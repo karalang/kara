@@ -33,6 +33,16 @@ fn write(path: &Path, contents: &[u8]) {
     std::fs::write(path, contents).unwrap();
 }
 
+/// Render a filesystem path for embedding in a TOML basic (double-quoted)
+/// string. Windows paths carry backslashes (`C:\Users\…`), which TOML reads
+/// as string escapes — `\U` starts an 8-digit unicode escape and the parse
+/// fails with "invalid unicode 8-digit hex code". Escaping each backslash to
+/// `\\` makes the path a valid TOML string; on Unix there are no backslashes,
+/// so this is a no-op.
+fn toml_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "\\\\")
+}
+
 fn git_available() -> bool {
     Command::new("git")
         .arg("--version")
@@ -106,7 +116,7 @@ fn build_fetches_and_resolves_a_git_dependency() {
         &proj.join("kara.toml"),
         format!(
             "[package]\nname = \"app\"\n\n[dependencies]\ngit_dep = {{ git = \"{}\" }}\n",
-            upstream.display()
+            toml_path(&upstream)
         )
         .as_bytes(),
     );
@@ -196,7 +206,7 @@ fn build_pins_a_git_dependency_to_a_tag() {
         &proj.join("kara.toml"),
         format!(
             "[package]\nname = \"app\"\n\n[dependencies]\ntagged_dep = {{ git = \"{}\", tag = \"v1.0.0\" }}\n",
-            upstream.display()
+            toml_path(&upstream)
         )
         .as_bytes(),
     );
@@ -240,7 +250,7 @@ fn build_reports_a_bad_git_url() {
         &proj.join("kara.toml"),
         format!(
             "[package]\nname = \"app\"\n\n[dependencies]\nghost = {{ git = \"{}\" }}\n",
-            bogus.display()
+            toml_path(&bogus)
         )
         .as_bytes(),
     );
