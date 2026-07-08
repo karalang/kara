@@ -6580,6 +6580,52 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
+        // Seed baked-stdlib generic FREE functions into `generic_fns` so a
+        // bare call from user code (`min(a, b)`, `clamp(v, lo, hi)` — roadmap
+        // Phase 8 § std.cmp) monomorphizes on demand through the same path as
+        // a user generic fn. Unlike stdlib impl methods (declared by
+        // `declare_stdlib_program`), free fns never reach that pass, and the
+        // user-program loop above only sees `program.items`. `#[compiler_builtin]`
+        // free fns (`spawn`, `size_of`, `with_span`, …) are skipped — they have
+        // placeholder bodies and dedicated call-site intercepts.
+        //
+        // The user program wins any name collision. A user `fn max(...)` that is
+        // NON-generic is `declare_function`'d (never in `generic_fns`), so a
+        // plain `or_insert` would still add the stdlib generic `max` — and the
+        // call-site generic-dispatch check (`call_dispatch.rs`) fires BEFORE the
+        // concrete-call path, mis-routing `max(data)` to the stdlib body
+        // (`examples/array_basics.kara` defines its own `fn max(a: Array[...])`).
+        // So skip any name the user program itself defines as a free function,
+        // generic or not. Gated on `user_redefines_stdlib_type` too, so a program
+        // that shadows a module's type (and thus has that whole module skipped at
+        // declare/compile) does not get its free fns either — keeping the three
+        // passes in lockstep.
+        let user_fn_names: std::collections::HashSet<&str> = program
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Function(f) => Some(f.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        for tp in compiled_stdlib_programs() {
+            if user_redefines_stdlib_type(program, tp) {
+                continue;
+            }
+            for item in &tp.items {
+                if let Item::Function(f) = item {
+                    if f.generic_params.is_some()
+                        && !f.attributes.iter().any(|a| a.is_bare("compiler_builtin"))
+                        && !user_fn_names.contains(f.name.as_str())
+                    {
+                        self.generic_fns
+                            .entry(f.name.clone())
+                            .or_insert_with(|| f.clone());
+                    }
+                }
+            }
+        }
+
         // Declare user impl-block methods as LLVM functions named
         // "Type.method". Self-taking methods get `self` prepended as a
         // normal owned parameter (`ref self`/`mut ref self` deferred; all

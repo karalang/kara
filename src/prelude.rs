@@ -1446,6 +1446,18 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     "tracing_emit_event",
     "tracing_set_min_level",
     "tracing_reset",
+    // `std.cmp` free functions (roadmap Phase 8 § std.cmp) —
+    // `min[T: Ord](a, b)` / `max[T: Ord](a, b)` / `clamp[T: Ord](v, lo, hi)`.
+    // Unlike the intercepted builtins above, these are ORDINARY generic
+    // stdlib free functions with real Kāra bodies in
+    // `runtime/stdlib/ordering.kara` — registering the name here makes the
+    // resolver accept the bare identifier; the interpreter registers their
+    // bodies from `STDLIB_PROGRAMS` (see `Interpreter::register_builtins`)
+    // and codegen seeds them into `generic_fns` for on-demand
+    // monomorphization (see `seed_stdlib_generic_free_fns`).
+    "min",
+    "max",
+    "clamp",
 ];
 
 /// Synthetic span used for every stub item the prelude module emits. The

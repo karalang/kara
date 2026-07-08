@@ -24,3 +24,37 @@ impl Ordering {
     fn is_ge(ref self) -> bool { match self { Ordering.Less => false, _ => true } }
     fn is_eq(ref self) -> bool { match self { Ordering.Equal => true, _ => false } }
 }
+
+// ── std.cmp free functions (roadmap Phase 8 § std.cmp) ──────────────
+//
+// `min` / `max` / `clamp` over any `Ord` type. Pure (no effect clause):
+// `Ord.cmp` is side-effect free, so these carry the empty effect set.
+// Ties return the *first* argument for both `min` and `max` — a single
+// consistent rule rather than Rust's min-first / max-second asymmetry.
+
+pub fn min[T: Ord](a: T, b: T) -> T {
+    match a.cmp(b) {
+        Ordering.Greater => b,
+        _ => a,
+    }
+}
+
+pub fn max[T: Ord](a: T, b: T) -> T {
+    match a.cmp(b) {
+        Ordering.Less => b,
+        _ => a,
+    }
+}
+
+// Clamp `value` into the inclusive range `[low, high]`. Caller must pass
+// `low <= high`; when `low > high` the low bound wins (value is pinned to
+// `low`), matching the "clamp to the nearer active bound" reading.
+pub fn clamp[T: Ord](value: T, low: T, high: T) -> T {
+    match value.cmp(low) {
+        Ordering.Less => low,
+        _ => match value.cmp(high) {
+            Ordering.Greater => high,
+            _ => value,
+        },
+    }
+}

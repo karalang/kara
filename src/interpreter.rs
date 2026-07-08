@@ -1348,6 +1348,27 @@ impl<'a> Interpreter<'a> {
                     };
                     self.env.define(f.name.clone(), val);
                 }
+                // Register ordinary baked-stdlib free functions (real Kāra
+                // bodies, e.g. `std.cmp`'s `min` / `max` / `clamp` in
+                // `ordering.kara`) so a bare call like `min(a, b)` dispatches
+                // through the normal `Value::Function` env entry — generics
+                // are erased at runtime, so the body just runs. Skip
+                // `#[compiler_builtin]` free fns (`spawn`, `size_of`,
+                // `with_span`, …): their bodies are placeholders and the real
+                // dispatch is an intercept earlier in `eval_call`. User items
+                // register afterward and win ties.
+                Item::Function(f)
+                    if !f.attributes.iter().any(|a| a.is_bare("compiler_builtin")) =>
+                {
+                    let val = Value::Function {
+                        name: f.name.clone(),
+                        param_patterns: f.params.iter().map(|p| p.pattern.clone()).collect(),
+                        param_defaults: f.params.iter().map(|p| p.default_value.clone()).collect(),
+                        body: f.body.clone(),
+                        closure_env: None,
+                    };
+                    self.env.define(f.name.clone(), val);
+                }
                 // Register baked-stdlib enum unit variants under their
                 // qualified path (e.g. `IoError.NotFound`, `VarError.NotPresent`)
                 // so they can be used as expressions, peer to the

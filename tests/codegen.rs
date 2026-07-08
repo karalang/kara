@@ -6328,6 +6328,30 @@ fn main() {
         }
     }
 
+    /// roadmap Phase 8 § std.cmp — `min` / `max` / `clamp` are ordinary
+    /// generic stdlib free functions (`ordering.kara`) monomorphized on
+    /// demand: the codegen seeds them into `generic_fns`, so a bare
+    /// `min(a, b)` call lowers through the same path as a user generic fn.
+    /// The `T → i64` monomorph body's `a.cmp(b)` hits the primitive `.cmp`
+    /// intercept, so no stdlib span-table swap is needed. This is the first
+    /// plain (non-intercepted) generic stdlib free function to reach codegen.
+    #[test]
+    fn e2e_std_cmp_min_max_clamp_codegen() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println(f\"{min(3i64, 5i64)}\");\n\
+                 println(f\"{max(3i64, 5i64)}\");\n\
+                 println(f\"{min(5i64, 3i64)}\");\n\
+                 println(f\"{max(5i64, 3i64)}\");\n\
+                 println(f\"{clamp(-2i64, 0i64, 10i64)}\");\n\
+                 println(f\"{clamp(7i64, 0i64, 10i64)}\");\n\
+                 println(f\"{clamp(15i64, 0i64, 10i64)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n5\n3\n5\n0\n7\n10\n");
+        }
+    }
+
     /// `String.cmp` on NON-identifier receivers — a string LITERAL
     /// (`"abd".cmp("abc")`) and an INDEX into a `Vec[String]` (`v[0].cmp(v[1])`).
     /// Both typecheck and run, but B-13's first codegen guard keyed on

@@ -2001,6 +2001,40 @@ fn test_match_bare_ordering_variant_from_cmp() {
 }
 
 #[test]
+fn test_std_cmp_min_max_clamp_free_functions() {
+    // roadmap Phase 8 § std.cmp — `min` / `max` / `clamp` are ordinary
+    // generic stdlib free functions (real Kāra bodies in `ordering.kara`),
+    // registered as bare-callable prelude names. Generics are erased at
+    // runtime, so the same fn serves i64 and String receivers.
+    assert_eq!(
+        run("fn main() {\n\
+                 println(min(3, 5));\n\
+                 println(max(3, 5));\n\
+                 println(min(5, 3));\n\
+                 println(max(5, 3));\n\
+             }"),
+        "3\n5\n3\n5\n"
+    );
+    // clamp: below / inside / above the inclusive range.
+    assert_eq!(
+        run("fn main() {\n\
+                 println(clamp(-2, 0, 10));\n\
+                 println(clamp(7, 0, 10));\n\
+                 println(clamp(15, 0, 10));\n\
+             }"),
+        "0\n7\n10\n"
+    );
+    // Generic over any Ord type — String receivers use lexicographic order.
+    assert_eq!(
+        run("fn main() {\n\
+                 println(min(\"abc\", \"abd\"));\n\
+                 println(max(\"abc\", \"abd\"));\n\
+             }"),
+        "abc\nabd\n"
+    );
+}
+
+#[test]
 fn test_qualified_enum_variant_constructor_cross_boundary() {
     // A method returning a qualified-constructed `Result` whose value is
     // matched in the caller — the original repro for the interpreter panic.
