@@ -440,6 +440,34 @@ mod llvm_main {
             true
         }
 
+        /// Conditionally move a live String into a Vec — `if round % 2 == 0 {
+        /// v.push(s); }`. The `round`-based guard is false on ~half the loop
+        /// iterations, so `s` is moved on some and left owned on others: codegen
+        /// must free `s` at scope exit exactly on the not-moved path (a leak if
+        /// it wrongly elides, a double-free if it wrongly frees the moved path).
+        /// This is the conditional-move drop shape the straight-line corpus
+        /// lacked — the runtime (ASan/LSan) counterpart to the oracle's
+        /// branch-state merge. `s` is consumed (not read after), so the program
+        /// stays ownership-valid.
+        fn conditional_move_str_into_vec(&mut self) -> bool {
+            let Some(s) = self.take(Ty::Str) else {
+                return false;
+            };
+            let v = match self.live_mut_of(Ty::VecStr) {
+                Some(v) => v.name,
+                None => {
+                    let n = self.fresh("v");
+                    self.emit(format!("        let mut {n}: Vec[String] = Vec.new();"));
+                    self.add_var_mut(n.clone(), Ty::VecStr);
+                    n
+                }
+            };
+            self.emit(format!(
+                "        if round % 2i64 == 0i64 {{ {v}.push({s}); }}"
+            ));
+            true
+        }
+
         /// For-loop over a live Vec[String] (owned iteration — consumes it),
         /// folding element lengths into `acc`. The element `e` aliases the
         /// source buffer in codegen; the loop's element drop + the source's
@@ -722,7 +750,7 @@ mod llvm_main {
         fn step_one(&mut self) {
             // Try transforms in a random order until one applies; if none does
             // (nothing live of the needed type), produce fresh material.
-            let mut order: [u8; 13] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+            let mut order: [u8; 14] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
             // Fisher-Yates on the fixed array.
             for i in (1..order.len()).rev() {
                 let j = self.rng.below(i + 1);
@@ -742,7 +770,8 @@ mod llvm_main {
                     9 => self.spawn_capture_vecstr(),
                     10 => self.ref_peek_str(),
                     11 => self.mut_grow_vec(),
-                    _ => false, // slot 12: fall through to a producer
+                    12 => self.conditional_move_str_into_vec(),
+                    _ => false, // slot 13: fall through to a producer
                 };
                 if applied {
                     return;
