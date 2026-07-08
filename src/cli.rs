@@ -3045,6 +3045,10 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // without its required explicit `MemoryOrdering` argument
                 // (deferred.md § Atomic Operations — no implicit-ordering form).
                 crate::typechecker::TypeErrorKind::AtomicMissingOrdering => "E0270",
+                // A return-position `impl Trait` yielding 2+ distinct concrete
+                // witnesses (design.md § `impl Trait`: one witness per
+                // monomorphization). Run-fatal (B-2026-07-08-1).
+                crate::typechecker::TypeErrorKind::ImplTraitMultipleWitnesses => "E0271",
                 // FE-2 — a `#[gpu]` function uses a non-GPU-safe type.
                 crate::typechecker::TypeErrorKind::GpuNotSafe => "E0801",
             };

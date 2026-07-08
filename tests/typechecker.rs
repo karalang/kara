@@ -18471,7 +18471,8 @@ fn impl_trait_return_multiple_witnesses_rejected() {
          fn main() { let r = pick(true); }",
     );
     let found = errors.iter().any(|e| {
-        e.message.contains("E_IMPL_TRAIT_MULTIPLE_WITNESSES")
+        e.kind == TypeErrorKind::ImplTraitMultipleWitnesses
+            && e.message.contains("E_IMPL_TRAIT_MULTIPLE_WITNESSES")
             && e.message.contains("Fast")
             && e.message.contains("Slow")
             && e.message.contains("impl Rate")
@@ -18481,6 +18482,17 @@ fn impl_trait_return_multiple_witnesses_rejected() {
         "expected E_IMPL_TRAIT_MULTIPLE_WITNESSES naming `Fast` and `Slow`; got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn impl_trait_multiple_witnesses_is_run_fatal() {
+    // The multi-witness `impl Trait` error must be run-fatal so `karac run`'s
+    // lenient script path REJECTS it at compile time (like `AtomicMissingOrdering`
+    // / `SharedFieldNotMut`) rather than downgrading to a warning and executing
+    // via the interpreter's dynamic dispatch — which would produce output
+    // `karac build` refuses to emit, re-opening the B-2026-07-08-1 run/build
+    // divergence. Pins `run`/`check`/`build` to reject at the same phase.
+    assert!(TypeErrorKind::ImplTraitMultipleWitnesses.is_run_fatal());
 }
 
 #[test]

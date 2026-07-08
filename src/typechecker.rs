@@ -450,6 +450,15 @@ pub enum TypeErrorKind {
     /// `karac run`'s lenient path downgrade-and-execute a program that
     /// `karac build` rejects, re-opening the divergence this kind closes.
     AtomicMissingOrdering,
+    /// A return-position `impl Trait` whose body yields two or more distinct
+    /// concrete witness types (design.md § `impl Trait`: "one concrete return
+    /// per monomorphization"). Codegen rejects it (no single type to
+    /// monomorphize), while the interpreter runs it via dynamic dispatch and
+    /// prints output `karac build` refuses to emit — a straight `run`/`build`
+    /// divergence (B-2026-07-08-1), the same shape as `AtomicMissingOrdering`.
+    /// Run-fatal: there is no `dyn Trait` fallback in v1 to iterate toward, so
+    /// downgrading it would only re-open the divergence.
+    ImplTraitMultipleWitnesses,
     LabelMismatch,
     NonContiguousLabels,
     InvalidPipePlaceholder,
@@ -808,6 +817,11 @@ impl TypeErrorKind {
     /// arity error that is *not* soft: there is no implicit-ordering form
     /// to iterate toward (the spec defines none), so downgrading it would
     /// only re-open the divergence rather than aid iteration.
+    /// And `TypeErrorKind::ImplTraitMultipleWitnesses`: a return-position
+    /// `impl Trait` returning 2+ distinct concrete witnesses is rejected by
+    /// codegen but run by the interpreter via dynamic dispatch
+    /// (B-2026-07-08-1) — the same straight `run`/`build` divergence as the
+    /// atomic case, with no `dyn Trait` fallback to iterate toward in v1.
     /// Genuinely soft type errors (most mismatches, arity, exhaustiveness)
     /// keep downgrading so
     /// a script author can still iterate. The partition is intentionally
@@ -820,6 +834,7 @@ impl TypeErrorKind {
                 | TypeErrorKind::StringNotIndexable
                 | TypeErrorKind::SharedFieldNotMut
                 | TypeErrorKind::AtomicMissingOrdering
+                | TypeErrorKind::ImplTraitMultipleWitnesses
         )
     }
 }
@@ -846,6 +861,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ConditionNotBool
         | TypeErrorKind::BranchTypeMismatch
         | TypeErrorKind::ReturnTypeMismatch
+        | TypeErrorKind::ImplTraitMultipleWitnesses
         | TypeErrorKind::InvalidTupleIndex
         | TypeErrorKind::StringNotIndexable
         | TypeErrorKind::LabelMismatch
@@ -3271,7 +3287,7 @@ impl<'a> TypeChecker<'a> {
                 names.join(", "),
             ),
             second_span,
-            TypeErrorKind::TypeMismatch,
+            TypeErrorKind::ImplTraitMultipleWitnesses,
         );
     }
 
