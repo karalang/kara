@@ -179,6 +179,17 @@ pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
             _ => None,
         })
         .collect();
+    // Every user struct (repr(C) or not) — lets a "you returned a plain
+    // struct" case suggest the one-step `#[repr(C)]` fix instead of the
+    // generic hint.
+    let all_structs: std::collections::BTreeSet<String> = program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::StructDef(s) => Some(s.name.clone()),
+            _ => None,
+        })
+        .collect();
     let mut errs = Vec::new();
     for it in &program.items {
         let Item::Function(f) = it else { continue };
@@ -193,9 +204,9 @@ pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
                     format!(
                         "return type `{}` cannot cross the C ABI: it is neither transparent \
                          (primitive / raw pointer / `#[repr(C)]` struct) nor an auto-boxable \
-                         `Vec[scalar]` / `String` / `Vec[String]` / `Vec[Vec[scalar]]`. Return a \
-                         `#[repr(C)]` struct or a raw pointer to a Kāra-owned box instead.",
-                        type_display(rt)
+                         `Vec[scalar]` / `String` / `Vec[String]` / `Vec[Vec[scalar]]`.{}",
+                        type_display(rt),
+                        abi_fix_hint(rt, &all_structs, &repr_c)
                     ),
                 ));
             }
@@ -208,15 +219,38 @@ pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
                     format!(
                         "parameter `{}: {}` cannot cross the C ABI by value: only transparent \
                          types (primitive / raw pointer / `#[repr(C)]` struct) may be exported \
-                         params. Take a raw pointer / opaque handle instead.",
+                         params.{}",
                         p.name().unwrap_or("_"),
-                        type_display(&p.ty)
+                        type_display(&p.ty),
+                        abi_fix_hint(&p.ty, &all_structs, &repr_c)
                     ),
                 ));
             }
         }
     }
     errs
+}
+
+/// The actionable suffix for an `E_EXPORT_ABI` message. When the offending
+/// type is a user struct that merely lacks `#[repr(C)]`, point at the
+/// one-step fix; otherwise give the generic raw-pointer-box guidance.
+fn abi_fix_hint(
+    te: &TypeExpr,
+    all_structs: &std::collections::BTreeSet<String>,
+    repr_c: &std::collections::BTreeSet<String>,
+) -> String {
+    if let TypeKind::Path(p) = &te.kind {
+        if p.segments.len() == 1 {
+            let n = &p.segments[0];
+            if all_structs.contains(n) && !repr_c.contains(n) {
+                return format!(
+                    " Add `#[repr(C)]` to `{n}` and it crosses transparently — the C header \
+                     then declares the struct by value."
+                );
+            }
+        }
+    }
+    " Return/accept a `#[repr(C)]` struct or a raw pointer to a Kāra-owned box instead.".to_string()
 }
 
 /// Emit the C header text for `program`'s exported surface. `lib_name` is
@@ -815,6 +849,31 @@ mod tests {
         assert!(
             validate_exports(&ok.program).is_empty(),
             "clean surface flagged"
+        );
+    }
+
+    #[test]
+    fn plain_struct_return_suggests_repr_c() {
+        // A user struct that just lacks `#[repr(C)]` gets the one-step fix,
+        // not the generic hint. Adding the attribute clears the error.
+        let bad = crate::parse(
+            "pub struct Point { x: f64, y: f64 }\n\
+             pub extern \"C\" fn origin() -> Point { }",
+        );
+        let errs = validate_exports(&bad.program);
+        let (_, reason) = errs.iter().find(|(n, _)| n == "origin").expect("flagged");
+        assert!(
+            reason.contains("Add `#[repr(C)]` to `Point`"),
+            "expected repr(C) hint, got: {reason}"
+        );
+
+        let good = crate::parse(
+            "#[repr(C)]\npub struct Point { x: f64, y: f64 }\n\
+             pub extern \"C\" fn origin() -> Point { }",
+        );
+        assert!(
+            validate_exports(&good.program).is_empty(),
+            "repr(C) struct return should be accepted"
         );
     }
 
