@@ -41,6 +41,9 @@
 //!      `while i < 1_000_000_000` from reserving gigabytes speculatively).
 
 use crate::ast::*;
+use crate::resolver::SpanKey;
+use crate::token::Span;
+use crate::typechecker::{IntSize, Type, TypeCheckResult, UIntSize};
 
 /// Upper bound on a constant-literal capacity hint. A variable bound (`m + n`,
 /// `xs.len()`) is sized by real program data and always allowed; only a *huge
@@ -67,7 +70,16 @@ impl Coll {
 /// Pre-size pre-sizable collections in one block's statement sequence. Does not
 /// recurse — the lowering walk invokes this for every block, before that block's
 /// operators are lowered.
-pub fn presize_block(block: &mut Block) {
+pub fn presize_block(block: &mut Block, tc: &TypeCheckResult) {
+    // Strongest rewrite first: a `Vec.new()` + EXACT counted `push(literal)` fill
+    // collapses to a single `Vec.filled(BOUND, literal)` — the `vec![x; n]` shape
+    // (one sized allocation + a straight fill, no per-element grow check). Removes
+    // the fill loop, so the `with_capacity` pass below then sees a `Vec.filled`
+    // binding it does not touch. Vecs that don't meet the exact-fill/literal gates
+    // fall through to the capacity-hint rewrite (removes the realloc chain but
+    // keeps the grow-checked push loop). See `fill_to_filled`. (B-2026-07-08-7.)
+    fill_to_filled(block, tc);
+
     let n = block.stmts.len();
     for i in 0..n {
         let (v_name, coll) = match presizable_let(&block.stmts[i]) {
@@ -78,6 +90,511 @@ pub fn presize_block(block: &mut Block) {
             rewrite_to_with_capacity(&mut block.stmts[i], coll, bound);
         }
     }
+}
+
+/// A recognised `Vec.new()` + exact-counted-`push(literal)` fill that can collapse
+/// to `Vec.filled`. `let_idx`/`loop_idx` are statement indices in the enclosing
+/// block; `bound`/`val` are the (cloned) fill count and element literal;
+/// `counter` is `Some(IV)` for the `while` form (whose external counter must be
+/// pinned to its post-loop value) and `None` for the `for` form.
+struct FillPlan {
+    let_idx: usize,
+    loop_idx: usize,
+    bound: Expr,
+    val: Expr,
+    counter: Option<String>,
+}
+
+/// Rewrite `let mut V = Vec.new(); <exact counted push loop>` to
+/// `let mut V = Vec.filled(BOUND, LIT)`, deleting the loop. This is the `vec![x;
+/// n]` lowering. Unlike the `with_capacity` pre-size (which removes the realloc
+/// chain but leaves a per-element `len == cap` grow check the optimizer cannot
+/// prove dead — the self-referential capacity phi defeats SCEV, B-2026-07-08-7),
+/// `Vec.filled` lowers to one sized allocation + a straight fill, no grow check.
+///
+/// Fires only under gates that make the collapse output-preserving AND
+/// memory-safe:
+///   * count is EXACT — `for I in 0..BOUND` (start absent/0), or `while IV <
+///     BOUND` with `IV` proven literal-`0` at entry and stepped by exactly one
+///     `+ 1` — so the loop yields exactly `BOUND` elements, matching
+///     `Vec.filled(BOUND, _)`.
+///   * exactly ONE unconditional `V.push(LIT)`, no early exit, and no other body
+///     statement beyond the counter step — nothing whose removal drops a
+///     side effect or read.
+///   * `LIT` is an integer LITERAL whose checked type is 64-bit (`i64` / `u64` /
+///     `usize`). `Vec.filled` sizes its buffer from the *compiled value* type,
+///     and a bare integer literal compiles to `i64`; gating on a 64-bit element
+///     keeps buffer stride == element stride. A narrow `Vec[i32]` fill would
+///     mis-size, so it stays on the `with_capacity` path.
+///   * `V` is untouched between its `Vec.new()` and the loop (no seed pushes), so
+///     the loop's trip count is the whole length.
+///   * `BOUND` is pure arithmetic over in-scope, loop-invariant identifiers that
+///     name neither `V` nor the counter, and unchanged between the `let` and the
+///     loop (the `filled` call evaluates it at the `let` position).
+///
+/// The `while` form's external counter `IV` is pinned to its exact post-loop
+/// value by REPLACING the loop with `IV = BOUND` (from `IV = 0` stepping `+1`
+/// until `IV >= BOUND`, `IV` ends at `BOUND`) — so any later read of `IV`
+/// observes the same value it would have after the real loop, with no need to
+/// prove `IV` dead. The `for` form's counter is loop-scoped, so its loop is
+/// simply deleted. The fixup is a dead store (DCE'd) when `IV` is unused.
+///
+/// Effect/ownership safety: the loop's only effect is `allocates` (the `push`),
+/// which `Vec.filled` reproduces; the counter arithmetic (`+`) carries no effect
+/// (`panics` comes from indexing/division/unwrap, not `+`). Both forms yield a
+/// fresh owned `Vec`. So the rewrite is effect- and ownership-neutral — it runs
+/// before `effectcheck`/`ownershipcheck` (see `cli.rs` pipeline order).
+fn fill_to_filled(block: &mut Block, tc: &TypeCheckResult) {
+    let mut plans: Vec<FillPlan> = Vec::new();
+    for i in 0..block.stmts.len() {
+        let Some(v) = fresh_empty_vec_new(&block.stmts[i]) else {
+            continue;
+        };
+        if let Some(plan) = plan_filled_rewrite(&block.stmts, i, &v, tc) {
+            plans.push(plan);
+        }
+    }
+    if plans.is_empty() {
+        return;
+    }
+    // Two in-place passes then a deletion pass — none of which shifts an index
+    // the next relies on. `let_idx < loop_idx` always, and distinct plans target
+    // distinct Vecs (distinct loops), so the passes don't interfere.
+    //   1. rewrite each `let` init to `Vec.filled` (in place),
+    //   2. for `while` plans, replace the loop with `IV = BOUND` (in place),
+    //   3. delete `for` plans' loops high-index-first (they have no counter fixup).
+    let mut for_loop_idxs: Vec<usize> = Vec::new();
+    for p in &plans {
+        rewrite_let_to_filled(&mut block.stmts[p.let_idx], p.bound.clone(), p.val.clone());
+        match &p.counter {
+            Some(iv) => {
+                replace_loop_with_counter_fixup(&mut block.stmts[p.loop_idx], iv, p.bound.clone())
+            }
+            None => for_loop_idxs.push(p.loop_idx),
+        }
+    }
+    for_loop_idxs.sort_unstable();
+    for idx in for_loop_idxs.into_iter().rev() {
+        block.stmts.remove(idx);
+    }
+}
+
+/// `let mut V = Vec.new()` (fresh, mutable, no args) → `Some(V)`.
+fn fresh_empty_vec_new(stmt: &Stmt) -> Option<String> {
+    let StmtKind::Let {
+        is_mut: true,
+        pattern,
+        value,
+        ..
+    } = &stmt.kind
+    else {
+        return None;
+    };
+    let PatternKind::Binding(name) = &pattern.kind else {
+        return None;
+    };
+    let ExprKind::Call { callee, args } = &value.kind else {
+        return None;
+    };
+    if !args.is_empty() {
+        return None;
+    }
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return None;
+    };
+    if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "new" {
+        Some(name.clone())
+    } else {
+        None
+    }
+}
+
+/// Find `v`'s exact counted-`push(literal)` fill loop after `let_idx` and, if all
+/// gates hold, return the plan to collapse it to `Vec.filled`. `v` must not be
+/// mentioned between its `let` and the loop (no seed pushes); the loop must be the
+/// first statement touching `v`.
+fn plan_filled_rewrite(
+    stmts: &[Stmt],
+    let_idx: usize,
+    v: &str,
+    tc: &TypeCheckResult,
+) -> Option<FillPlan> {
+    // Names bound between the `let` and the loop — the BOUND must not reference
+    // any (they aren't in scope at the `let`, so `Vec.filled(BOUND, _)` placed at
+    // the `let` couldn't see them).
+    // The `Vec.new()` initializer expression — its resolved type carries `v`'s
+    // element type, the stride-safety oracle for the `Vec.filled` rewrite.
+    let StmtKind::Let { value: vecnew, .. } = &stmts[let_idx].kind else {
+        return None;
+    };
+    let mut bound_between: Vec<String> = Vec::new();
+    for (off, stmt) in stmts[let_idx + 1..].iter().enumerate() {
+        let loop_idx = let_idx + 1 + off;
+        // The fill loop is the first statement that mentions `v`.
+        if let StmtKind::Expr(e) = &stmt.kind {
+            if let ExprKind::While {
+                condition, body, ..
+            } = &e.kind
+            {
+                let (iv, bound) = as_strict_lt(condition)?;
+                if iv == v {
+                    return None;
+                }
+                let val = while_fill_value(body, v, &iv)?;
+                if !counter_zero_before(stmts, loop_idx, &iv) {
+                    return None;
+                }
+                let pre_loop = &stmts[let_idx + 1..loop_idx];
+                return finish_plan(
+                    let_idx,
+                    loop_idx,
+                    bound,
+                    val,
+                    v,
+                    Some(&iv),
+                    &bound_between,
+                    pre_loop,
+                    vecnew,
+                    tc,
+                );
+            }
+            if let ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } = &e.kind
+            {
+                let bound = for_zero_range_end(pattern, iterable, v)?;
+                let val = for_fill_value(body, v)?;
+                let pre_loop = &stmts[let_idx + 1..loop_idx];
+                return finish_plan(
+                    let_idx,
+                    loop_idx,
+                    bound,
+                    val,
+                    v,
+                    None,
+                    &bound_between,
+                    pre_loop,
+                    vecnew,
+                    tc,
+                );
+            }
+        }
+        // Not the fill loop. If it touches `v` at all (a seed push, a move, …) we
+        // can't account for `v`'s length — bail. Otherwise record any names it
+        // binds and keep scanning.
+        if stmt_mentions_ident(stmt, v) {
+            return None;
+        }
+        collect_let_bound_names(stmt, &mut bound_between);
+    }
+    None
+}
+
+/// Shared final validation for both loop forms: `BOUND` purity/scope/invariance
+/// and the element-literal width gate. Returns the plan on success.
+#[allow(clippy::too_many_arguments)]
+fn finish_plan(
+    let_idx: usize,
+    loop_idx: usize,
+    bound: &Expr,
+    val: &Expr,
+    v: &str,
+    iv: Option<&str>,
+    bound_between: &[String],
+    pre_loop: &[Stmt],
+    vecnew: &Expr,
+    tc: &TypeCheckResult,
+) -> Option<FillPlan> {
+    // Stride safety: the fill value must be an integer LITERAL (it compiles to
+    // `i64`) AND `v`'s element type must be 64-bit (`i64` / `u64` / `usize`), so
+    // `Vec.filled`'s buffer stride (sized from the compiled value) equals the
+    // element stride. A narrow `Vec[i32]` fill would mis-size; it stays on the
+    // `with_capacity` path. The element type is read from the resolved type of the
+    // `Vec.new()` initializer — the literal's OWN checked type is unreliable here
+    // (a bare `0` records as `i64` even when coerced to a narrower element).
+    if !matches!(&val.kind, ExprKind::Integer(..)) {
+        return None;
+    }
+    if !vec_elem_is_64bit_int(vecnew, tc) {
+        return None;
+    }
+    // BOUND: fully analyzable, small-or-variable, in scope at the `let`, naming
+    // neither `v` nor the counter. Loop-body invariance is guaranteed
+    // structurally (the body is exactly the push + `+1` step, touching only `v`
+    // and the counter — both excluded from BOUND here).
+    let mut idents = Vec::new();
+    if !collect_idents(bound, &mut idents) {
+        return None;
+    }
+    if idents.iter().any(|n| n == v || Some(n.as_str()) == iv) {
+        return None;
+    }
+    if let ExprKind::Integer(k, _) = &bound.kind {
+        if *k < 0 || *k > MAX_LITERAL_BOUND {
+            return None;
+        }
+    }
+    if idents.iter().any(|n| bound_between.contains(n)) {
+        return None;
+    }
+    // BOUND must also be invariant across the statements BETWEEN the `let` and the
+    // loop: the rewritten `Vec.filled(BOUND, _)` sits at the `let` position and
+    // evaluates BOUND there, whereas the loop evaluated it later. If any of those
+    // statements writes a BOUND identifier (`xs.push(..)` before a `while j <
+    // xs.len()` fill), the two evaluations differ → miscount. (`with_capacity`
+    // tolerates this — capacity is a hint — but an exact `filled` cannot.)
+    if idents
+        .iter()
+        .any(|n| pre_loop.iter().any(|s| stmt_mutates_ident(s, n)))
+    {
+        return None;
+    }
+    Some(FillPlan {
+        let_idx,
+        loop_idx,
+        bound: bound.clone(),
+        val: val.clone(),
+        counter: iv.map(str::to_string),
+    })
+}
+
+/// `while IV < BOUND` body that is EXACTLY one `v.push(LIT)` plus one `IV = IV +
+/// 1` / `IV += 1` step (in either order), no early exit, no other statement, no
+/// tail expr → `Some(&LIT)`. This straight-line, two-statement shape guarantees
+/// the push is unconditional and the trip count is `BOUND` (with the caller's
+/// zero-start proof), and that removing the loop drops nothing else.
+fn while_fill_value<'a>(body: &'a Block, v: &str, iv: &str) -> Option<&'a Expr> {
+    if body.final_expr.is_some() || body.stmts.len() != 2 {
+        return None;
+    }
+    let mut push_val: Option<&Expr> = None;
+    let mut steps = 0;
+    for s in &body.stmts {
+        if let StmtKind::Expr(e) = &s.kind {
+            if let Some(val) = push_value(e, v) {
+                if push_val.is_some() {
+                    return None;
+                }
+                push_val = Some(val);
+                continue;
+            }
+        }
+        if is_plus_one_step(s, iv) {
+            steps += 1;
+            continue;
+        }
+        return None;
+    }
+    if steps != 1 {
+        return None;
+    }
+    push_val
+}
+
+/// `for I in 0..BOUND` body that is EXACTLY one `v.push(LIT)`, no early exit, no
+/// other statement, no tail expr → `Some(&LIT)`. The range owns the counter, so
+/// there is nothing else to validate.
+fn for_fill_value<'a>(body: &'a Block, v: &str) -> Option<&'a Expr> {
+    if body.final_expr.is_some() || body.stmts.len() != 1 {
+        return None;
+    }
+    let StmtKind::Expr(e) = &body.stmts[0].kind else {
+        return None;
+    };
+    push_value(e, v)
+}
+
+/// `v.push(VAL)` / `v.push_back(VAL)` with a single arg → `Some(&VAL)`.
+fn push_value<'a>(e: &'a Expr, v: &str) -> Option<&'a Expr> {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+        ..
+    } = &e.kind
+    else {
+        return None;
+    };
+    if !matches!(&object.kind, ExprKind::Identifier(n) if n == v) {
+        return None;
+    }
+    if !matches!(method.as_str(), "push" | "push_back") || args.len() != 1 {
+        return None;
+    }
+    Some(&args[0].value)
+}
+
+/// `IV = IV + 1` / `IV = 1 + IV` (Assign) or `IV += 1` (CompoundAssign).
+fn is_plus_one_step(stmt: &Stmt, iv: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::Assign { target, value } => {
+            if !matches!(&target.kind, ExprKind::Identifier(n) if n == iv) {
+                return false;
+            }
+            let ExprKind::Binary {
+                op: BinOp::Add,
+                left,
+                right,
+            } = &value.kind
+            else {
+                return false;
+            };
+            let is_iv = |e: &Expr| matches!(&e.kind, ExprKind::Identifier(n) if n == iv);
+            let is_one = |e: &Expr| matches!(&e.kind, ExprKind::Integer(1, _));
+            (is_iv(left) && is_one(right)) || (is_one(left) && is_iv(right))
+        }
+        StmtKind::CompoundAssign { target, op, value } => {
+            matches!(&target.kind, ExprKind::Identifier(n) if n == iv)
+                && matches!(op, CompoundOp::Add)
+                && matches!(&value.kind, ExprKind::Integer(1, _))
+        }
+        _ => false,
+    }
+}
+
+/// `while IV < BOUND` header → `(IV, &BOUND)` for a strict `<` with a bare-ident
+/// left operand. Runs pre-operator-lowering, so the condition is a raw `Binary`.
+fn as_strict_lt(cond: &Expr) -> Option<(String, &Expr)> {
+    let ExprKind::Binary {
+        op: BinOp::Lt,
+        left,
+        right,
+    } = &cond.kind
+    else {
+        return None;
+    };
+    let ExprKind::Identifier(iv) = &left.kind else {
+        return None;
+    };
+    Some((iv.clone(), right))
+}
+
+/// `for I in 0..BOUND` (exclusive, start absent or literal `0`, `I != v`) →
+/// `Some(&BOUND)`.
+fn for_zero_range_end<'a>(pattern: &Pattern, iterable: &'a Expr, v: &str) -> Option<&'a Expr> {
+    let PatternKind::Binding(i) = &pattern.kind else {
+        return None;
+    };
+    if i == v {
+        return None;
+    }
+    let ExprKind::Range {
+        start,
+        end,
+        inclusive,
+    } = &iterable.kind
+    else {
+        return None;
+    };
+    if *inclusive {
+        return None;
+    }
+    let start_zero = matches!(
+        start.as_deref().map(|e| &e.kind),
+        None | Some(ExprKind::Integer(0, _))
+    );
+    if !start_zero {
+        return None;
+    }
+    end.as_deref()
+}
+
+/// `IV` is bound `let mut IV = 0` before `loop_idx` and never assigned/compound-
+/// assigned before the loop, so it is provably `0` at loop entry (exact trip
+/// count `BOUND`). Fails closed if the init isn't a literal `0` or a pre-loop
+/// write is seen.
+fn counter_zero_before(stmts: &[Stmt], loop_idx: usize, iv: &str) -> bool {
+    let mut seen_zero_init = false;
+    for stmt in &stmts[..loop_idx] {
+        match &stmt.kind {
+            StmtKind::Let { pattern, value, .. } => {
+                if matches!(&pattern.kind, PatternKind::Binding(n) if n == iv) {
+                    if matches!(&value.kind, ExprKind::Integer(0, _)) {
+                        seen_zero_init = true;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+            StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } => {
+                if matches!(&target.kind, ExprKind::Identifier(n) if n == iv) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    seen_zero_init
+}
+
+/// The `Vec.new()` initializer `vecnew` has a resolved element type that is a
+/// 64-bit integer (`i64` / `u64` / `usize`) — the widths a bare integer literal
+/// compiles to, keeping `Vec.filled`'s buffer stride equal to the element stride.
+/// Reads `v`'s element from the initializer's checked type (`Vec[T]` →
+/// `Type::Named { name: "Vec", args: [T] }`). Fails closed when the type is
+/// unrecorded or not a concrete 64-bit-element `Vec` (e.g. an un-annotated
+/// binding whose element is still a type variable at the initializer, or a narrow
+/// element) — those keep the `with_capacity` path.
+fn vec_elem_is_64bit_int(vecnew: &Expr, tc: &TypeCheckResult) -> bool {
+    let Some(Type::Named { name, args }) = tc.expr_types.get(&SpanKey::from_span(&vecnew.span))
+    else {
+        return false;
+    };
+    if (name != "Vec" && name != "VecDeque") || args.len() != 1 {
+        return false;
+    }
+    matches!(
+        args[0],
+        Type::Int(IntSize::I64) | Type::UInt(UIntSize::U64 | UIntSize::Usize)
+    )
+}
+
+/// Rewrite `let mut V = Vec.new()` to `let mut V = Vec.filled(bound, val)`. The
+/// binding's type annotation (if any) is preserved, so the element type is
+/// unchanged.
+fn rewrite_let_to_filled(stmt: &mut Stmt, bound: Expr, val: Expr) {
+    let StmtKind::Let { value, .. } = &mut stmt.kind else {
+        return;
+    };
+    let span = value.span.clone();
+    let callee = Expr {
+        kind: ExprKind::Path {
+            segments: vec!["Vec".to_string(), "filled".to_string()],
+            generic_args: None,
+        },
+        span: span.clone(),
+    };
+    let mk_arg = |value: Expr, span: Span| CallArg {
+        label: None,
+        mut_marker: false,
+        value,
+        span,
+    };
+    *value = Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(callee),
+            args: vec![mk_arg(bound, span.clone()), mk_arg(val, span.clone())],
+        },
+        span,
+    };
+}
+
+/// Replace the `while IV < BOUND { … }` fill-loop statement with `IV = BOUND` —
+/// the counter's exact value after the real loop (`0`, stepping `+1`, exits at
+/// `IV >= BOUND`, so `IV == BOUND`). Keeps any later read of `IV` correct without
+/// a liveness proof; DCE removes the store when `IV` is unused.
+fn replace_loop_with_counter_fixup(stmt: &mut Stmt, iv: &str, bound: Expr) {
+    let span = bound.span.clone();
+    stmt.kind = StmtKind::Assign {
+        target: Expr {
+            kind: ExprKind::Identifier(iv.to_string()),
+            span: span.clone(),
+        },
+        value: bound,
+    };
 }
 
 /// `let mut V = <empty Vec/String>` → `Some((V, kind))`.
@@ -652,10 +1169,14 @@ fn collect_let_bound_names(stmt: &Stmt, out: &mut Vec<String>) {
 mod tests {
     use super::*;
 
-    /// Parse `src`, run pre-sizing on the first function's body, and report
-    /// whether the binding `name` ended up as a `*.with_capacity(...)` init.
-    fn fires_for(src: &str, name: &str) -> bool {
+    /// Parse + typecheck `src`, run pre-sizing on the first function's body, and
+    /// return the body so a test can inspect how `name`'s init was rewritten.
+    /// Typecheck is required so `fill_to_filled` can consult `expr_types` for the
+    /// element-width gate (the `with_capacity` pass ignores `tc`).
+    fn presize_first_fn(src: &str) -> Block {
         let parsed = crate::parse(src);
+        let rr = crate::resolve(&parsed.program);
+        let tc = crate::typecheck(&parsed.program, &rr);
         let mut body = parsed
             .program
             .items
@@ -665,16 +1186,45 @@ mod tests {
                 _ => None,
             })
             .expect("a function");
-        presize_block(&mut body);
+        presize_block(&mut body, &tc);
+        body
+    }
+
+    /// Whether `name`'s init became a `Vec.<method>(...)` call after pre-sizing.
+    fn init_is(body: &Block, name: &str, method: &str) -> bool {
         body.stmts.iter().any(|s| match &s.kind {
             StmtKind::Let { pattern, value, .. } => {
                 matches!(&pattern.kind, PatternKind::Binding(n) if n == name)
                     && matches!(&value.kind, ExprKind::Call { callee, .. }
                         if matches!(&callee.kind, ExprKind::Path { segments, .. }
-                            if segments.len() == 2 && segments[1] == "with_capacity"))
+                            if segments.len() == 2 && segments[1] == method))
             }
             _ => false,
         })
+    }
+
+    /// Whether `name` ended up as a `*.with_capacity(...)` init.
+    fn fires_for(src: &str, name: &str) -> bool {
+        init_is(&presize_first_fn(src), name, "with_capacity")
+    }
+
+    /// Whether `name` ended up as a `Vec.filled(...)` init (the strongest rewrite)
+    /// AND the fill loop was deleted (statement count is what remains).
+    fn filled_fires_for(src: &str, name: &str) -> bool {
+        init_is(&presize_first_fn(src), name, "filled")
+    }
+
+    /// Count `while` + `for` loop statements left in the first function's body —
+    /// a `fill_to_filled` firing must delete the fill loop.
+    fn loop_count(src: &str) -> usize {
+        presize_first_fn(src)
+            .stmts
+            .iter()
+            .filter(|s| {
+                matches!(&s.kind, StmtKind::Expr(e)
+                    if matches!(&e.kind, ExprKind::While { .. } | ExprKind::For { .. }))
+            })
+            .count()
     }
 
     #[test]
@@ -787,5 +1337,124 @@ mod tests {
         // relaxation from swallowing moves/reassigns.
         let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  sink(v);\n  let mut i = 0i64;\n  while i < n {\n    v.push(i);\n    i = i + 1i64;\n  }\n}\n";
         assert!(!fires_for(src, "v"));
+    }
+
+    // ── fill_to_filled (Vec.new()+counted push(literal) → Vec.filled) ────────
+
+    #[test]
+    fn filled_fires_on_while_zero_start_literal() {
+        // The kata #63 dp-fill shape: `while j < cols { dp.push(0); j = j + 1 }`
+        // over `j` proven 0 → collapses to `Vec.filled(cols, 0)`, loop deleted.
+        let src = "fn f(cols: i64) {\n  let mut dp: Vec[i64] = Vec.new();\n  let mut j = 0i64;\n  while j < cols {\n    dp.push(0i64);\n    j = j + 1i64;\n  }\n}\n";
+        assert!(filled_fires_for(src, "dp"));
+        assert_eq!(loop_count(src), 0, "fill loop must be deleted");
+    }
+
+    #[test]
+    fn filled_fires_on_while_compound_step() {
+        // `j += 1` (CompoundAssign) is an accepted `+1` step form.
+        let src = "fn f(cols: i64) {\n  let mut dp: Vec[i64] = Vec.new();\n  let mut j = 0i64;\n  while j < cols {\n    dp.push(0i64);\n    j += 1i64;\n  }\n}\n";
+        assert!(filled_fires_for(src, "dp"));
+        assert_eq!(loop_count(src), 0);
+    }
+
+    #[test]
+    fn filled_fires_on_for_zero_range() {
+        // `for i in 0..n { v.push(7) }` → `Vec.filled(n, 7)`.
+        let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  for i in 0i64..n {\n    v.push(7i64);\n  }\n}\n";
+        assert!(filled_fires_for(src, "v"));
+        assert_eq!(loop_count(src), 0);
+    }
+
+    #[test]
+    fn filled_no_fire_on_narrow_element() {
+        // A `Vec[i32]` fill: the bare literal compiles to i64 but the element is
+        // i32, so `Vec.filled` would mis-size the buffer — must NOT collapse.
+        // Falls through to `with_capacity` instead (still correct).
+        let src = "fn f(cols: i64) {\n  let mut dp: Vec[i32] = Vec.new();\n  let mut j = 0i64;\n  while j < cols {\n    dp.push(0);\n    j = j + 1i64;\n  }\n}\n";
+        assert!(!filled_fires_for(src, "dp"));
+        assert!(
+            fires_for(src, "dp"),
+            "narrow element still gets with_capacity"
+        );
+    }
+
+    #[test]
+    fn filled_no_fire_on_nonliteral_value() {
+        // `dp.push(j)` fills with the counter, not a literal — `Vec.filled` needs
+        // a single fixed value. Stays on the `with_capacity` path.
+        let src = "fn f(cols: i64) {\n  let mut dp: Vec[i64] = Vec.new();\n  let mut j = 0i64;\n  while j < cols {\n    dp.push(j);\n    j = j + 1i64;\n  }\n}\n";
+        assert!(!filled_fires_for(src, "dp"));
+        assert!(fires_for(src, "dp"));
+    }
+
+    #[test]
+    fn filled_no_fire_on_nonzero_counter_start() {
+        // `j` starts at 1, so the loop runs `cols - 1` times — NOT `cols`. An
+        // exact `Vec.filled(cols, _)` would over-count; must not fire.
+        let src = "fn f(cols: i64) {\n  let mut dp: Vec[i64] = Vec.new();\n  let mut j = 1i64;\n  while j < cols {\n    dp.push(0i64);\n    j = j + 1i64;\n  }\n}\n";
+        assert!(!filled_fires_for(src, "dp"));
+    }
+
+    #[test]
+    fn filled_fires_when_counter_used_after_via_fixup() {
+        // `j` is read after the loop. The rewrite still fires: the `while` is
+        // replaced by `j = cols` (its exact post-loop value), so the later read
+        // is preserved. The fill loop is gone (replaced by an assignment).
+        let src = "fn f(cols: i64) -> i64 {\n  let mut dp: Vec[i64] = Vec.new();\n  let mut j = 0i64;\n  while j < cols {\n    dp.push(0i64);\n    j = j + 1i64;\n  }\n  return j;\n}\n";
+        assert!(filled_fires_for(src, "dp"));
+        assert_eq!(loop_count(src), 0, "while loop replaced by counter fixup");
+        // The counter fixup `j = cols` must be present so the `return j` is correct.
+        let body = presize_first_fn(src);
+        assert!(
+            body.stmts.iter().any(|s| matches!(&s.kind,
+                StmtKind::Assign { target, value }
+                    if matches!(&target.kind, ExprKind::Identifier(n) if n == "j")
+                        && matches!(&value.kind, ExprKind::Identifier(n) if n == "cols"))),
+            "counter pinned to bound"
+        );
+    }
+
+    #[test]
+    fn filled_no_fire_on_seed_push() {
+        // A pre-loop seed push makes the total length `1 + cols`, not `cols` —
+        // `Vec.filled(cols, _)` would under-count. Must not fire.
+        let src = "fn f(cols: i64) {\n  let mut dp: Vec[i64] = Vec.new();\n  dp.push(9i64);\n  let mut j = 0i64;\n  while j < cols {\n    dp.push(0i64);\n    j = j + 1i64;\n  }\n}\n";
+        assert!(!filled_fires_for(src, "dp"));
+    }
+
+    #[test]
+    fn filled_no_fire_on_inclusive_while() {
+        // `while j <= cols` runs `cols + 1` times, not `cols`. Not a `<` header,
+        // so `as_strict_lt` rejects it — must not fire.
+        let src = "fn f(cols: i64) {\n  let mut dp: Vec[i64] = Vec.new();\n  let mut j = 0i64;\n  while j <= cols {\n    dp.push(0i64);\n    j = j + 1i64;\n  }\n}\n";
+        assert!(!filled_fires_for(src, "dp"));
+    }
+
+    #[test]
+    fn filled_no_fire_on_extra_body_stmt() {
+        // A body with more than the push + step (here an extra `dp[0] = 1`) is not
+        // a clean count-preserving fill — must not collapse (removal would drop
+        // the extra statement).
+        let src = "fn f(cols: i64) {\n  let mut dp: Vec[i64] = Vec.new();\n  let mut j = 0i64;\n  while j < cols {\n    dp.push(0i64);\n    dp[0i64] = 1i64;\n    j = j + 1i64;\n  }\n}\n";
+        assert!(!filled_fires_for(src, "dp"));
+    }
+
+    #[test]
+    fn filled_fires_on_len_bound() {
+        // `xs.len()` is a valid fill count: invariant across the loop (the body
+        // never touches `xs`) and evaluated once by `Vec.filled`.
+        let src = "fn f(xs: ref Vec[i64]) {\n  let mut v: Vec[i64] = Vec.new();\n  let mut j = 0i64;\n  while j < xs.len() {\n    v.push(0i64);\n    j = j + 1i64;\n  }\n}\n";
+        assert!(filled_fires_for(src, "v"));
+        assert_eq!(loop_count(src), 0);
+    }
+
+    #[test]
+    fn filled_no_fire_when_bound_mutated_before_loop() {
+        // `xs` is pushed BETWEEN the `let` and the loop, so `xs.len()` at the
+        // `let` position (where `Vec.filled` evaluates it) differs from its value
+        // at the loop — a miscount. Must not fire.
+        let src = "fn f(xs: mut ref Vec[i64]) {\n  let mut v: Vec[i64] = Vec.new();\n  xs.push(1i64);\n  let mut j = 0i64;\n  while j < xs.len() {\n    v.push(0i64);\n    j = j + 1i64;\n  }\n}\n";
+        assert!(!filled_fires_for(src, "v"));
     }
 }
