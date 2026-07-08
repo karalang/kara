@@ -1,35 +1,35 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="300" font-family="monospace" font-size="12">
 <rect width="720" height="300" fill="white"/>
-<polyline fill="none" stroke="#e8730a" stroke-width="2" points="40.0,259.2 105.3,258.5 275.1,254.7 288.2,254.0 301.2,252.5 314.3,247.2 327.3,240.4 340.4,229.9 353.5,214.8 366.5,190.7 379.6,185.4 392.7,184.7 405.7,177.9 418.8,168.8 431.8,158.3 444.9,145.5 458.0,143.2 471.0,140.2 562.4,138.7 575.5,127.4 588.6,118.4 601.6,91.2 614.7,64.9 627.8,52.1 640.8,50.5 653.9,46.8 666.9,42.3 680.0,40.0"/>
-<circle cx="40.0" cy="259.2" r="2.5" fill="#e8730a"/>
+<polyline fill="none" stroke="#e8730a" stroke-width="2" points="40.0,259.3 105.3,258.5 275.1,254.8 288.2,254.1 301.2,252.6 314.3,247.4 327.3,240.7 340.4,230.3 353.5,215.4 366.5,191.6 379.6,186.4 392.7,185.7 405.7,179.0 418.8,170.1 431.8,159.7 444.9,147.0 458.0,144.8 471.0,141.8 562.4,140.3 575.5,129.2 588.6,120.3 601.6,93.5 614.7,67.5 627.8,54.9 640.8,53.4 653.9,49.7 666.9,45.2 680.0,40.0"/>
+<circle cx="40.0" cy="259.3" r="2.5" fill="#e8730a"/>
 <circle cx="105.3" cy="258.5" r="2.5" fill="#e8730a"/>
-<circle cx="275.1" cy="254.7" r="2.5" fill="#e8730a"/>
-<circle cx="288.2" cy="254.0" r="2.5" fill="#e8730a"/>
-<circle cx="301.2" cy="252.5" r="2.5" fill="#e8730a"/>
-<circle cx="314.3" cy="247.2" r="2.5" fill="#e8730a"/>
-<circle cx="327.3" cy="240.4" r="2.5" fill="#e8730a"/>
-<circle cx="340.4" cy="229.9" r="2.5" fill="#e8730a"/>
-<circle cx="353.5" cy="214.8" r="2.5" fill="#e8730a"/>
-<circle cx="366.5" cy="190.7" r="2.5" fill="#e8730a"/>
-<circle cx="379.6" cy="185.4" r="2.5" fill="#e8730a"/>
-<circle cx="392.7" cy="184.7" r="2.5" fill="#e8730a"/>
-<circle cx="405.7" cy="177.9" r="2.5" fill="#e8730a"/>
-<circle cx="418.8" cy="168.8" r="2.5" fill="#e8730a"/>
-<circle cx="431.8" cy="158.3" r="2.5" fill="#e8730a"/>
-<circle cx="444.9" cy="145.5" r="2.5" fill="#e8730a"/>
-<circle cx="458.0" cy="143.2" r="2.5" fill="#e8730a"/>
-<circle cx="471.0" cy="140.2" r="2.5" fill="#e8730a"/>
-<circle cx="562.4" cy="138.7" r="2.5" fill="#e8730a"/>
-<circle cx="575.5" cy="127.4" r="2.5" fill="#e8730a"/>
-<circle cx="588.6" cy="118.4" r="2.5" fill="#e8730a"/>
-<circle cx="601.6" cy="91.2" r="2.5" fill="#e8730a"/>
-<circle cx="614.7" cy="64.9" r="2.5" fill="#e8730a"/>
-<circle cx="627.8" cy="52.1" r="2.5" fill="#e8730a"/>
-<circle cx="640.8" cy="50.5" r="2.5" fill="#e8730a"/>
-<circle cx="653.9" cy="46.8" r="2.5" fill="#e8730a"/>
-<circle cx="666.9" cy="42.3" r="2.5" fill="#e8730a"/>
+<circle cx="275.1" cy="254.8" r="2.5" fill="#e8730a"/>
+<circle cx="288.2" cy="254.1" r="2.5" fill="#e8730a"/>
+<circle cx="301.2" cy="252.6" r="2.5" fill="#e8730a"/>
+<circle cx="314.3" cy="247.4" r="2.5" fill="#e8730a"/>
+<circle cx="327.3" cy="240.7" r="2.5" fill="#e8730a"/>
+<circle cx="340.4" cy="230.3" r="2.5" fill="#e8730a"/>
+<circle cx="353.5" cy="215.4" r="2.5" fill="#e8730a"/>
+<circle cx="366.5" cy="191.6" r="2.5" fill="#e8730a"/>
+<circle cx="379.6" cy="186.4" r="2.5" fill="#e8730a"/>
+<circle cx="392.7" cy="185.7" r="2.5" fill="#e8730a"/>
+<circle cx="405.7" cy="179.0" r="2.5" fill="#e8730a"/>
+<circle cx="418.8" cy="170.1" r="2.5" fill="#e8730a"/>
+<circle cx="431.8" cy="159.7" r="2.5" fill="#e8730a"/>
+<circle cx="444.9" cy="147.0" r="2.5" fill="#e8730a"/>
+<circle cx="458.0" cy="144.8" r="2.5" fill="#e8730a"/>
+<circle cx="471.0" cy="141.8" r="2.5" fill="#e8730a"/>
+<circle cx="562.4" cy="140.3" r="2.5" fill="#e8730a"/>
+<circle cx="575.5" cy="129.2" r="2.5" fill="#e8730a"/>
+<circle cx="588.6" cy="120.3" r="2.5" fill="#e8730a"/>
+<circle cx="601.6" cy="93.5" r="2.5" fill="#e8730a"/>
+<circle cx="614.7" cy="67.5" r="2.5" fill="#e8730a"/>
+<circle cx="627.8" cy="54.9" r="2.5" fill="#e8730a"/>
+<circle cx="640.8" cy="53.4" r="2.5" fill="#e8730a"/>
+<circle cx="653.9" cy="49.7" r="2.5" fill="#e8730a"/>
+<circle cx="666.9" cy="45.2" r="2.5" fill="#e8730a"/>
 <circle cx="680.0" cy="40.0" r="2.5" fill="#e8730a"/>
 <text x="40" y="288">2026-05-20</text>
 <text x="610" y="288">2026-07-08</text>
-<text x="40" y="20">cumulative bugs surfaced: 292</text>
+<text x="40" y="20">cumulative bugs surfaced: 296</text>
 </svg>
