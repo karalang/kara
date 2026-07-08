@@ -1122,6 +1122,72 @@ fn test_struct_literal() {
 }
 
 #[test]
+fn test_single_field_shorthand_struct_literal() {
+    // B-2026-07-08-23: a single-field shorthand struct literal `P { a }` in a
+    // value position was misparsed as `P` followed by a block `{ a }` (the
+    // `looks_like_struct_literal` heuristic required a comma, i.e. >= 2 fields),
+    // producing a spurious "expected 'P', found 'i64'" / stray-brace error.
+    // It must now parse as a struct literal in value positions.
+    for src in [
+        // function-tail value position
+        "struct P { a: i64 }\nfn mk(a: i64) -> P { P { a } }",
+        // let-RHS value position
+        "struct P { a: i64 }\nfn main() { let a = 1; let p = P { a }; }",
+        // call-argument position
+        "struct P { a: i64 }\nfn take(p: P) {}\nfn main() { let a = 1; take(P { a }); }",
+    ] {
+        let prog = parse_ok(src);
+        // Find the `P { a }` StructLiteral somewhere in the program and confirm
+        // it parsed as a single-field literal (not a `P` + block).
+        assert!(
+            program_has_single_field_struct_literal(&prog, "P"),
+            "expected a single-field `P {{ a }}` struct literal in:\n{src}"
+        );
+    }
+}
+
+#[test]
+fn test_single_field_brace_stays_block_in_condition() {
+    // The dual of the above: in an `if`/`while`/`for` CONDITION, `Name { x }`
+    // must still read as `Name` + the branch body block, NOT a struct literal,
+    // so `if DEBUG { ... }` keeps working. (Regression guard for B-2026-07-08-23.)
+    parse_ok("fn main() { let DEBUG = true; if DEBUG { let a = 1; } }");
+    parse_ok("fn main() { let mut RUN = true; while RUN { RUN = false; } }");
+    // A match scrutinee, by contrast, still allows an unparenthesized struct
+    // literal (Kāra permits `match P { a } { ... }`).
+    parse_ok("struct P { a: i64 }\nfn main() { let a = 1; match P { a } { _ => {} } }");
+}
+
+/// True if any expression in `prog` is a single-field `StructLiteral` whose
+/// path ends in `name`. Walks function bodies' statement values shallowly —
+/// enough for the flat fixtures above.
+fn program_has_single_field_struct_literal(prog: &Program, name: &str) -> bool {
+    fn expr_matches(e: &Expr, name: &str) -> bool {
+        if let ExprKind::StructLiteral { path, fields, .. } = &e.kind {
+            if path.last().map(String::as_str) == Some(name) && fields.len() == 1 {
+                return true;
+            }
+        }
+        false
+    }
+    fn block_has(b: &Block, name: &str) -> bool {
+        b.stmts.iter().any(|s| match &s.kind {
+            StmtKind::Let { value, .. } => expr_matches(value, name),
+            StmtKind::Expr(e) => {
+                expr_matches(e, name)
+                    || matches!(&e.kind, ExprKind::Call { args, .. }
+                        if args.iter().any(|a| expr_matches(&a.value, name)))
+            }
+            _ => false,
+        }) || b.final_expr.as_ref().is_some_and(|t| expr_matches(t, name))
+    }
+    prog.items.iter().any(|it| match it {
+        Item::Function(f) => block_has(&f.body, name),
+        _ => false,
+    })
+}
+
+#[test]
 fn test_cast_expression() {
     parse_ok("fn main() { let x = count as f64; }");
 }

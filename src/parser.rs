@@ -127,6 +127,17 @@ pub struct Parser {
     /// around the `parse_param_pattern` call for comptime params; the binding
     /// case consults it instead of unconditionally requiring snake_case.
     pub(crate) allow_type_class_param_name: bool,
+    /// When set, a `Name { … }` at the current position is NOT treated as a
+    /// struct literal — the trailing `{` opens a block/body instead. Set only
+    /// while parsing an `if` / `while` / `for` CONDITION (where `Name { body }`
+    /// must read as `Name` + the loop/branch body block, e.g. `if DEBUG { … }`),
+    /// and cleared again inside any delimited sub-expression (parens, call args,
+    /// array literals, a committed struct-literal body) so a struct literal
+    /// nested in a condition — `while cond(P { x }) { … }` — still parses. NOT
+    /// set for a `match` scrutinee: Kāra allows an unparenthesized struct-literal
+    /// scrutinee (`match P { x: 1 } { … }`), which the restriction would break.
+    /// See `looks_like_struct_literal`.
+    pub(crate) no_struct_literal: bool,
     /// Machine-applicable fix edits synthesized during parsing, keyed by the
     /// span of the diagnostic they resolve. Mirrors ownership.rs's
     /// `error_fix_diffs` side-channel: rather than widen `ParseError` (built
@@ -172,6 +183,7 @@ impl Parser {
             effect_var_stack: Vec::new(),
             impl_trait_block_stack: Vec::new(),
             allow_type_class_param_name: false,
+            no_struct_literal: false,
             fix_edits: std::collections::HashMap::new(),
         }
     }

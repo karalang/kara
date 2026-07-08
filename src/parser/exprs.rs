@@ -966,11 +966,12 @@ impl super::Parser {
                 self.parse_closure(Some(CaptureMode::Own), Some(prefix_span))
             }
 
-            // Parenthesized expression or tuple
-            Token::LeftParen => self.parse_paren_or_tuple(),
+            // Parenthesized expression or tuple. A struct literal nested in a
+            // restricted (condition) position parses normally inside the parens.
+            Token::LeftParen => self.with_struct_literals(Self::parse_paren_or_tuple),
 
-            // Array literal: [expr, expr, ...]
-            Token::LeftBracket => self.parse_array_literal(),
+            // Array literal: [expr, expr, ...] (struct literals unrestricted).
+            Token::LeftBracket => self.with_struct_literals(Self::parse_array_literal),
 
             // Identifier (possibly path, struct literal, or function call)
             Token::Identifier { .. } => self.parse_identifier_expr(),
@@ -992,7 +993,7 @@ impl super::Parser {
             self.advance();
             let pattern = self.parse_pattern()?;
             self.expect(&Token::Equal)?;
-            let value = self.parse_expression()?;
+            let value = self.parse_condition_expr()?;
             let then_block = self.parse_block()?;
             let else_branch = if self.eat(&Token::Else) {
                 if self.check(&Token::If) {
@@ -1018,7 +1019,7 @@ impl super::Parser {
             });
         }
 
-        let condition = self.parse_expression()?;
+        let condition = self.parse_condition_expr()?;
         let then_block = self.parse_block()?;
         let else_branch = if self.eat(&Token::Else) {
             if self.check(&Token::If) {
@@ -1122,7 +1123,7 @@ impl super::Parser {
             self.advance();
             let pattern = self.parse_pattern()?;
             self.expect(&Token::Equal)?;
-            let value = self.parse_expression()?;
+            let value = self.parse_condition_expr()?;
             let body = self.parse_block()?;
             if label.is_some() {
                 self.loop_labels.pop();
@@ -1139,7 +1140,7 @@ impl super::Parser {
             });
         }
 
-        let condition = self.parse_expression()?;
+        let condition = self.parse_condition_expr()?;
         let body = self.parse_block()?;
         if label.is_some() {
             self.loop_labels.pop();
@@ -1175,7 +1176,7 @@ impl super::Parser {
         }
         let pattern = self.parse_pattern()?;
         self.expect(&Token::In)?;
-        let iterable = self.parse_expression()?;
+        let iterable = self.parse_condition_expr()?;
         let body = self.parse_block()?;
         if label.is_some() {
             self.loop_labels.pop();
@@ -1750,24 +1751,60 @@ impl super::Parser {
         //
         // `{ ident :` — struct literal (explicit field)
         // `{ ident ,` — shorthand struct literal (at least 2 fields)
+        // `{ ident }` — single-field shorthand struct literal (`P { a }`)
         // `{ }` — empty struct literal
         // `{ ..` — struct update
         //
-        // NOTE: `{ ident }` is intentionally NOT matched as struct literal
-        // because it's ambiguous with a block containing a single expression
-        // (e.g., `if a > b { x }` would misparse `b { x }` as a struct).
+        // The single-field shorthand `{ ident }` is genuinely ambiguous with a
+        // block containing one expression (`if a > b { x }` must read `b`'s
+        // value then the branch body `{ x }`). It is therefore accepted as a
+        // struct literal EXCEPT in a `no_struct_literal` position — an
+        // `if`/`while`/`for` condition — where the trailing `{` opens the body.
+        // Without this a legitimate value-position single-field struct literal
+        // (`fn mk(a: i64) -> P { P { a } }`, `let p = P { a };`) misparsed as
+        // `P` followed by a block and failed with "expected 'P', found 'i64'"
+        // (or a stray-brace parse error) — B-2026-07-08-23.
         if self.pos + 2 >= self.tokens.len() {
             return false;
         }
         let next = &self.tokens[self.pos + 1].token;
         let after = &self.tokens[self.pos + 2].token;
-        matches!(
+        if matches!(
             (next, after),
             (Token::Identifier { .. }, Token::Colon)
                 | (Token::Identifier { .. }, Token::Comma)
                 | (Token::RightBrace, _)
                 | (Token::DotDot, _)
-        )
+        ) {
+            return true;
+        }
+        !self.no_struct_literal
+            && matches!((next, after), (Token::Identifier { .. }, Token::RightBrace))
+    }
+
+    /// Parse an expression with the `no_struct_literal` restriction ACTIVE — a
+    /// bare `Name { … }` reads as `Name` + a following body block, not a struct
+    /// literal. Used for `if`/`while`/`for` conditions. Saves and restores the
+    /// prior flag so nested/sequential parses are unaffected.
+    fn parse_condition_expr(&mut self) -> Option<Expr> {
+        let saved = self.no_struct_literal;
+        self.no_struct_literal = true;
+        let r = self.parse_expression();
+        self.no_struct_literal = saved;
+        r
+    }
+
+    /// Run `f` with the `no_struct_literal` restriction CLEARED — struct
+    /// literals parse normally. Applied at the entry of every delimited
+    /// sub-expression (parens, call args, array literals, struct-literal field
+    /// values) so a struct literal nested inside a restricted condition still
+    /// parses. A no-op when the flag was already clear (the common case).
+    fn with_struct_literals<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = self.no_struct_literal;
+        self.no_struct_literal = false;
+        let r = f(self);
+        self.no_struct_literal = saved;
+        r
     }
 
     fn parse_struct_literal_body(&mut self, path: Vec<String>, start: &Span) -> Option<Expr> {
@@ -1821,7 +1858,14 @@ impl super::Parser {
         })
     }
 
+    /// Parse a `(...)` call-argument list. Struct literals in argument position
+    /// are always unrestricted — a `Name { … }` arg is a struct literal even
+    /// when the call sits in a condition (`while items.contains(P { x }) { … }`).
     fn parse_arg_list(&mut self) -> Option<Vec<CallArg>> {
+        self.with_struct_literals(Self::parse_arg_list_inner)
+    }
+
+    fn parse_arg_list_inner(&mut self) -> Option<Vec<CallArg>> {
         let mut args = Vec::new();
         while !self.check(&Token::RightParen) && !self.is_at_end() {
             let arg_start = self.current_span();
