@@ -890,6 +890,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap();
                     } else if let Some(ptr) = ref_ret_ptr {
                         self.builder.build_return(Some(&ptr)).unwrap();
+                    } else if self.current_fn_boxes_return {
+                        // C-ABI auto-boxed aggregate return (Slice 4 Path B) —
+                        // explicit `return v;` site. Box the value and return
+                        // the box pointer, matching the tail-return site.
+                        let boxed = self.box_return_value(v);
+                        self.builder.build_return(Some(&boxed)).unwrap();
                     } else if self.current_fn_name == "main" && self.main_result_err_te.is_some() {
                         // `return Ok(())` / `return Err(e)` inside
                         // `main() -> Result[(), E]`: adapt to a process exit

@@ -19921,3 +19921,118 @@ fn test_build_crate_type_staticlib_links_from_c_e2e() {
         assert_eq!(run.status.code(), Some(0));
     }
 }
+
+/// Producer-mode auto-boxing + auto-destructor (additive-interop Slice 4
+/// Path B). A `pub extern "C" fn -> Vec[i64]` is auto-boxed for the C ABI:
+/// the export returns an opaque `KaraVec_int64_t*` (heap box), the header
+/// auto-emits the `{data,len,cap}` struct + a `karac_free_<name>`
+/// destructor, and a C host reads the data through the struct and frees it
+/// via the destructor. Proves the compiler-generated boxing + destructor
+/// round-trips with no leak (a leak/UAF would surface as a crash or wrong
+/// output here; the ASAN gate is the memory_sanitizer job). Soft-skips on
+/// the no-llvm fallback / missing runtime / missing `cc`.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_auto_boxed_vec_return_e2e() {
+    use std::io::Write;
+    let src = "pub extern \"C\" fn make_vec(n: i64) -> Vec[i64] {\n\
+               \x20   let mut v: Vec[i64] = Vec.new();\n\
+               \x20   let mut i = 0;\n\
+               \x20   while i < n { v.push(i * i); i = i + 1; }\n\
+               \x20   v\n\
+               }\n";
+    let dir = std::env::temp_dir().join(format!("karac_pathb_e2e_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut f = std::fs::File::create(dir.join("k.kara")).unwrap();
+        f.write_all(src.as_bytes()).unwrap();
+    }
+    let build = karac_bin()
+        .current_dir(&dir)
+        .args(["build", "k.kara", "--crate-type", "staticlib"])
+        .output()
+        .unwrap();
+    let berr = String::from_utf8_lossy(&build.stderr);
+    let lib = dir.join("libk.a");
+    let header = dir.join("libk.h");
+    if berr.contains("requires the llvm feature")
+        || berr.contains("link failed")
+        || !lib.exists()
+        || !header.exists()
+    {
+        eprintln!("skip: test_build_auto_boxed_vec_return_e2e — build/link soft-skip");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let header_text = std::fs::read_to_string(&header).unwrap();
+    assert!(
+        header_text.contains("} KaraVec_int64_t;"),
+        "boxed struct typedef missing:\n{header_text}"
+    );
+    assert!(
+        header_text.contains("KaraVec_int64_t* make_vec(int64_t n);"),
+        "boxed return proto missing:\n{header_text}"
+    );
+    assert!(
+        header_text.contains("void karac_free_make_vec(KaraVec_int64_t* handle);"),
+        "destructor proto missing:\n{header_text}"
+    );
+
+    let host_c = "#include <stdio.h>\n\
+                  #include \"libk.h\"\n\
+                  int main(void) {\n\
+                      karac_runtime_init();\n\
+                      KaraVec_int64_t* v = make_vec(6);\n\
+                      long long sum = 0;\n\
+                      for (int64_t i = 0; i < v->len; i++) sum += v->data[i];\n\
+                      printf(\"%lld %lld\\n\", (long long)v->len, sum);\n\
+                      karac_free_make_vec(v);\n\
+                      karac_runtime_shutdown();\n\
+                      return 0;\n\
+                  }\n";
+    {
+        let mut f = std::fs::File::create(dir.join("host.c")).unwrap();
+        f.write_all(host_c.as_bytes()).unwrap();
+    }
+    let cc = std::process::Command::new("cc")
+        .current_dir(&dir)
+        .args([
+            "host.c",
+            "-L.",
+            "-l:libk.a",
+            "-lpthread",
+            "-lm",
+            "-ldl",
+            "-o",
+            "host",
+        ])
+        .output();
+    let cc = match cc {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("skip: test_build_auto_boxed_vec_return_e2e — no `cc`");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+    };
+    assert!(
+        cc.status.success(),
+        "C host failed to link the auto-boxed Kāra library:\n{}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+    let run = common::output_with_hang_watchdog(
+        {
+            let mut c = std::process::Command::new(dir.join("host"));
+            c.current_dir(&dir);
+            c
+        },
+        std::time::Duration::from_secs(15),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(run) = run {
+        // n=6 → squares 0,1,4,9,16,25 → len 6, sum 55.
+        assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "6 55");
+        assert_eq!(run.status.code(), Some(0));
+    }
+}

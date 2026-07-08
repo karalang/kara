@@ -1985,6 +1985,25 @@ pub(super) struct Codegen<'ctx> {
     /// value — see `B-2026-06-07-5` (returned-borrow codegen). Set per
     /// function in `compile_function`.
     pub(crate) current_fn_returns_ref: bool,
+    /// True while compiling a `pub extern "C" fn` whose non-transparent
+    /// aggregate return (`Vec[scalar]` / `String`) is auto-boxed for the C
+    /// ABI (additive-interop Slice 4 Path B). Kāra returns such a
+    /// `{data,len,cap}` value in 3 registers (rax/rdx/rcx), which does NOT
+    /// match the SysV struct-return ABI a C caller expects — so the export
+    /// heap-boxes the value and returns an opaque *pointer* (a scalar
+    /// return, trivially C-compatible; the C side reads `v->data`/`v->len`
+    /// through the header's struct + frees via the auto-emitted
+    /// `karac_free_<name>`). Set per function in `compile_function`; read at
+    /// the tail- and explicit-`return` sites to box before `ret`.
+    pub(crate) current_fn_boxes_return: bool,
+    /// Names of `pub extern "C" fn`s whose aggregate return is C-ABI
+    /// auto-boxed (additive-interop Slice 4 Path B). Their LLVM signature
+    /// returns a `ptr` (the heap box), not the `{data,len,cap}` value a
+    /// Kāra caller's typecheck expects — so a call to one *from Kāra code*
+    /// would read a garbage Vec. Such a boxed export is a C-facing surface;
+    /// `compile_call` rejects an internal call with an actionable error
+    /// (extract the body into a non-exported helper and call that).
+    pub(crate) boxed_export_names: std::collections::HashSet<String>,
     /// True only while compiling the RHS of a `let <name> = <ref-returning
     /// call>` — the one caller context that binds the borrow as a ref-local
     /// (deref on use). Outside it, a call to a borrow-returning function is
@@ -5437,6 +5456,8 @@ impl<'ctx> Codegen<'ctx> {
             main_result_err_te: None,
             main_returns_exitcode: false,
             current_fn_returns_ref: false,
+            current_fn_boxes_return: false,
+            boxed_export_names: std::collections::HashSet::new(),
             compiling_ref_return_let_rhs: false,
             suppress_shadow_metadata_purge: false,
             pattern_binding_is_borrow: false,
@@ -6556,6 +6577,17 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
+        // Record boxed-return exports (Slice 4 Path B) up front so
+        // `compile_call` can reject an internal Kāra call to one before any
+        // body is compiled.
+        for item in &program.items {
+            if let Item::Function(f) = item {
+                if crate::cheader::boxed_return_of(f).is_some() {
+                    self.boxed_export_names.insert(f.name.clone());
+                }
+            }
+        }
+
         // First pass: register generic functions for on-demand monomorphization;
         // declare concrete (non-generic) functions for forward-call support.
         for item in &program.items {
@@ -6961,6 +6993,13 @@ impl<'ctx> Codegen<'ctx> {
         // `main`'s entry already emitted the forward `call` to it.
         self.finalize_module_binding_static_init();
 
+        // C-ABI auto-destructors for boxed-return exports (additive-interop
+        // Slice 4 Path B): one `karac_free_<name>(handle)` per
+        // `pub extern "C" fn` returning `Vec[scalar]` / `String`, freeing
+        // the buffer + the heap box. Emitted after all bodies so the box
+        // shape is settled.
+        self.emit_export_destructors(program)?;
+
         // Phase-10 WASM build path: wasi-libc's `crt1-command.o` enters at
         // `_start → __main_void`; libc's own (weak, arg-gathering)
         // `__main_void` chains to `__main_argc_argv`, a symbol clang mints
@@ -7071,6 +7110,78 @@ impl<'ctx> Codegen<'ctx> {
     /// chokepoint nor the `OutputCapture` machinery it transitively pulls, and
     /// AOT `-dead_strip`s the whole lot — restoring the lean binary-size floor
     /// `1a401c7b`'s blanket routing regressed by ~17 KiB on every output-bearing
+    /// Emit a C-ABI auto-destructor for every boxed-return export
+    /// (additive-interop Slice 4 Path B). See [`emit_one_export_destructor`].
+    fn emit_export_destructors(&mut self, program: &Program) -> Result<(), String> {
+        let names: Vec<String> = program
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Function(f) if crate::cheader::boxed_return_of(f).is_some() => {
+                    Some(f.name.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        for name in names {
+            self.emit_one_export_destructor(&name);
+        }
+        Ok(())
+    }
+
+    /// `void karac_free_<fn>(handle)` — the auto-emitted destructor for a
+    /// boxed-return export (Slice 4 Path B). The handle is the heap box
+    /// holding the returned `{data,len,cap}` value; free its owned buffer
+    /// (`emit_free_vec_buffer_if_owned`, the same whole-buffer free the
+    /// scope-exit path uses — complete for scalar `Vec` elements / `String`
+    /// bytes, no per-element drop) then free the box. Null-guarded:
+    /// `karac_free_<fn>(NULL)` is a no-op.
+    fn emit_one_export_destructor(&mut self, fn_name: &str) {
+        use inkwell::module::Linkage;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let void_ty = self.context.void_type();
+        let free_name = format!("karac_free_{fn_name}");
+        if self.module.get_function(&free_name).is_some() {
+            return;
+        }
+        let fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let dtor = self
+            .module
+            .add_function(&free_name, fn_ty, Some(Linkage::External));
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(dtor);
+
+        let entry = self.context.append_basic_block(dtor, "entry");
+        let free_bb = self.context.append_basic_block(dtor, "free");
+        let ret_bb = self.context.append_basic_block(dtor, "ret");
+        self.builder.position_at_end(entry);
+        let handle = dtor.get_nth_param(0).unwrap().into_pointer_value();
+        // Null guard: skip both frees for a NULL handle.
+        let is_null = self.builder.build_is_null(handle, "kfree.isnull").unwrap();
+        self.builder
+            .build_conditional_branch(is_null, ret_bb, free_bb)
+            .unwrap();
+
+        self.builder.position_at_end(free_bb);
+        // The box points to a `{data,len,cap}` value; free its owned buffer.
+        self.emit_free_vec_buffer_if_owned(handle);
+        // Then free the box allocation itself.
+        self.builder
+            .build_call(self.free_fn, &[handle.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(ret_bb).unwrap();
+
+        self.builder.position_at_end(ret_bb);
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+    }
+
     /// compute binary (B-2026-06-15-2). Idempotent; must run after all function
     /// bodies are compiled so the par use-check sees every site.
     fn finalize_write_console_wrapper(&mut self) {

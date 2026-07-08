@@ -106,6 +106,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Reject an internal Kāra call to a boxed-return export (Slice 4
+        // Path B). Its LLVM signature returns a `ptr` (the heap box), not
+        // the `{data,len,cap}` value this call site's typecheck expects, so
+        // lowering it would read a garbage Vec/String. Such an export is a
+        // C-facing surface only.
+        if let ExprKind::Identifier(n) = &callee.kind {
+            if self.boxed_export_names.contains(n) {
+                return Err(format!(
+                    "cannot call `{n}` from Kāra code: it is a `pub extern \"C\" fn` whose \
+                     aggregate return (`Vec`/`String`) is auto-boxed for the C ABI (returns an \
+                     opaque handle to C, not a Kāra value). Move the body into a non-exported \
+                     helper and call that from Kāra; keep `{n}` as the thin C-facing export. \
+                     See design.md § Exported C ABI (Slice 4 Path B)."
+                ));
+            }
+        }
+
         // Cooperative cancel check before each call inside a par-branch.
         // No-op when not inside a par branch. Narrowed against the
         // `callee_effectful` side-table when the callee name is statically

@@ -30,6 +30,74 @@ pub fn is_exported(func: &Function) -> bool {
     func.is_pub && matches!(func.abi.as_deref(), Some("C") | Some("C-unwind"))
 }
 
+/// A `pub extern "C" fn` whose non-transparent aggregate return is
+/// auto-boxed for the C ABI (additive-interop Slice 4 Path B). Kāra returns
+/// a `{data,len,cap}` value in registers, which doesn't match the SysV
+/// struct-return ABI — so the export heap-boxes the value and returns an
+/// opaque pointer to it; the C side reads the fields through the emitted
+/// struct and frees via `karac_free_<name>`. Scoped to `Vec[scalar]` and
+/// `String` (whole-buffer free is complete — no per-element drop).
+pub enum BoxedReturn {
+    /// `Vec[E]` for scalar `E`; the field carries `E`'s C type (`int64_t`).
+    Vec(&'static str),
+    /// `String` — `{uint8_t* data; int64_t len; int64_t cap;}`.
+    Str,
+}
+
+/// If `func` is an exported fn whose return needs C-ABI auto-boxing,
+/// classify it. `None` for a transparent return (primitive / `#[repr(C)]`
+/// struct / raw pointer / `()`), a non-scalar-element `Vec`, or any
+/// non-export.
+pub fn boxed_return_of(func: &Function) -> Option<BoxedReturn> {
+    if !func.is_pub || func.abi.as_deref() != Some("C") {
+        return None;
+    }
+    let te = func.return_type.as_ref()?;
+    let TypeKind::Path(p) = &te.kind else {
+        return None;
+    };
+    if p.segments.len() != 1 {
+        return None;
+    }
+    match p.segments[0].as_str() {
+        "String" => Some(BoxedReturn::Str),
+        "Vec" => {
+            let args = p.generic_args.as_ref()?;
+            if args.len() != 1 {
+                return None;
+            }
+            let crate::ast::GenericArg::Type(elem) = &args[0] else {
+                return None;
+            };
+            let TypeKind::Path(ep) = &elem.kind else {
+                return None;
+            };
+            if ep.segments.len() != 1 {
+                return None;
+            }
+            c_primitive(&ep.segments[0]).map(BoxedReturn::Vec)
+        }
+        _ => None,
+    }
+}
+
+/// The element C type of a boxed-return struct's `data` field.
+fn boxed_elem_c_type(b: &BoxedReturn) -> &'static str {
+    match b {
+        BoxedReturn::Vec(elem) => elem,
+        BoxedReturn::Str => "uint8_t",
+    }
+}
+
+/// The C struct/typedef name for a boxed return (`KaraVec_int64_t`,
+/// `KaraString`).
+fn boxed_struct_name(b: &BoxedReturn) -> String {
+    match b {
+        BoxedReturn::Vec(elem) => format!("KaraVec_{elem}"),
+        BoxedReturn::Str => "KaraString".to_string(),
+    }
+}
+
 /// Emit the C header text for `program`'s exported surface. `lib_name` is
 /// the bare library stem (no `lib` prefix / extension) — it names the
 /// include guard and appears in the banner.
@@ -102,6 +170,24 @@ pub fn emit_c_header(program: &Program, lib_name: &str) -> String {
         );
     }
 
+    // C-ABI auto-boxed return structs (Slice 4 Path B): the transparent
+    // `{data,len,cap}` view a boxed `Vec[scalar]` / `String` handle points
+    // at. The C caller reads these fields directly, then frees the handle
+    // via the matching `karac_free_*` export.
+    let mut boxed_defs: BTreeMap<String, &'static str> = BTreeMap::new();
+    for f in &exports {
+        if let Some(b) = boxed_return_of(f) {
+            boxed_defs.insert(boxed_struct_name(&b), boxed_elem_c_type(&b));
+        }
+    }
+    for (name, elem) in &boxed_defs {
+        out.push_str(&format!(
+            "/* Boxed K\u{101}ra value. Read `data[0..len]`, then free the handle via\n\
+             * the matching karac_free_* export (never plain free()). */\n\
+             typedef struct {{ {elem}* data; int64_t len; int64_t cap; }} {name};\n\n"
+        ));
+    }
+
     // repr(C) struct definitions, dependency-ordered (a struct used
     // by-value inside another must be defined first).
     if !needed_structs.is_empty() {
@@ -138,10 +224,15 @@ fn render_prototype(
     needed: &mut BTreeSet<String>,
     used_opaque: &mut bool,
 ) -> String {
-    let ret = match &func.return_type {
-        None => "void".to_string(),
-        Some(ty) if is_unit(ty) => "void".to_string(),
-        Some(ty) => c_type(ty, structs, needed, used_opaque),
+    // C-ABI auto-boxed aggregate return (Slice 4 Path B): the export returns
+    // an opaque pointer to a heap box holding a `{data,len,cap}` struct; the
+    // C side reads its fields and frees it via `karac_free_<name>`.
+    let boxed = boxed_return_of(func);
+    let ret = match (&boxed, &func.return_type) {
+        (Some(b), _) => format!("{}*", boxed_struct_name(b)),
+        (None, None) => "void".to_string(),
+        (None, Some(ty)) if is_unit(ty) => "void".to_string(),
+        (None, Some(ty)) => c_type(ty, structs, needed, used_opaque),
     };
     let params: Vec<String> = func
         .params
@@ -164,6 +255,16 @@ fn render_prototype(
         s.push_str(&format!("/** @effects {eff} */\n"));
     }
     s.push_str(&format!("{ret} {}({param_list});", func.name));
+    // Boxed return: emit the matching destructor prototype. The C caller
+    // reads the returned handle's fields, then hands it back here to free
+    // both the owned buffer and the box (never plain `free()`).
+    if let Some(b) = &boxed {
+        s.push_str(&format!(
+            "\nvoid karac_free_{}({}* handle);",
+            func.name,
+            boxed_struct_name(b)
+        ));
+    }
     s
 }
 
@@ -430,16 +531,55 @@ mod tests {
     }
 
     #[test]
-    fn non_transparent_type_becomes_opaque_handle() {
-        let src = "pub extern \"C\" fn build() -> Vec[i32] { }";
+    fn genuinely_opaque_type_becomes_handle() {
+        // `Option[i32]` is non-transparent and NOT a boxable Vec/String, so
+        // it maps to the generic opaque `KaraHandle`.
+        let src = "pub extern \"C\" fn build() -> Option[i32] { }";
         let h = header_for(src, "lib");
         assert!(
             h.contains("typedef void* KaraHandle;"),
             "typedef missing:\n{h}"
         );
+        assert!(h.contains("KaraHandle"), "opaque return missing:\n{h}");
+    }
+
+    #[test]
+    fn vec_scalar_return_auto_boxes_with_destructor() {
+        // A `Vec[scalar]` return (Slice 4 Path B) crosses as a boxed
+        // `{data,len,cap}` handle + an auto-emitted `karac_free_<name>`.
+        let src = "pub extern \"C\" fn make() -> Vec[i64] { }";
+        let h = header_for(src, "lib");
         assert!(
-            h.contains("KaraHandle /* Vec */ build(void);"),
-            "proto:\n{h}"
+            h.contains(
+                "typedef struct { int64_t* data; int64_t len; int64_t cap; } KaraVec_int64_t;"
+            ),
+            "boxed struct typedef missing:\n{h}"
+        );
+        assert!(
+            h.contains("KaraVec_int64_t* make(void);"),
+            "boxed return proto missing:\n{h}"
+        );
+        assert!(
+            h.contains("void karac_free_make(KaraVec_int64_t* handle);"),
+            "destructor proto missing:\n{h}"
+        );
+    }
+
+    #[test]
+    fn string_return_auto_boxes() {
+        let src = "pub extern \"C\" fn greet() -> String { }";
+        let h = header_for(src, "lib");
+        assert!(
+            h.contains("typedef struct { uint8_t* data; int64_t len; int64_t cap; } KaraString;"),
+            "KaraString typedef missing:\n{h}"
+        );
+        assert!(
+            h.contains("KaraString* greet(void);"),
+            "proto missing:\n{h}"
+        );
+        assert!(
+            h.contains("void karac_free_greet(KaraString* handle);"),
+            "destructor missing:\n{h}"
         );
     }
 

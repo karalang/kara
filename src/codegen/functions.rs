@@ -230,6 +230,15 @@ impl<'ctx> super::Codegen<'ctx> {
             self.context
                 .ptr_type(AddressSpace::default())
                 .fn_type(&param_types, false)
+        } else if crate::cheader::boxed_return_of(func).is_some() {
+            // C-ABI auto-boxed aggregate return (additive-interop Slice 4
+            // Path B): the export returns an opaque pointer to a heap box
+            // instead of the `{data,len,cap}` value in registers (which
+            // wouldn't match the SysV struct-return ABI). The return sites
+            // box via `box_return_value`.
+            self.context
+                .ptr_type(AddressSpace::default())
+                .fn_type(&param_types, false)
         } else {
             match self.llvm_return_type(&func.return_type) {
                 Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
@@ -696,6 +705,10 @@ impl<'ctx> super::Codegen<'ctx> {
             func.return_type.as_ref().map(|t| &t.kind),
             Some(TypeKind::Ref(_) | TypeKind::MutRef(_))
         ) && !self.return_type_ref_is_value_abi(&func.return_type);
+        // C-ABI auto-boxed aggregate return (additive-interop Slice 4 Path
+        // B) — declared return type is `ptr` (above); the return sites box
+        // the `{data,len,cap}` value and return the box pointer.
+        self.current_fn_boxes_return = crate::cheader::boxed_return_of(func).is_some();
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
@@ -1440,6 +1453,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_return(None).unwrap();
                 } else if let Some(ptr) = ref_ret_ptr {
                     self.builder.build_return(Some(&ptr)).unwrap();
+                } else if self.current_fn_boxes_return {
+                    // C-ABI auto-boxed aggregate return (Slice 4 Path B).
+                    let boxed = self.box_return_value(val);
+                    self.builder.build_return(Some(&boxed)).unwrap();
                 } else if self.current_fn_ret_is_niche() {
                     // Niche-ABI return: pack the conventional 4-i64
                     // Option value into the single nullable ptr the
@@ -1591,6 +1608,40 @@ impl<'ctx> super::Codegen<'ctx> {
     /// all-unit enums; the value-driven `emit_display_fn_for_type_expr` does
     /// NOT cover user struct/enum types yet (Display-floor subtask 5), so the
     /// bridge is what makes a user error type render here.
+    /// Box a `pub extern "C"` export's aggregate return value on the heap
+    /// and return the pointer (additive-interop Slice 4 Path B). `malloc`s
+    /// `sizeof(val)`, stores the value, and yields the box pointer — a
+    /// scalar return the C ABI passes in `rax`, unlike the multi-register
+    /// `{data,len,cap}` return that mismatches SysV. The value was moved
+    /// out of the body at the return (no Kāra drop), so ownership transfers
+    /// cleanly to C, which frees it via the auto-emitted `karac_free_<name>`.
+    pub(super) fn box_return_value(&mut self, val: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
+        let i64_t = self.context.i64_type();
+        // Boxed returns are always the `{data,len,cap}` shape (`Vec[scalar]`
+        // / `String`), so size the box from `vec_struct_type` — avoids the
+        // `BasicType::size_of` trait dance on the `BasicValueEnum`.
+        let raw_size = self
+            .vec_struct_type()
+            .size_of()
+            .expect("vec struct is sized");
+        let size = if raw_size.get_type().get_bit_width() == 64 {
+            raw_size
+        } else {
+            self.builder
+                .build_int_z_extend(raw_size, i64_t, "kbox.sz64")
+                .unwrap()
+        };
+        let box_ptr = self
+            .builder
+            .build_call(self.malloc_fn, &[size.into()], "kret.box")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_store(box_ptr, val).unwrap();
+        box_ptr.into()
+    }
+
     pub(super) fn emit_main_result_err_exit(&mut self, err_val: BasicValueEnum<'ctx>) {
         use crate::ast::ParsedInterpolationPart as P;
         let i32_t = self.context.i32_type();
