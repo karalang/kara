@@ -52,6 +52,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 return true;
             }
         }
+        // `for (i, x) in obj.field.iter().enumerate()`: the `.iter()` peel routes
+        // a `Vec`/`Slice` field through `try_compile_for_field_iter`, which mints
+        // a synth identifier and recurses into `compile_for_{vec,slice}_var` (both
+        // now bind the enumerate index). Accept optimistically — if the field
+        // isn't an indexable container the field-iter path returns `None` and the
+        // dispatch falls through to the prior skip, with the stashed index pattern
+        // restored by the `.enumerate()` arm's save/restore (no leak, no regression).
+        if matches!(inner.kind, ExprKind::FieldAccess { .. }) {
+            return true;
+        }
         false
     }
 

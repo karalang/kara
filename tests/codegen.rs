@@ -2223,6 +2223,22 @@ mod codegen_tests {
             // did not insert. So len = 3. (Matches interp and AOT.)
             assert_eq!(out, "63\n0\n3\n");
         }
+        // Field-access receiver: `for (i, x) in obj.field.iter().enumerate()`
+        // routes through the `.iter()` field-iter path, which must ALSO bind the
+        // enumerate index (extended `for_receiver_is_indexable`). Was `sum=0`
+        // (body skipped) before the field-access extension.
+        if let Some(out) = run_program(
+            "struct Bag { items: Vec[i64] }\n\
+             fn main() {\n\
+                 let b = Bag { items: [5, 6, 7] };\n\
+                 let mut sum = 0i64;\n\
+                 for (i, x) in b.items.iter().enumerate() { sum = sum + x + i; }\n\
+                 println(sum);\n\
+             }",
+        ) {
+            // (5+0)+(6+1)+(7+2) = 21
+            assert_eq!(out, "21\n");
+        }
     }
 
     #[test]
