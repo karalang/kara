@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **305 surfaced · 4 open · 300 fixed** (2026-05-20 → 2026-07-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **306 surfaced · 4 open · 301 fixed** (2026-05-20 → 2026-07-08). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -100,9 +100,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **305 surfaced 
 | B-2026-07-08-14 | 2026-07-08 | interpreter (collections) | medium | INTERP BUG (run-vs-build): mutating a `Map`/`Set` through a STRUCT FIELD does not persist under the tree-walk interpreter, while codegen (AOT + JIT) is correct. Minimal repro: `struct Cache { index: Map[i64, u64] }  fn main() { let mut c = Cache { index: Map.new() }; let _ = c.index.insert(5, 9); println(c.index.len()); }` prints `0` under `karac run` (interpreter) but `1` under `karac build`/`KARAC_RUN_JIT=1` (correct). Independent of how the struct is constructed (bare literal in `main` AND via an associated `new()` both reproduce), so it is NOT the B-2026-07-08-12 constructor-codegen bug — it is a distinct interpreter defect: `c.index.insert(...)` mutates a COPY of the map handle/value (the field read yields a value, not an in-place reference), so the insert is lost; the subsequent `c.index.len()` reads the un-mutated field. This is the interpreter half of what makes `examples/leetcode/lru_cache.kara` render all-`None` under `karac run` (its `rebuild_index` populates `self.index`, but the mutation never persists, so every `get` misses). The interpreter (`src/interpreter.rs`) is the WRONG side here — codegen is the oracle. This is one more entry in the run-vs-build divergence class the LLJIT epic exists to eliminate: the Slice-6c JIT-default `run` flip makes it moot for the default path (interpreter retained as dev/debug only). FIX (if fixing the interpreter directly rather than waiting for 6c): the method-call / field-access path for a `Map`/`Set`-typed struct field must resolve the field to a mutable place (in-place handle) for mutating methods (`insert`/`remove`/`clear`), not clone the field value. Likely the same class as any struct-field-mutation-through-method issue; check whether `Vec` field mutation through a struct field has the same defect (it may already work if Vec fields are handled as places). | docs/spikes/lljit-productionization.md |
 | B-2026-07-08-15 | 2026-07-08 | codegen (comptime #[derive] method dispatch) | medium | A #[derive(...)]-generated method works under `karac run` but FAILS `karac build`: the call site's result type is unknown to codegen, so a follow-on method falls through dispatch ("no handler for method 'len' on variable 'bytes'"). Surfaced by std.protobuf: `let bytes = p.encode(); bytes.len()` where `encode` is a #[derive(Message)] method — bytes (Vec[u8]) is untyped at the call site. Minimal repro: a #[proto_schema] const declaring `message Person { string name = 1; }` then `let b = Person{name:"x"}.encode(); println(b.len());` — clean under `karac run`, codegen-aborts under `karac build`. | docs/implementation_checklist/phase-8-stdlib-floor.md § protobuf (compiled/AOT sub-item); src/comptime.rs (derive-expansion-before-typecheck future-work note) |
 
-### Fixed (300)
+### Fixed (301)
 
-<details><summary>300 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>301 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -406,6 +406,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **305 surfaced 
 | B-2026-07-08-11 | ownership | medium | Ownership-checker FALSE POSITIVE: a method call on a GENERIC-type receiver dispatched through a single trait bound (`a.cmp(b)` where `a: T`, `T: Ord`… | this commit |
 | B-2026-07-08-12 | codegen (struct construction) | medium | CODEGEN GAP (blocks Slice 6c): a struct with a `Map` (or `Set`) field constructed inside an associated `new()` constructor emits INVALID IR — `insert… | this commit |
 | B-2026-07-08-16 | codegen (pattern match) | medium | CODEGEN GAP (blocks Slice 6c): destructuring a TUPLE whose element is a SHARED struct (pointer-repr) out of an `Option` emits INVALID IR — `insertval… | this commit |
+| B-2026-07-08-17 | codegen (method dispatch) | medium | CODEGEN GAP (blocks Slice 6c): `<map>.values().collect()` / `.keys().collect()` / `.entries().collect()` fails codegen with `no handler for method 'c… | this commit |
 
 </details>
 

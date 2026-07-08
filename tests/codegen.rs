@@ -2245,6 +2245,38 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_map_values_keys_collect_to_vec() {
+        // B-2026-07-08-17: `<map>.values().collect()` / `.keys().collect()`
+        // failed codegen with "no handler for method 'collect' on non-identifier
+        // receiver" — the two `collect`-on-MethodCall intercepts only covered
+        // `chars()` and `map`/`filter` chains, so the eager `values()`/`keys()`
+        // Vec fell through to the dispatch-fail error. `values`/`keys`/`entries`
+        // already materialize an owned Vec, so `collect()` on them is identity.
+        // Surfaced by leetcode/group_anagrams (`groups.values().collect()`).
+        // Assert order-independently (Map iteration order is unspecified per
+        // design.md — sum the collected elements rather than compare positions).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut m: Map[i64, i64] = Map.new();\n\
+                 let _ = m.insert(1, 10);\n\
+                 let _ = m.insert(2, 20);\n\
+                 let _ = m.insert(3, 30);\n\
+                 let vs: Vec[i64] = m.values().collect();\n\
+                 let ks: Vec[i64] = m.keys().collect();\n\
+                 let mut vsum = 0;\n\
+                 for v in vs.iter() { vsum = vsum + v; }\n\
+                 let mut ksum = 0;\n\
+                 for k in ks.iter() { ksum = ksum + k; }\n\
+                 println(vsum);\n\
+                 println(ksum);\n\
+                 println(vs.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "60\n6\n3\n");
+        }
+    }
+
+    #[test]
     fn e2e_tuple_with_shared_struct_element_destructured_from_option() {
         // B-2026-07-08-16: destructuring a tuple whose first element is a shared
         // struct (pointer-repr) out of an `Option` — `Some((current, d))` from

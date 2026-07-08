@@ -3585,6 +3585,30 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<map>.values().collect()` / `.keys().collect()` / `.entries().collect()`
+        // → the map iterator `values`/`keys`/`entries` already materializes a
+        // fresh owned `Vec` eagerly (`compile_map_keys_values_entries`), so
+        // `collect()` on it is identity: evaluate the receiver and hand back its
+        // Vec (mirrors the identifier-receiver `collect` intercept above, which
+        // returns a clone of a materialized-iterator Vec). Without this the
+        // non-identifier `collect` receiver — the `.values()` MethodCall — falls
+        // through to the dispatch-fail error (B-2026-07-08-17). Surfaced by
+        // leetcode/group_anagrams (`groups.values().collect()`).
+        if method == "collect" && args.is_empty() {
+            if let ExprKind::MethodCall {
+                method: inner_method,
+                args: inner_args,
+                ..
+            } = &object.kind
+            {
+                if matches!(inner_method.as_str(), "values" | "keys" | "entries")
+                    && inner_args.is_empty()
+                {
+                    return self.compile_expr(object);
+                }
+            }
+        }
+
         // `<iter>.map(f)/.filter(p)....collect()` → materialize a `Vec[U]`
         // (B-2026-07-03-25). Codegen has no lazy iterator value, but a `map` /
         // `filter` adaptor chain terminating in `collect` is equivalent to a
