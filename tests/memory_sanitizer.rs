@@ -322,6 +322,56 @@ mod memory_sanitizer_tests {
     // called multiple times.
 
     #[test]
+    #[ignore = "B-2026-07-08-6: pre-existing codegen leak — a fn that conditionally \
+                returns one of several owned heap-owning struct params does not drop \
+                the un-returned one(s). std.cmp min/max/clamp over a heap Ord type \
+                surface it; the interpreter (karac run) is correct. Un-ignore when fixed."]
+    fn asan_std_cmp_min_max_clamp_heap_ord_no_leak() {
+        // roadmap Phase 8 § std.cmp — `min`/`max`/`clamp` are generic stdlib
+        // free fns monomorphized on demand from `ordering.kara`. Over a
+        // HEAP-OWNING `Ord` type (a `String`-field struct) the un-returned
+        // argument must drop exactly once. It currently LEAKS: `min`'s body
+        // (`match a.cmp(b) { Greater => b, _ => a }`) returns one owned param
+        // and drops the other, but codegen omits the drop of the un-returned
+        // param on the arm that doesn't move it out. NOT a std.cmp-specific
+        // bug: the minimal repro is plain user code —
+        //   `fn choose(a: Name, b: Name, t: bool) -> Name { if t { a } else { b } }`
+        // — no cmp / generics / stdlib. Tracked as B-2026-07-08-6. `#[ignore]`d
+        // until the codegen conditional-owned-param-drop fix lands; this is the
+        // ready regression test (un-ignore to verify the fix).
+        assert_clean_asan_run(
+            r#"
+struct Name { s: String }
+impl PartialEq for Name { fn eq(ref self, other: ref Name) -> bool { self.s == other.s } }
+impl Eq for Name {}
+impl PartialOrd for Name { fn partial_cmp(ref self, other: ref Name) -> Option[Ordering] { Some(self.s.cmp(other.s)) } }
+impl Ord for Name { fn cmp(ref self, other: ref Name) -> Ordering { self.s.cmp(other.s) } }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let lo = min(Name { s: f"alpha-{i}-padding-padding-padding" }, Name { s: f"beta-{i}-padding-padding-padding" });
+        let hi = max(Name { s: f"gamma-{i}-padding-padding-padding" }, Name { s: f"delta-{i}-padding-padding-padding" });
+        let cl = clamp(Name { s: f"mid-{i}-padding-padding-padding" }, Name { s: f"aaa-{i}" }, Name { s: f"zzz-{i}" });
+        println(lo.s);
+        println(hi.s);
+        println(cl.s);
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "alpha-0-padding-padding-padding",
+                "gamma-0-padding-padding-padding",
+                "mid-0-padding-padding-padding",
+                "alpha-1-padding-padding-padding",
+                "gamma-1-padding-padding-padding",
+                "mid-1-padding-padding-padding",
+            ],
+            "asan_std_cmp_min_max_clamp_heap_ord_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_single_element_fstring_vec_return_no_double_free() {
         // B-2026-07-04-1: a fn returning a SINGLE-element `Vec[String]` whose
         // element is an f-string literal (`return Vec[f"…"]`) double-freed the
