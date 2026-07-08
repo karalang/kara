@@ -2218,6 +2218,33 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_option_result_call_result_display_matches_interpreter() {
+        // B-2026-07-08-9 (call-result half): the variable case (`let x = get();
+        // f"{x}"`) was fixed first; a bare *call result* (`f"{get(1)}"`,
+        // `println(get(1))`) with no intervening `let` needs a span-keyed payload
+        // lookup (the variable path keys off the binding name). Guard both the
+        // f-string and println sites for Option[i64], Option[String], and
+        // Result[i64, String] call results.
+        if let Some(out) = run_program(
+            "fn get(k: i64) -> Option[i64] { if k == 1 { Some(10) } else { None } }\n\
+             fn tag(k: i64) -> Option[String] { if k == 1 { Some(\"hi\") } else { None } }\n\
+             fn res(k: i64) -> Result[i64, String] { if k > 0 { Ok(k) } else { Err(\"boom\") } }\n\
+             fn main() {\n\
+                 println(f\"a={get(1)} b={get(2)}\");\n\
+                 println(get(1));\n\
+                 println(f\"s={tag(1)}\");\n\
+                 println(f\"r={res(7)} e={res(-1)}\");\n\
+                 println(res(-2));\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "a=Some(10) b=None\nSome(10)\ns=Some(hi)\nr=Ok(7) e=Err(boom)\nErr(boom)\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_enumerate_loop_body_and_outer_mutations_execute() {
         // B-2026-07-08-5: `for (i, v) in xs.iter().enumerate()` fell through
         // `compile_for`'s dispatch to the silent skip-body arm, so the loop body

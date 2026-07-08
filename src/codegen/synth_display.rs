@@ -1960,4 +1960,65 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         Ok(None)
     }
+
+    /// B-2026-07-08-9 (call-result half): render an `Option[T]` / `Result[T, E]`
+    /// expression that is NOT a plain variable — a call result (`cache.get(1)`),
+    /// a method result, etc. — via its concrete per-payload Display fn. The
+    /// variable case (`try_compile_collection_display`) keys off the name-addressed
+    /// `var_option_payload_te` table populated at the `let` binding; a bare call
+    /// has no name, so we key off `display_option_result_types` (span-addressed,
+    /// forwarded from `TypeCheckResult.expr_types`). Non-place values are spilled
+    /// to an alloca so the Display fn has a pointer to load the 4-word aggregate
+    /// from (mirrors `render_user_enum_display`). Returns `None` when the expr is
+    /// not Option/Result-typed OR its payload isn't inline-displayable (compound
+    /// payloads remain a follow-on) — the caller then falls through to its
+    /// existing error path.
+    pub(super) fn try_compile_option_result_display(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        let key = (expr.span.offset, expr.span.length);
+        let Some(full_te) = self.display_option_result_types.get(&key).cloned() else {
+            return Ok(None);
+        };
+        // Resolve the Display fn for the concrete payload, guarding to
+        // inline-displayable payloads (primitives + String) exactly as the
+        // variable path does — the 4-i64 aggregate reload can't reconstruct a
+        // boxed/wide-struct payload.
+        let disp = if let Some(pte) = Self::option_payload_te(&full_te) {
+            if !Self::is_inline_displayable_payload(&pte) {
+                return Ok(None);
+            }
+            self.emit_option_display_te(&pte)
+        } else if let Some((ok_te, err_te)) = Self::result_payload_tes(&full_te) {
+            if !Self::is_inline_displayable_payload(&ok_te)
+                || !Self::is_inline_displayable_payload(&err_te)
+            {
+                return Ok(None);
+            }
+            self.emit_result_display_te(&ok_te, &err_te)
+        } else {
+            return Ok(None);
+        };
+        // Spill non-place values to an alloca so the append-form Display fn has
+        // a pointer to load from (a plain variable would already have a slot,
+        // but that case is handled earlier by `try_compile_collection_display`;
+        // here the expr is a call/method result).
+        let val_ptr = if let ExprKind::Identifier(n) = &expr.kind {
+            self.variables.get(n.as_str()).map(|s| s.ptr)
+        } else {
+            None
+        };
+        let val_ptr = match val_ptr {
+            Some(p) => p,
+            None => {
+                let val = self.compile_expr(expr)?;
+                let fn_val = self.current_fn.unwrap();
+                let slot = self.create_entry_alloca(fn_val, "optres.disp.tmp", val.get_type());
+                self.builder.build_store(slot, val).unwrap();
+                slot
+            }
+        };
+        Ok(Some(self.render_via_display_fn(disp, val_ptr)))
+    }
 }

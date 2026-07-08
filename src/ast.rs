@@ -315,6 +315,19 @@ pub type TaskJoinReturnTypesTable = std::collections::HashMap<(usize, usize), Ty
 pub type RefReturnInnerTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
 /// Side-table populated by the lowering pass from `TypeCheckResult.expr_types`:
+/// for every expression whose Kāra type is a built-in `Option[T]` /
+/// `Result[T, E]`, the full `Option`/`Result` `TypeExpr` keyed by the
+/// expression's span `(offset, length)`. Lets codegen render an Option/Result
+/// *call result* (`f"{cache.get(1)}"`, `println(opt_fn())`) via its concrete
+/// per-payload Display fn — the variable case keys off `var_option_payload_te`
+/// / `var_result_payload_te` (populated at the `let` binding), but a bare call
+/// expression has no variable name, so it needs a span-addressed lookup. The
+/// call-result half of B-2026-07-08-9; codegen splits the payload and applies
+/// the same inline-displayable guard the variable case does. Empty unless the
+/// lowering pass ran.
+pub type DisplayOptionResultTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
+/// Side-table populated by the lowering pass from `TypeCheckResult.expr_types`:
 /// for every expression whose Kāra type is a function type (`Fn(...)` /
 /// `OnceFn(...)`), maps its span `(offset, length)` to the equivalent `FnType`
 /// `TypeExpr`. Lets codegen recover a first-class fn value's signature from the
@@ -610,6 +623,12 @@ pub struct Program {
     /// type of every borrow-typed (`ref T`) expression, keyed by span. Lets
     /// codegen bind a borrow-returning method-call result as a ref-local.
     pub ref_return_inner_types: RefReturnInnerTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: the full
+    /// `Option[T]` / `Result[T, E]` `TypeExpr` of every such-typed expression,
+    /// keyed by span. Lets codegen render an Option/Result *call result* (no
+    /// variable name to key on) via its concrete Display fn — the call-result
+    /// half of B-2026-07-08-9. See [`DisplayOptionResultTypesTable`].
+    pub display_option_result_types: DisplayOptionResultTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_types`.
     pub pattern_binding_types: PatternBindingTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_inner_types`.

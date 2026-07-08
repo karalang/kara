@@ -6405,6 +6405,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_int_value();
             return Ok((data, len));
         }
+        // Option/Result *call result* interpolation (`f"{cache.get(1)}"`) — the
+        // variable case is caught by `try_compile_collection_display` above; this
+        // handles the no-variable-name expr via the span-keyed payload table.
+        // B-2026-07-08-9 (call-result half). Same scope-tracking as collections.
+        if let Some((acc, sval)) = self.try_compile_option_result_display(e)? {
+            let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
+            self.track_vec_var(acc, Some(u8_ty));
+            let s = sval.into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(s, 0, "fstr.or.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(s, 1, "fstr.or.len")
+                .unwrap()
+                .into_int_value();
+            return Ok((data, len));
+        }
         let is_char = self.expr_is_char(e);
         let val = self.compile_expr(e)?;
         if is_char {

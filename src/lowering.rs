@@ -156,6 +156,23 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // Forward the full `Option[T]` / `Result[T, E]` TypeExpr of every such-typed
+    // expression, keyed by span, so codegen can render an Option/Result *call
+    // result* (`f"{cache.get(1)}"`, `println(opt_fn())`) — which has no variable
+    // name to key on — via its concrete per-payload Display fn. The variable
+    // case is handled at the `let` binding (`var_option_payload_te`); this is the
+    // call-result half of B-2026-07-08-9. Codegen splits the payload and applies
+    // the inline-displayable guard, so recording the unfiltered type here is fine.
+    program.display_option_result_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Named { name, .. } if name == "Option" || name == "Result" => {
+                Some(((k.0, k.1), TypeChecker::type_to_type_expr(ty)))
+            }
+            _ => None,
+        })
+        .collect();
     // Forward the pattern-binding type table so codegen can reconstitute
     // struct payloads (single-field error wrappers, etc.) from the i64
     // word at match-arm bind sites. Without this, `Err(e) => e.field`

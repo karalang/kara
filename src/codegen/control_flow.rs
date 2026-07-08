@@ -716,6 +716,17 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Option/Result *call result* (`println(cache.get(1))`) — the variable
+        // case is caught by the identifier arms above; this handles the
+        // no-variable-name expr via the span-keyed payload table (spilling the
+        // value to an alloca internally). B-2026-07-08-9 (call-result half).
+        // Precedes the payload-enum / struct-value error arms, which explicitly
+        // exclude the built-in Option/Result enums.
+        if let Some((_acc, sval)) = self.try_compile_option_result_display(&args[0].value)? {
+            self.emit_print_and_free_string(sval, nl);
+            return Ok(zero.into());
+        }
+
         // User `impl Display` (a compiled `<Type>.to_string`) wins over every
         // built-in renderer below — render `println(x)` via the user method,
         // matching `f"{x}"` / `x.to_string()` and the interpreter. The owning

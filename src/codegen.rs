@@ -2211,6 +2211,14 @@ pub(super) struct Codegen<'ctx> {
     /// borrow and bind `n` as a ref-local. Method-ref half of
     /// B-2026-06-07-5 (free-fn calls use `fn_ref_return_inner`).
     pub(crate) ref_return_inner_types: HashMap<(usize, usize), TypeExpr>,
+    /// Full `Option[T]` / `Result[T, E]` `TypeExpr` of every such-typed
+    /// expression, keyed by span — populated from
+    /// `Program.display_option_result_types`. Lets `try_compile_option_result_display`
+    /// render an Option/Result *call result* (`f"{cache.get(1)}"`,
+    /// `println(opt_fn())`) via its concrete per-payload Display fn; the
+    /// variable case keys off `var_option_payload_te` instead. Call-result
+    /// half of B-2026-07-08-9.
+    pub(crate) display_option_result_types: HashMap<(usize, usize), TypeExpr>,
     /// Bare names of USER-defined impl methods whose declared return type is
     /// a borrow (`-> ref T`). Gates the method-ref caller path (let-bind +
     /// direct-use rejection) so it fires ONLY for user accessors — builtin
@@ -5492,6 +5500,7 @@ impl<'ctx> Codegen<'ctx> {
             gpu_dispatch_wgsl: HashMap::new(),
             task_join_return_types: HashMap::new(),
             ref_return_inner_types: HashMap::new(),
+            display_option_result_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             string_typed_exprs: HashSet::new(),
             fn_value_typed_exprs: HashMap::new(),
@@ -6472,6 +6481,7 @@ impl<'ctx> Codegen<'ctx> {
         self.gpu_dispatch_wgsl = program.gpu_dispatch_wgsl.clone();
         self.task_join_return_types = program.task_join_return_types.clone();
         self.ref_return_inner_types = program.ref_return_inner_types.clone();
+        self.display_option_result_types = program.display_option_result_types.clone();
         // Bare names of user impl methods that return a borrow — gates the
         // method-ref caller path away from builtin ref-returning methods.
         for item in &program.items {
@@ -7476,6 +7486,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_temp_recv_mapset_types = tp.temp_recv_mapset_types.clone();
         let mut t_channel_elem_types = tp.channel_elem_types.clone();
         let mut t_ref_return_inner_types = tp.ref_return_inner_types.clone();
+        let mut t_display_option_result_types = tp.display_option_result_types.clone();
         let mut t_pattern_binding_types = tp.pattern_binding_types.clone();
         let mut t_pattern_binding_inner_types = tp.pattern_binding_inner_types.clone();
         let mut t_pattern_binding_borrow_modes = tp.pattern_binding_borrow_modes.clone();
@@ -7514,6 +7525,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.ref_return_inner_types,
                     &mut t_ref_return_inner_types,
+                );
+                std::mem::swap(
+                    &mut self.display_option_result_types,
+                    &mut t_display_option_result_types,
                 );
                 std::mem::swap(
                     &mut self.pattern_binding_types,
