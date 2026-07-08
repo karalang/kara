@@ -39,7 +39,10 @@ fn pinned_session() -> Session {
 
 /// `pinned_session` variant for the `--auto-clone` REPL flag tests.
 fn pinned_session_with_auto_clone() -> Session {
-    let mut s = karac::repl::Session::with_options(ReplOptions { auto_clone: true });
+    let mut s = karac::repl::Session::with_options(ReplOptions {
+        auto_clone: true,
+        interp: false,
+    });
     pin_interpreter(&mut s);
     s
 }

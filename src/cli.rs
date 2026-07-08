@@ -350,6 +350,13 @@ pub enum Command {
         /// process exits non-zero. Used in CI when every required service
         /// must be live.
         all: bool,
+        /// `--interp`: force the tree-walk interpreter instead of the
+        /// default LLJIT executor (LLJIT-productionization Slice 5). The
+        /// interpreter is retained as a dev/debug backend (design.md §
+        /// Tree-walk interpreter (dev / debug only)); this is the ergonomic
+        /// equivalent of `KARAC_TEST_JIT=0`. No-op on a non-`llvm` build
+        /// (the interpreter is the only executor there).
+        interp: bool,
     },
     /// Launch the interactive REPL over the tree-walk interpreter. P0
     /// delivery item per `roadmap.md § Interactive Development`. See
@@ -363,6 +370,11 @@ pub enum Command {
         /// cross-cell `UseAfterMove`. Each insertion emits a
         /// `perf[auto-clone-in-repl]` note (never silent).
         auto_clone: bool,
+        /// `--interp`: force the tree-walk interpreter instead of the
+        /// default LLJIT executor (LLJIT-productionization Slice 5). The
+        /// ergonomic equivalent of `KARAC_REPL_JIT=0`; the interpreter is
+        /// retained as a dev/debug backend. No-op on a non-`llvm` build.
+        interp: bool,
     },
     /// Walk the project, parse every module, render one HTML page per
     /// documented item under `dist/doc/`. v1 MVP — no cross-references,
@@ -741,9 +753,13 @@ pub fn execute(cmd: Command) {
             template,
             force,
         } => cmd_init(directory, template, force),
-        Command::Test { filter, all } => cmd_test(filter, all),
-        Command::Repl { auto_clone } => {
-            crate::repl::run_with_options(crate::repl::ReplOptions { auto_clone })
+        Command::Test {
+            filter,
+            all,
+            interp,
+        } => cmd_test(filter, all, interp),
+        Command::Repl { auto_clone, interp } => {
+            crate::repl::run_with_options(crate::repl::ReplOptions { auto_clone, interp })
         }
         Command::Doc => cmd_doc(),
         Command::Clean { global } => cmd_clean(global),
@@ -10671,7 +10687,12 @@ fn run_health_check(cmd: &str) -> bool {
     }
 }
 
-fn cmd_test(filter: Option<String>, all: bool) {
+fn cmd_test(filter: Option<String>, all: bool, interp: bool) {
+    // `interp` is only consulted inside the `cfg(feature = "llvm")` JIT
+    // dispatch below; on a non-`llvm` build the interpreter is the only
+    // executor, so the flag is accepted (for CLI uniformity) but unused.
+    #[cfg(not(feature = "llvm"))]
+    let _ = interp;
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -10882,8 +10903,8 @@ fn cmd_test(filter: Option<String>, all: bool) {
 
     // One persistent JIT runner for the whole suite (amortizes LLVM init
     // across tests; re-spawns on a faulting test). Lazily spawns on the
-    // first JIT-dispatched test, so a suite running under `KARAC_TEST_JIT=0`
-    // or built without the feature pays nothing.
+    // first JIT-dispatched test, so a suite running under `--interp` /
+    // `KARAC_TEST_JIT=0` or built without the feature pays nothing.
     #[cfg(feature = "llvm")]
     let mut batch_runner = crate::test_jit_dispatch::TestBatchRunner::new(
         std::env::temp_dir().join(format!("karac_test_batch_{}", std::process::id())),
@@ -11022,14 +11043,16 @@ fn cmd_test(filter: Option<String>, all: bool) {
         // the body ran (see `test_main_synth` / `test_jit_dispatch`). The
         // `Completed` arm below maps that to the same event the interpreter
         // path emits.
-        // LLJIT Slice 1 (de-gate): `karac test` keeps the interpreter as the
-        // DEFAULT executor; `KARAC_TEST_JIT=1` opts INTO the JIT batch runner.
-        // Under the old `lljit_prototype` gate this was opt-out (JIT-default);
-        // folding the JIT into `llvm` would otherwise ship JIT-by-default in
-        // every `--features llvm` build — that flip is Slice 5, kept separate.
-        // Slice 5 restores `!= Ok("0")` once signed off.
+        // LLJIT Slice 5 (JIT-default flip): under `--features llvm` the JIT
+        // batch runner is now the DEFAULT `karac test` executor. The
+        // interpreter is the retained dev/debug backend, reachable via
+        // `--interp` (the `interp` param) or the `KARAC_TEST_JIT=0`
+        // regression-bisect escape hatch. So dispatch to the JIT unless
+        // either opt-out fires. (Slice 1 had this as opt-in `== Ok("1")`; the
+        // sign-off to flip landed this session — see
+        // docs/spikes/lljit-productionization.md § Slice 5.)
         #[cfg(feature = "llvm")]
-        if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1") {
+        if !interp && std::env::var("KARAC_TEST_JIT").as_deref() != Ok("0") {
             let timeout =
                 resolve_test_timeout(t.timeout_seconds, manifest_test_timeout, env_test_timeout);
             let fixtures: Vec<(String, crate::ast::Expr)> = t

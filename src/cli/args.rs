@@ -1137,9 +1137,14 @@ fn parse_run_example_command(args: &[String]) -> Command {
 fn parse_test_command(args: &[String]) -> Command {
     let mut filter: Option<String> = None;
     let mut all = false;
+    let mut interp = false;
     for arg in args.iter().skip(2) {
         match arg.as_str() {
             "--all" => all = true,
+            // `--interp`: force the interpreter over the default JIT executor
+            // (LLJIT Slice 5). Parsed on every build for CLI uniformity; only
+            // consulted under `--features llvm` (see `cmd_test`).
+            "--interp" => interp = true,
             flag if flag.starts_with("--") => {
                 eprintln!("error: unknown flag '{flag}' for `karac test`");
                 process::exit(1);
@@ -1153,14 +1158,22 @@ fn parse_test_command(args: &[String]) -> Command {
             }
         }
     }
-    Command::Test { filter, all }
+    Command::Test {
+        filter,
+        all,
+        interp,
+    }
 }
 
 fn parse_repl_command(args: &[String]) -> Command {
     let mut auto_clone = false;
+    let mut interp = false;
     for arg in args.iter().skip(2) {
         match arg.as_str() {
             "--auto-clone" => auto_clone = true,
+            // `--interp`: force the interpreter over the default JIT backend
+            // (LLJIT Slice 5). Parsed on every build; a no-op without `llvm`.
+            "--interp" => interp = true,
             flag if flag.starts_with("--") || flag.starts_with('-') => {
                 eprintln!("error: unknown flag '{flag}' for `karac repl`");
                 process::exit(1);
@@ -1171,7 +1184,7 @@ fn parse_repl_command(args: &[String]) -> Command {
             }
         }
     }
-    Command::Repl { auto_clone }
+    Command::Repl { auto_clone, interp }
 }
 
 fn parse_init_command(args: &[String]) -> Command {

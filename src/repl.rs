@@ -77,6 +77,12 @@ pub struct ReplOptions {
     /// `perf[auto-clone-in-repl]` note (never silent — design.md §
     /// Interactive Evaluation Model > Ownership Across Cells).
     pub auto_clone: bool,
+    /// `--interp`: force the tree-walk interpreter instead of the default
+    /// LLJIT executor (LLJIT-productionization Slice 5). The ergonomic
+    /// equivalent of `KARAC_REPL_JIT=0`; the interpreter is the retained
+    /// dev/debug backend. No effect on a non-`llvm` build (the JIT isn't
+    /// compiled in, so the interpreter already runs).
+    pub interp: bool,
 }
 
 /// Run the interactive REPL until EOF or `:quit`. Returns once the user
@@ -685,16 +691,16 @@ impl Session {
             #[cfg(feature = "llvm")]
             jit_client: None,
             #[cfg(feature = "llvm")]
-            // LLJIT Slice 1 (de-gate) keeps the tree-walk interpreter as the
-            // DEFAULT repl backend: `KARAC_REPL_JIT=1` opts INTO the JIT. When
-            // the JIT rode the unshipped `lljit_prototype` gate this defaulted
-            // JIT-on (opt-out via `=0`), but folding the JIT into `llvm`
-            // (Slice 1) would then ship JIT-by-default in every `--features
-            // llvm` build — that is Slice 5, deliberately kept separate. Slice
-            // 5 flips this back to opt-out (`!= Ok("0")`) once the repl-JIT
-            // default is signed off. The engine + all machinery are still
-            // compiled in; only the default is interpreter.
-            jit_enabled: std::env::var("KARAC_REPL_JIT").as_deref() == Ok("1"),
+            // LLJIT Slice 5 (JIT-default flip): under `--features llvm` the
+            // JIT is now the DEFAULT repl backend. The interpreter is the
+            // retained dev/debug backend, reachable via `--interp` (applied in
+            // `with_options`) or the `KARAC_REPL_JIT=0` escape hatch — so the
+            // bare `new()` default is JIT-on unless that env opt-out fires.
+            // (Slice 1 had this as opt-in `== Ok("1")`; the sign-off to flip
+            // landed this session — see docs/spikes/lljit-productionization.md
+            // § Slice 5.) Tests pin the interpreter via
+            // `set_jit_enabled_for_tests(false)`.
+            jit_enabled: std::env::var("KARAC_REPL_JIT").as_deref() != Ok("0"),
             #[cfg(feature = "llvm")]
             jit_next_cell_id: 0,
             #[cfg(feature = "llvm")]
@@ -1270,6 +1276,15 @@ impl Session {
     pub fn with_options(opts: ReplOptions) -> Self {
         let mut s = Self::new();
         s.auto_clone = opts.auto_clone;
+        // `--interp` (Slice 5) forces the interpreter over the now-default
+        // JIT. It's a hard override of the env-derived default set in `new()`
+        // — an explicit CLI flag beats the ambient `KARAC_REPL_JIT` env.
+        #[cfg(feature = "llvm")]
+        if opts.interp {
+            s.jit_enabled = false;
+        }
+        #[cfg(not(feature = "llvm"))]
+        let _ = opts.interp;
         s
     }
 

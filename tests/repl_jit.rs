@@ -736,3 +736,47 @@ fn repl_jit_cross_type_rebind_uses_new_value() {
         r.stdout,
     );
 }
+
+// ── Slice 5: JIT-default flip + `--interp` escape hatch ─────────────────────
+
+/// `--interp` (surfaced as `ReplOptions.interp`) forces the tree-walk
+/// interpreter over the now-default JIT. `Session::with_options` reads the
+/// env-derived default in `new()` (JIT-on unless `KARAC_REPL_JIT=0`) and then
+/// the flag hard-overrides it off. This is the regression guard for the
+/// escape hatch — the flag must win regardless of the ambient default.
+#[test]
+fn repl_interp_flag_forces_interpreter_over_default_jit() {
+    use karac::repl::ReplOptions;
+    let s = Session::with_options(ReplOptions {
+        auto_clone: false,
+        interp: true,
+    });
+    assert!(
+        !s.jit_enabled(),
+        "--interp must force the interpreter (jit_enabled == false) even though \
+         the Slice-5 default is JIT-on"
+    );
+}
+
+/// Without `--interp`, `with_options` leaves the JIT default in place: the
+/// Slice-5 flip means a fresh session is JIT-enabled unless `KARAC_REPL_JIT=0`
+/// is set. This suite's tests do not set that env var, so the default holds.
+#[test]
+fn repl_default_is_jit_after_slice5_flip() {
+    use karac::repl::ReplOptions;
+    // Guard the assertion on the escape-hatch env being unset, so a caller
+    // that exports KARAC_REPL_JIT=0 in the environment doesn't spuriously fail
+    // this test (the flag/env opt-outs are exercised by the test above).
+    if std::env::var("KARAC_REPL_JIT").as_deref() == Ok("0") {
+        return;
+    }
+    let s = Session::with_options(ReplOptions {
+        auto_clone: false,
+        interp: false,
+    });
+    assert!(
+        s.jit_enabled(),
+        "post-Slice-5, the default repl backend is the JIT (jit_enabled == true) \
+         unless --interp / KARAC_REPL_JIT=0 opt out"
+    );
+}

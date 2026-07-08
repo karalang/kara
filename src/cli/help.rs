@@ -663,7 +663,7 @@ NOTES:
 karac repl - Launch the interactive REPL
 
 USAGE:
-    karac repl [--auto-clone]
+    karac repl [--auto-clone] [--interp]
 
 FLAGS:
     --auto-clone   Opt into cross-cell ownership ergonomics. When a cell
@@ -676,6 +676,12 @@ FLAGS:
                    exports see the cloned form. Off by default; without
                    the flag the existing notebook-aware UAM diagnostic
                    surfaces unchanged.
+    --interp       Run cells on the tree-walk interpreter instead of the
+                   default LLJIT backend. The interpreter is a dev/debug
+                   executor (design.md § Tree-walk interpreter). Equivalent
+                   to `KARAC_REPL_JIT=0`; the flag wins over the env var.
+                   No effect on a build without the `llvm` feature (the JIT
+                   isn't compiled in, so the interpreter already runs).
     -h, --help     Print this message"
         }
         "test" => {
@@ -683,7 +689,7 @@ FLAGS:
 karac test - Run the project's tests
 
 USAGE:
-    karac test [<filter>] [--all]
+    karac test [<filter>] [--all] [--interp]
 
 ARGS:
     <filter>   Optional substring matched against each test case's
@@ -699,6 +705,11 @@ OPTIONS:
                runner emits `test_fail` for them instead and the
                process exits non-zero. Use in CI when every required
                service must be live.
+    --interp   Execute tests on the tree-walk interpreter instead of the
+               default LLJIT batch runner. The interpreter is a dev/debug
+               executor (design.md § Tree-walk interpreter). Equivalent to
+               `KARAC_TEST_JIT=0`; the flag wins over the env var. No
+               effect on a build without the `llvm` feature.
 
 OUTPUT:
     JSONL on stdout, one event per line. Event types: `run_start`,
