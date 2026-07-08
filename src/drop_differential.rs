@@ -77,9 +77,30 @@ pub fn has_capture_construct(src: &str) -> bool {
 }
 
 /// Compile `src` in-process with the drop recorder armed and diff the oracle's
+/// Which tree the oracle analyzes. The comparison is sound either way (validated
+/// 0-divergence on the corpus for both), and codegen's own inline self-check
+/// (`KARAC_ORACLE_DROP_CHECK`) uses `Lowered` — it analyzes the tree it already
+/// holds, which is why no surface tree needs threading into codegen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OracleTree {
+    /// Analyze before `lower` — matches the oracle's model + unit tests.
+    Surface,
+    /// Analyze after `lower` — matches what codegen's inline self-check does.
+    Lowered,
+}
+
+/// Compile `src` in-process with the drop recorder armed and diff the oracle's
 /// per-function schedule against codegen's emitted drop set. See the module doc
-/// for the three alignment rules that make this sound.
+/// for the three alignment rules that make this sound. Analyzes on the surface
+/// tree; use [`differential_check_on`] to pick the tree.
 pub fn differential_check(src: &str) -> DiffOutcome {
+    differential_check_on(src, OracleTree::Surface)
+}
+
+/// [`differential_check`] with an explicit oracle-tree choice. Both trees are
+/// validated to agree with codegen (0 divergences on the corpus); `Lowered`
+/// mirrors codegen's inline self-check.
+pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
     if has_capture_construct(src) {
         return DiffOutcome::CaptureEdge;
     }
@@ -94,9 +115,13 @@ pub fn differential_check(src: &str) -> DiffOutcome {
         return DiffOutcome::Invalid;
     }
 
-    // Oracle + per-function parameter names off the SURFACE tree (rule 1 & 2).
-    let oracle = crate::ownership_oracle::analyze(&parsed.program);
-    let params = param_names_by_function(&parsed.program);
+    // On the SURFACE tree, analyze before lowering (rule 1 & 2).
+    let surface = (tree == OracleTree::Surface).then(|| {
+        (
+            crate::ownership_oracle::analyze(&parsed.program),
+            param_names_by_function(&parsed.program),
+        )
+    });
 
     // Lower + ownership-check for codegen (codegen consumes the lowered tree).
     crate::lower(&mut parsed.program, &typed);
@@ -104,6 +129,14 @@ pub fn differential_check(src: &str) -> DiffOutcome {
     if !ownership.errors.is_empty() {
         return DiffOutcome::Invalid;
     }
+
+    // On the LOWERED tree, analyze after lowering — the tree codegen sees.
+    let (oracle, params) = surface.unwrap_or_else(|| {
+        (
+            crate::ownership_oracle::analyze(&parsed.program),
+            param_names_by_function(&parsed.program),
+        )
+    });
 
     // Seq surface (concurrency = None) to match the oracle's sequential model.
     // The recorder fires inside `compile_to_ir`'s cleanup drain; take

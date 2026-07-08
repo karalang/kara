@@ -22,7 +22,9 @@
 
 #![cfg(feature = "llvm")]
 
-use karac::drop_differential::{differential_check, DiffOutcome};
+use karac::drop_differential::{
+    differential_check, differential_check_on, DiffOutcome, OracleTree,
+};
 
 /// Assert `src` is a valid differential subject whose codegen drops cover the
 /// oracle's whole local schedule (zero missing-drop divergences). Returns the
@@ -153,6 +155,45 @@ fn borrow_param_source_still_drops() {
          fn main() {{ let s: String = {S}; let a: i64 = peek(s); println(a + s.len()); }}"
     );
     assert_clean(&src);
+}
+
+#[test]
+fn lowered_oracle_agrees_with_codegen() {
+    // Locks the architectural assumption codegen's inline self-check
+    // (`KARAC_ORACLE_DROP_CHECK`) relies on: the oracle run on the *lowered*
+    // tree — the tree codegen actually holds — covers codegen's emitted drops
+    // just as the surface-tree run does. If lowering ever introduced a droppable
+    // temporary the oracle scheduled but codegen didn't emit (or vice versa),
+    // this goes red and the self-check's no-plumbing design would need revisiting.
+    let shapes = [
+        format!("fn main() {{ let s: String = {S}; println(s.len()); }}"),
+        format!(
+            "fn main() {{ let s: String = {S}; let mut v: Vec[String] = Vec.new(); \
+             v.push(s); println(v.len()); }}"
+        ),
+        format!(
+            "struct P {{ tag: i64, name: String, items: Vec[String] }}\n\
+             fn main() {{ let p: P = P {{ tag: 1i64, name: {S}, items: Vec[{S}] }}; \
+             let P {{ tag, name, items }} = p; println(tag + name.len() + items.len()); }}"
+        ),
+        format!(
+            "fn main() {{ let mut m: Map[String, i64] = Map.new(); m.insert({S}, 1i64); \
+             let mut st: Set[String] = Set.new(); st.insert({S}); println(m.len() + st.len()); }}"
+        ),
+        format!(
+            "fn main() {{ let mut vv: Vec[Vec[String]] = Vec.new(); vv.push(Vec[{S}, {S}]); \
+             for iv in vv.iter() {{ for e in iv.iter() {{ println(e.len()); }} }} }}"
+        ),
+    ];
+    for src in &shapes {
+        match differential_check_on(src, OracleTree::Lowered) {
+            DiffOutcome::Checked { divergences, .. } => assert!(
+                divergences.is_empty(),
+                "lowered-oracle divergence: {divergences:?} in:\n{src}"
+            ),
+            other => panic!("expected Checked on lowered path, got {other:?} for:\n{src}"),
+        }
+    }
 }
 
 #[test]
