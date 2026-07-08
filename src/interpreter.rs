@@ -2064,6 +2064,27 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    /// Write a mutated *by-value* receiver back to its call-site place after a
+    /// mutating built-in method (`Map`/`Set`/`SortedMap`/`SortedSet` `insert`/
+    /// `remove`/`clear`, `String` `push`/`push_str`, iterator `next`, …). These
+    /// values are owned (not `Arc`-backed like `Vec`/`Array`), so the method ran
+    /// against a copy and the result must be stored back or the mutation is lost.
+    ///
+    /// The place dispatch mirrors the `mut ref self` user-method write-back and
+    /// `StmtKind::Assign`: a bare identifier, a struct field, an index slot, or
+    /// `self`. Before this, only a bare-identifier receiver was written back, so
+    /// `c.index.insert(..)` (a `Map` field) or `xs[i].insert(..)` silently
+    /// dropped the mutation (B-2026-07-08-14).
+    pub(crate) fn write_back_receiver(&mut self, object: &Expr, val: Value) {
+        match &object.kind {
+            ExprKind::Identifier(name) => self.env.set(name, val),
+            ExprKind::FieldAccess { object, field } => self.set_field(object, field, val),
+            ExprKind::Index { object, index } => self.set_index(object, index, val),
+            ExprKind::SelfValue => self.env.set("self", val),
+            _ => {}
+        }
+    }
+
     fn set_field(&mut self, object: &Expr, field: &str, val: Value) {
         // A bare-identifier (or `self`) receiver is mutated in its env slot.
         // Plain structs are value types, so the modified struct must be

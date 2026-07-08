@@ -41,15 +41,11 @@ impl<'a> super::Interpreter<'a> {
         match method {
             "clear" => {
                 if let Value::Map(_) = obj {
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Map(Vec::new()));
-                    }
+                    self.write_back_receiver(object, Value::Map(Vec::new()));
                     return Some(Value::Unit);
                 }
                 if let Value::SortedMap(_) = obj {
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::SortedMap(BTreeMap::new()));
-                    }
+                    self.write_back_receiver(object, Value::SortedMap(BTreeMap::new()));
                     return Some(Value::Unit);
                 }
             }

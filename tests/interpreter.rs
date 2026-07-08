@@ -20233,3 +20233,55 @@ fn forloop_enum_element_nested_struct_payload_runs() {
                }";
     assert_eq!(run(src), "240\n");
 }
+
+// B-2026-07-08-14: mutating a by-value collection (`Map`/`Set`/`SortedMap`/
+// `SortedSet`) or a `String` through a NON-identifier place (a struct field, an
+// index slot) must persist under the interpreter, matching codegen. Before the
+// fix only a bare-identifier receiver was written back, so `c.index.insert(..)`
+// mutated a copy and the insert was lost (interp printed the un-mutated length).
+#[test]
+fn test_map_mutation_through_struct_field_persists() {
+    let src = "struct Cache { index: Map[i64, u64] }\n\
+               fn main() {\n\
+               \x20 let mut c = Cache { index: Map.new() };\n\
+               \x20 let _ = c.index.insert(5, 9);\n\
+               \x20 let _ = c.index.insert(6, 10);\n\
+               \x20 println(c.index.len());\n\
+               }";
+    assert_eq!(run(src), "2\n");
+}
+
+#[test]
+fn test_set_and_string_mutation_through_field_persists() {
+    let set_src = "struct S { seen: Set[i64] }\n\
+                   fn main() {\n\
+                   \x20 let mut s = S { seen: Set.new() };\n\
+                   \x20 let _ = s.seen.insert(3);\n\
+                   \x20 let _ = s.seen.insert(3);\n\
+                   \x20 let _ = s.seen.insert(9);\n\
+                   \x20 println(s.seen.len());\n\
+                   }";
+    assert_eq!(run(set_src), "2\n");
+    let str_src = "struct T { buf: String }\n\
+                   fn main() {\n\
+                   \x20 let mut t = T { buf: \"\" };\n\
+                   \x20 t.buf.push('a');\n\
+                   \x20 t.buf.push_str(\"bc\");\n\
+                   \x20 println(t.buf);\n\
+                   }";
+    assert_eq!(run(str_src), "abc\n");
+}
+
+#[test]
+fn test_map_mutation_through_index_place_persists() {
+    // `v[0].insert(..)` — mutation through an index slot (not just a bare name).
+    let src = "fn main() {\n\
+               \x20 let m0: Map[i64, i64] = Map.new();\n\
+               \x20 let mut v: Vec[Map[i64, i64]] = Vec.new();\n\
+               \x20 v.push(m0);\n\
+               \x20 let _ = v[0].insert(5, 50);\n\
+               \x20 let _ = v[0].insert(6, 60);\n\
+               \x20 println(v[0].len());\n\
+               }";
+    assert_eq!(run(src), "2\n");
+}

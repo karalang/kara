@@ -111,9 +111,7 @@ impl<'a> super::Interpreter<'a> {
                             data: EnumData::Unit,
                         },
                     };
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, iter_val);
-                    }
+                    self.write_back_receiver(object, iter_val);
                     return Some(result);
                 }
             }
@@ -454,9 +452,7 @@ impl<'a> super::Interpreter<'a> {
                     }
                     let mut iter_val = obj;
                     let result = self.peek_value(&mut iter_val);
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, iter_val);
-                    }
+                    self.write_back_receiver(object, iter_val);
                     return Some(result);
                 }
             }

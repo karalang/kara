@@ -417,9 +417,7 @@ impl<'a> super::Interpreter<'a> {
                     };
                     let mut next = s.clone();
                     next.push(c);
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::String(next));
-                    }
+                    self.write_back_receiver(object, Value::String(next));
                     return Some(Value::Unit);
                 }
             }
@@ -439,9 +437,7 @@ impl<'a> super::Interpreter<'a> {
                     };
                     let mut next = s.clone();
                     next.push_str(&other);
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::String(next));
-                    }
+                    self.write_back_receiver(object, Value::String(next));
                     return Some(Value::Unit);
                 }
             }

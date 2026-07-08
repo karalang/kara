@@ -152,9 +152,7 @@ impl<'a> super::Interpreter<'a> {
                             data: EnumData::Unit,
                         }
                     };
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Map(m));
-                    }
+                    self.write_back_receiver(object, Value::Map(m));
                     return Some(old);
                 }
                 if let Value::SortedMap(mut m) = obj {
@@ -176,16 +174,12 @@ impl<'a> super::Interpreter<'a> {
                             data: EnumData::Unit,
                         },
                     };
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::SortedMap(m));
-                    }
+                    self.write_back_receiver(object, Value::SortedMap(m));
                     return Some(old);
                 }
                 if let Value::SortedSet(mut set) = obj {
                     let was_absent = set.insert(OrdValue(val), ()).is_none();
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::SortedSet(set));
-                    }
+                    self.write_back_receiver(object, Value::SortedSet(set));
                     return Some(Value::Bool(was_absent));
                 }
                 if let Value::Set(mut set) = obj {
@@ -193,9 +187,7 @@ impl<'a> super::Interpreter<'a> {
                     if was_absent {
                         set.push(val);
                     }
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Set(set));
-                    }
+                    self.write_back_receiver(object, Value::Set(set));
                     return Some(Value::Bool(was_absent));
                 }
             }
@@ -219,9 +211,7 @@ impl<'a> super::Interpreter<'a> {
                             data: EnumData::Unit,
                         }
                     };
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Map(m));
-                    }
+                    self.write_back_receiver(object, Value::Map(m));
                     return Some(old);
                 }
                 if let Value::SortedMap(mut m) = obj {
@@ -238,16 +228,12 @@ impl<'a> super::Interpreter<'a> {
                             data: EnumData::Unit,
                         },
                     };
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::SortedMap(m));
-                    }
+                    self.write_back_receiver(object, Value::SortedMap(m));
                     return Some(old);
                 }
                 if let Value::SortedSet(mut set) = obj {
                     let was_present = set.remove(&OrdValue(val)).is_some();
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::SortedSet(set));
-                    }
+                    self.write_back_receiver(object, Value::SortedSet(set));
                     return Some(Value::Bool(was_present));
                 }
                 if let Value::Set(mut set) = obj {
@@ -257,9 +243,7 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         false
                     };
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Set(set));
-                    }
+                    self.write_back_receiver(object, Value::Set(set));
                     return Some(Value::Bool(was_present));
                 }
             }
