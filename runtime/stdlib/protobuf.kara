@@ -10,8 +10,19 @@
 //! `encode` / `decode` / `merge` methods built from these primitives, reading
 //! the struct's fields via comptime reflection (no separate codegen tool).
 //!
-//! A future slice layers `.proto` schema parsing at comptime to emit the
-//! message types themselves.
+//! A `#[proto_schema] const S: String = "..."` holding proto3 schema text is
+//! expanded, before name resolution, into the `struct`/`enum` types it declares
+//! (each carrying `#[derive(Message)]`) by the pure-Kāra parser
+//! `proto_parse_schema` below — so a whole schema compiles with no external
+//! tool. See `examples/protobuf_schema.kara` and `tests/protobuf_proto.rs`.
+//!
+//! **Interpreter-only at v1.** The `#[derive(Message)]` methods are spliced at
+//! comptime, *after* typecheck, so the tree-walk interpreter dispatches them
+//! dynamically but codegen has no static type for them: a message method works
+//! under `karac run` and fails under `karac build`. Wiring the compiled path
+//! means running derive expansion before typecheck (a shared comptime-
+//! infrastructure change, see `src/comptime.rs`'s "derive expansion ahead of
+//! resolution" note) — tracked in `phase-8-stdlib-floor.md § protobuf`.
 //!
 //! ## Surface
 //!
