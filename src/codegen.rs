@@ -6156,6 +6156,25 @@ impl<'ctx> Codegen<'ctx> {
         // a source filename was threaded in via set_source_filename, which runs
         // before compile_program).
         self.di_init();
+        // ownership-model-mechanization Slice 4 (structural): when
+        // `KARAC_ORACLE_DROP_CHECK` is set, run the ownership oracle on this
+        // (lowered) program and arm the drop recorder, so `compile_program` can
+        // verify at the end that codegen's emitted cleanup covers the oracle's
+        // drop schedule on every function — the invariant the structural fix
+        // makes hold by construction, checked here first. Off by default (one
+        // env probe); it yields to an external arming (the differential harness)
+        // rather than fight it, so it never perturbs a real build or the fuzzer.
+        // The oracle runs on codegen's own lowered tree — validated to agree
+        // with codegen's emitted drops on the fuzzer corpus (0 divergences),
+        // which is why no surface tree needs threading in.
+        let mut oracle_drop_schedule = if std::env::var_os("KARAC_ORACLE_DROP_CHECK").is_some()
+            && !crate::codegen::drop_obs::armed()
+        {
+            crate::codegen::drop_obs::begin();
+            Some(crate::ownership_oracle::analyze(program))
+        } else {
+            None
+        };
         // Seed `Option` / `Result` layouts before walking struct fields so
         // a `shared struct N { mut left: Option[N] }` declaration's field-
         // type lowering finds the `{i64 tag, i64 payload}` layout via
@@ -6902,6 +6921,16 @@ impl<'ctx> Codegen<'ctx> {
         // `karac_par_run` / `karac_par_reduce` use-check is final (B-2026-06-15-2).
         self.finalize_write_console_wrapper();
 
+        // Slice 4 structural self-check: every user + stdlib function is now
+        // compiled, so the recorder holds codegen's full emitted-drop set.
+        // Compare it against the oracle schedule armed at entry. Warn-only (a
+        // diagnostic, not a build gate): closure / `spawn` / `par` captures are
+        // the oracle's §7 conservative edge and may warn benignly.
+        if let Some(schedule) = oracle_drop_schedule.take() {
+            let recs = crate::codegen::drop_obs::take();
+            self.verify_oracle_drop_coverage(program, &schedule, &recs);
+        }
+
         // Level 2 crash diagnostics — Part 2: finalize DWARF debug info BEFORE
         // verify. The verifier validates debug metadata, and unresolved
         // temporaries / a missing finalize would make it reject the module.
@@ -6911,6 +6940,64 @@ impl<'ctx> Codegen<'ctx> {
         self.module
             .verify()
             .map_err(|e| format!("Module verification failed: {}", e))
+    }
+
+    /// Slice 4 structural self-check (`KARAC_ORACLE_DROP_CHECK`): report any
+    /// place the ownership oracle schedules a drop for that codegen emitted no
+    /// cleanup action for — a missing drop (leak), the exact class the
+    /// structural fix must make impossible. Warn-only: this is the inline form
+    /// of the `drop_fuzz --differential` gate, run on whatever real program is
+    /// being compiled rather than the fuzzer corpus. Parameters are excluded
+    /// (an owned heap param is freed caller-side, not at the callee — see
+    /// `drop_differential`'s rule 2); closure / `spawn` / `par` captures are the
+    /// oracle's §7 conservative edge and may warn benignly. Only the
+    /// missing-drop direction is meaningful here — an extra codegen drop is not
+    /// emit-time distinguishable from a runtime-guarded no-op.
+    fn verify_oracle_drop_coverage(
+        &self,
+        program: &Program,
+        schedule: &crate::ownership_oracle::OracleResult,
+        recs: &[crate::codegen::drop_obs::DropRecord],
+    ) {
+        use std::collections::{HashMap, HashSet};
+
+        let params = crate::drop_differential::param_names_by_function(program);
+        let mut emitted: HashMap<&str, HashSet<&str>> = HashMap::new();
+        for r in recs {
+            emitted
+                .entry(r.function.as_str())
+                .or_default()
+                .insert(r.place.as_str());
+        }
+
+        let mut missing = 0usize;
+        for f in &schedule.functions {
+            let no_params = HashSet::new();
+            let fn_params = params.get(&f.function).unwrap_or(&no_params);
+            let em = emitted.get(f.function.as_str());
+            for d in &f.drops {
+                if fn_params.contains(&d.place) {
+                    continue;
+                }
+                if !em.is_some_and(|s| s.contains(d.place.as_str())) {
+                    missing += 1;
+                    eprintln!(
+                        "karac[oracle-drop-check]: fn `{}` — oracle schedules a drop for `{}` \
+                         ({}) that codegen emitted no cleanup for (possible leak, or a §7 \
+                         closure/spawn/par capture edge)",
+                        f.function, d.place, d.ty
+                    );
+                }
+            }
+        }
+        if missing == 0 {
+            eprintln!(
+                "karac[oracle-drop-check]: OK — codegen's emitted cleanup covers the oracle's \
+                 local drop schedule on every function"
+            );
+        } else {
+            eprintln!("karac[oracle-drop-check]: {missing} uncovered scheduled drop(s)");
+        }
     }
 
     /// Define the body of the internal `__karac_write_console` wrapper that
