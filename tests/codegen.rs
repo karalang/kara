@@ -2245,6 +2245,36 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_tuple_with_shared_struct_element_destructured_from_option() {
+        // B-2026-07-08-16: destructuring a tuple whose first element is a shared
+        // struct (pointer-repr) out of an `Option` — `Some((current, d))` from
+        // `Option[(Node, i64)]`, the shape `stack.pop()` produces in an iterative
+        // tree/graph walk — reconstructed the pointer element as the raw i64
+        // payload word and emitted `insertvalue i64 into ptr` (the tuple slot is
+        // `ptr`), aborting at module verification. Non-shared tuples
+        // (`Option[(i64, i64)]`) were unaffected. Fix: inttoptr each single-word
+        // shared/pointer tuple element to its slot type. Unblocked
+        // examples/leetcode/max_depth_binary_tree.kara (interp==AOT==JIT).
+        if let Some(out) = run_program(
+            "shared struct Node { val: i64 }\n\
+             fn main() {\n\
+                 let pair: Option[(Node, i64)] = Some((Node { val: 3 }, 7));\n\
+                 match pair {\n\
+                     None => { println(0); }\n\
+                     Some((current, d)) => { println(current.val + d); }\n\
+                 }\n\
+                 let none: Option[(Node, i64)] = None;\n\
+                 match none {\n\
+                     None => { println(-1); }\n\
+                     Some((c, d)) => { println(c.val + d); }\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "10\n-1\n");
+        }
+    }
+
+    #[test]
     fn e2e_map_field_constructed_in_associated_fn() {
         // B-2026-07-08-12: a `Map`/`Set`-typed struct field initialized with
         // `Map.new()` inside an associated constructor (`Cache.new()`) emitted

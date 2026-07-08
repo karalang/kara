@@ -2277,6 +2277,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 let end = (cursor + n).min(field_words.len());
                 let slice = &field_words[cursor..end];
                 let elem_val = self.reconstruct_payload_value(sub, slice)?;
+                // A single-word shared/pointer element (`(shared T, ..)`)
+                // reconstructs as the raw i64 payload word, but its tuple slot
+                // type is `ptr` (`pattern_payload_llvm_type`'s shared arm). Left
+                // as-is this emits `insertvalue i64 into ptr` — invalid IR that
+                // fails module verification (a `(shared T, i64)` tuple
+                // destructured out of an `Option`, e.g. `Some((current, d)) =
+                // stack.pop()`, B-2026-07-08-16). `inttoptr` to match the slot.
+                let elem_val = match (elem_tys[i], elem_val) {
+                    (BasicTypeEnum::PointerType(pt), BasicValueEnum::IntValue(iv)) => self
+                        .builder
+                        .build_int_to_ptr(iv, pt, "tup.elem.i2p")
+                        .unwrap()
+                        .into(),
+                    _ => elem_val,
+                };
                 agg = self
                     .builder
                     .build_insert_value(agg, elem_val, i as u32, "tup.iv")
