@@ -32,7 +32,9 @@ fn main() {
 
     // Nothing to do unless the JIT engine is compiled in. Cargo sets
     // `CARGO_FEATURE_<NAME>` for every active feature (uppercased, `-`→`_`).
-    if env::var_os("CARGO_FEATURE_LLJIT_PROTOTYPE").is_none() {
+    // Since LLJIT Slice 1 (de-gate) the JIT rides the `llvm` feature, so the
+    // ELF dynamic-symbol export keys on `CARGO_FEATURE_LLVM`.
+    if env::var_os("CARGO_FEATURE_LLVM").is_none() {
         return;
     }
 

@@ -29,7 +29,7 @@
 //! kills the karac process; the watchdog wrap goes on in c.4 alongside
 //! the per-test deadline plumbing.
 
-#![cfg(feature = "lljit_prototype")]
+#![cfg(feature = "llvm")]
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -367,7 +367,7 @@ impl TestBatchRunner {
         use std::process::{Command, Stdio};
         let runner_path = locate_karac_jit_runner().ok_or_else(|| {
             "karac_jit_runner binary not found alongside karac executable — rebuild karac \
-             with `--features lljit_prototype`"
+             with `--features llvm`"
                 .to_string()
         })?;
         let mut child = Command::new(&runner_path)

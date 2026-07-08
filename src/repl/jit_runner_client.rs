@@ -16,7 +16,7 @@
 //!      (the cargo build layout + the `karac install` step that copies
 //!      both binaries into the same install dir).
 
-#![cfg(feature = "lljit_prototype")]
+#![cfg(feature = "llvm")]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -61,7 +61,7 @@ impl ReplRunnerClient {
     pub fn spawn() -> Result<Self, String> {
         let path = locate_runner_binary().ok_or_else(|| {
             "karac_jit_runner binary not found — set KARAC_JIT_RUNNER or \
-             ensure karac was installed with --features lljit_prototype"
+             ensure karac was installed with --features llvm"
                 .to_string()
         })?;
         let mut child = Command::new(&path)

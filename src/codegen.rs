@@ -55,9 +55,9 @@ mod helpers;
 mod http;
 mod json;
 mod kernel;
-#[cfg(all(feature = "llvm", feature = "lljit_prototype"))]
+#[cfg(feature = "llvm")]
 mod lljit;
-#[cfg(all(feature = "llvm", feature = "lljit_prototype"))]
+#[cfg(feature = "llvm")]
 pub use lljit::{LLJITEngine, ResourceTracker};
 mod contracts;
 mod maps;
@@ -353,7 +353,7 @@ pub fn compile_to_ir_for_test_module(
 /// Gated on `lljit_prototype` — its only caller is `run_cell_via_jit`,
 /// which lives behind the same feature; without the gate the function
 /// is dead code under a plain `--features llvm` build.
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 pub(crate) fn impl_target_name_for_repl(target: &crate::ast::TypeExpr) -> Option<String> {
     helpers::impl_target_name(target)
 }
@@ -878,7 +878,7 @@ pub fn jit_run_main(
 /// W1 acceptance criterion (per L558 (a) finding): must round-trip a
 /// `printf` call on macOS arm64. If this entry hangs on a printf-bearing
 /// test, halt and revisit the v2 Cranelift question before W2+.
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 pub fn jit_run_main_lljit(
     program: &Program,
     ownership: Option<&OwnershipCheckResult>,

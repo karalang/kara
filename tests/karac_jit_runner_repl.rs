@@ -8,7 +8,7 @@
 //! engine persistence, per-cell ResourceTracker install, dup2-based
 //! stdout capture, response framing.
 
-#![cfg(feature = "lljit_prototype")]
+#![cfg(feature = "llvm")]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};

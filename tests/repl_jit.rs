@@ -14,7 +14,7 @@
 //! - A panicking cell trips the runner-died re-spawn flow; the next
 //!   cell sees a fresh runner.
 
-#![cfg(feature = "lljit_prototype")]
+#![cfg(feature = "llvm")]
 
 use karac::repl::Session;
 

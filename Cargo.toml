@@ -54,24 +54,28 @@ default = []
 # `types/enums.rs`). So the coro scaffolding for the network-async transform
 # (phase-6 bug C / A2) is emitted via llvm-sys raw FFI interleaved with the
 # inkwell-built body. Same 18.1 pin + `prefer-dynamic` as inkwell, so there's
-# a single LLVM copy. (`lljit_prototype` separately re-lists `dep:llvm-sys`
-# for its orc2 use; cargo unions the activations.)
-llvm = ["inkwell", "dep:llvm-sys"]
+# a single LLVM copy.
+#
+# LLJIT productionization Slice 1 (de-gate, 2026-07-08): the always-JIT
+# execution backend (orc2/LLJIT wrap, `src/codegen/lljit.rs`) is now folded
+# INTO `llvm` rather than living behind a throwaway `lljit_prototype` gate.
+# `--features llvm` (the shipped/CI build) therefore carries the JIT engine +
+# the `karac_jit_runner` bin, and pulls `karac-runtime` (as a regular dep, for
+# in-process JIT symbol resolution) + `libc` (per-cell fd redirect). Rationale:
+# the JIT lane must ride the same feature CI already exercises, so `--features
+# llvm` clippy/codegen/test jobs cover it (they did not under the prototype
+# gate — the invisibility that let the whole-lane Linux breakage sit undetected,
+# B-2026-07-07-5). Tradeoff (owner-accepted for this slice): every `--features
+# llvm` build now links the tokio/hyper/rustls `karac-runtime` tree + pays the
+# JIT build cost — there is no minimal-AOT-without-runtime build anymore. This
+# is DE-GATE ONLY: `karac repl`/`test`/`run` still default to the tree-walk
+# interpreter (JIT is opt-in via `KARAC_REPL_JIT=1` / `KARAC_TEST_JIT=1`); the
+# JIT-by-default flip is Slice 5, deliberately kept separate.
+llvm = ["inkwell", "dep:llvm-sys", "dep:karac-runtime", "dep:libc"]
 # Throwaway prototype gate for phase-7 L558 sub-step (a): inkwell-MCJIT
 # round-trip of representative Kāra modules. Off by default; not shipped
 # in the normal karac binary. Removed when the orc2 wrap (L560) lands.
 mcjit_prototype = ["llvm"]
-# Phase-7 L560 W1+ gate: orc2/LLJIT wrap, calling `llvm-sys::orc2`
-# directly (inkwell does not expose ORC v2). Off by default; promoted
-# to default + integrated into `karac repl`/`karac test` once W6 closes.
-#
-# W3.4: pulls `karac-runtime` in as a regular optional dep (not just
-# dev-dep) so the `karac_jit_runner` bin target — the subprocess
-# helper that isolates JIT'd panics from `cargo test`'s runner — can
-# link the runtime. Production builds with the default feature set
-# don't activate this dep; the AOT path keeps consuming `libkarac_runtime.a`
-# as a static archive instead.
-lljit_prototype = ["llvm", "dep:llvm-sys", "dep:karac-runtime", "dep:libc"]
 
 # Phase-7 L560 W3.4 — subprocess helper for JIT panic isolation. Takes
 # a karac-emitted LLVM IR file on argv, runs it through `LLJITEngine`,
@@ -80,12 +84,12 @@ lljit_prototype = ["llvm", "dep:llvm-sys", "dep:karac-runtime", "dep:libc"]
 # `exit(1)` from a runtime panic (bounds check, map-miss, slice OOB)
 # terminates only the helper child — `cargo test`'s runner is unaffected,
 # `Command::output` captures stdout/stderr/exit-code identically to the
-# AOT subprocess path. Only built when `lljit_prototype` is on; not
-# shipped in the default karac binary set.
+# AOT subprocess path. Built whenever `llvm` is on (Slice 1 de-gate); not
+# present in the default (interpreter-only) karac binary set.
 [[bin]]
 name = "karac_jit_runner"
 path = "src/bin/karac_jit_runner.rs"
-required-features = ["lljit_prototype"]
+required-features = ["llvm"]
 
 # Drop-soundness fuzzer (ownership-model-mechanization spike, Slice 1). Drives
 # the AOT codegen path (`compile_to_object` + `link_executable_with_sanitizer`),

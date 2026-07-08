@@ -9,7 +9,7 @@
 //! This is on the `lljit_prototype` cargo feature path and is not
 //! compiled into the normal `karac` binary until W6 closes.
 
-#![cfg(all(feature = "llvm", feature = "lljit_prototype"))]
+#![cfg(feature = "llvm")]
 
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;

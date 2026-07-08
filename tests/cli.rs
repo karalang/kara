@@ -2700,7 +2700,7 @@ fn test_test_failure_emits_contract_fault_category() {
 // stays byte-identical to the interpreter-path equivalents above —
 // the JIT cutover is supposed to be invisible to consumers.
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 #[test]
 fn test_test_jit_all_passing() {
     let tmp = scratch_project("test-jit-all-pass");
@@ -2736,7 +2736,7 @@ fn test_test_jit_all_passing() {
     assert!(summary.contains("\"failed\":0"));
 }
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 #[test]
 fn test_test_jit_failure_emits_left_right_and_location() {
     let tmp = scratch_project("test-jit-failure-detail");
@@ -2779,7 +2779,7 @@ fn test_test_jit_failure_emits_left_right_and_location() {
     assert!(summary.contains("\"failed\":1"));
 }
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 #[test]
 fn test_test_jit_bare_assert_false_emits_null_left_right() {
     // `assert(false)` failures (no left/right operands) must still
@@ -2823,7 +2823,7 @@ fn test_test_jit_bare_assert_false_emits_null_left_right() {
     );
 }
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 #[test]
 fn test_test_jit_timeout_kills_hanging_test() {
     // A `loop {}` body would normally hang the runner indefinitely.
@@ -2922,7 +2922,7 @@ fn test_jit_batch_runner_continues_after_failing_tests() {
     assert!(summary.contains("\"failed\":2"), "summary: {summary}");
 }
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 #[test]
 fn test_jit_skeleton_path_links_real_bodies_not_stubs() {
     // Incremental-typecheck slice: a no-fixture test's per-test `main` module

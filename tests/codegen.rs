@@ -29,33 +29,33 @@ mod common;
 // these stand-ins only satisfy the test binary's link, not user-
 // program semantics.
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 #[no_mangle]
 #[allow(non_upper_case_globals)]
 pub static KARAC_SPAWN_SITES_ENABLED: u8 = 0;
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 #[no_mangle]
 #[allow(non_upper_case_globals)]
 pub static KARAC_SPAWN_SITES_LEN: u32 = 0;
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 #[no_mangle]
 #[allow(non_upper_case_globals)]
 pub static KARAC_SPAWN_SITES: KaracSpawnSitesPad = KaracSpawnSitesPad([0; 4]);
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 #[repr(C, align(8))]
 pub struct KaracSpawnSitesPad([u64; 4]);
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 unsafe impl Sync for KaracSpawnSitesPad {}
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 #[used]
 static _FORCE_LINK_CALL_SITE: fn() -> usize = force_link_karac_runtime;
 
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 fn force_link_karac_runtime() -> usize {
     karac_runtime::__preserve_no_mangle_symbols()
 }
@@ -8156,7 +8156,7 @@ fn main() {
         // path (the runtime's atexit handler runs at test-binary exit,
         // not per-test) — stderr-dependent assertions need a different
         // approach and are currently the known failure bucket.
-        #[cfg(feature = "lljit_prototype")]
+        #[cfg(feature = "llvm")]
         if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1") {
             return jit_dispatch(&parsed.program, filename);
         }
@@ -8217,7 +8217,7 @@ fn main() {
     /// `tests/lljit_e2e.rs`. The codegen suite uses subprocess JIT
     /// only as a test-runner artifact, parallel to how the AOT codegen
     /// suite uses subprocess-execed binaries.
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     fn jit_dispatch(program: &karac::ast::Program, filename: Option<&str>) -> Option<CapturedRun> {
         use karac::codegen::compile_to_ir_with_options;
         use std::io::Write;

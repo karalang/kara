@@ -7,7 +7,7 @@
 //! before W2 — accumulating effort on a broken JIT foundation is the
 //! footgun this gate exists to catch.
 
-#![cfg(feature = "lljit_prototype")]
+#![cfg(feature = "llvm")]
 
 use karac::codegen::jit_run_main_lljit;
 

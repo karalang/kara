@@ -987,7 +987,7 @@ pub(super) fn parse_let_binding_names(let_src: &str) -> std::collections::HashSe
 /// need its own cross-cell ownership story (the global holds a
 /// heap pointer; who runs the destructor? when?), which is a
 /// dedicated slice of work each.
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 pub(super) fn snapshot_kind_for_type(
     ty: &crate::typechecker::Type,
 ) -> Option<crate::codegen::SnapshotPrimKind> {

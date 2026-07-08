@@ -16,7 +16,7 @@
 //! parallel to how the AOT codegen suite already spawns compiled
 //! binaries.
 
-#![cfg(feature = "lljit_prototype")]
+#![cfg(feature = "llvm")]
 
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};

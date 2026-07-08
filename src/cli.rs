@@ -10884,7 +10884,7 @@ fn cmd_test(filter: Option<String>, all: bool) {
     // across tests; re-spawns on a faulting test). Lazily spawns on the
     // first JIT-dispatched test, so a suite running under `KARAC_TEST_JIT=0`
     // or built without the feature pays nothing.
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     let mut batch_runner = crate::test_jit_dispatch::TestBatchRunner::new(
         std::env::temp_dir().join(format!("karac_test_batch_{}", std::process::id())),
     );
@@ -10908,7 +10908,7 @@ fn cmd_test(filter: Option<String>, all: bool) {
     // resource names from the whole tree; a fixture forces full mode unless its
     // resource is in that set (an unrecognized / qualified name falls to full
     // mode, which is always correct, just uncached).
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     let traitful_resources: std::collections::HashSet<&str> = tree
         .modules
         .iter()
@@ -10920,7 +10920,7 @@ fn cmd_test(filter: Option<String>, all: bool) {
             _ => None,
         })
         .collect();
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     let full_mode_fixture_modules: std::collections::HashSet<usize> = tests
         .iter()
         .filter(|t| {
@@ -11022,8 +11022,14 @@ fn cmd_test(filter: Option<String>, all: bool) {
         // the body ran (see `test_main_synth` / `test_jit_dispatch`). The
         // `Completed` arm below maps that to the same event the interpreter
         // path emits.
-        #[cfg(feature = "lljit_prototype")]
-        if std::env::var("KARAC_TEST_JIT").as_deref() != Ok("0") {
+        // LLJIT Slice 1 (de-gate): `karac test` keeps the interpreter as the
+        // DEFAULT executor; `KARAC_TEST_JIT=1` opts INTO the JIT batch runner.
+        // Under the old `lljit_prototype` gate this was opt-out (JIT-default);
+        // folding the JIT into `llvm` would otherwise ship JIT-by-default in
+        // every `--features llvm` build — that flip is Slice 5, kept separate.
+        // Slice 5 restores `!= Ok("0")` once signed off.
+        #[cfg(feature = "llvm")]
+        if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1") {
             let timeout =
                 resolve_test_timeout(t.timeout_seconds, manifest_test_timeout, env_test_timeout);
             let fixtures: Vec<(String, crate::ast::Expr)> = t

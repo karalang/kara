@@ -42,7 +42,7 @@ use rustyline::DefaultEditor;
 use crate::interpreter::Value;
 
 mod display;
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 mod jit_runner_client;
 mod util;
 
@@ -58,7 +58,7 @@ mod util;
 /// `"hi"` (no trailing newline) → `["hi"]`, `"7\n8"` → `["7\n", "8"]`).
 /// A plain `split('\n')` strips the newline and breaks the `join("")`
 /// contract — two `println`s collapse to `"78"` instead of `"7\n8\n"`.
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 fn bytes_to_stdout_lines(bytes: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(bytes);
     text.split_inclusive('\n').map(|s| s.to_string()).collect()
@@ -89,7 +89,7 @@ pub fn run() {
 /// on, `None` otherwise. Reads the session's `jit_enabled` snapshot
 /// taken at construction so the banner can't disagree with the
 /// dispatch path the session will actually take.
-#[cfg(feature = "lljit_prototype")]
+#[cfg(feature = "llvm")]
 fn jit_banner_tag(session: &Session) -> Option<String> {
     if session.jit_enabled() {
         Some("JIT".to_string())
@@ -98,7 +98,7 @@ fn jit_banner_tag(session: &Session) -> Option<String> {
     }
 }
 
-#[cfg(not(feature = "lljit_prototype"))]
+#[cfg(not(feature = "llvm"))]
 fn jit_banner_tag(_session: &Session) -> Option<String> {
     None
 }
@@ -564,12 +564,12 @@ pub struct Session {
     /// Re-spawned after a cell-induced `exit(1)` terminates the
     /// runner. `None` either when JIT mode is off or after a death
     /// + before the next cell.
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     jit_client: Option<jit_runner_client::ReplRunnerClient>,
     /// Slice c-repl.B.B: snapshot of `KARAC_REPL_JIT=1` at session
     /// construction. Env var is read once so a mid-session flip can't
     /// half-route cells.
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     jit_enabled: bool,
     /// Slice c-repl.B.B: monotonic cell id for the JIT subprocess
     /// protocol framing. The runner echoes the id back on `result`
@@ -578,7 +578,7 @@ pub struct Session {
     /// `fn main()` is registered in LLVM under `cell_main_<id>`
     /// (slice c-repl.B.4) so multiple cells coexist in the runner's
     /// JITDylib without symbol collisions.
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     jit_next_cell_id: u64,
     /// Slice c-repl.B.4: names of free functions already installed
     /// in the JIT runner's JITDylib by a prior successful cell. The
@@ -589,7 +589,7 @@ pub struct Session {
     /// JITDylib) and on `:reset` (which drops the runner so the
     /// snapshot globals don't outlive the persistent-let slate that
     /// gave them meaning).
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     jit_installed_fns: std::collections::HashSet<String>,
     /// Slice c-repl.B.5.1: top-level `let <name> = <expr>` bindings
     /// whose bound value has been stashed into a cell-spanning LLVM
@@ -603,7 +603,7 @@ pub struct Session {
     /// Cleared on runner death (the fresh runner's JITDylib has no
     /// globals) and on `:reset`. Only primitive types (i64, f64,
     /// bool, char) qualify in B.5.1; richer types deferred.
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     jit_snapshotted_lets: std::collections::HashMap<String, crate::codegen::SnapshotPrimKind>,
 }
 
@@ -682,22 +682,24 @@ impl Session {
             persistent_let_provider_scope: Vec::new(),
             pruned_provider_lets: Vec::new(),
             cell_effect_history: Vec::new(),
-            #[cfg(feature = "lljit_prototype")]
+            #[cfg(feature = "llvm")]
             jit_client: None,
-            #[cfg(feature = "lljit_prototype")]
-            // JIT is the default execution path (L577 step (c), 2026-05-31):
-            // all hardening gates cleared (L581 W5 + L601 Level 2 DWARF) and
-            // the full repl + `karac test` JIT blocker buckets closed
-            // (JIT-repl failures 0; `karac test` codegen/linkage audit clean
-            // after the predicate-FFI fix `037ce290`). `KARAC_REPL_JIT=0` is
-            // now the regression-bisect escape hatch rather than `=1` being
-            // the opt-in.
-            jit_enabled: std::env::var("KARAC_REPL_JIT").as_deref() != Ok("0"),
-            #[cfg(feature = "lljit_prototype")]
+            #[cfg(feature = "llvm")]
+            // LLJIT Slice 1 (de-gate) keeps the tree-walk interpreter as the
+            // DEFAULT repl backend: `KARAC_REPL_JIT=1` opts INTO the JIT. When
+            // the JIT rode the unshipped `lljit_prototype` gate this defaulted
+            // JIT-on (opt-out via `=0`), but folding the JIT into `llvm`
+            // (Slice 1) would then ship JIT-by-default in every `--features
+            // llvm` build — that is Slice 5, deliberately kept separate. Slice
+            // 5 flips this back to opt-out (`!= Ok("0")`) once the repl-JIT
+            // default is signed off. The engine + all machinery are still
+            // compiled in; only the default is interpreter.
+            jit_enabled: std::env::var("KARAC_REPL_JIT").as_deref() == Ok("1"),
+            #[cfg(feature = "llvm")]
             jit_next_cell_id: 0,
-            #[cfg(feature = "lljit_prototype")]
+            #[cfg(feature = "llvm")]
             jit_installed_fns: std::collections::HashSet::new(),
-            #[cfg(feature = "lljit_prototype")]
+            #[cfg(feature = "llvm")]
             jit_snapshotted_lets: std::collections::HashMap::new(),
         }
     }
@@ -1281,7 +1283,7 @@ impl Session {
     /// `Session::new` reads the env once; tests want explicit control
     /// without poking shared process state (which Rust 2024 made
     /// `unsafe`). Production callers should set the env var instead.
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     pub fn set_jit_enabled_for_tests(&mut self, enabled: bool) {
         self.jit_enabled = enabled;
     }
@@ -1289,7 +1291,7 @@ impl Session {
     /// Slice c-repl.B.B inspector: reports whether JIT-dispatch mode
     /// is active for this session. Used by integration tests to
     /// confirm the env-var read and by future status meta-commands.
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     pub fn jit_enabled(&self) -> bool {
         self.jit_enabled
     }
@@ -1697,7 +1699,7 @@ impl Session {
             // value-snapshot semantics for primitive-typed lets — see
             // `run_cell_via_jit` for the capture/replay handoff via
             // codegen-emitted LLVM globals in the runner's JITDylib.
-            #[cfg(feature = "lljit_prototype")]
+            #[cfg(feature = "llvm")]
             if self.jit_enabled {
                 return Ok(self.run_cell_via_jit(&parsed.program, &typed, capture, notes));
             }
@@ -1948,7 +1950,7 @@ impl Session {
     /// Non-primitive types (String, Vec, Map, structs) still fall
     /// through to the re-evaluating path; see slice c-repl.B.5
     /// follow-ons for those.
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     fn run_cell_via_jit(
         &mut self,
         program: &crate::ast::Program,
@@ -2176,7 +2178,7 @@ impl Session {
     /// goes through `snapshot_kind_for_type` which intentionally
     /// only accepts the explicit primitive forms (so an `i32` or
     /// `u64` doesn't quietly get stashed at the wrong storage width).
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     fn compute_snapshot_sets_for_cell(
         &self,
         program: &crate::ast::Program,
@@ -2670,7 +2672,7 @@ impl Session {
         // new RHS evaluates fresh. Trade-off: cached fn definitions
         // also re-emit, but shadows are explicit user actions and
         // not the steady-state pattern.
-        #[cfg(feature = "lljit_prototype")]
+        #[cfg(feature = "llvm")]
         if new_names
             .iter()
             .any(|n| self.jit_snapshotted_lets.contains_key(n))
@@ -2702,7 +2704,7 @@ impl Session {
         // dead value. Drop the whole runner so the next cell respawns
         // with a fresh, empty JITDylib; `jit_installed_fns` clears in
         // step so fn bodies re-emit instead of going declare-only.
-        #[cfg(feature = "lljit_prototype")]
+        #[cfg(feature = "llvm")]
         {
             self.jit_installed_fns.clear();
             self.jit_snapshotted_lets.clear();
@@ -3316,7 +3318,7 @@ impl Session {
     }
 }
 
-#[cfg(all(test, feature = "lljit_prototype"))]
+#[cfg(all(test, feature = "llvm"))]
 mod jit_stdout_tests {
     use super::bytes_to_stdout_lines;
 

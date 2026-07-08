@@ -12,9 +12,9 @@ use karac::repl::{DependencyKind, MagicOutput, ReplOptions, Session};
 /// fresh `Session` already runs the interpreter); under `lljit_prototype`
 /// it flips the per-session JIT flag back off.
 fn pin_interpreter(session: &mut Session) {
-    #[cfg(feature = "lljit_prototype")]
+    #[cfg(feature = "llvm")]
     session.set_jit_enabled_for_tests(false);
-    #[cfg(not(feature = "lljit_prototype"))]
+    #[cfg(not(feature = "llvm"))]
     let _ = session;
 }
 
