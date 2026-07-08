@@ -363,22 +363,21 @@ fn main() {
     }
 
     #[test]
-    #[ignore = "B-2026-07-08-6: generic-mono-path leak remains (compile_generic_call \
-                does no caller arg-temp cleanup); the NON-generic case is fixed. \
-                Un-ignore when the mono path is handled."]
     fn asan_std_cmp_min_max_clamp_heap_ord_no_leak() {
         // roadmap Phase 8 § std.cmp — `min`/`max`/`clamp` are generic stdlib
         // free fns monomorphized on demand from `ordering.kara`. Over a
         // HEAP-OWNING `Ord` type (a `String`-field struct) the un-returned
-        // argument must drop exactly once. It currently LEAKS: `min`'s body
-        // (`match a.cmp(b) { Greater => b, _ => a }`) returns one owned param
-        // and drops the other, but codegen omits the drop of the un-returned
-        // param on the arm that doesn't move it out. NOT a std.cmp-specific
-        // bug: the minimal repro is plain user code —
-        //   `fn choose(a: Name, b: Name, t: bool) -> Name { if t { a } else { b } }`
-        // — no cmp / generics / stdlib. Tracked as B-2026-07-08-6. `#[ignore]`d
-        // until the codegen conditional-owned-param-drop fix lands; this is the
-        // ready regression test (un-ignore to verify the fix).
+        // argument must drop exactly once. B-2026-07-08-6 (generic/mono leg,
+        // FIXED): the monomorph now ENTRY-COPIES its owned struct params
+        // (`compile_mono_function` → `make_aggregate_param_callee_owned`) and
+        // the caller registers the original arg-temp's drop
+        // (`compile_generic_call` → `track_inline_owned_aggregate_arg`),
+        // bringing the mono path to ownership parity with the non-generic
+        // `compile_function`/`compile_call` path. Before the fix `min`'s body
+        // (`match a.cmp(b) { Greater => b, _ => a }`) returned one owned param
+        // and the OTHER (plus every caller original) leaked. Ground-truthed
+        // balanced via a malloc interposer (4 mallocs / 4 frees for
+        // `min(Name, Name)`).
         assert_clean_asan_run(
             r#"
 struct Name { s: String }
@@ -408,6 +407,44 @@ fn main() {
                 "mid-1-padding-padding-padding",
             ],
             "asan_std_cmp_min_max_clamp_heap_ord_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_generic_fn_returns_owned_heap_struct_param_no_leak() {
+        // B-2026-07-08-6 (generic/mono leg, FIXED) — the non-stdlib peer of
+        // the std.cmp test: a USER generic fn that returns an owned heap-owning
+        // struct param. Pins the mono-path ownership parity directly (entry-
+        // copy in `compile_mono_function` + caller arg-temp drop in
+        // `compile_generic_call`) independent of the baked stdlib. `gid`
+        // (single param) and `gpick` (keep one of two) both leaked pre-fix: the
+        // mono registered no owned-aggregate param drop and the generic call
+        // path registered no caller arg-temp cleanup. (A `cmp`-based generic
+        // body can't be user-written — the ownership checker treats a generic
+        // trait-method value arg as a move — so this uses plain returns.)
+        assert_clean_asan_run(
+            r#"
+struct Name { s: String }
+fn gid[T](a: T) -> T { a }
+fn gpick[T](a: T, b: T) -> T { a }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let x = gid(Name { s: f"gid-{i}-padding-padding" });
+        let y = gpick(Name { s: f"gpa-{i}-padding-padding" }, Name { s: f"gpb-{i}-padding-padding" });
+        println(x.s);
+        println(y.s);
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "gid-0-padding-padding",
+                "gpa-0-padding-padding",
+                "gid-1-padding-padding",
+                "gpa-1-padding-padding",
+            ],
+            "asan_generic_fn_returns_owned_heap_struct_param_no_leak",
         );
     }
 

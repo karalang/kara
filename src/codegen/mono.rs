@@ -377,6 +377,30 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pending_let_elem_type_expr = saved_pending_elem_te;
         let arg_vals: Vec<BasicValueEnum<'ctx>> = arg_vals?;
 
+        // B-2026-07-08-6 (generic/mono leg) — caller-side arg-temp drop, the
+        // twin of the mono param entry-copy above. The monomorph body now
+        // ENTRY-COPIES an owned heap struct/enum param and returns an
+        // INDEPENDENT copy, so — exactly as in the non-generic `compile_call`
+        // path — the caller must drop the ORIGINAL moved-in arg buffer of an
+        // inline aggregate temp (struct/tuple literal, enum-variant ctor), else
+        // it is orphaned. Same gate as `compile_call`: skip only when the
+        // callee FORWARDS the arg (`call_arg_flows_into_return`) AND does not
+        // entry-copy it — an entry-copied heap struct arg is registered even on
+        // the return-passthrough path. `track_inline_owned_aggregate_arg`
+        // self-restricts to inline temps (identifier args keep their binding's
+        // drop; the fstr→struct move is already suppressed inside
+        // `compile_expr`), so nothing is double-registered. Runs here in the
+        // CALLER's context (before the mono body is compiled inline below,
+        // which swaps `scope_cleanup_actions`).
+        for (i, a) in args.iter().enumerate() {
+            let val = arg_vals[i];
+            if !self.call_arg_flows_into_return(name, i)
+                || self.arg_is_entry_copied_heap_struct(&a.value)
+            {
+                self.track_inline_owned_aggregate_arg(val, &a.value);
+            }
+        }
+
         // Infer type arguments from the argument value types.
         let mut subst = self.infer_type_args(&generic_fn, &arg_vals);
 
@@ -1391,6 +1415,28 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap_or_else(|| type_name.clone());
                         self.var_type_names.insert(param_name.clone(), concrete);
                     }
+                }
+            }
+            // B-2026-07-08-6 (generic/mono leg) — mirror `compile_function`'s
+            // #14 owned-aggregate entry-copy for a monomorph's bare (non-ref)
+            // owned heap struct/enum param: deep-copy its heap fields at entry
+            // and register the scope-exit drop, at the param's CONCRETE
+            // monomorph type (already recorded in `var_type_names`). Without
+            // it `compile_mono_function` registered NO owned-aggregate param
+            // drop (unlike `compile_function`), so a non-returned owned
+            // heap-struct param leaked — e.g. `std.cmp` `min`/`max`/`clamp`
+            // over a `String`-field `Ord` type: `match a.cmp(b) { Greater => b,
+            // _ => a }` returns one param and the OTHER was never freed. The
+            // RETURNED param is move-suppressed by `suppress_cleanup_for_tail_-
+            // return` (below), so its entry-copy is not double-freed. The
+            // caller side (`compile_generic_call`) registers the drop of the
+            // ORIGINAL moved-in arg buffer, mirroring `compile_call` — the two
+            // MUST stay paired (the callee returns an INDEPENDENT copy, so the
+            // caller's original is orphaned without it). `ref`/`mut ref` params
+            // (borrows, no ownership) are excluded by the `Path(_)`-only gate.
+            if matches!(&param.ty.kind, TypeKind::Path(_)) {
+                if let Some(concrete) = self.var_type_names.get(&param_name).cloned() {
+                    self.make_aggregate_param_callee_owned(&concrete, alloca);
                 }
             }
             // B-2026-07-03-23 layer 4: record the CONCRETE generic instantiation

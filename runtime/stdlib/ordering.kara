@@ -32,14 +32,13 @@ impl Ordering {
 // Ties return the *first* argument for both `min` and `max` — a single
 // consistent rule rather than Rust's min-first / max-second asymmetry.
 //
-// Known limitation (B-2026-07-08-6): under `karac build` (compiled output)
-// these LEAK the un-returned argument when `T` is a HEAP-owning type
-// (`String`, or a struct/enum with heap fields) — a pre-existing codegen
-// bug in dropping an owned param returned on some paths but not others,
-// which these bodies (`match a.cmp(b) { Greater => b, _ => a }`) are the
-// first stdlib functions to surface. Compiled use over Copy types
-// (`i64`/`f64`/`usize`/`bool`/`char` — the common case) is correct, and
-// `karac run` (interpreter) is correct for ALL types.
+// Correct in the interpreter (`karac run`) and compiled output (`karac
+// build`) for every `Ord` type, including HEAP-owning ones (`String`,
+// heap structs/enums). The compiled heap-`Ord` case was a codegen leak
+// these bodies (`match a.cmp(b) { Greater => b, _ => a }`) surfaced —
+// returning one owned param while the caller/callee failed to drop the
+// other's buffer — fixed in both the non-generic and generic/monomorphized
+// paths (B-2026-07-08-6).
 
 pub fn min[T: Ord](a: T, b: T) -> T {
     match a.cmp(b) {
