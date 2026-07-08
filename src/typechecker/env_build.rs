@@ -313,6 +313,21 @@ impl<'a> super::TypeChecker<'a> {
         // passes so the iteration borrow on `self.program.items` ends
         // before the env_add_* methods take `&mut self`.
         let mut imported_items: Vec<(String, crate::ast::Item, Vec<String>)> = Vec::new();
+        // Inherent + trait `impl` blocks for imported types, pulled from the
+        // type's DEFINING module so per-module typecheck can dispatch an
+        // imported type's associated functions / methods. Without this,
+        // `import providers.{InMemoryUserDB}` then `InMemoryUserDB.new()` (a
+        // `pub fn new` in an `impl InMemoryUserDB` block back in providers.kara)
+        // failed per-module typecheck with "no associated function 'new' on
+        // type 'InMemoryUserDB'" — the import carried the STRUCT but not its
+        // impl block — even though the merged super-program typechecks fine.
+        // That made `karac build` (project mode) reject a program `karac run`
+        // (super-program) accepts (B-2026-07-08-20). Only collected for a
+        // non-aliased import (bound == origin name): an aliased type is
+        // re-bound under a new name while the impl's target / method signatures
+        // still name the origin, so registering it as-is would be inconsistent
+        // (left as a known limitation).
+        let mut imported_impls: Vec<crate::ast::ImplBlock> = Vec::new();
         for item in &self.program.items {
             let Item::Import(imp) = item else { continue };
             for ii in &imp.items {
@@ -360,6 +375,23 @@ impl<'a> super::TypeChecker<'a> {
                             origin_path.clone(),
                         ));
                         break;
+                    }
+                }
+                // Pull the imported type's `impl` blocks from its defining
+                // module so its associated fns / methods dispatch under
+                // per-module typecheck (B-2026-07-08-20). Non-aliased imports
+                // only — see the `imported_impls` declaration.
+                if ii.alias.is_none() || ii.alias.as_deref() == Some(origin_name.as_str()) {
+                    for oitem in &origin_module.items {
+                        if let Item::ImplBlock(imp) = oitem {
+                            if let TypeKind::Path(p) = &imp.target_type.kind {
+                                if p.segments.last().map(|s| s.as_str())
+                                    == Some(origin_name.as_str())
+                                {
+                                    imported_impls.push(imp.clone());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -444,6 +476,20 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 _ => {}
             }
+        }
+        // Register the imported types' impl blocks (collected above) so their
+        // associated fns / methods dispatch. A local definition of the same
+        // type shadows the import, so skip an imported impl whose target the
+        // current module defines itself (the local impls already registered).
+        for imp in imported_impls {
+            if let TypeKind::Path(p) = &imp.target_type.kind {
+                if let Some(target) = p.segments.last() {
+                    if local_type_names.contains(target) {
+                        continue;
+                    }
+                }
+            }
+            self.env_add_impl(&imp);
         }
     }
 

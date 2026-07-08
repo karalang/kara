@@ -1482,6 +1482,77 @@ fn test_build_project_lists_discovered_modules() {
     assert!(stdout.contains("<crate root>"));
 }
 
+#[test]
+fn test_build_project_resolves_imported_type_associated_fn() {
+    // B-2026-07-08-20: project-mode `karac build` ran a PER-MODULE typecheck
+    // that could not see an imported type's `impl`-block associated function —
+    // `import lib.{Widget}` then `Widget.new()` failed with E0200 "no
+    // associated function 'new' on type 'Widget'", even though `karac run`
+    // (which typechecks the merged super-program) resolved it. The fix pulls
+    // the imported type's impl blocks from its defining module into the
+    // per-module env. Build must now type-check past the assoc-fn call.
+    let tmp = scratch_project("imported-assoc-fn");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/widgets.kara"),
+        "pub struct Widget { pub id: i64 }\n\
+         impl Widget {\n\
+             pub fn new(v: i64) -> Widget { Widget { id: v } }\n\
+         }\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "import widgets.{Widget};\n\
+         fn main() {\n\
+             let w = Widget.new(41);\n\
+             println(w.id);\n\
+         }\n",
+    );
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // No llvm in the test env falls back to type-check; either way the
+    // per-module typecheck must NOT reject the cross-module associated fn.
+    assert!(
+        !stderr.contains("E0200") && !stderr.contains("no associated function"),
+        "project build wrongly rejected the imported assoc fn: {stderr}"
+    );
+    assert!(
+        out.status.success(),
+        "project build failed: stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_single_file_build_refuses_package_member() {
+    // B-2026-07-08-19: `karac build <pkg>/src/main.kara` (single-file) silently
+    // dropped the package's sibling modules and emitted a truncated binary.
+    // It must now refuse with actionable guidance pointing at project mode.
+    let tmp = scratch_project("pkg-member-refusal");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/helper.kara"), "pub fn help() -> i64 { 7 }\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "import helper.{help};\nfn main() { println(help()); }\n",
+    );
+    // Invoke single-file build by naming the file explicitly.
+    let out = karac_bin()
+        .arg("build")
+        .arg(tmp.join("src/main.kara"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "single-file build of a package member should fail, not silently succeed",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("source file of the package") && stderr.contains("karac build"),
+        "expected a package-member refusal message, got: {stderr}"
+    );
+}
+
 /// Project-mode platform-suffix selection must follow the `--target`, not the
 /// host. A `--target=wasm_*` build selects `_wasm` modules and drops the
 /// `_macos`/`_linux` siblings — so an example that swaps its host/IO layer per

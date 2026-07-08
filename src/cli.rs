@@ -5851,6 +5851,50 @@ fn print_staticlib_rust_host_note(kind: NativeCrateType) {
 // CLI dispatch helpers naturally land more flag-shaped arguments
 // than the clippy default; factoring them into a struct here would
 // just move the flag list rather than tighten it.
+/// Emit a single-file-build error respecting the output mode (text to stderr,
+/// a minimal one-line JSON diagnostic under `--output=json`).
+fn emit_build_error(msg: &str, output: OutputMode) {
+    match output {
+        OutputMode::Json | OutputMode::Jsonl => {
+            println!(
+                "{{\"severity\":\"error\",\"phase\":\"build\",\"message\":{}}}",
+                json_string(msg)
+            );
+        }
+        OutputMode::Text => eprintln!("error: {msg}"),
+    }
+}
+
+/// If `filename` is a source file inside a `kara.toml` package's `src/`
+/// directory, return an actionable refusal message: a single-file `karac build`
+/// there silently drops the package's sibling modules and produces a truncated
+/// binary (B-2026-07-08-19). `None` for a standalone file — no package root, or
+/// the file is not under the package's `src/` (a script that merely sits at or
+/// near the package root stays buildable single-file).
+fn package_member_build_refusal(filename: &str) -> Option<String> {
+    let path = std::path::Path::new(filename);
+    let parent = path.parent()?;
+    let file_dir = if parent.as_os_str().is_empty() {
+        std::path::Path::new(".")
+    } else {
+        parent
+    };
+    let root = manifest::discover_project_root(file_dir)?;
+    let abs_file = std::fs::canonicalize(path).ok()?;
+    let abs_src = std::fs::canonicalize(root.join("src")).ok()?;
+    if !abs_file.starts_with(&abs_src) {
+        return None;
+    }
+    let root_disp = root.display();
+    Some(format!(
+        "`{filename}` is a source file of the package at `{root_disp}` — a \
+         single-file `karac build` drops the package's sibling modules and \
+         produces a truncated binary. Build the whole package instead: `cd \
+         {root_disp} && karac build` (or `karac run {filename}` to run it \
+         directly)."
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cmd_build(
     filename: &str,
@@ -5884,6 +5928,19 @@ fn cmd_build(
     // only project mode consumes (manifest `[target.<triple>.*]` overlay
     // merge) and stays accepted-but-inert in single-file mode.
     let build_target = resolve_build_target(target);
+    // Single-file `karac build` on a file that is a member of a `kara.toml`
+    // PACKAGE (lives under the package's `src/` directory) silently drops the
+    // sibling modules it `import`s and emits a truncated binary that links but
+    // does nothing — an unresolvable local-module import is accepted rather
+    // than erroring in single-file mode (B-2026-07-08-19). `karac run` on the
+    // same file auto-discovers the package and works, so this is a build-only
+    // footgun. Refuse it with actionable guidance instead of producing junk;
+    // gated tightly (file under `<root>/src/`) so a genuinely standalone script
+    // that merely sits near a manifest is unaffected.
+    if let Some(msg) = package_member_build_refusal(filename) {
+        emit_build_error(&msg, output);
+        process::exit(1);
+    }
     emit_no_proxy_note(no_proxy);
     let _ = no_proxy;
     #[cfg(feature = "llvm")]
