@@ -4204,6 +4204,48 @@ fn try_build_run_super_program(filename: &str, no_manifest: bool) -> Option<Prog
     Some(build_super_program_for_run(&tree))
 }
 
+/// LLJIT Slice 6b: run a codegen-emitted IR module through the
+/// `karac_jit_runner` one-shot subprocess and return its exit code. The
+/// runner JIT-compiles the module and calls `main`; its stdio is INHERITED
+/// (not captured) so the program's output flows straight to the user's
+/// terminal, and its `main`-return / `emit_panic` exit code propagates back —
+/// giving `karac run` the same execution + fault + exit semantics as a built
+/// binary. Mirrors the machinery `karac test` already uses (proven at
+/// 2084/2084 codegen-E2E-via-JIT parity), but one-shot rather than batched.
+#[cfg(feature = "llvm")]
+fn run_ir_via_jit_subprocess(ir: &str) -> i32 {
+    let ir_path = std::env::temp_dir().join(format!("karac_run_{}_jit.ll", std::process::id()));
+    if let Err(e) = std::fs::write(&ir_path, ir) {
+        eprintln!(
+            "error: could not write JIT IR to {}: {e}",
+            ir_path.display()
+        );
+        return 1;
+    }
+    let runner = match crate::test_jit_dispatch::locate_karac_jit_runner() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "error: karac_jit_runner not found — set KARAC_JIT_RUNNER, or install \
+                 karac with --features llvm (the runner ships beside the karac binary)"
+            );
+            let _ = std::fs::remove_file(&ir_path);
+            return 1;
+        }
+    };
+    // `.status()` inherits stdin/stdout/stderr, so the JIT'd program writes
+    // straight to the user's terminal and its exit code is the run's exit code.
+    let status = std::process::Command::new(&runner).arg(&ir_path).status();
+    let _ = std::fs::remove_file(&ir_path);
+    match status {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("error: could not spawn karac_jit_runner: {e}");
+            1
+        }
+    }
+}
+
 fn cmd_run(
     filename: &str,
     output: OutputMode,
@@ -4708,6 +4750,41 @@ fn cmd_run(
                 }
             }
             process::exit(1);
+        }
+    }
+
+    // LLJIT Slice 6b (opt-in) — route `karac run` through the LLJIT engine
+    // instead of the tree-walk interpreter, so `run` executes the SAME codegen
+    // as `karac build` and the interpreter-vs-codegen divergence on type-clean
+    // programs (the epic's second divergence source, after 6a closed the
+    // acceptance divergence) is gone. Opt-in via `KARAC_RUN_JIT=1` for now — the
+    // interpreter stays the default until this de-risks, mirroring the Slice-1
+    // de-gate → Slice-5 flip pattern. Scoped to plain text output with no
+    // `--timeout`: the JSON/JSONL structured envelopes and the cooperative
+    // `--timeout` deadline are interpreter-only affordances the JIT subprocess
+    // doesn't provide, so those keep the interpreter. Compiled out on a
+    // non-`llvm` build (no JIT engine to route to).
+    #[cfg(feature = "llvm")]
+    if output == OutputMode::Text
+        && timeout.is_none()
+        && std::env::var("KARAC_RUN_JIT").as_deref() == Ok("1")
+    {
+        // Codegen consumes ownership + concurrency (the interpreter path skips
+        // both); run them now so the emitted IR matches `karac build`'s.
+        pipeline.ownershipcheck();
+        pipeline.concurrencycheck();
+        match crate::codegen::compile_to_ir_with_options(
+            &pipeline.parsed.program,
+            pipeline.ownership.as_ref(),
+            pipeline.concurrency.as_ref(),
+            Some(filename),
+            Some(&source),
+        ) {
+            Ok(ir) => process::exit(run_ir_via_jit_subprocess(&ir)),
+            Err(e) => {
+                eprintln!("error: codegen failed: {e}");
+                process::exit(1);
+            }
         }
     }
 

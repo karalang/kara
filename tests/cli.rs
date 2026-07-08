@@ -11456,6 +11456,52 @@ fn run_soft_type_error_aborts() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// LLJIT Slice 6b (opt-in): `KARAC_RUN_JIT=1 karac run` routes execution through
+/// the LLJIT engine (via the `karac_jit_runner` subprocess) instead of the
+/// tree-walk interpreter, so `run` executes the same codegen as `karac build`.
+/// This pins the opt-in path end-to-end: the JIT'd program's stdout reaches the
+/// user (inherited stdio) and its `main` exit code propagates. Requires the
+/// runner beside the karac test binary (cargo builds it under `--features llvm`).
+#[cfg(feature = "llvm")]
+#[test]
+fn run_via_jit_opt_in_executes_and_matches_output() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-run-jit-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("jitrun.kara");
+    std::fs::write(
+        &path,
+        "fn main() {\n    let mut n = 0i64;\n    for i in 1..5 { n = n + i; }\n    println(f\"sum={n}\");\n}\n",
+    )
+    .unwrap();
+
+    // Point the runner locator at cargo's per-build runner binary.
+    let runner = env!("CARGO_BIN_EXE_karac_jit_runner");
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .env("KARAC_RUN_JIT", "1")
+        .env("KARAC_JIT_RUNNER", runner)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "JIT-run should exit 0; stdout={stdout} stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("sum=10"),
+        "JIT'd program stdout should reach the user (1+2+3+4=10): stdout={stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The abort tier of the same decision: RAII-across-yield violations
 /// break execution-soundness/teardown guarantees (like provider escape),
 /// so they abort `karac run` rather than warn. This gate existed in

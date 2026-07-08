@@ -723,12 +723,21 @@ fn clone_program_items(p: &Program) -> Program {
     }
 }
 
-/// Look for `karac_jit_runner` in the same directory as the current
-/// `karac` executable. Cargo writes both binaries next to each other
-/// (target/release/karac, target/release/karac_jit_runner); installed
-/// `karac` users get them paired through the same install step (the
-/// `reference_karac_install_path` memory pins how this is done).
-fn locate_karac_jit_runner() -> Option<PathBuf> {
+/// Look for `karac_jit_runner`: the `KARAC_JIT_RUNNER` env override wins
+/// (used by tests that build the runner at a known path and by advanced
+/// installs), else the sibling of the current `karac` executable. Cargo
+/// writes both binaries next to each other (target/release/karac,
+/// target/release/karac_jit_runner); installed `karac` users get them
+/// paired through the same install step (the `reference_karac_install_path`
+/// memory pins how this is done). `pub(crate)` so `cmd_run`'s Slice-6b
+/// JIT-run path shares one locator with the test batch runner.
+pub(crate) fn locate_karac_jit_runner() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("KARAC_JIT_RUNNER") {
+        let p = PathBuf::from(p);
+        if p.exists() {
+            return Some(p);
+        }
+    }
     let karac_exe = std::env::current_exe().ok()?;
     let dir = karac_exe.parent()?;
     let candidate = dir.join("karac_jit_runner");
