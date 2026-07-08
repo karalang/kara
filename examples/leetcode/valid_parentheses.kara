@@ -24,10 +24,10 @@ fn is_valid(s: ref String) -> bool {
 
 fn main() {
     println(f"\"()\"       → {is_valid("()")}");
-    println(f"\"()[]{{}}\" → {is_valid("()[]{}") }");
+    println(f"\"()[]\{\}\" → {is_valid("()[]{}") }");
     println(f"\"(]\"       → {is_valid("(]")}");
     println(f"\"([)]\"     → {is_valid("([)]")}");
-    println(f"\"{{[]}}\"   → {is_valid("{[]}")}");
+    println(f"\"\{[]\}\"   → {is_valid("{[]}")}");
 }
 
 // Expected output:
