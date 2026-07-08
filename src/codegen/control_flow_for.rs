@@ -748,7 +748,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // monotone scan) — the loop var itself is covered by the
         // for-range bounds below; this targets body-updated `let mut`
         // cursors (e.g. a compaction write head `k`).
-        let mono_vars = self.collect_monotone_index_vars(None, body);
+        let mono_vars = self.collect_monotone_vars(None, body);
         let mono_inits = self.load_monotone_inits(&mono_vars);
 
         let cond_bb = self.context.append_basic_block(fn_val, "for.cond");

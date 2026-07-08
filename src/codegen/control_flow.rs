@@ -1195,7 +1195,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // load each qualifying variable's loop-entry value here in the
         // preheader; the matching `llvm.assume`s are emitted at body
         // entry below.
-        let mono_vars = self.collect_monotone_index_vars(Some(condition), body);
+        let mono_vars = self.collect_monotone_vars(Some(condition), body);
         let mono_inits = self.load_monotone_inits(&mono_vars);
 
         self.builder.build_unconditional_branch(cond_bb).unwrap();

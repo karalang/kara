@@ -275,9 +275,17 @@ impl<'ctx> super::Codegen<'ctx> {
 //      call args, method calls on `x` (mut-ref receivers), `ptr.*`
 //      aliasing, and shadowing rebinds (`let x`, pattern bindings,
 //      closure params) — poisons the name.
-//   3. Emission is gated to names that appear inside an `Index`
-//      expression's index subtree (the only consumers of the fact),
-//      bounding assume count.
+//   3. Emission covers every non-poisoned monotone counter, not only
+//      those used as an array index. The fact `x >= / <= init` is sound
+//      for ANY monotone counter (soundness rests on overflow trapping,
+//      above) and LLVM discards it where useless (zero residue), so
+//      there is no reason to gate on a single consumer. Array-index
+//      counters feed bounds-check elision; arithmetic counters feed
+//      overflow-check elision — e.g. a `while c < cols` counter in an
+//      `(i*7 + c*3 + k) % 13` obstacle predicate whose non-negativity
+//      lets LLVM prove the sum can't overflow and drop the checks
+//      (kata #63, ledger B-2026-07-08-3). Restricting to index use left
+//      the arithmetic consumers unserved.
 // Updates inside nested loops/branches/closures stay eligible —
 // monotonicity cares about direction, not update count per iteration.
 
@@ -288,8 +296,6 @@ struct MonotoneScan {
     dirs: std::collections::HashMap<String, MonotoneDir>,
     /// Names disqualified by any non-monotone write/alias/shadow.
     poisoned: std::collections::HashSet<String>,
-    /// Names appearing inside an `Index` expression's index subtree.
-    index_used: std::collections::HashSet<String>,
 }
 
 impl MonotoneScan {
@@ -374,43 +380,6 @@ fn place_root_ident(expr: &Expr) -> Option<&str> {
         ExprKind::Unary { operand, .. } => place_root_ident(operand),
         ExprKind::Question(inner) => place_root_ident(inner),
         _ => None,
-    }
-}
-
-/// Collect identifiers in an index subtree for the emission gate.
-/// Over- and under-collection are both SAFE here (this set only gates
-/// which assumes are emitted, never their truth), so a wildcard-armed
-/// walk over the common index shapes is fine.
-fn collect_index_idents(expr: &Expr, out: &mut std::collections::HashSet<String>) {
-    match &expr.kind {
-        ExprKind::Identifier(name) => {
-            out.insert(name.clone());
-        }
-        ExprKind::Binary { left, right, .. } => {
-            collect_index_idents(left, out);
-            collect_index_idents(right, out);
-        }
-        ExprKind::Unary { operand, .. } => collect_index_idents(operand, out),
-        ExprKind::Call { args, .. } => {
-            for a in args {
-                collect_index_idents(&a.value, out);
-            }
-        }
-        ExprKind::MethodCall { object, args, .. } => {
-            collect_index_idents(object, out);
-            for a in args {
-                collect_index_idents(&a.value, out);
-            }
-        }
-        ExprKind::Index { object, index } => {
-            collect_index_idents(object, out);
-            collect_index_idents(index, out);
-        }
-        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-            collect_index_idents(object, out);
-        }
-        ExprKind::Cast { expr, .. } => collect_index_idents(expr, out),
-        _ => {}
     }
 }
 
@@ -583,9 +552,6 @@ fn mono_scan_expr(e: &Expr, s: &mut MonotoneScan) {
         ExprKind::FieldAccess { object, .. } => mono_scan_expr(object, s),
         ExprKind::TupleIndex { object, .. } => mono_scan_expr(object, s),
         ExprKind::Index { object, index } => {
-            let mut idx_idents = std::collections::HashSet::new();
-            collect_index_idents(index, &mut idx_idents);
-            s.index_used.extend(idx_idents);
             mono_scan_expr(object, s);
             mono_scan_expr(index, s);
         }
@@ -743,10 +709,11 @@ pub(super) struct MonotoneInit<'ctx> {
 }
 
 impl<'ctx> super::Codegen<'ctx> {
-    /// Scan a loop guard + body and return the qualifying monotone index
-    /// variables, deterministically ordered. See the monotone-scan
-    /// section comment above for the qualification rules.
-    pub(super) fn collect_monotone_index_vars(
+    /// Scan a loop guard + body and return the qualifying monotone
+    /// variables (every non-poisoned monotone counter, index or not),
+    /// deterministically ordered. See the monotone-scan section comment
+    /// above for the qualification rules.
+    pub(super) fn collect_monotone_vars(
         &self,
         guard: Option<&Expr>,
         body: &Block,
@@ -756,14 +723,10 @@ impl<'ctx> super::Codegen<'ctx> {
             mono_scan_expr(g, &mut scan);
         }
         mono_scan_block(body, &mut scan);
-        let MonotoneScan {
-            dirs,
-            poisoned,
-            index_used,
-        } = scan;
+        let MonotoneScan { dirs, poisoned } = scan;
         let mut out: Vec<(String, MonotoneDir)> = dirs
             .into_iter()
-            .filter(|(name, _)| !poisoned.contains(name) && index_used.contains(name))
+            .filter(|(name, _)| !poisoned.contains(name))
             .collect();
         // HashMap order is nondeterministic; sort so IR output is stable
         // across runs (build reproducibility + IR-test pinning).
