@@ -322,10 +322,50 @@ mod memory_sanitizer_tests {
     // called multiple times.
 
     #[test]
-    #[ignore = "B-2026-07-08-6: pre-existing codegen leak — a fn that conditionally \
-                returns one of several owned heap-owning struct params does not drop \
-                the un-returned one(s). std.cmp min/max/clamp over a heap Ord type \
-                surface it; the interpreter (karac run) is correct. Un-ignore when fixed."]
+    fn asan_return_owned_heap_struct_param_no_leak() {
+        // B-2026-07-08-6 (non-generic leg, FIXED) — a fn that returns an owned
+        // heap-owning STRUCT param used to leak the arg buffer: the caller's
+        // return-passthrough guard suppressed the arg-temp drop assuming the
+        // callee FORWARDS the buffer, but a copy-supported heap struct param is
+        // ENTRY-COPIED at the callee, so the callee returns an INDEPENDENT copy
+        // and the original moved-in buffer was orphaned. `id`/`pick`/`choose`
+        // all leaked; a String param (no entry-copy) was already clean.
+        // Exercises single-return, two-param-keep-one, and conditional-return.
+        assert_clean_asan_run(
+            r#"
+struct Name { s: String }
+fn id(a: Name) -> Name { a }
+fn pick(a: Name, b: Name) -> Name { a }
+fn choose(a: Name, b: Name, t: bool) -> Name { if t { a } else { b } }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let x = id(Name { s: f"id-{i}-padding-padding" });
+        let y = pick(Name { s: f"pa-{i}-padding-padding" }, Name { s: f"pb-{i}-padding-padding" });
+        let z = choose(Name { s: f"ca-{i}-padding-padding" }, Name { s: f"cb-{i}-padding-padding" }, true);
+        println(x.s);
+        println(y.s);
+        println(z.s);
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "id-0-padding-padding",
+                "pa-0-padding-padding",
+                "ca-0-padding-padding",
+                "id-1-padding-padding",
+                "pa-1-padding-padding",
+                "ca-1-padding-padding",
+            ],
+            "asan_return_owned_heap_struct_param_no_leak",
+        );
+    }
+
+    #[test]
+    #[ignore = "B-2026-07-08-6: generic-mono-path leak remains (compile_generic_call \
+                does no caller arg-temp cleanup); the NON-generic case is fixed. \
+                Un-ignore when the mono path is handled."]
     fn asan_std_cmp_min_max_clamp_heap_ord_no_leak() {
         // roadmap Phase 8 § std.cmp — `min`/`max`/`clamp` are generic stdlib
         // free fns monomorphized on demand from `ordering.kara`. Over a

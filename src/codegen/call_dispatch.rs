@@ -1386,7 +1386,24 @@ impl<'ctx> super::Codegen<'ctx> {
             // value out to the caller's consumer of the RESULT, whose own
             // binding/temp drop covers it — registering here too was a
             // DOUBLE user-drop firing (both surfaces, probe f6).
-            if !self.call_arg_flows_into_return(&name, i) {
+            //
+            // B-2026-07-08-6 — the passthrough guard's premise ("the result IS
+            // this arg's buffer") holds only when the callee FORWARDS the arg.
+            // A copy-supported heap STRUCT param is ENTRY-COPIED at the callee
+            // (`make_aggregate_param_callee_owned` → `deep_copy_struct_heap_-
+            // fields_in_place`): the callee returns an INDEPENDENT copy and the
+            // ORIGINAL moved-in buffer is orphaned (the caller suppressed its
+            // own cleanup as a move). So for a struct-literal arg the callee
+            // entry-copies, register the caller's struct drop even on the
+            // return-passthrough path — the copy flows out (freed via the
+            // result binding), this drops the original. Confirmed leak: `fn
+            // id(a: Name) -> Name { a }` over `Name { s: String }` leaked the
+            // arg buffer; a String param (no entry-copy) and a true-forward
+            // passthrough are unaffected (`arg_is_entry_copied_heap_struct`
+            // matches only copy-supported heap structs).
+            if !self.call_arg_flows_into_return(&name, i)
+                || self.arg_is_entry_copied_heap_struct(&a.value)
+            {
                 self.track_inline_owned_aggregate_arg(val, &a.value);
             }
         }
@@ -1792,6 +1809,40 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+    }
+
+    /// B-2026-07-08-6 — does a STRUCT-LITERAL argument have a type the callee
+    /// ENTRY-COPIES (`make_aggregate_param_callee_owned`'s struct arm)? True
+    /// only for a non-shared, copy-supported struct that owns heap content, so
+    /// the callee deep-copies its fields at entry and RETURNS an independent
+    /// copy — meaning the return-passthrough guard must NOT suppress the
+    /// caller's drop of the original moved-in temp (else it leaks). Mirrors the
+    /// exact predicate the callee uses, so caller and callee stay in lockstep:
+    /// a forwarded (non-copy) param — bare String/Vec, `Map`/shared/`Option`
+    /// non-copyable field, user-`Drop` via a `Call` arg — yields `false`, and
+    /// the passthrough guard's skip (B-2026-07-01-7) is preserved. Restricted
+    /// to struct literals: an identifier arg's drop is owned by its binding
+    /// (the arg-pass move-suppression handles the transfer), matching
+    /// `track_inline_owned_aggregate_arg`'s own scope.
+    pub(super) fn arg_is_entry_copied_heap_struct(&self, arg: &Expr) -> bool {
+        let ExprKind::StructLiteral { path, .. } = &arg.kind else {
+            return false;
+        };
+        // An enum struct-variant literal (`E.V { .. }`) forwards through the
+        // enum arm, not the struct entry-copy — exclude it.
+        if self.enum_name_of_expr(arg).is_some() {
+            return false;
+        }
+        let Some(name) = path.last() else {
+            return false;
+        };
+        self.struct_types.contains_key(name.as_str())
+            && !self.shared_types.contains_key(name.as_str())
+            && self.aggregate_param_copy_supported_struct(name, &mut Vec::new())
+            && self
+                .struct_field_type_exprs
+                .get(name.as_str())
+                .is_some_and(|ftes| ftes.iter().any(|f| self.type_expr_has_drop_heap(f)))
     }
 
     /// #21 — best-effort `TypeExpr` for a tuple-literal arg ELEMENT, so its
