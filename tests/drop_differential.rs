@@ -221,9 +221,11 @@ fn spawn_capture_is_checked_clean() {
 }
 
 #[test]
-fn par_block_is_still_the_capture_edge() {
-    // `par {}` captures interact with `shared struct` RC promotion the oracle
-    // does not yet model, so those programs remain the skipped §7 edge.
+fn par_block_shared_capture_is_checked_clean() {
+    // `par {}` captures `shared struct` values (`ha`/`hb`); those are freed at
+    // scope exit via `RcDec`, which is exactly the drop the oracle schedules —
+    // so codegen and the oracle agree and the program is CHECKED clean (no
+    // capture skip needed once spawn captures are modelled).
     let src = format!(
         "shared struct Holder {{ s: String }}\n\
          fn hold_len(h: Holder) -> i64 {{ return h.s.len(); }}\n\
@@ -231,7 +233,13 @@ fn par_block_is_still_the_capture_edge() {
          let ha: Holder = Holder {{ s: a }}; let hb: Holder = Holder {{ s: b }}; \
          par {{ hold_len(ha); hold_len(hb); }} }}"
     );
-    assert_eq!(differential_check(&src), DiffOutcome::CaptureEdge);
+    match differential_check(&src) {
+        DiffOutcome::Checked { divergences, .. } => assert!(
+            divergences.is_empty(),
+            "par shared-struct capture should be clean, got {divergences:?}"
+        ),
+        other => panic!("par program should be Checked now, got {other:?}"),
+    }
 }
 
 #[test]

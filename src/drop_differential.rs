@@ -27,12 +27,15 @@
 //!     bare `String`/`Vec`/`Map` param **caller-side** (caller-retains — the
 //!     callee emits no cleanup). Both free exactly once, across the call
 //!     boundary, so a per-callee comparison would false-positive on params.
-//!  3. **Skip the §7 closure / cross-task capture edge.** The oracle walks a
-//!     closure with Read role (conservative — never moves the captured parent),
-//!     keeping a `spawn`/`par`-captured heap value Owned and scheduling a drop
-//!     codegen elides (the task frees it). Documented model-conservatism, not a
-//!     leak; such programs return [`DiffOutcome::CaptureEdge`] (counted, not
-//!     silently dropped).
+//!  3. **Captures are modelled, not skipped.** A `spawn`-closure capture escapes
+//!     as an auto-promoted shared/RC reference, so the oracle demotes the
+//!     captured heap binding to `Borrowed` (no scope drop — codegen frees it via
+//!     the RC/join, not scope cleanup); a `par {}` block captures `shared struct`
+//!     values whose scope-exit `RcDec` *is* the drop the oracle schedules. Both
+//!     match codegen with 0 divergences over the whole corpus, so the differential
+//!     checks 100% of generated programs (no capture skip). The general
+//!     borrow-*escape decision procedure* for stored/heap-env closures is still
+//!     open (judgment §7) but is not exercised by the fuzzer.
 //!
 //! Only the **missing-drop (leak)** direction is checked. The extra-drop
 //! (double-free) direction is not emit-time observable — codegen neutralizes a
@@ -58,8 +61,12 @@ pub enum DiffOutcome {
     /// Not a valid differential subject (parse / type / ownership error, or a
     /// codegen failure) — not counted toward coverage.
     Invalid,
-    /// Contains a closure / cross-task capture construct (`par {}` /
-    /// `pool.spawn(|| …)`) — the oracle's §7 open edge, excluded from the gate.
+    /// Reserved: a program the differential deliberately skips. No longer
+    /// produced — both `spawn` closure captures (oracle demotes to Borrowed) and
+    /// `par {}` shared-struct captures (freed via scope-exit `RcDec`, which the
+    /// oracle schedules) are now modelled and checked with 0 divergences over
+    /// the corpus. Retained so a future *known*-divergent capture shape can be
+    /// routed here explicitly rather than surfacing as a spurious divergence.
     CaptureEdge,
     /// Checked: the oracle's local drop schedule was compared against codegen's
     /// emitted set. `divergences` is empty on agreement.
@@ -70,18 +77,6 @@ pub enum DiffOutcome {
     },
 }
 
-/// Whether a program contains a capture construct the differential still skips.
-/// `spawn` closures are now modelled (the oracle demotes a spawn-captured heap
-/// binding to Borrowed — no scope drop, matching codegen's RC/join free — see
-/// `ownership_oracle`'s `Closure` handling), so they are checked. `par {}`
-/// blocks remain the open §7 edge: their captures interact with `shared struct`
-/// RC promotion the oracle does not yet model, so those programs are still
-/// skipped (and counted).
-pub fn has_capture_construct(src: &str) -> bool {
-    src.contains("par {")
-}
-
-/// Compile `src` in-process with the drop recorder armed and diff the oracle's
 /// Which tree the oracle analyzes. The comparison is sound either way (validated
 /// 0-divergence on the corpus for both), and codegen's own inline self-check
 /// (`KARAC_ORACLE_DROP_CHECK`) uses `Lowered` — it analyzes the tree it already
@@ -106,10 +101,6 @@ pub fn differential_check(src: &str) -> DiffOutcome {
 /// validated to agree with codegen (0 divergences on the corpus); `Lowered`
 /// mirrors codegen's inline self-check.
 pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
-    if has_capture_construct(src) {
-        return DiffOutcome::CaptureEdge;
-    }
-
     let mut parsed = crate::parse(src);
     if !parsed.errors.is_empty() {
         return DiffOutcome::Invalid;
