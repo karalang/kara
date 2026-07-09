@@ -1138,14 +1138,19 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
-        // `CStr.to_string() -> Result[String, Utf8Error]` — UTF-8-validating,
-        // and MUST precede the generic Display `to_string` below (which returns
-        // a bare `String` and would mismatch the `Result` type the typechecker
-        // and codegen produce for a CStr receiver). Same oracle as
-        // `String.from_utf8` (eval_call.rs): `error_len()` distinguishes a
+        // `CStr.to_string() -> Result[String, Utf8Error]` and its zero-copy
+        // sibling `CStr.to_string_slice() -> Result[StringSlice, Utf8Error]` —
+        // both UTF-8-validating, and MUST precede the generic Display
+        // `to_string` below (which returns a bare `String` and would mismatch
+        // the `Result` type the typechecker and codegen produce for a CStr
+        // receiver). The interpreter is dynamically typed and has no separate
+        // `StringSlice` value — a borrowed view is just a `Value::String`, so
+        // both methods produce the same observable result (content + Ok/Err);
+        // codegen is where the borrow-vs-copy distinction is real. Same oracle
+        // as `String.from_utf8` (eval_call.rs): `error_len()` distinguishes a
         // truncated trailing sequence (`IncompleteSequence`) from a bad byte at
         // a known offset (`InvalidByte`).
-        if method == "to_string" {
+        if method == "to_string" || method == "to_string_slice" {
             if let Value::CStr(ref b) = obj {
                 return match std::str::from_utf8(b) {
                     Ok(s) => Value::EnumVariant {

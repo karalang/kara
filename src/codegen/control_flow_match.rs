@@ -2070,7 +2070,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // VecDeque rides Vec's 3-word `{ptr, len, cap}` layout
                     // (B-2026-06-10-3): without it, a VecDeque enum payload
                     // got the 1-word default → malformed value, crash on use.
-                    Some("Vec") | Some("VecDeque") | Some("String") => 3,
+                    // `StringSlice` rides the same 3-word layout (a borrowed
+                    // view, cap=0) — without it a match-bound StringSlice
+                    // payload (`Ok(s)` from `CStr.to_string_slice()`, or a
+                    // `String.slice()` result carried through an enum) got the
+                    // 1-word default and truncated to just the pointer.
+                    Some("Vec") | Some("VecDeque") | Some("String") | Some("StringSlice") => 3,
                     Some("Slice") => 2,
                     // Shared type (struct OR enum): RC heap pointer = exactly one
                     // word. Must precede the struct/enum arms (see the twin note
@@ -2155,7 +2160,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
-                    Some("Vec") | Some("VecDeque") | Some("String") => {
+                    // `StringSlice` shares `String`'s `{ptr, len, cap}` shape.
+                    Some("Vec") | Some("VecDeque") | Some("String") | Some("StringSlice") => {
                         self.vec_struct_type().into()
                     }
                     Some("Slice") => self.slice_struct_type().into(),
@@ -2472,7 +2478,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
         let target_ty: Option<BasicTypeEnum<'ctx>> =
             type_name.as_ref().and_then(|n| match n.as_str() {
-                "String" | "str" | "Vec" | "VecDeque" => Some(self.vec_struct_type().into()),
+                "String" | "str" | "Vec" | "VecDeque" | "StringSlice" => {
+                    Some(self.vec_struct_type().into())
+                }
                 "Slice" => Some(self.slice_struct_type().into()),
                 _ => self
                     .struct_types

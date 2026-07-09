@@ -363,6 +363,42 @@ fn main() {
     }
 
     #[test]
+    fn asan_cstr_to_string_slice_view_not_freed_and_copy_clean() {
+        // `CStr.to_string_slice()` returns a BORROWED `{ptr, len, cap=0}` view
+        // over the literal's rodata bytes. The `cap == 0` drop-skip must keep
+        // the view from being freed — freeing a rodata pointer is an
+        // invalid-free (ASan) — while the `.to_string()` copy allocates an
+        // owning String that must be freed exactly once (LSan catches a leak).
+        // Loop so any invalid-free / leak accumulates and trips the sanitizer.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        match c"hello-view".to_string_slice() {
+            Ok(s) => {
+                println(s);
+                println(s.to_string());
+            }
+            Err(_) => println("ERR"),
+        }
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "hello-view",
+                "hello-view",
+                "hello-view",
+                "hello-view",
+                "hello-view",
+                "hello-view",
+            ],
+            "asan_cstr_to_string_slice_view_not_freed_and_copy_clean",
+        );
+    }
+
+    #[test]
     fn asan_std_cmp_min_max_clamp_heap_ord_no_leak() {
         // roadmap Phase 8 § std.cmp — `min`/`max`/`clamp` are generic stdlib
         // free fns monomorphized on demand from `ordering.kara`. Over a

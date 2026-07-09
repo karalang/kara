@@ -17312,6 +17312,34 @@ fn main() {
     assert_eq!(out, "2\n");
 }
 
+#[test]
+fn test_cstr_to_string_slice_validates_and_views() {
+    // `CStr.to_string_slice() -> Result[StringSlice, Utf8Error]` — parity with
+    // codegen (`tests/codegen.rs::test_e2e_cstr_to_string_slice_result`). The
+    // tree-walk interpreter has no separate StringSlice value (a borrowed view
+    // is just a `Value::String`), so the observable result is the content plus
+    // the Ok/Err arm; codegen is where the zero-copy view is real.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    match c"hello".to_string_slice() {
+        Ok(s) => println(s),
+        Err(_) => println("ERR"),
+    }
+    match c"\xff".to_string_slice() {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            Utf8Error.InvalidByte => println("INVALID"),
+            Utf8Error.IncompleteSequence => println("INCOMPLETE"),
+            Utf8Error.Other(m) => println(m),
+        },
+    }
+}
+"#,
+    );
+    assert_eq!(out, "hello\nINVALID\n");
+}
+
 // ── Tensor[T, Shape] interpreter MVP (Phase 11) ─────────────────────
 
 #[test]

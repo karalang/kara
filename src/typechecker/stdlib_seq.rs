@@ -770,10 +770,40 @@ impl<'a> super::TypeChecker<'a> {
                     ],
                 }
             }
+            // `CStr.to_string_slice() -> Result[StringSlice, Utf8Error]` — the
+            // zero-copy sibling of `to_string`. Validates UTF-8 but yields a
+            // borrowed `StringSlice` view over the receiver's bytes (no owning
+            // copy); the borrow is tied to the `ref self` receiver, so the
+            // view (and its `c"..."`-literal-static or `from_ptr`-borrowed
+            // source) must outlive it. Codegen builds the `{ptr,len,cap=0}`
+            // view; the interpreter validates via `String.from_utf8` semantics.
+            "to_string_slice" => {
+                require_no_args(self, "to_string_slice");
+                Type::Named {
+                    name: "Result".to_string(),
+                    args: vec![
+                        Type::Named {
+                            name: "StringSlice".to_string(),
+                            args: vec![],
+                        },
+                        Type::Named {
+                            name: "Utf8Error".to_string(),
+                            args: vec![],
+                        },
+                    ],
+                }
+            }
             _ => self.require_known_method(
                 "CStr",
                 method,
-                &["as_bytes", "as_ptr", "is_empty", "len", "to_string"],
+                &[
+                    "as_bytes",
+                    "as_ptr",
+                    "is_empty",
+                    "len",
+                    "to_string",
+                    "to_string_slice",
+                ],
                 args,
                 span,
             ),

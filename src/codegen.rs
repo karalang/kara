@@ -4012,6 +4012,20 @@ impl<'ctx> Codegen<'ctx> {
             cstr_to_string_type,
             Some(Linkage::External),
         );
+        // `karac_runtime_utf8_validate(data: *const u8, len: usize,
+        //  out_err: *mut u8) -> bool`. Backs `CStr.to_string_slice() ->
+        //  Result[StringSlice, Utf8Error]`: the zero-copy sibling of
+        //  `cstr_to_string` — validates UTF-8 WITHOUT allocating, so codegen
+        //  builds a borrowed `{ptr, len, cap=0}` view on Ok. Same Utf8Error
+        //  discriminant on Err.
+        let utf8_validate_type = context
+            .bool_type()
+            .fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
+        let _karac_runtime_utf8_validate_fn = module.add_function(
+            "karac_runtime_utf8_validate",
+            utf8_validate_type,
+            Some(Linkage::External),
+        );
         let response_set_status_type = context
             .void_type()
             .fn_type(&[ptr_type.into(), context.i16_type().into()], false);

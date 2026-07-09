@@ -21847,6 +21847,32 @@ fn cstr_as_bytes_types_as_slice_u8() {
 }
 
 #[test]
+fn cstr_to_string_slice_types_as_result_stringslice_utf8error() {
+    // The zero-copy sibling of `to_string` returns a BORROWED `StringSlice`
+    // (not an owning `String`); the explicit annotation pins the exact shape.
+    typecheck_ok(
+        "fn main() {\n    let r: Result[StringSlice, Utf8Error] = c\"hi\".to_string_slice();\n    let _ = r;\n}",
+    );
+}
+
+#[test]
+fn cstr_to_string_slice_is_distinct_from_to_string() {
+    // `to_string_slice` yields `StringSlice`, not `String` — assigning its
+    // result where `Result[String, Utf8Error]` is required must be rejected,
+    // pinning that the two conversions are not interchangeable.
+    let errors = typecheck_errors(
+        "fn main() {\n    let r: Result[String, Utf8Error] = c\"hi\".to_string_slice();\n    let _ = r;\n}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("StringSlice") || e.to_string().contains("String")),
+        "expected a StringSlice-vs-String mismatch, got: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn cstr_methods_work_on_literal_receiver_and_annotated_binding() {
     // Literal receiver + the design's annotated form (`let msg: ref CStr
     // = c"..."` — requires the scope-0 `CStr` registration).

@@ -668,6 +668,13 @@ impl<'ctx> super::Codegen<'ctx> {
             if key.as_str() == "CStr.to_string" {
                 return self.compile_cstr_to_string(object);
             }
+            // `CStr.to_string_slice() -> Result[StringSlice, Utf8Error]` — the
+            // zero-copy sibling: validates UTF-8 but returns a borrowed
+            // `{ptr, len, cap=0}` view over the receiver's bytes instead of an
+            // owning heap copy.
+            if key.as_str() == "CStr.to_string_slice" {
+                return self.compile_cstr_to_string_slice(object);
+            }
         }
 
         // Phase 6 line 17 — stdlib `TcpListener` / `TcpStream`
@@ -7726,6 +7733,171 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         let phi = self.builder.build_phi(result_ty, "cstr.ts.result").unwrap();
+        phi.add_incoming(&[(&ok_val, ok_end), (&err_val, err_end)]);
+        Ok(phi.as_basic_value())
+    }
+
+    /// Lower `CStr.to_string_slice() -> Result[StringSlice, Utf8Error]` — the
+    /// zero-copy sibling of `to_string`. The receiver is the `{ptr, i64}`
+    /// slice-struct (field 0 the NUL-terminated bytes, field 1 the source
+    /// length). Instead of copying into an owning `String`, on valid UTF-8 it
+    /// returns a borrowed `StringSlice` VIEW over the SAME bytes (design.md
+    /// § StringSlice: a borrowed window, no allocation).
+    fn compile_cstr_to_string_slice(
+        &mut self,
+        object: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let recv = self.compile_expr(object)?;
+        let agg = recv.into_struct_value();
+        let data_ptr = self
+            .builder
+            .build_extract_value(agg, 0, "cstr.tss.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let data_len = self
+            .builder
+            .build_extract_value(agg, 1, "cstr.tss.len")
+            .unwrap()
+            .into_int_value();
+        self.build_utf8_validated_slice_result(data_ptr, data_len)
+    }
+
+    /// Borrowed-view sibling of `build_utf8_validated_result` (backs
+    /// `CStr.to_string_slice()`): validate `(data_ptr, data_len)` as UTF-8 via
+    /// the NON-copying `karac_runtime_utf8_validate` and build
+    /// `Result[StringSlice, Utf8Error]` — `Ok(StringSlice { ptr: data_ptr,
+    /// len: data_len, cap: 0 })` (a VIEW over the input, not a copy) on valid
+    /// UTF-8, else the same `Err(Utf8Error.{InvalidByte | IncompleteSequence})`
+    /// selected from the runtime discriminant. `StringSlice` shares the
+    /// `vec_struct_type` LLVM layout with `String`, so the enum layout is
+    /// identical to the owning `to_string()` path; the `cap == 0` field is what
+    /// keeps the view from being freed at scope exit (the drop path's
+    /// static/borrowed guard), so the input bytes (rodata for a `c"..."`
+    /// literal, caller-owned for a `from_ptr` receiver) are only READ.
+    fn build_utf8_validated_slice_result(
+        &mut self,
+        data_ptr: inkwell::values::PointerValue<'ctx>,
+        data_len: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+        // `StringSlice` lowers to the same `{ptr, i64, i64}` shape as `String`.
+        let slice_ty = self.vec_struct_type();
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "codegen: CStr.to_string_slice called outside a function".to_string())?;
+        let out_err = self.create_entry_alloca(fn_val, "cstr.tss.outerr", i8_t.into());
+
+        let f = self
+            .module
+            .get_function("karac_runtime_utf8_validate")
+            .expect("karac_runtime_utf8_validate declared in Codegen::new");
+        let ok = self
+            .builder
+            .build_call(
+                f,
+                &[data_ptr.into(), data_len.into(), out_err.into()],
+                "cstr.tss.ok",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // Copy out the Result llvm-type and the two Utf8Error variant tags
+        // before any `&mut self` call (drops the `enum_layouts` borrow).
+        let result_ty = self
+            .enum_layouts
+            .get("Result")
+            .map(|l| l.llvm_type)
+            .ok_or_else(|| "codegen: Result enum layout missing (codegen bug)".to_string())?;
+        let (tag_invalid, tag_incomplete) = {
+            let utf8 = self.enum_layouts.get("Utf8Error").ok_or_else(|| {
+                "codegen: Utf8Error enum layout missing (codegen bug)".to_string()
+            })?;
+            let inv = *utf8.tags.get("InvalidByte").ok_or_else(|| {
+                "codegen: Utf8Error.InvalidByte missing (codegen bug)".to_string()
+            })?;
+            let inc = *utf8.tags.get("IncompleteSequence").ok_or_else(|| {
+                "codegen: Utf8Error.IncompleteSequence missing (codegen bug)".to_string()
+            })?;
+            (inv, inc)
+        };
+
+        let ok_bb = self.context.append_basic_block(fn_val, "cstr.tss.ok_bb");
+        let err_bb = self.context.append_basic_block(fn_val, "cstr.tss.err_bb");
+        let merge_bb = self.context.append_basic_block(fn_val, "cstr.tss.merge");
+        self.builder
+            .build_conditional_branch(ok, ok_bb, err_bb)
+            .unwrap();
+
+        // Ok arm: Result.Ok(StringSlice { data_ptr, data_len, cap: 0 }) — a
+        // borrowed view; cap == 0 keeps the drop path from freeing it.
+        self.builder.position_at_end(ok_bb);
+        let view0 = self
+            .builder
+            .build_insert_value(slice_ty.const_zero(), data_ptr, 0, "cstr.tss.v0")
+            .unwrap()
+            .into_struct_value();
+        let view1 = self
+            .builder
+            .build_insert_value(view0, data_len, 1, "cstr.tss.v1")
+            .unwrap()
+            .into_struct_value();
+        let view = self
+            .builder
+            .build_insert_value(view1, i64_t.const_zero(), 2, "cstr.tss.v2")
+            .unwrap()
+            .into_struct_value();
+        let ok_val = self.build_nonshared_enum_value("Result", "Ok", &[view.into()])?;
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let ok_end = self.builder.get_insert_block().unwrap();
+
+        // Err arm: Result.Err(Utf8Error.<runtime-selected variant>) — identical
+        // to the owning `to_string()` path.
+        self.builder.position_at_end(err_bb);
+        let err_tag = self
+            .builder
+            .build_load(i8_t, out_err, "cstr.tss.errtag")
+            .unwrap()
+            .into_int_value();
+        let is_invalid = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                err_tag,
+                i8_t.const_zero(),
+                "cstr.tss.is_invalid",
+            )
+            .unwrap();
+        let sel_tag = self
+            .builder
+            .build_select(
+                is_invalid,
+                i64_t.const_int(tag_invalid, false),
+                i64_t.const_int(tag_incomplete, false),
+                "cstr.tss.errsel",
+            )
+            .unwrap()
+            .into_int_value();
+        let base_err = self
+            .build_nonshared_enum_value("Utf8Error", "InvalidByte", &[])?
+            .into_struct_value();
+        let utf8_err = self
+            .builder
+            .build_insert_value(base_err, sel_tag, 0, "cstr.tss.utf8err")
+            .unwrap()
+            .into_struct_value();
+        let err_val = self.build_nonshared_enum_value("Result", "Err", &[utf8_err.into()])?;
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let err_end = self.builder.get_insert_block().unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        let phi = self
+            .builder
+            .build_phi(result_ty, "cstr.tss.result")
+            .unwrap();
         phi.add_incoming(&[(&ok_val, ok_end), (&err_val, err_end)]);
         Ok(phi.as_basic_value())
     }

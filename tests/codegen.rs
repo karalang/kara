@@ -11168,6 +11168,53 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_cstr_to_string_slice_result() {
+        // `CStr.to_string_slice() -> Result[StringSlice, Utf8Error]` — the
+        // zero-copy sibling of `to_string`. Validates UTF-8 (via the
+        // non-copying `karac_runtime_utf8_validate`) but returns a BORROWED
+        // `{ptr, len, cap=0}` view over the receiver's rodata bytes instead of
+        // an owning heap copy — the `cap == 0` drop-skip keeps the view from
+        // being freed. Same four runtime arms as `to_string` (ASCII Ok,
+        // multi-byte Ok, `\xff` → InvalidByte, truncated `\xe2\x82` →
+        // IncompleteSequence); the Ok payload is a StringSlice printed directly
+        // (it shares String's `{ptr,len,cap}` layout + format surface, which
+        // the match-payload reconstruction now recognizes). Parity with the
+        // interpreter (`karac run`).
+        let src = r#"
+fn main() {
+    match c"hello".to_string_slice() {
+        Ok(s) => println(s),
+        Err(_) => println("ERR"),
+    }
+    match c"héllo".to_string_slice() {
+        Ok(s) => println(s),
+        Err(_) => println("ERR"),
+    }
+    match c"\xff".to_string_slice() {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            Utf8Error.InvalidByte => println("INVALID"),
+            Utf8Error.IncompleteSequence => println("INCOMPLETE"),
+            Utf8Error.Other(m) => println(m),
+        },
+    }
+    match c"\xe2\x82".to_string_slice() {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            Utf8Error.InvalidByte => println("INVALID"),
+            Utf8Error.IncompleteSequence => println("INCOMPLETE"),
+            Utf8Error.Other(m) => println(m),
+        },
+    }
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "hello\nhéllo\nINVALID\nINCOMPLETE\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_string_from_utf8_result() {
         // `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]`
         // (B-2026-06-18-11). Was interpreter-only — the codegen path now

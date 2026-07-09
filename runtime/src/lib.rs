@@ -296,6 +296,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_parse_i64_radix,
         karac_runtime_parse_f64,
         karac_runtime_cstr_to_string,
+        karac_runtime_utf8_validate,
         karac_runtime_char_is_alphabetic,
         karac_runtime_char_is_numeric,
         karac_runtime_char_is_alphanumeric,
@@ -4551,6 +4552,44 @@ pub unsafe extern "C" fn karac_runtime_cstr_to_string(
     }
 }
 
+/// Validate that `[data, data+len)` is well-formed UTF-8 WITHOUT copying — the
+/// zero-copy counterpart of `karac_runtime_cstr_to_string`, backing
+/// `CStr.to_string_slice()`. On success the caller builds a borrowed
+/// `StringSlice` (`{ptr, len, cap=0}`) view over the same bytes, so no owning
+/// `String` is allocated (the `cap == 0` drop-skip keeps the view from being
+/// freed). On failure writes the `Utf8Error` variant tag into `*out_err`
+/// (0 = InvalidByte, 1 = IncompleteSequence — the same mapping
+/// `karac_runtime_cstr_to_string` uses). Returns `true` (valid) / `false`.
+///
+/// # Safety
+/// `out_err` must be a valid, writable pointer. `data` may be null only when
+/// `len == 0` (treated as the empty, valid-UTF-8 string).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_utf8_validate(
+    data: *const u8,
+    len: usize,
+    out_err: *mut u8,
+) -> bool {
+    if out_err.is_null() {
+        return false;
+    }
+    let bytes: &[u8] = if data.is_null() || len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(data, len)
+    };
+    match std::str::from_utf8(bytes) {
+        Ok(_) => true,
+        Err(e) => {
+            *out_err = match e.error_len() {
+                None => 1,    // IncompleteSequence
+                Some(_) => 0, // InvalidByte
+            };
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod cstr_to_string_tests {
     use super::{karac_runtime_cstr_to_string, RuntimeKaracString};
@@ -4616,6 +4655,61 @@ mod cstr_to_string_tests {
             let (ok, _, tag) = run(&[0xE2, 0x82]);
             assert!(!ok);
             assert_eq!(tag, 1, "IncompleteSequence");
+        }
+    }
+}
+
+#[cfg(test)]
+mod utf8_validate_tests {
+    use super::karac_runtime_utf8_validate;
+
+    /// Drive the validate-only extern; return (ok, err-tag). Unlike
+    /// `karac_runtime_cstr_to_string` there is nothing to free — the whole
+    /// point is that no owning copy is made (the caller builds a borrowed view).
+    unsafe fn run(input: &[u8]) -> (bool, u8) {
+        let mut out_err: u8 = 255;
+        let ok = karac_runtime_utf8_validate(input.as_ptr(), input.len(), &mut out_err);
+        (ok, out_err)
+    }
+
+    #[test]
+    fn valid_utf8_returns_ok_no_copy() {
+        unsafe {
+            assert_eq!(run("héllo".as_bytes()), (true, 255)); // out_err untouched
+        }
+    }
+
+    #[test]
+    fn empty_is_ok() {
+        unsafe {
+            assert_eq!(run(b""), (true, 255));
+        }
+    }
+
+    #[test]
+    fn null_ptr_zero_len_is_ok() {
+        // The empty string may arrive as (null, 0) — must be valid UTF-8.
+        unsafe {
+            let mut out_err: u8 = 255;
+            assert!(karac_runtime_utf8_validate(
+                std::ptr::null(),
+                0,
+                &mut out_err
+            ));
+        }
+    }
+
+    #[test]
+    fn invalid_byte_maps_to_tag_0() {
+        unsafe {
+            assert_eq!(run(&[0xFF]), (false, 0)); // InvalidByte
+        }
+    }
+
+    #[test]
+    fn incomplete_sequence_maps_to_tag_1() {
+        unsafe {
+            assert_eq!(run(&[0xE2, 0x82]), (false, 1)); // IncompleteSequence
         }
     }
 }
