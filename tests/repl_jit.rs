@@ -780,3 +780,55 @@ fn repl_default_is_jit_after_slice5_flip() {
          unless --interp / KARAC_REPL_JIT=0 opt out"
     );
 }
+
+/// Regression: the INTERACTIVE `karac repl` (the real binary, driven over
+/// piped stdin — the `capture=false` path) must actually PRINT a cell's
+/// `println` output to the terminal under the JIT-default backend.
+///
+/// The rest of this file drives `Session::evaluate_cell_captured`
+/// (`capture=true`), which hands the runner-captured bytes back to the
+/// caller — so it never exercised the interactive path, where the runner
+/// pipes the cell's stdout and the REPL must forward it. That forward was
+/// missing (the non-capture arms returned `Vec::new()` and dropped the
+/// bytes), so after the Slice-5 JIT-default flip an interactive `println`
+/// cell was SILENT. This test spawns the actual `karac repl` process the
+/// way a user does and asserts the output reaches stdout. See
+/// B-2026-07-09-3.
+#[test]
+fn repl_jit_interactive_subprocess_prints_cell_output() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("repl")
+        .env("KARAC_JIT_RUNNER", env!("CARGO_BIN_EXE_karac_jit_runner"))
+        // Ensure the JIT default holds even if the ambient env opted out.
+        .env_remove("KARAC_REPL_JIT")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn karac repl");
+
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(b"let a = 40;\nprintln(a + 2);\nprintln(\"hi\");\n:quit\n")
+        .expect("write repl stdin");
+
+    let out = child.wait_with_output().expect("wait karac repl");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // The banner confirms the JIT backend is actually the one under test.
+    assert!(
+        stdout.contains("(JIT"),
+        "expected the JIT banner (JIT default); full stdout:\n{stdout}"
+    );
+    // The two cells' output must both reach the terminal.
+    assert!(
+        stdout.contains("42") && stdout.contains("hi"),
+        "interactive JIT repl must print cell output '42' and 'hi'; got stdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

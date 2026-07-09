@@ -2113,12 +2113,33 @@ impl Session {
                         self.jit_snapshotted_lets.insert(name.clone(), *kind);
                     }
                 }
+                let stdout_lines = if capture {
+                    // Kernel / test path: hand the captured bytes back so the
+                    // caller can render them (`evaluate_cell_captured`).
+                    bytes_to_stdout_lines(&stdout)
+                } else {
+                    // Interactive path: the runner captured the cell's stdout
+                    // over a pipe (`Stdio::piped()`), so — unlike the tree-walk
+                    // interpreter, which writes straight to the process stdout —
+                    // nothing has reached the terminal yet. Flush the captured
+                    // bytes (and any non-fatal stderr the clean cell produced)
+                    // to the real streams now, else an interactive `println`
+                    // cell is silent under the JIT-default REPL. The capture=true
+                    // tests never exercised this path, so the drop went unseen
+                    // until the Slice-5 JIT-default flip made it the default.
+                    use std::io::Write;
+                    let mut out = std::io::stdout();
+                    let _ = out.write_all(&stdout);
+                    let _ = out.flush();
+                    if !stderr.is_empty() {
+                        let mut err = std::io::stderr();
+                        let _ = err.write_all(&stderr);
+                        let _ = err.flush();
+                    }
+                    Vec::new()
+                };
                 WrapperOutcome {
-                    stdout: if capture {
-                        bytes_to_stdout_lines(&stdout)
-                    } else {
-                        Vec::new()
-                    },
+                    stdout: stdout_lines,
                     errors,
                     notes,
                 }
@@ -2154,12 +2175,34 @@ impl Session {
                         errors.push(format!("runner stderr: {line}"));
                     }
                 }
+                let stdout_lines = if capture {
+                    bytes_to_stdout_lines(&partial_stdout)
+                } else {
+                    // Interactive path: same drop as the `Completed` arm — the
+                    // runner piped its stdout/stderr, so a cell that panicked
+                    // (tripping the runner's `emit_panic` exit(1)) would show
+                    // nothing at all interactively. Flush what the cell managed
+                    // to transmit, then surface the fault diagnostic on stderr
+                    // so the user sees the cell faulted rather than silence.
+                    // (A cell that exit(1)s dies BEFORE framing its captured
+                    // stdout/stderr, so `partial_stdout`/`runner_stderr` are
+                    // usually empty — the panic text itself is lost in the
+                    // runner's capture buffer; that's the separate runner-
+                    // protocol gap B-2026-07-09-4, not this drop fix.)
+                    use std::io::Write;
+                    let mut out = std::io::stdout();
+                    let _ = out.write_all(&partial_stdout);
+                    let _ = out.flush();
+                    let mut err = std::io::stderr();
+                    let _ = err.write_all(&runner_stderr);
+                    for line in &errors {
+                        let _ = writeln!(err, "{line}");
+                    }
+                    let _ = err.flush();
+                    Vec::new()
+                };
                 WrapperOutcome {
-                    stdout: if capture {
-                        bytes_to_stdout_lines(&partial_stdout)
-                    } else {
-                        Vec::new()
-                    },
+                    stdout: stdout_lines,
                     errors,
                     notes,
                 }
