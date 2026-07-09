@@ -1,0 +1,366 @@
+diff --git a/selfhost/src/ast.kara b/selfhost/src/ast.kara
+index 67c4ace..6d5ee0d 100644
+--- a/selfhost/src/ast.kara
++++ b/selfhost/src/ast.kara
+@@ -672,6 +672,29 @@ pub struct UseDeclNode {
+     pub span: Span,
+ }
+ 
++// `[pub] import a.b.{Name [as Alias], ...};` / `import a.b.c [as X];`
++// Mirrors the seed's `ImportDecl` / `ImportItem` (src/ast/items.rs): `path` is
++// the dotted module prefix (no item), `items` the names imported from it. A
++// bare `import a.b.c;` maps `path = [a, b]`, `items = [{c}]` — the last segment
++// is the item, everything before is the prefix. The seed's `path_spans` (per-
++// segment prefix spans, used only for resolver diagnostics) are not carried:
++// the differential oracle renders the joined path text + per-item spans, and
++// the resolver port will re-derive prefix spans when it needs them.
++pub struct ImportItemNode {
++    pub name: String,
++    // The `as` rename target, if any. Named `rename` (not `alias`) because
++    // `alias` is a reserved keyword in Kāra (the trait/effect-`alias` form).
++    pub rename: Option[String],
++    pub span: Span,
++}
++
++pub struct ImportDeclNode {
++    pub is_pub: bool,
++    pub path: Vec[String],
++    pub items: Vec[ImportItemNode],
++    pub span: Span,
++}
++
+ // `[pub] const NAME: TYPE = VALUE;`
+ pub struct ConstDeclNode {
+     pub is_pub: bool,
+@@ -872,6 +895,7 @@ pub struct ImplBlockNode {
+ 
+ pub enum Item {
+     Use(UseDeclNode),
++    Import(ImportDeclNode),
+     Const(ConstDeclNode),
+     TypeAlias(TypeAliasNode),
+     Struct(StructDefNode),
+diff --git a/selfhost/src/ast_render.kara b/selfhost/src/ast_render.kara
+index cef3fdd..3f6b53f 100644
+--- a/selfhost/src/ast_render.kara
++++ b/selfhost/src/ast_render.kara
+@@ -49,6 +49,8 @@ import ast.{
+     AttrArgNode,
+     AttrNode,
+     UseDeclNode,
++    ImportDeclNode,
++    ImportItemNode,
+     ConstDeclNode,
+     TypeAliasNode,
+     StructFieldNode,
+@@ -1186,6 +1188,26 @@ fn render_meta(attributes: Vec[AttrNode], doc: Option[String]) -> String {
+     out
+ }
+ 
++// ` (imp NAME@off:len [ALIAS])` for one import item. A by-value helper (not an
++// inline loop body) so the element's `Option[String]` rename is move-consumed on
++// a plain param, not on a shallow-loaded Vec element — see the note at the
++// `Import` arm of `render_item`.
++fn render_import_item(it: ImportItemNode) -> String {
++    let ImportItemNode { name, rename, span } = it;
++    let mut out = " (imp ".to_string();
++    out.push_str(name);
++    out.push_str(span_str(span.offset, span.length));
++    match rename {
++        Some(a) => {
++            out.push_str(" ");
++            out.push_str(a);
++        }
++        None => {}
++    }
++    out.push_str(")");
++    out
++}
++
+ pub fn render_item(item: Item) -> String {
+     let mut out = "".to_string();
+     match item {
+@@ -1209,6 +1231,43 @@ pub fn render_item(item: Item) -> String {
+             }
+             out.push_str(")");
+         }
++        Import(n) => {
++            let ImportDeclNode {
++                is_pub,
++                path,
++                items,
++                span,
++            } = n;
++            out.push_str("(import");
++            out.push_str(render_vis(is_pub));
++            out.push_str(span_str(span.offset, span.length));
++            out.push_str(" (path");
++            if path.len() > 0 {
++                out.push_str(" ");
++                let mut i = 0;
++                for seg in path {
++                    if i > 0 {
++                        out.push_str(".");
++                    }
++                    out.push_str(seg);
++                    i = i + 1;
++                }
++            }
++            out.push_str(")");
++            // Each item renders through a by-value helper (`render_import_item`),
++            // mirroring the house convention every other Vec-element render uses
++            // (`render_attr`/`render_variant`/`render_struct_field`). Consuming an
++            // element's `Option[String]` field via `match` INLINE in this
++            // for-loop double-frees under codegen (a Cluster-1 bug the import
++            // slice surfaced — a `Vec[struct{Option[String]}]` element shallow-
++            // loaded by the loop, then its Option move-consumed, double-frees
++            // against the Vec's element-drop). Routing through a by-value helper
++            // param sidesteps it exactly as the sibling renders already do.
++            for it in items {
++                out.push_str(render_import_item(it));
++            }
++            out.push_str(")");
++        }
+         Const(n) => {
+             let ConstDeclNode {
+                 is_pub,
+diff --git a/selfhost/src/parser.kara b/selfhost/src/parser.kara
+index 3fb800a..b4c3bc3 100644
+--- a/selfhost/src/parser.kara
++++ b/selfhost/src/parser.kara
+@@ -71,6 +71,8 @@ import ast.{
+     AttrArgNode,
+     AttrNode,
+     UseDeclNode,
++    ImportDeclNode,
++    ImportItemNode,
+     ConstDeclNode,
+     TypeAliasNode,
+     StructFieldNode,
+@@ -2198,6 +2200,9 @@ impl Parser {
+         match self.tokens[self.pos].token {
+             // `use` carries neither attributes nor doc (seed parity) — both drop.
+             Use => self.parse_use_decl(is_pub),
++            // `import` likewise carries no attributes/doc (the seed's `Token::Import`
++            // arm drops both); only `pub` is threaded through.
++            Import => self.parse_import_decl(is_pub),
+             Const => self.parse_const_decl(is_pub, attrs, doc),
+             Type => self.parse_type_alias_decl(is_pub, attrs, doc),
+             Struct => self.parse_struct_def(is_pub, false, false, attrs, doc),
+@@ -2277,6 +2282,160 @@ impl Parser {
+         })
+     }
+ 
++    // `import a.b.{Name [as Alias], ...};` and `import a.b.c [as X];`. Mirrors
++    // the seed's `parse_import_decl`: read a dotted prefix; a trailing `.{ ... }`
++    // opens a brace-grouped item list, otherwise the LAST segment is the single
++    // imported item and everything before it is the path prefix. A one-segment
++    // lag (`pend_name`/`pend_span`) holds the most-recently-read segment that has
++    // not yet been committed to `path` — it is committed on a following `.` and
++    // becomes the bare item at end-of-path. Structured so `pend_name` is always
++    // moved exactly once per branch (into `path`, into `items`, or reassigned)
++    // and never read after the loop, so the ownership checker sees no
++    // conditional-move-across-`break`.
++    fn parse_import_decl(mut ref self, is_pub: bool) -> Item {
++        let start = self.current_span();
++        self.advance(); // `import`
++
++        let mut path: Vec[String] = Vec.new();
++        let mut items: Vec[ImportItemNode] = Vec.new();
++
++        let mut pend_span = self.current_span();
++        let mut pend_name = self.take_member_name();
++
++        loop {
++            let is_dot = if self.pos < self.tokens.len() {
++                match self.tokens[self.pos].token {
++                    Dot => true,
++                    _ => false,
++                }
++            } else {
++                false
++            };
++            if not is_dot {
++                // Dot-free path ended: the pending segment is the bare item,
++                // with an optional `as ALIAS` (seed parity — the bare branch
++                // parses an alias too, e.g. `import a.b.c as d;`).
++                let is_as = if self.pos < self.tokens.len() {
++                    match self.tokens[self.pos].token {
++                        As => true,
++                        _ => false,
++                    }
++                } else {
++                    false
++                };
++                let rename = if is_as {
++                    self.advance(); // consume `as`
++                    Some(self.take_member_name())
++                } else {
++                    None
++                };
++                items.push(ImportItemNode {
++                    name: pend_name,
++                    rename: rename,
++                    span: pend_span,
++                });
++                break;
++            }
++            self.advance(); // consume `.`
++            let is_brace = if self.pos < self.tokens.len() {
++                match self.tokens[self.pos].token {
++                    LeftBrace => true,
++                    _ => false,
++                }
++            } else {
++                false
++            };
++            if is_brace {
++                // `.{ ... }` — the pending segment is the last path prefix.
++                path.push(pend_name);
++                self.advance(); // consume `{`
++                items = self.parse_import_item_list();
++                self.eat_rbrace();
++                break;
++            }
++            // Another dotted segment: commit the pending one, read the next.
++            path.push(pend_name);
++            pend_span = self.current_span();
++            pend_name = self.take_member_name();
++        }
++
++        self.eat_semicolon();
++        Item.Import(ImportDeclNode {
++            is_pub: is_pub,
++            path: path,
++            items: items,
++            span: self.span_from(start),
++        })
++    }
++
++    // Body of `import path.{ ... }` — comma-separated `Name` / `Name as Alias`,
++    // optional trailing comma. Reads each token once (slice-3a borrow-match
++    // hazard). Well-formed corpus only; empty-group / recovery lands with the
++    // diagnostics slice.
++    fn parse_import_item_list(mut ref self) -> Vec[ImportItemNode] {
++        let mut items: Vec[ImportItemNode] = Vec.new();
++        loop {
++            if self.pos >= self.tokens.len() {
++                break;
++            }
++            let stop = match self.tokens[self.pos].token {
++                RightBrace => true,
++                _ => false,
++            };
++            if stop {
++                break;
++            }
++            let nspan = self.current_span();
++            let name = self.take_member_name();
++            let is_as = if self.pos < self.tokens.len() {
++                match self.tokens[self.pos].token {
++                    As => true,
++                    _ => false,
++                }
++            } else {
++                false
++            };
++            let rename = if is_as {
++                self.advance(); // consume `as`
++                Some(self.take_member_name())
++            } else {
++                None
++            };
++            items.push(ImportItemNode {
++                name: name,
++                rename: rename,
++                span: nspan,
++            });
++            let has_comma = if self.pos < self.tokens.len() {
++                match self.tokens[self.pos].token {
++                    Comma => true,
++                    _ => false,
++                }
++            } else {
++                false
++            };
++            if has_comma {
++                self.advance(); // consume `,`
++            } else {
++                break;
++            }
++        }
++        items
++    }
++
++    // Consume a `}` if present (well-formed item-group corpus; recovery later).
++    fn eat_rbrace(mut ref self) {
++        if self.pos < self.tokens.len() {
++            let ok = match self.tokens[self.pos].token {
++                RightBrace => true,
++                _ => false,
++            };
++            if ok {
++                self.advance();
++            }
++        }
++    }
++
+     // `const NAME: TYPE = VALUE;`
+     fn parse_const_decl(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
+         let start = self.current_span();
+diff --git a/tests/selfhost_parser_items.rs b/tests/selfhost_parser_items.rs
+index eb4aee2..6342ad1 100644
+--- a/tests/selfhost_parser_items.rs
++++ b/tests/selfhost_parser_items.rs
+@@ -44,6 +44,20 @@ const CORPUS: &[&str] = &[
+     "use a.b.c;",
+     "use a.b.c.d.e;",
+     "pub use std.io;",
++    // `import` declarations — bare (last segment is the item), aliased, and
++    // brace-grouped (single / multi item, aliases, trailing comma). Mirrors the
++    // shapes the selfhost modules' own headers use (`import token.{Token, ...};`,
++    // `import lexer.lex_all;`).
++    "import foo;",
++    "import a.b.c;",
++    "import lexer.lex_all;",
++    "import a.b.c as d;",
++    "import token.{Token};",
++    "import token.{Token, SpannedToken, InterpPart};",
++    "import a.b.{X as Y};",
++    "import a.b.{X, Y as Z, W};",
++    "import a.b.{X, Y,};",
++    "pub import std.io.{Read, Write};",
+     // `const` declarations — primitive values.
+     "const MAX: i64 = 100;",
+     "const ZERO: i64 = 0;",
+@@ -749,6 +763,30 @@ fn render_rust_item(item: &Item) -> String {
+                 u.path.join(".")
+             )
+         }
++        Item::Import(i) => {
++            let mut out = format!(
++                "(import{}{} (path",
++                vis(i.is_pub),
++                span_item_off_len(i.span.offset, i.span.length),
++            );
++            if !i.path.is_empty() {
++                out.push(' ');
++                out.push_str(&i.path.join("."));
++            }
++            out.push(')');
++            for it in &i.items {
++                out.push_str(" (imp ");
++                out.push_str(&it.name);
++                out.push_str(&span_item_off_len(it.span.offset, it.span.length));
++                if let Some(a) = &it.alias {
++                    out.push(' ');
++                    out.push_str(a);
++                }
++                out.push(')');
++            }
++            out.push(')');
++            out
++        }
+         Item::ConstDecl(c) => {
+             format!(
+                 "(const{} {}{}{} {} {})",
