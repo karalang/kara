@@ -1,7 +1,35 @@
 # Caller-retains parameter model — making the consume/escape decision explicit
 
-**Status:** design / scope (not yet implemented). Foundation for B-2026-07-03-28 and
-B-2026-07-03-31, both `#[ignore]`d leak-only bugs blocked on this model.
+**Status:** ✅ **COMPLETE (2026-07-04).** All phases delivered; both target bugs and every
+residual split off from them are fixed, and the once-`#[ignore]`d leak trackers are
+un-ignored and green on the authoritative Linux-LSan gate. The consumption classifier this
+spike scoped now ships as `src/codegen/consume_class.rs` and was **lifted into the
+consolidated ownership judgment** as the load-bearing rule §4 (`Escape` / `NonConsuming`) of
+[`ownership-drop-judgment.md`](ownership-drop-judgment.md); the corpus-wide parity guarantee
+Phase 0 wanted is delivered in a stronger form by the executable oracle + drop-differential of
+[`ownership-model-mechanization.md`](ownership-model-mechanization.md) (S3/S4). This file is
+retained as the design reference (linked from `consume_class.rs` and the bug ledger). See
+**Outcome** below for the plan-vs-reality map. The rest of the document is the original
+pre-implementation design, kept verbatim.
+
+## Outcome — what shipped (and where the plan bent)
+
+| Plan | Reality | Evidence |
+|---|---|---|
+| Phase 0 — `classify_use_site` + shadow `debug_assert!` at every suppressor, ship inert | Classifier shipped as `consume_class.rs` (`binding_only_borrowed` / `classify_binding_in_expr`), **conservative-by-default** (any unknown/transferring position ⇒ `Consumed`). Because a wrong answer can only *keep* today's suppress behavior — never drop a needed suppression, so never a double-free — it was safe to wire it to **gate** the B-31 site directly in Phase 1; no separate inert shadow ship was needed. The broader "parity at *every* suppressor" goal was met in a **stronger** form by the sibling spike: an executable ownership oracle (`src/ownership_oracle.rs`) implementing the same `Escape`/`NonConsuming` `classify`, plus a codegen drop-differential (`src/drop_differential.rs`, `tests/drop_differential.rs`) that checks **100% of the corpus at 0 divergences** — a whole-corpus check that subsumes per-suppressor debug-asserts. | `src/codegen/consume_class.rs`; `ownership-drop-judgment.md` §4; `ownership-model-mechanization.md` S3/S4 |
+| Phase 1 — gate `suppress_inline_option_agg_payload_cleanup` on `Escape` (B-2026-07-03-31) | Delivered. `arm_only_borrows_option_agg_payload` / `block_only_borrows_option_agg_payload` (`control_flow_match.rs`) route the classifier over the arm body + guard for `match` / if-let / while-let; `let else` stays unconditional (its bindings escape the analyzable scope). | fix `80229526`; test `asan_b31_option_agg_payload_borrow_only_no_leak` |
+| Phase 2 — `field_copy_supported` admits `Option[shared]` + rc-inc/rc-dec legs + escape rc-transfer (B-2026-07-03-28) | Delivered, but **without** the originally-scoped element-deep piece (b): the pinned consume path self-balances. `field_copy_supported` admits `Option[shared]`; `deep_copy_option_inline_payload_in_place` rc-INCs the inline box on `Some`; `track_struct_var` registers a combined value-drop + shared-field rc-dec for any shared-owning struct. | fix `7f727aaa`; tests `asan_b28_option_shared_and_direct_shared_struct_drop_no_leak`, un-ignored `asan_attr_node_list_drop_consume_and_plain` (240 B/6 → 0) |
+| — (residual, not in the original plan) | **B-2026-07-04-7** — the escape/return sibling of B-31: three coupled halves (copy-depth == drop-depth), no model rewrite. `field_copy_supported`'s Option arm admits a non-shared struct/enum payload; `deep_copy_option_struct_enum_payload_in_place` is the box-aware copy peer of `emit_option_drop_fn`; the destructure-leaf zeros the source's Option tag on move-out. | fix `e56cc298`; test `asan_b04_7_option_heap_enum_struct_field_drop_no_leak` |
+| — (residual) | **B-2026-07-04-9(a,b)** — the rc-balance / element-deep residuals. (b): the fresh-temp struct-arg gate registers the combined drop for a shared-owning struct even when not copy-supported (`f22b58c4`). (a): `deep_copy_vec_aggregate_elements_in_place` + a `vec_elem_agg_drop_for_type_expr` destructure-leaf drain, landed together (copy-depth == drop-depth). **The original "needs caller-retains model completion" diagnosis was wrong** — it was a contained copy/drop depth asymmetry, not the for-loop-consume suppressor / a missing `binding_only_borrowed` migration. | fixes `f22b58c4` (b), `273c9397` (a); test `asan_b04_9a_vec_struct_field_entrycopy_wholedrop_no_double_free` |
+| — (residual) | **B-2026-07-04-17** — pre-existing for-loop-element-move-to-new-owner double-free (independent of the Option class). | fix `278e1a91` |
+
+**Two honest deviations from the plan.** (1) The classifier is wired to gate **only** the B-31
+suppressor family — the rest of "the current suppressor scatter" below was *not* migrated to it;
+the residuals were closed by copy-depth-vs-drop-depth fixes in `param_own.rs` / `synth_drop.rs`,
+not by routing every suppressor through the classifier. The corpus-parity ambition instead
+became the oracle/differential. (2) Phase 2's element-deep entry-copy "piece (b)" was found
+**not** needed for the port shape (the consume path self-balances) and shipped only later, as
+B-04-9(a), for the whole-drop case — see that entry for the false-start it corrected.
 
 ## Summary
 
