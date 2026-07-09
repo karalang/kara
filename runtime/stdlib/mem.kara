@@ -1,0 +1,24 @@
+// runtime/stdlib/mem.kara
+//
+// std.mem — ownership-driven value-movement primitives (roadmap Phase 8
+// § std.mem). `swap` / `replace` move values through `mut ref` locations
+// WITHOUT running a destructor on the value that leaves the location — an
+// operation that cannot be written in safe Kāra source (you cannot move
+// out of a `mut ref`), so both are `#[compiler_builtin]` intrinsics with a
+// call-site intercept in the interpreter and codegen.
+//
+// (`forget` — the unsafe FFI destructor-suppression sibling — lives in
+// `intrinsics.kara`. `take` — `replace(dest, T.default())` — is a follow-on
+// gated on generic `T.default()` dispatch in codegen.)
+
+// Exchange the values held at two mutable locations. Neither value is
+// dropped — both stay live, just relocated.
+#[compiler_builtin]
+pub fn swap[T](a: mut ref T, b: mut ref T) {}
+
+// Write `value` into `*dest` and return the PREVIOUS value of `*dest`. The
+// old value is moved out (returned, not dropped); `value` is moved in. The
+// stub body just satisfies the return-type shape — the real move-without-
+// drop is the call-site intercept.
+#[compiler_builtin]
+pub fn replace[T](dest: mut ref T, value: T) -> T { value }

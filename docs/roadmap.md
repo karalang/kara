@@ -512,8 +512,8 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 - [ ] `Error` trait — `description() -> String`, `source() -> Option[ref dyn Error]`; structured chaining. `From` impls for cross-error `?` already in conversion-traits section.
 
 ### `std.mem`
-- [ ] `swap`, `replace`, `take` — ownership-driven idioms for value movement without consume.
-- [ ] `forget` (`unsafe`) — suppress destructor; reserved for FFI handoff.
+- [~] `swap`, `replace`, `take` — ownership-driven idioms for value movement without consume. `swap` / `replace` shipped: `#[compiler_builtin]` intrinsics in `runtime/stdlib/mem.kara`, intercepted at the call site in the interpreter (`eval_call`) and codegen (`compile_call`) — they move values through `mut ref` places via raw load/store (no destructor on the value that leaves the place), correct and leak/double-free-free for i64 / String / struct values / `mut ref` param forwarding in both backends. `take` (= `replace(dest, T.default())`) is pending: generic `T.default()` under a `T: Default` bound runs in the interpreter but does not yet monomorphize in codegen (a separate generic-assoc-fn-dispatch gap), so `take` as a source wrapper would fail `karac build`.
+- [x] `forget` (`unsafe`) — suppress destructor; reserved for FFI handoff. Shipped (`intrinsics.kara`; additive-interop Slice 4).
 
 ### `std.bytes`
 - [ ] `Bytes` type — slice-into-shared-buffer with cheap clone; critical for parser internals, network-protocol code, request-handling perf without per-call allocation.

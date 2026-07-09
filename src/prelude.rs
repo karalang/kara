@@ -864,6 +864,11 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
         "intrinsics.kara",
         include_str!("../runtime/stdlib/intrinsics.kara"),
     ),
+    // `std.mem` — `swap` / `replace` move-without-drop primitives (roadmap
+    // Phase 8 § std.mem). `#[compiler_builtin]` intrinsics intercepted at
+    // the call site in the interpreter and codegen (they operate through
+    // `mut ref` places, which safe source can't move out of).
+    ("mem.kara", include_str!("../runtime/stdlib/mem.kara")),
     // The reduce/elementwise surface traits (S6a of the
     // reduce-elementwise-trait-unification spike). Registered BEFORE
     // tensor.kara / column.kara, whose impl blocks reference them.
@@ -1402,6 +1407,13 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // nothing — the value is handed off (leaked from Kāra's view), the
     // FFI ownership-handoff primitive.
     "forget",
+    // `std.mem` § `swap` / `replace` (roadmap Phase 8) — move-without-drop
+    // primitives over `mut ref` places. Declared `#[compiler_builtin]` in
+    // `runtime/stdlib/mem.kara`; intercepted at the call site in the
+    // interpreter (`eval_call`) and codegen (`compile_call`) — the stub
+    // bodies never lower. Registered here so the bare identifiers resolve.
+    "swap",
+    "replace",
     // `std.time::sleep_ms(ms: i64) with suspends` — native async sleep,
     // the leaf `suspends` timer primitive (auto-par divergence slice
     // A2a-2.2). See `runtime/stdlib/time.kara`. Codegen intercepts the

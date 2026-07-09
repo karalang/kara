@@ -411,6 +411,45 @@ fn main() {
     }
 
     #[test]
+    fn asan_std_mem_swap_replace_heap_no_leak_no_double_free() {
+        // roadmap Phase 8 § std.mem — `swap` / `replace` move String buffers
+        // through `mut ref` places via raw load/store (no destructor on the
+        // value that leaves the place). The memory contract: every buffer is
+        // dropped EXACTLY once. `swap(s, t)` relocates two buffers (no alloc,
+        // no free); `replace(s, v)` moves `v` in and returns the OLD `s`
+        // (moved out, not freed — the caller's `old` binding owns and drops
+        // it). LSan flags a leak if the old value's drop is dropped; ASan flags
+        // a double-free if the store also freed the overwritten slot. Looped so
+        // any per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let mut s = f"aaa-{i}-padding-padding";
+        let mut t = f"bbb-{i}-padding-padding";
+        swap(mut s, mut t);
+        let old = replace(mut s, f"ccc-{i}-padding-padding");
+        println(s);
+        println(t);
+        println(old);
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "ccc-0-padding-padding",
+                "aaa-0-padding-padding",
+                "bbb-0-padding-padding",
+                "ccc-1-padding-padding",
+                "aaa-1-padding-padding",
+                "bbb-1-padding-padding",
+            ],
+            "asan_std_mem_swap_replace_heap_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_generic_fn_returns_owned_heap_struct_param_no_leak() {
         // B-2026-07-08-6 (generic/mono leg, FIXED) — the non-stdlib peer of
         // the std.cmp test: a USER generic fn that returns an owned heap-owning

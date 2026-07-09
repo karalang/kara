@@ -2035,6 +2035,59 @@ fn test_std_cmp_min_max_clamp_free_functions() {
 }
 
 #[test]
+fn test_std_mem_swap_replace() {
+    // roadmap Phase 8 § std.mem — `swap` / `replace` move values through
+    // `mut ref` places. `#[compiler_builtin]` intrinsics intercepted in
+    // `eval_call`. swap exchanges two places; replace writes the new value and
+    // returns the old.
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut a = 1i64; let mut b = 2i64;\n\
+                 swap(mut a, mut b);\n\
+                 println(f\"{a} {b}\");\n\
+                 let old = replace(mut a, 99i64);\n\
+                 println(f\"{a} {old}\");\n\
+             }"),
+        "2 1\n99 2\n"
+    );
+    // Heap values (String) — buffers relocate, old value flows out.
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut s = \"hello\".to_string();\n\
+                 let mut t = \"world\".to_string();\n\
+                 swap(mut s, mut t);\n\
+                 let prev = replace(mut s, \"new\".to_string());\n\
+                 println(f\"{s} {t} {prev}\");\n\
+             }"),
+        "new hello world\n"
+    );
+    // `mut ref` param forwarding: `swap(slot, mut z)` inside a fn taking
+    // `slot: mut ref i64` writes through the borrow.
+    assert_eq!(
+        run("fn reset(slot: mut ref i64) -> i64 {\n\
+                 let mut z = 0i64; swap(slot, mut z); z\n\
+             }\n\
+             fn main() {\n\
+                 let mut n = 77i64;\n\
+                 let prev = reset(mut n);\n\
+                 println(f\"{n} {prev}\");\n\
+             }"),
+        "0 77\n"
+    );
+    // A USER-defined `swap` (different shape — owned params, returns a tuple)
+    // must SHADOW the builtin: the intercept defers to the user fn when one is
+    // in scope. Peer to codegen's `test_e2e_generic_swap_via_tuple`.
+    assert_eq!(
+        run("fn swap[T](a: T, b: T) -> (T, T) { (b, a) }\n\
+             fn main() {\n\
+                 let r = swap(1, 2);\n\
+                 println(f\"{r.0} {r.1}\");\n\
+             }"),
+        "2 1\n"
+    );
+}
+
+#[test]
 fn test_qualified_enum_variant_constructor_cross_boundary() {
     // A method returning a qualified-constructed `Result` whose value is
     // matched in the caller — the original repro for the interpreter panic.

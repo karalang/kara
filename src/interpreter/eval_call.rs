@@ -1174,6 +1174,28 @@ impl<'a> super::Interpreter<'a> {
                     }
                     return Value::Unit;
                 }
+                "swap" if args.len() == 2 && self.env.get("swap").is_none() => {
+                    // std.mem::swap — exchange the values at two `mut ref`
+                    // places without dropping either. Read both current
+                    // values, then write each back to the OTHER place. The
+                    // `#[compiler_builtin]` stub body is skipped by this
+                    // intercept. (Tree-walk analogue of codegen's
+                    // load/load/store/store — no destructor runs.)
+                    let va = self.eval_expr_inner(&args[0].value);
+                    let vb = self.eval_expr_inner(&args[1].value);
+                    self.write_back_receiver(&args[0].value, vb);
+                    self.write_back_receiver(&args[1].value, va);
+                    return Value::Unit;
+                }
+                "replace" if args.len() == 2 && self.env.get("replace").is_none() => {
+                    // std.mem::replace — write `value` into `*dest`, return
+                    // the PREVIOUS `*dest`. The old value is moved out
+                    // (returned, not dropped); `value` is moved in.
+                    let old = self.eval_expr_inner(&args[0].value);
+                    let new = self.eval_expr_inner(&args[1].value);
+                    self.write_back_receiver(&args[0].value, new);
+                    return old;
+                }
                 _ => {}
             }
         }

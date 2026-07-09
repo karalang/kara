@@ -7051,6 +7051,39 @@ fn main() {
         }
     }
 
+    /// roadmap Phase 8 § std.mem — `swap` / `replace` compiled. Both are
+    /// `#[compiler_builtin]` intrinsics intercepted in `compile_call`:
+    /// `swap` load/load/store/store exchanges two `mut ref` places; `replace`
+    /// stores the new value and returns the old. Covers i64, String (heap),
+    /// struct values, and `mut ref` param forwarding — the output must match
+    /// the interpreter exactly (memory safety of the heap case is pinned by
+    /// `tests/memory_sanitizer.rs::asan_std_mem_swap_replace_*`).
+    #[test]
+    fn e2e_std_mem_swap_replace_codegen() {
+        if let Some(out) = run_program(
+            "struct P { x: i64, y: i64 }\n\
+             fn reset(slot: mut ref i64) -> i64 { let mut z = 0i64; swap(slot, mut z); z }\n\
+             fn main() {\n\
+                 let mut a = 1i64; let mut b = 2i64;\n\
+                 swap(mut a, mut b);\n\
+                 println(f\"{a} {b}\");\n\
+                 let old = replace(mut a, 99i64);\n\
+                 println(f\"{a} {old}\");\n\
+                 let mut s = \"hello\".to_string(); let mut t = \"world\".to_string();\n\
+                 swap(mut s, mut t);\n\
+                 let prev = replace(mut s, \"new\".to_string());\n\
+                 println(f\"{s} {t} {prev}\");\n\
+                 let mut p = P { x: 3i64, y: 4i64 }; let mut q = P { x: 5i64, y: 6i64 };\n\
+                 swap(mut p, mut q);\n\
+                 println(f\"{p.x} {q.x}\");\n\
+                 let mut n = 77i64; let pv = reset(mut n);\n\
+                 println(f\"{n} {pv}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "2 1\n99 2\nnew hello world\n5 3\n0 77\n");
+        }
+    }
+
     /// `String.cmp` on NON-identifier receivers — a string LITERAL
     /// (`"abd".cmp("abc")`) and an INDEX into a `Vec[String]` (`v[0].cmp(v[1])`).
     /// Both typecheck and run, but B-13's first codegen guard keyed on

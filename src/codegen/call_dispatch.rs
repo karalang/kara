@@ -526,6 +526,44 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(self.context.i64_type().const_int(0, false).into());
         }
 
+        // `std.mem::swap(mut a, mut b)` — exchange the values at two `mut ref`
+        // places WITHOUT dropping either (roadmap Phase 8 § std.mem). Load
+        // both current values, then store each into the OTHER place: raw
+        // load/store moves the values, no destructor runs (both stay live,
+        // just relocated). Intercepted before the generic-fn path so the
+        // `#[compiler_builtin]` stub body (`{}`) never lowers. Returns unit
+        // (the `i64 0` void-builtin placeholder, like `forget`).
+        if name == "swap" && args.len() == 2 && !self.user_shadows_mem_builtin("swap") {
+            let (pa, va) = self.mem_place_ptr_and_value(&args[0].value)?;
+            let (pb, vb) = self.mem_place_ptr_and_value(&args[1].value)?;
+            self.builder.build_store(pa, vb).unwrap();
+            self.builder.build_store(pb, va).unwrap();
+            return Ok(self.context.i64_type().const_int(0, false).into());
+        }
+
+        // `std.mem::replace(mut dest, value) -> T` — store `value` into
+        // `*dest` and return the PREVIOUS `*dest`. Raw load of the old value
+        // (moved out, returned — NOT dropped) then a raw store of the new
+        // value (moved in): the caller owns the returned old value and the
+        // place now owns the new one, so no buffer is freed here and none is
+        // double-owned. `value`'s own scope-exit drop is already suppressed by
+        // the ownership checker (the `value: T` param is a consume).
+        if name == "replace" && args.len() == 2 && !self.user_shadows_mem_builtin("replace") {
+            let (pd, old) = self.mem_place_ptr_and_value(&args[0].value)?;
+            let new = self.compile_expr(&args[1].value)?;
+            self.builder.build_store(pd, new).unwrap();
+            // `value` is MOVED into `*dest` — the place now owns its buffer.
+            // Neutralize the value temp's own scope-exit cleanup so it isn't
+            // freed a second time (the double-free the raw store would leave:
+            // an f-string / owned String-or-Vec / inline-Option arg carries a
+            // cleanup that the normal call-arg move path suppresses; mirror it
+            // here since this intercept bypasses that path).
+            self.suppress_fstr_acc_if_moved_out(&args[1].value);
+            self.suppress_source_vec_cleanup_for_arg(&args[1].value);
+            self.suppress_inline_option_result_binding_move(&args[1].value);
+            return Ok(old);
+        }
+
         // Phase 6 line 218 slice 4: free `spawn(closure) -> TaskHandle[T]`
         // dispatch. Intercepted before the generic-fn path so the slice-1
         // stub body (`TaskHandle { task_id: 0 }`) never lowers. The
@@ -1870,6 +1908,66 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+    }
+
+    /// Does the USER program define a function with this name, shadowing the
+    /// `std.mem` `#[compiler_builtin]` of the same name? `swap` / `replace` are
+    /// common names (`fn swap[T](a, b) -> (T, T)` is a legal user helper), so
+    /// the call-site intercept must defer to a user definition. The stdlib
+    /// builtins are compiler-intrinsic (never seeded into `generic_fns` nor
+    /// declared as a module function), so a hit in EITHER means the user owns
+    /// the name — fall through to the normal generic/concrete call path.
+    fn user_shadows_mem_builtin(&self, name: &str) -> bool {
+        self.generic_fns.contains_key(name) || self.module.get_function(name).is_some()
+    }
+
+    /// Resolve a `mut ref` place argument of a `std.mem` builtin (`swap` /
+    /// `replace`) to `(place_ptr, loaded_value)` — the address to store the new
+    /// value into, and the current value already loaded from it. Handles the
+    /// place forms the call-site `mut` marker admits. An OWNED IDENTIFIER
+    /// (`swap(mut a, ..)`) has `slot.ptr` as the alloca that holds `T` directly.
+    /// A FORWARDED `mut ref` PARAM (`swap(x, ..)` inside `fn f(x: mut ref T)`)
+    /// has `slot.ptr` as an alloca HOLDING the pointer-to-`T`, so it is loaded
+    /// once to reach the real place — mirroring `load_variable`'s ref-param
+    /// double-deref; a raw `field_chain_place_ptr` would return the pointer-slot
+    /// itself and corrupt it. A FIELD / INDEX / SELF place (`swap(mut s.x, ..)`)
+    /// takes the value via a fresh load and the store target via
+    /// `field_chain_place_ptr`. Errors (rather than silently miscompiling) on an
+    /// unsupported shape.
+    fn mem_place_ptr_and_value(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<(PointerValue<'ctx>, BasicValueEnum<'ctx>), String> {
+        if let ExprKind::Identifier(name) = &expr.kind {
+            if let Some(slot) = self.variables.get(name.as_str()) {
+                let (slot_ptr, slot_ty) = (slot.ptr, slot.ty);
+                if let Some(&inner_ty) = self.ref_params.get(name.as_str()) {
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    let place = self
+                        .builder
+                        .build_load(ptr_ty, slot_ptr, &format!("{name}.mem.place"))
+                        .unwrap()
+                        .into_pointer_value();
+                    let val = self
+                        .builder
+                        .build_load(inner_ty, place, &format!("{name}.mem.val"))
+                        .unwrap();
+                    return Ok((place, val));
+                }
+                let val = self
+                    .builder
+                    .build_load(slot_ty, slot_ptr, &format!("{name}.mem.val"))
+                    .unwrap();
+                return Ok((slot_ptr, val));
+            }
+        }
+        let val = self.compile_expr(expr)?;
+        let ptr = self.field_chain_place_ptr(expr).ok_or_else(|| {
+            "std.mem swap/replace: unsupported `mut ref` place expression \
+             (expected an identifier, struct field, or index place)"
+                .to_string()
+        })?;
+        Ok((ptr, val))
     }
 
     /// B-2026-07-08-6 — does a STRUCT-LITERAL argument have a type the callee
