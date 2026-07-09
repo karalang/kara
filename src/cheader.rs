@@ -23,6 +23,11 @@ use crate::ast::{
     TypeKind,
 };
 
+/// A boxable tagged-union `#[repr(C)]` enum's variants, in tag order:
+/// `(variant_name, Some(payload_c_type) | None)` — `None` for a unit variant
+/// (no payload member in the C union). See [`repr_c_enum_box_variants`].
+type EnumBoxVariants = Vec<(String, Option<String>)>;
+
 /// True iff `func` is part of the exported C surface: a `pub extern "C"`
 /// (or `"C-unwind"`) function *definition*. `abi` is `Some` only for
 /// FFI-export definitions (a body callable from C), so this does not
@@ -160,7 +165,9 @@ pub fn export_symbols(program: &Program) -> Vec<String> {
         if let Item::Function(f) = it {
             if is_exported(f) {
                 syms.push(f.name.clone());
-                if boxed_return_of(f).is_some() {
+                // A boxed return (Vec/String Path B) or a boxed tagged-union
+                // enum (Slice 2a) both auto-emit a `karac_free_<name>`.
+                if boxed_return_of(f).is_some() || export_return_is_boxed_enum(f, program) {
                     syms.push(format!("karac_free_{}", f.name));
                 }
             }
@@ -169,6 +176,40 @@ pub fn export_symbols(program: &Program) -> Vec<String> {
     syms.push("karac_runtime_init".to_string());
     syms.push("karac_runtime_shutdown".to_string());
     syms
+}
+
+/// If `func` is an exported fn whose return is a boxable tagged-union
+/// `#[repr(C)]` enum (Slice 2a), return `(enum_name, variants)`. `None`
+/// otherwise. Program-aware (unlike [`boxed_return_of`], which sees only the
+/// signature) because the classification needs the enum's variant list. The
+/// codegen boxing path uses this to (a) decide the return boxes and (b) know
+/// the box is enum-shaped (a distinct, buffer-free destructor — the Vec-box
+/// destructor's inner-buffer free would misinterpret the payload word).
+pub fn export_boxed_enum(func: &Function, program: &Program) -> Option<(String, EnumBoxVariants)> {
+    if !func.is_pub || func.abi.as_deref() != Some("C") {
+        return None;
+    }
+    let rt = func.return_type.as_ref()?;
+    let TypeKind::Path(p) = &rt.kind else {
+        return None;
+    };
+    if p.segments.len() != 1 {
+        return None;
+    }
+    let name = &p.segments[0];
+    for it in &program.items {
+        if let Item::EnumDef(e) = it {
+            if &e.name == name {
+                return repr_c_enum_box_variants(e).map(|vs| (e.name.clone(), vs));
+            }
+        }
+    }
+    None
+}
+
+/// True iff `func`'s return is a boxable tagged-union `#[repr(C)]` enum.
+pub fn export_return_is_boxed_enum(func: &Function, program: &Program) -> bool {
+    export_boxed_enum(func, program).is_some()
 }
 
 /// True iff `te` crosses the C boundary *transparently by value* — a
@@ -247,10 +288,12 @@ pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
         if !is_exported(f) {
             continue;
         }
-        // Return: transparent OR boxable.
+        // Return: transparent OR boxable (Vec/String Path B, or a Slice-2a
+        // tagged-union `#[repr(C)]` enum boxed to a pointer).
         if let Some(rt) = &f.return_type {
             if !is_transparent_boundary_type(rt, &repr_c, &repr_c_enums)
                 && boxed_return_of(f).is_none()
+                && export_boxed_enum(f, program).is_none()
             {
                 errs.push((
                     f.name.clone(),
@@ -410,6 +453,17 @@ pub fn emit_c_header(program: &Program, lib_name: &str) -> String {
         })
         .collect();
 
+    // Slice-2a boxed tagged-union enums referenced by an export return, keyed
+    // by enum name → per-variant `(name, payload_c)` list (dedup: two exports
+    // may return the same enum). Ordered so the typedefs emit before the
+    // prototypes that name them.
+    let mut boxed_enum_defs: BTreeMap<String, Vec<(String, Option<String>)>> = BTreeMap::new();
+    for f in &exports {
+        if let Some((name, variants)) = export_boxed_enum(f, program) {
+            boxed_enum_defs.entry(name).or_insert(variants);
+        }
+    }
+
     // Walk every exported signature, mapping each type to C and recording
     // which repr(C) structs / enums and whether an opaque handle are referenced.
     let mut needed_structs: BTreeSet<String> = BTreeSet::new();
@@ -417,6 +471,7 @@ pub fn emit_c_header(program: &Program, lib_name: &str) -> String {
     let mut used_opaque = false;
     let mut protos: Vec<String> = Vec::with_capacity(exports.len());
     for f in &exports {
+        let boxed_enum = export_boxed_enum(f, program).map(|(n, _)| n);
         protos.push(render_prototype(
             f,
             &repr_c_structs,
@@ -424,6 +479,7 @@ pub fn emit_c_header(program: &Program, lib_name: &str) -> String {
             &mut needed_structs,
             &mut needed_enums,
             &mut used_opaque,
+            boxed_enum.as_deref(),
         ));
     }
 
@@ -516,6 +572,32 @@ pub fn emit_c_header(program: &Program, lib_name: &str) -> String {
         ));
     }
 
+    // Slice-2a boxed tagged-union `#[repr(C)]` enums: a faithful C tagged
+    // union `{ int64_t tag; union { <per-variant scalar> } payload; }`
+    // matching the Kāra `{ i64 tag, i64 w0 }` layout. Read `tag`, select the
+    // variant's `payload.<Variant>`, then free via the karac_free_* export.
+    for (name, variants) in &boxed_enum_defs {
+        let mut members: Vec<String> = Vec::new();
+        let mut consts: Vec<String> = Vec::new();
+        for (i, (vname, payload)) in variants.iter().enumerate() {
+            consts.push(format!("{name}_{vname} = {i}"));
+            if let Some(cty) = payload {
+                members.push(format!("{cty} {vname};"));
+            }
+        }
+        // The union always has at least one member (a boxable enum has ≥1
+        // scalar variant), so it is never an (illegal) empty union.
+        out.push_str(&format!(
+            "/* Boxed K\u{101}ra tagged union. Read `tag` (see the constants), then the\n\
+             * matching `payload.<Variant>`; free the handle via the karac_free_*\n\
+             * export (never plain free()). Unit variants carry no payload member. */\n\
+             enum {{ {} }};\n\
+             typedef struct {{ int64_t tag; union {{ {} }} payload; }} {name};\n\n",
+            consts.join(", "),
+            members.join(" "),
+        ));
+    }
+
     // repr(C) struct definitions, dependency-ordered (a struct used
     // by-value inside another must be defined first). Built into a string
     // *before* the enum block is emitted: a struct field may reference an
@@ -580,16 +662,20 @@ fn render_prototype(
     needed: &mut BTreeSet<String>,
     needed_enums: &mut BTreeSet<String>,
     used_opaque: &mut bool,
+    boxed_enum: Option<&str>,
 ) -> String {
     // C-ABI auto-boxed aggregate return (Slice 4 Path B): the export returns
     // an opaque pointer to a heap box holding a `{data,len,cap}` struct; the
     // C side reads its fields and frees it via `karac_free_<name>`.
+    // A Slice-2a tagged-union `#[repr(C)]` enum return is boxed the same way,
+    // to a pointer to the emitted `{ tag; union }` struct.
     let boxed = boxed_return_of(func);
-    let ret = match (&boxed, &func.return_type) {
-        (Some(b), _) => format!("{}*", boxed_struct_name(b)),
-        (None, None) => "void".to_string(),
-        (None, Some(ty)) if is_unit(ty) => "void".to_string(),
-        (None, Some(ty)) => c_type(ty, structs, enums, needed, needed_enums, used_opaque),
+    let ret = match (&boxed, boxed_enum, &func.return_type) {
+        (Some(b), _, _) => format!("{}*", boxed_struct_name(b)),
+        (None, Some(en), _) => format!("{en}*"),
+        (None, None, None) => "void".to_string(),
+        (None, None, Some(ty)) if is_unit(ty) => "void".to_string(),
+        (None, None, Some(ty)) => c_type(ty, structs, enums, needed, needed_enums, used_opaque),
     };
     let params: Vec<String> = func
         .params
@@ -621,6 +707,11 @@ fn render_prototype(
             func.name,
             boxed_struct_name(b)
         ));
+    } else if let Some(en) = boxed_enum {
+        // Slice-2a boxed enum: the box owns no inner buffer (scalar payloads),
+        // so the destructor just frees the box — but the C side still must
+        // route through it, never plain `free()`.
+        s.push_str(&format!("\nvoid karac_free_{}({en}* handle);", func.name));
     }
     s
 }
@@ -837,6 +928,70 @@ fn is_repr_c_all_unit_enum(e: &EnumDef) -> bool {
         && e.variants
             .iter()
             .all(|v| matches!(v.kind, crate::ast::VariantKind::Unit))
+}
+
+/// The C type of a single-scalar payload field, if it is one (the boxable
+/// tagged-union payload set — Slice 2a). A scalar occupies exactly one i64
+/// payload word (`coerce_to_i64`: integers zero-extended, floats bit-cast,
+/// pointers `ptrtoint`), so a correctly-typed C union member overlaying that
+/// word reads it faithfully. `None` for any aggregate (`String` / `Vec` /
+/// struct / nested enum) — those have no by-value C form in a word.
+fn scalar_payload_c_type(te: &TypeExpr) -> Option<String> {
+    match &te.kind {
+        TypeKind::Pointer { is_mut, inner } => {
+            // A raw pointer payload rides the word as an address.
+            let base = match &inner.kind {
+                TypeKind::Path(p) if p.segments.len() == 1 => {
+                    c_primitive(&p.segments[0]).unwrap_or("void")
+                }
+                _ => "void",
+            };
+            Some(if *is_mut {
+                format!("{base}*")
+            } else {
+                format!("const {base}*")
+            })
+        }
+        TypeKind::Path(p) if p.segments.len() == 1 => {
+            c_primitive(&p.segments[0]).map(str::to_string)
+        }
+        _ => None,
+    }
+}
+
+/// Classify a `#[repr(C)]` enum as a boxable tagged union (Slice 2a) — the
+/// data-carrying counterpart to the all-unit transparent case. Returns the
+/// per-variant `(name, Some(payload_c_type) | None)` list (in declaration /
+/// tag order) iff: it is `#[repr(C)]`, not shared/par, every variant is either
+/// a unit variant OR carries exactly one scalar field, AND at least one
+/// variant carries a payload (a pure all-unit enum is Slice 1's transparent
+/// `int64_t`, handled separately). Anything with a multi-field variant or an
+/// aggregate payload returns `None` — those stay rejected (Slice 2b/2c).
+///
+/// Such an enum crosses as a heap-boxed pointer to a faithful C tagged union
+/// `{ int64_t tag; union { <per-variant scalar> … } payload; }` matching the
+/// Kāra `{ i64 tag, i64 w0 }` layout exactly.
+fn repr_c_enum_box_variants(e: &EnumDef) -> Option<EnumBoxVariants> {
+    use crate::ast::VariantKind;
+    if !attrs_have_repr_c(&e.attributes) || e.is_shared || e.is_par || e.variants.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(e.variants.len());
+    let mut any_payload = false;
+    for v in &e.variants {
+        let payload = match &v.kind {
+            VariantKind::Unit => None,
+            VariantKind::Tuple(tys) if tys.len() == 1 => {
+                any_payload = true;
+                Some(scalar_payload_c_type(&tys[0])?)
+            }
+            // Multi-field tuple, struct variant, or a non-scalar single field:
+            // not a Slice-2a shape.
+            _ => return None,
+        };
+        out.push((v.name.clone(), payload));
+    }
+    any_payload.then_some(out)
 }
 
 /// A best-effort Kāra-surface rendering of a type expression for the
@@ -1161,17 +1316,64 @@ mod tests {
     }
 
     #[test]
-    fn data_carrying_repr_c_enum_still_rejected() {
-        // `#[repr(C)]` on a data-carrying enum is NOT transparent at v1 (the
-        // tagged-union case is Slice 2) — it stays an export error.
-        let src = "#[repr(C)]\npub enum Msg { Ping, Data(i64) }\n\
+    fn scalar_tagged_union_repr_c_enum_boxes() {
+        // Slice 2a: a `#[repr(C)]` enum with unit + single-scalar variants is
+        // a boxable tagged union — accepted as a return, header emits the
+        // `{ tag; union }` typedef + a `karac_free_<fn>` destructor, prototype
+        // returns a pointer to it.
+        let src = "#[repr(C)]\npub enum Msg { Ping, Data(i64), Ratio(f64) }\n\
                    pub extern \"C\" fn recv() -> Msg { Msg.Ping }";
         let p = crate::parse(src);
         assert!(
+            validate_exports(&p.program).is_empty(),
+            "scalar tagged-union repr(C) enum should be accepted (boxed): {:?}",
             validate_exports(&p.program)
+        );
+        let h = emit_c_header(&p.program, "lib");
+        assert!(
+            h.contains("int64_t tag; union {") && h.contains("} payload; } Msg;"),
+            "tagged-union typedef missing:\n{h}"
+        );
+        assert!(
+            h.contains("int64_t Data;") && h.contains("double Ratio;"),
+            "per-variant union members missing:\n{h}"
+        );
+        assert!(
+            h.contains("Msg_Ping = 0") && h.contains("Msg_Data = 1") && h.contains("Msg_Ratio = 2"),
+            "tag constants missing:\n{h}"
+        );
+        assert!(
+            h.contains("Msg* recv(void);"),
+            "boxed return proto missing:\n{h}"
+        );
+        assert!(
+            h.contains("void karac_free_recv(Msg* handle);"),
+            "destructor proto missing:\n{h}"
+        );
+    }
+
+    #[test]
+    fn non_boxable_data_carrying_repr_c_enum_still_rejected() {
+        // A `#[repr(C)]` enum with a multi-field variant OR an aggregate
+        // payload is beyond Slice 2a (word-packed / has no by-value C form) —
+        // it stays an export error.
+        let multi = crate::parse(
+            "#[repr(C)]\npub enum Pair { None, Both(i32, i32) }\n\
+             pub extern \"C\" fn f() -> Pair { Pair.None }",
+        );
+        assert!(
+            validate_exports(&multi.program)
                 .iter()
-                .any(|(n, _)| n == "recv"),
-            "data-carrying repr(C) enum must still be rejected"
+                .any(|(n, _)| n == "f"),
+            "multi-field repr(C) enum variant must still be rejected"
+        );
+        let agg = crate::parse(
+            "#[repr(C)]\npub enum Msg { Ping, Text(String) }\n\
+             pub extern \"C\" fn g() -> Msg { Msg.Ping }",
+        );
+        assert!(
+            validate_exports(&agg.program).iter().any(|(n, _)| n == "g"),
+            "aggregate-payload repr(C) enum variant must still be rejected"
         );
     }
 

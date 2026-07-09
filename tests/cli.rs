@@ -20163,6 +20163,136 @@ fn test_build_repr_c_enum_roundtrip_from_c_e2e() {
     }
 }
 
+/// Producer-mode data-carrying `#[repr(C)]` enum across the C ABI (spike
+/// `repr-c-tagged-union-enums.md` Slice 2a). A `#[repr(C)]` enum with
+/// unit + single-scalar variants is boxed to a pointer to a faithful C
+/// tagged union `{ int64_t tag; union { … } payload; }` matching the Kāra
+/// `{ i64 tag, i64 w0 }` layout; the header auto-emits the struct + a
+/// `karac_free_<name>` box-only destructor. A C host reads `tag` + the
+/// matching `payload.<Variant>` and frees via the destructor. Proves the
+/// integer/float payload encoding is faithful through the union (i64 stored
+/// as-is, f64 bit-cast) and the box round-trips without leak/UAF (the ASAN
+/// gate is the memory_sanitizer job). Soft-skips on the no-llvm fallback /
+/// missing runtime / missing `cc`.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_repr_c_enum_tagged_union_from_c_e2e() {
+    use std::io::Write;
+    let src = "#[repr(C)]\npub enum Msg { Ping, Data(i64), Ratio(f64) }\n\
+               pub extern \"C\" fn make(kind: i64) -> Msg {\n\
+               \x20   if kind == 0 { return Msg.Ping; }\n\
+               \x20   if kind == 1 { return Msg.Data(4242); }\n\
+               \x20   Msg.Ratio(2.5)\n\
+               }\n";
+    let dir = std::env::temp_dir().join(format!("karac_reprc_tu_e2e_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut f = std::fs::File::create(dir.join("kernel.kara")).unwrap();
+        f.write_all(src.as_bytes()).unwrap();
+    }
+
+    let build = karac_bin()
+        .current_dir(&dir)
+        .args(["build", "kernel.kara", "--crate-type", "staticlib"])
+        .output()
+        .unwrap();
+    let berr = String::from_utf8_lossy(&build.stderr);
+    let lib = dir.join("libkernel.a");
+    let header = dir.join("libkernel.h");
+    if berr.contains("requires the llvm feature")
+        || berr.contains("link failed")
+        || !lib.exists()
+        || !header.exists()
+    {
+        eprintln!("skip: test_build_repr_c_enum_tagged_union_from_c_e2e — build/link soft-skip");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+
+    let header_text = std::fs::read_to_string(&header).unwrap();
+    assert!(
+        header_text.contains("int64_t tag; union {")
+            && header_text.contains("int64_t Data;")
+            && header_text.contains("double Ratio;")
+            && header_text.contains("} payload; } Msg;"),
+        "header missing faithful tagged-union typedef:\n{header_text}"
+    );
+    assert!(
+        header_text.contains("Msg* make(int64_t kind);")
+            && header_text.contains("void karac_free_make(Msg* handle);"),
+        "header missing boxed return + destructor prototypes:\n{header_text}"
+    );
+
+    let host_c = "#include <stdio.h>\n\
+                  #include \"libkernel.h\"\n\
+                  int main(void) {\n\
+                      karac_runtime_init();\n\
+                      Msg* p = make(0);\n\
+                      Msg* d = make(1);\n\
+                      Msg* r = make(2);\n\
+                      printf(\"%lld %lld %lld %.1f\\n\",\n\
+                             (long long)p->tag, (long long)d->tag,\n\
+                             (long long)d->payload.Data, r->payload.Ratio);\n\
+                      karac_free_make(p);\n\
+                      karac_free_make(d);\n\
+                      karac_free_make(r);\n\
+                      karac_free_make(0);\n\
+                      karac_runtime_shutdown();\n\
+                      return 0;\n\
+                  }\n";
+    {
+        let mut f = std::fs::File::create(dir.join("host.c")).unwrap();
+        f.write_all(host_c.as_bytes()).unwrap();
+    }
+
+    let cc = std::process::Command::new("cc")
+        .current_dir(&dir)
+        .args([
+            "host.c",
+            "-L.",
+            "-l:libkernel.a",
+            "-lpthread",
+            "-lm",
+            "-ldl",
+            "-o",
+            "host",
+        ])
+        .output();
+    let cc = match cc {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("skip: test_build_repr_c_enum_tagged_union_from_c_e2e — no `cc`");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+    };
+    assert!(
+        cc.status.success(),
+        "C host failed to link against the tagged-union-enum Kāra staticlib:\n{}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+
+    let run = common::output_with_hang_watchdog(
+        {
+            let mut c = std::process::Command::new(dir.join("host"));
+            c.current_dir(&dir);
+            c
+        },
+        std::time::Duration::from_secs(15),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(run) = run {
+        // Ping.tag=0, Data.tag=1, Data.payload=4242, Ratio.payload=2.5.
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "0 1 4242 2.5",
+            "tagged-union repr(C) enum crossed the C ABI with the wrong value(s)"
+        );
+        assert_eq!(run.status.code(), Some(0));
+    }
+}
+
 /// Producer-mode auto-boxing + auto-destructor (additive-interop Slice 4
 /// Path B). A `pub extern "C" fn -> Vec[i64]` is auto-boxed for the C ABI:
 /// the export returns an opaque `KaraVec_int64_t*` (heap box), the header

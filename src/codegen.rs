@@ -2004,6 +2004,14 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_call` rejects an internal call with an actionable error
     /// (extract the body into a non-exported helper and call that).
     pub(crate) boxed_export_names: std::collections::HashSet<String>,
+    /// Subset of `boxed_export_names` whose box is a Slice-2a tagged-union
+    /// `#[repr(C)]` enum (`{ i64 tag, i64 w0 }`), not a `{data,len,cap}` Vec
+    /// box. The distinction is load-bearing at destructor-emit time: the
+    /// Vec-box destructor frees an inner `data` buffer, which would
+    /// catastrophically misinterpret an enum's payload word as a pointer —
+    /// the enum box owns nothing but itself, so its `karac_free_<fn>` only
+    /// frees the box.
+    pub(crate) boxed_enum_export_names: std::collections::HashSet<String>,
     /// True only while compiling the RHS of a `let <name> = <ref-returning
     /// call>` — the one caller context that binds the borrow as a ref-local
     /// (deref on use). Outside it, a call to a borrow-returning function is
@@ -5477,6 +5485,7 @@ impl<'ctx> Codegen<'ctx> {
             current_fn_returns_ref: false,
             current_fn_boxes_return: false,
             boxed_export_names: std::collections::HashSet::new(),
+            boxed_enum_export_names: std::collections::HashSet::new(),
             compiling_ref_return_let_rhs: false,
             suppress_shadow_metadata_purge: false,
             pattern_binding_is_borrow: false,
@@ -6602,11 +6611,18 @@ impl<'ctx> Codegen<'ctx> {
 
         // Record boxed-return exports (Slice 4 Path B) up front so
         // `compile_call` can reject an internal Kāra call to one before any
-        // body is compiled.
+        // body is compiled. A Slice-2a tagged-union `#[repr(C)]` enum return
+        // is boxed the same way (its LLVM signature returns `ptr`), so it goes
+        // in `boxed_export_names` too (internal-call rejection) *and* in
+        // `boxed_enum_export_names` (marks the box as enum-shaped — a distinct,
+        // buffer-free destructor).
         for item in &program.items {
             if let Item::Function(f) = item {
                 if crate::cheader::boxed_return_of(f).is_some() {
                     self.boxed_export_names.insert(f.name.clone());
+                } else if crate::cheader::export_return_is_boxed_enum(f, program) {
+                    self.boxed_export_names.insert(f.name.clone());
+                    self.boxed_enum_export_names.insert(f.name.clone());
                 }
             }
         }
@@ -7136,19 +7152,28 @@ impl<'ctx> Codegen<'ctx> {
     /// Emit a C-ABI auto-destructor for every boxed-return export
     /// (additive-interop Slice 4 Path B). See [`emit_one_export_destructor`].
     fn emit_export_destructors(&mut self, program: &Program) -> Result<(), String> {
-        let targets: Vec<(String, bool)> = program
-            .items
-            .iter()
-            .filter_map(|it| match it {
-                Item::Function(f) if crate::cheader::boxed_return_of(f).is_some() => Some((
-                    f.name.clone(),
-                    crate::cheader::boxed_return_elements_need_drop(f),
-                )),
-                _ => None,
-            })
-            .collect();
-        for (name, elems_need_drop) in targets {
-            self.emit_one_export_destructor(&name, elems_need_drop);
+        // `(fn_name, elems_need_drop, is_plain_box)`. A Vec/String box
+        // (`boxed_return_of`) owns an inner `data` buffer to free (and, when
+        // nested, per-element buffers). A Slice-2a tagged-union `#[repr(C)]`
+        // enum box (`is_plain_box`) owns nothing but itself — its destructor
+        // must NOT run the vec-buffer free, which would misread the payload
+        // word as a `data` pointer and free garbage.
+        let mut targets: Vec<(String, bool, bool)> = Vec::new();
+        for it in &program.items {
+            if let Item::Function(f) = it {
+                if crate::cheader::boxed_return_of(f).is_some() {
+                    targets.push((
+                        f.name.clone(),
+                        crate::cheader::boxed_return_elements_need_drop(f),
+                        false,
+                    ));
+                } else if crate::cheader::export_return_is_boxed_enum(f, program) {
+                    targets.push((f.name.clone(), false, true));
+                }
+            }
+        }
+        for (name, elems_need_drop, is_plain_box) in targets {
+            self.emit_one_export_destructor(&name, elems_need_drop, is_plain_box);
         }
         Ok(())
     }
@@ -7160,7 +7185,17 @@ impl<'ctx> Codegen<'ctx> {
     /// first walk `data[0..len]` freeing each element's own `{ptr,len,cap}`
     /// buffer; then free the outer buffer (`emit_free_vec_buffer_if_owned`)
     /// and the box. Null-guarded: `karac_free_<fn>(NULL)` is a no-op.
-    fn emit_one_export_destructor(&mut self, fn_name: &str, elems_need_drop: bool) {
+    ///
+    /// `is_plain_box` (a Slice-2a tagged-union `#[repr(C)]` enum box) means the
+    /// box owns nothing but itself — a `{ i64 tag, i64 w0 }` value with only
+    /// scalar payloads. It frees the box directly and MUST skip the vec-buffer
+    /// free, which would read the payload word as a `data` pointer and free it.
+    fn emit_one_export_destructor(
+        &mut self,
+        fn_name: &str,
+        elems_need_drop: bool,
+        is_plain_box: bool,
+    ) {
         use inkwell::module::Linkage;
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let void_ty = self.context.void_type();
@@ -7189,14 +7224,21 @@ impl<'ctx> Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(free_bb);
-        // Nested return (`Vec[String]` / `Vec[Vec[scalar]]`): each element is
-        // a `{ptr,len,cap}` aggregate — free each element's buffer before the
-        // outer buffer, else the inner buffers leak.
-        if elems_need_drop {
-            self.emit_boxed_elems_drop_loop(handle);
+        if is_plain_box {
+            // Slice-2a tagged-union enum box: scalar payloads own no heap, so
+            // there is no inner buffer to free — freeing the box is the whole
+            // cleanup. Emphatically NOT `emit_free_vec_buffer_if_owned` (that
+            // would treat the payload word as a `data` pointer).
+        } else {
+            // Nested return (`Vec[String]` / `Vec[Vec[scalar]]`): each element
+            // is a `{ptr,len,cap}` aggregate — free each element's buffer
+            // before the outer buffer, else the inner buffers leak.
+            if elems_need_drop {
+                self.emit_boxed_elems_drop_loop(handle);
+            }
+            // The box points to a `{data,len,cap}` value; free its owned buffer.
+            self.emit_free_vec_buffer_if_owned(handle);
         }
-        // The box points to a `{data,len,cap}` value; free its owned buffer.
-        self.emit_free_vec_buffer_if_owned(handle);
         // Then free the box allocation itself.
         self.builder
             .build_call(self.free_fn, &[handle.into()], "")

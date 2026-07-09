@@ -1,6 +1,6 @@
 # Spike: `#[repr(C)]` enums across the C ABI
 
-**Status:** ✅ **Slice 1 SHIPPED (2026-07-08)** — all-unit `#[repr(C)]` enums cross transparently as `int64_t`. Slice 2 (data-carrying tagged unions) remains deferred. Verified end-to-end: a C host round-trips `Status { Ok, NotFound, Denied }` as both param and return, correct values (`0 1 2 2 1`), on x86-64 SysV (`test_build_repr_c_enum_roundtrip_from_c_e2e`). **AArch64/Apple ABI still unverified** — the single-`{i64}`-struct == `int64_t` equivalence holds there by the same one-eightbyte-in-one-register rule, but it should be confirmed on an Apple runner before that target's producer story is called done.
+**Status:** ✅ **Slices 1 + 2a SHIPPED (2026-07-08/09).** Slice 1: all-unit `#[repr(C)]` enums cross transparently as `int64_t`. Slice 2a: `#[repr(C)]` enums with unit + single-scalar variants cross as a heap-boxed pointer to a faithful C tagged union `{ int64_t tag; union {…} payload; }`. Both verified end-to-end from a C host: Slice 1 round-trips `Status { Ok, NotFound, Denied }` as param + return (`0 1 2 2 1`, `test_build_repr_c_enum_roundtrip_from_c_e2e`); Slice 2a round-trips `Msg { Ping, Data(i64), Ratio(f64) }` (`0 1 4242 2.5`, `test_build_repr_c_enum_tagged_union_from_c_e2e`) and is **ASAN/LeakSanitizer-clean** (box malloc + box-only destructor balance). **Slice 2b/2c (multi-scalar / aggregate-payload variants) remain deferred** — still rejected. **AArch64/Apple ABI unverified** for both slices (holds by the same one-eightbyte-per-register rule; confirm on an Apple runner).
 
 **Origin:** the additive-interop producer-mode work (`spikes/additive-interop-adoption.md`, roadmap Tier 5) rejects `enum` returns/params at the export boundary with `E_EXPORT_ABI`, because a boxed enum is an opaque pointer the C side can't read. The category-specific reject diagnostic now says "return a `#[repr(C)]` struct with a tag field, or an opaque handle + accessor exports — repr(C) tagged-union enums are a planned follow-on." **This spike is that follow-on.** It is deliberately *not* bolted onto producer mode: making an `enum` cross transparently is a cross-cutting language feature (parser + codegen layout + header), so it gets its own scoping.
 
@@ -60,14 +60,32 @@ enum { Color_Red = 0, Color_Green = 1, Color_Blue = 2 };
 **Work items (Slice 1) — all done:**
 1. ✅ **Parser/attributes** — `#[repr(C)]` was already parsed onto `EnumDef` (the parser attaches attributes generically; `EnumDef` carries an `attributes: Vec<Attribute>` field), so no parser change was needed. `cheader::attrs_have_repr_c` + `is_repr_c_all_unit_enum` classify it.
 2. ✅ **`cheader.rs`** — `is_transparent_boundary_type` treats an all-unit `#[repr(C)]` enum as transparent; the header emits `typedef int64_t <Name>;` + an anonymous `enum { <Name>_<Variant> = tag, … }` named-constant block (emitted before struct bodies so an enum-typed struct field resolves); prototypes use the enum name (the `int64_t` alias) by value. A data-carrying `#[repr(C)]` enum stays rejected; the `abi_fix_hint` enum branch names the all-unit path explicitly.
-3. ✅ **`validate_exports`** — all-unit `#[repr(C)]` enum passes as return AND param; data-carrying stays rejected (`data_carrying_repr_c_enum_still_rejected` test).
+3. ✅ **`validate_exports`** — all-unit `#[repr(C)]` enum passes as return AND param; a non-boxable data-carrying enum stays rejected (`non_boxable_data_carrying_repr_c_enum_still_rejected` test).
 4. ✅ **Codegen** — no change needed: the round-trip confirmed the all-unit enum value ABI already matches `int64_t` (a single-field `{i64}` struct returns/passes in one integer register on SysV, identical to a bare `i64`).
 5. ✅ **Tests** — `cheader` unit tests `all_unit_repr_c_enum_crosses_transparently` + `data_carrying_repr_c_enum_still_rejected`; E2E `test_build_repr_c_enum_roundtrip_from_c_e2e` (a C host round-trips `Status` as param + return, asserts `0 1 2 2 1` and the header shape).
 
-### Slice 2 (deferred): data-carrying `#[repr(C)]` enums → real C tagged union
+### Slice 2a (SHIPPED): scalar-payload `#[repr(C)]` enums → boxed faithful C tagged union
 
-The full feature: `#[repr(C)] enum Msg { Ping, Data(i64), Pair(i32, i32) }` → a C `{ int32_t tag; union { … } payload; }` with each variant's payload as a natural C struct. This needs a **second enum layout** in codegen (a real union, not the i64-word area) selected on `#[repr(C)]`, plus header emission of the union, plus the by-value ABI matching (a tagged union is returned via the aggregate ABI — likely the same box-to-pointer treatment Path B uses for `{data,len,cap}`, since a multi-eightbyte struct isn't register-returned). Variants with aggregate payloads (`String`, `Vec`) stay rejected — those have no by-value C form regardless. This is a multi-week slice with real ABI surface; it should not start until Slice 1 has shipped and proven the parser/header/validate plumbing.
+`#[repr(C)] enum Msg { Ping, Data(i64), Ratio(f64) }` — every variant unit OR a single scalar (integer / float / bool / raw pointer) — now crosses as a **heap-boxed pointer** to a faithful C tagged union. The insight that made this tractable without a second enum layout: Kāra already stores a scalar payload in one i64 word via `coerce_to_i64` (integers **zero-extended**, floats **bit-cast**, pointers `ptrtoint`), so a C `union` member typed per variant, overlaying that word, reads it faithfully. The emitted C exactly matches Kāra's `{ i64 tag, i64 w0 }`:
 
-## Recommendation
+```c
+enum { Msg_Ping = 0, Msg_Data = 1, Msg_Ratio = 2 };
+typedef struct { int64_t tag; union { int64_t Data; double Ratio; } payload; } Msg;
+Msg* make(int64_t kind);
+void karac_free_make(Msg* handle);
+```
 
-Ship **Slice 1** (all-unit → transparent `int64_t`). It covers the common status/kind-code adoption shape, is honestly transparent, and reuses the `#[repr(C)]`-struct plumbing almost verbatim. Gate it on an objdump + ASAN round-trip confirming the single-`{i64}`-struct ABI equals `int64_t` on SysV and AArch64. Keep data-carrying enums rejected with a message that names Slice 1's boundary ("all-unit repr(C) enums cross at v1; a tagged union with payloads is a follow-on"). Revisit Slice 2 only if a concrete consumer needs it — a `#[repr(C)]` struct with a tag field + out-param already covers most data-carrying cases without new codegen.
+**What shipped:**
+- **Boxing reuses Path B** — `boxed_enum_export_names` (a codegen set, since `boxed_return_of` can't see enum defs) marks the return; the three boxing sites (`declare_function` → `ptr`, `current_fn_boxes_return`, the tail/explicit-return box) fire; `box_return_value` was generalized to size the box from the value's own struct type (equivalent to `vec_struct_type` for the Vec path).
+- **A distinct box-only destructor** — the load-bearing correctness point: the Vec-box destructor's `emit_free_vec_buffer_if_owned` would read an enum payload word as a `data` pointer and free garbage. `emit_one_export_destructor` takes an `is_plain_box` flag; the enum box (scalar payloads own no heap) just frees the box.
+- **cheader** — `repr_c_enum_box_variants` classifies the boxable shape; `emit_c_header` emits the tagged union + `<Name>*` return + `karac_free_<name>`; `validate_exports` accepts it as a return (rejects as a param — params never box); `export_symbols` lists the destructor (Windows `/EXPORT`).
+- **Verified** — `test_build_repr_c_enum_tagged_union_from_c_e2e` (`0 1 4242 2.5`), ASAN/LeakSanitizer-clean, `memory_sanitizer` 561 pass (no regression to the Vec boxing path).
+
+### Slice 2b / 2c (deferred): multi-scalar and aggregate-payload variants
+
+- **2b — multi-field scalar variants** (`Pair(i32, i32)`): occupy >1 word. Boxable in principle (a C struct member `{ int32_t _0; int32_t _1; }` at the word offsets), but the field-width/word-packing needs its own ABI verification. Rejected today.
+- **2c — aggregate payloads** (`Data(String)`, `Node(Vec[i64])`): no by-value C form at all — the word holds a `{ptr,len,cap}` sub-aggregate. Stays rejected regardless (same reason those aren't by-value Path-B params).
+
+## Recommendation (updated)
+
+Slices 1 + 2a are shipped and cover the overwhelmingly common cases — status/kind codes and `Option`/`Result`-over-scalars. **Revisit 2b only if a concrete consumer needs a multi-scalar-payload variant across C**; a `#[repr(C)]` struct with a tag field already covers it without new codegen. 2c is a permanent reject (aggregate-by-value has no C form). Confirm both shipped slices' ABI on an Apple/AArch64 runner (the 5-target CI matrix would do this).

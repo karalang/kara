@@ -230,12 +230,16 @@ impl<'ctx> super::Codegen<'ctx> {
             self.context
                 .ptr_type(AddressSpace::default())
                 .fn_type(&param_types, false)
-        } else if crate::cheader::boxed_return_of(func).is_some() {
+        } else if crate::cheader::boxed_return_of(func).is_some()
+            || self.boxed_enum_export_names.contains(&func.name)
+        {
             // C-ABI auto-boxed aggregate return (additive-interop Slice 4
             // Path B): the export returns an opaque pointer to a heap box
             // instead of the `{data,len,cap}` value in registers (which
             // wouldn't match the SysV struct-return ABI). The return sites
-            // box via `box_return_value`.
+            // box via `box_return_value`. A Slice-2a tagged-union `#[repr(C)]`
+            // enum return (`boxed_enum_export_names`) is boxed identically —
+            // its `{ tag, w0 }` value likewise doesn't match the by-value ABI.
             self.context
                 .ptr_type(AddressSpace::default())
                 .fn_type(&param_types, false)
@@ -707,8 +711,10 @@ impl<'ctx> super::Codegen<'ctx> {
         ) && !self.return_type_ref_is_value_abi(&func.return_type);
         // C-ABI auto-boxed aggregate return (additive-interop Slice 4 Path
         // B) — declared return type is `ptr` (above); the return sites box
-        // the `{data,len,cap}` value and return the box pointer.
-        self.current_fn_boxes_return = crate::cheader::boxed_return_of(func).is_some();
+        // the `{data,len,cap}` value and return the box pointer. A Slice-2a
+        // tagged-union `#[repr(C)]` enum return boxes the same way.
+        self.current_fn_boxes_return = crate::cheader::boxed_return_of(func).is_some()
+            || self.boxed_enum_export_names.contains(&func.name);
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
@@ -1617,13 +1623,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// cleanly to C, which frees it via the auto-emitted `karac_free_<name>`.
     pub(super) fn box_return_value(&mut self, val: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
         let i64_t = self.context.i64_type();
-        // Boxed returns are always the `{data,len,cap}` shape (`Vec[scalar]`
-        // / `String`), so size the box from `vec_struct_type` — avoids the
-        // `BasicType::size_of` trait dance on the `BasicValueEnum`.
-        let raw_size = self
-            .vec_struct_type()
-            .size_of()
-            .expect("vec struct is sized");
+        // Size the box from the value's own type. For the Path-B Vec/String
+        // returns this is the `{data,len,cap}` `vec_struct_type` (24 B); for a
+        // Slice-2a tagged-union `#[repr(C)]` enum it is the `{ i64 tag, i64 w0,
+        // … }` enum struct. Both are struct values — size by `size_of` on the
+        // concrete type. A non-struct (defensive) falls back to the vec shape.
+        let raw_size = match val {
+            BasicValueEnum::StructValue(sv) => sv
+                .get_type()
+                .size_of()
+                .expect("boxed return struct is sized"),
+            _ => self
+                .vec_struct_type()
+                .size_of()
+                .expect("vec struct is sized"),
+        };
         let size = if raw_size.get_type().get_bit_width() == 64 {
             raw_size
         } else {
