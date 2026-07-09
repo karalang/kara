@@ -9268,6 +9268,55 @@ child = {{ path = "vendor/child" }}
     );
 }
 
+/// Resolver follow-up (g): building a *member* package whose own manifest is
+/// not the workspace root must inherit `[workspace.dependencies]` from a parent
+/// `[workspace]` root discovered by walking upward — exercised end-to-end
+/// through the real `FsLoader` (not the MemLoader the unit tests use). Before
+/// (g), a member's `workspace = true` dep surfaced
+/// `E_WORKSPACE_DEP_OUTSIDE_WORKSPACE` because the member's own manifest carries
+/// no `[workspace.dependencies]`; now the upward walk finds the parent root, so
+/// the entry dereferences (here to a registry spec, which — with no proxy —
+/// surfaces the ordinary `E_REGISTRY_DEP_UNSUPPORTED` warning instead).
+#[test]
+fn test_resolve_member_inherits_ancestor_workspace_deps() {
+    let tmp = update_tempdir("ws-member");
+    // Workspace root at <tmp>, member at <tmp>/core.
+    std::fs::create_dir_all(tmp.join("core/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"ws\"\n\n[workspace]\nmembers = [\"core\"]\n\n[workspace.dependencies]\nsomelib = \"1.2\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("core/kara.toml"),
+        "[package]\nname = \"core\"\n\n[dependencies]\nsomelib = { workspace = true }\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("core/src/main.kara"), "fn main() {}\n").unwrap();
+
+    // Run resolve from the *member* directory.
+    let out = karac_bin()
+        .arg("resolve")
+        .current_dir(tmp.join("core"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    // The member inherited the workspace root's deps — so the `workspace = true`
+    // entry dereferenced rather than erroring as "outside a workspace".
+    assert!(
+        !stderr.contains("E_WORKSPACE_DEP_OUTSIDE_WORKSPACE"),
+        "member must inherit workspace deps from the ancestor root;\nstderr={stderr}",
+    );
+    // The deref produced a registry spec (unsupported without a proxy), naming
+    // the shared dep — positive proof the upward discovery resolved it.
+    assert!(
+        stderr.contains("E_REGISTRY_DEP_UNSUPPORTED") && stderr.contains("somelib"),
+        "the inherited registry dep must surface as unsupported;\nstderr={stderr}",
+    );
+}
+
 #[test]
 fn test_resolve_output_json_shape() {
     let tmp = make_path_dep_project("resolve-json");

@@ -306,6 +306,15 @@ pub struct Manifest {
     /// matching key here. Empty when the manifest carries no
     /// `[workspace]` table or no nested `dependencies` sub-table.
     pub workspace_dependencies: BTreeMap<String, DependencySpec>,
+    /// `true` when this manifest declares a `[workspace]` table — i.e. it is a
+    /// workspace *root*, independent of whether that table carries a nested
+    /// `dependencies` sub-table (a workspace may declare only `members`).
+    /// Distinguishes "workspace root with no shared deps" (empty
+    /// `workspace_dependencies` but a real `[workspace]`) from "ordinary
+    /// package" (no `[workspace]` at all) — the signal `dep_graph`'s
+    /// workspace-root-upward discovery keys on when building a *member*
+    /// package whose own manifest is not the root (resolver follow-up (g)).
+    pub is_workspace_root: bool,
     /// `[target.<triple>.dependencies]` — per-target dependency
     /// overlays keyed by target triple. The build pipeline picks the
     /// matching entry (if any) for the active target and merges it
@@ -896,6 +905,10 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let dev_dependencies =
         parse_dependencies_table(path, &table, "dev-dependencies", &mut warnings)?;
     let workspace_dependencies = parse_workspace_dependencies(path, &table, &mut warnings)?;
+    // A `[workspace]` table (validated as a table by `parse_workspace_dependencies`
+    // above if present) marks this manifest as a workspace root — even when it
+    // carries no `[workspace.dependencies]`.
+    let is_workspace_root = table.get("workspace").and_then(|w| w.as_table()).is_some();
     let (target_dependencies, target_dev_dependencies, target_profile_overrides) =
         parse_target_tables(path, &table, &mut warnings)?;
     let build_default_target = parse_build_default_target(path, &table)?;
@@ -928,6 +941,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         dependencies,
         dev_dependencies,
         workspace_dependencies,
+        is_workspace_root,
         target_dependencies,
         target_dev_dependencies,
         target_profile_overrides,
@@ -2940,6 +2954,59 @@ http = { workspace = true }
         let m = parse_manifest(&p(), src).unwrap();
         assert_eq!(m.dependencies.get("http"), Some(&DependencySpec::Workspace));
         assert!(m.warnings.is_empty(), "got warnings: {:?}", m.warnings);
+    }
+
+    #[test]
+    fn workspace_root_detection_via_workspace_table() {
+        // A `[workspace.dependencies]` table marks the manifest as a workspace
+        // root and populates the shared-deps map. `dep_graph`'s upward
+        // discovery (resolver follow-up (g)) keys on the root flag.
+        let with_deps = r#"[package]
+name = "ws"
+
+[workspace]
+members = ["core"]
+
+[workspace.dependencies]
+http = "1.2"
+"#;
+        let m = parse_manifest(&p(), with_deps).unwrap();
+        assert!(
+            m.is_workspace_root,
+            "a [workspace] table marks a workspace root",
+        );
+        assert!(
+            m.workspace_dependencies.contains_key("http"),
+            "workspace.dependencies populated",
+        );
+
+        // A `[workspace]` carrying only `members` (no shared deps) is still a
+        // root — the flag must not depend on the dependencies sub-table.
+        let members_only = r#"[package]
+name = "ws"
+
+[workspace]
+members = ["core", "cli"]
+"#;
+        let m = parse_manifest(&p(), members_only).unwrap();
+        assert!(
+            m.is_workspace_root,
+            "a bare [workspace] with only members is still a workspace root",
+        );
+        assert!(m.workspace_dependencies.is_empty());
+
+        // An ordinary package (no [workspace] table) is not a workspace root.
+        let plain = r#"[package]
+name = "core"
+
+[dependencies]
+http = { workspace = true }
+"#;
+        let m = parse_manifest(&p(), plain).unwrap();
+        assert!(
+            !m.is_workspace_root,
+            "a package with no [workspace] table is not a workspace root",
+        );
     }
 
     #[test]

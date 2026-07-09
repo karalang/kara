@@ -457,7 +457,20 @@ pub fn build_dep_graph_with_options(
     let mut visiting_set: HashSet<PathBuf> = HashSet::new();
     let mut visited: HashSet<PathBuf> = HashSet::new();
 
-    let workspace_deps = root_manifest.workspace_dependencies.clone();
+    // Determine the effective `[workspace.dependencies]` for `workspace = true`
+    // derefs. When the entry-point manifest is itself a workspace root, use its
+    // own table (the pre-follow-up-(g) behavior). Otherwise walk *upward* to
+    // the nearest ancestor `kara.toml` declaring a `[workspace]` table and
+    // inherit its shared deps — so building a *member* package resolves
+    // `workspace = true` against the parent workspace root, per the spec's
+    // actual workspace model (resolver follow-up (g)). No workspace-root
+    // ancestor → empty, and a `workspace = true` dep then surfaces
+    // `E_WORKSPACE_DEP_OUTSIDE_WORKSPACE` exactly as before.
+    let workspace_deps = if root_manifest.is_workspace_root {
+        root_manifest.workspace_dependencies.clone()
+    } else {
+        discover_ancestor_workspace_deps(&root_canonical, loader)
+    };
 
     visit(
         &root_canonical,
@@ -807,6 +820,33 @@ fn resolve_path_dep_dir(from_dir: &Path, path: &Path) -> PathBuf {
     }
 }
 
+/// Walk upward from `start_dir`'s parent to the filesystem root, returning the
+/// `[workspace.dependencies]` of the nearest ancestor `kara.toml` that declares
+/// a `[workspace]` table (empty when there is none). This implements the spec's
+/// workspace model: a member package's `workspace = true` deps are declared
+/// once in a *parent* workspace root, not in the member's own manifest
+/// (resolver follow-up (g)). Non-workspace-root ancestor manifests are passed
+/// over — a regular package sitting between the member and the root doesn't
+/// stop the walk — and a malformed ancestor manifest is skipped rather than
+/// failing the member build. `start_dir` is expected canonical so
+/// `Path::ancestors` yields real parent directories.
+fn discover_ancestor_workspace_deps(
+    start_dir: &Path,
+    loader: &dyn ManifestLoader,
+) -> BTreeMap<String, DependencySpec> {
+    for ancestor in start_dir.ancestors().skip(1) {
+        if !loader.manifest_exists(ancestor) {
+            continue;
+        }
+        if let Ok(mf) = loader.load(ancestor) {
+            if mf.is_workspace_root {
+                return mf.workspace_dependencies;
+            }
+        }
+    }
+    BTreeMap::new()
+}
+
 /// Collect a registry package's full candidate set: every selectable
 /// published version (via [`RegistryProvider::available_versions`]) paired
 /// with that version's own registry-dep requirements (read from the version's
@@ -919,6 +959,7 @@ mod tests {
             dependencies: BTreeMap::new(),
             dev_dependencies: BTreeMap::new(),
             workspace_dependencies: BTreeMap::new(),
+            is_workspace_root: false,
             target_dependencies: BTreeMap::new(),
             target_dev_dependencies: BTreeMap::new(),
             target_profile_overrides: BTreeMap::new(),
@@ -1272,6 +1313,9 @@ mod tests {
             .insert("http".into(), DependencySpec::Workspace);
         root.workspace_dependencies
             .insert("http".into(), registry("1.5"));
+        // A manifest declaring `[workspace.dependencies]` is a workspace root —
+        // the parser sets this whenever a `[workspace]` table is present.
+        root.is_workspace_root = true;
         let loader = MemLoader {
             manifests: BTreeMap::new(),
         };
@@ -1287,6 +1331,7 @@ mod tests {
             .insert("http".into(), DependencySpec::Workspace);
         root.workspace_dependencies
             .insert("json".into(), registry("1.0"));
+        root.is_workspace_root = true;
         let loader = MemLoader {
             manifests: BTreeMap::new(),
         };
@@ -1479,6 +1524,7 @@ mod tests {
             .insert("member".into(), path_dep("member"));
         root.workspace_dependencies
             .insert("http".into(), registry("2.0"));
+        root.is_workspace_root = true;
         let mut member = empty_manifest("member");
         member
             .dependencies
@@ -1492,6 +1538,98 @@ mod tests {
         // the root's workspace_dependencies even though the member itself
         // declared no `[workspace.dependencies]`.
         assert_eq!(member_derived.get("http"), Some(&registry("2.0")));
+    }
+
+    #[test]
+    fn workspace_deps_inherited_from_ancestor_root() {
+        // Follow-up (g): the entry point is a *member* (`/ws/core`) whose own
+        // manifest is not the workspace root; `workspace = true` derefs against
+        // `[workspace.dependencies]` on the nearest ancestor `[workspace]` root
+        // (`/ws`), discovered by walking upward.
+        let mut member = empty_manifest("core");
+        member
+            .dependencies
+            .insert("http".into(), DependencySpec::Workspace);
+        let mut ws_root = empty_manifest("ws");
+        ws_root.is_workspace_root = true;
+        ws_root
+            .workspace_dependencies
+            .insert("http".into(), registry("1.5"));
+        let loader = MemLoader {
+            manifests: BTreeMap::from([(PathBuf::from("/ws"), ws_root)]),
+        };
+        let graph = build_dep_graph(&PathBuf::from("/ws/core"), member, &loader).expect("build");
+        let derived = &graph.derived_deps[&PathBuf::from("/ws/core")];
+        assert_eq!(
+            derived.get("http"),
+            Some(&registry("1.5")),
+            "member's `workspace = true` must deref against the ancestor root's workspace deps",
+        );
+    }
+
+    #[test]
+    fn workspace_ancestor_root_missing_declaration_errors() {
+        // The ancestor workspace root exists but doesn't declare the requested
+        // dep → E_WORKSPACE_DEP_NOT_DECLARED (root found, dep absent) — distinct
+        // from the no-root-at-all case below.
+        let mut member = empty_manifest("core");
+        member
+            .dependencies
+            .insert("http".into(), DependencySpec::Workspace);
+        let mut ws_root = empty_manifest("ws");
+        ws_root.is_workspace_root = true;
+        ws_root
+            .workspace_dependencies
+            .insert("json".into(), registry("1.0"));
+        let loader = MemLoader {
+            manifests: BTreeMap::from([(PathBuf::from("/ws"), ws_root)]),
+        };
+        let err = build_dep_graph(&PathBuf::from("/ws/core"), member, &loader).unwrap_err();
+        assert_eq!(err.code(), "E_WORKSPACE_DEP_NOT_DECLARED");
+    }
+
+    #[test]
+    fn workspace_walk_passes_over_non_root_ancestor() {
+        // A regular package sits between the member and the workspace root:
+        // /ws (root) / mid (ordinary pkg) / core (member). The upward walk must
+        // skip `mid` (not a workspace root) and inherit from `/ws`.
+        let mut member = empty_manifest("core");
+        member
+            .dependencies
+            .insert("http".into(), DependencySpec::Workspace);
+        let mid = empty_manifest("mid"); // not a workspace root
+        let mut ws_root = empty_manifest("ws");
+        ws_root.is_workspace_root = true;
+        ws_root
+            .workspace_dependencies
+            .insert("http".into(), registry("3.0"));
+        let loader = MemLoader {
+            manifests: BTreeMap::from([
+                (PathBuf::from("/ws/mid"), mid),
+                (PathBuf::from("/ws"), ws_root),
+            ]),
+        };
+        let graph =
+            build_dep_graph(&PathBuf::from("/ws/mid/core"), member, &loader).expect("build");
+        let derived = &graph.derived_deps[&PathBuf::from("/ws/mid/core")];
+        assert_eq!(derived.get("http"), Some(&registry("3.0")));
+    }
+
+    #[test]
+    fn workspace_no_ancestor_root_surfaces_outside_error() {
+        // The member's ancestors exist but none declares `[workspace]` → the
+        // `workspace = true` dep is still a hard error, exactly as before (g)
+        // (proves the walk doesn't manufacture a phantom workspace root).
+        let mut member = empty_manifest("core");
+        member
+            .dependencies
+            .insert("http".into(), DependencySpec::Workspace);
+        let mid = empty_manifest("mid"); // ordinary package, not a workspace root
+        let loader = MemLoader {
+            manifests: BTreeMap::from([(PathBuf::from("/ws/mid"), mid)]),
+        };
+        let err = build_dep_graph(&PathBuf::from("/ws/mid/core"), member, &loader).unwrap_err();
+        assert_eq!(err.code(), "E_WORKSPACE_DEP_OUTSIDE_WORKSPACE");
     }
 
     #[test]
