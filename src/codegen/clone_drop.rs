@@ -1695,10 +1695,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i64_t, cap_p, "cap")
             .unwrap()
             .into_int_value();
-        let is_heap = self
-            .builder
-            .build_int_compare(IntPredicate::UGT, cap, i64_t.const_zero(), "is.heap")
-            .unwrap();
+        // SSO forward-prep: owned-heap ⇔ signed `cap > 0`, so inline
+        // (cap < 0) and static (cap == 0) both skip the free. No-op today
+        // (cap ≥ 0 always); see `sso.rs`.
+        let is_heap = self.sso_string_is_owned_heap(cap);
         self.builder
             .build_conditional_branch(is_heap, free_bb, exit_bb)
             .unwrap();
@@ -2169,10 +2169,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // (static-literal Vecs with cap=0 skip the free — same convention
         // as the existing FreeVecBuffer cleanup).
         self.builder.position_at_end(after_loop_bb);
-        let is_heap = self
-            .builder
-            .build_int_compare(IntPredicate::UGT, cap, i64_t.const_zero(), "is.heap")
-            .unwrap();
+        // SSO forward-prep: owned-heap ⇔ signed `cap > 0`, so inline
+        // (cap < 0) and static (cap == 0) both skip the free. No-op today
+        // (cap ≥ 0 always); see `sso.rs`.
+        let is_heap = self.sso_string_is_owned_heap(cap);
         self.builder
             .build_conditional_branch(is_heap, free_bb, exit_bb)
             .unwrap();

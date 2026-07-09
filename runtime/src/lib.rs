@@ -49,6 +49,10 @@ mod map;
 mod mutex;
 #[cfg(feature = "net")]
 pub mod scheduler;
+// Small-String Optimization encoding — the executable contract shared with
+// codegen (`src/codegen/sso.rs`). Target-independent; see the module doc
+// and `docs/spikes/small-string-optimization.md`.
+mod sso;
 // Sequential spawn/TaskGroup scheduler — the WASM-default concurrency
 // lowering (phase-10 "WASM concurrency lowering — sequential default").
 // Compiled under cfg(test) on native too so the queue/join logic is

@@ -1,9 +1,21 @@
 # Spike: Small-String Optimization (SSO) for the runtime `String`
 
-**Status:** 🟡 **SCOPED — campaign teed up, NOT started.** Designed for a *fresh,
-dedicated session* (highest blast radius of any String-subsystem change; see "Why
-later" below). This doc is the cold-start handoff: layout decision, staged slice plan,
-the tag-aware-accessor work list, and the verification matrix. Scoped 2026-06-12.
+**Status:** 🟢 **Slice 1 LANDED (layout + accessors + free-gate hardening, proven
+no-op).** Slice 2 (inline construction — *the win*) is the next dedicated session; its
+precise handoff is in the staged plan below. This doc is the campaign's living
+handoff: layout decision (now settled), staged slice plan, the tag-aware-accessor work
+list, and the verification matrix. Scoped 2026-06-12; Slice 1 landed 2026-07-09.
+
+**Layout decision — SETTLED (Slice 1):** Option A, **inline flag = sign bit (bit 63) of
+`cap`**. Three states discriminated by `cap` read as `i64`: static-heap (`cap == 0`),
+owned-heap (`cap > 0`), inline (`cap < 0`). Encoding the flag as the sign bit is
+load-bearing — it collapses the buffer-free decision to the single signed compare
+`cap > 0`, which is a *provable no-op today* (no code has ever produced a `cap` with
+bit 63 set; a real capacity never approaches 2^63) yet is forward-correct for inline.
+Full folly-`fbstring`-style 23-byte inline overlay: bytes `0..=22` hold data, byte 23
+(`cap`'s MSB) holds `flag | length`. The **executable contract** lives in
+`runtime/src/sso.rs` (exhaustively unit-tested; the single source of truth codegen
+mirrors); the codegen tag helpers are in `src/codegen/sso.rs`.
 
 ## Why this campaign
 
@@ -44,17 +56,22 @@ the inline tag, so the accessor always takes its heap path for a `Vec` and behav
 identically to today. (Threading the Kāra-level type to keep `Vec` on the branch-free
 raw path is a *perf* refinement, not a correctness requirement — see Slice 3.)
 
-### Layout decision (settle in Slice 1)
+### Layout decision — DECIDED (Slice 1): Option A, flag = sign bit of `cap`
 
-- **Option A — in-struct tag (recommended).** Reuse the 24 bytes. Inline form stores up
-  to ~23 bytes of data overlapping the `ptr`/`len`/`cap` words (libc++/folly style), with
-  one bit (a high bit of `cap` or `len`, or the low bit of `ptr` which is always
-  pointer-aligned ⇒ 0 for heap) as the inline flag. `Vec` leaves the flag clear. Minimal
-  type churn — String stays `vec_struct_type` everywhere.
+- **Option A — in-struct tag (CHOSEN).** Reuse the 24 bytes. Inline form stores up
+  to 23 bytes of data overlapping the `ptr`/`len`/`cap` words (folly `fbstring` style),
+  with **bit 63 of `cap` (the sign bit)** as the inline flag. `Vec` leaves the flag clear.
+  Minimal type churn — String stays `vec_struct_type` everywhere.
+  - *Why the sign bit of `cap` and not the low bit of `ptr` or a bit of `len`:* the low
+    bit of `ptr` is unsafe (a `.rodata` string-literal buffer is not guaranteed ≥2-byte
+    aligned), and overlapping `len` would break the invariant that a `cap`-only signed
+    compare distinguishes all three drop states. The sign bit of `cap` gives one predicate
+    — `is_owned_heap ⇔ (i64)cap > 0` — that is simultaneously (a) a no-op today, (b)
+    correct for inline (`cap < 0` skips free), (c) correct for static (`cap == 0` skips),
+    and (d) identical to the old `UGT` gate for `Vec` (whose cap is a non-negative count).
 - **Option B — split `String` into a distinct LLVM type.** Cleaner semantics but enormous
   churn: String currently *is* `vec_struct_type` across ~15 files, the by-value ABI, the
-  recursive-drop type-identity checks (`llvm_ty_is_vec_struct`), and dispatch. **Rejected
-  unless A proves unworkable.**
+  recursive-drop type-identity checks (`llvm_ty_is_vec_struct`), and dispatch. **Rejected.**
 
 ### Hazard: the `cap == 0` "static literal, don't free" convention
 
@@ -104,17 +121,49 @@ Find the full set with:
 Each slice is independently shippable and gated on the full String + ASAN suite; the
 perf payoff lands in Slice 2.
 
-- **Slice 0** — *this spike.* Scope + layout-decision criteria.
-- **Slice 1 — layout + accessors (no behavior change).** Pick the layout (Option A);
-  implement tag-aware `string_data_ptr()` / `string_len()` / `string_is_inline()` in
-  codegen and the runtime; prove them no-op-correct for `Vec`. Route the construction +
-  read sites to the accessors but **keep every string heap-allocated (tag never set)**.
-  Gate: full suite green, **zero perf delta** (pure plumbing).
+- **Slice 0** — *this spike.* Scope + layout-decision criteria. ✅ **DONE.**
+- **Slice 1 — layout + accessors (no behavior change).** ✅ **DONE (2026-07-09).**
+  Layout settled (Option A, sign bit of `cap`). Shipped:
+  - `runtime/src/sso.rs` — the executable encoding contract on `RuntimeKaracString`
+    (`is_inline` / `is_static` / `is_owned_heap` / `byte_len` / `data_ptr` / `as_bytes` /
+    `new_inline` + `INLINE_CAPACITY = 23`), exhaustively unit-tested (all three states,
+    every inline length 0..=23, boundary rejection, layout-pin). This is the single
+    source of truth codegen mirrors, and the FFI-decode path Slice 3 will call.
+  - `src/codegen/sso.rs` — codegen tag helpers `sso_string_is_owned_heap` (SGT, wired)
+    and `sso_string_is_inline` (SLT, ready for Slice 2).
+  - **Free-gate hardening:** the six `{ptr,len,cap}` buffer-free gates (`emit_string_drop_fn`,
+    `emit_vec_drop_fn` in `clone_drop.rs`; the overwrite-free, enum-payload-free, and live
+    `FreeVecBuffer` gates in `runtime.rs`; the enum `VecOrString` payload drop in
+    `synth_drop.rs`) now route through `sso_string_is_owned_heap` (`UGT`→`SGT`). Proven
+    no-op: full suite + 562 ASAN cases + 2103 codegen E2E + 153 par_codegen all green,
+    zero perf delta.
+  - *Deliberately deferred to Slice 2* (they need coordinated changes, not just a gate
+    flip, and are only testable once inline construction exists): the **grow/realloc
+    `was_heap` gates** in `vec_method.rs` (`tss`/`efs`/`tefs` from-slice builders, ~L3158
+    /L3455/L3817) — each also needs its memcpy *source* to become the tag-aware inline
+    data ptr, not the raw field-0 load. `FreeSoaGroups` (`runtime.rs`) is **NOT** in scope
+    (its `cap` is a SoA group count, never a String descriptor). Grow gates comparing
+    `new_len`/`doubled` to `cap` are unrelated and must stay `UGT`.
 - **Slice 2 — inline construction (the win).** `substring`, runtime-built `StringLit`,
-  concat, `to_string`, `push_str` result → build **inline** when `len ≤ N`. Drop/clone
-  become tag-aware. Gate: **re-profile the self-host lexer** (instruction count + `malloc`
-  leaf share must drop), full ASAN + **Linux/LSan** (SSO touches every free path —
-  authoritative leak gate).
+  concat, `to_string`, `push_str` result → build **inline** when `len ≤ 23`. Concrete
+  checklist for the fresh session:
+  1. **Convert the remaining `was_heap` gates** (see Slice 1 deferral) to
+     `sso_string_is_owned_heap`, *and* fix their memcpy source to `string_data_ptr`.
+  2. **Tag-aware `string_data_ptr` / `string_len`** in codegen (mirror `runtime/src/sso.rs`):
+     a *slot* form (GEP field-0 address for inline, load field-0 for heap) is clean; a
+     *value* (SSA) form must **spill to an alloca** to take the inline self-pointer — this
+     is the main new complexity. Sweep the field-0 (data-ptr, ~224 sites) and field-1
+     (len, ~204 sites) reads *on Strings* onto these (many are `Vec` — the accessor is a
+     safe no-op there, but threading the Kāra type to keep `Vec` branch-free is Slice 3).
+  3. **Clone becomes tag-aware:** inline source ⇒ struct copy, no malloc (today's clone
+     does `EQ cap, 0` then mallocs `select(cap==0, len, cap)` — an inline `cap<0` would
+     malloc a garbage size, so this is a *must-fix before flipping construction on*).
+  4. Route the **string-match dispatch tree** (`emit_string_dispatch` / `emit_len_bucket`
+     / `emit_byte_group`) through `string_data_ptr` + `string_len` (it currently reads
+     `extract_value(sv, 0/1)` raw).
+  Gate: **re-profile the self-host lexer** (instruction count + `malloc` leaf share must
+  drop), full ASAN + **Linux/LSan** (SSO touches every free path — authoritative leak
+  gate).
 - **Slice 3 — sweep + runtime/FFI decode.** Remaining raw sites; runtime decode
   (`println`/file/http/tls/json); thread the Kāra type to keep `Vec` branch-free for perf.
   Gate: corpus re-bench.

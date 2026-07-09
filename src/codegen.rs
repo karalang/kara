@@ -72,6 +72,7 @@ mod reduce;
 mod refinement;
 mod runtime;
 mod shadow;
+mod sso;
 mod state;
 mod stats;
 mod stmts;

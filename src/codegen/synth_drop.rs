@@ -180,10 +180,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .unwrap()
                                 .into_int_value();
                             let zero = i64_t.const_int(0, false);
-                            let is_heap = self
-                                .builder
-                                .build_int_compare(IntPredicate::UGT, cap_val, zero, "drop.is_heap")
-                                .unwrap();
+                            // SSO forward-prep (see `sso.rs`): owned-heap ⇔
+                            // signed `cap > 0`; inline/static skip the free.
+                            let is_heap = self.sso_string_is_owned_heap(cap_val);
                             let free_bb = self.context.append_basic_block(drop_fn, "drop.free");
                             let skip_bb = self.context.append_basic_block(drop_fn, "drop.skip");
                             self.builder

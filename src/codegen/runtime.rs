@@ -2966,11 +2966,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i64_t, cap_ptr, "ov.cap")
             .unwrap()
             .into_int_value();
-        let zero = i64_t.const_int(0, false);
-        let owned = self
-            .builder
-            .build_int_compare(IntPredicate::UGT, cap, zero, "ov.owned")
-            .unwrap();
+        // SSO forward-prep (see `sso.rs`): free only a genuinely owned
+        // heap buffer; inline (cap < 0) / static (cap == 0) skip.
+        let owned = self.sso_string_is_owned_heap(cap);
         let free_bb = self.context.append_basic_block(fn_val, "ov.free");
         let after_bb = self.context.append_basic_block(fn_val, "ov.after");
         self.builder
@@ -3652,10 +3650,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i64_t, cap_ptr, &format!("{label}.cap"))
             .unwrap()
             .into_int_value();
-        let is_heap = self
-            .builder
-            .build_int_compare(IntPredicate::UGT, cap, zero, &format!("{label}.is_heap"))
-            .unwrap();
+        // SSO forward-prep (see `sso.rs`): owned-heap ⇔ signed `cap > 0`.
+        let is_heap = self.sso_string_is_owned_heap(cap);
         let free_bb = self
             .context
             .append_basic_block(fn_val, &format!("{label}.free"));
@@ -4827,10 +4823,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
                 let zero = i64_t.const_int(0, false);
-                let is_heap = self
-                    .builder
-                    .build_int_compare(IntPredicate::UGT, cap, zero, "is_heap")
-                    .unwrap();
+                // SSO forward-prep (see `sso.rs`): owned-heap ⇔ signed
+                // `cap > 0`; inline/static skip the free. No-op for `Vec`
+                // (cap is a non-negative element count).
+                let is_heap = self.sso_string_is_owned_heap(cap);
                 let free_bb = self.context.append_basic_block(fn_val, "cleanup.free");
                 let skip_bb = self.context.append_basic_block(fn_val, "cleanup.skip");
                 self.builder
