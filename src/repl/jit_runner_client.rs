@@ -121,7 +121,12 @@ impl ReplRunnerClient {
         }
         let trimmed = header_line.trim_end_matches(['\r', '\n']);
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        if parts.len() != 5 || parts[0] != "result" {
+        // `result` = the runner survived; `faulted` = a cell tripped
+        // `emit_panic`'s exit(1) and the runner's atexit salvage framed the
+        // captured output on its way out (B-2026-07-09-4). Both share the
+        // 5-field `<verb> <id> <exit> <stdout_len> <stderr_len>` shape.
+        let faulted = parts.first() == Some(&"faulted");
+        if parts.len() != 5 || (parts[0] != "result" && !faulted) {
             return self.collect_died();
         }
         let echoed_id: u64 = match parts[1].parse() {
@@ -154,6 +159,20 @@ impl ReplRunnerClient {
         let mut stderr_buf = vec![0u8; stderr_len];
         if self.stdout.read_exact(&mut stderr_buf).is_err() {
             return self.collect_died();
+        }
+        if faulted {
+            // The runner salvaged the faulting cell's captured stdout (incl.
+            // the `panic at …` message, which `emit_panic` prints to stdout)
+            // and stderr, then exit(1)'d. Surface it through the runner-died
+            // path so `run_cell_via_jit` prints it and the client re-spawns
+            // for the next cell — same handling as a runner that died without
+            // salvage, but now with the output the user needs.
+            let wait_status = self.child.wait().ok();
+            return CellResult::RunnerDied {
+                partial_stdout: stdout_buf,
+                runner_stderr: stderr_buf,
+                wait_status,
+            };
         }
         CellResult::Completed {
             exit,

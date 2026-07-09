@@ -203,21 +203,21 @@ fn main() {
 }
 
 #[test]
-fn repl_runner_dies_when_cell_calls_exit() {
-    // Documented B.A limitation: a cell whose JIT'd `main` reaches
-    // `emit_panic` (assert failure, OOB index, runtime panic, etc.)
-    // calls libc's `exit(1)` from inside the JIT'd code itself. That
-    // terminates the runner subprocess, the parent reads EOF on
-    // stdout, no framed response arrives. The REPL-side integration
-    // (slice B.B) handles this by detecting the EOF, joining the
-    // child process, and re-spawning a fresh runner plus replaying
-    // prior cells if it wants to continue.
+fn repl_runner_salvages_output_when_cell_calls_exit() {
+    // A cell whose JIT'd `main` reaches `emit_panic` (assert failure, OOB
+    // index, runtime panic, contract violation) calls libc's `exit(1)` from
+    // inside the JIT'd code. That still terminates the runner subprocess —
+    // but the runner now installs an `atexit` handler (B-2026-07-09-4) that,
+    // before the process dies, flushes and frames the cell's CAPTURED output
+    // as a `faulted <id> <exit> <stdout_len> <stderr_len>\n<bytes>` frame on
+    // stdout. So instead of a silent EOF, the parent receives the fault
+    // output (the `panic …` message + any pre-fault prints) and THEN EOF.
+    // The REPL-side client (`jit_runner_client.rs`) maps `faulted` onto its
+    // runner-died path: surface the salvaged output, reap, re-spawn.
     //
-    // This test pins that "framed response never arrives" shape so
-    // future work knows when it has shifted (e.g. if `emit_panic` is
-    // ever rewritten to unwind instead of `exit`, or if the runner
-    // grows an `atexit` handler that flushes a pre-exit framed
-    // response).
+    // This test pins the salvage-frame shape (it superseded the older
+    // "framed response never arrives" pin, which this test used to assert —
+    // the atexit-handler future-work note in that pin is now the present).
     let mut runner = ReplRunner::spawn();
     let ir = lower_kara_to_ir(
         r#"
@@ -227,17 +227,58 @@ fn main() {
 "#,
     );
     runner.send_cell(7, &ir);
-    // The runner's stdout closes on exit; reading produces EOF. We
-    // check by reading raw bytes and asserting we got 0 bytes (rather
-    // than calling `read_result`, which assumes a valid header).
-    let mut hdr = String::new();
-    let n = runner.stdout.read_line(&mut hdr).expect("read after exit");
-    assert_eq!(
-        n, 0,
-        "expected EOF on runner stdout after cell exit(1); got partial header: {hdr:?}"
+
+    // A `faulted` frame arrives before EOF. Parse it by hand (read_result
+    // asserts a `result` verb).
+    let mut header = String::new();
+    runner
+        .stdout
+        .read_line(&mut header)
+        .expect("read faulted header");
+    let trimmed = header.trim_end_matches(['\r', '\n']);
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    assert_eq!(parts.len(), 5, "faulted header parts: {trimmed:?}");
+    assert_eq!(parts[0], "faulted", "expected a `faulted` salvage frame");
+    assert_eq!(parts[1], "7", "echoed cell id");
+    assert_eq!(parts[2], "1", "salvage frames the emit_panic exit code (1)");
+    let stdout_len: usize = parts[3].parse().expect("stdout_len");
+    let stderr_len: usize = parts[4].parse().expect("stderr_len");
+    let mut cell_stdout = vec![0u8; stdout_len];
+    runner
+        .stdout
+        .read_exact(&mut cell_stdout)
+        .expect("read salvaged stdout");
+    let mut cell_stderr = vec![0u8; stderr_len];
+    runner
+        .stdout
+        .read_exact(&mut cell_stderr)
+        .expect("read salvaged stderr");
+    // The fault text must survive the salvage — an assert failure lands on
+    // stderr (the `KARAC_TEST_FAILURE` marker path); an OOB/contract panic's
+    // `panic …` line lands on stdout. Assert the union is non-empty and
+    // carries a recognizable fault token.
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&cell_stdout),
+        String::from_utf8_lossy(&cell_stderr)
     );
-    // Reap the dead child. Bounded wait so a hang shows up as a
-    // failure rather than a CI lock-up.
+    assert!(
+        !combined.is_empty()
+            && (combined.contains("panic")
+                || combined.contains("assert")
+                || combined.contains("KARAC_TEST_FAILURE")),
+        "salvaged fault output should carry the fault text; got {combined:?}"
+    );
+
+    // EOF follows the frame — the runner is dead.
+    let mut tail = String::new();
+    let n = runner
+        .stdout
+        .read_line(&mut tail)
+        .expect("read after salvage");
+    assert_eq!(n, 0, "expected EOF after the faulted frame; got {tail:?}");
+
+    // Reap the dead child. Bounded wait so a hang shows up as a failure.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let status = loop {
         match runner.child.try_wait().expect("try_wait") {
@@ -249,9 +290,6 @@ fn main() {
             None => std::thread::sleep(Duration::from_millis(20)),
         }
     };
-    // Cell's exit(1) propagates through dup2-restored fds; the
-    // runner's main() doesn't reach its own return path, so the child
-    // exit code matches the cell's exit code.
     assert_eq!(
         status.code(),
         Some(1),

@@ -33,9 +33,83 @@
 //!     `main` lookup failed). Diagnostic to stderr.
 
 use std::io::{BufRead, Read, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use karac::codegen::LLJITEngine;
+
+// ── Panic-salvage for REPL mode (B-2026-07-09-4) ─────────────────────
+//
+// A faulting cell lowers to codegen's `emit_panic` → libc `exit(1)`,
+// which terminates the runner mid-`call_main` — before
+// `capture_via_redirect` restores the fds, reads the per-cell redirect
+// tempfiles, and frames the captured bytes back to the parent. Those
+// bytes (the cell's pre-fault prints AND the `panic at …` message, both
+// already landed in the redirect tempfiles by dup2) would be lost, so an
+// interactive faulting cell showed nothing at all.
+//
+// libc `exit` runs `atexit` handlers before terminating, so we register
+// `salvage_faulted_cell_output`: when a cell is in flight (`SALVAGE_ARMED`),
+// it flushes the JIT'd libc stdio, reads the two tempfiles, and writes a
+// `faulted <id> <exit> <stdout_len> <stderr_len>\n<bytes>` frame to the
+// SAVED parent-stdout fd — the original pipe, dup'd aside before the
+// redirect (fd 1 itself is still the tempfile on the fault path, never
+// restored). The parent recognizes `faulted`, surfaces the salvaged
+// output via its existing runner-died path, and re-spawns. Disarmed the
+// instant `call_main` returns normally, so a clean cell's own
+// `write_cell_outcome` stays the only frame.
+static SALVAGE_ARMED: AtomicBool = AtomicBool::new(false);
+static SALVAGE_SAVED_FD: AtomicI32 = AtomicI32::new(-1);
+static SALVAGE_CELL_ID: AtomicU64 = AtomicU64::new(0);
+static SALVAGE_PATHS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
+
+extern "C" fn salvage_faulted_cell_output() {
+    // Only fire when a cell is mid-flight; a clean cell disarms before any
+    // cleanup, and normal runner shutdown never armed. `swap` makes this
+    // idempotent (exactly one salvage).
+    if !SALVAGE_ARMED.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    // Flush the JIT'd libc stdio so the redirect tempfiles hold every byte
+    // (the `panic at …` printf may still be buffered at exit time).
+    unsafe {
+        libc::fflush(std::ptr::null_mut());
+    }
+    let fd = SALVAGE_SAVED_FD.load(Ordering::SeqCst);
+    if fd < 0 {
+        return;
+    }
+    let paths = SALVAGE_PATHS.lock().ok().and_then(|g| g.clone());
+    let (out_path, err_path) = match paths {
+        Some(p) => p,
+        None => return,
+    };
+    let stdout = std::fs::read(&out_path).unwrap_or_default();
+    let stderr = std::fs::read(&err_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&out_path);
+    let _ = std::fs::remove_file(&err_path);
+    let id = SALVAGE_CELL_ID.load(Ordering::SeqCst);
+    // Exit code is emit_panic's `exit(1)`; frame it as 1.
+    let header = format!("faulted {} 1 {} {}\n", id, stdout.len(), stderr.len());
+    write_all_fd(fd, header.as_bytes());
+    write_all_fd(fd, &stdout);
+    write_all_fd(fd, &stderr);
+}
+
+/// Raw `libc::write` loop to a saved fd — used from the atexit salvage
+/// handler, where the buffered `std::io::Stdout` (and fd 1 itself) point
+/// at the per-cell tempfile, not the parent pipe.
+fn write_all_fd(fd: i32, mut buf: &[u8]) {
+    while !buf.is_empty() {
+        let n = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
+        if n <= 0 {
+            break;
+        }
+        buf = &buf[n as usize..];
+    }
+}
 
 // ── KARAC_SPAWN_SITES stand-ins ──────────────────────────────────────
 // Mirror of the test-binary stand-ins in `tests/codegen.rs` and
@@ -171,6 +245,13 @@ fn oneshot_main(ir_path: &str) -> ExitCode {
 /// the bidirectional response channel — anything the runner needs to
 /// say *outside* the framed protocol goes to stderr.
 fn repl_main() -> ExitCode {
+    // Register the panic-salvage atexit handler once. It's a no-op unless a
+    // cell is mid-flight (SALVAGE_ARMED), so it's inert for the ready/quit
+    // paths and only fires when a faulting cell's `exit(1)` unwinds here.
+    unsafe {
+        libc::atexit(salvage_faulted_cell_output);
+    }
+
     let engine = match LLJITEngine::new() {
         Ok(e) => e,
         Err(e) => {
@@ -342,8 +423,10 @@ fn run_one_cell<'a>(
     // Redirect stdout/stderr to tempfiles so the JIT'd `printf` calls
     // land in per-cell buffers we can frame back to the parent. See
     // also `tests/lljit_e2e.rs` for the pre-W3.4 in-process capture
-    // path that this mirrors.
-    let captured = capture_via_redirect(|| call_main(addr));
+    // path that this mirrors. `Some(id)` arms the atexit panic-salvage
+    // for this cell (B-2026-07-09-4) so a fault's captured output is
+    // framed back before `exit(1)` tears the runner down.
+    let captured = capture_via_redirect(Some(id), || call_main(addr));
 
     (
         CellOutcome {
@@ -603,7 +686,7 @@ struct CapturedRun {
     stderr: Vec<u8>,
 }
 
-fn capture_via_redirect<F: FnOnce() -> i32>(f: F) -> CapturedRun {
+fn capture_via_redirect<F: FnOnce() -> i32>(salvage_id: Option<u64>, f: F) -> CapturedRun {
     // We use dup2 to redirect fds 1 + 2 to tempfiles. The dance is
     // safe because all JIT'd printf calls go through libc, which
     // writes to fd 1 / 2 directly; Rust's `println!` uses its own
@@ -671,7 +754,26 @@ fn capture_via_redirect<F: FnOnce() -> i32>(f: F) -> CapturedRun {
     close_fd(stdout_fd);
     close_fd(stderr_fd);
 
+    // Arm the atexit panic-salvage (B-2026-07-09-4) for the duration of
+    // `f()`: if `f` faults (`emit_panic` → libc `exit(1)`), the handler
+    // reads these tempfiles and frames them to `saved_stdout` (the parent
+    // pipe) before the process dies. Disarmed the instant `f` returns
+    // normally, below, so a clean cell salvages nothing. Only repl-mode
+    // passes `Some(id)`; the test-batch/one-shot paths pass `None`.
+    if let Some(id) = salvage_id {
+        if let Ok(mut g) = SALVAGE_PATHS.lock() {
+            *g = Some((stdout_path.clone(), stderr_path.clone()));
+        }
+        SALVAGE_SAVED_FD.store(saved_stdout, Ordering::SeqCst);
+        SALVAGE_CELL_ID.store(id, Ordering::SeqCst);
+        SALVAGE_ARMED.store(true, Ordering::SeqCst);
+    }
+
     let rc = f();
+
+    // Cell survived — disarm before any cleanup so the handler is inert on
+    // the eventual clean shutdown (and doesn't reference freed tempfiles).
+    SALVAGE_ARMED.store(false, Ordering::SeqCst);
 
     // Flush again so JIT'd output reaches the tempfile before we
     // restore the saved fds.

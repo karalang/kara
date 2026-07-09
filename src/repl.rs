@@ -2178,25 +2178,26 @@ impl Session {
                 let stdout_lines = if capture {
                     bytes_to_stdout_lines(&partial_stdout)
                 } else {
-                    // Interactive path: same drop as the `Completed` arm — the
-                    // runner piped its stdout/stderr, so a cell that panicked
-                    // (tripping the runner's `emit_panic` exit(1)) would show
-                    // nothing at all interactively. Flush what the cell managed
-                    // to transmit, then surface the fault diagnostic on stderr
-                    // so the user sees the cell faulted rather than silence.
-                    // (A cell that exit(1)s dies BEFORE framing its captured
-                    // stdout/stderr, so `partial_stdout`/`runner_stderr` are
-                    // usually empty — the panic text itself is lost in the
-                    // runner's capture buffer; that's the separate runner-
-                    // protocol gap B-2026-07-09-4, not this drop fix.)
+                    // Interactive path: forward the cell's salvaged output to
+                    // the terminal (the `Completed` arm's forward wouldn't run
+                    // for a dead runner). The runner's atexit salvage
+                    // (B-2026-07-09-4) frames the faulting cell's captured
+                    // stdout — including the `panic at …` message emit_panic
+                    // prints to stdout — plus its stderr, so a fault is no
+                    // longer silent. When we DID salvage output, the panic text
+                    // is self-explanatory, so suppress the verbose internal
+                    // "runner died / will respawn" note; show it only on a
+                    // genuine silent death (no salvaged bytes at all).
                     use std::io::Write;
                     let mut out = std::io::stdout();
                     let _ = out.write_all(&partial_stdout);
                     let _ = out.flush();
                     let mut err = std::io::stderr();
                     let _ = err.write_all(&runner_stderr);
-                    for line in &errors {
-                        let _ = writeln!(err, "{line}");
+                    if partial_stdout.is_empty() && runner_stderr.is_empty() {
+                        for line in &errors {
+                            let _ = writeln!(err, "{line}");
+                        }
                     }
                     let _ = err.flush();
                     Vec::new()

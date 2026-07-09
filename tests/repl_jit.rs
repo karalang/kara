@@ -832,3 +832,60 @@ fn repl_jit_interactive_subprocess_prints_cell_output() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// Regression (B-2026-07-09-4): a cell that FAULTS under the JIT (an OOB,
+/// contract violation, failed assert — all lower to `emit_panic` → libc
+/// `exit(1)`) must still show its output to an interactive user: the prints
+/// it made before the fault AND the `panic …` message itself. Before the
+/// runner's atexit salvage, the runner died mid-cell before framing its
+/// captured stdout, so the parent got an empty runner-died signal and the
+/// fault was silent. This drives the real `karac repl` binary over piped
+/// stdin and asserts the panic text reaches the terminal and that a later
+/// cell still runs (the client re-spawned the runner).
+#[test]
+fn repl_jit_interactive_subprocess_surfaces_panic_and_recovers() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("repl")
+        .env("KARAC_JIT_RUNNER", env!("CARGO_BIN_EXE_karac_jit_runner"))
+        .env_remove("KARAC_REPL_JIT")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn karac repl");
+
+    // Cell 1 prints, then faults on an OOB; cell 2 must still run after the
+    // runner re-spawns.
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(b"let v: Vec[i64] = Vec.new();\nprintln(111); println(v[5]); println(999);\nprintln(444);\n:quit\n")
+        .expect("write repl stdin");
+
+    let out = child.wait_with_output().expect("wait karac repl");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("111"),
+        "pre-fault print should reach the terminal; got:\n{combined}"
+    );
+    assert!(
+        combined.contains("panic") && combined.contains("out of bounds"),
+        "the OOB panic text must be salvaged to the terminal; got:\n{combined}"
+    );
+    assert!(
+        !combined.contains("999"),
+        "execution must halt at the fault (999 is after v[5]); got:\n{combined}"
+    );
+    assert!(
+        combined.contains("444"),
+        "a later cell must run after the runner re-spawns; got:\n{combined}"
+    );
+}
