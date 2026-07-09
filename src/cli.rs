@@ -5050,6 +5050,31 @@ fn cmd_check(
         process::exit(1);
     }
 
+    // Resolver follow-up (m): when `karac check <file>` runs inside a project,
+    // surface dependency-resolution diagnostics so a broken dep graph (cycle /
+    // version conflict / MSRV / missing path-dep / workspace-deref) fails the
+    // check exactly as it fails `karac build`. Runs once up front, before the
+    // profiles/targets/single dispatch below, so it fires regardless of matrix
+    // mode. No-op for a single-file script outside any project, or a project
+    // that declares no deps / MSRV. Path-dep-only (no network) — see
+    // `run_check_dep_diagnostics`.
+    let file_dir = std::path::Path::new(filename)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    if let Some(root) = manifest::discover_project_root(&file_dir) {
+        if let Ok(mf) = manifest::load_from_root(&root) {
+            let mf = manifest::merge_target_overlay(&mf, Some(&default_resolution_target(&mf)));
+            let has_deps = !mf.dependencies.is_empty()
+                || !mf.dev_dependencies.is_empty()
+                || mf.kara_version.is_some();
+            if has_deps && !run_check_dep_diagnostics(&root, mf, output) {
+                process::exit(1);
+            }
+        }
+    }
+
     let source = read_source(filename);
 
     if let Some(list) = profiles {
@@ -8760,6 +8785,56 @@ fn default_resolution_target(mf: &manifest::Manifest) -> String {
     mf.build_default_target
         .clone()
         .unwrap_or_else(crate::build_cache::host_target_triple)
+}
+
+/// Surface dependency-resolution diagnostics for `karac check` (resolver
+/// follow-up (m)). **Path-dep-only** — `check` is a fast static pass and must
+/// not touch the network, so no registry/git provider is threaded in. Returns
+/// `false` (halt the check) when a fatal graph error is emitted; `true` to
+/// continue.
+///
+/// A structural graph error — a dependency cycle, a missing path-dep, or a
+/// workspace-deref failure — fails `build_dep_graph_with_options` and halts.
+/// A version conflict or an MSRV (`kara-version`) violation surfaces from the
+/// resolve step and halts. Registry/git deps, by contrast, cannot be satisfied
+/// without a fetch and `check` neither fetches nor loads dependency modules, so
+/// an `E_*_DEP_UNSUPPORTED` finding is a build-time concern, not a check
+/// failure — it is skipped here (the same dep surfaces on `karac build`).
+fn run_check_dep_diagnostics(
+    root: &std::path::Path,
+    mf: crate::manifest::Manifest,
+    output: OutputMode,
+) -> bool {
+    let loader = crate::dep_graph::FsLoader;
+    let options = crate::dep_graph::DepGraphOptions {
+        offline_root: None,
+        include_dev_deps: false,
+        registry_provider: None,
+        git_provider: None,
+    };
+    let graph = match crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options) {
+        Ok(g) => g,
+        Err(e) => {
+            let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
+            emit_dep_diagnostic(&diag, output, "error");
+            return false;
+        }
+    };
+    let active = crate::dep_resolver::active_toolchain_version();
+    match crate::dep_resolver::resolve(&graph, &active) {
+        Ok(_) => true,
+        Err(boxed) => {
+            if matches!(
+                boxed.code(),
+                "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED"
+            ) {
+                return true;
+            }
+            let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
+            emit_dep_diagnostic(&diag, output, "error");
+            false
+        }
+    }
 }
 
 /// Build the dep graph and resolve it against the active toolchain. Returns

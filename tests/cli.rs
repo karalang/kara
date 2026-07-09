@@ -7736,6 +7736,114 @@ root = { path = ".." }
     );
 }
 
+/// Resolver follow-up (m): `karac check <file>` run inside a project must
+/// surface a structural dep-graph error (here, a path-dep cycle) and fail —
+/// the same graph-build error that halts `karac build`, now caught by the
+/// static-verification command too instead of slipping through to build time.
+#[test]
+fn test_check_surfaces_dep_cycle() {
+    let tmp = slice7_tempdir("check-cycle");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("sub/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"root\"\n\n[dependencies]\nsub = { path = \"sub\" }\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("sub/kara.toml"),
+        "[package]\nname = \"sub\"\n\n[dependencies]\nroot = { path = \"..\" }\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("sub/src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["check", "src/main.kara"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "a dependency cycle must fail `karac check`; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_DEPENDENCY_CYCLE]"),
+        "expected E_DEPENDENCY_CYCLE from check; stderr={stderr}",
+    );
+}
+
+/// Resolver follow-up (m): a resolve-step error — an MSRV (`kara-version`)
+/// constraint the running toolchain can't satisfy — must also fail
+/// `karac check` (exercises the resolve arm, not the graph-build arm).
+#[test]
+fn test_check_surfaces_msrv_violation() {
+    let tmp = slice7_tempdir("check-msrv");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"proj\"\nkara-version = \">=999.0.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["check", "src/main.kara"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "an unsatisfiable MSRV must fail `karac check`; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_TOOLCHAIN_TOO_OLD]"),
+        "expected E_TOOLCHAIN_TOO_OLD from check; stderr={stderr}",
+    );
+}
+
+/// Resolver follow-up (m) negative pin: a *valid* path-dep graph must not
+/// make `karac check` fail — the resolver runs, finds no error, and the check
+/// proceeds to type-check normally. Guards against the wiring spuriously
+/// halting clean projects.
+#[test]
+fn test_check_passes_with_clean_path_dep() {
+    let tmp = slice7_tempdir("check-clean-dep");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("child/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"root\"\n\n[dependencies]\nchild = { path = \"child\" }\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(tmp.join("child/kara.toml"), "[package]\nname = \"child\"\n").unwrap();
+    std::fs::write(tmp.join("child/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["check", "src/main.kara"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "a clean path-dep graph must not fail check; stderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("E_DEPENDENCY"),
+        "no dependency error expected on a clean graph; stderr={stderr}",
+    );
+}
+
 #[test]
 fn test_slice7_no_deps_no_msrv_skips_resolver() {
     // Regression pin: a project with neither `[dependencies]` nor
