@@ -34,6 +34,28 @@ use super::helpers::{
 };
 use super::state::SharedTypeInfo;
 
+/// Flatten an aggregate LLVM type into its leaf scalar types (recursing through
+/// nested structs and arrays), in field order. Used by the AArch64 HFA test
+/// (`arm64_repr_c_struct_coercion`): a Homogeneous Floating-point Aggregate is
+/// one whose every leaf is the same float type, so a `struct { struct { f64;
+/// f64 } }` correctly flattens to two `f64` leaves.
+fn collect_leaf_scalars<'ctx>(ty: BasicTypeEnum<'ctx>, out: &mut Vec<BasicTypeEnum<'ctx>>) {
+    match ty {
+        BasicTypeEnum::StructType(st) => {
+            for f in st.get_field_types() {
+                collect_leaf_scalars(f, out);
+            }
+        }
+        BasicTypeEnum::ArrayType(at) => {
+            let elem = at.get_element_type();
+            for _ in 0..at.len() {
+                collect_leaf_scalars(elem, out);
+            }
+        }
+        other => out.push(other),
+    }
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     // ── Type resolution ───────────────────────────────────────────
 
@@ -1796,6 +1818,56 @@ impl<'ctx> super::Codegen<'ctx> {
 
     pub(super) fn llvm_param_type(&self, param: &Param) -> BasicMetadataTypeEnum<'ctx> {
         BasicMetadataTypeEnum::from(self.llvm_type_for_type_expr(&param.ty))
+    }
+
+    /// AArch64 AAPCS coercion for a `#[repr(C)]` struct passed/returned by value
+    /// across the C boundary (B-2026-07-09-2). Kāra otherwise emits the raw LLVM
+    /// struct and relies on the backend default, which matches SysV on x86-64 by
+    /// luck but not AAPCS on arm64 — a C frontend does explicit per-target ABI
+    /// classification, which this reproduces for the register cases:
+    ///   - HFA (1..=4 leaves, all the same float type) → `[N x <float>]` (v-regs)
+    ///   - non-HFA, size ≤ 8 B → `i64`; ≤ 16 B → `[2 x i64]` (x0..x1)
+    ///
+    /// Returns `Ok(None)` to pass the struct directly (no known struct / empty),
+    /// or `Err(reason)` for a shape AAPCS passes *indirectly* (> 16 B non-HFA),
+    /// which the caller turns into a codegen error (pass-by-pointer) rather than
+    /// a silent miscompile. The coercions match `clang -target arm64-apple`
+    /// exactly (verified against the ABI oracle table).
+    pub(super) fn arm64_repr_c_struct_coercion(
+        &mut self,
+        struct_name: &str,
+    ) -> Result<Option<BasicTypeEnum<'ctx>>, String> {
+        let Some(st) = self.struct_types.get(struct_name).copied() else {
+            return Ok(None);
+        };
+        let mut leaves: Vec<BasicTypeEnum<'ctx>> = Vec::new();
+        collect_leaf_scalars(st.into(), &mut leaves);
+        // HFA: 1..=4 identical-float leaves → passed in v-registers as [N x fp].
+        if (1..=4).contains(&leaves.len()) {
+            if let Some(BasicTypeEnum::FloatType(fty)) = leaves.first().copied() {
+                if leaves.iter().all(|l| *l == leaves[0]) {
+                    return Ok(Some(fty.array_type(leaves.len() as u32).into()));
+                }
+            }
+        }
+        // Non-HFA: classify by ABI size. (Scalar-struct sizes are identical on
+        // x86-64 and arm64 under LP64, so the host `target_data` size is correct
+        // for the arm64 decision here.)
+        let size = self.ensure_target_data()?.get_abi_size(&st);
+        let i64_t = self.context.i64_type();
+        if size == 0 {
+            Ok(None)
+        } else if size <= 8 {
+            Ok(Some(i64_t.into()))
+        } else if size <= 16 {
+            Ok(Some(i64_t.array_type(2).into()))
+        } else {
+            Err(format!(
+                "`#[repr(C)]` struct `{struct_name}` ({size} bytes, non-HFA) cannot cross the C \
+                 ABI by value on AArch64 yet — AAPCS passes it indirectly. Pass it by raw pointer \
+                 (`*const {struct_name}`) instead (tracked: B-2026-07-09-2)."
+            ))
+        }
     }
 
     // ── Shared type helpers ─────────────────────────────────────────

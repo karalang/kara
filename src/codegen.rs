@@ -3118,6 +3118,23 @@ pub(super) struct Codegen<'ctx> {
     /// which we want to avoid in the (common) path where no layout
     /// intrinsic is invoked.
     pub(crate) target_data: Option<TargetData>,
+    /// Whether the build target is AArch64 — computed once at construction
+    /// from the native triple (or `KARAC_FORCE_TARGET_ARCH`). Gates the
+    /// per-target `#[repr(C)]` struct-by-value ABI coercion (B-2026-07-09-2);
+    /// x86-64's raw-struct lowering already matches the C ABI, so the coercion
+    /// path is AArch64-only and this stays `false` there (zero x86-64 change).
+    pub(crate) target_is_aarch64: bool,
+    /// Per-function record of `#[repr(C)]` struct params coerced to an AAPCS
+    /// register type on AArch64 (B-2026-07-09-2): fn name → `[(param_index,
+    /// struct_name)]`. The declared LLVM param at `param_index` is the coerced
+    /// type (`[N x i64]` / `[N x fp]` / `i64`); the body prologue reconstructs
+    /// the original struct value from it. Empty on x86-64 (no coercion).
+    pub(crate) arm64_coerced_struct_params: HashMap<String, Vec<(usize, String)>>,
+    /// Exported fn names whose signature carries an AArch64-coerced struct
+    /// param. An internal Kāra call to one would need matching arg coercion
+    /// (not implemented in this slice), so `compile_call` rejects it with an
+    /// actionable message — mirroring the boxed-export rejection.
+    pub(crate) arm64_coerced_export_names: std::collections::HashSet<String>,
     // ── Hot-swap codegen (phase-7 line 5) ─────────────────────────
     /// Set by `compile_to_*_with_hot_swap` from the CLI's
     /// `--enable-hot-swap` flag. When `true`, every call to a
@@ -5698,6 +5715,10 @@ impl<'ctx> Codegen<'ctx> {
             karac_error_trace_clear_fn,
             karac_test_record_failure_fn,
             target_data: None,
+            target_is_aarch64: !crate::target::active_target_is_wasm()
+                && driver::native_target_is_aarch64(),
+            arm64_coerced_struct_params: HashMap::new(),
+            arm64_coerced_export_names: std::collections::HashSet::new(),
             hot_swap_enabled: false,
             declare_only_fns: std::collections::HashSet::new(),
             main_symbol_override: None,

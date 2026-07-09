@@ -29,6 +29,17 @@ fn returns_self_or_type(return_type: Option<&TypeExpr>, type_name: &str) -> bool
     }
 }
 
+/// The type name of a **by-value** struct param — a single-segment
+/// `TypeKind::Path` (`s: Stats`). `None` for a `ref`/`mut ref`/pointer param
+/// (`ref Stats`, `*const Stats`) or any non-path type, so only genuine
+/// by-value struct params reach the AArch64 ABI coercion.
+fn struct_by_value_param_name(ty: &TypeExpr) -> Option<String> {
+    match &ty.kind {
+        TypeKind::Path(p) if p.segments.len() == 1 => Some(p.segments[0].clone()),
+        _ => None,
+    }
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     /// The `#[link_name("symbol")]` value carried by `attrs`, if any —
     /// the C/foreign symbol an `unsafe extern` import binds to, distinct
@@ -140,11 +151,35 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(self.module.add_function(symbol, main_type, None));
         }
 
-        let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
-            .params
-            .iter()
-            .map(|p| self.llvm_param_type(p))
-            .collect();
+        // AArch64 `#[repr(C)]` struct-by-value ABI (B-2026-07-09-2): an
+        // exported fn's by-value struct param is passed per AAPCS (coerced to a
+        // register type), not as a raw LLVM struct (which only matches the C
+        // ABI on x86-64). Coercion is export-only + arm64-only, so x86-64 and
+        // every non-export signature are byte-identical to before. The
+        // reconstruction from the coerced value happens in the body prologue.
+        let is_export = crate::cheader::is_exported(func);
+        let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
+            Vec::with_capacity(func.params.len());
+        let mut coerced_struct_params: Vec<(usize, String)> = Vec::new();
+        for (i, p) in func.params.iter().enumerate() {
+            if is_export && self.target_is_aarch64 {
+                if let Some(name) = struct_by_value_param_name(&p.ty) {
+                    if self.struct_types.contains_key(name.as_str()) {
+                        if let Some(coerced) = self.arm64_repr_c_struct_coercion(&name)? {
+                            param_types.push(coerced.into());
+                            coerced_struct_params.push((i, name));
+                            continue;
+                        }
+                    }
+                }
+            }
+            param_types.push(self.llvm_param_type(p));
+        }
+        if !coerced_struct_params.is_empty() {
+            self.arm64_coerced_struct_params
+                .insert(func.name.clone(), coerced_struct_params);
+            self.arm64_coerced_export_names.insert(func.name.clone());
+        }
 
         // Niche call ABI for `Option[shared T]` signature positions
         // (wip-shared-struct-codegen-followups Slice 1 + method
@@ -757,6 +792,28 @@ impl<'ctx> super::Codegen<'ctx> {
             for (i, param) in func.params.iter().enumerate() {
                 let param_name = self.param_name(param);
                 let param_val = fn_val.get_nth_param(i as u32).unwrap();
+                // AArch64 `#[repr(C)]` struct-by-value reconstruction
+                // (B-2026-07-09-2): the LLVM param is the AAPCS-coerced type
+                // (`[N x i64]` / `[N x fp]` / `i64`) rather than the raw struct.
+                // Reinterpret its bytes as the original struct value — store to
+                // a temp, reload as the struct type (both have identical size +
+                // layout) — so every downstream field read is byte-identical to
+                // the un-coerced path. Empty map on x86-64, so this is inert
+                // there.
+                let coerced_struct = self
+                    .arm64_coerced_struct_params
+                    .get(&func.name)
+                    .and_then(|v| v.iter().find(|(idx, _)| *idx == i).map(|(_, n)| n.clone()));
+                let param_val = if let Some(struct_name) = coerced_struct {
+                    let struct_ty = *self.struct_types.get(struct_name.as_str()).unwrap();
+                    let tmp = self.create_entry_alloca(fn_val, "kabi.coerce", param_val.get_type());
+                    self.builder.build_store(tmp, param_val).unwrap();
+                    self.builder
+                        .build_load(struct_ty, tmp, "kabi.reload")
+                        .unwrap()
+                } else {
+                    param_val
+                };
                 // Niche-ABI param unpack: an `Option[shared T]` param
                 // declared `ptr`-shaped (see `declare_function`) is
                 // rebuilt into the conventional 4-i64 Option struct here,

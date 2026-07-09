@@ -1412,6 +1412,24 @@ fn create_wasm_target_machine_threaded(
         .ok_or_else(|| "Failed to create wasm32-threads target machine".to_string())
 }
 
+/// Whether the native build target is AArch64 (arm64). Drives the per-target
+/// `#[repr(C)]` struct-by-value ABI classifier (B-2026-07-09-2): on AArch64 a
+/// small aggregate is passed per AAPCS (HFA in v-regs / `[N x i64]` / indirect),
+/// which differs from the raw-struct lowering that happens to match SysV on
+/// x86-64. `TargetMachine::get_default_triple()` is the host triple for a native
+/// AOT build (karac targets the host it runs on). `KARAC_FORCE_TARGET_ARCH`
+/// overrides it for local testing — it lets an x86-64 dev box emit the AArch64
+/// param/return coercions so the IR signatures can be diffed against clang's
+/// (the ABI oracle) without an arm64 machine.
+pub(super) fn native_target_is_aarch64() -> bool {
+    if let Ok(forced) = std::env::var("KARAC_FORCE_TARGET_ARCH") {
+        return forced == "aarch64" || forced == "arm64";
+    }
+    let triple = TargetMachine::get_default_triple();
+    let s = triple.as_str().to_string_lossy();
+    s.starts_with("aarch64") || s.starts_with("arm64")
+}
+
 fn create_native_target_machine(cpu_override: Option<&str>) -> Result<TargetMachine, String> {
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| format!("Failed to initialize native target: {}", e))?;

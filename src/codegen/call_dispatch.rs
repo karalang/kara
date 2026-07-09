@@ -121,6 +121,18 @@ impl<'ctx> super::Codegen<'ctx> {
                      See design.md § Exported C ABI (Slice 4 Path B)."
                 ));
             }
+            // AArch64 (B-2026-07-09-2): an export with an AAPCS-coerced `#[repr(C)]`
+            // struct param takes a register-coerced type this call site doesn't
+            // pack. Reject the internal call rather than pass a mismatched arg
+            // (the boxed-export pattern — extract a non-exported helper).
+            if self.arm64_coerced_export_names.contains(n) {
+                return Err(format!(
+                    "cannot call `{n}` from Kāra code on AArch64: it is a `pub extern \"C\" fn` \
+                     whose `#[repr(C)]` struct param is coerced to the AAPCS register ABI for the \
+                     C boundary. Move the body into a non-exported helper and call that from Kāra; \
+                     keep `{n}` as the thin C-facing export. Tracked: B-2026-07-09-2."
+                ));
+            }
         }
 
         // Cooperative cancel check before each call inside a par-branch.

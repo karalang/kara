@@ -287,6 +287,18 @@ jobs:
       - name: Codegen E2E + interpreter + typechecker + self-host oracle
         run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer
 
+      # AArch64 `#[repr(C)]` struct-by-value ABI signature match (B-2026-07-09-2).
+      # Forces the arm64 target-ABI classifier via KARAC_FORCE_TARGET_ARCH and
+      # asserts the emitted LLVM param signatures equal clang's arm64 coercions
+      # (`[2 x i64]`, `[N x double]`, `i64`, …). Identical IR lowers identically,
+      # so a signature match IS an ABI match — this catches a coercion regression
+      # HERE, on Linux/x86-64, without arm64 hardware; the codegen-e2e-macos job
+      # is the paired real-execution confirmation.
+      - name: AArch64 repr(C) struct ABI signature match (forced arch)
+        run: cargo test --features llvm --test abi_repr_c_struct
+        env:
+          KARAC_FORCE_TARGET_ARCH: aarch64
+
       # LLJIT-productionization Slice 1 follow-up: re-run the codegen E2E suite
       # through the JIT execution lane (not just AOT). `KARAC_TEST_JIT=1` routes
       # `tests/codegen.rs`'s runner to a `karac_jit_runner` subprocess (which
@@ -359,23 +371,19 @@ jobs:
       - name: Codegen E2E (arm64)
         run: cargo test --features llvm --test codegen
 
-      # The producer-mode library + `#[repr(C)]` enum round-trips — the direct
-      # AArch64 confirmation for the artifact + enum-ABI work. Multiple filters
-      # are OR'd by libtest, so this runs exactly the producer tests.
-      #
-      # QUARANTINE (B-2026-07-09-2): `test_build_crate_type` is deliberately
-      # NOT in this arm64 filter. It is the sole struct-by-value-float case
-      # (`stats_mean(Stats{ f64, i64 })`), and this job caught a real AArch64
-      # ABI bug there — a mixed float+int `#[repr(C)]` struct passed by value is
-      # mislowered on arm64 (returns 0.00 not 7.50; x86-64 is correct). The
-      # bug is filed and tracked; the test still runs on the x86-64 codegen-e2e
-      # job. Dropping it keeps this gate GREEN + LIVE for the confirmed surface
-      # (enums, boxing, project-lib) so a *new* arm64 regression still turns it
-      # red. Re-add `test_build_crate_type` here when B-2026-07-09-2 is fixed.
-      - name: Producer-mode E2E (library artifacts + repr(C) enums, arm64)
+      # The producer-mode library + `#[repr(C)]` enum + struct-by-value
+      # round-trips — the direct AArch64 confirmation for the artifact + ABI
+      # work. Multiple filters are OR'd by libtest. `test_build_crate_type`
+      # (the `stats_mean(Stats{ f64, i64 })` struct-by-value case) is the
+      # real-execution proof of the B-2026-07-09-2 fix: it was quarantined when
+      # this job first caught the arm64 struct-ABI mislowering, and is re-added
+      # now that codegen coerces `#[repr(C)]` struct params per AAPCS. If it
+      # regresses, the fix broke on real arm64 hardware.
+      - name: Producer-mode E2E (library artifacts + repr(C) enums + structs, arm64)
         run: >
           cargo test --features llvm --test cli --
           test_build_repr_c_enum
+          test_build_crate_type
           test_build_auto_boxed
           test_project_lib_table
 
