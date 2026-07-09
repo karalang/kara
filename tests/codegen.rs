@@ -4994,6 +4994,135 @@ fn main() {
         }
     }
 
+    /// `#[track_caller]` slice 6: the STDLIB panic-emitters honour the caller
+    /// redirection. Each emitter (`unwrap`, `[i]` bounds check, `/`-by-zero,
+    /// `assert`) is a compiler intrinsic lowered *inline*, so when it fires
+    /// inside a `#[track_caller]` fn `emit_panic` (and the assert record path)
+    /// reports the caller's site, not the emitter's own line. The redirected
+    /// location is a runtime value forwarded from the call site, so it survives
+    /// the string-source harness (which does not thread `source_filename`) even
+    /// though the compile-time-span path does not — same property the slice-5
+    /// test relies on. The emitter-line marker must be ABSENT to prove the
+    /// panic was redirected rather than reported in place.
+    #[test]
+    fn e2e_track_caller_redirects_stdlib_emitters() {
+        // unwrap() on None inside a `#[track_caller]` fn: unwrap is on line 6,
+        // main's call is on line 10 → report 10, frame `force`.
+        let unwrap = "fn none_val() -> Option[i32] {\n\
+                      None\n\
+                      }\n\
+                      #[track_caller]\n\
+                      fn force(o: Option[i32]) -> i32 {\n\
+                      o.unwrap()\n\
+                      }\n\
+                      fn main() {\n\
+                      let n = none_val();\n\
+                      force(n);\n\
+                      }\n";
+        if let Some(cap) = run_program_capturing(unwrap) {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains(":10:")
+                    && cap.stdout.contains("in force")
+                    && !cap.stdout.contains(":6:"),
+                "unwrap must report the caller's line (10), not its own (6); stdout={:?}",
+                cap.stdout
+            );
+        }
+
+        // Vec index out of bounds inside a `#[track_caller]` fn: `v[i]` is on
+        // line 3, the call is on line 8 → report 8, frame `at`.
+        let index = "#[track_caller]\n\
+                     fn at(v: Vec[i64], i: i64) -> i64 {\n\
+                     v[i]\n\
+                     }\n\
+                     fn main() {\n\
+                     let mut v: Vec[i64] = Vec.new();\n\
+                     v.push(1i64);\n\
+                     at(v, 99i64);\n\
+                     }\n";
+        if let Some(cap) = run_program_capturing(index) {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains(":8:")
+                    && cap.stdout.contains("in at")
+                    && !cap.stdout.contains(":3:"),
+                "index-OOB must report the caller's line (8), not its own (3); stdout={:?}",
+                cap.stdout
+            );
+        }
+
+        // Division by zero inside a `#[track_caller]` fn: `a / b` is on line 3,
+        // the call is on line 7 → report 7, frame `divide`. The divisor comes
+        // from a fn return so the guard is not const-folded away.
+        let div = "#[track_caller]\n\
+                   fn divide(a: i64, b: i64) -> i64 {\n\
+                   a / b\n\
+                   }\n\
+                   fn main() {\n\
+                   let z = zero();\n\
+                   divide(10i64, z);\n\
+                   }\n\
+                   fn zero() -> i64 {\n\
+                   0i64\n\
+                   }\n";
+        if let Some(cap) = run_program_capturing(div) {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains(":7:")
+                    && cap.stdout.contains("in divide")
+                    && !cap.stdout.contains(":3:"),
+                "div-by-zero must report the caller's line (7), not its own (3); stdout={:?}",
+                cap.stdout
+            );
+        }
+
+        // assert() inside a `#[track_caller]` fn goes through the test-record
+        // path (`KARAC_TEST_FAILURE` JSON on stderr), which slice 6 also taught
+        // to redirect: assert is on line 3, the call is on line 7 → report 7.
+        let assert = "#[track_caller]\n\
+                      fn check(x: i64) {\n\
+                      assert(x > 0);\n\
+                      }\n\
+                      fn main() {\n\
+                      let n = neg();\n\
+                      check(n);\n\
+                      }\n\
+                      fn neg() -> i64 {\n\
+                      -5i64\n\
+                      }\n";
+        if let Some(cap) = run_program_capturing(assert) {
+            assert_eq!(cap.status.code(), Some(1), "stdout={:?}", cap.stdout);
+            assert!(
+                cap.stderr.contains("\"line\":7") && !cap.stderr.contains("\"line\":3"),
+                "assert must report the caller's line (7), not its own (3); stderr={:?}",
+                cap.stderr
+            );
+        }
+
+        // Baseline contrast: the SAME assert with NO `#[track_caller]` reports
+        // its own line (2 here), proving the redirect is opt-in via the
+        // attribute, not unconditional.
+        let assert_base = "fn check(x: i64) {\n\
+                           assert(x > 0);\n\
+                           }\n\
+                           fn main() {\n\
+                           let n = neg();\n\
+                           check(n);\n\
+                           }\n\
+                           fn neg() -> i64 {\n\
+                           -5i64\n\
+                           }\n";
+        if let Some(cap) = run_program_capturing(assert_base) {
+            assert_eq!(cap.status.code(), Some(1), "stdout={:?}", cap.stdout);
+            assert!(
+                cap.stderr.contains("\"line\":2") && !cap.stderr.contains("\"line\":6"),
+                "baseline assert must report its own line (2), not the caller's (6); stderr={:?}",
+                cap.stderr
+            );
+        }
+    }
+
     /// Bit intrinsics codegen (`llvm.ctpop` / `llvm.ctlz` / `llvm.cttz`),
     /// width-correct: narrow receivers are masked to their declared width, so a
     /// signed `i8 -1` has 8 set bits and a zero `u8` has 8 leading/trailing

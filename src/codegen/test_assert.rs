@@ -188,12 +188,44 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_ty = self.context.i64_type();
         let i32_ty = self.context.i32_type();
 
-        let (file_ptr, file_len) = match self.ensure_source_filename_global() {
-            Some((p, len)) => (p, i64_ty.const_int(len, false)),
-            None => (ptr_ty.const_null(), i64_ty.const_int(0, false)),
+        // `#[track_caller]` slice 6: when the enclosing fn is `#[track_caller]`,
+        // redirect the reported assert location to the received caller location
+        // (the same redirect `emit_panic` performs for the other panic-emitters,
+        // so an assert inside a `#[track_caller]` wrapper blames the wrapper's
+        // caller for consistency with unwrap/index/div). The caller-location
+        // file is a NUL-terminated C string (built that way in `compile_call`),
+        // so its byte length comes from a runtime `strlen` rather than a
+        // compile-time constant. Outside a `#[track_caller]` fn
+        // (`current_fn_caller_loc == None`) this path is byte-identical to
+        // before — the whole test-harness surface is unaffected.
+        let (file_ptr, file_len, line, col) = match self.current_fn_caller_loc {
+            Some((cf_file, cf_line, cf_col)) => {
+                let strlen_fn = self
+                    .module
+                    .get_function("strlen")
+                    .expect("strlen declared in Codegen::new");
+                let len = self
+                    .builder
+                    .build_call(strlen_fn, &[cf_file.into()], "tc.assert_file_len")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                (cf_file, len, cf_line, cf_col)
+            }
+            None => {
+                let (fp, fl) = match self.ensure_source_filename_global() {
+                    Some((p, len)) => (p, i64_ty.const_int(len, false)),
+                    None => (ptr_ty.const_null(), i64_ty.const_int(0, false)),
+                };
+                (
+                    fp,
+                    fl,
+                    i32_ty.const_int(call_span.line as u64, false),
+                    i32_ty.const_int(call_span.column as u64, false),
+                )
+            }
         };
-        let line = i32_ty.const_int(call_span.line as u64, false);
-        let col = i32_ty.const_int(call_span.column as u64, false);
 
         // Materialize the message as a deduped global string. The
         // runtime reads `msg_len` bytes, so we pass the exact byte length
