@@ -3348,64 +3348,6 @@ fn main() {
         }
     }
 
-    /// B-2026-07-08-7: a `Vec.new()` + exact counted `push(literal)` fill on a
-    /// 64-bit-element Vec collapses to `Vec.filled` (the `vec![x; n]` shape) in the
-    /// pre-size pass, so the emitted fill loop carries NO per-element `needs_grow`
-    /// check (the residual the `with_capacity` pre-size couldn't shed — the
-    /// self-referential capacity phi defeats SCEV). Checks the IR shape (filled,
-    /// no grow check) AND that output is unchanged.
-    #[test]
-    fn fill_loop_lowers_to_filled_no_grow_check() {
-        let src = "fn build(cols: i64) -> i64 {\n\
-                   \x20   let mut dp: Vec[i64] = Vec.new();\n\
-                   \x20   let mut j = 0;\n\
-                   \x20   while j < cols { dp.push(0); j = j + 1; }\n\
-                   \x20   dp[0] = 1;\n\
-                   \x20   let mut c = 1;\n\
-                   \x20   while c < cols { dp[c] = dp[c] + dp[c - 1]; c = c + 1; }\n\
-                   \x20   return dp[cols - 1];\n\
-                   }\n\
-                   fn main() { println(build(5)); }\n";
-        let ir = ir_for(src);
-        assert!(
-            ir.contains("filled.buf"),
-            "fill must lower to Vec.filled; IR:\n{ir}"
-        );
-        assert!(
-            !ir.contains("needs_grow"),
-            "Vec.filled fill must carry no grow check; IR:\n{ir}"
-        );
-        // Output unchanged: unique-paths for a 1x5 strip is 1 (dp[4] == 1).
-        if let Some(out) = run_program(src) {
-            assert_eq!(out.trim(), "1", "stdout:\n{out}");
-        }
-    }
-
-    /// The `filled` collapse must NOT fire on a narrow (`Vec[i32]`) element — the
-    /// bare literal compiles to i64 and would mis-size the buffer — and the
-    /// program must stay correct on the (retained) `with_capacity` + push path.
-    #[test]
-    fn fill_loop_narrow_element_stays_correct() {
-        let src = "fn build(n: i64) -> i32 {\n\
-                   \x20   let mut v: Vec[i32] = Vec.new();\n\
-                   \x20   let mut j = 0;\n\
-                   \x20   while j < n { v.push(3); j = j + 1; }\n\
-                   \x20   let mut s = 0;\n\
-                   \x20   let mut c = 0;\n\
-                   \x20   while c < n { s = s + v[c]; c = c + 1; }\n\
-                   \x20   return s;\n\
-                   }\n\
-                   fn main() { println(build(10) as i64); }\n";
-        let ir = ir_for(src);
-        assert!(
-            !ir.contains("filled.buf"),
-            "narrow Vec[i32] fill must NOT collapse to Vec.filled; IR:\n{ir}"
-        );
-        if let Some(out) = run_program(src) {
-            assert_eq!(out.trim(), "30", "10 * 3 = 30; stdout:\n{out}");
-        }
-    }
-
     /// B-2026-07-08-10: `Vec.filled` / `Vec[v; n]` must size the buffer and stride
     /// the fill by the ELEMENT type, not the compiled value width. A bare integer
     /// literal compiles to i64; for a narrow element (`Vec[i32]`/`Vec[u8]`/…) the

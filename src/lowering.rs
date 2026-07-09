@@ -533,7 +533,7 @@ impl<'a> Lowerer<'a> {
         // `Binary` loop conditions / increments. Operates only on this block's
         // statement sequence; nested blocks are pre-sized by their own
         // `lower_block` calls during the recursion below.
-        crate::presize::presize_block(block, self.tc);
+        crate::presize::presize_block(block);
         for stmt in &mut block.stmts {
             self.lower_stmt(stmt);
         }
