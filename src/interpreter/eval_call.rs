@@ -1269,6 +1269,27 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `<Type>.default()` where `Type` is (or resolves through a bound type
+        // param to) a PRIMITIVE — the built-in zero value (`0` / `0.0` /
+        // `false` / `'\0'` / `""`). Named types have a `<Type>.default`
+        // function (derived or hand-written) registered in env and route
+        // through the normal callee-eval below; primitives have no such
+        // function, so without this intercept `T.default()` monomorphized to a
+        // primitive (std.mem `take[T: Default]` on `i64`, any `fn f[T:
+        // Default]`) falls through to the "no interpreter evaluation rule"
+        // path error. Mirrors codegen's primitive-default fallthrough in
+        // `compile_assoc_call`.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && segments[1] == "default" && args.is_empty() {
+                let concrete = self
+                    .resolve_type_param(&segments[0])
+                    .unwrap_or_else(|| segments[0].clone());
+                if let Some(v) = primitive_default_value(&concrete) {
+                    return v;
+                }
+            }
+        }
+
         // Evaluate callee
         let callee_val = self.eval_expr_inner(callee);
         // Callee evaluation can itself fault (e.g. the unwired-path
@@ -2179,6 +2200,24 @@ impl<'a> super::Interpreter<'a> {
                 "{method_label}: comparator must return Ordering, returned a different value"
             ),
         }
+    }
+}
+
+/// The built-in `default()` value for a primitive type name, or `None` for a
+/// non-primitive (which routes to its `<Type>.default` function instead). The
+/// interpreter models every integer width with `Value::Int` and both floats
+/// with `Value::Float`, so the zero values collapse accordingly. Matches the
+/// primitive-default constants codegen emits in `compile_assoc_call`.
+fn primitive_default_value(type_name: &str) -> Option<Value> {
+    match type_name {
+        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" => {
+            Some(Value::Int(0))
+        }
+        "f32" | "f64" => Some(Value::Float(0.0)),
+        "bool" => Some(Value::Bool(false)),
+        "char" => Some(Value::Char('\0')),
+        "String" | "str" => Some(Value::String(String::new())),
+        _ => None,
     }
 }
 

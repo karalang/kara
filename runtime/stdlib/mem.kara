@@ -8,8 +8,7 @@
 // call-site intercept in the interpreter and codegen.
 //
 // (`forget` — the unsafe FFI destructor-suppression sibling — lives in
-// `intrinsics.kara`. `take` — `replace(dest, T.default())` — is a follow-on
-// gated on generic `T.default()` dispatch in codegen.)
+// `intrinsics.kara`.)
 
 // Exchange the values held at two mutable locations. Neither value is
 // dropped — both stay live, just relocated.
@@ -22,3 +21,13 @@ pub fn swap[T](a: mut ref T, b: mut ref T) {}
 // drop is the call-site intercept.
 #[compiler_builtin]
 pub fn replace[T](dest: mut ref T, value: T) -> T { value }
+
+// Move the value out of `*dest`, leaving `T.default()` in its place, and
+// return the moved-out value. The dual of `replace` with the incoming value
+// fixed to the type's default — the idiom for "steal this field, reset it to
+// empty". A real Kāra body (NOT a `#[compiler_builtin]`): it composes the
+// `replace` intercept with the derived `T.default()`, so it monomorphizes per
+// concrete `T` like any generic free fn. The `T: Default` bound is what makes
+// `T.default()` resolvable (interpreter) / dispatchable to the derived
+// `<Concrete>.default` (codegen, via the monomorph's type substitution).
+pub fn take[T: Default](dest: mut ref T) -> T { replace(dest, T.default()) }

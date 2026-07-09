@@ -703,14 +703,29 @@ impl<'a> Interpreter<'a> {
     /// Returns `None` for a name with no matching AST function (e.g. closures),
     /// leaving those on the marker-only path.
     pub(crate) fn fn_param_mut_ref_flags(&self, name: &str) -> Option<Vec<bool>> {
-        self.program.items.iter().find_map(|item| match item {
-            Item::Function(f) if f.name == name => Some(
-                f.params
-                    .iter()
-                    .map(|p| matches!(p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_)))
-                    .collect(),
-            ),
-            _ => None,
+        fn flags_in(items: &[Item], name: &str) -> Option<Vec<bool>> {
+            items.iter().find_map(|item| match item {
+                Item::Function(f) if f.name == name => Some(
+                    f.params
+                        .iter()
+                        .map(|p| matches!(p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_)))
+                        .collect(),
+                ),
+                _ => None,
+            })
+        }
+        // Fall back to the baked stdlib programs, mirroring the method-
+        // writeback lookup: a baked-stdlib free fn with a `mut ref` param
+        // (`std.mem`'s `take[T: Default](dest: mut ref T)`) lives in
+        // `STDLIB_PROGRAMS`, not `self.program.items`. Without this fallback a
+        // FORWARDED `mut ref` arg into such a baked fn (`take(slot)` inside a
+        // helper taking `slot: mut ref T`) carries no `mut` marker, so the CICO
+        // write-back was silently skipped and the caller's place kept its old
+        // value.
+        flags_in(&self.program.items, name).or_else(|| {
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .find_map(|(_, p)| flags_in(&p.items, name))
         })
     }
 

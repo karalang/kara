@@ -11870,6 +11870,55 @@ fn use_it() -> i64 {
 }
 
 #[test]
+fn test_default_bound_satisfied_by_derive_and_primitive() {
+    // A `T: Default` bound at a CALL SITE is discharged by any concrete type
+    // that has a default — a `#[derive(Default)]` struct (via its synthesized
+    // inherent `default`) and a primitive (built-in zero). Regression:
+    // `type_satisfies_bound` had no `Default` arm, so the bound fell through to
+    // the impl-table (which the derive-only builtin never populates) and every
+    // concrete arg was rejected as "does not implement Default" — std.mem
+    // `take[T: Default]` and any user `fn f[T: Default]` were uncallable.
+    typecheck_desugared_ok(
+        r#"
+#[derive(Default)]
+struct Config { n: i64, name: String }
+
+fn make[T: Default](x: T) -> T { x }
+
+fn use_it() {
+    let c = make(Config { n: 1, name: "a" });
+    let k = make(5);
+    let s = make("hi".to_string());
+}
+"#,
+    );
+}
+
+#[test]
+fn test_default_bound_rejected_for_non_default_type() {
+    // The dual: a type with NO default (a plain struct, no `#[derive(Default)]`,
+    // no hand-written `default`) does NOT satisfy `T: Default` — the fix
+    // recognizes real defaults, it does not blanket-accept.
+    let errors = typecheck_desugared_errors(
+        r#"
+struct Plain { x: i64 }
+
+fn make[T: Default](x: T) -> T { x }
+
+fn use_it() {
+    let p = make(Plain { x: 1 });
+}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Default") && e.message.contains("Plain")),
+        "expected `Plain` does-not-implement-Default rejection, got: {errors:?}"
+    );
+}
+
+#[test]
 fn test_derive_default_container_field_rejected() {
     // A container/generic field type is out of v1 scope: the derive
     // validator reports it cleanly rather than failing in codegen.

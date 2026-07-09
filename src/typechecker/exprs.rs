@@ -1923,6 +1923,15 @@ impl<'a> super::TypeChecker<'a> {
             "Clone" => return self.type_supports_clone(ty),
             "Copy" => return self.is_type_copy(ty),
             "Debug" => return self.type_supports_debug(ty),
+            // `Default` is a derive-only builtin (no `trait Default`) — a
+            // `#[derive(Default)]` synthesizes a CONCRETE inherent `default`
+            // impl, not a trait-table entry, so the impl-table fallthrough
+            // below would reject every named type. `type_supports_default`
+            // recognizes primitives implicitly and named types via that
+            // synthesized `default` method — the analogue of the Clone/Debug
+            // arms above. Without this a `T: Default` bound (std.mem `take`,
+            // any user `fn f[T: Default]`) rejects every concrete arg.
+            "Default" => return self.type_supports_default(ty),
             // Built-in marker trait for primitive numeric types (SIMD lane
             // elements + `fn f[T: Numeric]`). See `type_supports_numeric`.
             "Numeric" => return self.type_supports_numeric(ty),

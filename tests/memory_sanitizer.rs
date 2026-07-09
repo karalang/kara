@@ -100,6 +100,15 @@ mod memory_sanitizer_tests {
             eprintln!("[{label}] parse errors: {:?}", parsed.errors);
             return None;
         }
+        // Mirror the real CLI pipeline (lib.rs / cli.rs) and the codegen
+        // harness (`tests/codegen.rs::run_program_capturing_inner`): desugar
+        // runs between parse and resolve. It synthesizes `#[derive(...)]`
+        // bodies (e.g. `#[derive(Default)]` → the inherent `Type.default`
+        // impl) and expands comptime — without it a derive-dependent program
+        // (std.mem `take[T: Default]`'s `T.default()` dispatch) miscompiles to
+        // the const-0 fallback and double-frees, an ASAN-harness-only artifact
+        // absent from shipped binaries.
+        karac::desugar_program(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -233,6 +242,15 @@ mod memory_sanitizer_tests {
             eprintln!("[{label}] parse errors: {:?}", parsed.errors);
             return None;
         }
+        // Mirror the real CLI pipeline (lib.rs / cli.rs) and the codegen
+        // harness (`tests/codegen.rs::run_program_capturing_inner`): desugar
+        // runs between parse and resolve. It synthesizes `#[derive(...)]`
+        // bodies (e.g. `#[derive(Default)]` → the inherent `Type.default`
+        // impl) and expands comptime — without it a derive-dependent program
+        // (std.mem `take[T: Default]`'s `T.default()` dispatch) miscompiles to
+        // the const-0 fallback and double-frees, an ASAN-harness-only artifact
+        // absent from shipped binaries.
+        karac::desugar_program(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -482,6 +500,51 @@ fn main() {
                 "bbb-1-padding-padding",
             ],
             "asan_std_mem_swap_replace_heap_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_std_mem_take_heap_no_leak_no_double_free() {
+        // roadmap Phase 8 § std.mem — `take[T: Default](dest: mut ref T) -> T`
+        // over a heap-owning type. `take` monomorphizes `replace(dest,
+        // T.default())`: the old heap buffer is moved OUT (returned, the
+        // caller's `old` binding owns and drops it exactly once) and a fresh
+        // `T.default()` (empty String buffer, later dropped when `dest` goes out
+        // of scope) is moved IN. The memory contract: no buffer leaks (LSan) and
+        // none is freed twice (ASan) — in particular the `T.default()`
+        // freshly-allocated empty String and the moved-out old value each drop
+        // once. Both the named-struct field String and the bare-String cases are
+        // looped so any per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+#[derive(Default)]
+struct S { x: i64, name: String }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let mut a = S { x: i, name: f"held-{i}-padding-padding" };
+        let old = take(mut a);
+        println(old.name);
+        println(f"[{a.name}]");
+        let mut s = f"bare-{i}-padding-padding";
+        let got = take(mut s);
+        println(got);
+        println(f"[{s}]");
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "held-0-padding-padding",
+                "[]",
+                "bare-0-padding-padding",
+                "[]",
+                "held-1-padding-padding",
+                "[]",
+                "bare-1-padding-padding",
+                "[]",
+            ],
+            "asan_std_mem_take_heap_no_leak_no_double_free",
         );
     }
 
@@ -7531,6 +7594,15 @@ fn main() {
             eprintln!("[{label}] parse errors: {:?}", parsed.errors);
             return None;
         }
+        // Mirror the real CLI pipeline (lib.rs / cli.rs) and the codegen
+        // harness (`tests/codegen.rs::run_program_capturing_inner`): desugar
+        // runs between parse and resolve. It synthesizes `#[derive(...)]`
+        // bodies (e.g. `#[derive(Default)]` → the inherent `Type.default`
+        // impl) and expands comptime — without it a derive-dependent program
+        // (std.mem `take[T: Default]`'s `T.default()` dispatch) miscompiles to
+        // the const-0 fallback and double-frees, an ASAN-harness-only artifact
+        // absent from shipped binaries.
+        karac::desugar_program(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -7657,6 +7729,15 @@ fn main() {
             eprintln!("[{label}] parse errors: {:?}", parsed.errors);
             return None;
         }
+        // Mirror the real CLI pipeline (lib.rs / cli.rs) and the codegen
+        // harness (`tests/codegen.rs::run_program_capturing_inner`): desugar
+        // runs between parse and resolve. It synthesizes `#[derive(...)]`
+        // bodies (e.g. `#[derive(Default)]` → the inherent `Type.default`
+        // impl) and expands comptime — without it a derive-dependent program
+        // (std.mem `take[T: Default]`'s `T.default()` dispatch) miscompiles to
+        // the const-0 fallback and double-frees, an ASAN-harness-only artifact
+        // absent from shipped binaries.
+        karac::desugar_program(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);

@@ -2088,6 +2088,49 @@ fn test_std_mem_swap_replace() {
 }
 
 #[test]
+fn test_std_mem_take() {
+    // roadmap Phase 8 § std.mem — `take[T: Default](dest: mut ref T) -> T`
+    // moves the value out of `*dest`, leaving `T.default()` behind, and returns
+    // it. A REAL Kāra body (`replace(dest, T.default())`), not a
+    // `#[compiler_builtin]` — it monomorphizes per concrete `T`, so it exercises
+    // both the `replace` intercept AND the derived/primitive `T.default()`.
+    // Primitive `T` — `take` leaves the zero value.
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut n = 7i64;\n\
+                 let prev = take(mut n);\n\
+                 println(f\"{prev} {n}\");\n\
+             }"),
+        "7 0\n"
+    );
+    // Named `#[derive(Default)]` type — `take` leaves the field-wise default
+    // (0 / empty String) and returns the original struct (heap String flows out
+    // intact).
+    assert_eq!(
+        run("#[derive(Default)]\n\
+             struct S { x: i64, name: String }\n\
+             fn main() {\n\
+                 let mut a = S { x: 42i64, name: \"hello\".to_string() };\n\
+                 let old = take(mut a);\n\
+                 println(f\"{old.x} {old.name}\");\n\
+                 println(f\"{a.x} [{a.name}]\");\n\
+             }"),
+        "42 hello\n0 []\n"
+    );
+    // `mut ref` param forwarding: `take(slot)` inside a fn taking
+    // `slot: mut ref String` writes the default through the borrow.
+    assert_eq!(
+        run("fn steal(slot: mut ref String) -> String { take(slot) }\n\
+             fn main() {\n\
+                 let mut s = \"owned\".to_string();\n\
+                 let got = steal(mut s);\n\
+                 println(f\"{got} [{s}]\");\n\
+             }"),
+        "owned []\n"
+    );
+}
+
+#[test]
 fn test_qualified_enum_variant_constructor_cross_boundary() {
     // A method returning a qualified-constructed `Result` whose value is
     // matched in the caller — the original repro for the interpreter panic.

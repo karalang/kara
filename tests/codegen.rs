@@ -7084,6 +7084,38 @@ fn main() {
         }
     }
 
+    /// roadmap Phase 8 § std.mem — `take[T: Default](dest: mut ref T) -> T`
+    /// under codegen. Unlike swap/replace, `take` is a REAL generic Kāra body
+    /// (`replace(dest, T.default())`) seeded into `generic_fns` from the baked
+    /// `std.mem` program, so this exercises the whole monomorphization path:
+    /// the mono resolves `T` → the concrete type, dispatches `T.default()` to
+    /// the derived `S.default` (or the primitive-default fallthrough for i64),
+    /// and composes the `replace` intercept. Output must match the interpreter
+    /// oracle (`test_std_mem_take`); heap memory safety is pinned by
+    /// `tests/memory_sanitizer.rs::asan_std_mem_take_*`.
+    #[test]
+    fn e2e_std_mem_take_codegen() {
+        if let Some(out) = run_program(
+            "#[derive(Default)]\n\
+             struct S { x: i64, name: String }\n\
+             fn steal(slot: mut ref String) -> String { take(slot) }\n\
+             fn main() {\n\
+                 let mut n = 7i64;\n\
+                 let prev = take(mut n);\n\
+                 println(f\"{prev} {n}\");\n\
+                 let mut a = S { x: 42i64, name: \"hello\".to_string() };\n\
+                 let old = take(mut a);\n\
+                 println(f\"{old.x} {old.name}\");\n\
+                 println(f\"{a.x} [{a.name}]\");\n\
+                 let mut s = \"owned\".to_string();\n\
+                 let got = steal(mut s);\n\
+                 println(f\"{got} [{s}]\");\n\
+             }",
+        ) {
+            assert_eq!(out, "7 0\n42 hello\n0 []\nowned []\n");
+        }
+    }
+
     /// `String.cmp` on NON-identifier receivers — a string LITERAL
     /// (`"abd".cmp("abc")`) and an INDEX into a `Vec[String]` (`v[0].cmp(v[1])`).
     /// Both typecheck and run, but B-13's first codegen guard keyed on

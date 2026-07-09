@@ -444,6 +444,22 @@ fn protobuf_stdlib_program() -> &'static Program {
     &PROTOBUF_LOWERED_PROGRAM
 }
 
+static MEM_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
+    lower_stdlib_source("mem", include_str!("../runtime/stdlib/mem.kara"))
+});
+
+/// The lowered `std.mem` program. `swap`/`replace` are `#[compiler_builtin]`
+/// (hand-rolled call-site intercepts in `call_dispatch.rs`, never compiled as
+/// bodies), so the ONLY thing this contributes to codegen is the real generic
+/// free fn `take[T: Default]` — seeded into `generic_fns` by the generic-fn
+/// seeding loop so a `take(&mut x)` call site monomorphizes its
+/// `replace(dest, T.default())` body per concrete `T`. Always present (like
+/// `ordering`); `take`'s mono is emitted only on demand, so an unused `std.mem`
+/// costs nothing in the output.
+fn mem_stdlib_program() -> &'static Program {
+    &MEM_LOWERED_PROGRAM
+}
+
 /// True when `user` references the `std.protobuf` runtime surface — i.e. it
 /// carries a `#[derive(Message)]` on some struct/enum. That derive is the sole
 /// entry point to protobuf: its expansion (already run by codegen time, per
@@ -484,7 +500,7 @@ fn program_uses_protobuf(user: &Program) -> bool {
 /// compile) MUST all call this with the same `user` program so a module is
 /// declared iff its bodies are compiled.
 fn compiled_stdlib_programs(user: &Program) -> Vec<&'static Program> {
-    let mut programs = vec![ordering_stdlib_program()];
+    let mut programs = vec![ordering_stdlib_program(), mem_stdlib_program()];
     if program_uses_protobuf(user) {
         programs.push(protobuf_stdlib_program());
     }

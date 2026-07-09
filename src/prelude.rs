@@ -1414,6 +1414,11 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // bodies never lower. Registered here so the bare identifiers resolve.
     "swap",
     "replace",
+    // `std.mem::take[T: Default](dest: mut ref T) -> T` — move-out-and-reset.
+    // Unlike `swap`/`replace` this is a REAL Kāra body (`replace(dest,
+    // T.default())`), not a `#[compiler_builtin]`; it monomorphizes per
+    // concrete `T`. Registered here so the bare identifier resolves.
+    "take",
     // `std.time::sleep_ms(ms: i64) with suspends` — native async sleep,
     // the leaf `suspends` timer primitive (auto-par divergence slice
     // A2a-2.2). See `runtime/stdlib/time.kara`. Codegen intercepts the

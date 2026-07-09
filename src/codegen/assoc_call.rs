@@ -323,6 +323,60 @@ impl<'ctx> super::Codegen<'ctx> {
         super::helpers::vec_inner_type_expr(ok_te).map(|elem| self.llvm_type_for_type_expr(&elem))
     }
 
+    /// The built-in `default()` value for a primitive or `String` type name,
+    /// or `None` for any other type (which dispatches to its own `Type.default`
+    /// function instead). Scalars are the properly-typed zero (`llvm_type_for_name`
+    /// picks the native width — `i32` for `char`, `i8` for `i8`, etc.); `String`
+    /// is the empty `{ptr, len, cap}` header built exactly like an empty string
+    /// literal (valid data ptr, `len = 0`, `cap = 0` so scope-exit drop's
+    /// `cap > 0` guard no-ops). Mirrors the interpreter's `primitive_default_value`
+    /// and the derived-Default field initializers in `desugar.rs`. B-2026-07-08-25.
+    fn primitive_default_value(&self, type_name: &str) -> Option<BasicValueEnum<'ctx>> {
+        match type_name {
+            "String" => {
+                // Empty String: valid ptr to a NUL global, len 0, cap 0.
+                // Matches the `ExprKind::StringLit("")` lowering so println /
+                // drop treat it exactly like `"".to_string()`.
+                let data_ptr = self.build_str_bytes_global(&[], "str.default");
+                let str_ty = self.vec_struct_type();
+                let i64_t = self.context.i64_type();
+                let zero = i64_t.const_int(0, false);
+                let mut agg = str_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, data_ptr, 0, "str.default.data")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, zero, 1, "str.default.len")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, zero, 2, "str.default.cap")
+                    .unwrap()
+                    .into_struct_value();
+                Some(agg.into())
+            }
+            "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
+                match self.llvm_type_for_name(type_name) {
+                    BasicTypeEnum::IntType(t) => Some(t.const_zero().into()),
+                    _ => None,
+                }
+            }
+            "f32" | "f64" => match self.llvm_type_for_name(type_name) {
+                BasicTypeEnum::FloatType(t) => Some(t.const_zero().into()),
+                _ => None,
+            },
+            "bool" | "char" => match self.llvm_type_for_name(type_name) {
+                BasicTypeEnum::IntType(t) => Some(t.const_zero().into()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub(super) fn compile_assoc_call(
         &mut self,
         type_name: &str,
@@ -330,6 +384,20 @@ impl<'ctx> super::Codegen<'ctx> {
         _args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let args = _args;
+        // B-2026-07-08-25 — inside a monomorph body, a leading GENERIC type
+        // param (`T.default()`, `T.new()`, `T.from(x)`) must dispatch at the
+        // CONCRETE instantiation. Resolve `type_name` through the mono's
+        // name-level substitution (`type_subst_names`, set by
+        // `compile_generic_call`) so every `Type.method` lookup below —
+        // including the user-impl `module.get_function("Type.method")` — keys
+        // on the real type (`S.default`), not the erased param name (`T`),
+        // which matches nothing and falls through to the silent `const 0`
+        // default (miscompiling a generic `T.default()` to a 0-return, e.g.
+        // std.mem `take[T: Default]`). No-op outside a mono / for concrete
+        // types (not in `type_subst_names`); a param bound to a primitive with
+        // no `<prim>.default` still falls through as before (no regression).
+        let resolved_type_name = self.type_subst_names.get(type_name).cloned();
+        let type_name = resolved_type_name.as_deref().unwrap_or(type_name);
         // Fallible-allocation constructor companions (phase-8-stdlib-floor
         // item 2) are interpreter-only in v1 — their codegen lowering (runtime
         // allocator wrappers) is item 8 (Phase 7). Reject at `karac build` with
@@ -1977,6 +2045,23 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 Ok(self.unpack_niche_abi_ret(&qualified, basic_val.unwrap_basic()))
             };
+        }
+
+        // `<Prim>.default()` / `String.default()` — the built-in zero value for
+        // a primitive or String `T` bound in a monomorph (std.mem
+        // `take[T: Default]`, any `fn f[T: Default]`). Named user types with a
+        // derived/hand-written `default` dispatch through the
+        // `module.get_function(qualified)` block above; primitives have no such
+        // function, so without this they fall through to the i64-zero default
+        // at the tail of this method — correct for i64 but a MISCOMPILE for
+        // String (an `i64 0` store zeros only the first 8 of the 24-byte
+        // `{ptr,len,cap}` header, leaving a dangling `{null, old_len, old_cap}`
+        // that reads freed/garbage bytes), and wrong-width for `f32`/`f64` /
+        // `bool` / `char`. Produce the properly-typed zero. B-2026-07-08-25.
+        if method == "default" && args.is_empty() {
+            if let Some(v) = self.primitive_default_value(type_name) {
+                return Ok(v);
+            }
         }
 
         // `Vec.with_capacity(n: i64) -> Vec[T]` — empty Vec (len=0)
