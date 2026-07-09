@@ -30863,14 +30863,13 @@ fn test_suffixed_int_literal_rejected_at_narrowing_boundary() {
 }
 
 #[test]
-fn test_suffixed_int_literal_in_range_coercion_still_admitted() {
-    // Scope boundary of the B-2026-07-09-7 fix: it fires ONLY when the value
-    // does not fit. An in-range suffixed literal coerced across signedness
-    // (`5i64` into `u64`, `200i64` into `u8`) is left untouched — the broader
-    // "should in-range implicit widening require `as`" question is a separate
-    // design decision. Variable-to-variable coercion (e.g. `u64 = v.len()`,
-    // where `len()` returns i64) is likewise untouched — the fix is
-    // literal-only, so the load-bearing corpus idiom keeps compiling.
+fn test_in_range_int_literal_coercion_still_admitted() {
+    // Literals stay lenient: the widening rule (design decision (B), below)
+    // deliberately skips integer literals, which are value-checked against the
+    // contextual type instead. So an in-range suffixed literal coerced across
+    // signedness (`5i64` into `u64`, `200i64` into `u8`) keeps typechecking —
+    // only its VALUE must fit, not its suffix. (Out-of-range literals are
+    // rejected by test_suffixed_int_literal_rejected_at_narrowing_boundary.)
     typecheck_ok(
         "fn main() {\n\
              let a: u64 = 5i64;\n\
@@ -30879,9 +30878,76 @@ fn test_suffixed_int_literal_in_range_coercion_still_admitted() {
              println((a as i64) + (b as i64) + (c as i64));\n\
          }",
     );
+}
+
+// ── B-2026-07-09-7 VARIABLE half (design decision (B)): a non-literal integer
+// value at a coercion boundary must WIDEN; narrowing / sign-changing coercions
+// demand an explicit `as` ──
+//
+// The literal half (above) closed the statically-known holes. The variable
+// half closes the runtime-only ones: `let s: u32 = big_i64` where `big_i64`
+// holds 5e9 was silently truncated with no compile-time signal, because the
+// value is unknown until runtime. Rather than a runtime check, decision (B)
+// makes the narrowing itself illegal without `as` — widening stays implicit,
+// everything else is a type error naming the required cast.
+
+#[test]
+fn test_variable_narrowing_or_signchange_coercion_requires_as() {
+    for src in [
+        // signed -> unsigned (sign change), same width — the len()-into-u64 idiom
+        "fn total(v: Vec[i64]) -> u64 { let n: u64 = v.len(); n }\n\
+         fn main() { println(total(Vec.new()) as i64); }",
+        // wider signed -> narrower signed
+        "fn f(x: i64) -> i8 { let y: i8 = x; y }\n\
+         fn main() { println(f(3) as i64); }",
+        // wider unsigned -> narrower unsigned
+        "fn f(x: u64) -> u32 { let y: u32 = x; y }\n\
+         fn main() { println(f(3u64) as i64); }",
+        // signed -> unsigned in fn-arg position
+        "fn g(x: u32) -> i64 { return 0; }\n\
+         fn main() { let a: i32 = 7; println(g(a)); }",
+        // signed -> unsigned in return position
+        "fn h(a: i64) -> u64 { a }\n\
+         fn main() { println(h(9) as i64); }",
+        // unsigned -> signed of EQUAL width still steals the sign bit (u64 -> i64)
+        "fn k(x: u64) -> i64 { x }\n\
+         fn main() { println(k(1u64)); }",
+        // arithmetic result (non-literal) narrowed
+        "fn main() { let a: i64 = 5; let b: i64 = 6; let c: u32 = a + b; println(c as i64); }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("would narrow or change sign")),
+            "expected an implicit-narrowing error for {:?}; got {:?}",
+            src,
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_variable_widening_coercion_still_implicit() {
+    // The other side of decision (B): value-preserving widening needs no `as`.
+    // signed->signed and unsigned->unsigned widen when the target is at least
+    // as wide; unsigned->signed widens only when STRICTLY wider (u8 -> i16 fits,
+    // the sign bit has room). Same-type coercion is trivially fine.
+    typecheck_ok(
+        "fn wid(a: i32, b: u8, c: u16, d: u32) -> i64 {\n\
+             let w1: i64 = a;\n\
+             let w2: u32 = b;\n\
+             let w3: i32 = c;\n\
+             let w4: u64 = d;\n\
+             w1 + (w2 as i64) + (w3 as i64) + (w4 as i64)\n\
+         }\n\
+         fn main() { println(wid(1, 2, 3, 4)); }",
+    );
+    // The narrowing cases above all become legal once an explicit `as` is
+    // written — the rule asks only for the acknowledgement, not a redesign.
     typecheck_ok(
         "fn total(v: Vec[i64]) -> u64 {\n\
-             let n: u64 = v.len();\n\
+             let n: u64 = v.len() as u64;\n\
              n\n\
          }\n\
          fn main() { println(total(Vec.new()) as i64); }",

@@ -781,6 +781,53 @@ pub(super) fn integer_width_bits(ty: &Type) -> Option<u32> {
     }
 }
 
+/// Width (in bits) and signedness of an integer scalar type, covering the
+/// full 8/16/32/64/128 range plus `usize` (modeled at 64, matching the
+/// codegen target). `None` for anything that is not a concrete integer.
+/// Used by the B-2026-07-09-7 implicit-widening gate — unlike
+/// `integer_width_bits` it does not drop `i128`/`u128` and it reports the
+/// sign, both of which the widening predicate needs.
+pub(super) fn int_signed_width(ty: &Type) -> Option<(u32, bool)> {
+    match ty {
+        Type::Int(IntSize::I8) => Some((8, true)),
+        Type::Int(IntSize::I16) => Some((16, true)),
+        Type::Int(IntSize::I32) => Some((32, true)),
+        Type::Int(IntSize::I64) => Some((64, true)),
+        Type::Int(IntSize::I128) => Some((128, true)),
+        Type::UInt(UIntSize::U8) => Some((8, false)),
+        Type::UInt(UIntSize::U16) => Some((16, false)),
+        Type::UInt(UIntSize::U32) => Some((32, false)),
+        Type::UInt(UIntSize::U64) => Some((64, false)),
+        Type::UInt(UIntSize::U128) => Some((128, false)),
+        Type::UInt(UIntSize::Usize) => Some((64, false)),
+        _ => None,
+    }
+}
+
+/// Is coercing a value of integer type `from` into integer slot `to`
+/// value-preserving for EVERY representable value (i.e. implicit-widening,
+/// no `as` required)? The B-2026-07-09-7 rule (design decision (B)):
+///   - signed→signed / unsigned→unsigned: widen iff `to` is at least as wide;
+///   - unsigned→signed: widen iff `to` is strictly wider (`u8`→`i16` fits,
+///     `u8`→`i8` does not — the sign bit steals a value);
+///   - signed→unsigned: NEVER implicit (negative values change meaning).
+///
+/// Equal types are trivially fine. Non-integer types return `false` here;
+/// callers gate on both sides being integers first.
+pub(super) fn int_coercion_is_widening(from: &Type, to: &Type) -> bool {
+    if from == to {
+        return true;
+    }
+    let (Some((fw, fs)), Some((tw, ts))) = (int_signed_width(from), int_signed_width(to)) else {
+        return false;
+    };
+    match (fs, ts) {
+        (true, true) | (false, false) => tw >= fw,
+        (false, true) => tw > fw,
+        (true, false) => false,
+    }
+}
+
 /// Map a typechecked receiver type to the receiver-name segment used in the
 /// `Type.method` keys of `EffectCheckResult.{inferred,declared}_effects`
 /// (and therefore in `Program.callee_effectful`). Returns `None` for

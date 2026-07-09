@@ -23,9 +23,9 @@ use super::inference::{
     InstantiatedSignature,
 };
 use super::types::{
-    contains_type_param, impl_args_match, impl_table_key, is_integer, lub_block_type, type_display,
-    type_is_fully_concrete, type_to_concrete_or_param_name, ConstArg, DimArg, IntSize,
-    ScrutineeMode, SubstValue, Type, UIntSize,
+    contains_type_param, impl_args_match, impl_table_key, int_coercion_is_widening, is_integer,
+    lub_block_type, type_display, type_is_fully_concrete, type_to_concrete_or_param_name, ConstArg,
+    DimArg, IntSize, ScrutineeMode, SubstValue, Type, UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -627,6 +627,16 @@ impl<'a> super::TypeChecker<'a> {
                 return narrowed;
             }
         }
+        // B-2026-07-09-7 (design decision (B)): a NON-literal integer value
+        // flowing into a differently-typed integer slot must widen — a
+        // narrowing or sign-changing coercion (`let x: u32 = some_i64`,
+        // `let x: u8 = wide_val`, signed→unsigned) requires an explicit `as`.
+        // The static permissiveness that let these through is deliberate for
+        // *literals* (value-checked above, so `let a: u64 = 5i64` stays fine)
+        // but unsound for variables, whose value is unknown at compile time.
+        // This is the variable half of B-2026-07-09-7; the literal half is
+        // the two `*_int_literal_value` blocks at the top of check_expr.
+        self.check_int_widening_coercion(expr, expected, &actual);
         self.check_assignable(expected, &actual, expr.span.clone());
         // B-2026-07-02-6: a collection literal admitted against a
         // differently-widthed scalar element context (`total([10, 20, 30])`
@@ -2223,6 +2233,62 @@ impl<'a> super::TypeChecker<'a> {
             },
             _ => None,
         }
+    }
+
+    /// B-2026-07-09-7 variable half (design decision (B)): reject an implicit
+    /// NARROWING or SIGN-CHANGING integer coercion at a check-mode boundary
+    /// (`let`/arg/return/struct-field — every position funnels through
+    /// `check_expr`). Only widening coercions (`i32`→`i64`, `u8`→`u32`,
+    /// `u8`→`i16`) stay implicit; anything else demands an explicit `as`.
+    ///
+    /// Deliberately skipped:
+    ///   - integer *literals* (bare or suffixed) — already range-checked against
+    ///     the contextual type at the top of `check_expr`, and literal coercion
+    ///     when the value fits is intentionally allowed (`let a: u64 = 5i64`);
+    ///   - non-integer or non-concrete types (floats, generics, type vars,
+    ///     `Error`) — the gate needs a concrete signed/unsigned width on both
+    ///     sides, so those fall through untouched.
+    fn check_int_widening_coercion(&mut self, expr: &Expr, expected: &Type, actual: &Type) {
+        if *actual == Type::Error {
+            return;
+        }
+        // A literal was already validated by the two `*_int_literal_value`
+        // blocks; re-flagging it here would be a spurious "needs `as`" on a
+        // value that provably fits.
+        if Self::unsuffixed_int_literal_value(expr).is_some()
+            || Self::suffixed_int_literal_value(expr).is_some()
+        {
+            return;
+        }
+        let peel = |t: &Type| -> Type {
+            match t {
+                Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                other => other.clone(),
+            }
+        };
+        let target = peel(expected);
+        let source = peel(actual);
+        // Both sides must be concrete integers and genuinely differ; a
+        // widening coercion needs no `as`.
+        if !is_integer(&target) || !is_integer(&source) || target == source {
+            return;
+        }
+        if int_coercion_is_widening(&source, &target) {
+            return;
+        }
+        self.type_error(
+            format!(
+                "implicit coercion from '{}' to '{}' would narrow or change sign; \
+                 an out-of-range value is not caught at compile time. Write an \
+                 explicit 'as {}' to acknowledge the truncation (widening \
+                 coercions such as i32 -> i64 remain implicit)",
+                type_display(&source),
+                type_display(&target),
+                type_display(&target),
+            ),
+            expr.span.clone(),
+            TypeErrorKind::TypeMismatch,
+        );
     }
 
     fn infer_expr_inner(&mut self, expr: &Expr) -> Type {

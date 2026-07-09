@@ -17,7 +17,7 @@ enum VisitState {
 fn can_finish(num_courses: u64, prerequisites: ref Vec[(u64, u64)]) -> bool {
     // Build adjacency list: prereq → courses that require it
     let mut graph: Map[u64, Vec[u64]] = Map.new();
-    for i in 0..num_courses {
+    for i in 0u64..num_courses {
         graph.insert(i, Vec.new());
     }
     for (course, prereq) in prerequisites.iter() {
@@ -25,11 +25,11 @@ fn can_finish(num_courses: u64, prerequisites: ref Vec[(u64, u64)]) -> bool {
     }
 
     let mut state: Map[u64, VisitState] = Map.new();
-    for i in 0..num_courses {
+    for i in 0u64..num_courses {
         state.insert(i, VisitState.Unvisited);
     }
 
-    for i in 0..num_courses {
+    for i in 0u64..num_courses {
         match state.get(i) {
             Some(VisitState.Unvisited) => {
                 if has_cycle(i, graph, mut state) {
