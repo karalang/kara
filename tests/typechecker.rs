@@ -16678,6 +16678,106 @@ fn test_match_owned_array_slice_rest_is_owned_array() {
     );
 }
 
+// ── Match Ergonomics: ref-scrutinee CONSUME rejection (negative) ─────
+//
+// These pin the borrow propagation as *load-bearing*. The positive
+// `typecheck_ok` cases above cannot: passing an owned `String` to a
+// `ref String` parameter is legal (an owned value borrows freely), so
+// `use_str(name)` typechecks whether `name` is `ref String` OR plain
+// `String`. Only a binding that is CONSUMED — passed where an OWNED
+// value is required — distinguishes the two. If `wrap_binding_ty` ever
+// stopped firing, every case below would silently start compiling, so
+// each is the true regression guard for its propagation path. The error
+// surfaces as `expected 'T', found 'ref T'` at the consume site — this
+// is the design's "cannot move out of a borrow" rule (design.md § Match
+// Arm Binding Modes), enforced through the binding's borrow type rather
+// than a bespoke diagnostic.
+
+#[test]
+fn test_match_ref_scrutinee_binding_cannot_be_consumed() {
+    // Leaf `Binding` arm: `name: ref String` under `ref Foo` cannot
+    // satisfy an owned `String` parameter.
+    let errs = typecheck_errors(
+        "struct Foo { name: String }
+         fn use_owned(s: String) -> i64 { 0 }
+         fn g(val: ref Foo) -> i64 {
+             match val { Foo { name } => use_owned(name) }
+         }
+         fn main() { }",
+    );
+    assert!(
+        errs.iter().any(|e| {
+            let m = e.to_string();
+            m.contains("ref String") && m.contains("String")
+        }),
+        "expected a `ref String` vs `String` consume rejection, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_match_mut_ref_scrutinee_binding_cannot_be_consumed() {
+    // `MutRef` branch of `wrap_binding_ty`: `name: mut ref String` under
+    // `mut ref Foo` likewise cannot be moved into an owned parameter.
+    let errs = typecheck_errors(
+        "struct Foo { name: String }
+         fn use_owned(s: String) -> i64 { 0 }
+         fn g(val: mut ref Foo) -> i64 {
+             match val { Foo { name } => use_owned(name) }
+         }
+         fn main() { }",
+    );
+    assert!(
+        errs.iter().any(|e| e.to_string().contains("ref String")),
+        "expected a `mut ref String` consume rejection, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_match_ref_nested_binding_cannot_be_consumed() {
+    // Recursion through `TupleVariant` + `Struct`: the transitively
+    // propagated `name: ref String` (nested `Some(Person { name })`
+    // under `ref Option[Person]`) cannot be consumed.
+    let errs = typecheck_errors(
+        "struct Person { name: String }
+         fn use_owned(s: String) -> i64 { 0 }
+         fn g(val: ref Option[Person]) -> i64 {
+             match val {
+                 Option.Some(Person { name }) => use_owned(name),
+                 Option.None => 0,
+             }
+         }
+         fn main() { }",
+    );
+    assert!(
+        errs.iter().any(|e| e.to_string().contains("ref String")),
+        "expected a transitive `ref String` consume rejection, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_match_ref_or_pattern_binding_cannot_be_consumed() {
+    // `Or` arm threads the mode to every alternative: `x` is `ref String`
+    // in both `A(x)` and `B(x)` under `ref E`, so consuming it is rejected.
+    let errs = typecheck_errors(
+        "enum E { A(String), B(String) }
+         fn use_owned(s: String) -> i64 { 0 }
+         fn g(e: ref E) -> i64 {
+             match e {
+                 E.A(x) | E.B(x) => use_owned(x),
+             }
+         }
+         fn main() { }",
+    );
+    assert!(
+        errs.iter().any(|e| e.to_string().contains("ref String")),
+        "expected an or-pattern `ref String` consume rejection, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
 // ── Vec.get_unchecked — unsafe direct-index read ─────────────────
 //
 // Counterpart to the bounds-check elision tax measured on kata #5
