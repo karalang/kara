@@ -40,6 +40,54 @@ println(names[0]);          // "Alice"
 println(names.len());       // 3
 ```
 
+### Capacity — when you know the size, reserve it
+
+A `Vec.new()` starts empty and **grows by reallocation** as you push: capacity
+goes `0 → 1 → 2 → 4 → 8 → …`, and each doubling copies every element it already
+holds to a fresh, larger buffer. On allocation-bound code that builds a
+bounded-size `Vec`, that grow chain is the dominant cost.
+
+When you already know how many elements you'll add, reserve the space up front
+with `Vec.with_capacity(n)`. It allocates once; the first `n` pushes land in the
+reserved slots without a single reallocation:
+
+```kara
+let mut out = Vec.with_capacity(n + 1);   // one allocation, no grow chain
+let mut i = 0;
+while i < n {
+    out.push(compute(i));
+    i = i + 1;
+}
+```
+
+`with_capacity` is only a *hint* — the `Vec` still grows if you exceed `n`, so an
+imperfect estimate can never change your program's output, only its memory use.
+Reach for it whenever you're **building a bounded-size collection in a hand-written
+loop** and the bound is known before the loop starts.
+
+The payoff is real: building a bounded `Vec` with `Vec.new()` + a `push` loop, then
+switching that same loop to `Vec.with_capacity(n)`, roughly **halved** the build
+time on an allocation-bound benchmark — the whole difference was the
+grow-from-empty tax, not the work itself.
+
+**You often don't have to write it, though.** Two things already handle the common
+cases for you:
+
+- A **simple counted push loop** — `while i < n { v.push(..) }` with a known bound
+  and an unconditional push — is pre-sized automatically; the compiler reserves the
+  trip count for you, so the hand-written form above is only needed when the count
+  isn't a clean loop bound.
+- The **`collect` idiom** doesn't need it either. `src.iter().map(..).collect()` and
+  `src.iter().filter(..).collect()` build their result with a tight grow loop that
+  has no per-element bounds check, so they already run within a hair of a
+  hand-tuned `with_capacity` — reaching for a manual reservation there buys nothing
+  (and can even cost you, since a fixed up-front allocation interacts worse with the
+  cache when the source elements are large).
+
+So the rule of thumb is narrow: **use `Vec.with_capacity` for a hand-written loop
+whose element count you know but that isn't a plain counted `push`.** For counted
+loops and for `collect`, write the natural code — it's already fast.
+
 ## Arrays
 
 Fixed-size, stack-allocated. Size is part of the type — `Array[i64, 4]` and `Array[i64, 5]` are different types.

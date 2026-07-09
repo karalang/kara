@@ -7051,6 +7051,42 @@ fn main() {
     }
 
     #[test]
+    fn e2e_collect_accumulator_is_not_presized_codegen() {
+        // Spike collection-capacity-presizing (S2/S3), decision recorded
+        // 2026-07-09: the iterator-adaptor `.collect()` accumulator is a plain
+        // `Vec.new()` and is DELIBERATELY NOT rewritten to
+        // `Vec.with_capacity(<src>.len())`. Pre-sizing it was prototyped and
+        // measured net-harmful under glibc — a modest ~1.16× on POD-element
+        // sources but a 20–30% REGRESSION on heap-element sources (a fresh
+        // full-size malloc per iteration on cold pages vs. the grow path reusing
+        // the previous iteration's hot buffer; `Vec[String].filter().collect()`
+        // measured 0.72×). The desugared grow loop is already within ~15% of
+        // hand-tuned `with_capacity` because glibc reallocs in place and the
+        // loop carries no per-element bounds check. This test locks that decision
+        // in: re-introducing an unconditional accumulator pre-size would flip
+        // `with_cap` into the emitted IR and must be re-measured against the heap
+        // regression first (see the spike doc). `Vec.with_capacity` itself stays
+        // the documented manual idiom for hand-written counted push loops, where
+        // it IS a reliable ~2× win.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let s: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64, 5i64];
+    let doubled: Vec[i64] = s.iter().map(|n| n * 2i64).collect();
+    let big: Vec[i64] = s.iter().filter(|x| x > 2i64).collect();
+    println(f"{doubled[4]} {big.len()}");
+}
+"#,
+        );
+        assert!(
+            !ir.contains("with_cap"),
+            "the collect accumulator must stay Vec.new() (not pre-sized) — \
+             pre-sizing it regresses heap-element sources; see the \
+             collection-capacity-presizing spike"
+        );
+    }
+
+    #[test]
     fn e2e_iter_adaptor_collect_stateful_passthrough_codegen() {
         // B-2026-07-03-29: `<iter>....collect()` under `karac build` rejected
         // every adaptor beyond the `map`/`filter` subset landed in

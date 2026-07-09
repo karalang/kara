@@ -1,7 +1,60 @@
 # Spike: automatic collection capacity pre-sizing
 
-**Status:** ⬜ **SCOPED 2026-07-03 — not started. Narrow-A targets PROBED 2026-07-03; the
-highest-value one is blocked on a correctness bug, not a perf gap.** Decision framing: the
+**Status:** ✅ **RESOLVED 2026-07-09. Correctness half shipped (S2/S3 `.collect()` now
+compiles, by the B-2026-07-03-25 family). Perf half MEASURED AND DECLINED: pre-sizing the
+`collect` accumulator was prototyped end-to-end and is net-harmful under glibc — it does NOT
+ship. Slice B (document `Vec.with_capacity`) shipped. See "Empirical result (2026-07-09)"
+below.** The take-away is a vindication of the spike's own caution: even the "defensible
+narrow-A" pre-size fails the predictability bar for the `collect` idiom, because the existing
+grow-lowering is already near-optimal and forcing `with_capacity` regresses heap-element
+sources.
+
+**Empirical result (2026-07-09) — the perf half, prototyped then reverted.**
+The `collect` accumulator pre-size (`Vec.new()` → `Vec.with_capacity(<src>.len())` at the
+lowering site in `method_call.rs::try_compile_iter_adaptor_collect_to_vec`) was implemented,
+verified correct (codegen E2E 2104/2104, memory_sanitizer 562/562 LSan-clean — the `cap > len`
+drop is sound), and benchmarked before/after with two release compilers built from the same
+tree. It does not pay off and is reverted. Measurements (min-of-N, interleaved, glibc/Linux):
+
+| source → accumulator | shape | speedup (after ÷ before) |
+|---|---|---|
+| POD → POD | `Vec[i64].iter().map(...).collect()`, n=2048 | **1.16× (win)** |
+| POD → POD, fragmented heap | same, with 2048 live `String`s present | 1.17× (win) |
+| heap → POD | `Vec[String].iter().map(\|s\| s.len()).collect()`, n=2048 | 0.81× (**regress**) |
+| heap → heap | `Vec[String].iter().filter(...).collect()`, n=2048 | 0.72× (**regress**) |
+
+Two findings drive the decision:
+
+1. **The collect grow-lowering is ALREADY near-optimal.** The desugared loop grows via
+   `realloc` with no per-element bounds check, and glibc grows the buffer in place (reusing the
+   previous iteration's just-freed buffer), so a `Vec[i64]` collect from `cap 0` measured
+   **41 ms** vs. a hand-tuned `Vec.with_capacity` at **36 ms** — only ~15% apart. The
+   spike's motivating **3.3×** was a `with_capacity`-vs-`Vec.new()` gap on a *hand-written,
+   bounds-checked* indexed `push` loop (2.03× reproduced here: 35.7 ms vs 72.4 ms); the collect
+   idiom already sidesteps most of that tax via the iterator (no bounds checks) + realloc.
+
+2. **Pre-sizing REGRESSES heap-element sources 20–30%.** A fresh full-size `malloc` every
+   iteration lands on cold pages, and iterating a heap source streams its larger `{ptr,len,cap}`
+   element headers through cache, inflating the working set; the grow path instead reuses a hot
+   buffer. The regression tracks the *source* element type (a POD collect with a deliberately
+   fragmented heap still wins — so it is not general heap fragmentation, it is the cost of
+   iterating heap elements alongside a cold up-front allocation). The very common
+   `Vec[String].filter().collect()` lands at **0.72×**.
+
+A source-type gate (pre-size scalar sources only) would recover the ~1.16× POD win while
+dodging the regression, but its firing rule — "pre-sizes for small-scalar-element sources, not
+heap-element sources, because of cache working-set effects" — is opaque, allocator- and
+hardware-dependent, and platform-variable (glibc realloc-in-place is unusually good; the
+picture may differ on macOS/musl/jemalloc). That is precisely the *unpredictable firing* the
+spike disqualifies below, and the reverted `Vec.new()`-vs-net-harm trade mirrors the
+B-2026-07-08-7 fill-peephole revert ("net-harms the corpus"). So the accumulator stays
+`Vec.new()`; the decision is locked by `e2e_collect_accumulator_is_not_presized_codegen`
+(asserts no `with_cap` in the collect IR). Where pre-sizing genuinely pays — hand-written
+counted `push` loops — it is already delivered by the `src/presize.rs` loop pass (which
+rewrites `Vec.new()` + counted unconditional `push` → `with_capacity`) and by the manual
+`Vec.with_capacity` idiom now documented in `ch09-collections.md` (Slice B).
+
+**Original framing (2026-07-03), retained for context.** Decision framing: the
 *narrow* version (size-hinted bulk construction — `collect`/map-to-`Vec`/comprehension/
 `from_iter` pre-sizes from a known source length) is the defensible long-term fix; the
 *general* version (static push-count inference over arbitrary loops) is **out of scope** —
@@ -143,32 +196,33 @@ narrow-A work would turn the common (bulk-construction) case into a genuine Kār
 edge, since rustc does not auto-presize a `for`-push loop either; but for #57's specific
 manual-loop shape, the win stays a documented idiom, not a compiler guarantee.
 
-## Proposed slices (if greenlit)
+## Proposed slices — final disposition (2026-07-09)
 
 1. **S1 — one reservation helper + `Vec.from_slice`/`from_iter(known_len)`.** ✅ **Already
    done for `from_slice`** (probed 2026-07-03: 16.7 ms/1M, single alloc + bulk copy — no win
-   left). Keep only as the plumbing reference if `from_iter(known_len)` turns out not to
-   pre-size; otherwise skip.
-2. **S2 — `.map(..).collect()`: FIRST make it compile, THEN pre-size.** ⚠️ **Reprioritized —
-   correctness before perf.** This idiom does not codegen at all today
-   ([`B-2026-07-03-25`](../bug-ledger.md)): interp runs it, `karac build` errors
-   `no handler for method 'collect' on non-identifier receiver`. So the slice is (a) add the
-   codegen dispatcher arm that materializes a lazy adaptor chain into a `Vec`, then (b)
-   reserve the source length while materializing (the size hint rides on the new lowering for
-   free). Highest value — it closes a run/build divergence on a book-documented idiom, with
-   pre-sizing as a bonus. There is no before/after *number* here, because it errors today;
-   the deliverable is a fixed divergence + a new benchmark for the idiom.
-3. **S3 — `.filter(..).collect()` + comprehensions.** Upper-bound reserve + one shrink-to-fit;
-   confirm no adversarial blowup (a `filter` that drops everything must not hold a giant
-   buffer — the shrink covers it). Likely shares the S2 dispatcher gap — verify each
-   adaptor's collect lowering exists before assuming a pre-size is all that's needed.
-4. **B (do regardless, independent of S1–S3)** — document `Vec.with_capacity` +
-   the "reserve when the bound is known" idiom in `ch09-collections.md`, with the kata-#57
-   number as the motivating example.
+   left). No further work.
+2. **S2 — `.map(..).collect()`: FIRST make it compile, THEN pre-size.** ✅ **Correctness
+   SHIPPED / ⛔ pre-size DECLINED.** The compile half is done: the whole `collect` surface now
+   lowers under `karac build` at run==build parity (the [`B-2026-07-03-25`](../bug-ledger.md)
+   → `B-2026-07-04-2` family, fix `9230632` and predecessors — map/filter/named-fn/
+   destructuring/identity/range/into_iter and every multi-source adaptor). The pre-size half
+   was prototyped and **declined** — see "Empirical result (2026-07-09)": the grow-lowering is
+   already near-optimal and pre-sizing regresses heap sources. The fixed divergence is the
+   deliverable; the pre-size "bonus" did not materialize.
+3. **S3 — `.filter(..).collect()` + comprehensions.** ✅ **compiles** (same family as S2) /
+   ⛔ **pre-size DECLINED** — the heap→heap `filter().collect()` is the *worst* pre-size
+   regression (0.72×), so the shrink-to-fit idea is moot: there is no reservation to shrink.
+4. **B — document `Vec.with_capacity` + the "reserve when the bound is known" idiom.**
+   ✅ **SHIPPED** in `ch09-collections.md` ("Capacity — when you know the size, reserve it").
+   The framing matches the measured reality: `with_capacity` is the manual ~2× win for
+   *hand-written* counted loops; the `presize.rs` pass auto-applies it to simple counted
+   pushes; and the `collect` idiom is already fast without it.
 
-Explicitly **out of scope:** general static push-count inference over arbitrary user loops.
-Revisit only if profiling shows manual-`push` loops (not bulk construction) dominate real
-Kāra allocation cost — which the corpus does not currently show.
+Explicitly **out of scope (unchanged):** general static push-count inference over arbitrary
+user loops. The tightly-gated slice of it that IS safe — a counted, unconditional single-push
+loop with a provable bound — is already implemented in `src/presize.rs` (source-AST pass, wired
+at `lowering.rs`), so the residual the spike assigned to path B is in practice auto-handled for
+that shape; `Vec.with_capacity` remains the documented opt-in for the loops it can't prove.
 
 ## Cross-references
 

@@ -4907,6 +4907,27 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
 
+        // The accumulator is a plain `Vec.new()` — deliberately NOT pre-sized to
+        // `Vec.with_capacity(<src>.len())`. Pre-sizing it was prototyped and
+        // measured net-harmful for the collect idiom under glibc (spike
+        // collection-capacity-presizing, "Empirical result", 2026-07-09): the
+        // desugared loop below already grows via `realloc` with no per-element
+        // bounds check, and glibc grows the buffer in place, so the collect is
+        // ALREADY within ~15% of hand-tuned `with_capacity` even from `cap 0`
+        // (measured 41 ms vs 36 ms on a 2048-elem `Vec[i64]` build). Forcing
+        // `with_capacity` bought a modest ~1.16× on POD-element sources but
+        // REGRESSED heap-element sources 20–30% — a fresh full-size malloc every
+        // iteration lands on cold pages while iterating the larger heap source
+        // (its `{ptr,len,cap}` headers) inflates the working set, whereas the
+        // grow path reuses the previous iteration's hot buffer. The common
+        // `Vec[String].filter().collect()` measured 0.72×. A source-type gate
+        // (pre-size scalars only) would recover the POD win but yields an opaque,
+        // allocator- and hardware-dependent two-tier performance model — exactly
+        // the "unpredictable firing" the spike disqualifies. The manual
+        // `Vec.with_capacity` idiom (a reliable ~2× on hand-written counted push
+        // loops) and the existing `presize.rs` loop pass cover the cases where
+        // pre-sizing genuinely pays; the collect accumulator is not one of them.
+        //
         // `let mut __icv_N: Vec[U] = Vec.new();`
         let vec_new = Expr {
             kind: ExprKind::Call {
