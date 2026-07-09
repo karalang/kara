@@ -4901,6 +4901,99 @@ fn main() {
         }
     }
 
+    /// `#[track_caller]` codegen (phase-5 slices 4+5): a panic inside a
+    /// `#[track_caller]` fn reports the CALLER's source location, while the
+    /// `in <fn>` frame name still identifies the emitting function. Pins the
+    /// baseline (a non-`#[track_caller]` fn reports its OWN location) and
+    /// transitivity (a `#[track_caller]` fn calling another forwards the
+    /// received location). The `\`-continued strings strip leading whitespace,
+    /// so each Kāra statement sits at column 1 and only the line number varies.
+    #[test]
+    fn e2e_track_caller_redirects_panic_location() {
+        // boom() panics on line 3; main calls it on line 6. The attribute makes
+        // the reported location the caller's line 6, not the callee's line 3.
+        let with_attr = "#[track_caller]\n\
+                         fn boom() {\n\
+                         unreachable()\n\
+                         }\n\
+                         fn main() {\n\
+                         boom();\n\
+                         }\n";
+        if let Some(cap) = run_program_capturing(with_attr) {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains(":6:") && cap.stdout.contains("in boom"),
+                "track_caller must report the caller's line (6) with the emitting frame name; \
+                 stdout={:?}",
+                cap.stdout
+            );
+            assert!(
+                !cap.stdout.contains(":3:"),
+                "the emitting frame's own line (3) must be redirected away; stdout={:?}",
+                cap.stdout
+            );
+        }
+
+        // Baseline: without the attribute, the panic is NOT redirected to the
+        // caller. The `#[track_caller]` location travels as a RUNTIME arg (from
+        // the call site's span), so it survives even here where the harness does
+        // not thread `source_filename`; the compile-time-location path, by
+        // contrast, is gated on `source_filename` and stays inert under
+        // `run_program_capturing`, yielding the bare `panic: <msg>` form. So the
+        // load-bearing contrast the harness can observe is: the attribute ADDS a
+        // caller location (`panic at …:5:… in boom`) the baseline lacks. (Under a
+        // real `karac build` the baseline would report its OWN line 2 via the
+        // compile-time span path — covered by the manual E2E, not reproducible
+        // in this harness.)
+        let no_attr = "fn boom() {\n\
+                       unreachable()\n\
+                       }\n\
+                       fn main() {\n\
+                       let x = 1;\n\
+                       let _ = x;\n\
+                       boom();\n\
+                       }\n";
+        if let Some(cap) = run_program_capturing(no_attr) {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                !cap.stdout.contains("panic at") && !cap.stdout.contains(":5:"),
+                "baseline must not redirect to the caller's line (5); stdout={:?}",
+                cap.stdout
+            );
+            assert!(
+                cap.stdout.contains("entered unreachable code"),
+                "baseline still fires the same underlying panic; stdout={:?}",
+                cap.stdout
+            );
+        }
+
+        // Transitivity: main calls outer() on line 12; outer (track_caller)
+        // forwards its received location to inner (track_caller), which panics.
+        // The reported location is main's call site (12), frame name `inner`.
+        let transitive = "#[track_caller]\n\
+                          fn inner() {\n\
+                          unreachable()\n\
+                          }\n\
+                          #[track_caller]\n\
+                          fn outer() {\n\
+                          inner()\n\
+                          }\n\
+                          fn main() {\n\
+                          let x = 1;\n\
+                          let _ = x;\n\
+                          outer();\n\
+                          }\n";
+        if let Some(cap) = run_program_capturing(transitive) {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains(":12:") && cap.stdout.contains("in inner"),
+                "transitivity must forward the caller's line (12) to the innermost frame; \
+                 stdout={:?}",
+                cap.stdout
+            );
+        }
+    }
+
     /// Bit intrinsics codegen (`llvm.ctpop` / `llvm.ctlz` / `llvm.cttz`),
     /// width-correct: narrow receivers are masked to their declared width, so a
     /// signed `i8 -1` has 8 set bits and a zero `u8` has 8 leading/trailing

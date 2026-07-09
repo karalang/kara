@@ -1455,6 +1455,37 @@ impl<'ctx> super::Codegen<'ctx> {
         // (same dispatch path). See `coerce_scalar_to_type`.
         self.coerce_args_to_fn_params(func, &mut compiled_args);
 
+        // `#[track_caller]` slice 4: a call to a `#[track_caller]` callee passes
+        // the caller's source location as three trailing args matching the hidden
+        // params `declare_function` appended. When THIS fn is itself
+        // `#[track_caller]`, forward its own received location (the transitivity
+        // rule); otherwise pass the literal call-site `(file, line, col)`.
+        // Appended AFTER `coerce_args_to_fn_params` (which zips the N user args
+        // against the callee's param types and stops at the shorter) so these
+        // already-typed args pass through untouched. Inert unless the callee is
+        // `#[track_caller]`, i.e. never for a program without the attribute.
+        if self.track_caller_fns.contains(&lookup_name) {
+            match self.current_fn_caller_loc {
+                Some((file, line, col)) => {
+                    compiled_args.push(file.into());
+                    compiled_args.push(line.into());
+                    compiled_args.push(col.into());
+                }
+                None => {
+                    let file = self.source_filename.as_deref().unwrap_or("<unknown>");
+                    let file_ptr = self
+                        .builder
+                        .build_global_string_ptr(&format!("{file}\0"), "tc_callsite_file")
+                        .unwrap()
+                        .as_pointer_value();
+                    let i32_ty = self.context.i32_type();
+                    compiled_args.push(file_ptr.into());
+                    compiled_args.push(i32_ty.const_int(call_span.line as u64, false).into());
+                    compiled_args.push(i32_ty.const_int(call_span.column as u64, false).into());
+                }
+            }
+        }
+
         // Phase-7 line 5 sub-item 1 — hot-swap indirect dispatch.
         // For callees registered in `hot_swap_slots`, lower the call as
         // a load from the slot in `@karac_hotswap_table` followed by an

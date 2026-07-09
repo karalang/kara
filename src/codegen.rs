@@ -2691,6 +2691,24 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) concurrency_decisions: HashMap<String, FunctionConcurrency>,
     /// Name of the function currently being compiled (for rc_fallback_fns lookup).
     pub(crate) current_fn_name: String,
+    /// `#[track_caller]` slice 4: names of functions declared `#[track_caller]`
+    /// that received the hidden caller-location parameter triple (populated in
+    /// `declare_function`). A call site consults this to decide whether to
+    /// append the `(file, line, col)` caller-location args. Empty for any
+    /// program with no `#[track_caller]` functions, so the whole feature is
+    /// inert by default.
+    pub(crate) track_caller_fns: std::collections::HashSet<String>,
+    /// `#[track_caller]` slice 4/5: when the function currently being compiled
+    /// is `#[track_caller]`, its three hidden trailing params — the received
+    /// caller location `(file_ptr, line, col)`. `emit_panic` redirects the
+    /// reported panic location to these runtime values, and a nested
+    /// `#[track_caller]` call forwards them (the transitivity rule). `None`
+    /// inside an ordinary function.
+    pub(crate) current_fn_caller_loc: Option<(
+        inkwell::values::PointerValue<'ctx>,
+        inkwell::values::IntValue<'ctx>,
+        inkwell::values::IntValue<'ctx>,
+    )>,
     /// Source span of the expression currently being compiled. Set at the top
     /// of `compile_expr`; read by `emit_panic` for Level 2 crash diagnostics
     /// (design.md § Crash diagnostics) — `panic at <file>:<line>:<col> in
@@ -5672,6 +5690,8 @@ impl<'ctx> Codegen<'ctx> {
             par_capture_modes: HashMap::new(),
             concurrency_decisions: HashMap::new(),
             current_fn_name: String::new(),
+            track_caller_fns: std::collections::HashSet::new(),
+            current_fn_caller_loc: None,
             current_span: None,
             debug_info: None,
             par_counter: 0,

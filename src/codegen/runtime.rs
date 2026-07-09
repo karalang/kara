@@ -42,9 +42,26 @@ impl<'ctx> super::Codegen<'ctx> {
         // outlining the landing pad is cheaper still.
         let site_id = self.panic_site_counter.get();
         self.panic_site_counter.set(site_id + 1);
+        // `#[track_caller]` slice 5: inside a `#[track_caller]` fn the reported
+        // panic location comes from the runtime caller-location params — SSA
+        // values of the *enclosing* function, which the separate outlined
+        // `__karac_panic_site_<n>` body cannot reference. So when redirecting,
+        // the outlined body takes the location `(file, line, col)` as three
+        // params and the landing-pad call forwards the enclosing fn's received
+        // values. Ordinary panics keep the zero-arg outlined body (unchanged).
+        let tc_loc = self.current_fn_caller_loc;
+        let panic_fn_type = if tc_loc.is_some() {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let i32_ty = self.context.i32_type();
+            self.context
+                .void_type()
+                .fn_type(&[ptr_ty.into(), i32_ty.into(), i32_ty.into()], false)
+        } else {
+            self.context.void_type().fn_type(&[], false)
+        };
         let panic_fn = self.module.add_function(
             &format!("__karac_panic_site_{site_id}"),
-            self.context.void_type().fn_type(&[], false),
+            panic_fn_type,
             Some(inkwell::module::Linkage::Internal),
         );
         for attr_name in ["cold", "noinline", "noreturn"] {
@@ -112,18 +129,43 @@ impl<'ctx> super::Codegen<'ctx> {
         // same gating the sibling `?`-error-trace uses. DWARF emission for
         // gdb/lldb symbolic backtraces (the design's stated *bonus*) is a
         // separate concern handled by the DIBuilder pass.
-        let location = match (&self.source_filename, &self.current_span) {
-            (Some(file), Some(span)) => Some((file.clone(), span.line, span.column)),
-            _ => None,
-        };
         let i32_ty = self.context.i32_type();
-        match location {
-            Some((file, line, col)) => {
+        // Location operands for the `panic at <file>:<line>:<col> in <fn>` form.
+        // When redirecting (`#[track_caller]`), they are the outlined body's OWN
+        // three params (the caller location the landing pad forwards below);
+        // otherwise they are the compile-time Level-2 span constants. The `<fn>`
+        // name always identifies the actually-emitting frame. `None` → the bare
+        // `panic: <msg>` form (no filename/span available, non-track_caller).
+        let loc_operands: Option<(
+            inkwell::values::PointerValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        )> = if tc_loc.is_some() {
+            Some((
+                panic_fn.get_nth_param(0).unwrap().into_pointer_value(),
+                panic_fn.get_nth_param(1).unwrap().into_int_value(),
+                panic_fn.get_nth_param(2).unwrap().into_int_value(),
+            ))
+        } else {
+            match (&self.source_filename, &self.current_span) {
+                (Some(file), Some(span)) => {
+                    let file_ptr = b
+                        .build_global_string_ptr(&format!("{}\0", file), "panic_file")
+                        .unwrap()
+                        .as_pointer_value();
+                    Some((
+                        file_ptr,
+                        i32_ty.const_int(span.line as u64, false),
+                        i32_ty.const_int(span.column as u64, false),
+                    ))
+                }
+                _ => None,
+            }
+        };
+        match loc_operands {
+            Some((file_ptr, line, col)) => {
                 let fmt = b
                     .build_global_string_ptr("panic at %s:%d:%d in %s: %s%s\n\0", "panic_fmt")
-                    .unwrap();
-                let file_ptr = b
-                    .build_global_string_ptr(&format!("{}\0", file), "panic_file")
                     .unwrap();
                 let fn_ptr = b
                     .build_global_string_ptr(&format!("{}\0", self.current_fn_name), "panic_fn")
@@ -132,9 +174,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.printf_fn,
                     &[
                         fmt.as_pointer_value().into(),
-                        file_ptr.as_pointer_value().into(),
-                        i32_ty.const_int(line as u64, false).into(),
-                        i32_ty.const_int(col as u64, false).into(),
+                        file_ptr.into(),
+                        line.into(),
+                        col.into(),
                         fn_ptr.as_pointer_value().into(),
                         prefix.into(),
                         msg.as_pointer_value().into(),
@@ -163,10 +205,25 @@ impl<'ctx> super::Codegen<'ctx> {
         b.build_call(self.exit_fn, &[exit_code.into()], "").unwrap();
         b.build_unreachable().unwrap();
 
-        // The landing pad in the enclosing function: one zero-operand call.
-        // Callers of `emit_panic` terminate the block themselves (the
-        // existing contract — most follow with `build_unreachable`).
-        self.builder.build_call(panic_fn, &[], "").unwrap();
+        // The landing pad in the enclosing function. Normally one zero-operand
+        // call; when redirecting (`#[track_caller]`), forward the enclosing fn's
+        // received caller-location params so the outlined body prints them.
+        // Callers of `emit_panic` terminate the block themselves (the existing
+        // contract — most follow with `build_unreachable`).
+        match tc_loc {
+            Some((file_arg, line_arg, col_arg)) => {
+                self.builder
+                    .build_call(
+                        panic_fn,
+                        &[file_arg.into(), line_arg.into(), col_arg.into()],
+                        "",
+                    )
+                    .unwrap();
+            }
+            None => {
+                self.builder.build_call(panic_fn, &[], "").unwrap();
+            }
+        }
     }
 
     pub(super) fn emit_rc_alloc(&self, heap_type: StructType<'ctx>) -> PointerValue<'ctx> {

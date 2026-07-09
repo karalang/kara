@@ -245,6 +245,25 @@ impl<'ctx> super::Codegen<'ctx> {
             self.abi_adapted_export_names.insert(func.name.clone());
         }
 
+        // `#[track_caller]` hidden caller-location params (phase-5 slice 4).
+        // A `#[track_caller]` fn receives the caller's source location as three
+        // trailing params — `(file: ptr, line: i32, col: i32)` — so a panic
+        // inside it reports the CALLER's site (design.md § Stdlib panic-emitters
+        // report the caller's source location). Gated off coroutines (which
+        // append their own trailing completion-slot `ptr`, whose index this
+        // would otherwise shift) and off exports (the attribute is a
+        // Kāra-internal ABI, not a stable C signature). Recorded so call sites
+        // append the matching args; the set is empty for any program with no
+        // `#[track_caller]` fn, keeping the feature fully inert by default.
+        if func.is_track_caller && !is_export && !self.is_coroutine_compiled(&func.name) {
+            let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+            let i32_ty = self.context.i32_type();
+            param_types.push(ptr_ty.into());
+            param_types.push(i32_ty.into());
+            param_types.push(i32_ty.into());
+            self.track_caller_fns.insert(func.name.clone());
+        }
+
         // Niche call ABI for `Option[shared T]` signature positions
         // (wip-shared-struct-codegen-followups Slice 1 + method
         // extension): pass/return a single nullable `ptr` (null = None)
@@ -717,6 +736,21 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.current_fn = Some(fn_val);
         self.current_fn_name = func.name.clone();
+        // `#[track_caller]` slice 4/5: if this fn received the hidden
+        // caller-location params (the three trailing params declare_function
+        // appended), capture them. `emit_panic` reads them to report the
+        // caller's location, and a nested `#[track_caller]` call forwards them.
+        // Reset (to `None`) for every ordinary function.
+        self.current_fn_caller_loc = if self.track_caller_fns.contains(&func.name) {
+            let base = func.params.len() as u32;
+            Some((
+                fn_val.get_nth_param(base).unwrap().into_pointer_value(),
+                fn_val.get_nth_param(base + 1).unwrap().into_int_value(),
+                fn_val.get_nth_param(base + 2).unwrap().into_int_value(),
+            ))
+        } else {
+            None
+        };
         // A2 slice 2b.3: drain any prior function's coroutine context. A
         // coroutine fn's `emit_coro_ramp` sets it; `emit_coro_finish` clears it
         // — this reset is the belt-and-suspenders for an early-error exit.
