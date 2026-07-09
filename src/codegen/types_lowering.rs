@@ -36,14 +36,29 @@ use super::state::SharedTypeInfo;
 
 /// How a `#[repr(C)]` struct crosses the C ABI by value on AArch64 (AAPCS),
 /// from `arm64_repr_c_struct_coercion` (B-2026-07-09-2). Register cases are
-/// `Coerced`; the > 16 B non-HFA case is `Indirect` (Slice 3a).
+/// `Coerced`; a struct larger than 16 B (non-HFA) is `Indirect` (Slice 3a).
 pub(super) enum Arm64ParamClass<'ctx> {
     /// Pass the raw struct unchanged (unknown / empty struct).
     Direct,
     /// Pass in registers, coerced to this type (`i64` / `[2 x i64]` / `[N x fp]`).
     Coerced(BasicTypeEnum<'ctx>),
-    /// > 16 B non-HFA: pass a `ptr` to a caller-owned copy (indirect).
+    /// Larger than 16 B (non-HFA): pass a `ptr` to a caller-owned copy.
     Indirect,
+}
+
+/// How a `#[repr(C)]` struct crosses the C ABI *as a return value* on AArch64
+/// (AAPCS), from `arm64_repr_c_struct_return_coercion` (B-2026-07-09-2). A
+/// struct larger than 16 B (non-HFA) is `Sret` (Slice 3b) — it carries the
+/// return struct's LLVM type so the body can store the result through the
+/// caller's pointer.
+pub(super) enum Arm64ReturnClass<'ctx> {
+    /// Return the raw struct unchanged (HFA / empty / unknown struct).
+    Direct,
+    /// Return in registers, coerced to this type (`i64` / `[2 x i64]`).
+    Coerced(BasicTypeEnum<'ctx>),
+    /// Larger than 16 B (non-HFA): the function returns `void`; the caller
+    /// passes an `sret(%Struct)` result pointer (x8) that the body stores into.
+    Sret(inkwell::types::StructType<'ctx>),
 }
 
 /// Flatten an aggregate LLVM type into its leaf scalar types (recursing through
@@ -1904,19 +1919,20 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// AArch64 AAPCS coercion for a `#[repr(C)]` struct **returned** by value
-    /// (B-2026-07-09-2 Slice 2). Differs from the param classifier only for an
-    /// HFA: `clang` returns an HFA as the *raw struct* (LLVM lowers it to the
-    /// `v` registers natively), so returning it uncoerced already matches —
-    /// hence `Ok(None)` there. A non-HFA ≤ 16 B return coerces to `i64` /
-    /// `[2 x i64]` (x0..x1); a > 16 B return is `sret` (indirect), not yet
-    /// lowered here, so it errors with a pass-by-pointer message.
+    /// AArch64 AAPCS classification for a `#[repr(C)]` struct **returned** by
+    /// value (B-2026-07-09-2 Slices 2 + 3b). Differs from the param classifier
+    /// only for an HFA: `clang` returns an HFA as the *raw struct* (LLVM lowers
+    /// it to the `v` registers natively), so returning it uncoerced already
+    /// matches — hence `Direct` there. A non-HFA ≤ 16 B return is `Coerced` to
+    /// `i64` / `[2 x i64]` (x0..x1); a > 16 B return is `Sret` — the caller
+    /// passes a result pointer (in x8) and the function returns `void`. `Err`
+    /// only when target-data layout is unavailable.
     pub(super) fn arm64_repr_c_struct_return_coercion(
         &mut self,
         struct_name: &str,
-    ) -> Result<Option<BasicTypeEnum<'ctx>>, String> {
+    ) -> Result<Arm64ReturnClass<'ctx>, String> {
         let Some(st) = self.struct_types.get(struct_name).copied() else {
-            return Ok(None);
+            return Ok(Arm64ReturnClass::Direct);
         };
         let mut leaves: Vec<BasicTypeEnum<'ctx>> = Vec::new();
         collect_leaf_scalars(st.into(), &mut leaves);
@@ -1924,24 +1940,21 @@ impl<'ctx> super::Codegen<'ctx> {
         if (1..=4).contains(&leaves.len()) {
             if let Some(BasicTypeEnum::FloatType(_)) = leaves.first().copied() {
                 if leaves.iter().all(|l| *l == leaves[0]) {
-                    return Ok(None);
+                    return Ok(Arm64ReturnClass::Direct);
                 }
             }
         }
         let size = self.ensure_target_data()?.get_abi_size(&st);
         let i64_t = self.context.i64_type();
         if size == 0 {
-            Ok(None)
+            Ok(Arm64ReturnClass::Direct)
         } else if size <= 8 {
-            Ok(Some(i64_t.into()))
+            Ok(Arm64ReturnClass::Coerced(i64_t.into()))
         } else if size <= 16 {
-            Ok(Some(i64_t.array_type(2).into()))
+            Ok(Arm64ReturnClass::Coerced(i64_t.array_type(2).into()))
         } else {
-            Err(format!(
-                "`#[repr(C)]` struct `{struct_name}` ({size} bytes, non-HFA) cannot be returned by \
-                 value across the C ABI on AArch64 yet — AAPCS returns it via `sret`. Return it \
-                 through an out-param (`*mut {struct_name}`) instead (tracked: B-2026-07-09-2)."
-            ))
+            // > 16 B non-HFA: AAPCS returns via `sret` (x8 result pointer).
+            Ok(Arm64ReturnClass::Sret(st))
         }
     }
 

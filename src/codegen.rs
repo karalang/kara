@@ -3154,6 +3154,18 @@ pub(super) struct Codegen<'ctx> {
     /// reinterprets its `#[repr(C)]` struct value into this type before
     /// `ret`. `None` on x86-64 and for non-coerced returns.
     pub(crate) current_fn_arm64_return_coercion: Option<BasicTypeEnum<'ctx>>,
+    /// Per-function AArch64 `sret` return (B-2026-07-09-2 Slice 3b): fn name →
+    /// the returned `#[repr(C)]` struct's LLVM type. A > 16 B non-HFA struct is
+    /// returned via `sret` — the LLVM signature drops the struct return (becomes
+    /// `void`) and gains a leading `ptr sret(%Struct)` param (x8); each return
+    /// site stores the struct value through that pointer and `ret void`s. Empty
+    /// on x86-64 and for register/HFA returns.
+    pub(crate) arm64_sret_struct_returns: HashMap<String, inkwell::types::StructType<'ctx>>,
+    /// The current function's `sret` result pointer (the leading param), set at
+    /// body entry from `arm64_sret_struct_returns`. `Some` ⇒ every return site
+    /// stores its struct value here and returns `void`; the prologue also shifts
+    /// every Kāra param index by +1 to skip this leading pointer.
+    pub(crate) current_fn_arm64_sret_param: Option<inkwell::values::PointerValue<'ctx>>,
     // ── Hot-swap codegen (phase-7 line 5) ─────────────────────────
     /// Set by `compile_to_*_with_hot_swap` from the CLI's
     /// `--enable-hot-swap` flag. When `true`, every call to a
@@ -5741,6 +5753,8 @@ impl<'ctx> Codegen<'ctx> {
             arm64_coerced_export_names: std::collections::HashSet::new(),
             arm64_coerced_struct_returns: HashMap::new(),
             current_fn_arm64_return_coercion: None,
+            arm64_sret_struct_returns: HashMap::new(),
+            current_fn_arm64_sret_param: None,
             hot_swap_enabled: false,
             declare_only_fns: std::collections::HashSet::new(),
             main_symbol_override: None,

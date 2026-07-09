@@ -168,6 +168,51 @@ fn small_int_struct_return_coerces_to_i64() {
 }
 
 #[test]
+fn big_nonhfa_return_uses_sret() {
+    // clang arm64: a > 16 B non-HFA struct returns via sret — the fn returns
+    // `void` and takes a leading `ptr sret(%struct.P)` result pointer (x8):
+    //   define void @make(ptr sret(%struct.P) align 8 %0, i64 %1)
+    // (Slice 3b). Assert both the void return AND the sret param.
+    if !arm64_forced() {
+        return;
+    }
+    let src = "#[repr(C)]\npub struct P { a: i64, b: i64, c: i64 }\n\
+               pub extern \"C\" fn make(x: i64) -> P { P { a: x, b: x, c: x } }\n";
+    let line = define_line(&ir_for(src), "make");
+    assert!(
+        line.starts_with("define void @make("),
+        "sret return should make the fn `void`:\n{line}"
+    );
+    assert!(
+        line.contains("sret("),
+        "sret return should carry a leading `sret(...)` result param:\n{line}"
+    );
+}
+
+#[test]
+fn big_nonhfa_param_and_sret_return_combined() {
+    // clang arm64: a fn taking a > 16 B struct by value AND returning one has
+    // the sret pointer FIRST, then the indirect param pointer:
+    //   define void @rt(ptr sret(%P) %0, ptr %1, i64 %2)
+    // Proves the param-index +1 shift lands the Kāra params correctly.
+    if !arm64_forced() {
+        return;
+    }
+    let src = "#[repr(C)]\npub struct P { a: i64, b: i64, c: i64 }\n\
+               pub extern \"C\" fn rt(s: P, d: i64) -> P { P { a: s.a + d, b: s.b, c: s.c } }\n";
+    let line = define_line(&ir_for(src), "rt");
+    assert!(
+        line.starts_with("define void @rt(ptr sret("),
+        "sret result pointer must be the FIRST param:\n{line}"
+    );
+    // Two `ptr` params (sret + indirect struct) then the scalar.
+    assert!(
+        line.matches("ptr ").count() >= 2 && line.contains("i64 %2"),
+        "indirect param should follow the sret pointer, scalar last:\n{line}"
+    );
+}
+
+#[test]
 fn hfa_return_stays_raw_struct() {
     // clang arm64 returns an HFA as the raw struct (v-regs), NOT [2 x i64].
     // Kāra's raw `{ double, double }` return lowers to v0/v1 identically.
