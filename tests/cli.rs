@@ -3482,6 +3482,56 @@ fn test_run_comptime_derive_fn_skipped_by_codegen() {
 }
 
 #[test]
+fn test_run_derive_message_roundtrips_under_codegen() {
+    // B-2026-07-08-15 Layer 2: `#[derive(Message)]` generates `encode`/`decode`
+    // bodies that call into the pure-Kāra `std.protobuf` runtime surface
+    // (`ProtoBuf.*` encoders, `ProtoReader`). Those bodies were interpreter-only;
+    // Layer 2 compiles protobuf's impl bodies through codegen (baked into
+    // `compiled_stdlib_programs` under a usage gate) so a derived Message
+    // round-trips under the JIT-default `karac run` exactly as under `--interp`.
+    // Exercises scalar (String/i64), repeated-scalar (Vec[i64]), and nested-
+    // message fields. The usage gate also keeps protobuf out of protobuf-free
+    // IR (its cyclic encoder bodies defeat the zero-use prune) — that leanness is
+    // covered by `wrapping_arith_lowers_without_overflow_trap` in tests/codegen.rs.
+    let path = write_run_temp(
+        "derive-message",
+        "#[derive(Message)]\n\
+         struct Addr { city: String, zip: i64 }\n\
+         #[derive(Message)]\n\
+         struct User { name: String, age: i64, scores: Vec[i64], home: Addr }\n\
+         fn main() {\n\
+            let u = User {\n\
+                name: \"Ada\", age: 36, scores: [90, 85, 100],\n\
+                home: Addr { city: \"London\", zip: 12345 },\n\
+            };\n\
+            let back = User.decode(u.encode());\n\
+            println(back.name);\n\
+            println(back.age);\n\
+            println(back.scores.len());\n\
+            println(back.scores[2]);\n\
+            println(back.home.city);\n\
+            println(back.home.zip);\n\
+         }\n",
+    );
+    // Same field decode order under both backends — this is the parity claim.
+    let expected = "Ada\n36\n3\n100\nLondon\n12345\n";
+    for args in [
+        vec!["run", path.to_str().unwrap()],
+        vec!["run", "--interp", path.to_str().unwrap()],
+    ] {
+        let out = karac_bin().args(&args).output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success() && stdout == expected,
+            "derived Message under {args:?} should round-trip to {expected:?}; \
+             got stdout={stdout:?} stderr={stderr}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
 fn test_run_contract_violation_prints_message_and_exits_nonzero() {
     let path = write_run_temp(
         "contract",

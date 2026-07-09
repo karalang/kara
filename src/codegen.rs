@@ -427,12 +427,67 @@ fn ordering_stdlib_program() -> &'static Program {
     &ORDERING_LOWERED_PROGRAM
 }
 
+static PROTOBUF_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
+    lower_stdlib_source("protobuf", include_str!("../runtime/stdlib/protobuf.kara"))
+});
+
+/// The lowered `std.protobuf` program — its pure-Kāra `ProtoBuf.*` encoder
+/// namespace fns and `ProtoReader` methods, which a `#[derive(Message)]`-
+/// generated `encode`/`decode` body calls into (B-2026-07-08-15 Layer 2).
+/// Designed interpreter-only originally; compiling its bodies here is what lets
+/// a derived Message round-trip under codegen / the JIT-default `karac run`.
+/// The `comptime fn derive_message` / `proto_*` items are skipped by the
+/// compile pass (comptime-only, per Layer 3); only the runtime `ProtoBuf` /
+/// `ProtoReader` impl bodies are emitted.
+fn protobuf_stdlib_program() -> &'static Program {
+    &PROTOBUF_LOWERED_PROGRAM
+}
+
+/// True when `user` references the `std.protobuf` runtime surface — i.e. it
+/// carries a `#[derive(Message)]` on some struct/enum. That derive is the sole
+/// entry point to protobuf: its expansion (already run by codegen time, per
+/// B-2026-07-08-15 Layer 1) splices `encode`/`decode` bodies that call into
+/// `ProtoBuf.*` / `ProtoReader`, and there is no user-facing manual API.
+///
+/// Why protobuf needs a usage gate when `ordering` does not: the zero-use
+/// fixpoint prune in [`Codegen::compile_stdlib_program_method_bodies`] cannot
+/// collect a *mutually-recursive* dead group — encode↔nested-encode and the
+/// reader's recursive descent keep each other's use counts nonzero, so none
+/// of them ever reaches zero uses and the whole encoder tree (with its checked-
+/// arithmetic `with.overflow` intrinsics) survives into a protobuf-free binary.
+/// `ordering`'s `is_lt`/`is_le`/… bodies don't call each other, so they prune
+/// clean and need no gate. Gating protobuf on actual use keeps protobuf-free
+/// IR lean and the IR-shape codegen tests valid.
+fn program_uses_protobuf(user: &Program) -> bool {
+    user.items.iter().any(|item| {
+        let attrs = match item {
+            Item::StructDef(s) => &s.attributes,
+            Item::EnumDef(e) => &e.attributes,
+            _ => return false,
+        };
+        crate::comptime::ordered_derived_traits(attrs)
+            .iter()
+            .any(|t| t == "Message")
+    })
+}
+
 /// The baked stdlib modules whose real (non-`#[compiler_builtin]`) impl
 /// bodies codegen compiles via the generalized stdlib-body passes, beyond
 /// the special-cased `tracing` program. Phase-7 line 889 grows this list
 /// one module at a time as each module's bodies are verified to lower.
-fn compiled_stdlib_programs() -> [&'static Program; 1] {
-    [ordering_stdlib_program()]
+///
+/// `ordering` is always present (its bodies prune to nothing when unused);
+/// `protobuf` is included only when the user program uses it (see
+/// [`program_uses_protobuf`] for why it can't rely on the prune). The three
+/// consuming passes (generic-fn declare, layout/signature declare, body
+/// compile) MUST all call this with the same `user` program so a module is
+/// declared iff its bodies are compiled.
+fn compiled_stdlib_programs(user: &Program) -> Vec<&'static Program> {
+    let mut programs = vec![ordering_stdlib_program()];
+    if program_uses_protobuf(user) {
+        programs.push(protobuf_stdlib_program());
+    }
+    programs
 }
 
 /// A real-source stdlib module (`std.tracing`, `Ordering`) is SKIPPED at
@@ -6702,7 +6757,7 @@ impl<'ctx> Codegen<'ctx> {
                 _ => None,
             })
             .collect();
-        for tp in compiled_stdlib_programs() {
+        for tp in compiled_stdlib_programs(program) {
             if user_redefines_stdlib_type(program, tp) {
                 continue;
             }
@@ -6829,7 +6884,7 @@ impl<'ctx> Codegen<'ctx> {
         // 889 slice 1: declare the other compiled stdlib modules' layouts +
         // non-builtin impl-method signatures so user-body call sites resolve
         // their `Type.method` symbols (e.g. `ordering_value.is_lt()`).
-        for tp in compiled_stdlib_programs() {
+        for tp in compiled_stdlib_programs(program) {
             if !user_redefines_stdlib_type(program, tp) {
                 self.declare_stdlib_program(tp)?;
             }
@@ -7014,7 +7069,7 @@ impl<'ctx> Codegen<'ctx> {
         // (declared above). Each runs with its own span tables swapped in and
         // prunes its own zero-use functions, so an ordering-free binary stays
         // lean.
-        for tp in compiled_stdlib_programs() {
+        for tp in compiled_stdlib_programs(program) {
             if !user_redefines_stdlib_type(program, tp) {
                 self.compile_stdlib_program(tp)?;
             }

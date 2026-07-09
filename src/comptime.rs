@@ -1073,7 +1073,7 @@ impl Folder<'_> {
 /// Trait names from a declaration's `#[derive(...)]` attributes, in source
 /// order (the ordered analogue of the typechecker's `extract_derived_traits`).
 /// Order is preserved so the spliced impls land deterministically.
-fn ordered_derived_traits(attributes: &[Attribute]) -> Vec<String> {
+pub(crate) fn ordered_derived_traits(attributes: &[Attribute]) -> Vec<String> {
     let mut traits = Vec::new();
     for attr in attributes {
         if !attr.is_bare("derive") {
