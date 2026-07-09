@@ -303,6 +303,73 @@ jobs:
         env:
           KARAC_TEST_JIT: "1"
 
+  # The `--features llvm` codegen + producer-mode E2E on **Apple silicon
+  # (arm64)** — the one non-x86_64, non-Linux leg that runs real binaries, so
+  # it is the first step of the additive-interop "5-target CI matrix" (roadmap
+  # Tier 5). It closes the standing "AArch64/Apple ABI unverified" caveat on
+  # the `#[repr(C)]` enum slices (repr-c-tagged-union-enums.md): the all-unit
+  # `int64_t` mapping and the scalar-payload tagged-union box both rest on the
+  # SysV "one-eightbyte struct in one register" rule holding on AArch64 too —
+  # this job is where that stops being an assumption. `macos-latest` IS arm64,
+  # so no emulation. LLVM 18 comes from Homebrew's `llvm@18` (18.1.x, what
+  # llvm-sys `181` wants); the dylib is found at test-runtime via
+  # DYLD_FALLBACK_LIBRARY_PATH (SIP strips DYLD_LIBRARY_PATH from spawned
+  # children, the fallback var survives). `cc` is clang, already present.
+  #
+  # Scope is the ABI-bearing subset, not the whole suite: the codegen E2E
+  # oracle (general arm64 codegen/ABI: enum-payload word encoding, boxing,
+  # struct returns) + the producer-mode cli tests (library artifacts + the
+  # repr(C)-enum round-trips). NOT the JIT lane (a Linux-regression guard,
+  # B-2026-07-07-5) and NOT the network/wasm cli tests (extra tooling).
+  #
+  # NON-REQUIRED until it has a green streak (mirrors `memory-sanitizer`): add
+  # to branch protection only once stable, so a first-run macOS-toolchain
+  # hiccup can't block the required gates.
+  codegen-e2e-macos:
+    name: Codegen E2E (macOS arm64, LLVM 18)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18 (Homebrew)
+        run: |
+          brew install llvm@18
+          PREFIX="$(brew --prefix llvm@18)"
+          echo "LLVM_SYS_181_PREFIX=$PREFIX" >> "$GITHUB_ENV"
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$PREFIX/lib" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: llvm-e2e-macos
+
+      # Same lean→full archive dance as the Linux `codegen-e2e` job — the
+      # real-binary E2E links these (without them the tests skip vacuously).
+      - name: Build runtime staticlib archives (lean → full)
+        run: |
+          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+
+      # Broad arm64 codegen/ABI oracle.
+      - name: Codegen E2E (arm64)
+        run: cargo test --features llvm --test codegen
+
+      # The producer-mode library + `#[repr(C)]` enum round-trips — the direct
+      # AArch64 confirmation for the artifact + enum-ABI work. Multiple filters
+      # are OR'd by libtest, so this runs exactly the producer tests.
+      - name: Producer-mode E2E (library artifacts + repr(C) enums, arm64)
+        run: >
+          cargo test --features llvm --test cli --
+          test_build_repr_c_enum
+          test_build_crate_type
+          test_build_auto_boxed
+          test_project_lib_table
+
   # Tier 2 of the CI test-coverage tiers (docs/spikes/ci-test-coverage.md): the
   # `--features llvm` memory-sanitizer suite — ASAN catches use-after-free /
   # double-free, and on Linux `-fsanitize=address` ALSO runs LeakSanitizer,
