@@ -14889,6 +14889,66 @@ fn main() {
     /// both are consumed (not live at exit), so a missing free is a detectable
     /// non-reachable leak rather than one LSan masks.
     #[test]
+    fn asan_par_ref_string_arg_network_call_no_double_free() {
+        // A2b-2 variable-arg groundwork: a network call whose param is `ref
+        // String` BORROWS its argument (no move), so lifting it into a par
+        // branch must NOT drop the branch's view of the parent's owned `String`
+        // — the parent stays the unique owner and frees each once. Uses an
+        // explicit `par {}` (same capture machinery auto-par reuses) to prove
+        // the borrow-capture is double-free-clean BEFORE the predicate is
+        // relaxed to admit ref-param args to auto-par. Loop so any double-free
+        // accumulates under ASan.
+        assert_clean_asan_run(
+            r#"
+fn fetch(u: ref String) -> i64 with reads(Network) suspends { return u.len(); }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let a = "aaaaaaaaaaaaaaaaaaaa";
+        let b = "bbbbbbbbbbbbbbbbbbbb";
+        let r = par {
+            let x = fetch(a);
+            let y = fetch(b);
+            x + y
+        };
+        println(r);
+        i = i + 1i64;
+    }
+}
+"#,
+            &["40", "40", "40"],
+            "asan_par_ref_string_arg_network_call_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_a2b2_autopar_ref_param_arg_no_double_free() {
+        // A2b-2 variable-arg (end-to-end): two `reads(Network) suspends` calls
+        // whose `ref String` param BORROWS an owned parent binding are now
+        // grouped by AUTO-PAR (no explicit `par {}`) — the relaxed
+        // `is_safe_network_fanout` admits identifier args at borrow positions.
+        // The parent stays the unique owner of each `String`; the borrow into
+        // the branch must not double-free. Pins the full admission path
+        // (analysis groups -> codegen fans out), LSan/ASan-clean. Companion to
+        // the explicit-`par {}` `asan_par_ref_string_arg_network_call_no_double_free`.
+        assert_clean_asan_run(
+            r#"
+fn fetch(u: ref String) -> i64 with reads(Network) suspends { return u.len(); }
+fn main() {
+    let a = "aaaaaaaaaaaaaaaaaaaa";
+    let b = "bbbbbbbbbbbbbbbbbbbb";
+    let x = fetch(a);
+    let y = fetch(b);
+    println(x);
+    println(y);
+}
+"#,
+            &["20", "20"],
+            "asan_a2b2_autopar_ref_param_arg_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_auto_par_network_effect_owned_heap_fanout_clean() {
         // A2b-2: two independent `reads(Network) suspends` fns returning owned
         // heap (String) are now grouped by auto-par via the arg-safe

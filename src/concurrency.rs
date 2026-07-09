@@ -921,28 +921,53 @@ fn expr_is_call_free(expr: &Expr) -> bool {
 /// (`(Sends,Sends)`/`(Receives,Receives)` on `Network`) — the exemption ONLY
 /// lifts the blanket coroutine-boundary EXCLUSION so two *independent*
 /// (disjoint-resource) network calls can group.
-fn stmt_fanout_args_safe(stmt: &Stmt) -> bool {
+fn stmt_fanout_args_safe(stmt: &Stmt, function_bodies: &HashMap<String, &Function>) -> bool {
     let value = match &stmt.kind {
         StmtKind::Let { value, .. } | StmtKind::Expr(value) => value,
         _ => return false,
     };
-    match &value.kind {
-        ExprKind::Call { callee, args } => {
-            // Bare free-function callee only — a method call could move an owned
-            // receiver (no `Identifier`-arg suppression covers the receiver),
-            // and a computed callee is outside the conservative shape.
-            let bare_callee = match &callee.kind {
-                ExprKind::Identifier(_) => true,
-                ExprKind::Path { segments, .. } => segments.len() == 1,
-                _ => false,
-            };
-            bare_callee
-                && args
-                    .iter()
-                    .all(|a| expr_is_call_free(&a.value) && expr_is_binding_free(&a.value))
-        }
-        _ => false,
-    }
+    let ExprKind::Call { callee, args } = &value.kind else {
+        return false;
+    };
+    // Bare free-function callee only — a method call could move an owned
+    // receiver (no `Identifier`-arg suppression covers the receiver), and a
+    // computed callee is outside the conservative shape.
+    let callee_name = match &callee.kind {
+        ExprKind::Identifier(n) => n.clone(),
+        ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
+        _ => return false,
+    };
+    // The callee's declared params (when its body is in this program) tell us
+    // which positions BORROW their argument (`ref`/`mut ref`/`mut Slice` — not
+    // moved). An `Identifier` argument at a borrow position moves no owned
+    // binding into the coroutine, so it is fan-out-safe even though it names a
+    // binding (verified double-free-clean by
+    // `tests/memory_sanitizer.rs::asan_par_ref_string_arg_network_call_no_double_free`).
+    // Absent the body (extern / not in this program) the params are unknown and
+    // every name stays fail-closed.
+    let callee_params = function_bodies
+        .get(&callee_name)
+        .map(|f| f.params.as_slice());
+    args.iter().enumerate().all(|(i, a)| {
+        expr_is_call_free(&a.value)
+            && (expr_is_binding_free(&a.value)
+                || (matches!(a.value.kind, ExprKind::Identifier(_))
+                    && param_is_borrow(callee_params, i)))
+    })
+}
+
+/// True iff the callee's parameter at position `i` is a borrow form
+/// (`ref T` / `mut ref T` / `mut Slice[T]`) — an argument passed there is
+/// borrowed, never moved, so an owned binding at that position is not
+/// double-dropped when the call is lifted into a par branch. `None` params
+/// (callee body not in this program) → `false` (fail-closed).
+fn param_is_borrow(params: Option<&[Param]>, i: usize) -> bool {
+    params.and_then(|ps| ps.get(i)).is_some_and(|p| {
+        matches!(
+            p.ty.kind,
+            TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
+        )
+    })
 }
 
 /// True iff `expr` references no binding — used by `stmt_fanout_args_safe`
@@ -1941,8 +1966,8 @@ impl<'a> ConcurrencyChecker<'a> {
         // the Network-resource check keeps a non-network user `with suspends`
         // fn serial (its independence isn't established here). Now that
         // `info.effects` is populated, combine them.
-        info.is_safe_network_fanout =
-            stmt_fanout_args_safe(stmt) && info.effects.iter().any(|e| e.resource == "Network");
+        info.is_safe_network_fanout = stmt_fanout_args_safe(stmt, &self.function_bodies)
+            && info.effects.iter().any(|e| e.resource == "Network");
 
         info
     }

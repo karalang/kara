@@ -635,6 +635,39 @@ fn test_a2b2_network_call_with_owned_arg_stays_serial() {
     );
 }
 
+#[test]
+fn test_a2b2_network_call_with_ref_param_arg_parallelizes() {
+    // A2b-2 variable-arg reach: a network call whose parameter BORROWS
+    // (`ref String`) does not move its argument, so passing an owned binding
+    // there is fan-out-safe (no coroutine-owned-param double-drop). The two
+    // `fetch(a)` / `fetch(b)` calls (statements 2 and 3, distinct URLs) now
+    // group — the identifier args are admitted because the callee param is
+    // `ref`. Contrast `test_a2b2_network_call_with_owned_arg_stays_serial`,
+    // where the same arg shape into an OWNED `String` param stays serial.
+    let analysis = analyze(
+        r#"
+        fn fetch(u: ref String) -> i64 with reads(Network) suspends { return 1; }
+        fn main() {
+            let a = "http://a";
+            let b = "http://b";
+            let x = fetch(a);
+            let y = fetch(b);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    let fetches_grouped = main_fc
+        .parallel_groups
+        .iter()
+        .any(|g| g.statement_indices.contains(&2) && g.statement_indices.contains(&3));
+    assert!(
+        fetches_grouped,
+        "ref-param network calls with owned-binding args should parallelize \
+         (A2b-2 variable-arg), got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
 // ── Different resources are parallelizable ─────────────────────
 
 #[test]
