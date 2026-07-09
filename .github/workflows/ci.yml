@@ -317,7 +317,7 @@ jobs:
 
   # The `--features llvm` codegen + producer-mode E2E on **Apple silicon
   # (arm64)** — the one non-x86_64, non-Linux leg that runs real binaries, so
-  # it is the first step of the additive-interop "5-target CI matrix" (roadmap
+  # it is the first step of the additive-interop "4-target CI matrix" (roadmap
   # Tier 5). It closes the standing "AArch64/Apple ABI unverified" caveat on
   # the `#[repr(C)]` enum slices (repr-c-tagged-union-enums.md): the all-unit
   # `int64_t` mapping and the scalar-payload tagged-union box both rest on the
@@ -388,7 +388,7 @@ jobs:
           test_build_auto_boxed
           test_project_lib_table
 
-  # 5-target matrix STAGE 2 — Linux AArch64 (native `ubuntu-*-arm` runner, GA +
+  # 4-target matrix STAGE 2 — Linux AArch64 (native `ubuntu-*-arm` runner, GA +
   # free for public repos). The SECOND arm64 execution leg: it runs the same
   # real binaries as `codegen-e2e-macos` but under the Linux AAPCS64 (vs Apple's
   # arm64 ABI), so it independently confirms the `#[repr(C)]` struct-by-value
@@ -438,51 +438,13 @@ jobs:
           test_build_auto_boxed
           test_project_lib_table
 
-  # 5-target matrix STAGE 3 — macOS x86_64 (Intel `macos-13`, the last Intel
-  # image). Rounds out the Apple pair: it exercises the macOS producer link path
-  # (libtool `-static`, `@rpath` install-name) under the x86-64 SysV ABI +
-  # Mach-O, a combination no other leg covers (macos-arm64 is Apple ABI; the
-  # Linux legs are ELF). Homebrew LLVM 18, same as `codegen-e2e-macos`.
-  # NON-REQUIRED until it has a green streak.
-  codegen-e2e-macos-x86_64:
-    name: Codegen E2E (macOS x86_64, LLVM 18)
-    runs-on: macos-13
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install LLVM 18 (Homebrew)
-        run: |
-          brew install llvm@18
-          PREFIX="$(brew --prefix llvm@18)"
-          echo "LLVM_SYS_181_PREFIX=$PREFIX" >> "$GITHUB_ENV"
-          echo "DYLD_FALLBACK_LIBRARY_PATH=$PREFIX/lib" >> "$GITHUB_ENV"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: llvm-e2e-macos-x86_64
-
-      - name: Build runtime staticlib archives (lean → full)
-        run: |
-          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
-          cargo rustc -p karac-runtime --release --crate-type staticlib
-
-      - name: Codegen E2E (x86_64)
-        run: cargo test --features llvm --test codegen
-
-      - name: Producer-mode E2E (library artifacts + repr(C) enums + structs)
-        run: >
-          cargo test --features llvm --test cli --
-          test_build_repr_c_enum
-          test_build_repr_c_struct
-          test_build_crate_type
-          test_build_auto_boxed
-          test_project_lib_table
+  # NOTE: the former STAGE 3 leg (Codegen E2E on macOS x86_64, Intel `macos-13`)
+  # was dropped 2026-07-09. It only covered the intersection of two things the
+  # matrix already tests — x86-64 codegen+execution (the `codegen-e2e` job on
+  # ubuntu-latest, ELF/SysV) and the macOS producer link path (`codegen-e2e-macos`
+  # on arm64, Mach-O) — so it added no unique coverage, and the scarce `macos-13`
+  # Intel runners left it queued for 1h+ without allocating. The matrix is now
+  # Linux x86-64, Linux arm64, macOS arm64 (+ the Windows build/clippy jobs).
 
   # Tier 2 of the CI test-coverage tiers (docs/spikes/ci-test-coverage.md): the
   # `--features llvm` memory-sanitizer suite — ASAN catches use-after-free /
