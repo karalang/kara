@@ -18502,6 +18502,63 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vec_filled_zero_uses_calloc_no_fill_loop() {
+        // B-2026-07-08-7: a statically-zero fill of a trivially-copyable element
+        // lowers to the `calloc`-backed `karac_alloc_zeroed_or_panic(count,size)`
+        // — one lazily-zeroed allocation, matching rust's `vec![0; n]` — and
+        // emits NO runtime fill loop (no `filled.body` block, no per-slot store).
+        let ir = ir_for("fn main() { let v: Vec[i64] = Vec.filled(8, 0); println(v[0]); }");
+        assert!(
+            ir.contains("karac_alloc_zeroed_or_panic"),
+            "zero fill should route through the calloc wrapper:\n{ir}"
+        );
+        assert!(
+            !ir.contains("filled.body"),
+            "zero fill must skip the runtime fill loop entirely:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_vec_filled_nonzero_keeps_fill_loop() {
+        // Regression guard: the calloc fast path must fire ONLY for a
+        // compile-time zero. A non-zero fill still takes the malloc + runtime
+        // fill loop (LLVM memsets it downstream) — no zeroed-alloc symbol.
+        let ir = ir_for("fn main() { let v: Vec[i64] = Vec.filled(8, 7); println(v[0]); }");
+        assert!(
+            !ir.contains("karac_alloc_zeroed_or_panic"),
+            "non-zero fill must NOT use the calloc wrapper:\n{ir}"
+        );
+        assert!(
+            ir.contains("filled.body"),
+            "non-zero fill must keep the runtime fill loop:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_vec_filled_zero_all_zeroed() {
+        // The calloc fast path must produce the same observable result as the
+        // fill loop it replaces: every slot reads back zero, len == n.
+        let out = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec.filled(5, 0);
+    println(v.len());
+    let mut i = 0i64;
+    let mut sum = 0i64;
+    while i < 5 {
+        sum = sum + v[i];
+        i = i + 1;
+    }
+    println(sum);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5\n0");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_filled_bool_with_indexed_write() {
         // Kata's `Vec.filled(n, false)` shape — followed by indexed
         // writes flipping selected slots true.

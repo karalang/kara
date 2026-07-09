@@ -39,6 +39,21 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// Lazily declare (get-or-add) the `calloc`-backed zeroed-allocation wrapper
+    /// used by the `Vec.filled(n, 0)` fast path (B-2026-07-08-7). Unlike the
+    /// byte-count `alloc_or_panic` it takes `(count, size)` — `ptr fn(i64, i64)`
+    /// — so `calloc` does the multiply with its own overflow check. Cold enough
+    /// (one call site) to declare on demand rather than cache a struct field.
+    pub(super) fn alloc_zeroed_or_panic_fn_decl(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let sym = crate::codegen::driver::c_alloc_zeroed_or_panic_symbol();
+        self.module.get_function(sym).unwrap_or_else(|| {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let i64_t = self.context.i64_type();
+            let ty = ptr_ty.fn_type(&[i64_t.into(), i64_t.into()], false);
+            self.module.add_function(sym, ty, Some(Linkage::External))
+        })
+    }
+
     /// Grow a String's byte buffer to `new_cap` bytes, preserving the first
     /// `len` bytes, and return the new data pointer (builder left positioned at
     /// the merge block, ready for the `data`/`cap` stores). A heap buffer

@@ -740,6 +740,37 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|te| !super::vec_method::is_trivially_copyable_te(te))
             .unwrap_or(false);
 
+        // Zero fast path (B-2026-07-08-7): a statically all-zero-bits fill of a
+        // trivially-copyable element is a `calloc` — one lazily-zeroed heap
+        // allocation, no fill loop at all — matching rust's `vec![0; n]`
+        // (`__rust_alloc_zeroed`), which the OS can serve from zeroed pages
+        // instead of touching every byte. Restricted to compile-time zero so it
+        // never changes the reverted auto-peephole's construction of anyone's
+        // push-loop; it only strengthens an explicit `Vec.filled(n, 0)`. The
+        // `(count, size)` calloc wrapper does the multiply with overflow check,
+        // subsuming the `n * elem_size` byte-count computation the other paths do.
+        let val_is_zero_bits = match val {
+            BasicValueEnum::IntValue(iv) => iv.get_zero_extended_constant() == Some(0),
+            BasicValueEnum::FloatValue(fv) => {
+                fv.get_constant().is_some_and(|(v, _)| v.to_bits() == 0)
+            }
+            _ => false,
+        };
+        if !needs_clone && val_is_zero_bits {
+            let buf = self
+                .builder
+                .build_call(
+                    self.alloc_zeroed_or_panic_fn_decl(),
+                    &[n.into(), elem_size.into()],
+                    "filled.zbuf",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            return Ok(self.finish_vec_filled_agg(buf, n));
+        }
+
         let alloc_bytes = self
             .builder
             .build_int_mul(n, elem_size, "filled.alloc_bytes")

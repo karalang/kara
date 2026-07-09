@@ -6450,6 +6450,28 @@ fn main() {
         );
     }
 
+    // B-2026-07-08-7: `Vec.filled(n, 0)` now allocates its buffer via the
+    // `calloc`-backed zeroed wrapper instead of malloc + fill loop. The buffer
+    // is still an ordinary heap allocation freed by the standard Vec drop —
+    // this pins that the calloc path leaks nothing and double-frees nothing
+    // (indexed writes into the zeroed buffer, then scope-exit free).
+    #[test]
+    fn asan_vec_filled_zero_calloc_buffer_freed() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.filled(8, 0);
+    v[3] = 42;
+    println(v.len());
+    println(v[3]);
+    println(v[0]);
+}
+"#,
+            &["8", "42", "0"],
+            "vec_filled_zero_calloc_buffer_freed",
+        );
+    }
+
     // `with_capacity(N)` + push exactly N times — every slot fits in
     // the pre-allocated buffer, no realloc fires, scope-exit frees
     // the single original allocation. Counterpart to

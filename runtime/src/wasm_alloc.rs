@@ -26,14 +26,14 @@ use std::alloc::{GlobalAlloc, Layout};
 use std::ffi::c_void;
 
 extern "C" {
-    // `*mut u8` (not `*mut c_void`) on `malloc`/`realloc` to match the externs
-    // declared in `alloc.rs` / `lib.rs` — all are compiled on wasm, and a
+    // `*mut u8` (not `*mut c_void`) on `malloc`/`realloc`/`calloc` to match the
+    // externs declared in `alloc.rs` / `lib.rs` — all are compiled on wasm, and a
     // signature mismatch trips the `clashing_extern_declarations` lint (the
     // `-D warnings` wasm clippy gate, B-2026-06-11-9). `*mut u8` is the majority
     // form; aligning these outliers removes the clash. ABI-identical regardless
     // (the `cabi_realloc` call site casts `c_void` ↔ `u8`, like `malloc` does).
     fn malloc(size: usize) -> *mut u8;
-    fn calloc(nmemb: usize, size: usize) -> *mut c_void;
+    fn calloc(nmemb: usize, size: usize) -> *mut u8;
     fn aligned_alloc(alignment: usize, size: usize) -> *mut c_void;
     fn realloc(ptr: *mut u8, size: usize) -> *mut u8;
     fn free(ptr: *mut c_void);
@@ -60,7 +60,7 @@ unsafe impl GlobalAlloc for LibcAlloc {
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         if layout.align() <= MALLOC_ALIGN {
-            calloc(1, layout.size()) as *mut u8
+            calloc(1, layout.size())
         } else {
             let ptr = self.alloc(layout);
             if !ptr.is_null() {
@@ -119,6 +119,19 @@ pub extern "C" fn __karac_alloc_or_panic64(size: u64) -> *mut u8 {
 pub extern "C" fn __karac_alloc_fallible64(size: u64) -> *mut u8 {
     let size = usize::try_from(size).unwrap_or(usize::MAX);
     crate::alloc::karac_alloc_fallible(size)
+}
+
+/// 64-bit-dims shim for the panicking **zeroed** allocation wrapper — the
+/// `calloc` twin of [`__karac_alloc_or_panic64`], same B-2026-06-12-1 size_t
+/// rationale. `karac_alloc_zeroed_or_panic` takes two `usize` (i32 on wasm32),
+/// but the `Vec.filled(n, 0)` codegen passes i64 `count`/`size`; each is
+/// narrowed (saturating to `usize::MAX` so an >4 GiB request fails cleanly via
+/// the wrapper's `calloc`-overflow/OOM path) before the real wrapper runs.
+#[no_mangle]
+pub extern "C" fn __karac_alloc_zeroed_or_panic64(count: u64, size: u64) -> *mut u8 {
+    let count = usize::try_from(count).unwrap_or(usize::MAX);
+    let size = usize::try_from(size).unwrap_or(usize::MAX);
+    crate::alloc::karac_alloc_zeroed_or_panic(count, size)
 }
 
 /// 64-bit-size shim for the panicking reallocation wrapper — the grow-path

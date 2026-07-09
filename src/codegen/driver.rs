@@ -1260,6 +1260,19 @@ pub(super) fn c_alloc_fallible_symbol() -> &'static str {
     }
 }
 
+/// Symbol for the panicking **zeroed** allocation wrapper — the `calloc`-backed
+/// sibling used by the `Vec.filled(n, 0)` fast path (B-2026-07-08-7). Native:
+/// `karac_alloc_zeroed_or_panic`. wasm: the `__karac_alloc_zeroed_or_panic64`
+/// i64-dims shim (same size_t-width rationale as the other alloc symbols;
+/// B-2026-06-12-1). Unlike the byte-count wrappers it takes `(count, size)`.
+pub(super) fn c_alloc_zeroed_or_panic_symbol() -> &'static str {
+    if crate::target::active_target_is_wasm() {
+        "__karac_alloc_zeroed_or_panic64"
+    } else {
+        "karac_alloc_zeroed_or_panic"
+    }
+}
+
 /// Symbol for the panicking reallocation wrapper — the grow-path counterpart of
 /// [`c_alloc_or_panic_symbol`]. Native: `karac_realloc_or_panic`. wasm: the
 /// `__karac_realloc_or_panic64` i64-size shim (same size_t-width rationale as

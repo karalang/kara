@@ -22,6 +22,7 @@
 extern "C" {
     fn malloc(size: usize) -> *mut u8;
     fn realloc(ptr: *mut u8, size: usize) -> *mut u8;
+    fn calloc(nmemb: usize, size: usize) -> *mut u8;
 }
 
 /// Fallible allocation — non-null on success, null on failure (OOM).
@@ -78,6 +79,35 @@ pub extern "C" fn karac_realloc_or_panic(ptr: *mut u8, size: usize) -> *mut u8 {
     p
 }
 
+/// Panicking **zeroed** allocation — the `calloc` counterpart of
+/// [`karac_alloc_or_panic`]. Allocates `count * size` bytes, all initialised to
+/// zero, and aborts on OOM. This is the runtime half of the `Vec.filled(n, 0)`
+/// codegen fast path: it matches rust's `vec![0; n]` (`__rust_alloc_zeroed`),
+/// which the OS can serve from lazily-zeroed pages — strictly cheaper than the
+/// `malloc + memset`/store-loop the general fill path emits (B-2026-07-08-7).
+///
+/// Taking `(count, size)` rather than a pre-multiplied byte count is deliberate:
+/// `calloc` performs the `count * size` multiply with a built-in overflow check
+/// (returning null on overflow), so an oversized request fails cleanly through
+/// the shared OOM-abort path instead of wrapping around to a tiny allocation.
+#[no_mangle]
+pub extern "C" fn karac_alloc_zeroed_or_panic(count: usize, size: usize) -> *mut u8 {
+    // Normalise a zero-byte request to one element so a successful allocation is
+    // always a unique non-null pointer (same discipline as the fallible malloc
+    // wrapper); `calloc(0, _)`/`calloc(_, 0)` may legitimately return null.
+    let (count, size) = if count == 0 || size == 0 {
+        (1, 1)
+    } else {
+        (count, size)
+    };
+    let p = unsafe { calloc(count, size) };
+    if p.is_null() {
+        crate::fatal::write_stderr(b"panic: out of memory\n");
+        std::process::abort();
+    }
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +131,21 @@ mod tests {
     #[test]
     fn or_panic_returns_non_null_on_success() {
         assert!(!karac_alloc_or_panic(128).is_null());
+    }
+
+    #[test]
+    fn zeroed_or_panic_is_non_null_and_zeroed() {
+        let p = karac_alloc_zeroed_or_panic(16, 8);
+        assert!(!p.is_null());
+        // All 16 * 8 bytes must be zero — the whole point of the calloc path.
+        let all_zero = (0..16 * 8).all(|i| unsafe { *p.add(i) } == 0);
+        assert!(all_zero);
+    }
+
+    #[test]
+    fn zeroed_or_panic_zero_dims_are_non_null() {
+        // A degenerate 0-count / 0-size request must still yield a usable pointer.
+        assert!(!karac_alloc_zeroed_or_panic(0, 8).is_null());
+        assert!(!karac_alloc_zeroed_or_panic(16, 0).is_null());
     }
 }
