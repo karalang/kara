@@ -1292,6 +1292,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // small constant trip count. Computed while `condition`/`body` are
         // in scope; applied to the back-edge instruction.
         let wants_full_unroll = self.while_loop_wants_full_unroll(condition, body);
+        // Partial (fixed-factor) unroll for the runtime-trip scalar-recurrence
+        // shape LLVM 18's cost model wrongly declines (kata #70's Fibonacci
+        // loop, ~1.38× — B-2026-07-08-24). Full unroll wins the small-constant-
+        // trip case, so it takes precedence; memory-bound loops are excluded by
+        // the scalar-only body gate so they never get force-unrolled + bloated.
+        let wants_partial_unroll =
+            !wants_full_unroll && self.while_loop_wants_partial_unroll(condition, body);
         let body_has_terminator = self
             .builder
             .get_insert_block()
@@ -1303,6 +1310,8 @@ impl<'ctx> super::Codegen<'ctx> {
             let back_edge = self.builder.build_unconditional_branch(cond_bb).unwrap();
             if wants_full_unroll {
                 self.attach_unroll_full_metadata(back_edge);
+            } else if wants_partial_unroll {
+                self.attach_unroll_count_metadata(back_edge, 4);
             }
         } else {
             self.scope_cleanup_actions.pop();

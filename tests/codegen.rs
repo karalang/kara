@@ -11197,6 +11197,34 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_partial_unroll_metadata_gated_on_scalar_recurrence_body() {
+        // A runtime-trip counted loop whose body is pure-scalar (the
+        // Fibonacci-recurrence shape, kata #70) carries
+        // `llvm.loop.unroll.count` — LLVM 18's cost model wrongly declines
+        // these loop-carried scalar recurrences, so karac forces a partial
+        // unroll for a measured ~1.5× (B-2026-07-08-24). A MEMORY-bound loop
+        // (array read/write in the body) must NOT: forcing an unroll count
+        // there only bloats it, so the scalar-only body gate excludes it.
+        let scalar = ir_for(
+            "fn fib(n: i64) -> i64 { let mut a = 1i64; let mut b = 2i64; let mut i = 3i64; \
+             while i <= n { let next = a + b; a = b; b = next; i = i + 1i64; } b } \
+             fn main() { println(fib(40i64)); }",
+        );
+        assert!(
+            scalar.contains("llvm.loop.unroll.count"),
+            "scalar-recurrence `while i <= n` loop should carry the partial-unroll hint; IR:\n{scalar}"
+        );
+        let memory = ir_for(
+            "fn main() { let mut v: Vec[i64] = Vec.filled(64i64, 0i64); let mut s = 0i64; \
+             let mut c = 0i64; while c < 64i64 { s = s + v[c]; c = c + 1i64; } println(s); }",
+        );
+        assert!(
+            !memory.contains("llvm.loop.unroll.count"),
+            "memory-bound `while c < 64 {{ s += v[c] }}` loop must NOT carry the partial-unroll hint; IR:\n{memory}"
+        );
+    }
+
+    #[test]
     fn test_e2e_ptr_dangling_is_not_null() {
         // ptr.dangling() returns a non-null pointer; ptr.is_null
         // observes false.

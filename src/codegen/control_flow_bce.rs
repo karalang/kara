@@ -1159,6 +1159,124 @@ fn body_top_level_constant_step(body: &Block, var: &str) -> bool {
     saw_step
 }
 
+/// `var` when `cond` upper-bounds a bare induction identifier — `v < X`,
+/// `v <= X`, `X > v`, `X >= v` — with `X` ANY expression (unlike
+/// `guard_upper_bounded_counter`, which needs a literal `X`). Used by the
+/// partial-unroll gate, where the bound is typically a runtime value
+/// (`while i <= n`). Both the surface `Binary` form and the trait-method-
+/// lowered `Call` form are recognised.
+fn guard_counter_var(cond: &Expr) -> Option<String> {
+    if let ExprKind::Binary { op, left, right } = &cond.kind {
+        return match (op, &left.kind, &right.kind) {
+            (BinOp::Lt | BinOp::LtEq, ExprKind::Identifier(v), _) => Some(v.clone()),
+            (BinOp::Gt | BinOp::GtEq, _, ExprKind::Identifier(v)) => Some(v.clone()),
+            _ => None,
+        };
+    }
+    if let ExprKind::Call { callee, args } = &cond.kind {
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return None;
+        };
+        if segments.len() != 2 || args.len() != 2 {
+            return None;
+        }
+        return match (
+            segments[1].as_str(),
+            &args[0].value.kind,
+            &args[1].value.kind,
+        ) {
+            ("lt" | "le", ExprKind::Identifier(v), _) => Some(v.clone()),
+            ("gt" | "ge", _, ExprKind::Identifier(v)) => Some(v.clone()),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// Fail-closed "is this a pure-scalar (register-only) expression": literals,
+/// identifiers, and arithmetic/logical `Binary`/`Unary` over the same. ANY
+/// other shape — `Index`, `Call`, `MethodCall`, `FieldAccess`, string/heap
+/// literals — returns false. This is the gate that keeps partial unroll off
+/// MEMORY-bound loops (array scans like kata #63's dp loop), which forcing an
+/// unroll count only bloats (B-2026-07-08-24).
+fn expr_is_scalar_only(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::Bool(_)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::Identifier(_) => true,
+        ExprKind::Binary { left, right, .. } => {
+            expr_is_scalar_only(left) && expr_is_scalar_only(right)
+        }
+        ExprKind::Unary { operand, .. } => expr_is_scalar_only(operand),
+        // The typechecker lowers primitive operators to trait-method Calls —
+        // `a + b` → `i64::add(a, b)`, `i + 1` → `i64::add(i, 1)` (same rewrite
+        // as the comparison Call form `walk_guard_conjuncts` handles). Accept a
+        // 2-segment `<prim>::<op>(scalar args…)` call as scalar; every other
+        // call (heap method, user fn, `Vec.push`, …) is not.
+        ExprKind::Call { callee, args } => {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                if segments.len() == 2 && is_scalar_op_method(&segments[1]) {
+                    return args.iter().all(|a| expr_is_scalar_only(&a.value));
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// The primitive operator names the typechecker's operator-to-trait-method
+/// lowering produces: arithmetic, bitwise, and comparison. A call to one of
+/// these on scalar operands is pure register work — no memory, no side
+/// effect — so it keeps a loop body eligible for partial unroll.
+fn is_scalar_op_method(name: &str) -> bool {
+    matches!(
+        name,
+        "add"
+            | "sub"
+            | "mul"
+            | "div"
+            | "rem"
+            | "neg"
+            | "bitand"
+            | "bitor"
+            | "bitxor"
+            | "shl"
+            | "shr"
+            | "not"
+            | "eq"
+            | "ne"
+            | "lt"
+            | "le"
+            | "gt"
+            | "ge"
+    )
+}
+
+/// Fail-closed "is every top-level statement of `body` pure-scalar": `let`
+/// with a scalar initializer, scalar `x = e` / `x ±= e`, or a scalar
+/// expression statement. Any other statement (nested loop, `return`, a
+/// call, an indexed write) declines. A top-level-only scan matches
+/// `body_top_level_constant_step`: a loop whose body is entirely scalar
+/// arithmetic + counter advance is the Fibonacci-recurrence shape partial
+/// unroll wins on.
+fn body_is_scalar_only(body: &Block) -> bool {
+    body.stmts.iter().all(|stmt| match &stmt.kind {
+        StmtKind::Let { value, .. } => expr_is_scalar_only(value),
+        StmtKind::Assign { target, value } => {
+            expr_is_scalar_only(target) && expr_is_scalar_only(value)
+        }
+        StmtKind::CompoundAssign { target, value, .. } => {
+            expr_is_scalar_only(target) && expr_is_scalar_only(value)
+        }
+        StmtKind::Expr(e) => expr_is_scalar_only(e),
+        _ => false,
+    })
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     /// Whether this `while` loop should carry `llvm.loop.unroll.full`
     /// metadata: a small, constant-upper-bounded counted loop whose
@@ -1173,6 +1291,27 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         body_top_level_constant_step(body, &var)
+    }
+
+    /// Whether this `while` loop should carry `llvm.loop.unroll.count` (a
+    /// PARTIAL unroll by a fixed factor): a counted loop — a counter var
+    /// upper-bounded in the guard and advanced by a constant step every
+    /// iteration — whose body is entirely PURE-SCALAR (register arithmetic,
+    /// no memory/calls). That is the Fibonacci-recurrence shape (kata #70's
+    /// `next = a + b`) where LLVM 18's cost model wrongly declines the
+    /// unroll (a loop-carried scalar recurrence "looks" un-parallelizable),
+    /// but forcing a 4× unroll amortizes the per-iteration branch overhead
+    /// for a measured ~1.38× win (B-2026-07-08-24). MEMORY-bound loops
+    /// (array scans — e.g. #63's dp) are excluded by `body_is_scalar_only`:
+    /// forcing a count there only bloats them (the in-pipeline cost model
+    /// serves them, and full re-optimization keeps them neutral). The
+    /// constant-small-trip case is left to `while_loop_wants_full_unroll`,
+    /// so the caller checks that first.
+    pub(super) fn while_loop_wants_partial_unroll(&self, cond: &Expr, body: &Block) -> bool {
+        let Some(var) = guard_counter_var(cond) else {
+            return false;
+        };
+        body_top_level_constant_step(body, &var) && body_is_scalar_only(body)
     }
 
     /// Attach `!llvm.loop !{!self, !{!"llvm.loop.unroll.full"}}` to a
@@ -1210,6 +1349,48 @@ impl<'ctx> super::Codegen<'ctx> {
             LLVMMetadataReplaceAllUsesWith(temp, loop_id);
 
             // branch !llvm.loop !loop_id
+            let kind = b"llvm.loop";
+            let kind_id =
+                LLVMGetMDKindIDInContext(ctx, kind.as_ptr() as *const c_char, kind.len() as c_uint);
+            let loop_id_val = LLVMMetadataAsValue(ctx, loop_id);
+            LLVMSetMetadata(branch.as_value_ref(), kind_id, loop_id_val);
+        }
+    }
+
+    /// Attach `!llvm.loop !{!self, !{!"llvm.loop.unroll.count", i32 count}}`
+    /// to a loop's back-edge branch — a PARTIAL unroll by a fixed factor
+    /// (vs `attach_unroll_full_metadata`'s full unroll). Same self-referential
+    /// loop-id recipe; the only difference is the property node carries the
+    /// `unroll.count` key plus an `i32` operand. See
+    /// `while_loop_wants_partial_unroll` for when it fires.
+    pub(super) fn attach_unroll_count_metadata(
+        &self,
+        branch: inkwell::values::InstructionValue<'ctx>,
+        count: u32,
+    ) {
+        use inkwell::values::AsValueRef;
+        use llvm_sys::core::{
+            LLVMGetMDKindIDInContext, LLVMMDNodeInContext2, LLVMMDStringInContext2,
+            LLVMMetadataAsValue, LLVMSetMetadata, LLVMValueAsMetadata,
+        };
+        use llvm_sys::debuginfo::{LLVMMetadataReplaceAllUsesWith, LLVMTemporaryMDNode};
+        use std::os::raw::{c_char, c_uint};
+
+        let ctx = self.context.raw();
+        let count_const = self.context.i32_type().const_int(count as u64, false);
+        unsafe {
+            // !{!"llvm.loop.unroll.count", i32 count}
+            let key = b"llvm.loop.unroll.count";
+            let prop_str = LLVMMDStringInContext2(ctx, key.as_ptr() as *const c_char, key.len());
+            let count_md = LLVMValueAsMetadata(count_const.as_value_ref());
+            let mut prop_ops = [prop_str, count_md];
+            let prop_node = LLVMMDNodeInContext2(ctx, prop_ops.as_mut_ptr(), prop_ops.len());
+
+            let temp = LLVMTemporaryMDNode(ctx, std::ptr::null_mut(), 0);
+            let mut loop_ops = [temp, prop_node];
+            let loop_id = LLVMMDNodeInContext2(ctx, loop_ops.as_mut_ptr(), loop_ops.len());
+            LLVMMetadataReplaceAllUsesWith(temp, loop_id);
+
             let kind = b"llvm.loop";
             let kind_id =
                 LLVMGetMDKindIDInContext(ctx, kind.as_ptr() as *const c_char, kind.len() as c_uint);
