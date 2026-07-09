@@ -6631,6 +6631,16 @@ impl<'ctx> Codegen<'ctx> {
         // declare concrete (non-generic) functions for forward-call support.
         for item in &program.items {
             if let Item::Function(f) = item {
+                // `comptime fn`s (including `#[derive(X)]`'s `derive_x`) run only
+                // at compile time — the comptime fold evaluates them via the
+                // interpreter and splices their results; their bodies (reflection
+                // calls like `T.name()`, `ast.item(..)`) have no runtime lowering
+                // and must NOT reach codegen, which would fail dispatch ("no
+                // handler for method 'name' on variable 'T'"). Skip declaring +
+                // compiling them entirely (B-2026-07-08-15 Layer 3).
+                if f.is_comptime {
+                    continue;
+                }
                 if f.generic_params.is_some() {
                     self.generic_fns.insert(f.name.clone(), f.clone());
                     // Register the CONCRETE return-type name (if any) so code
@@ -6921,6 +6931,11 @@ impl<'ctx> Codegen<'ctx> {
         self.compute_fns_returning_heap_env_vec();
         for item in &program.items {
             if let Item::Function(f) = item {
+                // Comptime-only fn — never emitted (B-2026-07-08-15 Layer 3);
+                // see the declare pass above.
+                if f.is_comptime {
+                    continue;
+                }
                 if f.generic_params.is_none() {
                     if self.declare_only_fns.contains(&f.name) {
                         continue;

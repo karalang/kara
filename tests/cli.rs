@@ -3384,6 +3384,45 @@ fn write_run_temp(tag: &str, src: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn test_run_comptime_derive_fn_skipped_by_codegen() {
+    // B-2026-07-08-15 Layer 3: a `#[derive(X)]`'s `comptime fn derive_x` runs
+    // only at compile time (the comptime fold evaluates it via the interpreter
+    // and splices the items it returns). Its body — reflection like `T.name()`
+    // and `ast.item(..)` — has no runtime lowering, so codegen must SKIP it.
+    // Before, codegen tried to compile the derive fn and aborted with "no
+    // handler for method 'name' on variable 'T'"; now it is skipped and the
+    // GENERATED method compiles and runs, matching the interpreter. Uses the
+    // real CLI (the codegen unit harness skips the comptime fold). Relevance
+    // rose after Slice 6c made `karac run` JIT-default. Default run is JIT.
+    let path = write_run_temp(
+        "comptime-derive",
+        "comptime fn derive_double(comptime T: Type) -> Vec[Item] {\n\
+            let n = T.name();\n\
+            [ast.item(\"impl \" + n + \" { fn doubled(ref self) -> i64 { self.val * 2 } }\")]\n\
+         }\n\
+         #[derive(Double)]\n\
+         struct W { val: i64 }\n\
+         fn main() { let w = W { val: 5 }; println(w.doubled()); }\n",
+    );
+    for args in [
+        vec!["run", path.to_str().unwrap()],
+        vec!["run", "--interp", path.to_str().unwrap()],
+    ] {
+        let out = karac_bin().args(&args).output().unwrap();
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.status.success() && combined.contains("10"),
+            "derive under {args:?} should print 10; got:\n{combined}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
 fn test_run_contract_violation_prints_message_and_exits_nonzero() {
     let path = write_run_temp(
         "contract",
