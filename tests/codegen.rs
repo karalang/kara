@@ -26351,6 +26351,92 @@ fn main() {
         }
     }
 
+    // ── Generic associated types (GATs) codegen ───────────────────
+    //
+    // The GAT typechecker/resolver slices (design.md § Generic
+    // associated types) are pinned by 46 tests in `tests/typechecker.rs`,
+    // but the runtime lowering of a projected GAT return had NO codegen
+    // coverage. These two E2E tests exercise it: a call whose signature
+    // return is `Self.Mapped[..]` must lower to the impl binding's
+    // concrete right-hand side and run correctly. The first is a concrete
+    // impl (`Mapped[U] = Vec[U]`); the second is the harder generic impl
+    // where the RHS mixes the impl's own param `T` with the GAT param `U`
+    // (`Mapped[U] = Pair[T, U]`), so codegen must apply the two-sided
+    // substitution the resolver computes, not just a single map.
+
+    #[test]
+    fn test_e2e_gat_concrete_impl_projection_returns_vec() {
+        // `Doubler` binds `Mapped[U] = Vec[U]`; `map_to_i64(ref self) ->
+        // Self.Mapped[i64]` resolves to `Vec[i64]`. The returned vector is
+        // indexed at the call site, proving the projected type lowered to a
+        // real `Vec[i64]` (not an opaque/aborted shape).
+        let out = run_program(
+            r#"
+trait Functor {
+    type Mapped[U];
+    fn map_to_i64(ref self) -> Self.Mapped[i64];
+}
+struct Doubler {}
+impl Functor for Doubler {
+    type Mapped[U] = Vec[U];
+    fn map_to_i64(ref self) -> Vec[i64] {
+        let mut v: Vec[i64] = Vec.new();
+        v.push(21i64);
+        v.push(42i64);
+        v
+    }
+}
+fn caller(d: ref Doubler) -> Vec[i64] {
+    d.map_to_i64()
+}
+fn main() {
+    let dbl = Doubler {};
+    let result = caller(dbl);
+    println(f"{result[0]}");
+    println(f"{result[1]}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "21\n42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_gat_generic_impl_two_sided_substitution() {
+        // `impl[T] Functor for Wrapper[T]` with `Mapped[U] = Pair[T, U]`:
+        // resolving `Self.Mapped[i64]` for `Wrapper[bool]` must substitute
+        // BOTH the impl param `T = bool` and the GAT param `U = i64`,
+        // yielding `Pair[bool, i64]`. Reads back both fields to prove each
+        // side of the substitution reached codegen intact.
+        let out = run_program(
+            r#"
+trait Functor {
+    type Mapped[U];
+    fn rewrap(ref self) -> Self.Mapped[i64];
+}
+struct Pair[A, B] { a: A, b: B }
+struct Wrapper[T] { x: T }
+impl[T] Functor for Wrapper[T] {
+    type Mapped[U] = Pair[T, U];
+    fn rewrap(ref self) -> Pair[T, i64] {
+        Pair { a: self.x, b: 99i64 }
+    }
+}
+fn main() {
+    let w = Wrapper { x: true };
+    let p = w.rewrap();
+    let msg = if p.a { "yes" } else { "no" };
+    println(msg);
+    println(f"{p.b}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "yes\n99");
+        }
+    }
+
     // ── F-string codegen (Phase 7.2 minimum formatter) ────────────
 
     #[test]
