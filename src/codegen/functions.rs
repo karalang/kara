@@ -184,14 +184,27 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
             Vec::with_capacity(func.params.len());
         let mut coerced_struct_params: Vec<(usize, String)> = Vec::new();
+        let mut indirect_struct_params: Vec<(usize, String)> = Vec::new();
         for (i, p) in func.params.iter().enumerate() {
             if is_export && self.target_is_aarch64 {
                 if let Some(name) = struct_by_value_param_name(&p.ty) {
                     if self.struct_types.contains_key(name.as_str()) {
-                        if let Some(coerced) = self.arm64_repr_c_struct_coercion(&name)? {
-                            param_types.push(coerced.into());
-                            coerced_struct_params.push((i, name));
-                            continue;
+                        match self.arm64_repr_c_struct_coercion(&name)? {
+                            super::types_lowering::Arm64ParamClass::Coerced(coerced) => {
+                                param_types.push(coerced.into());
+                                coerced_struct_params.push((i, name));
+                                continue;
+                            }
+                            super::types_lowering::Arm64ParamClass::Indirect => {
+                                // > 16 B non-HFA: AAPCS passes a `ptr` to a
+                                // caller-owned copy. The prologue loads the
+                                // struct value back through it.
+                                param_types
+                                    .push(self.context.ptr_type(AddressSpace::default()).into());
+                                indirect_struct_params.push((i, name));
+                                continue;
+                            }
+                            super::types_lowering::Arm64ParamClass::Direct => {}
                         }
                     }
                 }
@@ -201,6 +214,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if !coerced_struct_params.is_empty() {
             self.arm64_coerced_struct_params
                 .insert(func.name.clone(), coerced_struct_params);
+            self.arm64_coerced_export_names.insert(func.name.clone());
+        }
+        if !indirect_struct_params.is_empty() {
+            self.arm64_indirect_struct_params
+                .insert(func.name.clone(), indirect_struct_params);
             self.arm64_coerced_export_names.insert(func.name.clone());
         }
 
@@ -848,12 +866,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     .arm64_coerced_struct_params
                     .get(&func.name)
                     .and_then(|v| v.iter().find(|(idx, _)| *idx == i).map(|(_, n)| n.clone()));
+                // AArch64 indirect struct param (B-2026-07-09-2 Slice 3a): a
+                // > 16 B `#[repr(C)]` struct arrives as a `ptr` to the caller's
+                // copy. Load the struct value through it — the alloca+store
+                // below then owns an independent copy (AAPCS lets the callee
+                // treat the indirect argument as its own).
+                let indirect_struct = self
+                    .arm64_indirect_struct_params
+                    .get(&func.name)
+                    .and_then(|v| v.iter().find(|(idx, _)| *idx == i).map(|(_, n)| n.clone()));
                 let param_val = if let Some(struct_name) = coerced_struct {
                     let struct_ty = *self.struct_types.get(struct_name.as_str()).unwrap();
                     let tmp = self.create_entry_alloca(fn_val, "kabi.coerce", param_val.get_type());
                     self.builder.build_store(tmp, param_val).unwrap();
                     self.builder
                         .build_load(struct_ty, tmp, "kabi.reload")
+                        .unwrap()
+                } else if let Some(struct_name) = indirect_struct {
+                    let struct_ty = *self.struct_types.get(struct_name.as_str()).unwrap();
+                    self.builder
+                        .build_load(struct_ty, param_val.into_pointer_value(), "kabi.indirect")
                         .unwrap()
                 } else {
                     param_val

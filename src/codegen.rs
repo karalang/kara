@@ -3130,6 +3130,14 @@ pub(super) struct Codegen<'ctx> {
     /// type (`[N x i64]` / `[N x fp]` / `i64`); the body prologue reconstructs
     /// the original struct value from it. Empty on x86-64 (no coercion).
     pub(crate) arm64_coerced_struct_params: HashMap<String, Vec<(usize, String)>>,
+    /// Per-function record of `#[repr(C)]` struct params passed **indirectly**
+    /// on AArch64 (B-2026-07-09-2 Slice 3a): fn name → `[(param_index,
+    /// struct_name)]`. AAPCS passes a > 16 B non-HFA struct as a `ptr` to a
+    /// caller-owned copy, so the declared LLVM param at `param_index` is `ptr`;
+    /// the body prologue loads the struct value back through it. Distinct from
+    /// `arm64_coerced_struct_params` (register coercion for ≤ 16 B). Empty on
+    /// x86-64.
+    pub(crate) arm64_indirect_struct_params: HashMap<String, Vec<(usize, String)>>,
     /// Exported fn names whose signature carries an AArch64-coerced struct
     /// param. An internal Kāra call to one would need matching arg coercion
     /// (not implemented in this slice), so `compile_call` rejects it with an
@@ -5729,6 +5737,7 @@ impl<'ctx> Codegen<'ctx> {
             target_is_aarch64: !crate::target::active_target_is_wasm()
                 && driver::native_target_is_aarch64(),
             arm64_coerced_struct_params: HashMap::new(),
+            arm64_indirect_struct_params: HashMap::new(),
             arm64_coerced_export_names: std::collections::HashSet::new(),
             arm64_coerced_struct_returns: HashMap::new(),
             current_fn_arm64_return_coercion: None,

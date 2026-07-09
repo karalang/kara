@@ -115,6 +115,19 @@ fn single_i32_param_coerces_to_i64() {
     assert_param_coercion("#[repr(C)]\npub struct P { a: i32 }", "i32", "i64");
 }
 
+#[test]
+fn big_nonhfa_param_passed_indirect_ptr() {
+    // clang arm64: a > 16 B non-HFA struct is passed indirectly — the caller
+    // allocates a copy and passes a `ptr`:
+    //   define i64 @take(ptr nocapture noundef readonly %0)
+    // (Slice 3a). We match the *type* (`ptr`); attributes are opt hints.
+    assert_param_coercion(
+        "#[repr(C)]\npub struct P { a: i64, b: i64, c: i64 }",
+        "i64",
+        "ptr",
+    );
+}
+
 // ── Returns (Slice 2) ───────────────────────────────────────────────
 
 /// Assert the `define <ret> @make(...)` return type for a fn returning `P`.

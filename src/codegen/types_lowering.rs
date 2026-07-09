@@ -34,6 +34,18 @@ use super::helpers::{
 };
 use super::state::SharedTypeInfo;
 
+/// How a `#[repr(C)]` struct crosses the C ABI by value on AArch64 (AAPCS),
+/// from `arm64_repr_c_struct_coercion` (B-2026-07-09-2). Register cases are
+/// `Coerced`; the > 16 B non-HFA case is `Indirect` (Slice 3a).
+pub(super) enum Arm64ParamClass<'ctx> {
+    /// Pass the raw struct unchanged (unknown / empty struct).
+    Direct,
+    /// Pass in registers, coerced to this type (`i64` / `[2 x i64]` / `[N x fp]`).
+    Coerced(BasicTypeEnum<'ctx>),
+    /// > 16 B non-HFA: pass a `ptr` to a caller-owned copy (indirect).
+    Indirect,
+}
+
 /// Flatten an aggregate LLVM type into its leaf scalar types (recursing through
 /// nested structs and arrays), in field order. Used by the AArch64 HFA test
 /// (`arm64_repr_c_struct_coercion`): a Homogeneous Floating-point Aggregate is
@@ -1850,17 +1862,18 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   - HFA (1..=4 leaves, all the same float type) → `[N x <float>]` (v-regs)
     ///   - non-HFA, size ≤ 8 B → `i64`; ≤ 16 B → `[2 x i64]` (x0..x1)
     ///
-    /// Returns `Ok(None)` to pass the struct directly (no known struct / empty),
-    /// or `Err(reason)` for a shape AAPCS passes *indirectly* (> 16 B non-HFA),
-    /// which the caller turns into a codegen error (pass-by-pointer) rather than
-    /// a silent miscompile. The coercions match `clang -target arm64-apple`
-    /// exactly (verified against the ABI oracle table).
+    /// Returns `Direct` to pass the struct unchanged (no known struct / empty),
+    /// `Coerced(ty)` for a register coercion (≤ 16 B / HFA), or `Indirect` for a
+    /// shape AAPCS passes by pointer (> 16 B non-HFA): the caller allocates a
+    /// copy and passes its address (B-2026-07-09-2 Slice 3a). `Err` only when
+    /// target-data layout is unavailable. The coercions match `clang -target
+    /// arm64-apple` exactly (verified against the ABI oracle table).
     pub(super) fn arm64_repr_c_struct_coercion(
         &mut self,
         struct_name: &str,
-    ) -> Result<Option<BasicTypeEnum<'ctx>>, String> {
+    ) -> Result<Arm64ParamClass<'ctx>, String> {
         let Some(st) = self.struct_types.get(struct_name).copied() else {
-            return Ok(None);
+            return Ok(Arm64ParamClass::Direct);
         };
         let mut leaves: Vec<BasicTypeEnum<'ctx>> = Vec::new();
         collect_leaf_scalars(st.into(), &mut leaves);
@@ -1868,7 +1881,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if (1..=4).contains(&leaves.len()) {
             if let Some(BasicTypeEnum::FloatType(fty)) = leaves.first().copied() {
                 if leaves.iter().all(|l| *l == leaves[0]) {
-                    return Ok(Some(fty.array_type(leaves.len() as u32).into()));
+                    return Ok(Arm64ParamClass::Coerced(
+                        fty.array_type(leaves.len() as u32).into(),
+                    ));
                 }
             }
         }
@@ -1878,17 +1893,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let size = self.ensure_target_data()?.get_abi_size(&st);
         let i64_t = self.context.i64_type();
         if size == 0 {
-            Ok(None)
+            Ok(Arm64ParamClass::Direct)
         } else if size <= 8 {
-            Ok(Some(i64_t.into()))
+            Ok(Arm64ParamClass::Coerced(i64_t.into()))
         } else if size <= 16 {
-            Ok(Some(i64_t.array_type(2).into()))
+            Ok(Arm64ParamClass::Coerced(i64_t.array_type(2).into()))
         } else {
-            Err(format!(
-                "`#[repr(C)]` struct `{struct_name}` ({size} bytes, non-HFA) cannot cross the C \
-                 ABI by value on AArch64 yet — AAPCS passes it indirectly. Pass it by raw pointer \
-                 (`*const {struct_name}`) instead (tracked: B-2026-07-09-2)."
-            ))
+            // > 16 B non-HFA: AAPCS passes a `ptr` to a caller-owned copy.
+            Ok(Arm64ParamClass::Indirect)
         }
     }
 

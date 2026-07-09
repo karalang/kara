@@ -128,9 +128,10 @@ impl<'ctx> super::Codegen<'ctx> {
             if self.arm64_coerced_export_names.contains(n) {
                 return Err(format!(
                     "cannot call `{n}` from Kāra code on AArch64: it is a `pub extern \"C\" fn` \
-                     whose `#[repr(C)]` struct param is coerced to the AAPCS register ABI for the \
-                     C boundary. Move the body into a non-exported helper and call that from Kāra; \
-                     keep `{n}` as the thin C-facing export. Tracked: B-2026-07-09-2."
+                     whose `#[repr(C)]` struct param/return uses the AAPCS C-boundary ABI \
+                     (register-coerced for ≤ 16 B, a pointer to a caller copy for > 16 B). Move \
+                     the body into a non-exported helper and call that from Kāra; keep `{n}` as \
+                     the thin C-facing export. Tracked: B-2026-07-09-2."
                 ));
             }
         }
