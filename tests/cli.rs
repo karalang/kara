@@ -21080,6 +21080,118 @@ fn test_build_repr_c_struct_return_from_c_e2e() {
     }
 }
 
+/// Producer-mode `#[repr(C)]` struct **larger than 16 bytes** crossing the C
+/// ABI by value (B-2026-07-09-2 Slice 3a/3b/3c). A 24-byte `{i64,i64,i64}` is
+/// MEMORY/indirect class on both targets: a `byval` pointer param on x86-64 (a
+/// plain indirect pointer on AArch64) and an `sret` return on both. This
+/// exercises all three shapes — a by-value param (`sum3`), an sret return
+/// (`make`), and a fn that does both (`roundtrip`) — and a C host reads the
+/// fields back. On x86-64 this is a real-execution proof of Slice 3c (which
+/// closes the pre-existing silent-miscompile there); on arm64 CI it proves 3a
+/// + 3b. Soft-skips on the no-llvm fallback / missing runtime / missing `cc`.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_repr_c_struct_big_byval_sret_from_c_e2e() {
+    use std::io::Write;
+    let src = "#[repr(C)]\npub struct Big { a: i64, b: i64, c: i64 }\n\
+               pub extern \"C\" fn sum3(s: Big) -> i64 { s.a + s.b + s.c }\n\
+               pub extern \"C\" fn make(x: i64) -> Big { Big { a: x, b: x + 1, c: x + 2 } }\n\
+               pub extern \"C\" fn roundtrip(s: Big, d: i64) -> Big {\n\
+               \x20   Big { a: s.a + d, b: s.b, c: s.c }\n\
+               }\n";
+    let dir = std::env::temp_dir().join(format!("karac_reprc_big_e2e_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut f = std::fs::File::create(dir.join("kernel.kara")).unwrap();
+        f.write_all(src.as_bytes()).unwrap();
+    }
+
+    let build = karac_bin()
+        .current_dir(&dir)
+        .args(["build", "kernel.kara", "--crate-type", "staticlib"])
+        .output()
+        .unwrap();
+    let berr = String::from_utf8_lossy(&build.stderr);
+    let lib = dir.join("libkernel.a");
+    let header = dir.join("libkernel.h");
+    if berr.contains("requires the llvm feature")
+        || berr.contains("link failed")
+        || !lib.exists()
+        || !header.exists()
+    {
+        eprintln!(
+            "skip: test_build_repr_c_struct_big_byval_sret_from_c_e2e — build/link soft-skip"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+
+    let host_c = "#include <stdio.h>\n\
+                  #include \"libkernel.h\"\n\
+                  int main(void) {\n\
+                      karac_runtime_init();\n\
+                      struct Big b = make(10);\n\
+                      long long s1 = (long long)sum3(b);\n\
+                      struct Big r = roundtrip(b, 5);\n\
+                      printf(\"%lld %lld %lld %lld %lld %lld\\n\",\n\
+                             (long long)b.a, (long long)b.b, (long long)b.c,\n\
+                             s1, (long long)r.a, (long long)sum3(r));\n\
+                      karac_runtime_shutdown();\n\
+                      return 0;\n\
+                  }\n";
+    {
+        let mut f = std::fs::File::create(dir.join("host.c")).unwrap();
+        f.write_all(host_c.as_bytes()).unwrap();
+    }
+
+    let cc = std::process::Command::new("cc")
+        .current_dir(&dir)
+        .args([
+            "host.c",
+            "libkernel.a",
+            "-lpthread",
+            "-lm",
+            "-ldl",
+            "-o",
+            "host",
+        ])
+        .output();
+    let cc = match cc {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("skip: test_build_repr_c_struct_big_byval_sret_from_c_e2e — no `cc`");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+    };
+    assert!(
+        cc.status.success(),
+        "C host failed to link the >16B struct-ABI Kāra staticlib:\n{}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+
+    let run = common::output_with_hang_watchdog(
+        {
+            let mut c = std::process::Command::new(dir.join("host"));
+            c.current_dir(&dir);
+            c
+        },
+        std::time::Duration::from_secs(15),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(run) = run {
+        // make(10) -> {10,11,12}; sum3 -> 33; roundtrip(b,5) -> {15,11,12};
+        // sum3(r) -> 15+11+12 = 38.
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "10 11 12 33 15 38",
+            ">16B repr(C) struct crossed the C ABI with wrong field value(s)"
+        );
+        assert_eq!(run.status.code(), Some(0));
+    }
+}
+
 /// Producer-mode auto-boxing + auto-destructor (additive-interop Slice 4
 /// Path B). A `pub extern "C" fn -> Vec[i64]` is auto-boxed for the C ABI:
 /// the export returns an opaque `KaraVec_int64_t*` (heap box), the header

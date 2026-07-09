@@ -1443,6 +1443,21 @@ pub(super) fn native_target_is_aarch64() -> bool {
     s.starts_with("aarch64") || s.starts_with("arm64")
 }
 
+/// Whether the build target is x86-64. Gates the SysV `#[repr(C)]`
+/// struct-by-value handling for structs > 16 B (MEMORY class): a `byval`
+/// pointer param and an `sret` return, which the raw-struct lowering does NOT
+/// match (B-2026-07-09-2 Slice 3c). Structs ≤ 16 B stay raw (they match SysV's
+/// eightbyte register classification by luck, per the green x86-64 CI).
+/// `KARAC_FORCE_TARGET_ARCH=x86_64` overrides for local testing.
+pub(super) fn native_target_is_x86_64() -> bool {
+    if let Ok(forced) = std::env::var("KARAC_FORCE_TARGET_ARCH") {
+        return forced == "x86_64" || forced == "x86-64" || forced == "amd64";
+    }
+    let triple = TargetMachine::get_default_triple();
+    let s = triple.as_str().to_string_lossy();
+    s.starts_with("x86_64") || s.starts_with("amd64")
+}
+
 fn create_native_target_machine(cpu_override: Option<&str>) -> Result<TargetMachine, String> {
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| format!("Failed to initialize native target: {}", e))?;

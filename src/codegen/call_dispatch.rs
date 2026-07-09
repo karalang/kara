@@ -125,7 +125,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // struct param takes a register-coerced type this call site doesn't
             // pack. Reject the internal call rather than pass a mismatched arg
             // (the boxed-export pattern — extract a non-exported helper).
-            if self.arm64_coerced_export_names.contains(n) {
+            if self.abi_adapted_export_names.contains(n) {
                 return Err(format!(
                     "cannot call `{n}` from Kāra code on AArch64: it is a `pub extern \"C\" fn` \
                      whose `#[repr(C)]` struct param/return uses the AAPCS C-boundary ABI \

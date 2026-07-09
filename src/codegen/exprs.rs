@@ -901,7 +901,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // explicit `return v;` site; matches the tail site.
                         let coerced = self.reinterpret_value_as(v, coerced_ty);
                         self.builder.build_return(Some(&coerced)).unwrap();
-                    } else if let Some(sret_ptr) = self.current_fn_arm64_sret_param {
+                    } else if let Some(sret_ptr) = self.current_fn_sret_param {
                         // AArch64 `sret` return (Slice 3b) — explicit `return v;`
                         // site; store through the caller's result pointer, then
                         // `ret void`. Matches the tail site.

@@ -1958,6 +1958,47 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// x86-64 SysV classification for a `#[repr(C)]` struct passed by value
+    /// (B-2026-07-09-2 Slice 3c). A struct ≤ 16 B is `Direct` — the raw-struct
+    /// lowering matches SysV's eightbyte register classification by luck (the
+    /// green x86-64 CI is the standing proof). A struct larger than 16 B is
+    /// MEMORY class: passed as a `ptr byval(%Struct)`, which the raw lowering
+    /// does NOT match, so it is `Indirect`. (There is no HFA concept on x86-64 —
+    /// an all-float struct larger than 16 B is MEMORY too, unlike AArch64.)
+    pub(super) fn x86_64_repr_c_struct_param_class(
+        &mut self,
+        struct_name: &str,
+    ) -> Result<Arm64ParamClass<'ctx>, String> {
+        let Some(st) = self.struct_types.get(struct_name).copied() else {
+            return Ok(Arm64ParamClass::Direct);
+        };
+        let size = self.ensure_target_data()?.get_abi_size(&st);
+        if size <= 16 {
+            Ok(Arm64ParamClass::Direct)
+        } else {
+            Ok(Arm64ParamClass::Indirect)
+        }
+    }
+
+    /// x86-64 SysV classification for a `#[repr(C)]` struct **returned** by
+    /// value (B-2026-07-09-2 Slice 3c). A struct ≤ 16 B is `Direct` (raw struct
+    /// matches SysV eightbyte return by luck); a struct larger than 16 B is
+    /// MEMORY class, returned via `sret` (result pointer in rdi) — `Sret`.
+    pub(super) fn x86_64_repr_c_struct_return_class(
+        &mut self,
+        struct_name: &str,
+    ) -> Result<Arm64ReturnClass<'ctx>, String> {
+        let Some(st) = self.struct_types.get(struct_name).copied() else {
+            return Ok(Arm64ReturnClass::Direct);
+        };
+        let size = self.ensure_target_data()?.get_abi_size(&st);
+        if size <= 16 {
+            Ok(Arm64ReturnClass::Direct)
+        } else {
+            Ok(Arm64ReturnClass::Sret(st))
+        }
+    }
+
     // ── Shared type helpers ─────────────────────────────────────────
 
     /// Check if a type name refers to a shared (RC) type.

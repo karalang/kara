@@ -49,6 +49,17 @@ fn arm64_forced() -> bool {
         .unwrap_or(false)
 }
 
+/// True when the x86-64 SysV struct ABI is in effect: either forced via the env
+/// or running natively on an x86-64 host (the common `cargo test` case — the
+/// `codegen-e2e` CI job is x86-64, so these run there for free). Any other
+/// forced arch disables them.
+fn x86_64_active() -> bool {
+    match std::env::var("KARAC_FORCE_TARGET_ARCH") {
+        Ok(v) => v == "x86_64" || v == "x86-64" || v == "amd64",
+        Err(_) => cfg!(target_arch = "x86_64"),
+    }
+}
+
 fn assert_param_coercion(struct_def: &str, field_ty: &str, expect_param: &str) {
     if !arm64_forced() {
         eprintln!("skip: KARAC_FORCE_TARGET_ARCH not set to aarch64");
@@ -225,5 +236,76 @@ fn hfa_return_stays_raw_struct() {
     assert!(
         line.contains("double, double") && !line.contains("[2 x i64]"),
         "HFA return should stay a raw 2-double struct:\n{line}"
+    );
+}
+
+// ── x86-64 SysV (Slice 3c) ──────────────────────────────────────────
+//
+// x86-64 matches the raw-struct lowering for ≤ 16 B (eightbyte register
+// classification, by luck), so only the larger-than-16 B MEMORY case is
+// adapted: a `byval` pointer param and an `sret` return. These run natively on
+// the x86-64 `codegen-e2e` CI job (no forcing needed).
+
+#[test]
+fn x86_64_small_struct_param_stays_raw() {
+    // ≤ 16 B: x86-64 keeps the raw struct (matches SysV eightbytes by luck).
+    if !x86_64_active() {
+        return;
+    }
+    let src = "#[repr(C)]\npub struct P { a: f64, b: i64 }\n\
+               pub extern \"C\" fn probe(s: P) -> f64 { s.a }\n";
+    let line = define_line(&ir_for(src), "probe");
+    assert!(
+        !line.contains("byval") && !line.contains("ptr "),
+        "≤16B x86-64 param should stay raw (no byval/ptr):\n{line}"
+    );
+}
+
+#[test]
+fn x86_64_big_struct_param_uses_byval() {
+    // clang x86-64: define i64 @f(ptr byval(%struct.P) align 8 %0)
+    if !x86_64_active() {
+        return;
+    }
+    let src = "#[repr(C)]\npub struct P { a: i64, b: i64, c: i64 }\n\
+               pub extern \"C\" fn sum(s: P) -> i64 { s.a }\n";
+    let line = define_line(&ir_for(src), "sum");
+    assert!(
+        line.contains("byval("),
+        "x86-64 >16B param must be `ptr byval(...)`:\n{line}"
+    );
+}
+
+#[test]
+fn x86_64_big_struct_return_uses_sret() {
+    // clang x86-64: define void @make(ptr sret(%struct.P) align 8 %0, i64 %1)
+    if !x86_64_active() {
+        return;
+    }
+    let src = "#[repr(C)]\npub struct P { a: i64, b: i64, c: i64 }\n\
+               pub extern \"C\" fn make(x: i64) -> P { P { a: x, b: x, c: x } }\n";
+    let line = define_line(&ir_for(src), "make");
+    assert!(
+        line.starts_with("define void @make(") && line.contains("sret("),
+        "x86-64 >16B return must be void + `sret(...)`:\n{line}"
+    );
+}
+
+#[test]
+fn x86_64_big_struct_combined_sret_then_byval() {
+    // clang x86-64: void @rt(ptr sret(%P) %0, ptr byval(%P) %1, i64 %2)
+    if !x86_64_active() {
+        return;
+    }
+    let src = "#[repr(C)]\npub struct P { a: i64, b: i64, c: i64 }\n\
+               pub extern \"C\" fn rt(s: P, d: i64) -> P { P { a: s.a + d, b: s.b, c: s.c } }\n";
+    let line = define_line(&ir_for(src), "rt");
+    assert!(
+        line.starts_with("define void @rt(ptr sret("),
+        "sret result pointer must be first:\n{line}"
+    );
+    assert!(
+        line.contains("byval(") && line.contains("i64 %2"),
+        "byval struct param must follow the sret pointer, scalar last:\n{line}"
     );
 }

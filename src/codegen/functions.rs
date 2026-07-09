@@ -41,17 +41,18 @@ fn struct_by_value_param_name(ty: &TypeExpr) -> Option<String> {
 }
 
 impl<'ctx> super::Codegen<'ctx> {
-    /// The AArch64 AAPCS classification for `func`'s `#[repr(C)]`
-    /// struct-by-value return: `Direct` when it doesn't apply (not arm64, not
-    /// an export, not a by-value struct return, or an HFA — which returns raw),
-    /// `Coerced` for a ≤ 16 B register return, or `Sret` for a > 16 B return
-    /// (B-2026-07-09-2 Slices 2 + 3b).
-    fn arm64_return_coercion_for(
+    /// The per-target classification for `func`'s `#[repr(C)]` struct-by-value
+    /// return: `Direct` when it doesn't apply (not an export, not a by-value
+    /// struct return, or a target/shape that returns raw — e.g. an AArch64 HFA
+    /// or any x86-64 struct ≤ 16 B), `Coerced` for an AArch64 ≤ 16 B register
+    /// return, or `Sret` for a larger-than-16 B return on either target
+    /// (B-2026-07-09-2 Slices 2 + 3b/3c).
+    fn repr_c_struct_return_class_for(
         &mut self,
         func: &Function,
     ) -> Result<super::types_lowering::Arm64ReturnClass<'ctx>, String> {
         use super::types_lowering::Arm64ReturnClass;
-        if !self.target_is_aarch64 || !crate::cheader::is_exported(func) {
+        if !crate::cheader::is_exported(func) {
             return Ok(Arm64ReturnClass::Direct);
         }
         let Some(rt) = func.return_type.as_ref() else {
@@ -63,7 +64,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.struct_types.contains_key(name.as_str()) {
             return Ok(Arm64ReturnClass::Direct);
         }
-        self.arm64_repr_c_struct_return_coercion(&name)
+        if self.target_is_aarch64 {
+            self.arm64_repr_c_struct_return_coercion(&name)
+        } else if self.target_is_x86_64 {
+            self.x86_64_repr_c_struct_return_class(&name)
+        } else {
+            Ok(Arm64ReturnClass::Direct)
+        }
     }
 
     /// The `#[link_name("symbol")]` value carried by `attrs`, if any —
@@ -188,19 +195,33 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut coerced_struct_params: Vec<(usize, String)> = Vec::new();
         let mut indirect_struct_params: Vec<(usize, String)> = Vec::new();
         for (i, p) in func.params.iter().enumerate() {
-            if is_export && self.target_is_aarch64 {
+            if is_export {
                 if let Some(name) = struct_by_value_param_name(&p.ty) {
                     if self.struct_types.contains_key(name.as_str()) {
-                        match self.arm64_repr_c_struct_coercion(&name)? {
+                        // Per-target `#[repr(C)]` struct-by-value param ABI. On
+                        // AArch64 the full AAPCS classifier applies (HFA / ≤ 16 B
+                        // register coercion / larger-than-16 B indirect). On
+                        // x86-64 only the larger-than-16 B MEMORY case needs
+                        // handling (indirect `byval`); ≤ 16 B stays raw.
+                        let class = if self.target_is_aarch64 {
+                            self.arm64_repr_c_struct_coercion(&name)?
+                        } else if self.target_is_x86_64 {
+                            self.x86_64_repr_c_struct_param_class(&name)?
+                        } else {
+                            super::types_lowering::Arm64ParamClass::Direct
+                        };
+                        match class {
                             super::types_lowering::Arm64ParamClass::Coerced(coerced) => {
                                 param_types.push(coerced.into());
                                 coerced_struct_params.push((i, name));
                                 continue;
                             }
                             super::types_lowering::Arm64ParamClass::Indirect => {
-                                // > 16 B non-HFA: AAPCS passes a `ptr` to a
-                                // caller-owned copy. The prologue loads the
-                                // struct value back through it.
+                                // Larger than 16 B: passed by pointer — a plain
+                                // `ptr` to a caller copy (AArch64) or a `ptr
+                                // byval(%Struct)` (x86-64, attribute added after
+                                // `add_function`). The prologue loads the struct
+                                // value back through it either way.
                                 param_types
                                     .push(self.context.ptr_type(AddressSpace::default()).into());
                                 indirect_struct_params.push((i, name));
@@ -216,12 +237,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if !coerced_struct_params.is_empty() {
             self.arm64_coerced_struct_params
                 .insert(func.name.clone(), coerced_struct_params);
-            self.arm64_coerced_export_names.insert(func.name.clone());
+            self.abi_adapted_export_names.insert(func.name.clone());
         }
         if !indirect_struct_params.is_empty() {
-            self.arm64_indirect_struct_params
+            self.indirect_struct_params
                 .insert(func.name.clone(), indirect_struct_params);
-            self.arm64_coerced_export_names.insert(func.name.clone());
+            self.abi_adapted_export_names.insert(func.name.clone());
         }
 
         // Niche call ABI for `Option[shared T]` signature positions
@@ -322,7 +343,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .ptr_type(AddressSpace::default())
                 .fn_type(&param_types, false)
         } else if let super::types_lowering::Arm64ReturnClass::Coerced(coerced_ret) =
-            self.arm64_return_coercion_for(func)?
+            self.repr_c_struct_return_class_for(func)?
         {
             // AArch64 `#[repr(C)]` struct-by-value return (B-2026-07-09-2
             // Slice 2): return the AAPCS-coerced register type (`i64` /
@@ -330,28 +351,29 @@ impl<'ctx> super::Codegen<'ctx> {
             // reinterprets its struct value into it. Recorded so the body
             // prologue picks up the coercion, and the fn is marked a coerced
             // export (internal Kāra calls rejected — the caller expects a
-            // struct value, not the register form).
+            // struct value, not the register form). x86-64 never yields
+            // `Coerced` (≤ 16 B stays raw there).
             self.arm64_coerced_struct_returns
                 .insert(func.name.clone(), coerced_ret);
-            self.arm64_coerced_export_names.insert(func.name.clone());
+            self.abi_adapted_export_names.insert(func.name.clone());
             match coerced_ret {
                 BasicTypeEnum::IntType(t) => t.fn_type(&param_types, false),
                 BasicTypeEnum::ArrayType(t) => t.fn_type(&param_types, false),
                 _ => unreachable!("arm64 struct-return coercion is i64 or [2 x i64]"),
             }
         } else if let super::types_lowering::Arm64ReturnClass::Sret(struct_ty) =
-            self.arm64_return_coercion_for(func)?
+            self.repr_c_struct_return_class_for(func)?
         {
-            // AArch64 `#[repr(C)]` > 16 B struct return (B-2026-07-09-2 Slice
-            // 3b): AAPCS returns it via `sret`. The function returns `void` and
-            // gains a leading `ptr sret(%Struct)` result param (passed in x8);
-            // each return site stores the struct value through it. Recorded so
-            // the body sets up the sret param + shifts Kāra param indices; the
-            // `sret` attribute (ABI-load-bearing for x8) is added after
-            // `add_function`. Internal Kāra calls are rejected.
-            self.arm64_sret_struct_returns
+            // `#[repr(C)]` larger-than-16 B struct return (B-2026-07-09-2 Slice
+            // 3b/3c): returned via `sret` on both AArch64 (x8) and x86-64 SysV
+            // (rdi). The function returns `void` and gains a leading `ptr
+            // sret(%Struct)` result param; each return site stores the struct
+            // value through it. Recorded so the body sets up the sret param +
+            // shifts Kāra param indices; the `sret` attribute (ABI-load-bearing)
+            // is added after `add_function`. Internal Kāra calls are rejected.
+            self.sret_struct_returns
                 .insert(func.name.clone(), struct_ty);
-            self.arm64_coerced_export_names.insert(func.name.clone());
+            self.abi_adapted_export_names.insert(func.name.clone());
             let ptr_ty = self.context.ptr_type(AddressSpace::default());
             let mut sret_params: Vec<BasicMetadataTypeEnum<'ctx>> =
                 Vec::with_capacity(param_types.len() + 1);
@@ -490,18 +512,46 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_param_alias_attrs(fn_val, func);
         self.emit_codegen_hint_attrs(fn_val, func);
 
-        // AArch64 `sret` return (B-2026-07-09-2 Slice 3b): attach the
-        // `sret(%Struct)` type attribute to the leading result pointer. This is
-        // ABI-load-bearing, not cosmetic — the AArch64 backend uses it to route
-        // the pointer through x8 (a plain ptr param would land in x0 and break
-        // the C contract). Matches `clang`'s `ptr sret(%struct.P) %0`.
-        if let Some(&struct_ty) = self.arm64_sret_struct_returns.get(&func.name) {
+        // `sret` return (B-2026-07-09-2 Slice 3b/3c): attach the `sret(%Struct)`
+        // type attribute to the leading result pointer. This is ABI-load-bearing,
+        // not cosmetic — the backend uses it to route the pointer through the
+        // dedicated result register (x8 on AArch64, rdi on x86-64 SysV); a plain
+        // ptr param would take an ordinary arg register and break the C contract.
+        // Matches `clang`'s `ptr sret(%struct.P) %0` on both targets.
+        if let Some(&struct_ty) = self.sret_struct_returns.get(&func.name) {
             use inkwell::types::AnyType;
             let kind_id = inkwell::attributes::Attribute::get_named_enum_kind_id("sret");
             let attr = self
                 .context
                 .create_type_attribute(kind_id, struct_ty.as_any_type_enum());
             fn_val.add_attribute(inkwell::attributes::AttributeLoc::Param(0), attr);
+        }
+
+        // x86-64 SysV indirect struct param (B-2026-07-09-2 Slice 3c): a
+        // larger-than-16 B `#[repr(C)]` struct is MEMORY class, passed as a `ptr
+        // byval(%Struct)`. The `byval` attribute is ABI-load-bearing on x86-64 —
+        // it tells the backend the caller has placed a copy on the stack and the
+        // callee reads through the pointer (matches `clang`'s `ptr byval(...)`).
+        // AArch64 does NOT use `byval` (its indirect params are plain pointers),
+        // so this is x86-64-only. The LLVM param index is the Kāra index shifted
+        // by +1 when the fn also returns via `sret` (the leading result pointer).
+        if self.target_is_x86_64 {
+            if let Some(indirect) = self.indirect_struct_params.get(&func.name).cloned() {
+                use inkwell::types::AnyType;
+                let sret_base = u32::from(self.sret_struct_returns.contains_key(&func.name));
+                let kind_id = inkwell::attributes::Attribute::get_named_enum_kind_id("byval");
+                for (idx, struct_name) in indirect {
+                    if let Some(&struct_ty) = self.struct_types.get(struct_name.as_str()) {
+                        let attr = self
+                            .context
+                            .create_type_attribute(kind_id, struct_ty.as_any_type_enum());
+                        fn_val.add_attribute(
+                            inkwell::attributes::AttributeLoc::Param(idx as u32 + sret_base),
+                            attr,
+                        );
+                    }
+                }
+            }
         }
 
         // Phase-7 line 5 sub-item 1 — hot-swap slot registration.
@@ -849,17 +899,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // into this register type. `None` on x86-64 / non-coerced returns.
         self.current_fn_arm64_return_coercion =
             self.arm64_coerced_struct_returns.get(&func.name).copied();
-        // AArch64 `sret` return (B-2026-07-09-2 Slice 3b): if this fn returns a
-        // > 16 B `#[repr(C)]` struct, its leading LLVM param is the caller's
-        // result pointer (x8). Capture it so every return site stores through
-        // it; its presence also shifts each Kāra param index by +1 in the
-        // binding loop below. `None` on x86-64 / register / HFA returns.
-        self.current_fn_arm64_sret_param =
-            if self.arm64_sret_struct_returns.contains_key(&func.name) {
-                Some(fn_val.get_nth_param(0).unwrap().into_pointer_value())
-            } else {
-                None
-            };
+        // `sret` return (B-2026-07-09-2 Slice 3b/3c): if this fn returns a
+        // larger-than-16 B `#[repr(C)]` struct, its leading LLVM param is the
+        // caller's result pointer (x8 on AArch64, rdi on x86-64). Capture it so
+        // every return site stores through it; its presence also shifts each
+        // Kāra param index by +1 in the binding loop below. `None` for
+        // register/HFA returns.
+        self.current_fn_sret_param = if self.sret_struct_returns.contains_key(&func.name) {
+            Some(fn_val.get_nth_param(0).unwrap().into_pointer_value())
+        } else {
+            None
+        };
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
@@ -902,7 +952,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // AArch64 `sret` return (Slice 3b) prepends a leading result-pointer
             // param, so every Kāra param sits one slot to the right. `sret_base`
             // is 1 when this fn returns via sret, 0 otherwise (the common case).
-            let sret_base = u32::from(self.current_fn_arm64_sret_param.is_some());
+            let sret_base = u32::from(self.current_fn_sret_param.is_some());
             for (i, param) in func.params.iter().enumerate() {
                 let param_name = self.param_name(param);
                 let param_val = fn_val.get_nth_param(i as u32 + sret_base).unwrap();
@@ -924,7 +974,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // below then owns an independent copy (AAPCS lets the callee
                 // treat the indirect argument as its own).
                 let indirect_struct = self
-                    .arm64_indirect_struct_params
+                    .indirect_struct_params
                     .get(&func.name)
                     .and_then(|v| v.iter().find(|(idx, _)| *idx == i).map(|(_, n)| n.clone()));
                 let param_val = if let Some(struct_name) = coerced_struct {
@@ -1640,7 +1690,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .as_deref()
                         .and_then(|e| self.compile_ref_return_ptr(e))
                 };
-                if let Some(sret_ptr) = self.current_fn_arm64_sret_param {
+                if let Some(sret_ptr) = self.current_fn_sret_param {
                     // AArch64 `sret` return (Slice 3b): store the struct value
                     // through the caller's result pointer and `ret void`. Checked
                     // BEFORE `fn_returns_void` — the LLVM signature IS void here,

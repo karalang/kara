@@ -3119,11 +3119,17 @@ pub(super) struct Codegen<'ctx> {
     /// intrinsic is invoked.
     pub(crate) target_data: Option<TargetData>,
     /// Whether the build target is AArch64 — computed once at construction
-    /// from the native triple (or `KARAC_FORCE_TARGET_ARCH`). Gates the
-    /// per-target `#[repr(C)]` struct-by-value ABI coercion (B-2026-07-09-2);
-    /// x86-64's raw-struct lowering already matches the C ABI, so the coercion
-    /// path is AArch64-only and this stays `false` there (zero x86-64 change).
+    /// from the native triple (or `KARAC_FORCE_TARGET_ARCH`). Gates the AArch64
+    /// `#[repr(C)]` struct-by-value ABI: HFA / ≤ 16 B register coercion, and the
+    /// larger-than-16 B indirect/`sret` cases (B-2026-07-09-2).
     pub(crate) target_is_aarch64: bool,
+    /// Whether the build target is x86-64 — computed once at construction.
+    /// x86-64 SysV matches the raw-struct lowering for `#[repr(C)]` structs
+    /// ≤ 16 B (eightbyte register classification, by luck), so those need no
+    /// adaptation. A struct larger than 16 B is MEMORY class, which the raw
+    /// lowering does NOT match — it gets a `byval` param / `sret` return
+    /// (B-2026-07-09-2 Slice 3c). `false` outside x86-64.
+    pub(crate) target_is_x86_64: bool,
     /// Per-function record of `#[repr(C)]` struct params coerced to an AAPCS
     /// register type on AArch64 (B-2026-07-09-2): fn name → `[(param_index,
     /// struct_name)]`. The declared LLVM param at `param_index` is the coerced
@@ -3131,18 +3137,20 @@ pub(super) struct Codegen<'ctx> {
     /// the original struct value from it. Empty on x86-64 (no coercion).
     pub(crate) arm64_coerced_struct_params: HashMap<String, Vec<(usize, String)>>,
     /// Per-function record of `#[repr(C)]` struct params passed **indirectly**
-    /// on AArch64 (B-2026-07-09-2 Slice 3a): fn name → `[(param_index,
-    /// struct_name)]`. AAPCS passes a > 16 B non-HFA struct as a `ptr` to a
-    /// caller-owned copy, so the declared LLVM param at `param_index` is `ptr`;
-    /// the body prologue loads the struct value back through it. Distinct from
-    /// `arm64_coerced_struct_params` (register coercion for ≤ 16 B). Empty on
-    /// x86-64.
-    pub(crate) arm64_indirect_struct_params: HashMap<String, Vec<(usize, String)>>,
-    /// Exported fn names whose signature carries an AArch64-coerced struct
-    /// param. An internal Kāra call to one would need matching arg coercion
-    /// (not implemented in this slice), so `compile_call` rejects it with an
+    /// (B-2026-07-09-2 Slice 3a/3c): fn name → `[(param_index, struct_name)]`.
+    /// A struct larger than 16 B crosses the C boundary by pointer on both
+    /// AArch64 (a plain `ptr` to a caller-owned copy) and x86-64 SysV (a `ptr
+    /// byval(%Struct)`), so the declared LLVM param at `param_index` is `ptr`;
+    /// the body prologue loads the struct value back through it. The `byval`
+    /// attribute (x86-64 only) is attached after `add_function`. Distinct from
+    /// `arm64_coerced_struct_params` (register coercion for ≤ 16 B, AArch64).
+    pub(crate) indirect_struct_params: HashMap<String, Vec<(usize, String)>>,
+    /// Exported fn names whose signature adapts a `#[repr(C)]` struct param or
+    /// return to the target C ABI (register coercion, indirect `byval`, or
+    /// `sret`). An internal Kāra call to one would need matching arg/return
+    /// adaptation (not implemented), so `compile_call` rejects it with an
     /// actionable message — mirroring the boxed-export rejection.
-    pub(crate) arm64_coerced_export_names: std::collections::HashSet<String>,
+    pub(crate) abi_adapted_export_names: std::collections::HashSet<String>,
     /// Per-function AArch64-coerced `#[repr(C)]` struct **return** type
     /// (B-2026-07-09-2 Slice 2): fn name → the coerced LLVM return type
     /// (`i64` / `[2 x i64]`). The declared return type is coerced; each return
@@ -3154,18 +3162,18 @@ pub(super) struct Codegen<'ctx> {
     /// reinterprets its `#[repr(C)]` struct value into this type before
     /// `ret`. `None` on x86-64 and for non-coerced returns.
     pub(crate) current_fn_arm64_return_coercion: Option<BasicTypeEnum<'ctx>>,
-    /// Per-function AArch64 `sret` return (B-2026-07-09-2 Slice 3b): fn name →
-    /// the returned `#[repr(C)]` struct's LLVM type. A > 16 B non-HFA struct is
-    /// returned via `sret` — the LLVM signature drops the struct return (becomes
-    /// `void`) and gains a leading `ptr sret(%Struct)` param (x8); each return
-    /// site stores the struct value through that pointer and `ret void`s. Empty
-    /// on x86-64 and for register/HFA returns.
-    pub(crate) arm64_sret_struct_returns: HashMap<String, inkwell::types::StructType<'ctx>>,
+    /// Per-function `sret` return (B-2026-07-09-2 Slice 3b/3c): fn name → the
+    /// returned `#[repr(C)]` struct's LLVM type. A struct larger than 16 B is
+    /// returned via `sret` on both AArch64 (x8) and x86-64 SysV (rdi): the LLVM
+    /// signature drops the struct return (becomes `void`) and gains a leading
+    /// `ptr sret(%Struct)` param; each return site stores the struct value
+    /// through that pointer and `ret void`s. Empty for register/HFA returns.
+    pub(crate) sret_struct_returns: HashMap<String, inkwell::types::StructType<'ctx>>,
     /// The current function's `sret` result pointer (the leading param), set at
-    /// body entry from `arm64_sret_struct_returns`. `Some` ⇒ every return site
-    /// stores its struct value here and returns `void`; the prologue also shifts
-    /// every Kāra param index by +1 to skip this leading pointer.
-    pub(crate) current_fn_arm64_sret_param: Option<inkwell::values::PointerValue<'ctx>>,
+    /// body entry from `sret_struct_returns`. `Some` ⇒ every return site stores
+    /// its struct value here and returns `void`; the prologue also shifts every
+    /// Kāra param index by +1 to skip this leading pointer.
+    pub(crate) current_fn_sret_param: Option<inkwell::values::PointerValue<'ctx>>,
     // ── Hot-swap codegen (phase-7 line 5) ─────────────────────────
     /// Set by `compile_to_*_with_hot_swap` from the CLI's
     /// `--enable-hot-swap` flag. When `true`, every call to a
@@ -5748,13 +5756,15 @@ impl<'ctx> Codegen<'ctx> {
             target_data: None,
             target_is_aarch64: !crate::target::active_target_is_wasm()
                 && driver::native_target_is_aarch64(),
+            target_is_x86_64: !crate::target::active_target_is_wasm()
+                && driver::native_target_is_x86_64(),
             arm64_coerced_struct_params: HashMap::new(),
-            arm64_indirect_struct_params: HashMap::new(),
-            arm64_coerced_export_names: std::collections::HashSet::new(),
+            indirect_struct_params: HashMap::new(),
+            abi_adapted_export_names: std::collections::HashSet::new(),
             arm64_coerced_struct_returns: HashMap::new(),
             current_fn_arm64_return_coercion: None,
-            arm64_sret_struct_returns: HashMap::new(),
-            current_fn_arm64_sret_param: None,
+            sret_struct_returns: HashMap::new(),
+            current_fn_sret_param: None,
             hot_swap_enabled: false,
             declare_only_fns: std::collections::HashSet::new(),
             main_symbol_override: None,

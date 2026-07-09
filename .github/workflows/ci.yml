@@ -383,7 +383,7 @@ jobs:
         run: >
           cargo test --features llvm --test cli --
           test_build_repr_c_enum
-          test_build_repr_c_struct_return
+          test_build_repr_c_struct
           test_build_crate_type
           test_build_auto_boxed
           test_project_lib_table
@@ -433,7 +433,7 @@ jobs:
         run: >
           cargo test --features llvm --test cli --
           test_build_repr_c_enum
-          test_build_repr_c_struct_return
+          test_build_repr_c_struct
           test_build_crate_type
           test_build_auto_boxed
           test_project_lib_table
@@ -479,7 +479,7 @@ jobs:
         run: >
           cargo test --features llvm --test cli --
           test_build_repr_c_enum
-          test_build_repr_c_struct_return
+          test_build_repr_c_struct
           test_build_crate_type
           test_build_auto_boxed
           test_project_lib_table
