@@ -3840,10 +3840,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let (elem, unsigned) = if let Some(ti) = self.tensor_var_infos.get(name) {
             (ti.elem, ti.elem_unsigned)
-        } else if let Some(ci) = self.column_var_infos.get(name) {
-            (ci.elem, ci.elem_unsigned)
         } else {
-            return None;
+            let ci = self.column_var_infos.get(name)?;
+            (ci.elem, ci.elem_unsigned)
         };
         let prim = self.primitive_type_name_for_llvm(elem, unsigned)?;
         Some(GenericArg::Type(TypeExpr {

@@ -520,7 +520,7 @@ impl<'a> UseClassifier<'a> {
             // else the whole-`c` read (empty place) would overlap it. The
             // leaf itself is still classified per `mode` (a read stays a
             // read); the place only refines disjointness.
-            ExprKind::FieldAccess { object: _, .. } | ExprKind::TupleIndex { object: _, .. } => {
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
                 let leaf_mode = if mode == Mode::Consuming && !self.expr_is_copy(expr) {
                     Mode::Consuming
                 } else {

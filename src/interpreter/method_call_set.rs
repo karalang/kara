@@ -137,7 +137,7 @@ impl<'a> super::Interpreter<'a> {
                 if let (Value::SortedSet(ref a_set), Value::SortedSet(ref b_set)) = (obj, &other) {
                     #[allow(clippy::mutable_key_type)]
                     let mut result = a_set.clone();
-                    for (k, _v) in b_set.iter() {
+                    for k in b_set.keys() {
                         result.insert(k.clone(), ());
                     }
                     return Some(Value::SortedSet(result));

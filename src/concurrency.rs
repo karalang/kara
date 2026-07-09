@@ -1417,7 +1417,8 @@ impl<'a> ConcurrencyChecker<'a> {
                     // accumulator the loop also writes to.
                     if induction_step_via_assign(value, &name) {
                         // i = i + const_lit — loop-counter step; ignored.
-                    } else if let Some(op) = reduction_binary_shape(value, &name) {
+                    } else {
+                        let op = reduction_binary_shape(value, &name)?;
                         match reduction {
                             None => reduction = Some((name, op)),
                             Some((ref existing_name, existing_op)) => {
@@ -1426,8 +1427,6 @@ impl<'a> ConcurrencyChecker<'a> {
                                 }
                             }
                         }
-                    } else {
-                        return None;
                     }
                 }
                 StmtKind::CompoundAssign { target, op, value } => {

@@ -333,7 +333,7 @@ fn write_struct_plain(out: &mut String, name: &str, fields: &HashMap<String, Val
             }
             out.push_str(k);
             out.push_str(": ");
-            out.push_str(&format!("{}", &fields[*k]));
+            out.push_str(&format!("{}", fields[*k]));
         }
         out.push_str(" }");
     }

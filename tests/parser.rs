@@ -864,7 +864,7 @@ fn test_effect_variable_in_generics() {
         assert!(
             matches!(&effects.items[0], EffectItem::Variable(v) if v == "E"),
             "expected Variable(\"E\"), got {:?}",
-            &effects.items[0]
+            effects.items[0]
         );
     }
 }
@@ -897,7 +897,7 @@ fn test_multiple_effect_variables_comma_separated() {
                 matches!(&effects.items[i], EffectItem::Variable(v) if v == name),
                 "expected Variable({}), got {:?}",
                 name,
-                &effects.items[i]
+                effects.items[i]
             );
         }
     }
@@ -4074,7 +4074,7 @@ fn test_extern_function() {
            }"#,
     );
     let Item::ExternBlock(b) = &prog.items[0] else {
-        panic!("expected ExternBlock, got {:?}", &prog.items[0]);
+        panic!("expected ExternBlock, got {:?}", prog.items[0]);
     };
     assert_eq!(b.abi, "C");
     assert_eq!(b.items.len(), 1);
@@ -4590,7 +4590,7 @@ fn test_unsafe_fn_parses_and_records_is_unsafe() {
     // only the surface marker.
     let prog = parse_ok("unsafe fn foo() {}");
     let Item::Function(f) = &prog.items[0] else {
-        panic!("expected Function, got {:?}", &prog.items[0]);
+        panic!("expected Function, got {:?}", prog.items[0]);
     };
     assert!(f.is_unsafe, "is_unsafe should be set on `unsafe fn`");
     assert_eq!(f.name, "foo");
@@ -4801,7 +4801,7 @@ fn test_extern_block_opaque_type_parses() {
         "#,
     );
     let Item::ExternBlock(b) = &prog.items[0] else {
-        panic!("expected ExternBlock, got {:?}", &prog.items[0]);
+        panic!("expected ExternBlock, got {:?}", prog.items[0]);
     };
     assert_eq!(b.abi, "C");
     assert_eq!(b.items.len(), 1);
@@ -8954,12 +8954,7 @@ fn test_let_uninit_scalar() {
     if let Item::Function(f) = &prog.items[0] {
         assert_eq!(f.body.stmts.len(), 1);
         match &f.body.stmts[0].kind {
-            StmtKind::LetUninit {
-                is_mut,
-                name,
-                ty: _,
-                ..
-            } => {
+            StmtKind::LetUninit { is_mut, name, .. } => {
                 assert!(!is_mut);
                 assert_eq!(name, "x");
             }

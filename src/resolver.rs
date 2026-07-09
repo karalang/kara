@@ -450,9 +450,9 @@ impl SymbolTable {
             if let Some(&sym_id) = scope.names.get(name) {
                 return Some(&self.symbols[sym_id.0]);
             }
-            match scope.parent {
-                Some(parent) => scope_id = parent,
-                None => return None,
+            {
+                let parent = scope.parent?;
+                scope_id = parent
             }
         }
     }

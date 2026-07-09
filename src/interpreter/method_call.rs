@@ -1884,10 +1884,9 @@ fn parse_overflow_arith(method: &str) -> Option<(OvFam, OvOp)> {
         (OvFam::Checked, r)
     } else if let Some(r) = method.strip_prefix("saturating_") {
         (OvFam::Saturating, r)
-    } else if let Some(r) = method.strip_prefix("overflowing_") {
-        (OvFam::Overflowing, r)
     } else {
-        return None;
+        let r = method.strip_prefix("overflowing_")?;
+        (OvFam::Overflowing, r)
     };
     let op = match rest {
         "add" => OvOp::Add,

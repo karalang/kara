@@ -397,10 +397,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let TypeKind::Path(p) = &te.kind {
                     if p.segments.len() == 1 && p.generic_args.is_none() {
                         let name = &p.segments[0];
-                        if let Some(cv) = self.const_subst.get(name) {
+                        {
+                            let cv = self.const_subst.get(name)?;
                             const_value_as_u32(cv)?
-                        } else {
-                            return None;
                         }
                     } else {
                         return None;
@@ -450,10 +449,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let TypeKind::Path(p) = &te.kind {
                     if p.segments.len() == 1 && p.generic_args.is_none() {
                         let name = &p.segments[0];
-                        if let Some(cv) = self.const_subst.get(name) {
+                        {
+                            let cv = self.const_subst.get(name)?;
                             const_value_as_u32(cv)?
-                        } else {
-                            return None;
                         }
                     } else {
                         return None;

@@ -124,10 +124,7 @@ pub(super) fn extract_derived_traits(attributes: &[Attribute]) -> HashSet<String
                     // `#[derive(Display(snake_case))]` — call expression;
                     // extract the callee-name identifier as the trait name.
                     Some(Expr {
-                        kind:
-                            ExprKind::Call {
-                                callee, args: _, ..
-                            },
+                        kind: ExprKind::Call { callee, .. },
                         ..
                     }) => {
                         if let ExprKind::Identifier(name) = &callee.kind {

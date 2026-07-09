@@ -835,7 +835,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
-                StmtKind::LetUninit { name: _, .. } => {
+                StmtKind::LetUninit { .. } => {
                     // LetUninit has no immediate value; tracked only as a
                     // "name defined" — the slot value is whatever later
                     // assignment writes. Slice A doesn't lift this case
@@ -944,7 +944,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .collect();
         names_with_branch.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         for (branch_idx, name, stmt) in names_with_branch {
-            if let Some(llvm_ty) = self.infer_let_binding_llvm_type(stmt) {
+            {
+                let llvm_ty = self.infer_let_binding_llvm_type(stmt)?;
                 // A closure-valued return slot (a heap-env closure binding, or a
                 // COPY of one) can't round-trip the par-group join — see the
                 // group-level bail above. The construction-site `is_heap_env_producing_call`
@@ -965,14 +966,6 @@ impl<'ctx> super::Codegen<'ctx> {
                     llvm_ty,
                     var_type_name: Self::let_binding_annotation_type_name(stmt),
                 });
-            } else {
-                // RHS shape we can't recover the LLVM type from. Bail
-                // — the caller drops the par-group and falls back to
-                // sequential compilation. Emitting the group with the
-                // binding silently absent leaves it as a class-(i)
-                // branch-local alloca and every later read site
-                // fails with "Undefined variable".
-                return None;
             }
         }
         Some(slots)
