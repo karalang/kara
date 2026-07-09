@@ -3384,6 +3384,65 @@ fn write_run_temp(tag: &str, src: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn test_run_derive_generated_body_typechecked_under_codegen() {
+    // B-2026-07-08-15 Layer 1: a derive SPLICES generated method bodies AFTER
+    // the normal typecheck/lower, so an un-annotated local (whose type comes
+    // from a call result — `let v = Vec.new(); v.push(..)`, or `let b =
+    // self.make()` where `make` returns a Vec) had no codegen side-table and
+    // failed dispatch ("no handler for method 'push' on variable 'v'"). The fold
+    // now runs first, then the program is re-resolved + re-typechecked before
+    // lowering. Two shapes: (1) an un-annotated call-result local across two
+    // generated methods; (2) TWO un-annotated Vec locals in ONE generated body —
+    // which additionally exercises the span re-anchor (the old collapse-to-one-
+    // span put both locals at the same SpanKey, colliding their side-tables and
+    // silently miscompiling). Both must match the interpreter under the (now
+    // JIT-default) `karac run`.
+    let cases = [
+        (
+            "chain",
+            "comptime fn derive_chain(comptime T: Type) -> Vec[Item] {\n\
+                let n = T.name();\n\
+                [ast.item(\"impl \" + n + \" { fn make(ref self) -> Vec[i64] { let mut v = Vec.new(); v.push(self.a); v.push(self.a); v } fn count(ref self) -> i64 { let b = self.make(); b.len() as i64 } }\")]\n\
+             }\n\
+             #[derive(Chain)]\n\
+             struct S { a: i64 }\n\
+             fn main() { println(S { a: 9 }.count()); }\n",
+            "2",
+        ),
+        (
+            "twovec",
+            "comptime fn derive_two(comptime T: Type) -> Vec[Item] {\n\
+                let n = T.name();\n\
+                [ast.item(\"impl \" + n + \" { fn combine(ref self) -> i64 { let mut a = Vec.new(); a.push(self.x); a.push(self.x); let mut b = Vec.new(); b.push(self.y); let mut s = 0; for e in a.iter() { s = s + e; } for e in b.iter() { s = s + e; } s } }\")]\n\
+             }\n\
+             #[derive(Two)]\n\
+             struct P { x: i64, y: i64 }\n\
+             fn main() { println(P { x: 10, y: 3 }.combine()); }\n",
+            "23",
+        ),
+    ];
+    for (tag, src, expected) in cases {
+        let path = write_run_temp(tag, src);
+        for args in [
+            vec!["run", path.to_str().unwrap()],
+            vec!["run", "--interp", path.to_str().unwrap()],
+        ] {
+            let out = karac_bin().args(&args).output().unwrap();
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(
+                out.status.success() && combined.contains(expected),
+                "derive case {tag} under {args:?} should print {expected}; got:\n{combined}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+}
+
+#[test]
 fn test_run_comptime_derive_fn_skipped_by_codegen() {
     // B-2026-07-08-15 Layer 3: a `#[derive(X)]`'s `comptime fn derive_x` runs
     // only at compile time (the comptime fold evaluates it via the interpreter

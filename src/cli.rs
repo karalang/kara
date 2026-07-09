@@ -1057,13 +1057,36 @@ impl Pipeline {
     /// operand types) and before any downstream phase that consumes the AST
     /// (effectcheck / ownership / interpreter / codegen).
     fn lower(&mut self) {
-        if let Some(ref typed) = self.typed {
+        if self.typed.is_none() {
+            return;
+        }
+        // `#[derive(X)]` expansion (B-2026-07-08-15 Layer 1): a derive SPLICES
+        // new items (methods/impls) into the program. Those generated bodies
+        // must be name-resolved and typechecked so codegen's span-keyed side-
+        // tables (element types of un-annotated locals, `let b = self.make()`
+        // where `make` returns a `Vec`, etc.) are populated — otherwise codegen
+        // fails dispatch ("no handler for method 'push' on variable 'v'"). So
+        // when derives are present, fold+expand FIRST, then RE-RESOLVE and
+        // RE-TYPECHECK the mutated program, then operator-lower. Pure
+        // `comptime { … }`-block folding adds no items and keeps the original
+        // lower→fold order (no re-typecheck cost). This runs in `lower()` so
+        // every path that lowers (check / build / run) gets it uniformly.
+        if crate::comptime::has_derives_to_expand(&self.parsed.program) {
+            let typed = self.typed.take().unwrap();
+            let fold_errors = crate::comptime::evaluate(&mut self.parsed.program, &typed);
+            self.comptime_errors
+                .get_or_insert_with(Vec::new)
+                .extend(fold_errors);
+            // Re-run name resolution + typecheck over the spliced program so
+            // generated items resolve and their side-tables populate.
+            let resolved = crate::resolve(&self.parsed.program);
+            let retyped = crate::typecheck(&self.parsed.program, &resolved);
+            self.resolved = Some(resolved);
+            crate::lower(&mut self.parsed.program, &retyped);
+            self.typed = Some(retyped);
+        } else {
+            let typed = self.typed.as_ref().unwrap();
             crate::lower(&mut self.parsed.program, typed);
-            // Comptime fold (substrate 1): evaluate every `comptime { ... }`
-            // block at compile time and splice its constant result in place,
-            // so the interpreter / codegen see plain literals. Runs here, as
-            // part of "prepare the AST for downstream consumption", so every
-            // path that lowers (check / build / run) gets it uniformly.
             let fold_errors = crate::comptime::evaluate(&mut self.parsed.program, typed);
             self.comptime_errors
                 .get_or_insert_with(Vec::new)

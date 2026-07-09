@@ -96,6 +96,15 @@ pub struct Interpreter<'a> {
     /// comptime evaluation continues. The comptime fold pass drains these into
     /// `E_COMPTIME_ERROR` compile diagnostics after each block evaluation.
     pub comptime_user_errors: Vec<RuntimeError>,
+    /// Next base offset for re-anchoring a spliced `ast.item(..)` quasi-quote's
+    /// spans (B-2026-07-08-15 Layer 1). Each `ast.item` call claims a unique
+    /// high window (base += stride) and shifts the parsed fragment's spans by
+    /// it, PRESERVING their relative offsets — so distinct generated nodes keep
+    /// distinct `SpanKey`s (codegen's span-keyed side-tables would otherwise
+    /// collide when the old collapse-to-one-span behavior mapped every node to
+    /// the splice site). The window starts well above any real source offset so
+    /// generated spans never collide with the host program's.
+    pub comptime_splice_base: usize,
     /// Per-task stack of provider maps for `with_provider` (design.md §
     /// Provider-Rooted Resources > Runtime mechanics). Each frame binds
     /// `effect resource R` names (keyed by the resolver's fully-qualified
@@ -567,6 +576,7 @@ impl<'a> Interpreter<'a> {
             sequential_mode: cfg!(target_arch = "wasm32"),
             runtime_errors: Vec::new(),
             comptime_user_errors: Vec::new(),
+            comptime_splice_base: 1_000_000_000,
             provider_stack: vec![HashMap::new()],
             active_span_stack: Vec::new(),
             tracing_min_level: 0,

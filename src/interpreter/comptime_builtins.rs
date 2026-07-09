@@ -63,7 +63,13 @@ impl Interpreter<'_> {
         };
         match parse_comptime_item(&s) {
             Ok(mut item) => {
-                reanchor_item_spans(&mut item, span);
+                // Claim a unique high span window for this fragment so its
+                // nodes keep DISTINCT SpanKeys (codegen side-tables key on them);
+                // preserve each node's relative offset by shifting, not
+                // collapsing. See `reanchor_item_spans` (B-2026-07-08-15 Layer 1).
+                let base = self.comptime_splice_base;
+                self.comptime_splice_base += 1_000_000;
+                reanchor_item_spans(&mut item, span, base);
                 Value::AstItem(Box::new(item))
             }
             Err(why) => self.record_runtime_error(
@@ -135,9 +141,21 @@ fn reanchor_spans(expr: &mut Expr, site: &Span) {
     crate::span_visitor::visit_expr_spans_mut(expr, &mut |s| *s = site.clone());
 }
 
-/// The item analogue of [`reanchor_spans`] — overwrite every span in a quoted
-/// item with `site` so a spliced derive-generated item points at the derive
-/// call site rather than at bogus offsets into the quote string.
-fn reanchor_item_spans(item: &mut Item, site: &Span) {
-    crate::span_visitor::visit_item_spans_mut(item, &mut |s| *s = site.clone());
+/// The item analogue of [`reanchor_spans`] for a spliced derive-generated item.
+/// Points `line`/`column` at the derive call `site` (so diagnostics blame the
+/// derive site, not bogus offsets into the quote string), but SHIFTS each
+/// node's `offset` into `base`'s unique high window while PRESERVING its
+/// relative offset and `length`. This keeps distinct generated nodes at
+/// distinct `SpanKey`s — the previous behavior collapsed every node onto the
+/// single site span, so codegen's span-keyed side-tables (element type of an
+/// un-annotated `let v = Vec.new()`, etc.) all collided on one key and the
+/// generated body miscompiled (B-2026-07-08-15 Layer 1). `base` is well above
+/// any real source offset, so generated spans never collide with the host
+/// program's or with another fragment's window.
+fn reanchor_item_spans(item: &mut Item, site: &Span, base: usize) {
+    crate::span_visitor::visit_item_spans_mut(item, &mut |s| {
+        s.line = site.line;
+        s.column = site.column;
+        s.offset = base.wrapping_add(s.offset);
+    });
 }

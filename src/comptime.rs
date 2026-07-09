@@ -153,6 +153,19 @@ pub fn expand_proto_schemas(program: &mut Program) -> Vec<ComptimeError> {
     errors
 }
 
+/// True iff the program has at least one `#[derive(X)]` whose `derive_x`
+/// comptime fn exists — i.e. [`evaluate`] will SPLICE new items into the
+/// program. Those generated items (methods, impls) must be re-resolved and
+/// re-typechecked BEFORE operator-lowering so their bodies get name resolution
+/// and codegen's span-keyed side-tables (element types of un-annotated locals,
+/// etc.); the `Pipeline::lower` reorder gates on this (B-2026-07-08-15 Layer 1).
+/// Pure `comptime { … }`-block folding (no derive) does not add items and keeps
+/// the original lower→fold order, so this predicate is false for it.
+pub fn has_derives_to_expand(program: &Program) -> bool {
+    let derive_fns = collect_derive_fns(program);
+    !derive_fns.is_empty() && program_has_derive_to_expand(program, &derive_fns)
+}
+
 pub fn evaluate(program: &mut Program, typed: &TypeCheckResult) -> Vec<ComptimeError> {
     // Two kinds of work drive this pass: folding `comptime { ... }` blocks
     // (substrates 1–3) and expanding `#[derive(X)]` attributes that resolve to
