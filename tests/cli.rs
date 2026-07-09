@@ -3532,6 +3532,54 @@ fn test_run_derive_message_roundtrips_under_codegen() {
 }
 
 #[test]
+fn test_run_derive_message_repeated_string_and_map_roundtrip() {
+    // B-2026-07-09-1: `#[derive(Message)]` on repeated-`Vec[String]` and `Map`
+    // fields generates encode loops that take a method on a non-identifier
+    // receiver — `self.names[i].bytes()` (an indexed FIELD-ACCESS container)
+    // and `e0.0.bytes()` (a tuple ELEMENT over `self.<field>.entries()`). Both
+    // failed codegen ("indexed container must be a named variable" / "no
+    // handler for method on non-identifier receiver") while the interpreter
+    // accepted them — a run-vs-build divergence on top of B-2026-07-08-15's
+    // Layer 2. Now they round-trip under the JIT-default `karac run` exactly as
+    // under `--interp`. Vec order is preserved (repeated field); Map iteration
+    // order is unspecified, so the Map is asserted via `len` + `get`.
+    let path = write_run_temp(
+        "derive-message-str-map",
+        "#[derive(Message)]\n\
+         struct Tags { names: Vec[String] }\n\
+         #[derive(Message)]\n\
+         struct Counts { tally: Map[String, i64] }\n\
+         fn main() {\n\
+            let t = Tags { names: [\"a\", \"bb\", \"ccc\"] };\n\
+            let tb = Tags.decode(t.encode());\n\
+            println(tb.names.len());\n\
+            println(tb.names[1]);\n\
+            let mut m: Map[String, i64] = Map.new();\n\
+            let _ = m.insert(\"x\", 7);\n\
+            let _ = m.insert(\"yy\", 9);\n\
+            let cb = Counts.decode(Counts { tally: m }.encode());\n\
+            println(cb.tally.len());\n\
+            println(cb.tally.get(\"yy\").unwrap_or(0));\n\
+         }\n",
+    );
+    let expected = "3\nbb\n2\n9\n";
+    for args in [
+        vec!["run", path.to_str().unwrap()],
+        vec!["run", "--interp", path.to_str().unwrap()],
+    ] {
+        let out = karac_bin().args(&args).output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success() && stdout == expected,
+            "repeated-String/Map Message under {args:?} should round-trip to \
+             {expected:?}; got stdout={stdout:?} stderr={stderr}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
 fn test_run_contract_violation_prints_message_and_exits_nonzero() {
     let path = write_run_temp(
         "contract",

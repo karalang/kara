@@ -53,6 +53,65 @@ impl<'ctx> super::Codegen<'ctx> {
             ));
         }
 
+        // B-2026-07-09-1: hoist a FieldAccess container — `self.names[i].m()` —
+        // to a synth Vec/Slice identifier so the identifier-keyed lowering
+        // below applies unchanged. Surfaced by std.protobuf `#[derive(Message)]`
+        // on repeated-`Vec[String]` / Map fields, whose generated encode loop
+        // emits `self.<field>[i].bytes()`; without the hoist the
+        // container-must-be-a-named-variable guard rejects it (the interpreter
+        // accepts it, so it was a run-vs-build divergence). We resolve the field
+        // to its storage pointer + declared TypeExpr, register a synth binding
+        // for it (so `vec_elem_types` / `var_elem_type_exprs` / slot are all in
+        // place), and rewrite `inner` to that synth identifier. Cleaned up at
+        // the end alongside the element synth.
+        let mut hoisted_container: Option<String> = None;
+        let inner_synth: Option<Expr> = if let ExprKind::FieldAccess { object, field } = &inner.kind
+        {
+            // `self` parses as `SelfValue`; normalise to the "self" binding the
+            // per-var registries key on (mirrors the field-receiver method path
+            // in `compile_method_call`).
+            let self_ident;
+            let obj: &Expr = if matches!(object.kind, ExprKind::SelfValue) {
+                self_ident = Expr {
+                    kind: ExprKind::Identifier("self".to_string()),
+                    span: object.span.clone(),
+                };
+                &self_ident
+            } else {
+                object
+            };
+            match self.lower_field_access_ptr(
+                obj,
+                field,
+                &format!("indexed-receiver method '{method}'"),
+            )? {
+                Some((field_ptr, field_ll_ty, field_te)) => {
+                    let synth = format!("__field_container_{}", self.indexed_elem_counter);
+                    self.indexed_elem_counter += 1;
+                    self.variables.insert(
+                        synth.clone(),
+                        VarSlot {
+                            ptr: field_ptr,
+                            ty: field_ll_ty,
+                        },
+                    );
+                    self.register_var_from_type_expr(&synth, &field_te);
+                    let expr = Expr {
+                        kind: ExprKind::Identifier(synth.clone()),
+                        span: inner.span.clone(),
+                    };
+                    hoisted_container = Some(synth);
+                    Some(expr)
+                }
+                // Not a known struct field — leave `inner` as-is so the
+                // existing non-identifier diagnostic fires below.
+                None => None,
+            }
+        } else {
+            None
+        };
+        let inner: &Expr = inner_synth.as_ref().unwrap_or(inner);
+
         // Container must be an identifier in v1 — `get_grid()[i].push(x)` is
         // out of scope. The error mirrors the existing fall-through diagnostic.
         let outer_name = if let ExprKind::Identifier(name) = &inner.kind {
@@ -157,6 +216,23 @@ impl<'ctx> super::Codegen<'ctx> {
         self.set_elem_types.remove(&synth);
         self.set_elem_type_names.remove(&synth);
         self.set_elem_type_exprs.remove(&synth);
+
+        // B-2026-07-09-1: tear down the hoisted FieldAccess-container synth
+        // (same registry set as the element synth above), if one was minted.
+        if let Some(c) = hoisted_container {
+            self.variables.remove(&c);
+            self.vec_elem_types.remove(&c);
+            self.slice_elem_types.remove(&c);
+            self.var_elem_type_exprs.remove(&c);
+            self.var_type_names.remove(&c);
+            self.map_key_types.remove(&c);
+            self.map_val_types.remove(&c);
+            self.map_key_type_names.remove(&c);
+            self.map_key_type_exprs.remove(&c);
+            self.set_elem_types.remove(&c);
+            self.set_elem_type_names.remove(&c);
+            self.set_elem_type_exprs.remove(&c);
+        }
 
         result
     }
@@ -498,10 +574,20 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(elem_te) = elem_tes.get(idx).cloned() else {
             return Ok(None);
         };
-        // Only Map/Set (opaque ptr-handle) elements need the synth-pointer
-        // dispatch; everything else already works via value extraction.
+        // Map/Set (opaque ptr-handle) AND String elements need the synth-
+        // pointer dispatch; scalar/Vec/struct elements already work via value
+        // extraction. String was assumed to work via value extraction, but its
+        // place-taking methods (`.bytes()`, dispatched through the named-
+        // receiver String-method path) fell through on a tuple element — the
+        // shape a `#[derive(Message)]` map-field encode loop generates
+        // (`e0.0.bytes()` over `self.<field>.entries()`), so a Map Message
+        // failed codegen while the interpreter accepted it (B-2026-07-09-1).
+        // Routing String tuple elements through the same synth-elem-ptr path as
+        // Map/Set (a read-only alias of the tuple storage — no drop registered)
+        // closes that gap.
         if self.extract_map_kv_types(&elem_te).is_none()
             && self.extract_set_elem_type(&elem_te).is_none()
+            && !self.is_string_type_expr(&elem_te)
         {
             return Ok(None);
         }

@@ -3908,7 +3908,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// no-drop leaf — safe: worst case a missed cap-zero degrades to the
     /// pre-existing leak, never a double-free). Returns `None` when no names
     /// were recorded, so the caller keeps the Vec-only fallback.
-    fn tuple_var_elem_tes(&self, var_name: &str) -> Option<Vec<TypeExpr>> {
+    pub(super) fn tuple_var_elem_tes(&self, var_name: &str) -> Option<Vec<TypeExpr>> {
         let names = self.tuple_var_elem_type_names.get(var_name)?;
         Some(
             names

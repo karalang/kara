@@ -2969,6 +2969,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// where `f` is declared a tuple, or a tuple-index thereof). `&self`.
     pub(super) fn place_chain_tuple_tes(&self, expr: &Expr) -> Option<Vec<TypeExpr>> {
         match &expr.kind {
+            // A bare tuple-typed local — `let e: (String, i64) = …`, a Map/Set
+            // `.entries()` loop binding, etc. Recover its element TEs from the
+            // per-variable registry populated at the binding site. Without this
+            // arm, a method on a tuple element of a plain tuple variable
+            // (`e.0.bytes()`) had no tuple-TE source, so the tuple-index
+            // receiver path bailed and `.bytes()` fell through to "no handler
+            // for method on non-identifier receiver" (B-2026-07-09-1, the Map
+            // Message case).
+            ExprKind::Identifier(name) => self.tuple_var_elem_tes(name),
             ExprKind::FieldAccess { object, field } => {
                 let obj_ty = self.place_chain_type_name(object)?;
                 let idx = self

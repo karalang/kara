@@ -2277,6 +2277,33 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_tuple_element_string_method() {
+        // B-2026-07-09-1: a method on a tuple ELEMENT — `e.0.bytes()` — failed
+        // codegen ("no handler for method 'bytes' on non-identifier receiver")
+        // while the interpreter accepted it. The tuple-index receiver path had
+        // no element-type source for a bare tuple-typed identifier. Two shapes:
+        // a plain tuple local, and a `Vec[(K, V)]` for-loop element (what
+        // `map.entries()` yields — the shape a `#[derive(Message)]` map-field
+        // encode loop generates, `e0.0.bytes()`). Both now resolve.
+        // Order-independent (Map iteration order is unspecified): sum the key
+        // byte-lengths (2 + 3 = 5).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let e: (String, i64) = (\"hello\", 7);\n\
+                 println(e.0.bytes().len());\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 let _ = m.insert(\"ab\", 1);\n\
+                 let _ = m.insert(\"cde\", 2);\n\
+                 let mut total: i64 = 0;\n\
+                 for kv in m.entries() { total = total + kv.0.bytes().len(); }\n\
+                 println(total);\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n5\n");
+        }
+    }
+
+    #[test]
     fn e2e_tuple_with_shared_struct_element_destructured_from_option() {
         // B-2026-07-08-16: destructuring a tuple whose first element is a shared
         // struct (pointer-repr) out of an `Option` — `Some((current, d))` from

@@ -1222,6 +1222,28 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return;
         }
+        // A tuple binding — `let e: (String, i64) = …`, a for-loop element over
+        // `Vec[(K, V)]` (what `m.entries()` yields), a destructured field, etc.
+        // Record its element type NAMES so `e.0` / `e.1` tuple-index access and
+        // methods on those elements (`e.0.bytes()`) resolve their element types
+        // via the tuple-index receiver path (`place_chain_tuple_tes`'s
+        // Identifier arm). Without this a `#[derive(Message)]` map-field encode
+        // loop's `e.0.bytes()` fell through to "no handler for method on
+        // non-identifier receiver" while the interpreter accepted it
+        // (B-2026-07-09-1). Mirrors the per-param tuple registration in
+        // `functions.rs`.
+        if let TypeKind::Tuple(elems) = &te.kind {
+            let names: Vec<Option<String>> = elems
+                .iter()
+                .map(|e| match &e.kind {
+                    TypeKind::Path(p) => p.segments.first().cloned(),
+                    _ => None,
+                })
+                .collect();
+            self.tuple_var_elem_type_names
+                .insert(var_name.to_string(), names);
+            return;
+        }
         // B-2026-07-08-9: capture the CONCRETE payload TypeExpr(s) of an
         // `Option[T]` / `Result[T, E]` binding so the f-string / `println`
         // Display path can synthesize a `Some(<T>)`/`None` (or `Ok`/`Err`)
