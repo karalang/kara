@@ -1,0 +1,90 @@
+// Grade-book histogram: bucket student scores into letter grades and print
+// a per-bucket count, the total characters across all names, and one lookup.
+//
+// Exercises: struct + impl, Vec[String] / Vec[i64], `Vec.filled(n, 0)`
+// zero-init, indexed-receiver method calls (`self.names[i].len()`), range
+// bucketing, and a `Map[String, i64]` name -> score lookup.
+
+struct GradeBook {
+    names: Vec[String],
+    scores: Vec[i64],
+    index: Map[String, i64],
+}
+
+impl GradeBook {
+    fn new() -> GradeBook {
+        GradeBook { names: Vec.new(), scores: Vec.new(), index: Map.new() }
+    }
+
+    fn add(mut ref self, name: String, score: i64) {
+        // `name` is needed as both the map key and a Vec element, so the key
+        // takes a clone; the Vec takes ownership of the original.
+        self.index.insert(name.clone(), score);
+        self.names.push(name);
+        self.scores.push(score);
+    }
+
+    // 0=A 1=B 2=C 3=D 4=F
+    fn bucket(ref self, score: i64) -> i64 {
+        if score >= 90 {
+            0
+        } else if score >= 80 {
+            1
+        } else if score >= 70 {
+            2
+        } else if score >= 60 {
+            3
+        } else {
+            4
+        }
+    }
+
+    fn histogram(ref self) -> Vec[i64] {
+        let mut counts: Vec[i64] = Vec.filled(5, 0);
+        let mut i = 0i64;
+        while i < self.scores.len() {
+            let b = self.bucket(self.scores[i]);
+            counts[b] = counts[b] + 1;
+            i = i + 1;
+        }
+        counts
+    }
+
+    // Indexed-receiver method call: `self.names[i].len()` (B-2026-07-09-1 path).
+    fn total_name_chars(ref self) -> i64 {
+        let mut total = 0i64;
+        let mut i = 0i64;
+        while i < self.names.len() {
+            total = total + self.names[i].len();
+            i = i + 1;
+        }
+        total
+    }
+
+    fn score_of(ref self, name: String) -> i64 {
+        match self.index.get(name) {
+            Some(s) => s,
+            None => -1,
+        }
+    }
+}
+
+fn main() {
+    let mut gb = GradeBook.new();
+    gb.add("ada", 95);
+    gb.add("bo", 83);
+    gb.add("cy", 72);
+    gb.add("di", 68);
+    gb.add("ez", 55);
+    gb.add("fi", 91);
+
+    let h = gb.histogram();
+    let labels = ["A", "B", "C", "D", "F"];
+    let mut i = 0i64;
+    while i < 5 {
+        println(f"{labels[i]}: {h[i]}");
+        i = i + 1;
+    }
+    println(f"total name chars: {gb.total_name_chars()}");
+    println(f"score of cy: {gb.score_of("cy")}");
+}

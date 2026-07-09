@@ -1,0 +1,7 @@
+A: 2
+B: 1
+C: 1
+D: 1
+F: 1
+total name chars: 13
+score of cy: 72
