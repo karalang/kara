@@ -37,9 +37,13 @@
 //! is a documented follow-on; the oracle test therefore ranges over release
 //! versions.
 
-use pubgrub::{resolve, DefaultStringReporter, OfflineDependencyProvider, PubGrubError, Reporter};
+use pubgrub::{
+    resolve, DefaultStringReporter, Dependencies, DependencyProvider, OfflineDependencyProvider,
+    PackageResolutionStatistics, PubGrubError, Reporter,
+};
 use semver::{Comparator, Op, Version, VersionReq};
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 
 /// PubGrub's version-set type instantiated for `semver::Version`. Re-exported
 /// under the shorter `Range` alias by the `pubgrub` crate.
@@ -201,6 +205,25 @@ pub fn solve(
     root_deps: &[(String, VersionReq)],
     registry: &BTreeMap<String, PackageCandidates>,
 ) -> Result<BTreeMap<String, Version>, SolveError> {
+    solve_with_pins(root, root_version, root_deps, registry, &BTreeMap::new())
+}
+
+/// [`solve`] with **lockfile version pins** (resolver follow-up (d) / (h),
+/// lockfile-pin-over-catalog). `pins` maps a package name to the exact version
+/// recorded in `kara.lock`. The solver *prefers* the pinned version whenever it
+/// still satisfies the constraints in play, and only moves off it when the pin
+/// is incompatible (a sibling capped it out, or the manifest tightened past it)
+/// — matching Cargo's "use the lock unless it's incompatible" rule, so
+/// backtracking still finds a compatible version rather than failing. Passing
+/// an empty map is byte-identical to [`solve`] (the wrapper's `choose_version`
+/// then always defers to the inner provider's highest-in-range default).
+pub fn solve_with_pins(
+    root: &str,
+    root_version: &Version,
+    root_deps: &[(String, VersionReq)],
+    registry: &BTreeMap<String, PackageCandidates>,
+    pins: &BTreeMap<String, Version>,
+) -> Result<BTreeMap<String, Version>, SolveError> {
     let mut dp = OfflineDependencyProvider::<String, Range>::new();
 
     let to_range_deps = |deps: &[(String, VersionReq)]| -> Vec<(String, Range)> {
@@ -224,13 +247,75 @@ pub fn solve(
         }
     }
 
-    match resolve(&dp, root.to_string(), root_version.clone()) {
+    let provider = PinPreferringProvider {
+        inner: dp,
+        pins: pins.clone(),
+    };
+    match resolve(&provider, root.to_string(), root_version.clone()) {
         Ok(selected) => Ok(selected.into_iter().collect()),
         Err(PubGrubError::NoSolution(mut tree)) => {
             tree.collapse_no_versions();
             Err(SolveError::NoSolution(DefaultStringReporter::report(&tree)))
         }
         Err(other) => Err(SolveError::Internal(format!("{other:?}"))),
+    }
+}
+
+/// A [`DependencyProvider`] that wraps an [`OfflineDependencyProvider`] and
+/// **prefers a pinned version** for each package, when one is supplied and the
+/// pin still lies within the package's currently-allowed range — the
+/// lockfile-pin-over-catalog rule. The pin is a *preference*, not a hard
+/// constraint: when the locked version is excluded by the constraints in play,
+/// `choose_version` defers to the inner provider (highest-in-range) so PubGrub
+/// backtracks to a compatible version rather than failing. Only
+/// `choose_version` is overridden; priority, dependency lookup, and
+/// cancellation delegate to the inner provider unchanged, so an empty pin set
+/// reproduces `OfflineDependencyProvider`'s behavior exactly.
+struct PinPreferringProvider {
+    inner: OfflineDependencyProvider<String, Range>,
+    pins: BTreeMap<String, Version>,
+}
+
+impl DependencyProvider for PinPreferringProvider {
+    type P = String;
+    type V = Version;
+    type VS = Range;
+    type M = String;
+    type Priority = <OfflineDependencyProvider<String, Range> as DependencyProvider>::Priority;
+    type Err = Infallible;
+
+    fn prioritize(
+        &self,
+        package: &String,
+        range: &Range,
+        stats: &PackageResolutionStatistics,
+    ) -> Self::Priority {
+        self.inner.prioritize(package, range, stats)
+    }
+
+    fn choose_version(
+        &self,
+        package: &String,
+        range: &Range,
+    ) -> Result<Option<Version>, Infallible> {
+        // Prefer the locked version while it is still in the allowed range;
+        // otherwise defer to the inner provider so the solver can move off an
+        // incompatible pin (PubGrub narrows `range` to exclude a version that
+        // led to a conflict, so the pin stops being offered on backtrack).
+        if let Some(pinned) = self.pins.get(package) {
+            if range.contains(pinned) {
+                return Ok(Some(pinned.clone()));
+            }
+        }
+        self.inner.choose_version(package, range)
+    }
+
+    fn get_dependencies(
+        &self,
+        package: &String,
+        version: &Version,
+    ) -> Result<Dependencies<String, Range, String>, Infallible> {
+        self.inner.get_dependencies(package, version)
     }
 }
 
@@ -427,6 +512,96 @@ mod tests {
         );
         assert_eq!(sol.get("b"), Some(&ver("1.0.0")));
         assert_eq!(sol.get("c"), Some(&ver("1.0.0")));
+    }
+
+    #[test]
+    fn solve_with_pins_prefers_locked_version() {
+        // a has 1.0.0 and 1.9.0; root wants a ^1. A fresh solve picks the
+        // highest (1.9.0); a lock pinning a=1.0.0 makes the solver honor the
+        // recorded version instead — lockfile-pin-over-catalog.
+        let reg = registry(&[("a", vec![cand("1.0.0", &[]), cand("1.9.0", &[])])]);
+        let root_deps = [("a".to_string(), req("^1"))];
+
+        let fresh = solve("root", &ver("0.0.0"), &root_deps, &reg).expect("resolve");
+        assert_eq!(
+            fresh.get("a"),
+            Some(&ver("1.9.0")),
+            "fresh solve picks the catalog highest"
+        );
+
+        let pins = BTreeMap::from([("a".to_string(), ver("1.0.0"))]);
+        let pinned =
+            solve_with_pins("root", &ver("0.0.0"), &root_deps, &reg, &pins).expect("resolve");
+        assert_eq!(
+            pinned.get("a"),
+            Some(&ver("1.0.0")),
+            "the lock pin is honored over the catalog highest"
+        );
+    }
+
+    #[test]
+    fn solve_with_pins_falls_back_when_pin_incompatible() {
+        // The manifest now requires a ^2, but the lock pins a=1.0.0
+        // (incompatible). The pin is a *preference*, not a hard constraint —
+        // the solver moves off it to the only compatible version (2.0.0)
+        // rather than failing.
+        let reg = registry(&[("a", vec![cand("1.0.0", &[]), cand("2.0.0", &[])])]);
+        let pins = BTreeMap::from([("a".to_string(), ver("1.0.0"))]);
+        let sol = solve_with_pins(
+            "root",
+            &ver("0.0.0"),
+            &[("a".to_string(), req("^2"))],
+            &reg,
+            &pins,
+        )
+        .expect("must move off the incompatible pin, not fail");
+        assert_eq!(sol.get("a"), Some(&ver("2.0.0")));
+    }
+
+    #[test]
+    fn solve_with_pins_still_backtracks_when_pin_forces_a_conflict() {
+        // The diamond from `solve_backtracks_over_a_diamond`, but pinning
+        // a=2.0.0 — the version that forces c=2.0.0, which b rejects. Because
+        // the pin is only a preference, the solver tries a=2.0.0, hits the
+        // conflict, and backtracks to the compatible a=1.0.0.
+        let reg = registry(&[
+            (
+                "a",
+                vec![
+                    cand("1.0.0", &[("c", "=1.0.0")]),
+                    cand("2.0.0", &[("c", "=2.0.0")]),
+                ],
+            ),
+            ("b", vec![cand("1.0.0", &[("c", "=1.0.0")])]),
+            ("c", vec![cand("1.0.0", &[]), cand("2.0.0", &[])]),
+        ]);
+        let pins = BTreeMap::from([("a".to_string(), ver("2.0.0"))]);
+        let sol = solve_with_pins(
+            "root",
+            &ver("0.0.0"),
+            &[("a".to_string(), req("*")), ("b".to_string(), req("*"))],
+            &reg,
+            &pins,
+        )
+        .expect("a pin must not break backtracking");
+        assert_eq!(
+            sol.get("a"),
+            Some(&ver("1.0.0")),
+            "backtracks off the pinned-but-conflicting a=2.0.0"
+        );
+        assert_eq!(sol.get("c"), Some(&ver("1.0.0")));
+    }
+
+    #[test]
+    fn solve_with_pins_empty_matches_solve() {
+        // An empty pin set must reproduce `solve` exactly (the wrapper always
+        // defers to the inner highest-in-range provider).
+        let reg = registry(&[("a", vec![cand("1.0.0", &[]), cand("1.2.0", &[])])]);
+        let root_deps = [("a".to_string(), req("^1.0"))];
+        let via_solve = solve("root", &ver("0.0.0"), &root_deps, &reg).unwrap();
+        let via_pins =
+            solve_with_pins("root", &ver("0.0.0"), &root_deps, &reg, &BTreeMap::new()).unwrap();
+        assert_eq!(via_solve, via_pins, "empty pins must be identical to solve");
     }
 
     #[test]
