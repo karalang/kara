@@ -9048,6 +9048,118 @@ fn test_resolve_lists_path_dep_graph_and_writes_no_lockfile() {
     );
 }
 
+/// Resolver follow-up (e): `[target.<triple>.dependencies]` must participate in
+/// `karac resolve` resolution for the host-default triple — not only in
+/// `karac build`. Before the overlay was threaded into the `resolve` / `test` /
+/// `update` entry points, a dep declared *only* under `[target.*]` silently
+/// dropped out of the resolved graph everywhere except `build`.
+#[test]
+fn test_resolve_consumes_host_target_dependencies() {
+    // The production host-triple helper — same value `cmd_build_project`'s
+    // no-`--target` path and `default_resolution_target` compute — so the
+    // `[target.<host>]` key below is exactly the one the resolver activates.
+    let host = karac::build_cache::host_target_triple();
+    let tmp = update_tempdir("resolve-target-dep");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("vendor/child/src")).unwrap();
+    // `child` is declared ONLY under `[target.<host>.dependencies]`. A second
+    // dep sits under a bogus non-host triple whose `vendor/ghost` path doesn't
+    // exist — so if the merge wrongly pulled in *all* overlays the resolver
+    // would fail on the missing path (or list `ghost`); success + no `ghost`
+    // proves only the active triple's overlay was merged.
+    std::fs::write(
+        tmp.join("kara.toml"),
+        format!(
+            r#"[package]
+name = "root-pkg"
+
+[target."{host}".dependencies]
+child = {{ path = "vendor/child" }}
+
+[target."nonexistent-target-triple".dependencies]
+ghost = {{ path = "vendor/ghost" }}
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("vendor/child/kara.toml"),
+        "[package]\nname = \"child\"\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("vendor/child/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    let out = karac_bin()
+        .arg("resolve")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "resolve should succeed with a host-target path-dep; host={host}\nstderr={stderr}",
+    );
+    assert!(
+        stderr.contains("child"),
+        "the `[target.<host>.dependencies]` dep must appear in the resolved graph;\nhost={host}\nstderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("ghost"),
+        "a dep under a non-active triple must not be resolved;\nstderr={stderr}",
+    );
+}
+
+/// Resolver follow-up (e): `karac update` must pin `[target.<host>.dependencies]`
+/// into `kara.lock` too — the overlay is merged before the graph build so the
+/// refreshed lockfile matches what `karac build` resolves.
+#[test]
+fn test_update_consumes_host_target_dependencies() {
+    let host = karac::build_cache::host_target_triple();
+    let tmp = update_tempdir("update-target-dep");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("vendor/child/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        format!(
+            r#"[package]
+name = "root-pkg"
+
+[target."{host}".dependencies]
+child = {{ path = "vendor/child" }}
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("vendor/child/kara.toml"),
+        "[package]\nname = \"child\"\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("vendor/child/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    let out = karac_bin()
+        .arg("update")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lock = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "update should succeed with a host-target path-dep; host={host}\nstderr={stderr}",
+    );
+    assert!(
+        lock.contains("child"),
+        "kara.lock must pin the host-target dep;\nlock={lock}",
+    );
+}
+
 #[test]
 fn test_resolve_output_json_shape() {
     let tmp = make_path_dep_project("resolve-json");

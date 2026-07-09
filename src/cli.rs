@@ -8747,6 +8747,21 @@ fn emit_manifest_error(e: &manifest::ManifestError, output: OutputMode) {
     }
 }
 
+/// The active target triple for resolver invocations that carry no `--target`
+/// flag — `test` / `resolve` / `update`. Precedence mirrors the `None`-flag
+/// case of `cmd_build_project`'s target resolution: the manifest's
+/// `[build].default-target` if set, else the host triple. Threading this
+/// through `merge_target_overlay` (below) makes these commands consume the
+/// same per-target `[dependencies]` view a plain `karac build` would — the
+/// resolver-follow-up-(e) gap where only `cmd_build_project` merged the
+/// overlay, so `[target.<triple>.dependencies]` silently dropped out of
+/// `test` / `resolve` / `update`.
+fn default_resolution_target(mf: &manifest::Manifest) -> String {
+    mf.build_default_target
+        .clone()
+        .unwrap_or_else(crate::build_cache::host_target_triple)
+}
+
 /// Build the dep graph and resolve it against the active toolchain. Returns
 /// `true` to continue with the build, `false` to halt. Registry/git
 /// unsupported errors downgrade to warnings — the rest are fatal. Slice 7
@@ -11276,6 +11291,12 @@ fn cmd_test(filter: Option<String>, all: bool, interp: bool) {
             process::exit(1);
         }
     };
+    // Merge `[target.<triple>].dependencies` / `.dev-dependencies` overlays for
+    // the host-default triple so per-target deps participate in test-mode
+    // resolution exactly as they do under `karac build` (resolver follow-up
+    // (e)). Applied before the `has_resolvable_deps` gate so a project whose
+    // deps are declared *only* under `[target.*]` still resolves.
+    let mf = manifest::merge_target_overlay(&mf, Some(&default_resolution_target(&mf)));
 
     // Toolchain pin (tracker line 892). Same enforcement as
     // cmd_build_project — runs before walk so a failing toolchain
@@ -12732,6 +12753,10 @@ fn cmd_update(package: Option<&str>, output: OutputMode, no_proxy: bool) {
             process::exit(1);
         }
     };
+    // Merge `[target.<triple>].dependencies` for the host-default triple so the
+    // refreshed lockfile pins the same per-target deps `karac build` resolves
+    // (resolver follow-up (e)).
+    let mf = manifest::merge_target_overlay(&mf, Some(&default_resolution_target(&mf)));
 
     // Unlike cmd_build_project, we *always* run the resolver here even when
     // the manifest declares no deps. The user explicitly asked to refresh
@@ -12963,6 +12988,10 @@ fn cmd_resolve(output: OutputMode, offline: bool, no_proxy: bool) {
             process::exit(1);
         }
     };
+    // Consume `[target.<triple>].dependencies` for the host-default triple so
+    // `karac resolve` prints the same graph `karac build` would (resolver
+    // follow-up (e)). Applied before the `has_deps` gate below.
+    let mf = manifest::merge_target_overlay(&mf, Some(&default_resolution_target(&mf)));
 
     // Mirror the build path's `--offline` handling: resolve against `./vendor/`,
     // and a project that has deps but no vendor dir is a hard error rather than
