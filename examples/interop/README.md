@@ -27,7 +27,7 @@ so the caller `#include`s it instead of hand-transcribing signatures.
 
 ```
 karac build kernel.kara --crate-type staticlib
-cc host.c -L. -l:libkernel.a -lpthread -lm -ldl -o host_c
+cc host.c libkernel.a -lpthread -lm -ldl -o host_c
 ./host_c        # => add=42 fib=6765 mean=7.50
 ```
 

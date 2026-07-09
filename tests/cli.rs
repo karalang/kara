@@ -20504,14 +20504,16 @@ fn test_build_crate_type_staticlib_links_from_c_e2e() {
         f.write_all(host_c.as_bytes()).unwrap();
     }
 
-    // `-l:libkernel.a` forces the static archive (a bare `-lkernel` would
-    // prefer a `.so` if one existed). If `cc` is unavailable, soft-skip.
+    // Pass the archive by path (positional) — forces the static archive and
+    // is portable: GNU ld's `-l:libkernel.a` exact-name form is unsupported by
+    // macOS `ld` (`library ':libkernel.a' not found`). If `cc` is unavailable,
+    // soft-skip.
     let cc = std::process::Command::new("cc")
         .current_dir(&dir)
         .args([
             "host.c",
             "-L.",
-            "-l:libkernel.a",
+            "libkernel.a",
             "-lpthread",
             "-lm",
             "-ldl",
@@ -20644,7 +20646,7 @@ fn test_build_repr_c_enum_roundtrip_from_c_e2e() {
         .args([
             "host.c",
             "-L.",
-            "-l:libkernel.a",
+            "libkernel.a",
             "-lpthread",
             "-lm",
             "-ldl",
@@ -20774,7 +20776,7 @@ fn test_build_repr_c_enum_tagged_union_from_c_e2e() {
         .args([
             "host.c",
             "-L.",
-            "-l:libkernel.a",
+            "libkernel.a",
             "-lpthread",
             "-lm",
             "-ldl",
@@ -20894,7 +20896,7 @@ fn test_build_auto_boxed_vec_return_e2e() {
         .args([
             "host.c",
             "-L.",
-            "-l:libk.a",
+            "libk.a",
             "-lpthread",
             "-lm",
             "-ldl",
@@ -20991,7 +20993,7 @@ fn test_build_auto_boxed_vec_string_return_e2e() {
         .args([
             "host.c",
             "-L.",
-            "-l:libk.a",
+            "libk.a",
             "-lpthread",
             "-lm",
             "-ldl",
@@ -21083,8 +21085,7 @@ fn test_project_lib_table_builds_library_e2e() {
         .current_dir(&tmp)
         .args([
             "host.c",
-            "-Ldist",
-            "-l:libmathkit.a",
+            "dist/libmathkit.a",
             "-lpthread",
             "-lm",
             "-ldl",
