@@ -1923,7 +1923,12 @@ impl<'a> ConcurrencyChecker<'a> {
         // Group 3: allocates — informational, NOT a conflict (A3a; design.md)
         // Group 4: panics — informational, NOT a conflict (A3b; design.md)
         // Group 5: blocks — execution verb, NOT a conflict (A1; design.md:5907)
-        // Group 6: suspends — self-conflict (pending A2)
+        // Group 6: suspends — execution verb, NOT a conflict (A2b; the
+        //          `(Suspends,Suspends) => false` arm below). General
+        //          suspends/network still serialize, but via the upstream
+        //          `effects_mark_coroutine_boundary` gate in
+        //          `find_parallel_groups`, not this conflict arm — only
+        //          `sleep_ms` timer waits (which clear the gate) reach here.
         // Cross-group: no conflict
 
         match (&a.verb, &b.verb) {
