@@ -896,6 +896,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the box pointer, matching the tail-return site.
                         let boxed = self.box_return_value(v);
                         self.builder.build_return(Some(&boxed)).unwrap();
+                    } else if let Some(coerced_ty) = self.current_fn_arm64_return_coercion {
+                        // AArch64 `#[repr(C)]` struct-by-value return (Slice 2) —
+                        // explicit `return v;` site; matches the tail site.
+                        let coerced = self.reinterpret_value_as(v, coerced_ty);
+                        self.builder.build_return(Some(&coerced)).unwrap();
                     } else if self.current_fn_name == "main" && self.main_result_err_te.is_some() {
                         // `return Ok(())` / `return Err(e)` inside
                         // `main() -> Result[(), E]`: adapt to a process exit

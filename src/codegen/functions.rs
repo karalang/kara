@@ -41,6 +41,29 @@ fn struct_by_value_param_name(ty: &TypeExpr) -> Option<String> {
 }
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// The AArch64 AAPCS coercion for `func`'s `#[repr(C)]` struct-by-value
+    /// return, or `None` when it doesn't apply (not arm64, not an export, not a
+    /// by-value struct return, or an HFA — which returns raw). `Err` bubbles up
+    /// the > 16 B reject (B-2026-07-09-2 Slice 2).
+    fn arm64_return_coercion_for(
+        &mut self,
+        func: &Function,
+    ) -> Result<Option<BasicTypeEnum<'ctx>>, String> {
+        if !self.target_is_aarch64 || !crate::cheader::is_exported(func) {
+            return Ok(None);
+        }
+        let Some(rt) = func.return_type.as_ref() else {
+            return Ok(None);
+        };
+        let Some(name) = struct_by_value_param_name(rt) else {
+            return Ok(None);
+        };
+        if !self.struct_types.contains_key(name.as_str()) {
+            return Ok(None);
+        }
+        self.arm64_repr_c_struct_return_coercion(&name)
+    }
+
     /// The `#[link_name("symbol")]` value carried by `attrs`, if any —
     /// the C/foreign symbol an `unsafe extern` import binds to, distinct
     /// from the Kāra identifier. Reads `string_value` first (the parser's
@@ -278,6 +301,22 @@ impl<'ctx> super::Codegen<'ctx> {
             self.context
                 .ptr_type(AddressSpace::default())
                 .fn_type(&param_types, false)
+        } else if let Some(coerced_ret) = self.arm64_return_coercion_for(func)? {
+            // AArch64 `#[repr(C)]` struct-by-value return (B-2026-07-09-2
+            // Slice 2): return the AAPCS-coerced register type (`i64` /
+            // `[2 x i64]`) instead of the raw struct. Each return site
+            // reinterprets its struct value into it. Recorded so the body
+            // prologue picks up the coercion, and the fn is marked a coerced
+            // export (internal Kāra calls rejected — the caller expects a
+            // struct value, not the register form).
+            self.arm64_coerced_struct_returns
+                .insert(func.name.clone(), coerced_ret);
+            self.arm64_coerced_export_names.insert(func.name.clone());
+            match coerced_ret {
+                BasicTypeEnum::IntType(t) => t.fn_type(&param_types, false),
+                BasicTypeEnum::ArrayType(t) => t.fn_type(&param_types, false),
+                _ => unreachable!("arm64 struct-return coercion is i64 or [2 x i64]"),
+            }
         } else {
             match self.llvm_return_type(&func.return_type) {
                 Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
@@ -750,6 +789,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // tagged-union `#[repr(C)]` enum return boxes the same way.
         self.current_fn_boxes_return = crate::cheader::boxed_return_of(func).is_some()
             || self.boxed_enum_export_names.contains(&func.name);
+        // AArch64 `#[repr(C)]` struct-by-value return coercion (B-2026-07-09-2
+        // Slice 2): if set, every return site reinterprets its struct value
+        // into this register type. `None` on x86-64 / non-coerced returns.
+        self.current_fn_arm64_return_coercion =
+            self.arm64_coerced_struct_returns.get(&func.name).copied();
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
@@ -1520,6 +1564,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // C-ABI auto-boxed aggregate return (Slice 4 Path B).
                     let boxed = self.box_return_value(val);
                     self.builder.build_return(Some(&boxed)).unwrap();
+                } else if let Some(coerced_ty) = self.current_fn_arm64_return_coercion {
+                    // AArch64 `#[repr(C)]` struct-by-value return (Slice 2):
+                    // reinterpret the struct value as the AAPCS register type.
+                    let coerced = self.reinterpret_value_as(val, coerced_ty);
+                    self.builder.build_return(Some(&coerced)).unwrap();
                 } else if self.current_fn_ret_is_niche() {
                     // Niche-ABI return: pack the conventional 4-i64
                     // Option value into the single nullable ptr the
@@ -1678,6 +1727,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `{data,len,cap}` return that mismatches SysV. The value was moved
     /// out of the body at the return (no Kāra drop), so ownership transfers
     /// cleanly to C, which frees it via the auto-emitted `karac_free_<name>`.
+    /// Reinterpret `val`'s bytes as type `ty` via a stack round-trip (store the
+    /// value, load `ty` from the same slot). Used for the AArch64 struct-return
+    /// coercion (B-2026-07-09-2 Slice 2): a `#[repr(C)]` struct value is
+    /// reinterpreted as its AAPCS register type (`i64` / `[2 x i64]`) at the
+    /// return site. The slot is sized to `ty`, which is ≥ the struct size for
+    /// every coercion (a ≤ 8 B struct widens to `i64`), so the store never
+    /// overruns; any surplus high bits are unspecified, as AAPCS permits.
+    pub(super) fn reinterpret_value_as(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        ty: BasicTypeEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let fn_val = self.current_fn.unwrap();
+        let tmp = self.create_entry_alloca(fn_val, "kabi.ret", ty);
+        self.builder.build_store(tmp, val).unwrap();
+        self.builder.build_load(ty, tmp, "kabi.retload").unwrap()
+    }
+
     pub(super) fn box_return_value(&mut self, val: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
         let i64_t = self.context.i64_type();
         // Size the box from the value's own type. For the Path-B Vec/String

@@ -1892,6 +1892,47 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// AArch64 AAPCS coercion for a `#[repr(C)]` struct **returned** by value
+    /// (B-2026-07-09-2 Slice 2). Differs from the param classifier only for an
+    /// HFA: `clang` returns an HFA as the *raw struct* (LLVM lowers it to the
+    /// `v` registers natively), so returning it uncoerced already matches —
+    /// hence `Ok(None)` there. A non-HFA ≤ 16 B return coerces to `i64` /
+    /// `[2 x i64]` (x0..x1); a > 16 B return is `sret` (indirect), not yet
+    /// lowered here, so it errors with a pass-by-pointer message.
+    pub(super) fn arm64_repr_c_struct_return_coercion(
+        &mut self,
+        struct_name: &str,
+    ) -> Result<Option<BasicTypeEnum<'ctx>>, String> {
+        let Some(st) = self.struct_types.get(struct_name).copied() else {
+            return Ok(None);
+        };
+        let mut leaves: Vec<BasicTypeEnum<'ctx>> = Vec::new();
+        collect_leaf_scalars(st.into(), &mut leaves);
+        // HFA return → raw struct (LLVM returns it in v-regs; matches clang).
+        if (1..=4).contains(&leaves.len()) {
+            if let Some(BasicTypeEnum::FloatType(_)) = leaves.first().copied() {
+                if leaves.iter().all(|l| *l == leaves[0]) {
+                    return Ok(None);
+                }
+            }
+        }
+        let size = self.ensure_target_data()?.get_abi_size(&st);
+        let i64_t = self.context.i64_type();
+        if size == 0 {
+            Ok(None)
+        } else if size <= 8 {
+            Ok(Some(i64_t.into()))
+        } else if size <= 16 {
+            Ok(Some(i64_t.array_type(2).into()))
+        } else {
+            Err(format!(
+                "`#[repr(C)]` struct `{struct_name}` ({size} bytes, non-HFA) cannot be returned by \
+                 value across the C ABI on AArch64 yet — AAPCS returns it via `sret`. Return it \
+                 through an out-param (`*mut {struct_name}`) instead (tracked: B-2026-07-09-2)."
+            ))
+        }
+    }
+
     // ── Shared type helpers ─────────────────────────────────────────
 
     /// Check if a type name refers to a shared (RC) type.

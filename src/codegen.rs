@@ -3135,6 +3135,17 @@ pub(super) struct Codegen<'ctx> {
     /// (not implemented in this slice), so `compile_call` rejects it with an
     /// actionable message — mirroring the boxed-export rejection.
     pub(crate) arm64_coerced_export_names: std::collections::HashSet<String>,
+    /// Per-function AArch64-coerced `#[repr(C)]` struct **return** type
+    /// (B-2026-07-09-2 Slice 2): fn name → the coerced LLVM return type
+    /// (`i64` / `[2 x i64]`). The declared return type is coerced; each return
+    /// site reinterprets the struct value into it. HFA returns are absent (they
+    /// return the raw struct). Empty on x86-64.
+    pub(crate) arm64_coerced_struct_returns: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// The current function's AArch64 struct-return coercion type, set at body
+    /// entry from `arm64_coerced_struct_returns`. `Some` ⇒ every return site
+    /// reinterprets its `#[repr(C)]` struct value into this type before
+    /// `ret`. `None` on x86-64 and for non-coerced returns.
+    pub(crate) current_fn_arm64_return_coercion: Option<BasicTypeEnum<'ctx>>,
     // ── Hot-swap codegen (phase-7 line 5) ─────────────────────────
     /// Set by `compile_to_*_with_hot_swap` from the CLI's
     /// `--enable-hot-swap` flag. When `true`, every call to a
@@ -5719,6 +5730,8 @@ impl<'ctx> Codegen<'ctx> {
                 && driver::native_target_is_aarch64(),
             arm64_coerced_struct_params: HashMap::new(),
             arm64_coerced_export_names: std::collections::HashSet::new(),
+            arm64_coerced_struct_returns: HashMap::new(),
+            current_fn_arm64_return_coercion: None,
             hot_swap_enabled: false,
             declare_only_fns: std::collections::HashSet::new(),
             main_symbol_override: None,

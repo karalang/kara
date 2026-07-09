@@ -20972,6 +20972,114 @@ fn test_build_repr_c_enum_tagged_union_from_c_e2e() {
     }
 }
 
+/// Producer-mode `#[repr(C)]` struct **returned by value** across the C ABI
+/// (B-2026-07-09-2 Slice 2). Exercises both AAPCS return shapes: a non-HFA
+/// `{f64,i64}` return (coerced to `[2 x i64]` in x0/x1 on arm64) and an HFA
+/// `{f64,f64}` return (raw struct in v0/v1). A C host receives each by value
+/// and reads its fields. This is the return-side counterpart to the
+/// struct-param test; on arm64 it is the real-execution proof of the
+/// return-coercion (the codegen-e2e-macos job runs it). Soft-skips on the
+/// no-llvm fallback / missing runtime / missing `cc`.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_repr_c_struct_return_from_c_e2e() {
+    use std::io::Write;
+    let src = "#[repr(C)]\npub struct Stats { sum: f64, count: i64 }\n\
+               #[repr(C)]\npub struct Vec2 { x: f64, y: f64 }\n\
+               pub extern \"C\" fn make_stats(s: f64, c: i64) -> Stats {\n\
+               \x20   Stats { sum: s, count: c }\n\
+               }\n\
+               pub extern \"C\" fn make_vec2(a: f64, b: f64) -> Vec2 {\n\
+               \x20   Vec2 { x: a, y: b }\n\
+               }\n";
+    let dir = std::env::temp_dir().join(format!("karac_reprc_ret_e2e_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut f = std::fs::File::create(dir.join("kernel.kara")).unwrap();
+        f.write_all(src.as_bytes()).unwrap();
+    }
+
+    let build = karac_bin()
+        .current_dir(&dir)
+        .args(["build", "kernel.kara", "--crate-type", "staticlib"])
+        .output()
+        .unwrap();
+    let berr = String::from_utf8_lossy(&build.stderr);
+    let lib = dir.join("libkernel.a");
+    let header = dir.join("libkernel.h");
+    if berr.contains("requires the llvm feature")
+        || berr.contains("link failed")
+        || !lib.exists()
+        || !header.exists()
+    {
+        eprintln!("skip: test_build_repr_c_struct_return_from_c_e2e — build/link soft-skip");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+
+    let host_c = "#include <stdio.h>\n\
+                  #include \"libkernel.h\"\n\
+                  int main(void) {\n\
+                      karac_runtime_init();\n\
+                      struct Stats s = make_stats(30.0, 4);\n\
+                      struct Vec2 v = make_vec2(1.5, 2.5);\n\
+                      printf(\"%.1f %lld %.1f %.1f\\n\",\n\
+                             s.sum, (long long)s.count, v.x, v.y);\n\
+                      karac_runtime_shutdown();\n\
+                      return 0;\n\
+                  }\n";
+    {
+        let mut f = std::fs::File::create(dir.join("host.c")).unwrap();
+        f.write_all(host_c.as_bytes()).unwrap();
+    }
+
+    let cc = std::process::Command::new("cc")
+        .current_dir(&dir)
+        .args([
+            "host.c",
+            "libkernel.a",
+            "-lpthread",
+            "-lm",
+            "-ldl",
+            "-o",
+            "host",
+        ])
+        .output();
+    let cc = match cc {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("skip: test_build_repr_c_struct_return_from_c_e2e — no `cc`");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+    };
+    assert!(
+        cc.status.success(),
+        "C host failed to link the struct-return Kāra staticlib:\n{}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+
+    let run = common::output_with_hang_watchdog(
+        {
+            let mut c = std::process::Command::new(dir.join("host"));
+            c.current_dir(&dir);
+            c
+        },
+        std::time::Duration::from_secs(15),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(run) = run {
+        // make_stats(30.0,4) -> {30.0, 4}; make_vec2(1.5,2.5) -> {1.5, 2.5}.
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "30.0 4 1.5 2.5",
+            "repr(C) struct returned across the C ABI with wrong field value(s)"
+        );
+        assert_eq!(run.status.code(), Some(0));
+    }
+}
+
 /// Producer-mode auto-boxing + auto-destructor (additive-interop Slice 4
 /// Path B). A `pub extern "C" fn -> Vec[i64]` is auto-boxed for the C ABI:
 /// the export returns an opaque `KaraVec_int64_t*` (heap box), the header

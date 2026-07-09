@@ -114,3 +114,58 @@ fn single_i32_param_coerces_to_i64() {
     // clang arm64: {i32} (4 B) -> i64 (widened)
     assert_param_coercion("#[repr(C)]\npub struct P { a: i32 }", "i32", "i64");
 }
+
+// ── Returns (Slice 2) ───────────────────────────────────────────────
+
+/// Assert the `define <ret> @make(...)` return type for a fn returning `P`.
+/// `expect_ret` is the exact token clang emits for the arm64 return.
+fn assert_return_type(struct_def: &str, ctor: &str, expect_ret: &str) {
+    if !arm64_forced() {
+        eprintln!("skip: KARAC_FORCE_TARGET_ARCH not set to aarch64");
+        return;
+    }
+    let src = format!("{struct_def}\npub extern \"C\" fn make() -> P {{ {ctor} }}\n");
+    let line = define_line(&ir_for(&src), "make");
+    let ret = line
+        .strip_prefix("define ")
+        .and_then(|s| s.split(" @make(").next())
+        .unwrap_or("")
+        .trim();
+    assert_eq!(ret, expect_ret, "unexpected arm64 return type in:\n{line}");
+}
+
+#[test]
+fn mixed_f64_i64_return_coerces_to_2xi64() {
+    // clang arm64: define [2 x i64] @make()
+    assert_return_type(
+        "#[repr(C)]\npub struct P { a: f64, b: i64 }",
+        "P { a: 1.5, b: 3 }",
+        "[2 x i64]",
+    );
+}
+
+#[test]
+fn small_int_struct_return_coerces_to_i64() {
+    // clang arm64: {i32,i32} (8 B) -> i64
+    assert_return_type(
+        "#[repr(C)]\npub struct P { a: i32, b: i32 }",
+        "P { a: 1, b: 2 }",
+        "i64",
+    );
+}
+
+#[test]
+fn hfa_return_stays_raw_struct() {
+    // clang arm64 returns an HFA as the raw struct (v-regs), NOT [2 x i64].
+    // Kāra's raw `{ double, double }` return lowers to v0/v1 identically.
+    if !arm64_forced() {
+        return;
+    }
+    let src = "#[repr(C)]\npub struct P { a: f64, b: f64 }\n\
+               pub extern \"C\" fn make() -> P { P { a: 1.0, b: 2.0 } }\n";
+    let line = define_line(&ir_for(src), "make");
+    assert!(
+        line.contains("double, double") && !line.contains("[2 x i64]"),
+        "HFA return should stay a raw 2-double struct:\n{line}"
+    );
+}
