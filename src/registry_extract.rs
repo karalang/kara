@@ -160,6 +160,14 @@ impl RegistryProvider for ProxyRegistryProvider<'_> {
         list_registry_versions(self.client, name).map_err(|e| e.to_string())
     }
 
+    fn yanked_versions(&self, name: &str) -> Result<Vec<semver::Version>, String> {
+        // The catalog's `yanked` array (resolver follow-up (h)). `available_versions`
+        // above filters these *out* of fresh selection; here we surface them so a
+        // lockfile pin that lands on a yanked version can be flagged.
+        let catalog = self.client.fetch_catalog(name).map_err(|e| e.to_string())?;
+        Ok(catalog.yanked)
+    }
+
     fn fetch_exact(
         &self,
         name: &str,

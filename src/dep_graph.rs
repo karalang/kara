@@ -72,6 +72,14 @@ pub struct DepGraph {
     /// SHA. Empty when no provider is configured — the resolver then reports
     /// git deps as unsupported, preserving the pre-fetch behavior.
     pub git_resolutions: BTreeMap<(PathBuf, String), GitResolution>,
+    /// For every fetched registry package the provider reports a non-empty
+    /// **yanked** set for, its yanked published versions, keyed by package name.
+    /// Fresh selection already excludes yanked versions, so this is consulted
+    /// only to warn when a *pinned* resolved version (from `kara.lock`) turns
+    /// out to be yanked (`W_DEPENDENCY_YANKED`, resolver follow-up (h)). Empty
+    /// when no `RegistryProvider` is configured, when the provider can't
+    /// enumerate yanked versions, or when nothing is yanked.
+    pub yanked_versions: BTreeMap<String, Vec<semver::Version>>,
 }
 
 /// One fetched-and-extracted registry dependency (see
@@ -170,6 +178,22 @@ pub trait RegistryProvider {
         version: &semver::Version,
     ) -> Result<MaterializedDep, String> {
         self.fetch(name, &crate::registry_proxy::exact_version_req(version))
+    }
+
+    /// The package's **yanked** published versions — the ones the catalog marks
+    /// withdrawn. Fresh selection excludes these (they never appear in
+    /// [`available_versions`](Self::available_versions)), but a lockfile pin can
+    /// still resolve to a now-yanked version (`fetch_exact` is *not*
+    /// yanked-filtered — reproducing a pin must succeed), and that is exactly
+    /// when the resolver warns (`W_DEPENDENCY_YANKED`, resolver follow-up (h)).
+    /// The graph records this set so the post-resolution audit can flag a
+    /// pinned-but-yanked version.
+    ///
+    /// The default returns an empty vec: a provider that can't enumerate offers
+    /// no yanked set, so no warning fires. The `Err` string wraps into
+    /// `RegistryFetchFailed`.
+    fn yanked_versions(&self, _name: &str) -> Result<Vec<semver::Version>, String> {
+        Ok(Vec::new())
     }
 }
 
@@ -404,6 +428,7 @@ pub fn build_dep_graph_with_offline(
             include_dev_deps: false,
             registry_provider: None,
             git_provider: None,
+            pins: None,
         },
     )
 }
@@ -436,6 +461,13 @@ pub struct DepGraphOptions<'a> {
     /// — the pre-fetch behavior. Independent of `registry_provider`: a git
     /// dep is direct-from-source, so it needs no proxy.
     pub git_provider: Option<&'a dyn crate::git_fetch::GitProvider>,
+    /// Lockfile version pins (resolver follow-up (d)/(h)): package name → the
+    /// version recorded in `kara.lock`. When set, a registry dep with a pin is
+    /// fetched at *exactly* that version via `fetch_exact` (which, unlike fresh
+    /// range selection, resolves even a yanked release — reproducing a lock must
+    /// succeed), and the pinned version is added to the candidate set so the
+    /// solver can honor it. `None` (the default) reproduces fresh selection.
+    pub pins: Option<&'a BTreeMap<String, semver::Version>>,
 }
 
 /// Options-driven entry point. The two thin wrappers above
@@ -481,6 +513,7 @@ pub fn build_dep_graph_with_options(
         options.include_dev_deps,
         options.registry_provider,
         options.git_provider,
+        options.pins,
         true,
         &mut manifests,
         &mut derived_deps,
@@ -492,6 +525,26 @@ pub fn build_dep_graph_with_options(
         &mut visited,
     )?;
 
+    // Record each fetched registry package's yanked version set (resolver
+    // follow-up (h)). A post-walk pass over the already-collected registry
+    // package names — no extra threading through `visit`, since
+    // `registry_candidates` already holds every registry package the walk
+    // fetched. Best-effort: a provider that can't enumerate (or has no yanked
+    // set) contributes nothing, and a fetch error for one package is skipped
+    // rather than failing the build — this is advisory warning data, never a
+    // hard gate. Only non-empty sets are stored, so the map is empty whenever
+    // nothing is yanked.
+    let mut yanked_versions: BTreeMap<String, Vec<semver::Version>> = BTreeMap::new();
+    if let Some(provider) = options.registry_provider {
+        for name in registry_candidates.keys() {
+            if let Ok(yanked) = provider.yanked_versions(name) {
+                if !yanked.is_empty() {
+                    yanked_versions.insert(name.clone(), yanked);
+                }
+            }
+        }
+    }
+
     Ok(DepGraph {
         root_dir: root_canonical,
         manifests,
@@ -499,6 +552,7 @@ pub fn build_dep_graph_with_options(
         registry_resolutions,
         registry_candidates,
         git_resolutions,
+        yanked_versions,
     })
 }
 
@@ -512,6 +566,7 @@ fn visit(
     include_dev_deps: bool,
     registry_provider: Option<&dyn RegistryProvider>,
     git_provider: Option<&dyn crate::git_fetch::GitProvider>,
+    pins: Option<&BTreeMap<String, semver::Version>>,
     is_root: bool,
     manifests: &mut BTreeMap<PathBuf, Manifest>,
     derived_deps: &mut BTreeMap<PathBuf, BTreeMap<String, DependencySpec>>,
@@ -614,6 +669,7 @@ fn visit(
             include_dev_deps,
             registry_provider,
             git_provider,
+            pins,
             // Transitive children are never the root — dev-deps stop
             // propagating here even if the root opted them in.
             false,
@@ -638,12 +694,19 @@ fn visit(
             let DependencySpec::Registry { version: req } = spec else {
                 continue;
             };
-            let materialized = provider.fetch(dep_name, req).map_err(|message| {
-                DepGraphError::RegistryFetchFailed {
-                    from_dir: dir.to_path_buf(),
-                    dep_name: dep_name.clone(),
-                    message,
-                }
+            // A lockfile pin fetches EXACTLY the recorded version via
+            // `fetch_exact` (not yanked-filtered — reproducing a lock must
+            // succeed, even for a since-yanked release); an unpinned dep does
+            // fresh range selection via `fetch` (which excludes yanked).
+            let pinned = pins.and_then(|p| p.get(dep_name));
+            let materialized = match pinned {
+                Some(v) => provider.fetch_exact(dep_name, v),
+                None => provider.fetch(dep_name, req),
+            }
+            .map_err(|message| DepGraphError::RegistryFetchFailed {
+                from_dir: dir.to_path_buf(),
+                dep_name: dep_name.clone(),
+                message,
             })?;
             let canonical_target = canonicalize_or_self(&materialized.root_dir);
             registry_resolutions.insert(
@@ -664,7 +727,23 @@ fn visit(
             // is unchanged, so the walk's shape (and today's resolution) is
             // preserved.
             if !registry_candidates.contains_key(dep_name) {
-                let candidates = record_registry_candidates(provider, loader, dep_name);
+                let mut candidates = record_registry_candidates(provider, loader, dep_name);
+                // A pinned version may be absent from `available_versions` (it
+                // was yanked): add it as a candidate so the solver can honor the
+                // lock. Its deps come from its own just-fetched manifest at
+                // `canonical_target` (the `fetch_exact` above materialized it).
+                if let Some(pinned_v) = pinned {
+                    if !candidates.iter().any(|c| &c.version == pinned_v) {
+                        let deps = loader
+                            .load(&canonical_target)
+                            .map(|m| registry_deps_of(&m))
+                            .unwrap_or_default();
+                        candidates.push(RegistryCandidate {
+                            version: pinned_v.clone(),
+                            deps,
+                        });
+                    }
+                }
                 registry_candidates.insert(dep_name.clone(), candidates);
             }
 
@@ -698,6 +777,7 @@ fn visit(
                 include_dev_deps,
                 registry_provider,
                 git_provider,
+                pins,
                 false,
                 manifests,
                 derived_deps,
@@ -766,6 +846,7 @@ fn visit(
                 include_dev_deps,
                 registry_provider,
                 git_provider,
+                pins,
                 false,
                 manifests,
                 derived_deps,
@@ -847,6 +928,20 @@ fn discover_ancestor_workspace_deps(
     BTreeMap::new()
 }
 
+/// The registry-dep `(name, constraint)` edges a manifest declares — the
+/// per-version dependency data PubGrub needs to solve. Path/git deps of a
+/// published package are outside the v1 version-solve domain and are excluded.
+fn registry_deps_of(manifest: &Manifest) -> Vec<(String, semver::VersionReq)> {
+    manifest
+        .dependencies
+        .iter()
+        .filter_map(|(name, spec)| match spec {
+            DependencySpec::Registry { version: req } => Some((name.clone(), req.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Collect a registry package's full candidate set: every selectable
 /// published version (via [`RegistryProvider::available_versions`]) paired
 /// with that version's own registry-dep requirements (read from the version's
@@ -882,15 +977,10 @@ fn record_registry_candidates(
         let Ok(manifest) = loader.load(&dir) else {
             continue;
         };
-        let deps = manifest
-            .dependencies
-            .iter()
-            .filter_map(|(dep_name, spec)| match spec {
-                DependencySpec::Registry { version: req } => Some((dep_name.clone(), req.clone())),
-                _ => None,
-            })
-            .collect();
-        candidates.push(RegistryCandidate { version, deps });
+        candidates.push(RegistryCandidate {
+            version,
+            deps: registry_deps_of(&manifest),
+        });
     }
     candidates
 }
@@ -944,6 +1034,7 @@ mod tests {
                 include_dev_deps: true,
                 registry_provider: None,
                 git_provider: None,
+                pins: None,
             },
         )
     }
@@ -1063,6 +1154,7 @@ mod tests {
                 include_dev_deps: false,
                 registry_provider: Some(&provider),
                 git_provider: None,
+                pins: None,
             },
         )
         .expect("build");
@@ -1139,6 +1231,69 @@ mod tests {
     }
 
     #[test]
+    fn yanked_versions_recorded_from_provider() {
+        // A provider that reports `http`'s 1.1.0 as yanked → the graph records
+        // it in `yanked_versions` so a post-resolution audit can flag a pin on
+        // it (follow-up (h)). Fresh selection (`available_versions`) still
+        // excludes the yanked version.
+        struct YankAwareProvider;
+        impl RegistryProvider for YankAwareProvider {
+            fn fetch(&self, name: &str, _req: &VersionReq) -> Result<MaterializedDep, String> {
+                Ok(MaterializedDep {
+                    root_dir: PathBuf::from("/reg/http-1.0.0"),
+                    version: v("1.0.0"),
+                    upstream_url: format!("https://up/{name}"),
+                })
+            }
+            fn available_versions(&self, _name: &str) -> Result<Vec<semver::Version>, String> {
+                Ok(vec![v("1.0.0")]) // 1.1.0 is yanked, so excluded here
+            }
+            fn fetch_exact(
+                &self,
+                name: &str,
+                version: &semver::Version,
+            ) -> Result<MaterializedDep, String> {
+                Ok(MaterializedDep {
+                    root_dir: PathBuf::from("/reg/http-1.0.0"),
+                    version: version.clone(),
+                    upstream_url: format!("https://up/{name}"),
+                })
+            }
+            fn yanked_versions(&self, name: &str) -> Result<Vec<semver::Version>, String> {
+                if name == "http" {
+                    Ok(vec![v("1.1.0")])
+                } else {
+                    Ok(vec![])
+                }
+            }
+        }
+
+        let mut root = empty_manifest("app");
+        root.dependencies.insert("http".into(), registry("^1.0"));
+        let loader = MemLoader {
+            manifests: BTreeMap::from([(PathBuf::from("/reg/http-1.0.0"), empty_manifest("http"))]),
+        };
+        let graph = build_dep_graph_with_options(
+            &PathBuf::from("/app"),
+            root,
+            &loader,
+            DepGraphOptions {
+                offline_root: None,
+                include_dev_deps: false,
+                registry_provider: Some(&YankAwareProvider),
+                git_provider: None,
+                pins: None,
+            },
+        )
+        .expect("graph");
+        assert_eq!(
+            graph.yanked_versions.get("http"),
+            Some(&vec![v("1.1.0")]),
+            "the provider's yanked set is recorded per package name"
+        );
+    }
+
+    #[test]
     fn registry_candidate_set_recorded_with_per_version_deps() {
         // `http` publishes three versions, each declaring a different `log`
         // constraint. The walk selects 1.1.0 (highest `^1.0`) and recurses
@@ -1201,6 +1356,7 @@ mod tests {
                 include_dev_deps: false,
                 registry_provider: Some(&provider),
                 git_provider: None,
+                pins: None,
             },
         )
         .expect("build");
@@ -1286,6 +1442,7 @@ mod tests {
                 include_dev_deps: false,
                 registry_provider: Some(&provider),
                 git_provider: None,
+                pins: None,
             },
         )
         .unwrap_err();

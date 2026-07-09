@@ -111,6 +111,35 @@ fn build_store_yanked_catalog(name: &str, version: &str) -> PathBuf {
     root
 }
 
+/// Like [`build_store`] but the catalog marks `version` as `yanked` while still
+/// serving its tarball. A *fresh* resolve would refuse it (yanked is excluded
+/// from selection), but a lockfile pin — via `fetch_exact`, which is not
+/// yanked-filtered — can still materialize it. Drives the `W_DEPENDENCY_YANKED`
+/// audit (follow-up (h), slice 4).
+fn build_store_with_yanked(name: &str, version: &str) -> PathBuf {
+    let root = unique("store-yankpin");
+    std::fs::create_dir_all(root.join("catalog")).unwrap();
+    std::fs::create_dir_all(root.join("pkg").join(name)).unwrap();
+    write(
+        &root.join("catalog").join(format!("{name}.json")),
+        format!(
+            r#"{{ "upstream": "https://example.test/{name}", "versions": ["{version}"], "yanked": ["{version}"] }}"#
+        )
+        .as_bytes(),
+    );
+    let kara_toml = format!("[package]\nname = \"{name}\"\n");
+    let lib = b"pub fn answer() -> i64 { 42 }\n";
+    let targz = make_targz(&[("kara.toml", kara_toml.as_bytes()), ("src/lib.kara", lib)]);
+    write(
+        &root
+            .join("pkg")
+            .join(name)
+            .join(format!("{version}.tar.gz")),
+        &targz,
+    );
+    root
+}
+
 /// Start the reference server on an ephemeral loopback port; return the base
 /// URL. The thread is detached (dies with the test process).
 fn start_server(root: PathBuf) -> String {
@@ -533,6 +562,74 @@ fn build_refuses_only_yanked_registry_dep() {
     assert!(
         !stderr.contains("E_REGISTRY_NO_MATCHING_VERSION"),
         "a yanked match must not be reported as no-matching-version;\nstderr={stderr}",
+    );
+
+    let _ = std::fs::remove_dir_all(&proj);
+    let _ = std::fs::remove_dir_all(&cache);
+}
+
+/// Follow-up (h), slice 4: when `kara.lock` *pins* a registry dep to a version
+/// the catalog has since *yanked*, the build must reproduce the locked version
+/// (not refuse it — that is the fresh-selection case above) and surface
+/// `W_DEPENDENCY_YANKED`. The pin is fetched via `fetch_exact` (bypassing the
+/// yanked filter) and added to the candidate set so the solver honors it; the
+/// post-resolution audit then flags the yanked pin. This is the end-to-end
+/// close of the lockfile-pin-over-catalog + yanked-warning work.
+#[test]
+fn build_warns_when_lockfile_pins_a_yanked_version() {
+    let store = build_store_with_yanked("stale_dep", "1.0.0");
+    let base = start_server(store);
+    let cache = unique("cache-yankpin");
+
+    let proj = unique("proj-yankpin");
+    write(
+        &proj.join("kara.toml"),
+        b"[package]\nname = \"app\"\n\n[dependencies]\nstale_dep = \"1.0\"\n",
+    );
+    write(&proj.join("src/main.kara"), b"fn main() {}\n");
+    // Pre-seed a lockfile pinning stale_dep@1.0.0 from the registry — the exact
+    // version the catalog now yanks.
+    write(
+        &proj.join("kara.lock"),
+        b"version = 1\n\n\
+          [[package]]\n\
+          name = \"app\"\nversion = \"0.0.0\"\nsource = \"root\"\n\
+          content_hash = \"blake3:x\"\ndependencies = [\"stale_dep\"]\n\n\
+          [[package]]\n\
+          name = \"stale_dep\"\nversion = \"1.0.0\"\n\
+          source = \"registry+https://example.test/stale_dep\"\n\
+          content_hash = \"blake3:y\"\ndependencies = []\n",
+    );
+
+    let out = karac()
+        .arg("build")
+        .env("KARAC_REGISTRY_PROXY", &base)
+        .env("KARAC_REGISTRY_CACHE_ROOT", &cache)
+        .current_dir(&proj)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // The yanked-pin warning fires and names the dep.
+    assert!(
+        stderr.contains("W_DEPENDENCY_YANKED"),
+        "a lockfile pin on a yanked version must warn;\nstderr={stderr}\nstdout={stdout}",
+    );
+    assert!(
+        stderr.contains("stale_dep"),
+        "the warning must name the yanked dependency;\nstderr={stderr}",
+    );
+    // It is a *warning*, not a refusal — the build still succeeds (the pinned
+    // version was fetched and compiled for reproducibility).
+    assert!(
+        out.status.success(),
+        "a yanked *pin* must warn-and-build, not fail;\nstderr={stderr}\nstdout={stdout}",
+    );
+    // Distinct from the fresh-selection refusal path.
+    assert!(
+        !stderr.contains("E_REGISTRY_ONLY_YANKED"),
+        "a lockfile pin reproduces the yanked version rather than refusing it;\nstderr={stderr}",
     );
 
     let _ = std::fs::remove_dir_all(&proj);

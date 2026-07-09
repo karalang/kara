@@ -229,6 +229,27 @@ impl Lockfile {
         }
     }
 
+    /// The version pins to feed lockfile-pin-over-catalog resolution
+    /// ([`crate::dep_resolver::resolve_with_pins`], follow-up (d)/(h)): each
+    /// **registry** package's recorded exact version, keyed by package name.
+    /// Only registry sources carry a meaningful version pin — path/root deps
+    /// have no catalog to select against, and git deps are pinned by commit rev
+    /// (`LockSource::Git.resolved_rev`), not version. A `version` string that
+    /// doesn't parse as semver is skipped rather than failing: a hand-edited or
+    /// legacy lockfile shouldn't break resolution — that entry just isn't
+    /// pinned and falls back to fresh selection.
+    pub fn version_pins(&self) -> std::collections::BTreeMap<String, semver::Version> {
+        self.packages
+            .iter()
+            .filter(|p| matches!(p.source, LockSource::Registry { .. }))
+            .filter_map(|p| {
+                semver::Version::parse(&p.version)
+                    .ok()
+                    .map(|v| (p.name.clone(), v))
+            })
+            .collect()
+    }
+
     /// Materialize a `Lockfile` from the resolver's output. The `root_dir` is
     /// the project root; path-dep sources are relativized against it so the
     /// lockfile survives a project move. The `hash_path` closure converts a
@@ -703,6 +724,63 @@ dependencies = []
         assert_eq!(
             lf.packages[1].source,
             LockSource::Path(PathBuf::from("./vendor/child"))
+        );
+    }
+
+    #[test]
+    fn version_pins_extracts_registry_versions_only() {
+        // Only registry packages contribute a version pin: root/path carry no
+        // catalog to select against, and a registry entry whose version string
+        // isn't valid semver is skipped rather than poisoning the pin map.
+        let src = r#"version = 1
+
+[[package]]
+name = "root-pkg"
+version = "0.1.0"
+source = "root"
+content_hash = "blake3:abc"
+dependencies = ["child", "http"]
+
+[[package]]
+name = "child"
+version = "0.0.0"
+source = "path+./vendor/child"
+content_hash = "blake3:def"
+dependencies = []
+
+[[package]]
+name = "http"
+version = "1.4.2"
+source = "registry+https://example/registry"
+content_hash = "blake3:ghi"
+dependencies = []
+
+[[package]]
+name = "broken"
+version = "not-semver"
+source = "registry+https://example/registry"
+content_hash = "blake3:jkl"
+dependencies = []
+"#;
+        let lf = Lockfile::parse(dummy_path(), src).unwrap();
+        let pins = lf.version_pins();
+        assert_eq!(
+            pins.len(),
+            1,
+            "only the well-formed registry entry pins; got {pins:?}"
+        );
+        assert_eq!(
+            pins.get("http"),
+            Some(&semver::Version::parse("1.4.2").unwrap())
+        );
+        assert!(!pins.contains_key("root-pkg"), "root is not version-pinned");
+        assert!(
+            !pins.contains_key("child"),
+            "path deps are not version-pinned"
+        );
+        assert!(
+            !pins.contains_key("broken"),
+            "an unparseable registry version is skipped, not panicked on"
         );
     }
 

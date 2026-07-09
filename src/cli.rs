@@ -4183,6 +4183,8 @@ fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::DepPackageWalk
         // this quiet walk swallows.
         registry_provider: None,
         git_provider: None,
+        // Path-dep-only lenient walk — no lockfile pinning here.
+        pins: None,
     };
     let Ok(graph) = crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options)
     else {
@@ -8837,6 +8839,8 @@ fn surface_dep_graph_diagnostics(
         include_dev_deps: false,
         registry_provider: None,
         git_provider: None,
+        // Path-dep-only lenient walk — no lockfile pinning here.
+        pins: None,
     };
     let graph = match crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options) {
         Ok(g) => g,
@@ -8967,6 +8971,16 @@ fn run_dep_resolution(
         None
     };
 
+    // Lockfile-pin-over-catalog (follow-up (d)/(h)): read an existing
+    // `kara.lock` and prefer its recorded registry-package versions, so a
+    // rebuild reproduces the locked graph rather than drifting to the newest
+    // compatible version. The pins feed BOTH the graph walk (slice 4 — a pinned
+    // registry dep is fetched at exactly that version via `fetch_exact`, even if
+    // since-yanked, and added to the candidate set) and version selection (slice
+    // 2). Best-effort — an absent / unreadable / malformed lockfile yields no
+    // pins (fresh selection), never a build error. Pins bite only where the
+    // registry candidate set is widened; path/git deps ignore them.
+    let pins = read_lockfile_pins(root);
     let options = crate::dep_graph::DepGraphOptions {
         offline_root,
         include_dev_deps,
@@ -8976,6 +8990,7 @@ fn run_dep_resolution(
         git_provider: git_provider
             .as_ref()
             .map(|p| p as &dyn crate::git_fetch::GitProvider),
+        pins: Some(&pins),
     };
     let graph = match crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options) {
         Ok(g) => g,
@@ -8986,8 +9001,14 @@ fn run_dep_resolution(
         }
     };
     let active = crate::dep_resolver::active_toolchain_version();
-    match crate::dep_resolver::resolve_with_offline(&graph, &active, offline_root) {
+    match crate::dep_resolver::resolve_with_pins(&graph, &active, offline_root, &pins) {
         Ok(resolution) => {
+            // Warn on any resolved version the catalog marks yanked (follow-up
+            // (h), slice 4). Fresh selection excludes yanked versions, so this
+            // fires only when a `kara.lock` pin lands on a version yanked since
+            // it was recorded — reproducibility kept it, and the user should
+            // hear the pin is now withdrawn.
+            emit_yanked_pin_warnings(&resolution, &graph, output);
             // `karac resolve` is read-only — it inspects the graph without
             // rewriting `kara.lock`. Only build / test persist the pin.
             if persist_lock {
@@ -9247,6 +9268,60 @@ fn emit_offline_no_vendor_dir(vendor_dir: &std::path::Path, output: OutputMode) 
                 ),
             );
         }
+    }
+}
+
+/// Read the project's `kara.lock` (if present) and extract the registry-package
+/// version pins for lockfile-pin-over-catalog resolution (follow-up (d)/(h),
+/// slice 3). Best-effort: a missing / unreadable / malformed lockfile yields an
+/// empty pin map, so a fresh project or a corrupt lockfile falls back to fresh
+/// version selection rather than failing the build.
+fn read_lockfile_pins(
+    root: &std::path::Path,
+) -> std::collections::BTreeMap<String, semver::Version> {
+    let path = root.join("kara.lock");
+    let Ok(source) = std::fs::read_to_string(&path) else {
+        return std::collections::BTreeMap::new();
+    };
+    match crate::lockfile::Lockfile::parse(&path, &source) {
+        Ok(lock) => lock.version_pins(),
+        Err(_) => std::collections::BTreeMap::new(),
+    }
+}
+
+/// Emit a `W_DEPENDENCY_YANKED` warning for each resolved package whose selected
+/// version the catalog marks yanked (resolver follow-up (h), slice 4). Fresh
+/// selection never picks a yanked version, so this only fires when a `kara.lock`
+/// pin lands on a version yanked *since* it was recorded — reproducibility kept
+/// the pin, and the user should hear it is now withdrawn. Purely advisory: it
+/// never fails the build.
+fn emit_yanked_pin_warnings(
+    resolution: &crate::dep_resolver::Resolution,
+    graph: &crate::dep_graph::DepGraph,
+    output: OutputMode,
+) {
+    for pkg in resolution.packages.values() {
+        let Some(yanked) = graph.yanked_versions.get(&pkg.name) else {
+            continue;
+        };
+        if !yanked.contains(&pkg.version) {
+            continue;
+        }
+        let diag = crate::dep_diagnostic::Diagnostic {
+            code: "W_DEPENDENCY_YANKED",
+            primary: format!(
+                "dependency `{}` is pinned to version {}, which the registry has yanked",
+                pkg.name, pkg.version
+            ),
+            notes: vec![
+                "the version is recorded in `kara.lock`, but the registry has since withdrawn it — a yanked release is kept resolvable for reproducibility, yet should not be relied on for new work".to_string(),
+            ],
+            help: Some(format!(
+                "run `karac update {}` to move to a non-yanked version, or pin a different version in `kara.toml`",
+                pkg.name
+            )),
+        };
+        emit_dep_diagnostic(&diag, output, "warning");
     }
 }
 

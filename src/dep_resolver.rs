@@ -285,6 +285,24 @@ pub fn resolve_with_offline(
     active_toolchain: &semver::Version,
     offline_root: Option<&std::path::Path>,
 ) -> Result<Resolution, Box<ResolverError>> {
+    resolve_with_pins(graph, active_toolchain, offline_root, &BTreeMap::new())
+}
+
+/// [`resolve_with_offline`] with **lockfile version pins** (resolver follow-up
+/// (d) / (h), lockfile-pin-over-catalog). `pins` maps a package name to the
+/// version recorded in `kara.lock`; version selection *prefers* the pinned
+/// version when it still satisfies the graph's constraints, and only moves off
+/// an incompatible pin (see [`crate::pubgrub_solve::solve_with_pins`] for the
+/// preference-not-constraint semantics). The pin only bites where the registry
+/// candidate set is widened (multiple published versions) — path/git deps and
+/// the root each have a single candidate, so their pins are no-ops. An empty
+/// map reproduces [`resolve_with_offline`] exactly.
+pub fn resolve_with_pins(
+    graph: &DepGraph,
+    active_toolchain: &semver::Version,
+    offline_root: Option<&std::path::Path>,
+    pins: &BTreeMap<String, semver::Version>,
+) -> Result<Resolution, Box<ResolverError>> {
     // MSRV check runs first — a package whose kara-version excludes the
     // active toolchain can't be built regardless of how the dep graph
     // resolves. Surfacing the toolchain mismatch up front gives a clearer
@@ -481,6 +499,7 @@ pub fn resolve_with_offline(
         &root_name,
         &sentinel,
         &graph.registry_candidates,
+        pins,
     ) {
         PubgrubOutcome::Solved => Ok(Resolution { packages }),
         PubgrubOutcome::NoSolution(report) => {
@@ -580,8 +599,9 @@ fn select_versions_with_pubgrub(
     root_name: &str,
     root_version: &semver::Version,
     registry_candidates: &BTreeMap<String, Vec<crate::dep_graph::RegistryCandidate>>,
+    pins: &BTreeMap<String, semver::Version>,
 ) -> PubgrubOutcome {
-    use crate::pubgrub_solve::{solve, CandidateVersion, PackageCandidates, SolveError};
+    use crate::pubgrub_solve::{solve_with_pins, CandidateVersion, PackageCandidates, SolveError};
 
     // Forward edges: parent package name → [(dependency name, constraint)].
     // `declared_by` is the reverse map (who required me); invert it. A path/git
@@ -621,7 +641,7 @@ fn select_versions_with_pubgrub(
         .collect();
     let root_deps = deps_of.get(root_name).cloned().unwrap_or_default();
 
-    match solve(root_name, root_version, &root_deps, &registry) {
+    match solve_with_pins(root_name, root_version, &root_deps, &registry, pins) {
         Ok(selected) => {
             for (name, version) in selected {
                 if name == root_name {
@@ -994,6 +1014,7 @@ mod tests {
                 include_dev_deps: false,
                 registry_provider: Some(&provider),
                 git_provider: None,
+                pins: None,
             },
         )
         .expect("graph");
@@ -1058,6 +1079,7 @@ mod tests {
                 include_dev_deps: false,
                 registry_provider: Some(&provider),
                 git_provider: None,
+                pins: None,
             },
         )
         .expect("graph");
@@ -1167,6 +1189,7 @@ mod tests {
                 include_dev_deps: false,
                 registry_provider: Some(&provider),
                 git_provider: None,
+                pins: None,
             },
         )
         .expect("graph");
@@ -1181,6 +1204,71 @@ mod tests {
         assert_eq!(
             resolution.packages.get("y").expect("y resolved").version,
             ver("1.0.0")
+        );
+    }
+
+    #[test]
+    fn resolve_with_pins_honors_lockfile_pin() {
+        // `x` publishes 1.0.0 and 1.9.0; root wants `x ^1.0`. A fresh resolve
+        // selects the catalog highest (1.9.0); a lockfile pin of x=1.0.0 makes
+        // the resolver honor the recorded version — lockfile-pin-over-catalog
+        // (slice 2). The pin flows through `resolve_with_pins` →
+        // `select_versions_with_pubgrub` → `solve_with_pins`.
+        let mut root = empty_manifest("app");
+        root.dependencies.insert("x".into(), registry("^1.0"));
+
+        let loader = MemLoader {
+            manifests: BTreeMap::from([
+                (PathBuf::from("/reg/x-1.9.0"), empty_manifest("x")),
+                (PathBuf::from("/reg/x-1.0.0"), empty_manifest("x")),
+            ]),
+        };
+        let provider = MultiVersionMockProvider {
+            versions: BTreeMap::from([("x".to_string(), vec![ver("1.0.0"), ver("1.9.0")])]),
+            selected: BTreeMap::from([(
+                "x".to_string(),
+                (PathBuf::from("/reg/x-1.9.0"), ver("1.9.0")),
+            )]),
+            exact: BTreeMap::from([
+                (
+                    ("x".to_string(), ver("1.0.0")),
+                    PathBuf::from("/reg/x-1.0.0"),
+                ),
+                (
+                    ("x".to_string(), ver("1.9.0")),
+                    PathBuf::from("/reg/x-1.9.0"),
+                ),
+            ]),
+        };
+        let graph = crate::dep_graph::build_dep_graph_with_options(
+            &PathBuf::from("/app"),
+            root,
+            &loader,
+            crate::dep_graph::DepGraphOptions {
+                offline_root: None,
+                include_dev_deps: false,
+                registry_provider: Some(&provider),
+                git_provider: None,
+                pins: None,
+            },
+        )
+        .expect("graph");
+
+        // Fresh resolve (no pins) → catalog highest.
+        let fresh = resolve(&graph, &test_version()).expect("resolve");
+        assert_eq!(
+            fresh.packages.get("x").expect("x resolved").version,
+            ver("1.9.0"),
+            "a fresh resolve picks the catalog highest"
+        );
+
+        // Pinned → the locked (lower) version.
+        let pins = BTreeMap::from([("x".to_string(), ver("1.0.0"))]);
+        let pinned = resolve_with_pins(&graph, &test_version(), None, &pins).expect("resolve");
+        assert_eq!(
+            pinned.packages.get("x").expect("x resolved").version,
+            ver("1.0.0"),
+            "the lockfile pin is honored over the catalog highest"
         );
     }
 
@@ -1235,6 +1323,7 @@ mod tests {
                 include_dev_deps: false,
                 registry_provider: None,
                 git_provider: Some(&provider),
+                pins: None,
             },
         )
         .expect("graph");
