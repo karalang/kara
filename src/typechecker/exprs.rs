@@ -88,6 +88,28 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Error;
             }
         }
+        // B-2026-07-09-7: a SUFFIXED integer literal at a differently-typed
+        // boundary (`let x: u64 = -5i64`, `let x: u32 = 5_000_000_000i64`, and
+        // the same at arg/return/field/match-arm positions) must still fit the
+        // CONTEXTUAL type — its own-suffix validation at synthesis does not see
+        // the coercion target, so a negative-into-unsigned or out-of-range value
+        // silently changed sign / stayed untruncated. `check_int_literal_fits`
+        // emits ONLY when the value does not fit, so an in-range coercion
+        // (`5i64` into `u64`) is left untouched — the broader question of
+        // whether in-range implicit integer widening at boundaries should
+        // require `as` at all is a separate design decision (see the ledger
+        // entry). Returning early keeps this the single diagnostic (the
+        // synthesis-time own-suffix check is skipped for the error case).
+        if let Some(value) = Self::suffixed_int_literal_value(expr) {
+            let ctx = match expected {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                other => other,
+            };
+            if !self.check_int_literal_fits(value, ctx, &expr.span) {
+                self.record_expr_type(&expr.span, &Type::Error);
+                return Type::Error;
+            }
+        }
         // Fallible-allocation constructor `?`-form at check-mode
         // (phase-8-stdlib-floor item 8): `let v: Vec[T] =
         // Vec.try_with_capacity(n)?`. The `?` unwraps `Result[Vec[?T],
@@ -2175,6 +2197,28 @@ impl<'a> super::TypeChecker<'a> {
                 operand,
             } => match &operand.kind {
                 ExprKind::Integer(n, None) => Some(-(*n as i128)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The compile-time value of a SUFFIXED integer literal (`5i64` / negated
+    /// `-5i64`), in i128. Companion of [`unsuffixed_int_literal_value`] for the
+    /// coercion-boundary range check (B-2026-07-09-7): a suffixed literal is
+    /// validated against its own suffix at synthesis but was NOT re-checked
+    /// against a *differing* contextual type at a `let`/arg/return boundary, so
+    /// `let x: u64 = -5i64` (a negative into unsigned) and `let x: u32 =
+    /// 5_000_000_000i64` (out of range) silently coerced — the exact holes the
+    /// unsuffixed check at `check_expr` closes for bare literals.
+    fn suffixed_int_literal_value(expr: &Expr) -> Option<i128> {
+        match &expr.kind {
+            ExprKind::Integer(n, Some(_)) => Some(*n as i128),
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => match &operand.kind {
+                ExprKind::Integer(n, Some(_)) => Some(-(*n as i128)),
                 _ => None,
             },
             _ => None,

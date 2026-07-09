@@ -30789,6 +30789,105 @@ fn test_int_literal_boundaries_still_admitted() {
     );
 }
 
+// ── B-2026-07-09-7: SUFFIXED integer literals must ALSO fit the contextual
+// type at a coercion boundary ──
+//
+// The B-2026-07-02-7 checks above fire for UNSUFFIXED literals (validated
+// against the expected type) and for suffixed literals against their OWN
+// suffix. The gap: a suffixed literal whose suffix DIFFERS from the boundary
+// type (`let x: u64 = -5i64`, `let x: u32 = 5_000_000_000i64`) was validated
+// only against i64 and then silently coerced — a negative-into-unsigned sign
+// flip or an out-of-range value that stayed untruncated (interp == compiled,
+// so a typechecker permissiveness). These now take the same range check as
+// their unsuffixed twins.
+
+#[test]
+fn test_suffixed_int_literal_rejected_at_narrowing_boundary() {
+    for (src, needle) in [
+        // annotated let: negative suffixed into unsigned + out-of-range magnitude
+        (
+            "fn main() { let x: u64 = -5i64; println(x); }",
+            "cannot initialize unsigned",
+        ),
+        (
+            "fn main() { let x: u8 = -1i64; println(x); }",
+            "cannot initialize unsigned",
+        ),
+        (
+            "fn main() { let x: u32 = 5000000000i64; println(x); }",
+            "out of range",
+        ),
+        (
+            "fn main() { let x: u8 = 300i64; println(x); }",
+            "out of range",
+        ),
+        // suffix differs from the boundary width but both are signed
+        (
+            "fn main() { let x: u8 = 300i32; println(x); }",
+            "out of range",
+        ),
+        // fn-arg position
+        (
+            "fn f(x: u64) -> i64 { return 0; }\nfn main() { println(f(-5i64)); }",
+            "cannot initialize unsigned",
+        ),
+        // return position
+        (
+            "fn f() -> u32 { return 5000000000i64; }\nfn main() { println(f() as i64); }",
+            "out of range",
+        ),
+        // struct-field init
+        (
+            "struct S { b: u8, }\nfn main() { let s = S { b: 300i64 }; println(s.b); }",
+            "out of range",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(needle)),
+            "expected a suffixed-literal-range error containing {:?} for {:?}; got {:?}",
+            needle,
+            src,
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+        // Exactly one diagnostic — the boundary check must not double-emit
+        // with the synthesis-time own-suffix check.
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected a single diagnostic for {:?}; got {:?}",
+            src,
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_suffixed_int_literal_in_range_coercion_still_admitted() {
+    // Scope boundary of the B-2026-07-09-7 fix: it fires ONLY when the value
+    // does not fit. An in-range suffixed literal coerced across signedness
+    // (`5i64` into `u64`, `200i64` into `u8`) is left untouched — the broader
+    // "should in-range implicit widening require `as`" question is a separate
+    // design decision. Variable-to-variable coercion (e.g. `u64 = v.len()`,
+    // where `len()` returns i64) is likewise untouched — the fix is
+    // literal-only, so the load-bearing corpus idiom keeps compiling.
+    typecheck_ok(
+        "fn main() {\n\
+             let a: u64 = 5i64;\n\
+             let b: u8 = 200i64;\n\
+             let c: u32 = 4294967295i64;\n\
+             println((a as i64) + (b as i64) + (c as i64));\n\
+         }",
+    );
+    typecheck_ok(
+        "fn total(v: Vec[i64]) -> u64 {\n\
+             let n: u64 = v.len();\n\
+             n\n\
+         }\n\
+         fn main() { println(total(Vec.new()) as i64); }",
+    );
+}
+
 // ── S6a: trait-arg substitution through generic bounds ─────────────
 
 #[test]
