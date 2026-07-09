@@ -4387,6 +4387,31 @@ fn cmd_run(
         process::exit(1);
     }
 
+    // Resolver follow-up (m), run slice: surface dependency-resolution
+    // diagnostics before executing, so a broken dep graph (cycle / version
+    // conflict / MSRV / missing path-dep / workspace-deref) fails `karac run`
+    // exactly as it fails `check` / `build` — instead of the lenient path
+    // silently swallowing the resolver's finding (via `quiet_dep_package_walks`)
+    // and running anyway. Path-dep-only (no network), same policy as `check`:
+    // registry/git deps stay lenient (unsupported findings skipped). Scoped to
+    // the normal project-discovery case — `--no-manifest` opts out (as does
+    // `karac run --example`, which passes it), and a `--manifest` override is a
+    // single-file-script mode where project dep resolution doesn't apply.
+    if !no_manifest && manifest_override.is_none() {
+        if let (Some(root), Some(mf)) = (
+            manifest::discover_project_root(&script_dir),
+            discovered_manifest.as_ref(),
+        ) {
+            let mf = manifest::merge_target_overlay(mf, Some(&default_resolution_target(mf)));
+            let has_deps = !mf.dependencies.is_empty()
+                || !mf.dev_dependencies.is_empty()
+                || mf.kara_version.is_some();
+            if has_deps && !surface_dep_graph_diagnostics(&root, mf, output) {
+                process::exit(1);
+            }
+        }
+    }
+
     let source = read_source(filename);
     let mut lint_overrides = lint_overrides;
     if let Some(ref m) = discovered_manifest {
@@ -5057,7 +5082,7 @@ fn cmd_check(
     // profiles/targets/single dispatch below, so it fires regardless of matrix
     // mode. No-op for a single-file script outside any project, or a project
     // that declares no deps / MSRV. Path-dep-only (no network) — see
-    // `run_check_dep_diagnostics`.
+    // `surface_dep_graph_diagnostics`.
     let file_dir = std::path::Path::new(filename)
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -5069,7 +5094,7 @@ fn cmd_check(
             let has_deps = !mf.dependencies.is_empty()
                 || !mf.dev_dependencies.is_empty()
                 || mf.kara_version.is_some();
-            if has_deps && !run_check_dep_diagnostics(&root, mf, output) {
+            if has_deps && !surface_dep_graph_diagnostics(&root, mf, output) {
                 process::exit(1);
             }
         }
@@ -8787,20 +8812,21 @@ fn default_resolution_target(mf: &manifest::Manifest) -> String {
         .unwrap_or_else(crate::build_cache::host_target_triple)
 }
 
-/// Surface dependency-resolution diagnostics for `karac check` (resolver
-/// follow-up (m)). **Path-dep-only** — `check` is a fast static pass and must
+/// Surface dependency-resolution diagnostics for the static/lenient commands
+/// that consult a project but don't fetch — `karac check` and `karac run`
+/// (resolver follow-up (m)). **Path-dep-only** — both are fast passes that must
 /// not touch the network, so no registry/git provider is threaded in. Returns
-/// `false` (halt the check) when a fatal graph error is emitted; `true` to
+/// `false` (halt the command) when a fatal graph error is emitted; `true` to
 /// continue.
 ///
 /// A structural graph error — a dependency cycle, a missing path-dep, or a
 /// workspace-deref failure — fails `build_dep_graph_with_options` and halts.
 /// A version conflict or an MSRV (`kara-version`) violation surfaces from the
 /// resolve step and halts. Registry/git deps, by contrast, cannot be satisfied
-/// without a fetch and `check` neither fetches nor loads dependency modules, so
-/// an `E_*_DEP_UNSUPPORTED` finding is a build-time concern, not a check
-/// failure — it is skipped here (the same dep surfaces on `karac build`).
-fn run_check_dep_diagnostics(
+/// without a fetch and neither command fetches or loads dependency modules from
+/// a registry/git source, so an `E_*_DEP_UNSUPPORTED` finding is a build-time
+/// concern — it is skipped here (the same dep surfaces on `karac build`).
+fn surface_dep_graph_diagnostics(
     root: &std::path::Path,
     mf: crate::manifest::Manifest,
     output: OutputMode,

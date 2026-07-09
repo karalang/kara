@@ -7894,6 +7894,112 @@ fn test_check_passes_with_clean_path_dep() {
     );
 }
 
+/// Resolver follow-up (m), run slice: `karac run <file>` inside a project must
+/// also fail on a broken dep graph, instead of the lenient run path silently
+/// swallowing the resolver's finding and executing anyway. A path-dep cycle is
+/// caught before the program runs.
+#[test]
+fn test_run_surfaces_dep_cycle() {
+    let tmp = slice7_tempdir("run-cycle");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("sub/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"root\"\n\n[dependencies]\nsub = { path = \"sub\" }\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("sub/kara.toml"),
+        "[package]\nname = \"sub\"\n\n[dependencies]\nroot = { path = \"..\" }\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("sub/src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["run", "src/main.kara"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "a dependency cycle must fail `karac run`; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_DEPENDENCY_CYCLE]"),
+        "expected E_DEPENDENCY_CYCLE from run; stderr={stderr}",
+    );
+}
+
+/// Resolver follow-up (m), run slice: an MSRV violation (resolve-step error)
+/// must also fail `karac run`.
+#[test]
+fn test_run_surfaces_msrv_violation() {
+    let tmp = slice7_tempdir("run-msrv");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"proj\"\nkara-version = \">=999.0.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["run", "src/main.kara"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "an unsatisfiable MSRV must fail `karac run`; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_TOOLCHAIN_TOO_OLD]"),
+        "expected E_TOOLCHAIN_TOO_OLD from run; stderr={stderr}",
+    );
+}
+
+/// Resolver follow-up (m), run slice negative pin: a *clean* path-dep graph
+/// must not block `karac run` — the resolver gate passes and the program
+/// executes normally. Guards against the wiring spuriously halting valid runs.
+#[test]
+fn test_run_clean_path_dep_still_runs() {
+    let tmp = slice7_tempdir("run-clean-dep");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("child/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"root\"\n\n[dependencies]\nchild = { path = \"child\" }\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(tmp.join("child/kara.toml"), "[package]\nname = \"child\"\n").unwrap();
+    std::fs::write(tmp.join("child/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["run", "src/main.kara"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "a clean path-dep graph must not block `karac run`; stderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("E_DEPENDENCY"),
+        "no dependency error expected on a clean graph; stderr={stderr}",
+    );
+}
+
 #[test]
 fn test_slice7_no_deps_no_msrv_skips_resolver() {
     // Regression pin: a project with neither `[dependencies]` nor
