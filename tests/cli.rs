@@ -7571,6 +7571,112 @@ root = { path = ".." }
     );
 }
 
+/// Follow-up (n) of the PubGrub-resolver block (`docs/implementation_checklist/
+/// phase-5-diagnostics.md`): the `--output=json` envelope must surface a
+/// *resolver* diagnostic in the `diagnostics` array under `phase:"dep_resolution"`.
+/// The sibling `build_output_json_pins_proxy_fetch_error_shape`
+/// (`registry_fetch_e2e.rs`) pins the *fetch*-failure shape (needs a live proxy);
+/// this pins the pure *resolution*-failure shape — a path-dep cycle, which is
+/// deterministic and needs no network — so an LLM agent / IDE / CI gate can
+/// consume resolver errors from the machine surface the same way it consumes
+/// fetch errors. Golden shape, frozen here.
+#[test]
+fn test_slice7_path_dep_cycle_json_output_shape() {
+    // Same mutually-referencing path-dep cycle as
+    // `test_slice7_path_dep_cycle_fails_build`, asserted through the
+    // machine-readable envelope instead of text stderr.
+    let tmp = slice7_tempdir("cycle-json");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("sub/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root"
+
+[dependencies]
+sub = { path = "sub" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("sub/kara.toml"),
+        r#"[package]
+name = "sub"
+
+[dependencies]
+root = { path = ".." }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("sub/src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--output=json"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "dependency cycle should halt the build; stdout={stdout} stderr={stderr}",
+    );
+
+    // The JSON envelope lands on stdout (text-mode diagnostics go to stderr).
+    // Locate the one object line so any incidental stdout notice ahead of it
+    // can't break the parse — same approach as the proxy-fetch shape test.
+    let line = stdout
+        .lines()
+        .find(|l| l.trim_start().starts_with('{'))
+        .unwrap_or_else(|| {
+            panic!("expected a JSON envelope on stdout;\nstdout={stdout}\nstderr={stderr}")
+        });
+    let v: serde_json::Value = serde_json::from_str(line.trim())
+        .unwrap_or_else(|e| panic!("stdout line is not valid JSON ({e});\nline={line}"));
+
+    // Top-level envelope: a failed build.
+    assert_eq!(
+        v["status"], "error",
+        "a resolver failure must set status=error;\nenvelope={v}"
+    );
+    let diags = v["diagnostics"]
+        .as_array()
+        .unwrap_or_else(|| panic!("diagnostics must be an array;\nenvelope={v}"));
+    assert!(
+        !diags.is_empty(),
+        "expected at least one diagnostic;\nenvelope={v}"
+    );
+
+    let d = &diags[0];
+    assert_eq!(
+        d["severity"], "error",
+        "a dependency cycle is an error;\ndiag={d}"
+    );
+    assert_eq!(
+        d["phase"], "dep_resolution",
+        "resolver diagnostics surface under the dep_resolution phase;\ndiag={d}"
+    );
+    assert_eq!(
+        d["code"], "E_DEPENDENCY_CYCLE",
+        "a path-dep cycle surfaces the cycle code;\ndiag={d}"
+    );
+    // The constraint/cycle chain must reach the machine surface too, not only
+    // the human text render — carried in a `notes` entry (`cycle: A → B → A`).
+    let notes = d["notes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("notes must be an array;\ndiag={d}"));
+    assert!(
+        notes.iter().any(|n| {
+            let s = n.as_str().unwrap_or("");
+            s.contains("cycle") && s.contains('→')
+        }),
+        "the cycle chain must render with arrow separators in a note;\ndiag={d}"
+    );
+}
+
 #[test]
 fn test_slice7_no_deps_no_msrv_skips_resolver() {
     // Regression pin: a project with neither `[dependencies]` nor
