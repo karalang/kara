@@ -6386,4 +6386,31 @@ fn main() {
             assert_eq!(out.trim(), "13", "got {out:?}");
         }
     }
+
+    #[test]
+    fn test_e2e_a2b2_network_fanout_runs() {
+        // A2b-2: two independent `reads(Network) suspends` calls (arg-free →
+        // arg-safe) are grouped by auto-par and fanned out. Pins that the group
+        // codegen EMITS + RUNS correctly — the analysis-side relaxation
+        // (`is_safe_network_fanout`) produces a group the auto-par lowering can
+        // fork/join. Output must match sequential execution (ordered-output
+        // capture). Companion to the `tests/concurrency.rs` analysis pins and
+        // the memory_sanitizer owned-heap variant; runs even where ASAN is
+        // unavailable.
+        let out = run_program(
+            r#"
+fn fetch_a() -> i64 with reads(Network) suspends { return 11; }
+fn fetch_b() -> i64 with reads(Network) suspends { return 22; }
+fn main() {
+    let x = fetch_a();
+    let y = fetch_b();
+    println(x);
+    println(y);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "11\n22", "got {out:?}");
+        }
+    }
 }

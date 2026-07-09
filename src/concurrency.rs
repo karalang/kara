@@ -440,7 +440,9 @@ fn reorder_eligible(info: &StmtInfo) -> bool {
         && !info.has_channel_op
         && !info.has_console_output
         && !info.is_seq
-        && (!effects_mark_coroutine_boundary(&info.effects) || info.is_timer_suspend)
+        && (!effects_mark_coroutine_boundary(&info.effects)
+            || info.is_timer_suspend
+            || info.is_safe_network_fanout)
 }
 
 // ── Result Types ───────────────────────────────────────────────
@@ -760,6 +762,20 @@ struct StmtInfo {
     /// exempts only the ones proven to be a standalone timer park here. See
     /// `stmt_is_timer_suspend` and the `find_parallel_groups` boundary guards.
     is_timer_suspend: bool,
+    /// A2b-2: whether this statement is a network-boundary call the auto-par
+    /// fan-out can safely overlap — a direct free-function `Call` (or its
+    /// `let`) whose arguments move in NO owned heap/`Drop` binding, so the
+    /// coroutine-owned-param double-drop (the `__par_branch` suppression-scope
+    /// gap) cannot fire. Like `is_timer_suspend`, it exempts the statement from
+    /// the `effects_mark_coroutine_boundary` gate — the conflict model then
+    /// keeps same-resource network calls (`sends`/`receives` on `Network`)
+    /// serial and overlaps only independent ones (e.g. two `reads(Network)`
+    /// fetches). Fail-closed: proven purely from AST shape (no type info in
+    /// this pass), so it admits literal/const-arg calls only; variable-arg
+    /// fan-out (Copy/borrow args) awaits threading ownership info through and
+    /// is the A2b-2 follow-up. Set in `analyze_stmt` as `stmt_fanout_args_safe`
+    /// (arg-safety) AND a `Network`-resource-effect check.
+    is_safe_network_fanout: bool,
     /// Whether this statement is a constant-cost initializer — a
     /// `let`/`assign` of a literal or bare identifier, or a `let
     /// uninit`. These are O(1) and run in ~zero time. Used by the
@@ -881,6 +897,80 @@ fn expr_is_call_free(expr: &Expr) -> bool {
         ExprKind::Cast { expr, .. } => expr_is_call_free(expr),
         // Literals, paths, and other leaf forms carry no call.
         _ => true,
+    }
+}
+
+/// A2b-2 (arg-safety half): true iff `stmt` is a direct free-function `Call`
+/// (or `let x = Call(...)`) whose every argument is BOTH call-free (no nested
+/// call/method that could itself suspend or touch a channel) AND binding-free
+/// (references no name, so nothing owned is moved into the coroutine). The
+/// coroutine-owned-param double-drop
+/// (docs/spikes/network-async-coroutine-transform.md; the `__par_branch`
+/// suppression-scope gap in `call_dispatch.rs`) fires ONLY when a coroutine
+/// call moves an owned parent `Drop`/heap binding into itself via an
+/// `Identifier` argument; a literal / const-expression argument names no
+/// binding, so the caller's drop-suppression has nothing to cancel and the
+/// value drops exactly once (inside the coroutine). Deliberately conservative:
+/// it admits the flagship two-`http_get("...")`-to-different-hosts shape and
+/// leaves variable-arg fan-out (Copy/borrow args — safe, but indistinguishable
+/// from an owned move without type info this pass does not carry) to the A2b-2
+/// follow-up. This is only the ARG-safety half; `analyze_stmt` combines it with
+/// a Network-resource-effect check so the exemption fires for network calls
+/// only (a non-network user `with suspends` fn stays serial), and the conflict
+/// model still serializes same-resource network calls
+/// (`(Sends,Sends)`/`(Receives,Receives)` on `Network`) — the exemption ONLY
+/// lifts the blanket coroutine-boundary EXCLUSION so two *independent*
+/// (disjoint-resource) network calls can group.
+fn stmt_fanout_args_safe(stmt: &Stmt) -> bool {
+    let value = match &stmt.kind {
+        StmtKind::Let { value, .. } | StmtKind::Expr(value) => value,
+        _ => return false,
+    };
+    match &value.kind {
+        ExprKind::Call { callee, args } => {
+            // Bare free-function callee only — a method call could move an owned
+            // receiver (no `Identifier`-arg suppression covers the receiver),
+            // and a computed callee is outside the conservative shape.
+            let bare_callee = match &callee.kind {
+                ExprKind::Identifier(_) => true,
+                ExprKind::Path { segments, .. } => segments.len() == 1,
+                _ => false,
+            };
+            bare_callee
+                && args
+                    .iter()
+                    .all(|a| expr_is_call_free(&a.value) && expr_is_binding_free(&a.value))
+        }
+        _ => false,
+    }
+}
+
+/// True iff `expr` references no binding — used by `stmt_fanout_args_safe`
+/// to prove a network call's arguments move no owned parent binding into the
+/// coroutine. FAIL-CLOSED: only pure-value literals and arithmetic/cast over
+/// them are binding-free; ANY `Identifier`/`Path`, and every richer form
+/// (struct/array/map literal, interpolated string, index, field access, call,
+/// closure, …) that could carry a name, disqualifies. This pass has no type
+/// info, so it cannot tell an owned heap binding from a Copy scalar and
+/// conservatively excludes all names.
+fn expr_is_binding_free(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Integer(..)
+        | ExprKind::Float(..)
+        | ExprKind::CharLit(..)
+        | ExprKind::ByteLit(..)
+        | ExprKind::StringLit(..)
+        | ExprKind::MultiStringLit(..)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(..) => true,
+        ExprKind::Binary { left, right, .. } => {
+            expr_is_binding_free(left) && expr_is_binding_free(right)
+        }
+        ExprKind::Unary { operand, .. } => expr_is_binding_free(operand),
+        ExprKind::Cast { expr, .. } => expr_is_binding_free(expr),
+        // Identifier / Path / interpolated string / struct-array-map literals /
+        // index / field access / call / closure / everything else: fail closed.
+        _ => false,
     }
 }
 
@@ -1773,6 +1863,9 @@ impl<'a> ConcurrencyChecker<'a> {
             has_channel_op: stmt_has_channel_op(stmt),
             has_console_output: stmt_has_console_output(stmt),
             is_timer_suspend: stmt_is_timer_suspend(stmt),
+            // Set below, once `effects` is populated — it needs the effect set
+            // to confirm the call touches the `Network` resource.
+            is_safe_network_fanout: false,
             is_constant_init: stmt_is_constant_init(stmt),
         };
 
@@ -1841,6 +1934,15 @@ impl<'a> ConcurrencyChecker<'a> {
                 self.collect_block_inner_writes(body, &mut info.defines);
             }
         }
+
+        // A2b-2: a network call (touches the `Network` resource) whose args
+        // move in no owned binding is exempt from the coroutine-boundary gate.
+        // Both halves are required: the arg-safety proves no double-drop, and
+        // the Network-resource check keeps a non-network user `with suspends`
+        // fn serial (its independence isn't established here). Now that
+        // `info.effects` is populated, combine them.
+        info.is_safe_network_fanout =
+            stmt_fanout_args_safe(stmt) && info.effects.iter().any(|e| e.resource == "Network");
 
         info
     }
@@ -2046,6 +2148,7 @@ impl<'a> ConcurrencyChecker<'a> {
             // `effects_mark_coroutine_boundary` / `stmt_is_timer_suspend`.
             if effects_mark_coroutine_boundary(&infos[start].effects)
                 && !infos[start].is_timer_suspend
+                && !infos[start].is_safe_network_fanout
             {
                 assigned[start] = true;
                 continue;
@@ -2110,6 +2213,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 // join. End the group at any other boundary.
                 if effects_mark_coroutine_boundary(&infos[candidate].effects)
                     && !infos[candidate].is_timer_suspend
+                    && !infos[candidate].is_safe_network_fanout
                 {
                     break;
                 }

@@ -533,17 +533,18 @@ fn test_nontimer_suspend_calls_serialize() {
     );
 }
 
-// ── Network coroutine boundaries STILL serialize (A2b-2 pending) ─
+// ── Conflicting network calls STILL serialize (post-A2b-2) ────────
 
 #[test]
 fn test_network_boundary_calls_still_serialize() {
-    // A2b lifts PLAIN suspends only. A `sends(Network)`/`receives(Network)`
-    // call is compiled into a dispatcher-driven coroutine that owns + drops
-    // its by-value params — lifting it into a `__par_branch` worker would
-    // double-drop an owned user-`Drop` arg. So network boundaries stay serial
-    // via `effects_mark_coroutine_boundary`'s network arm. Pins the A2b/A2b-2
-    // boundary: a premature network-fan-out flip without the coroutine-aware
-    // lowering fails here.
+    // Post-A2b-2, the arg-safe exemption admits these two arg-free network
+    // calls PAST the coroutine-boundary gate — but they still stay serial,
+    // because they `sends(Network)` AND `receives(Network)` on the SAME
+    // `Network` resource, and `(Sends,Sends)`/`(Receives,Receives)` conflict.
+    // So the serialization now comes from the conflict model, not the boundary
+    // gate. This complements `test_a2b2_independent_network_reads_parallelize`:
+    // independent `reads(Network)` calls parallelize; genuinely-conflicting
+    // network calls (a send/recv pair on one resource) do not.
     let analysis = analyze(
         r#"
         fn get_a() -> i64 with sends(Network) receives(Network) { return 1; }
@@ -559,6 +560,77 @@ fn test_network_boundary_calls_still_serialize() {
     assert!(
         main_fc.parallel_groups.is_empty(),
         "network coroutine boundaries must stay serialized until A2b-2, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+// ── A2b-2: independent network calls fan out (arg-safe shape) ─────
+
+#[test]
+fn test_a2b2_independent_network_reads_parallelize() {
+    // A2b-2: two independent network fetches — `reads(Network) suspends`, the
+    // canonical shape — now overlap. The coroutine-boundary gate excluded ALL
+    // suspends/Network calls; A2b-2 lifts it for the ARG-SAFE shape (literal /
+    // no-argument calls that move no owned binding into the coroutine, so the
+    // `__par_branch` coroutine-owned-param double-drop cannot fire).
+    // `reads(Network)` + `reads(Network)` do not conflict (`(Reads,Reads) =>
+    // false`), so once past the gate they group. Flagship "effects
+    // auto-parallelize independent I/O".
+    let analysis = analyze(
+        r#"
+        fn fetch_a() -> i64 with reads(Network) suspends { return 1; }
+        fn fetch_b() -> i64 with reads(Network) suspends { return 2; }
+        fn main() {
+            let x = fetch_a();
+            let y = fetch_b();
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "two independent arg-safe network reads should parallelize (A2b-2), got {:?}",
+        main_fc.parallel_groups
+    );
+    let g = &main_fc.parallel_groups[0];
+    assert!(g.statement_indices.contains(&0) && g.statement_indices.contains(&1));
+}
+
+#[test]
+fn test_a2b2_network_call_with_owned_arg_stays_serial() {
+    // The A2b-2 exemption is FAIL-CLOSED on arguments: a network call that moves
+    // an owned binding into itself (`fetch(a)` where `a` is a named `String`)
+    // could hit the coroutine-owned-param double-drop, so it is NOT admitted —
+    // only literal/const-arg calls are. The `Identifier` argument disqualifies,
+    // so these stay serial. (Copy/borrow args are also excluded for now — this
+    // pass carries no type info to tell them from an owned move; admitting them
+    // is the A2b-2 follow-up.)
+    let analysis = analyze(
+        r#"
+        fn fetch(u: String) -> i64 with reads(Network) suspends { return 1; }
+        fn main() {
+            let a = "http://a";
+            let b = "http://b";
+            let x = fetch(a);
+            let y = fetch(b);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    // The two `fetch(...)` calls are statements 2 and 3 (after the two `let`
+    // URL bindings). They must NOT be co-grouped — the owned-`String` identifier
+    // arg fails the fail-closed exemption. (The two trivial constant-init `let`
+    // bindings at 0,1 may form their own is_trivial group — a codegen no-op —
+    // which is not what this pins.)
+    let fetches_grouped = main_fc
+        .parallel_groups
+        .iter()
+        .any(|g| g.statement_indices.contains(&2) && g.statement_indices.contains(&3));
+    assert!(
+        !fetches_grouped,
+        "two network calls each moving an owned binding in must stay serial \
+         (fail-closed A2b-2), got {:?}",
         main_fc.parallel_groups
     );
 }

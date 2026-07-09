@@ -14889,6 +14889,33 @@ fn main() {
     /// both are consumed (not live at exit), so a missing free is a detectable
     /// non-reachable leak rather than one LSan masks.
     #[test]
+    fn asan_auto_par_network_effect_owned_heap_fanout_clean() {
+        // A2b-2: two independent `reads(Network) suspends` fns returning owned
+        // heap (String) are now grouped by auto-par via the arg-safe
+        // network-fanout exemption (`is_safe_network_fanout`) and fanned out
+        // through the return-slot move-only path. Each String must be freed
+        // exactly once — the parent is the unique drop owner after the branch
+        // bit-copies through its slot and the branch's own cleanup is
+        // discarded. Distinct from `asan_auto_par_allocating_calls_clean`
+        // (grouped via `allocates`): this exercises the `reads(Network)`-driven
+        // admission end-to-end, so a leak/double-free surfaces under LSan/ASan.
+        assert_clean_asan_run(
+            r#"
+fn fetch_a() -> String with reads(Network) suspends { return "aaaaaaaaaaaaaaaaaaaa"; }
+fn fetch_b() -> String with reads(Network) suspends { return "bbbbbbbbbbbbbbbbbbbb"; }
+fn main() {
+    let x = fetch_a();
+    let y = fetch_b();
+    println(x);
+    println(y);
+}
+"#,
+            &["aaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbb"],
+            "asan_auto_par_network_effect_owned_heap_fanout_clean",
+        );
+    }
+
+    #[test]
     fn asan_auto_par_allocating_calls_clean() {
         let label = "auto_par_allocating_calls";
         if !asan_available() {
