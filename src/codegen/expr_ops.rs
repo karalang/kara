@@ -1720,41 +1720,73 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let sv = val.into_struct_value();
-        let tag = self
-            .builder
-            .build_extract_value(sv, 0, "capt.opt.tag")
-            .unwrap()
-            .into_int_value();
-        let w0 = self
-            .builder
-            .build_extract_value(sv, 1, "capt.opt.w0")
-            .unwrap()
-            .into_int_value();
-        let some_tag = self
-            .enum_layouts
-            .get("Option")
-            .and_then(|l| l.tags.get("Some").copied())
-            .unwrap_or(1);
-        let is_some = self
-            .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                tag,
-                i64_t.const_int(some_tag, false),
-                "capt.opt.is_some",
-            )
-            .unwrap();
-        let do_bb = self.context.append_basic_block(fn_val, "capt.opt.inc.do");
+
+        // The captured `Option[shared T]` field value arrives in one of two
+        // representations, and which one is layout/order-dependent:
+        //   * conventional `{ tag, w0, ... }` struct (owned / non-niche
+        //     layout) — the Some tag gates whether `w0` holds a live handle;
+        //   * niche-optimized bare pointer / i64 (a `shared`-only layout that
+        //     folds `None` into a null handle, dropping the tag word entirely).
+        // Recover the inner heap pointer for whichever we got. The old code
+        // unconditionally called `val.into_struct_value()`, which PANICKED on
+        // the niche pointer — the latent bug the `import` parser-tail port
+        // surfaced when adding a variant shifted an `Option[shared TypeExpr]`
+        // field onto the niche path. `IntValue` is handled defensively (a niche
+        // handle materialized as an integer); any other kind carries no handle.
+        let (tag, inner) = match val {
+            BasicValueEnum::StructValue(sv) => {
+                let tag = self
+                    .builder
+                    .build_extract_value(sv, 0, "capt.opt.tag")
+                    .unwrap()
+                    .into_int_value();
+                let w0 = self
+                    .builder
+                    .build_extract_value(sv, 1, "capt.opt.w0")
+                    .unwrap()
+                    .into_int_value();
+                let inner = self
+                    .builder
+                    .build_int_to_ptr(w0, ptr_ty, "capt.opt.inner")
+                    .unwrap();
+                (Some(tag), inner)
+            }
+            BasicValueEnum::PointerValue(pv) => (None, pv),
+            BasicValueEnum::IntValue(iv) => {
+                let inner = self
+                    .builder
+                    .build_int_to_ptr(iv, ptr_ty, "capt.opt.inner")
+                    .unwrap();
+                (None, inner)
+            }
+            _ => return,
+        };
+
         let skip_bb = self.context.append_basic_block(fn_val, "capt.opt.inc.skip");
-        self.builder
-            .build_conditional_branch(is_some, do_bb, skip_bb)
-            .unwrap();
-        self.builder.position_at_end(do_bb);
-        let inner = self
-            .builder
-            .build_int_to_ptr(w0, ptr_ty, "capt.opt.inner")
-            .unwrap();
+        // Conventional layout: branch away unless the tag says `Some` (the
+        // niche layout has no tag — `null == None` is the only guard needed).
+        if let Some(tag) = tag {
+            let some_tag = self
+                .enum_layouts
+                .get("Option")
+                .and_then(|l| l.tags.get("Some").copied())
+                .unwrap_or(1);
+            let is_some = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    tag,
+                    i64_t.const_int(some_tag, false),
+                    "capt.opt.is_some",
+                )
+                .unwrap();
+            let some_bb = self.context.append_basic_block(fn_val, "capt.opt.inc.some");
+            self.builder
+                .build_conditional_branch(is_some, some_bb, skip_bb)
+                .unwrap();
+            self.builder.position_at_end(some_bb);
+        }
+        // Null-guard (both layouts): a null handle is `None` / already-empty.
         let is_null = self
             .builder
             .build_is_null(inner, "capt.opt.is_null")
@@ -4355,6 +4387,91 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(ft) => self.coerce_scalar_to_type(val, ft),
             None => val,
         }
+    }
+
+    /// Niche→conventional boundary conversion for an `Option[shared T]` struct
+    /// field. A niche-ABI source (a niche-returning fn like
+    /// `parse_else() -> Option[Expr]`, or a niche let-local) yields the value
+    /// in the NICHE representation — a bare `ptr`, `null` == `None`. But a
+    /// *conventional* field slot (every non-`shared` struct's `Option[shared]`
+    /// field, and every non-niche `shared` field) is the 4-word
+    /// `{ tag, w0, 0, 0 }` layout the match/drop/`emit_rc_inc` sites all read.
+    /// Storing the raw pointer into that slot `insertvalue`s a `ptr` into a
+    /// 4×i64 aggregate → "Invalid InsertValueInst" (self-hosting parser-tail
+    /// `import`-slice repro; masked at HEAD only by the exact corpus).
+    ///
+    /// Widen the pointer to the conventional aggregate whose field-0 is the
+    /// `Some`/`None` tag (chosen by null-ness) and field-1 holds the handle
+    /// (as an `i64` bit-pattern or a `ptr`, matching the slot's field type).
+    /// A **no-op** when `val` is already conventional (a struct value), when the
+    /// field is not `Option[shared]`, or when the slot is not the conventional
+    /// multi-word layout — so working paths and true niche field slots are
+    /// untouched.
+    pub(super) fn widen_niche_option_ptr_to_field(
+        &self,
+        field_ty: BasicTypeEnum<'ctx>,
+        is_option_shared_field: bool,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        if !is_option_shared_field {
+            return val;
+        }
+        let BasicValueEnum::PointerValue(inner) = val else {
+            return val;
+        };
+        let BasicTypeEnum::StructType(sty) = field_ty else {
+            return val;
+        };
+        if sty.count_fields() < 2 {
+            return val;
+        }
+        let i64_t = self.context.i64_type();
+        let some_tag = self
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("Some").copied())
+            .unwrap_or(1);
+        let none_tag = self
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("None").copied())
+            .unwrap_or(0);
+        let is_null = self
+            .builder
+            .build_is_null(inner, "opt.niche.isnull")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_select(
+                is_null,
+                i64_t.const_int(none_tag, false),
+                i64_t.const_int(some_tag, false),
+                "opt.niche.tag",
+            )
+            .unwrap()
+            .into_int_value();
+        // field-1 holds the handle — an `i64` bit-pattern in the canonical
+        // layout, but tolerate a `ptr`-typed slot (store the pointer directly).
+        let w0: BasicValueEnum<'ctx> = match sty.get_field_type_at_index(1) {
+            Some(BasicTypeEnum::PointerType(_)) => inner.into(),
+            _ => self
+                .builder
+                .build_ptr_to_int(inner, i64_t, "opt.niche.w0")
+                .unwrap()
+                .into(),
+        };
+        let mut agg = sty.const_zero();
+        agg = self
+            .builder
+            .build_insert_value(agg, tag, 0, "opt.conv.tag")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, w0, 1, "opt.conv.w0")
+            .unwrap()
+            .into_struct_value();
+        agg.into()
     }
 
     /// Boundary coercion for the current function's `ret`: coerce a

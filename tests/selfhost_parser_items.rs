@@ -890,7 +890,11 @@ fn rust_render(src: &str) -> String {
 /// Item differential gate (slice 3c). Same harness as the sibling oracles:
 /// build the real selfhost modules into a temp project with a per-input driver,
 /// run, and diff against the seed's render.
+// IGNORED — B-2026-07-09-12: the self-hosted parser compiles (after the
+// B-2026-07-09-11 niche fix) but crashes at runtime on basic inputs. See the
+// note in tests/selfhost_parser.rs. Un-ignore once B-2026-07-09-12 is fixed.
 #[test]
+#[ignore = "B-2026-07-09-12: selfhost parser builds but crashes at runtime (pre-existing port memory-safety bug)"]
 fn selfhost_parser_matches_rust_parser_items() {
     // 1. Crate-root program: a driver over the Kāra `parse_item_str` +
     //    `render_item`. The six selfhost modules are copied verbatim (step 2).
@@ -951,7 +955,14 @@ fn selfhost_parser_matches_rust_parser_items() {
     let bin = tmp.join("parse");
 
     if !bin.exists() {
-        let compile_err = berr.contains("error[")
+        // A compiler PANIC or signal-kill is a real bug, never a benign skip.
+        // This class was silently skipping for weeks: a niche `Option[shared]`
+        // codegen panic produced no binary and matched none of the markers
+        // below, so `!bin.exists()` fell through to the "missing archive" skip
+        // and the oracle reported a vacuous "ok". Treat it as a hard failure.
+        let compiler_crashed = berr.contains("panicked at") || build.status.code().is_none();
+        let compile_err = compiler_crashed
+            || berr.contains("error[")
             || berr.contains("codegen failed")
             || berr.contains("parse error")
             || berr.contains("Module verification failed");

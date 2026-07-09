@@ -660,7 +660,12 @@ fn selfhost_lexer_matches_rust_lexer() {
         // port regression — fail loudly with the generated source. Anything
         // else (no-llvm gate, or a link failure from a missing runtime archive)
         // soft-skips like the rest of the E2E suite.
-        let compile_err = berr.contains("error[")
+        // A compiler PANIC or signal-kill is a real bug, never a benign skip
+        // (see the parser oracles — a niche codegen panic silently skipped for
+        // weeks). Treat a compiler crash as a hard failure.
+        let compiler_crashed = berr.contains("panicked at") || build.status.code().is_none();
+        let compile_err = compiler_crashed
+            || berr.contains("error[")
             || berr.contains("codegen failed")
             || berr.contains("parse error")
             || berr.contains("Module verification failed");

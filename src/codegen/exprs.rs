@@ -1966,6 +1966,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         // narrow slot, corrupting neighboring fields.
                         // See `coerce_to_struct_field_ty`.
                         let val = self.coerce_to_struct_field_ty(gep_ty, idx as u32 + base, val);
+                        // Niche→conventional boundary (same as the non-shared
+                        // insertvalue branch): a niche-ABI `Option[shared T]`
+                        // value into this conventional field slot is widened
+                        // from a bare `ptr` to the 4-word `{tag, w0, 0, 0}`.
+                        let val = match gep_ty.get_field_type_at_index(idx as u32 + base) {
+                            Some(fty) => self.widen_niche_option_ptr_to_field(
+                                fty,
+                                opt_inner_heap.is_some(),
+                                val,
+                            ),
+                            None => val,
+                        };
                         self.builder.build_store(field_ptr, val).unwrap();
                     }
                     // Capture-inc for a non-fresh `Option[shared T]` field
@@ -2086,6 +2098,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // a malformed aggregate that reads back as garbage. See
                 // `coerce_to_struct_field_ty`.
                 let val = self.coerce_to_struct_field_ty(st, idx as u32, val);
+                // Niche→conventional boundary: a niche-ABI `Option[shared T]`
+                // value (bare `ptr`) into this conventional (non-`shared` struct)
+                // 4-word slot must be widened, else the `ptr` is `insertvalue`'d
+                // into a 4×i64 aggregate (invalid IR — the pre-existing niche
+                // panic the selfhost parser oracles were silently skipping on).
+                let is_opt_shared = self
+                    .struct_field_type_exprs
+                    .get(name)
+                    .and_then(|tes| tes.get(idx))
+                    .is_some_and(|te| self.option_inner_shared_type_for_type_expr(te).is_some());
+                let val = match st.get_field_type_at_index(idx as u32) {
+                    Some(fty) => self.widen_niche_option_ptr_to_field(fty, is_opt_shared, val),
+                    None => val,
+                };
                 agg = self
                     .builder
                     .build_insert_value(agg, val, idx as u32, "field")
