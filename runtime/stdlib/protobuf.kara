@@ -806,6 +806,26 @@ comptime fn proto_index_to_enum(idx: String, en: String, vnames: Vec[String]) ->
 // Emit `impl T { encode / decode / merge }` for a `#[derive(Message)]` struct.
 comptime fn derive_message(comptime T: Type) -> Vec[Item] {
     let n = T.name();
+    // #[derive(Message)] applies to a struct (a proto3 message). A proto3 enum
+    // is a FIELD type, not a top-level message — it is encoded as a varint of
+    // the variant's 0-based declaration index when it appears as a field of a
+    // derived struct (the `is_enum` field branch below). Reject a bare-enum
+    // target with an actionable diagnostic rather than emitting a struct-shaped
+    // body that fails to typecheck (a `T { … }` constructor on a non-struct and
+    // an un-inferred empty `Vec.new()` encode — `'T' is not a struct` /
+    // `Vec<?T0>`). See docs bug-ledger B-2026-07-09-5.
+    if T.is_enum() {
+        compiler.error(
+            "derive(Message): `" + n + "` is an enum, but #[derive(Message)] applies to a struct "
+                + "(a proto3 message). A proto3 enum is a field type: declare the enum WITHOUT "
+                + "#[derive(Message)] and use it as a field of a #[derive(Message)] struct — it "
+                + "encodes as a varint of the variant's 0-based declaration index. For a "
+                + "choice-of-payloads, use an enum with payload variants as a struct field (a "
+                + "proto3 oneof).",
+        );
+        let empty: Vec[Item] = Vec.new();
+        return empty;
+    }
     let mut enc = "let mut out = Vec.new(); ";
     let mut decls = "";
     let mut dec = "";

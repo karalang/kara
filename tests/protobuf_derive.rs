@@ -1378,6 +1378,32 @@ fn main() {}
 }
 
 #[test]
+fn derive_message_on_bare_enum_errors() {
+    // B-2026-07-09-5: `#[derive(Message)]` applies to a STRUCT (a proto3
+    // message). A proto3 enum is a FIELD type, not a top-level message — used
+    // as a field it encodes as a varint of the variant's declaration index
+    // (see `derive_enum_field_roundtrip`). A bare-enum target previously
+    // slipped through `derive_message`'s struct-shaped codegen and failed with
+    // confusing generated-body typecheck errors (`'Role' is not a struct` /
+    // `Vec<?T0>`) on BOTH backends; now `derive_message` guards `T.is_enum()`
+    // and raises an actionable `compiler.error`.
+    let src = r#"
+#[derive(Message)]
+enum Role { Guest, Member, Admin }
+
+fn main() {}
+"#;
+    let diags = comptime_diags(src);
+    assert!(
+        diags.iter().any(|d| d.contains("E_COMPTIME_ERROR")
+            && d.contains("is an enum")
+            && d.contains("applies to a struct")
+            && d.contains("Role")),
+        "expected a bare-enum derive(Message) diagnostic; got: {diags:?}"
+    );
+}
+
+#[test]
 fn derive_supported_struct_has_no_diagnostics() {
     let src = r#"
 #[derive(Message)]
