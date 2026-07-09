@@ -3375,6 +3375,73 @@ fn main() {
         }
     }
 
+    /// B-2026-07-09-6: matching a BORROWED `Option[struct]` (`ref` / `mut ref`)
+    /// and reading a field of the `Some(n)` payload returned 0 — a silent
+    /// wrong-answer miscompile. A single-field struct flattens to one i64
+    /// payload word, so the via-ptr `TupleVariant` fast path bound `n` as a
+    /// ref-to-i64 leaf (the wrong type); the arm body's `n.field` access then
+    /// collapsed to 0. Independent of `shared`/RC — plain structs and shared
+    /// structs both hit it. The fix defers struct-typed payload bindings to the
+    /// value-source path, which reconstructs the struct aggregate at the right
+    /// type. Owned `Option[struct]` always worked (the control below).
+    #[test]
+    fn borrowed_option_struct_payload_field_read_is_correct() {
+        // Plain struct, `ref` param.
+        let plain_ref = "struct P { val: i64 }\n\
+            fn getval(o: ref Option[P]) -> i64 { match o { None => 999i64, Some(n) => n.val } }\n\
+            fn main() { println(getval(Some(P { val: -3i64 }))); println(getval(None)); }\n";
+        if let Some(out) = run_program(plain_ref) {
+            assert_eq!(
+                out.trim(),
+                "-3\n999",
+                "ref Option[struct] field read; got:\n{out}"
+            );
+        }
+        // Plain struct, `mut ref` param — same projection path.
+        let plain_mut = "struct P { val: i64 }\n\
+            fn getval(o: mut ref Option[P]) -> i64 { match o { None => 999i64, Some(n) => n.val } }\n\
+            fn main() { let mut x = Some(P { val: 7i64 }); println(getval(mut x)); }\n";
+        if let Some(out) = run_program(plain_mut) {
+            assert_eq!(
+                out.trim(),
+                "7",
+                "mut ref Option[struct] field read; got:\n{out}"
+            );
+        }
+        // Shared struct, `ref` param, recursive walk (the #98 validate-BST shape):
+        // a list [5, -3]; `any_negative` must find the -3 through the borrow.
+        let shared_rec = "shared struct Node { val: i64, mut next: Option[Node] }\n\
+            fn any_negative(node: ref Option[Node]) -> bool {\n\
+                match node {\n\
+                    None => false,\n\
+                    Some(n) => { if n.val < 0i64 { return true; } any_negative(n.next) }\n\
+                }\n\
+            }\n\
+            fn main() {\n\
+                let list = Some(Node { val: 5i64, next: Some(Node { val: -3i64, next: None }) });\n\
+                println(any_negative(list));\n\
+            }\n";
+        if let Some(out) = run_program(shared_rec) {
+            assert_eq!(
+                out.trim(),
+                "true",
+                "ref Option[shared struct] recursive read; got:\n{out}"
+            );
+        }
+        // Owned control — must remain correct (guards against a regression the
+        // other way if the deferral logic ever changes).
+        let owned = "struct P { val: i64 }\n\
+            fn getval(o: Option[P]) -> i64 { match o { None => 999i64, Some(n) => n.val } }\n\
+            fn main() { println(getval(Some(P { val: -3i64 }))); }\n";
+        if let Some(out) = run_program(owned) {
+            assert_eq!(
+                out.trim(),
+                "-3",
+                "owned Option[struct] control; got:\n{out}"
+            );
+        }
+    }
+
     /// B-2026-07-08-10: `Vec.filled` / `Vec[v; n]` must size the buffer and stride
     /// the fill by the ELEMENT type, not the compiled value width. A bare integer
     /// literal compiles to i64; for a narrow element (`Vec[i32]`/`Vec[u8]`/…) the

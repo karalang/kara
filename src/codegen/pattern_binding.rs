@@ -1020,6 +1020,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 if layout.is_shared {
                     return Ok(None);
                 }
+                // B-2026-07-09-6: a struct-typed payload binding (`Some(n)` where
+                // `n: SomeStruct`) must NOT take the primitive-word fast path below.
+                // A single-field struct (`struct P { val: i64 }`) flattens to one
+                // i64 payload word, so `first_word_is_primitive` / `ok_single_word`
+                // pass and `n` gets bound as a ref-to-i64 LEAF — the wrong type. The
+                // arm body's `n.field` access then can't resolve against the scalar
+                // binding and silently reads 0 (a SILENT miscompile: `ref`/`mut ref
+                // Option[struct]` field reads returned 0, invisible to any workload
+                // whose payloads all validate the same). Defer to the value-source
+                // path, which reconstructs the struct aggregate at the correct type
+                // via `pattern_binding_types` (see `reconstruct_payload_value`'s
+                // `binding_is_struct`). This is read-correct; struct-payload
+                // write-through under `mut ref` is a separate future enhancement
+                // (the copy-shim the value-source path emits does not alias back).
+                if patterns
+                    .iter()
+                    .any(|p| self.pattern_binds_struct_payload(p))
+                {
+                    return Ok(None);
+                }
                 let offsets: Vec<(usize, usize)> = layout
                     .field_word_offsets
                     .get(variant_name)
@@ -1122,5 +1142,23 @@ impl<'ctx> super::Codegen<'ctx> {
             // in those triggers yet.
             _ => Ok(None),
         }
+    }
+
+    /// Does this payload sub-pattern bind a name whose surface type is a user
+    /// struct or shared struct? Mirrors the `binding_is_struct` gate in
+    /// `reconstruct_payload_value`: a `Binding` whose typechecker-recorded
+    /// `pattern_binding_types` entry names a known struct. Used by
+    /// `bind_pattern_values_via_ptr`'s `TupleVariant` arm to defer struct-typed
+    /// payloads to the value-source path — the primitive-word fast path there
+    /// can't type such a binding correctly (B-2026-07-09-6).
+    fn pattern_binds_struct_payload(&self, pat: &Pattern) -> bool {
+        if let PatternKind::Binding(_) = &pat.kind {
+            let key = (pat.span.offset, pat.span.length);
+            return self.pattern_binding_types.get(&key).is_some_and(|n| {
+                self.struct_types.contains_key(n.as_str())
+                    || self.shared_types.contains_key(n.as_str())
+            });
+        }
+        false
     }
 }
