@@ -6865,6 +6865,56 @@ fn main() {
     }
 
     #[test]
+    fn e2e_sorted_map_int_keys_values_entries_codegen() {
+        // B-2026-07-09-17: `SortedMap[i64, String]` observes ASCENDING key order
+        // at `keys()` / `values()` / `entries()` / `for (k,v)`. Crucially
+        // `values()` is emitted in KEY order (it carries no key to post-sort by),
+        // via a sorted-key walk + `karac_map_get` per key. Byte-identical to the
+        // `karac run` (BTreeMap) oracle. `try_insert`/`get` reuse compile_map_method.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut m: SortedMap[i64, String] = SortedMap.new();\n\
+                 let _ = m.insert(5_i64, \"five\"); let _ = m.insert(1_i64, \"one\");\n\
+                 let _ = m.insert(3_i64, \"three\"); let _ = m.try_insert(1_i64, \"ONE\");\n\
+                 let mut ks: String = \"\";\n\
+                 for k in m.keys() { ks.push_str(f\"{k},\"); }\n\
+                 println(ks);\n\
+                 let mut vs: String = \"\";\n\
+                 for v in m.values() { vs.push_str(f\"{v},\"); }\n\
+                 println(vs);\n\
+                 let mut es: String = \"\";\n\
+                 for (k, v) in m { es.push_str(f\"{k}={v};\"); }\n\
+                 println(es);\n\
+                 match m.get(3_i64) { Some(v) => println(v), None => println(\"none\") }\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "1,3,5,\nONE,three,five,\n1=ONE;3=three;5=five;\nthree\n"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_sorted_map_string_keys_codegen() {
+        // `SortedMap[String, i64]` — heap KEY sorted lexicographically; the
+        // ordered producers deep-clone the key/value halves into the owned
+        // result `Vec` (never aliasing the map's stored buffers).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut m: SortedMap[String, i64] = SortedMap.new();\n\
+                 let _ = m.insert(\"banana\", 2_i64); let _ = m.insert(\"apple\", 1_i64);\n\
+                 let _ = m.insert(\"cherry\", 3_i64);\n\
+                 let mut out: String = \"\";\n\
+                 for (k, v) in m { out.push_str(f\"{k}={v} \"); }\n\
+                 println(out);\n\
+             }",
+        ) {
+            assert_eq!(out, "apple=1 banana=2 cherry=3 \n");
+        }
+    }
+
+    #[test]
     fn e2e_map_try_insert_question_propagation_codegen() {
         // `Map.try_insert` composes with `?`: a helper returning
         // `Result[(), AllocError]` propagates any `Err` and discards the
@@ -17804,15 +17854,21 @@ fn main() {
     }
 
     #[test]
-    fn test_sorted_map_codegen_rejected_interpreter_only() {
-        // B3: `SortedMap` is interpreter-only in v1 (like `SortedSet`, it has no
-        // B-tree-map runtime/codegen lowering). `karac build` must fail loud at
-        // the constructor with an actionable interpreter-only message rather than
-        // fall through to the generic "no handler for method" codegen-bug error.
+    fn test_sorted_map_codegen_now_compiles() {
+        // B-2026-07-09-17: `SortedMap` used to be rejected at codegen
+        // (interpreter-only, B3). It now LOWERS under `karac build` — sharing
+        // `Map`'s `KaracMap` storage + `karac_map_sorted_keys` ordered
+        // observation — so the constructor + storage methods must reach
+        // `compile_to_ir` cleanly (the old fail-loud guard is inverted). Runtime
+        // behaviour is covered byte-for-byte against the interpreter oracle by
+        // `e2e_sorted_map_int_keys_values_entries_codegen` / `..._string_keys`.
         let mut parsed = karac::parse(
             "fn main() {\n\
                  let mut m: SortedMap[i64, String] = SortedMap.new();\n\
                  let _ = m.insert(1_i64, \"one\");\n\
+                 let mut out: String = \"\";\n\
+                 for (k, v) in m { out.push_str(v); }\n\
+                 println(out);\n\
              }",
         );
         assert!(
@@ -17824,15 +17880,13 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         assert!(
             typed.errors.is_empty(),
-            "SortedMap should typecheck (interpreter-complete): {:?}",
+            "SortedMap should typecheck: {:?}",
             typed.errors
         );
         karac::lower(&mut parsed.program, &typed);
-        let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("SortedMap codegen must fail loud (interpreter-only)");
         assert!(
-            err.contains("SortedMap") && err.contains("interpreter-only"),
-            "expected the SortedMap interpreter-only message, got: {err}"
+            compile_to_ir(&parsed.program, None, None).is_ok(),
+            "SortedMap should now compile to IR (B-2026-07-09-17)"
         );
     }
 

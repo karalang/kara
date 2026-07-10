@@ -1544,6 +1544,103 @@ impl<'ctx> super::Codegen<'ctx> {
             .copied()
             .unwrap_or(i64_t.into());
 
+        // `SortedMap[K, V]`: iterate `(k, v)` in ASCENDING key order. Walk the
+        // sorted-key buffer, look each value up by key (`karac_map_get`), and
+        // bind `{k, v}` with the same borrow-like semantics as the hash path
+        // (aliases into the map's data; the freed header buffer owns nothing).
+        if self.sorted_collection_vars.contains(var_name) {
+            let key_te = self
+                .map_key_type_exprs
+                .get(var_name)
+                .cloned()
+                .ok_or_else(|| format!("SortedMap iteration: unknown key type for '{var_name}'"))?;
+            let (kbuf, len) = self.emit_sorted_keys_buf(map_handle, &key_te)?;
+            let out_val = self.create_entry_alloca(fn_val, "smf.outv", val_ty);
+            let idx_slot = self.create_entry_alloca(fn_val, "smf.i", i64_t.into());
+            self.builder
+                .build_store(idx_slot, i64_t.const_zero())
+                .unwrap();
+
+            let cond_bb = self.context.append_basic_block(fn_val, "smf.cond");
+            let body_bb = self.context.append_basic_block(fn_val, "smf.body");
+            let cont_bb = self.context.append_basic_block(fn_val, "smf.cont");
+            let exit_bb = self.context.append_basic_block(fn_val, "smf.exit");
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.loop_stack.push(LoopFrame {
+                label: label.map(str::to_string),
+                continue_bb: cont_bb,
+                break_bb: exit_bb,
+                result_slot: None,
+                cleanup_depth: self.scope_cleanup_actions.len(),
+            });
+
+            self.builder.position_at_end(cond_bb);
+            let i = self
+                .builder
+                .build_load(i64_t, idx_slot, "smf.i.v")
+                .unwrap()
+                .into_int_value();
+            let more = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, i, len, "smf.more")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(more, body_bb, exit_bb)
+                .unwrap();
+
+            self.builder.position_at_end(body_bb);
+            let kptr = unsafe {
+                self.builder
+                    .build_gep(key_ty, kbuf, &[i], "smf.kptr")
+                    .unwrap()
+            };
+            let key_val = self.builder.build_load(key_ty, kptr, "smf.k").unwrap();
+            self.builder
+                .build_call(
+                    self.karac_map_get_fn,
+                    &[map_handle.into(), kptr.into(), out_val.into()],
+                    "smf.get",
+                )
+                .unwrap();
+            let val_val = self.builder.build_load(val_ty, out_val, "smf.v").unwrap();
+            let kv_ty = self.context.struct_type(&[key_ty, val_ty], false);
+            let mut kv = kv_ty.get_undef();
+            kv = self
+                .builder
+                .build_insert_value(kv, key_val, 0, "smf.kv.k")
+                .unwrap()
+                .into_struct_value();
+            kv = self
+                .builder
+                .build_insert_value(kv, val_val, 1, "smf.kv.v")
+                .unwrap()
+                .into_struct_value();
+            self.bind_pattern(pattern, kv.into())?;
+            self.register_for_loop_bindings(pattern, var_name);
+            self.compile_loop_body_with_cleanup(body, cont_bb)?;
+
+            self.builder.position_at_end(cont_bb);
+            let i2 = self
+                .builder
+                .build_load(i64_t, idx_slot, "smf.i2")
+                .unwrap()
+                .into_int_value();
+            let inc = self
+                .builder
+                .build_int_add(i2, i64_t.const_int(1, false), "smf.inc")
+                .unwrap();
+            self.builder.build_store(idx_slot, inc).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.loop_stack.pop();
+            self.builder.position_at_end(exit_bb);
+            self.builder
+                .build_call(self.free_fn, &[kbuf.into()], "")
+                .unwrap();
+            return Ok(self.context.i64_type().const_int(0, false).into());
+        }
+
         // Create the iterator (opaque ptr, lives for the duration of the loop).
         let iter_ptr = self
             .builder

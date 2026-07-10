@@ -939,7 +939,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// path segment for named types, `tuple_T1_T2_…_Tn` for tuples (recursive).
     pub(super) fn extract_map_key_name(te: &TypeExpr) -> Option<String> {
         if let TypeKind::Path(path) = &te.kind {
-            if path.segments.first().map(|s| s.as_str()) != Some("Map") {
+            // `SortedMap[K, V]` shares `Map[K, V]`'s `KaracMap` storage; the only
+            // difference is key-ordered iteration (handled at keys/values/
+            // entries / for-loop via `sorted_collection_vars`).
+            if !matches!(
+                path.segments.first().map(|s| s.as_str()),
+                Some("Map") | Some("SortedMap")
+            ) {
                 return None;
             }
             let args = path.generic_args.as_ref()?;
@@ -1026,7 +1032,10 @@ impl<'ctx> super::Codegen<'ctx> {
         te: &TypeExpr,
     ) -> Option<(BasicTypeEnum<'ctx>, BasicTypeEnum<'ctx>)> {
         if let TypeKind::Path(path) = &te.kind {
-            if path.segments.first().map(|s| s.as_str()) != Some("Map") {
+            if !matches!(
+                path.segments.first().map(|s| s.as_str()),
+                Some("Map") | Some("SortedMap")
+            ) {
                 return None;
             }
             let args = path.generic_args.as_ref()?;
@@ -1481,7 +1490,9 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn is_map_new_call(&self, expr: &Expr) -> bool {
         if let ExprKind::Call { callee, .. } = &expr.kind {
             if let ExprKind::Path { segments, .. } = &callee.kind {
-                return segments.len() == 2 && segments[0] == "Map" && segments[1] == "new";
+                return segments.len() == 2
+                    && (segments[0] == "Map" || segments[0] == "SortedMap")
+                    && segments[1] == "new";
             }
         }
         false

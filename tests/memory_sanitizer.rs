@@ -646,6 +646,47 @@ fn main() {
     }
 
     #[test]
+    fn asan_sorted_map_string_key_iter_no_leak() {
+        // B-2026-07-09-17: `SortedMap[String, String]` ordered observation. The
+        // `keys()`/`values()`/`entries()` producers DEEP-CLONE each half into
+        // the owned result `Vec` (LSan flags a leak if a clone is dropped or the
+        // sorted-key scratch buffer is not freed; ASan flags a double-free if a
+        // clone aliases a map buffer), while the `for (k,v)` loop binds
+        // borrow-like aliases and frees only the header buffer. Heap KEY *and*
+        // heap VALUE, looped, so any imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut n: i64 = 0i64;
+    while n < 3i64 {
+        let mut m: SortedMap[String, String] = SortedMap.new();
+        let _ = m.insert(f"kb-{n}-pad-pad", f"vb-{n}-pad-pad");
+        let _ = m.insert(f"ka-{n}-pad-pad", f"va-{n}-pad-pad");
+        let _ = m.insert(f"kc-{n}-pad-pad", f"vc-{n}-pad-pad");
+        let ks = m.keys();
+        let mut ko: String = "";
+        for k in ks { ko.push_str(k); ko.push_str("|"); }
+        println(ko);
+        let mut fo: String = "";
+        for (k, v) in m { fo.push_str(k); fo.push_str("="); fo.push_str(v); fo.push_str(";"); }
+        println(fo);
+        n = n + 1i64;
+    }
+}
+"#,
+            &[
+                "ka-0-pad-pad|kb-0-pad-pad|kc-0-pad-pad|",
+                "ka-0-pad-pad=va-0-pad-pad;kb-0-pad-pad=vb-0-pad-pad;kc-0-pad-pad=vc-0-pad-pad;",
+                "ka-1-pad-pad|kb-1-pad-pad|kc-1-pad-pad|",
+                "ka-1-pad-pad=va-1-pad-pad;kb-1-pad-pad=vb-1-pad-pad;kc-1-pad-pad=vc-1-pad-pad;",
+                "ka-2-pad-pad|kb-2-pad-pad|kc-2-pad-pad|",
+                "ka-2-pad-pad=va-2-pad-pad;kb-2-pad-pad=vb-2-pad-pad;kc-2-pad-pad=vc-2-pad-pad;",
+            ],
+            "asan_sorted_map_string_key_iter_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_std_mem_take_heap_no_leak_no_double_free() {
         // roadmap Phase 8 § std.mem — `take[T: Default](dest: mut ref T) -> T`
         // over a heap-owning type. `take` monomorphizes `replace(dest,

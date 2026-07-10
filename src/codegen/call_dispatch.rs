@@ -155,22 +155,11 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
 
-        // `SortedMap` (B3) is interpreter-only in v1, like its sibling
-        // `SortedSet` (no B-tree-map runtime/codegen lowering yet). Every
-        // SortedMap program must construct one before using it, so gating the
-        // constructor here gives a single clean, honest diagnostic instead of
-        // letting a later method call fall through method dispatch with the
-        // generic "no handler for method" codegen-bug message. Run under
-        // `karac run` for full SortedMap support.
-        if callee_key.as_deref() == Some("SortedMap.new") {
-            return Err(
-                "`SortedMap` is interpreter-only in v1; its `karac build` (codegen) lowering \
-                 is not yet implemented (the B-tree-backed ordered map has no runtime backing \
-                 yet, same status as `SortedSet`). Run the program under `karac run`, or use \
-                 `Map[K, V]` if you don't need sorted-key ordering."
-                    .to_string(),
-            );
-        }
+        // `SortedMap[K, V]` (B-2026-07-09-17) shares `Map`'s `KaracMap` storage
+        // and only orders its keys/values/entries/for-loop observation points
+        // (via `karac_map_sorted_keys`), the map sibling of `SortedSet`
+        // (B-2026-07-09-16). It is registered like `Map` and no longer rejected
+        // here; `SortedMap.new` flows through the normal `Map.new` construction.
 
         self.emit_branch_cancel_check("call", callee_key.as_deref());
 

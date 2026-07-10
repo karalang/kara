@@ -12,7 +12,7 @@
 use crate::ast::*;
 
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 
 use super::state::VarSlot;
@@ -620,6 +620,17 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let elem_size = elem_ty.size_of().unwrap();
 
+        // `SortedMap.keys()`/`values()`/`entries()` must emit in ASCENDING key
+        // order. Walk the sorted-key buffer and look each value up by key
+        // (`karac_map_get`), instead of the hash-order iterator below. `values`
+        // in particular cannot be post-sorted (it carries no key), so ordering
+        // has to happen at build time.
+        if self.sorted_collection_vars.contains(var_name) {
+            return self.compile_sorted_map_kvg(
+                var_name, method, map_handle, key_ty, val_ty, elem_ty, elem_size,
+            );
+        }
+
         // len = karac_map_len(map)
         let len = self
             .builder
@@ -767,6 +778,160 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_struct_value();
 
+        Ok(vec_val.into())
+    }
+
+    /// Ordered `SortedMap.keys()` / `values()` / `entries()` — the sorted
+    /// sibling of the hash-order path in `compile_map_keys_values_entries`.
+    /// Materializes the ascending-sorted keys (`karac_map_sorted_keys`) and
+    /// walks them by index; `values` / `entries` look each value up by its key
+    /// (`karac_map_get`, which always hits since the key came from the map).
+    /// Every half is DEEP-CLONED into the result buffer (the same owned-`Vec`
+    /// contract as the hash path, so a `String`/`Vec` half never aliases the
+    /// map's stored buffer). The sorted-key scratch buffer is freed at exit.
+    #[allow(clippy::too_many_arguments)]
+    fn compile_sorted_map_kvg(
+        &mut self,
+        var_name: &str,
+        method: &str,
+        map_handle: PointerValue<'ctx>,
+        key_ty: BasicTypeEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+        elem_ty: BasicTypeEnum<'ctx>,
+        elem_size: IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let vec_ty = self.vec_struct_type();
+        let fn_val = self.current_fn.unwrap();
+
+        let key_te = self
+            .map_key_type_exprs
+            .get(var_name)
+            .cloned()
+            .ok_or_else(|| format!("SortedMap.{method}: unknown key type for '{var_name}'"))?;
+        let val_te = self.var_elem_type_exprs.get(var_name).cloned();
+
+        // Emit (cached) clone fns before creating blocks — the emitter may move
+        // the builder into the synthesized fn.
+        let key_clone = Some(self.emit_clone_fn_for_type_expr(&key_te));
+        let val_clone = val_te
+            .as_ref()
+            .map(|te| self.emit_clone_fn_for_type_expr(te));
+
+        let (kbuf, len) = self.emit_sorted_keys_buf(map_handle, &key_te)?;
+        let alloc_bytes = self
+            .builder
+            .build_int_mul(len, elem_size, "smkvg.bytes")
+            .unwrap();
+        let buf = self
+            .builder
+            .build_call(self.malloc_fn, &[alloc_bytes.into()], "smkvg.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let out_val = self.create_entry_alloca(fn_val, "smkvg.outv", val_ty);
+        let i_slot = self.create_entry_alloca(fn_val, "smkvg.i", i64_t.into());
+        self.builder
+            .build_store(i_slot, i64_t.const_zero())
+            .unwrap();
+
+        let loop_bb = self.context.append_basic_block(fn_val, "smkvg.loop");
+        let body_bb = self.context.append_basic_block(fn_val, "smkvg.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "smkvg.exit");
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+        self.builder.position_at_end(loop_bb);
+        let i_val = self
+            .builder
+            .build_load(i64_t, i_slot, "smkvg.i.cur")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i_val, len, "smkvg.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let kptr = unsafe {
+            self.builder
+                .build_gep(key_ty, kbuf, &[i_val], "smkvg.kptr")
+                .unwrap()
+        };
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, buf, &[i_val], "smkvg.eptr")
+                .unwrap()
+        };
+        match method {
+            "keys" => self.kvg_emit_half(key_clone, key_ty, kptr, elem_ptr, "smkvg.k"),
+            "values" => {
+                self.builder
+                    .build_call(
+                        self.karac_map_get_fn,
+                        &[map_handle.into(), kptr.into(), out_val.into()],
+                        "smkvg.get",
+                    )
+                    .unwrap();
+                self.kvg_emit_half(val_clone, val_ty, out_val, elem_ptr, "smkvg.v");
+            }
+            "entries" => {
+                let kv_struct_ty = self.context.struct_type(&[key_ty, val_ty], false);
+                let k_dst = self
+                    .builder
+                    .build_struct_gep(kv_struct_ty, elem_ptr, 0, "smkvg.kv.k")
+                    .unwrap();
+                let v_dst = self
+                    .builder
+                    .build_struct_gep(kv_struct_ty, elem_ptr, 1, "smkvg.kv.v")
+                    .unwrap();
+                self.kvg_emit_half(key_clone, key_ty, kptr, k_dst, "smkvg.kv.kk");
+                self.builder
+                    .build_call(
+                        self.karac_map_get_fn,
+                        &[map_handle.into(), kptr.into(), out_val.into()],
+                        "smkvg.kv.get",
+                    )
+                    .unwrap();
+                self.kvg_emit_half(val_clone, val_ty, out_val, v_dst, "smkvg.kv.vv");
+            }
+            _ => {
+                return Err(format!(
+                    "compile_sorted_map_kvg: unexpected method '{method}'"
+                ))
+            }
+        }
+        let i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "smkvg.i.next")
+            .unwrap();
+        self.builder.build_store(i_slot, i_next).unwrap();
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        // `free(NULL)` is a no-op (empty map → null buffer).
+        self.builder
+            .build_call(self.free_fn, &[kbuf.into()], "")
+            .unwrap();
+        let mut vec_val = vec_ty.get_undef();
+        vec_val = self
+            .builder
+            .build_insert_value(vec_val, buf, 0, "smkvg.vec.data")
+            .unwrap()
+            .into_struct_value();
+        vec_val = self
+            .builder
+            .build_insert_value(vec_val, len, 1, "smkvg.vec.len")
+            .unwrap()
+            .into_struct_value();
+        vec_val = self
+            .builder
+            .build_insert_value(vec_val, len, 2, "smkvg.vec.cap")
+            .unwrap()
+            .into_struct_value();
         Ok(vec_val.into())
     }
 

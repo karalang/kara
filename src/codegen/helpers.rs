@@ -196,10 +196,13 @@ pub(super) fn is_sorted_collection_type(te: &TypeExpr) -> bool {
     false
 }
 
-/// Pull the (key, value) `TypeExpr`s out of `Map[K, V]`.
+/// Pull the (key, value) `TypeExpr`s out of `Map[K, V]` / `SortedMap[K, V]`.
 pub(super) fn map_kv_type_exprs(te: &TypeExpr) -> Option<(TypeExpr, TypeExpr)> {
     if let TypeKind::Path(path) = &te.kind {
-        if path.segments.first().map(|s| s.as_str()) != Some("Map") {
+        if !matches!(
+            path.segments.first().map(|s| s.as_str()),
+            Some("Map") | Some("SortedMap")
+        ) {
             return None;
         }
         let args = path.generic_args.as_ref()?;
