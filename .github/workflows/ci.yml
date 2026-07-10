@@ -484,10 +484,18 @@ jobs:
       # Chocolatey ships LLVM 18.1.x prebuilts installed to
       # `C:\Program Files\LLVM\`. Add that as the LLVM_SYS_181_PREFIX; the
       # DLL under `bin/` is auto-added to PATH by the installer.
+      #
+      # `--allow-downgrade` is load-bearing: the `windows-latest` runner
+      # comes with a newer LLVM (20.x today) preinstalled, and choco
+      # refuses a downgrade without the flag ("A newer version of llvm
+      # (v20.x) is already installed. Use --allow-downgrade or --force to
+      # attempt to install older versions.", exit 1). llvm-sys 181 needs
+      # 18.1.x specifically — LLVM 20 headers/libs won't satisfy it — so
+      # the downgrade is the point of this step.
       - name: Install LLVM 18 (Chocolatey)
         shell: pwsh
         run: |
-          choco install -y llvm --version=18.1.8
+          choco install -y llvm --version=18.1.8 --allow-downgrade
           echo "LLVM_SYS_181_PREFIX=C:\Program Files\LLVM" >> $env:GITHUB_ENV
           echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
 
