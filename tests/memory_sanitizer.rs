@@ -19552,6 +19552,58 @@ fn main() {
     }
 
     #[test]
+    fn asan_letbound_struct_vec_shared_elem_moved_into_enum_ctor_no_uaf() {
+        // B-2026-07-10-1: a LET-BOUND struct with a `Vec[<enum owning a shared
+        // field>]` field AND an `Option[shared]` field, MOVED whole into a
+        // shared-enum ctor (`let b = Block { stmts, tail, span }; Expr.Blk(b)`).
+        // The struct's combined drop (`__karac_vec_elem_full_drop_<S>`) frees the
+        // Vec buffer under a `cap > 0` guard but runs a SEPARATE, LEN-driven
+        // per-element rc-dec walk for the shared-bearing elements. The whole-struct
+        // move-suppression (`zero_struct_move_caps`) zeroed only the Vec `cap`, so
+        // that len-driven walk still rc-dec'd the moved-out elements' shared handles
+        // — which the boxed enum payload co-owns — a use-after-free (the self-hosted
+        // parser's `{ a; }` statement-expr read back as a garbage `Error` node under
+        // AOT while correct under interp). Fix: `zero_struct_move_caps` also zeroes
+        // the Vec `len`. Looped x20 under the LSan gate; the shared-elem count must
+        // survive the move so the reader sees the real payload.
+        assert_clean_asan_run(
+            r#"
+struct IdentExpr { name: String, val: i64 }
+shared enum Expr { Ident(IdentExpr), Blk(Block) }
+struct ExprStmt { expr: Expr }
+enum Stmt { Exp(ExprStmt) }
+struct Block { stmts: Vec[Stmt], tail: Option[Expr], span: i64 }
+fn render_expr(e: Expr) -> i64 {
+    match e {
+        Ident(n) => n.val,
+        Blk(b) => {
+            let Block { stmts, tail, span } = b;
+            let mut acc = span;
+            for s in stmts { match s { Exp(n) => { let ExprStmt { expr } = n; acc = acc + render_expr(expr); } } }
+            acc
+        }
+    }
+}
+fn mk_expr() -> Expr {
+    let mut stmts: Vec[Stmt] = Vec.new();
+    stmts.push(Stmt.Exp(ExprStmt { expr: Expr.Ident(IdentExpr { name: "aaaaaaaaaaaaaaaaaaaaaaaa".to_string(), val: 7 }) }));
+    stmts.push(Stmt.Exp(ExprStmt { expr: Expr.Ident(IdentExpr { name: "bbbbbbbbbbbbbbbbbbbbbbbb".to_string(), val: 11 }) }));
+    let block = Block { stmts: stmts, tail: None, span: 100 };
+    Expr.Blk(block)
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 { total = total + render_expr(mk_expr()); i = i + 1; }
+    println(total);
+}
+"#,
+            &["2360"],
+            "letbound_struct_vec_shared_elem_moved_into_enum_ctor",
+        );
+    }
+
+    #[test]
     fn asan_shared_enum_view_destructure_bare_shared_child_no_double_free() {
         // B-2026-07-09-12 (clone-on-extract half): a shared-enum whose struct
         // payload carries BARE-SHARED children (`BinNode { left: Expr, right: Expr

@@ -3580,6 +3580,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let _ = self.builder.build_store(cap_ptr, zero);
                 }
+                // B-2026-07-10-1 — also zero LEN. The struct's combined drop
+                // (`__karac_vec_elem_full_drop_<S>`) frees the Vec BUFFER under a
+                // `cap > 0` guard (neutralized by the cap-zero above) BUT ALSO runs
+                // a SEPARATE, LEN-driven per-element rc-dec walk when the element
+                // transitively owns a `shared` handle (B-2026-06-14-28 —
+                // `Vec[Stmt]`, `Stmt::Exp(ExprStmt)`, `ExprStmt { expr: Expr }`).
+                // That walk is NOT under the cap guard, so a whole-struct move
+                // (`let b = Block{..}; Expr.Blk(b)`) that zeroed only `cap` still
+                // rc-dec'd the moved-out elements' shared handles — which the
+                // destination (the boxed enum payload) co-owns — corrupting them.
+                // Zeroing `len` makes the element walk skip too, fully neutralizing
+                // the moved-out source's drop. Harmless for a `Vec`/`String` with no
+                // shared-bearing element (no such walk exists).
+                if let Ok(len_ptr) =
+                    self.builder
+                        .build_struct_gep(vec_ty, field_ptr, 1, &format!("smv.f{i}.len"))
+                {
+                    let _ = self.builder.build_store(len_ptr, zero);
+                }
             } else if fname == "Option" {
                 // B-2026-07-03-28 Facet A — the whole struct is moved, so its
                 // Option field is now owned by the destination; zero the source
