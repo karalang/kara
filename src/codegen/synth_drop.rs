@@ -435,10 +435,21 @@ impl<'ctx> super::Codegen<'ctx> {
         //     call site BEFORE this walker) already freed the buffer. The
         //     double-free was latent on B-31 only because the cross-function
         //     blocks above were DCE'd before they could run; fixing (1) made the
-        //     free reachable and surfaced it. So: the per-element rc-dec drain
-        //     (which `__karac_drop_struct_<S>` does NOT do — its VecOrString arm
-        //     frees the buffer but leaks `Vec[shared]` element boxes) ALWAYS
-        //     runs; the buffer `free(data)` runs only when this walker owns it.
+        //     free reachable and surfaced it. So the buffer `free(data)` runs
+        //     only when this walker owns it.
+        //
+        //     B-2026-07-10-4 — the per-element rc-dec drain is now ALSO gated on
+        //     `owns_buffer_free`. When B-31/B-34 were written, `__karac_drop_struct_<S>`'s
+        //     VecOrString arm froze the buffer but did NOT drain elements, so the
+        //     walker's drain was the ONLY drain and had to run in the value-drop
+        //     companion path too. Since #35 that arm drains elements itself (via
+        //     the SAME `vec_elem_agg_drop_for_type_expr` fn), so in the companion
+        //     path (`owns_buffer_free == false`) draining here is a redundant
+        //     SECOND drain — a double-free of every element's shared/heap
+        //     children (`__karac_vec_elem_full_drop_FnDefNode` over `params` /
+        //     `attributes` / nested `Block.stmts`). The walker's drain now runs
+        //     ONLY in the shared-enum-box path (`owns_buffer_free == true`), where
+        //     no `__karac_drop_struct_<S>` runs and the walker is the sole drop.
         let Some(&st) = self.struct_types.get(struct_name) else {
             return;
         };
@@ -702,8 +713,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, cap_p, "nstr.vec.cap")
                     .unwrap()
                     .into_int_value();
-                // Per-element drain loop (only when an element drop exists).
-                if let Some(elem_drop) = elem_drop {
+                // Per-element drain loop — ONLY when this walker OWNS the buffer
+                // (the shared-enum-box RC-drop path, `owns_buffer_free == true`,
+                // where NO `__karac_drop_struct_<S>` runs and the walker is the
+                // sole drop for the inline/boxed payload). In the value-drop
+                // COMPANION path (`owns_buffer_free == false`) the struct's own
+                // `__karac_drop_struct_<S>` VecOrString arm ALREADY drains every
+                // element via the SAME `vec_elem_agg_drop_for_type_expr` fn (#35
+                // made that arm element-draining — for `Vec[shared]` it rc-dec's
+                // each box, for `Vec[struct/enum-with-shared]` it runs the
+                // combined/value element drop). Re-draining here double-frees
+                // each element's shared/heap children — B-2026-07-10-4:
+                // `__karac_vec_elem_full_drop_FnDefNode` double-dropped
+                // `params`/`attributes` and, via the nested-struct recursion into
+                // `body: Block`, `Block.stmts`. The buffer free below is gated on
+                // the same flag for the same reason (B-2026-06-14-34); the drain
+                // and the free are now one disjoint unit owned by pass 1 in the
+                // companion path. (`elem_drop` is still resolved above so its
+                // synthesis side effect — registering the element drop fn — runs
+                // regardless; the memoized fn is reused by pass 1's drain.)
+                if let Some(elem_drop) = elem_drop.filter(|_| owns_buffer_free) {
                     let elem_ty = self.llvm_type_for_type_expr(&elem_te);
                     let cond_bb = self.context.append_basic_block(drop_fn, "nstr.vec.cond");
                     let body_bb = self.context.append_basic_block(drop_fn, "nstr.vec.body");

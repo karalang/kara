@@ -1974,16 +1974,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// self-hosted parser: each call argument's `value: Expr` box leaked).
     ///
     /// The combined drop runs two DISJOINT passes over the same element slot.
-    /// Pass 1 is `__karac_drop_struct_<S>` — the value-heap free, which skips
-    /// shared fields (it classifies them as no-cleanup). Pass 2 is
+    /// Pass 1 is `__karac_drop_struct_<S>` — the value-heap free, which frees
+    /// `S`'s String/Vec/Map/enum buffers AND (post-#35) DRAINS every heap-owning
+    /// `Vec[T]` field's elements (rc-dec'ing a `Vec[shared]` element, running the
+    /// combined/value element drop for a `Vec[struct/enum-with-shared]`), then
+    /// frees the buffer. It skips only the DIRECT `shared` / `Option[shared]`
+    /// SCALAR fields (classified no-cleanup — a local's shared fields are
+    /// rc-dec'd by its `let` cleanup, which a Vec element lacks). Pass 2 is
     /// `emit_nested_struct_shared_rc_decs(.., owns_buffer_free=false)` — it
-    /// rc-dec's the shared / `Option[shared]` fields and drains any
-    /// `Vec[shared]` field's element boxes, WITHOUT re-freeing the buffers pass
-    /// 1 already freed (`owns_buffer_free=false` gates the String/Vec buffer
-    /// frees off). Disjoint field coverage ⇒ no double-free. The shared rc-dec
-    /// is refcount-safe even when the element is ALSO consumed by value
-    /// elsewhere (the consume site rc-incs the shared handle on its element
-    /// copy, balancing this dec). Memoized by symbol name.
+    /// rc-dec's exactly those direct `shared` / `Option[shared]` scalar fields
+    /// pass 1 skipped (and recurses into nested structs for THEIR shared
+    /// scalars). Its `Vec[T]`-element drain and buffer frees are gated OFF by
+    /// `owns_buffer_free=false`, because pass 1 already did both — re-draining
+    /// would double-free (B-2026-07-10-4). Disjoint field coverage ⇒ no
+    /// double-free. The shared rc-dec is refcount-safe even when the element is
+    /// ALSO consumed by value elsewhere (the consume site rc-incs the shared
+    /// handle on its element copy, balancing this dec). Memoized by symbol name.
     fn emit_vec_elem_struct_with_shared_drop_fn(
         &mut self,
         struct_name: &str,
