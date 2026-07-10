@@ -606,22 +606,6 @@ impl<'ctx> super::Codegen<'ctx> {
         idx: u32,
         fte: &TypeExpr,
     ) {
-        // B-2026-07-09-12 — bare `shared` field → rc-INC the box handle, symmetric
-        // with the struct combined-drop's per-field rc-DEC. A copy-supported outer
-        // struct entry-copied at a callee-owned param boundary recurses into a
-        // nested struct/enum payload carrying a bare `shared` field (`Block.stmts:
-        // Vec[Stmt]`, `Stmt::Exp(ExprStmt { expr: Expr })`); without the inc the
-        // callee-owned copy shallow-aliases that handle and the copy's drop + the
-        // caller's drop both rc-dec it → the render use-after-free.
-        if let Some(heap_type) = self.shared_heap_type_for_type_expr(fte) {
-            if let Ok(field_ptr) = self
-                .builder
-                .build_struct_gep(agg_ty, base_ptr, idx, "p14.shf")
-            {
-                self.rc_inc_shared_handle_at_slot(field_ptr, heap_type);
-            }
-            return;
-        }
         let vec_ty = self.vec_struct_type();
         // String / Vec field → copy the OUTER buffer in place (`elem_te = None`),
         // mirroring the struct drop's outer-only free (nested Vec elements are a
