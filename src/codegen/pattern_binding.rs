@@ -460,8 +460,46 @@ impl<'ctx> super::Codegen<'ctx> {
                                 && self.struct_types.contains_key(tn)
                                 && !self.shared_types.contains_key(tn)
                                 && self.aggregate_param_copy_supported_struct(tn, &mut Vec::new());
+                            // B-2026-07-10-3: an `Option`/`Result` scrutinee whose
+                            // INLINE struct payload (held as a value in the slot, not
+                            // heap-boxed) is bound WHOLE as `e`. The dedicated inline
+                            // `Option`/`Result` cleanup frees only a DIRECT
+                            // `{ptr,len,cap}` payload (a bare `String`/`Vec`) — it does
+                            // NOT recurse into a STRUCT payload's own heap fields, and
+                            // the consuming-arm suppressor
+                            // (`suppress_inline_{option,result}_payload_cleanup`, which
+                            // fires because a `Some(e)`/`Err(e)` binding counts as
+                            // consuming) zeroes the source `cap` anyway. So the struct's
+                            // inner heap (`e.msg`) was owned by NOBODY and leaked —
+                            // `match run() { Err(e) => println(e.msg) }`, both the
+                            // fresh-temp (no source cleanup) and named-binding (source
+                            // suppressed) scrutinee shapes. Track the bound struct so
+                            // its scope-exit `StructDrop` frees those fields; the same
+                            // copy-supported gate + whole-value / field move-out
+                            // suppression set (`zero_struct_move_caps` /
+                            // `zero_struct_field_move_cap`) that makes the
+                            // non-`Option`/`Result` user-struct arm above sound applies
+                            // here unchanged. GATED to a payload whose struct fits within
+                            // the seed enum's inline area
+                            // (`pattern_binding_scrutinee_optres_area` — 3 for `Option`,
+                            // 5 for `Result`) so a heap-BOXED wide payload —
+                            // reconstructed into the same inline struct-value slot but
+                            // OWNED by the box drop (`boxed_enum_payload_variants` /
+                            // `track_boxed_enum_var`) — is left untouched (tracking it
+                            // there would double-free).
+                            let is_inline_optres_struct_payload = self
+                                .pattern_binding_scrutinee_is_option_result
+                                && !self.pattern_binding_scrutinee_is_shared_enum
+                                && self.struct_types.contains_key(tn)
+                                && !self.shared_types.contains_key(tn)
+                                && self.aggregate_param_copy_supported_struct(tn, &mut Vec::new())
+                                && self.struct_types.get(tn).is_some_and(|st| {
+                                    Self::llvm_type_word_count((*st).into())
+                                        <= self.pattern_binding_scrutinee_optres_area
+                                });
                             if matches!(tn, "Response" | "HttpError")
                                 || is_copy_supported_user_struct
+                                || is_inline_optres_struct_payload
                             {
                                 self.track_struct_var(tn, alloca);
                             }

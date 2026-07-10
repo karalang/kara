@@ -2160,6 +2160,16 @@ pub(super) struct Codegen<'ctx> {
     /// double-free against the Option's own free. Gates the user-struct arm of
     /// the pattern-binding struct-drop registration.
     pub(crate) pattern_binding_scrutinee_is_option_result: bool,
+    /// B-2026-07-10-3 — the inline payload-area word budget of the
+    /// `Option`/`Result` scrutinee currently being compiled: 3 for `Option`,
+    /// 5 for `Result`, 0 when the scrutinee is neither (the same fixed areas
+    /// `coerce_to_payload_words` / `boxed_enum_payload_variants` pack with). A
+    /// struct payload whose word count is ≤ this budget is held INLINE (not
+    /// heap-boxed), so binding it whole can safely `track_struct_var` it to
+    /// free its inner heap fields; a wider (boxed) payload is owned by the box
+    /// drop and must be left untouched. Set/restored by `compile_match`
+    /// alongside `pattern_binding_scrutinee_is_option_result`.
+    pub(crate) pattern_binding_scrutinee_optres_area: usize,
     /// B-2026-06-14-31 — set by `compile_match` when the scrutinee enum is a
     /// user `shared enum` (RC-boxed). A struct payload bound in such an arm
     /// (`Wrapped(w)` from `shared enum Expr { Wrapped(Wrap) }`,
@@ -5738,6 +5748,7 @@ impl<'ctx> Codegen<'ctx> {
             suppress_shadow_metadata_purge: false,
             pattern_binding_is_borrow: false,
             pattern_binding_scrutinee_is_option_result: false,
+            pattern_binding_scrutinee_optres_area: 0,
             pattern_binding_scrutinee_is_shared_enum: false,
             match_scrutinee_enum_hint: None,
             enum_drop_fns: HashMap::new(),

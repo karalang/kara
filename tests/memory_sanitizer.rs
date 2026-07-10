@@ -22093,6 +22093,54 @@ fn main() {
         );
     }
 
+    /// B-2026-07-10-3 — a `Result`/`Option` scrutinee whose INLINE struct payload
+    /// is bound WHOLE as `e` and a heap field is read as a DIRECT call argument
+    /// (`println(e.msg)`). The inline `Result`/`Option` cleanup frees only a bare
+    /// `{ptr,len,cap}` payload, not a struct payload's own fields, and the
+    /// consuming-arm suppressor zeroed the source anyway — so `e.msg` was owned by
+    /// nobody and leaked. The bound struct is now `track_struct_var`-tracked so its
+    /// scope-exit drop frees the field. Covers the fresh-temp scrutinee (this test),
+    /// the `Option` sibling, the `{code,msg}` 4-word inline-`Result` payload (still
+    /// inline for `Result`'s area of 5), and the move-out shapes that must NOT
+    /// double-free (whole `e` into a by-value callee; whole `e` out as the match
+    /// value).
+    #[test]
+    fn asan_result_struct_payload_direct_field_arg_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct AppError { msg: String }
+struct E2 { code: i64, msg: String }
+fn run(x: i64) -> Result[i64, AppError] {
+    if x > 0i64 { Result.Ok(x + 1i64) } else { Result.Err(AppError { msg: "neg_error_payload_alpha_aaaaaaaa".to_string() }) }
+}
+fn run_opt(x: i64) -> Option[AppError] {
+    if x > 0i64 { Option.None } else { Option.Some(AppError { msg: "neg_option_payload_beta_bbbbbbbb".to_string() }) }
+}
+fn run2(x: i64) -> Result[i64, E2] {
+    if x > 0i64 { Result.Ok(x + 1i64) } else { Result.Err(E2 { code: 7i64, msg: "neg_error_two_field_gamma_cccccccc".to_string() }) }
+}
+fn take(a: AppError) -> i64 { if a.msg.len() >= 0 { 1 } else { 0 } }
+fn main() {
+    let mut t = 0;
+    // direct-field-arg read (the reported leak)
+    match run(-1i64) { Ok(v) => { if v >= 0i64 { t = t + 1; } } Err(e) => { if e.msg.len() >= 0 { t = t + 1; } } }
+    // Option sibling
+    match run_opt(-1i64) { Some(e) => { if e.msg.len() >= 0 { t = t + 1; } } None => {} }
+    // 4-word inline-Result struct payload
+    match run2(-1i64) { Ok(v) => { if v >= 0i64 { t = t + 1; } } Err(e) => { if e.msg.len() >= 0 { t = t + 1; } } }
+    // move whole `e` into a by-value callee (must not double-free)
+    match run(-1i64) { Ok(v) => { if v >= 0i64 { t = t + 1; } } Err(e) => { t = t + take(e); } }
+    // move whole `e` out as the match value (must not double-free)
+    let held = match run(-1i64) { Ok(_v) => AppError { msg: "ok_payload_delta_dddddddddddd".to_string() }, Err(e) => e };
+    if held.msg.len() >= 0 { t = t + 1; }
+    println(t);
+}
+"#,
+            &["5"],
+            "result_struct_payload_direct_field_arg",
+        );
+    }
+
     #[test]
     fn asan_forloop_struct_element_whole_move_no_double_free() {
         // B-2026-07-04-17: iterating an owned `Vec[<heap struct>]` by value and

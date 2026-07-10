@@ -172,6 +172,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some("Option") | Some("Result")
             )
         });
+        // B-2026-07-10-3 — record the seed enum's inline payload-area budget
+        // (Option = 3, Result = 5) so `bind_pattern_values` can tell an INLINE
+        // struct payload (safe to `track_struct_var`) from a heap-BOXED one
+        // (owned by the box drop). Same enum for every arm, resolved once.
+        let saved_optres_area = self.pattern_binding_scrutinee_optres_area;
+        self.pattern_binding_scrutinee_optres_area = arms
+            .iter()
+            .find_map(
+                |a| match self.variant_pattern_enum_name(&a.pattern).as_deref() {
+                    Some("Option") => Some(3),
+                    Some("Result") => Some(5),
+                    _ => None,
+                },
+            )
+            .unwrap_or(0);
         // B-2026-06-14-31 — the scrutinee enum is a user `shared enum` (RC-boxed):
         // a struct payload bound in an arm (`Wrapped(w)`) is a by-value VIEW of
         // the box's inline payload, so its Vec/String buffer must NOT get a
@@ -496,6 +511,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(merge_bb);
         self.pattern_binding_is_borrow = saved_borrow_flag;
         self.pattern_binding_scrutinee_is_option_result = saved_opt_res_flag;
+        self.pattern_binding_scrutinee_optres_area = saved_optres_area;
         self.pattern_binding_scrutinee_is_shared_enum = saved_shared_enum_flag;
         self.match_scrutinee_enum_hint = saved_scrut_enum_hint;
 
