@@ -4437,6 +4437,38 @@ fn main() {
         }
     }
 
+    /// Returning a heap FIELD through a BORROWED receiver (`fn name(ref self) ->
+    /// String { self.n }`) — the borrow does not own the field, so codegen must
+    /// deep-clone it on return (`maybe_defensive_copy_param_arg`). Previously it
+    /// returned an alias of the receiver's buffer, which the caller's drop of
+    /// the receiver then double-freed (surfaced while making generic
+    /// associated-type field-returns usable, but fires non-generically too).
+    /// The receiver is USED AFTER the call (`x.name()` then `x.n`), so a move
+    /// would be wrong — the clone must leave the field intact. Covers `ref
+    /// self`, `mut ref self`, a String field and a `Vec[i64]` field; memory
+    /// safety pinned by `tests/memory_sanitizer.rs::asan_ref_self_field_return_*`.
+    #[test]
+    fn e2e_ref_self_heap_field_return_codegen() {
+        if let Some(out) = run_program(
+            "struct Person { n: String, tags: Vec[i64] }\n\
+             impl Person {\n\
+                 fn name(ref self) -> String { self.n }\n\
+                 fn take_tags(mut ref self) -> Vec[i64] { self.tags }\n\
+             }\n\
+             fn main() {\n\
+                 let mut p = Person { n: \"alice\".to_string(), tags: [1i64, 2i64, 3i64] };\n\
+                 let a = p.name();\n\
+                 println(a);\n\
+                 println(p.n);\n\
+                 let t = p.take_tags();\n\
+                 println(f\"{t.len()}\");\n\
+                 println(f\"{p.tags.len()}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "alice\nalice\n3\n3\n");
+        }
+    }
+
     /// B-2026-07-03-11 (narrow-width facet): a generic function with a
     /// non-generic NARROW return type. `fn narrow[T](x: T) -> u8 { 255 }`
     /// used to (a) fail module verification — the mono tail-return emitted

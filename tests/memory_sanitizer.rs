@@ -802,6 +802,56 @@ fn main() {
     }
 
     #[test]
+    fn asan_ref_self_field_return_no_double_free() {
+        // Returning a heap FIELD through a BORROWED receiver (`fn name(ref self)
+        // -> String { self.n }`). The borrow does not own the field, so the
+        // returned value must be a deep CLONE — an alias would be freed twice
+        // (the caller drops the receiver, freeing the field, AND drops the
+        // returned value). The receiver is USED AFTER the call each iteration
+        // (`x.n`/`x.tags` read), so a move would corrupt it; the clone leaves
+        // the field intact. Covers a String field and a `Vec[i64]` field via
+        // `ref self` / `mut ref self`; looped so any per-iteration imbalance
+        // accumulates (leak on LSan, double-free / UAF on ASan).
+        assert_clean_asan_run(
+            r#"
+struct Person { n: String, tags: Vec[i64] }
+impl Person {
+    fn name(ref self) -> String { self.n }
+    fn steal_tags(mut ref self) -> Vec[i64] { self.tags }
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let mut p = Person { n: f"name-{i}-padded-padded", tags: [i, i + 1i64, i + 2i64] };
+        let nm = p.name();
+        println(nm);
+        println(p.n);
+        let tg = p.steal_tags();
+        println(f"{tg.len()}");
+        println(f"{p.tags.len()}");
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "name-0-padded-padded",
+                "name-0-padded-padded",
+                "3",
+                "3",
+                "name-1-padded-padded",
+                "name-1-padded-padded",
+                "3",
+                "3",
+                "name-2-padded-padded",
+                "name-2-padded-padded",
+                "3",
+                "3",
+            ],
+            "ref_self_field_return_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_single_element_fstring_vec_return_no_double_free() {
         // B-2026-07-04-1: a fn returning a SINGLE-element `Vec[String]` whose
         // element is an f-string literal (`return Vec[f"…"]`) double-freed the

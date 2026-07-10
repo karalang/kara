@@ -2891,6 +2891,82 @@ impl<'ctx> super::Codegen<'ctx> {
                 .clone_owned_vec_index_element(arg_expr, val)
                 .unwrap_or(val);
         }
+        // A heap FIELD read through a BORROWED receiver (`ref self` / `mut ref
+        // self` / a `ref` param) and returned — `fn name(ref self) -> String {
+        // self.n }`. The borrow does not own the field, so returning the loaded
+        // `{ptr,len,cap}` hands the caller an ALIAS of the receiver's buffer;
+        // the caller's drop of the receiver then frees it a second time (and any
+        // reuse of the receiver dangles). Deep-clone the field so the returned
+        // value owns an independent buffer. (An OWNED receiver's field move-out
+        // is handled instead by zeroing the source cap in
+        // `suppress_source_vec_cleanup_for_arg_ex` — that requires the receiver
+        // to be dropped by this frame, which a borrow is not; the two cases are
+        // mutually exclusive on `ref_params` membership.) Shared (RC) fields are
+        // left to the refcount machinery. This runs on the return value at the
+        // tail (`compile_function` / mono tail), so it fires exactly in return
+        // position.
+        if let ExprKind::FieldAccess { object, field } = &arg_expr.kind {
+            let recv_name = match &object.kind {
+                ExprKind::SelfValue => Some("self".to_string()),
+                ExprKind::Identifier(n) => Some(n.clone()),
+                _ => None,
+            };
+            if let Some(recv_name) = recv_name {
+                if self.ref_params.contains_key(&recv_name) {
+                    if let Some(struct_name) = self.inferred_receiver_type(object) {
+                        let field_te = self
+                            .struct_field_names
+                            .get(&struct_name)
+                            .and_then(|names| names.iter().position(|n| n == field))
+                            .and_then(|idx| {
+                                self.struct_field_type_exprs
+                                    .get(&struct_name)
+                                    .and_then(|tes| tes.get(idx))
+                            })
+                            .cloned();
+                        if let Some(field_te) = field_te {
+                            if self.te_owns_heap_below_buffer(&field_te)
+                                && self.shared_heap_type_for_type_expr(&field_te).is_none()
+                            {
+                                if let Some(fn_val) = self.current_fn {
+                                    let val_ty = val.get_type();
+                                    let clone_fn = self.emit_clone_fn_for_type_expr(&field_te);
+                                    // `emit_clone_fn_*` / `create_entry_alloca`
+                                    // may move the builder — re-anchor to the
+                                    // tail block before emitting the copy.
+                                    let cur = self.builder.get_insert_block();
+                                    let src = self.create_entry_alloca(
+                                        fn_val,
+                                        "retfld.clone.src",
+                                        val_ty,
+                                    );
+                                    let dst = self.create_entry_alloca(
+                                        fn_val,
+                                        "retfld.clone.dst",
+                                        val_ty,
+                                    );
+                                    if let Some(bb) = cur {
+                                        self.builder.position_at_end(bb);
+                                    }
+                                    self.builder.build_store(src, val).unwrap();
+                                    self.builder
+                                        .build_call(
+                                            clone_fn,
+                                            &[src.into(), dst.into()],
+                                            "retfld.clone",
+                                        )
+                                        .unwrap();
+                                    return self
+                                        .builder
+                                        .build_load(val_ty, dst, "retfld.cloned")
+                                        .unwrap();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let name = match &arg_expr.kind {
             ExprKind::Identifier(n) => n.clone(),
             _ => return val,
