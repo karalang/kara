@@ -801,6 +801,28 @@ struct StmtInfo {
     /// is the A2b-2 follow-up. Set in `analyze_stmt` as `stmt_fanout_args_safe`
     /// (arg-safety) AND a `Network`-resource-effect check.
     is_safe_network_fanout: bool,
+    /// A2b-2 Phase 1: whether this statement is an *ephemeral* network
+    /// fan-out — a safe network fan-out (`is_safe_network_fanout`) whose
+    /// callee declares NO borrow parameter (`ref`/`mut ref`/`mut Slice`). No
+    /// borrow param means the callee cannot be handed a shared connection
+    /// object; it must open its own connection internally (the
+    /// `http_get(url: String)` shape), so two such calls touch disjoint,
+    /// freshly-created OS connection state. That is what makes it *sound to
+    /// relax the `Network`-resource conflict* between two of them
+    /// (`(Sends,Sends)`/`(Receives,Receives)` on `Network`) in
+    /// `statements_conflict`, letting `http_get("a"); http_get("b")` fan out
+    /// with their real `sends`/`receives` effects. A call that borrows an
+    /// argument (`send_on(ref conn, ...)`) is deliberately excluded: two ops
+    /// on the same borrowed connection would race if overlapped, and this
+    /// pass has no connection-identity info to tell same-conn from
+    /// different-conn apart — that is the Phase 2 parameterized-`Network`
+    /// follow-up (docs/spikes/network-resource-granularity.md). Any *other*
+    /// shared resource a callee touches (a pool checkout `writes(Pool)`, a DB
+    /// `writes(Db)`) still surfaces as a non-`Network` effect and still
+    /// serializes — the relaxation only ever skips `Network`↔`Network` pairs.
+    /// Set in `analyze_stmt` as `is_safe_network_fanout` AND
+    /// `stmt_callee_has_no_borrow_params`.
+    is_ephemeral_network_fanout: bool,
     /// Whether this statement is a constant-cost initializer — a
     /// `let`/`assign` of a literal or bare identifier, or a `let
     /// uninit`. These are O(1) and run in ~zero time. Used by the
@@ -993,6 +1015,42 @@ fn param_is_borrow(params: Option<&[Param]>, i: usize) -> bool {
             TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
         )
     })
+}
+
+/// A2b-2 Phase 1 companion to [`stmt_fanout_args_safe`]: true iff the
+/// statement's callee (resolved by the same bare-free-fn rule) is in this
+/// program and declares NO borrow parameter (`ref`/`mut ref`/`mut Slice`).
+/// Combined with `is_safe_network_fanout` in `analyze_stmt` it yields
+/// `is_ephemeral_network_fanout` — see that field's doc for why a borrow-free
+/// callee proves two network calls use disjoint, freshly-opened connections
+/// and may overlap. Fail-closed: a computed callee, a non-`Call` statement, or
+/// an extern callee (body not in this program, so its param modes are unknown)
+/// all return `false`.
+fn stmt_callee_has_no_borrow_params(
+    stmt: &Stmt,
+    function_bodies: &HashMap<String, &Function>,
+) -> bool {
+    let value = match &stmt.kind {
+        StmtKind::Let { value, .. } | StmtKind::Expr(value) => value,
+        _ => return false,
+    };
+    let ExprKind::Call { callee, .. } = &value.kind else {
+        return false;
+    };
+    let callee_name = match &callee.kind {
+        ExprKind::Identifier(n) => n.clone(),
+        ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
+        _ => return false,
+    };
+    match function_bodies.get(&callee_name) {
+        Some(func) => !func.params.iter().any(|p| {
+            matches!(
+                p.ty.kind,
+                TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
+            )
+        }),
+        None => false,
+    }
 }
 
 /// True iff `expr` references no binding — used by `stmt_fanout_args_safe`
@@ -1414,11 +1472,22 @@ impl<'a> ConcurrencyChecker<'a> {
 
         // Effect conflict: find the conflicting effect pairs and attribute
         // them to the callees that contributed them.
+        //
+        // A2b-2 Phase 1: mirror `statements_conflict`'s ephemeral-network
+        // relaxation so a reported cause is never a `Network`↔`Network` pair
+        // that the grouper actually treated as non-conflicting. For two
+        // ephemeral network fan-outs the edge that reached here must be a
+        // *non-Network* conflict, so skip `Network`↔`Network` pairs and
+        // attribute the true cause.
+        let skip_network = a.is_ephemeral_network_fanout && b.is_ephemeral_network_fanout;
         let mut resource = String::new();
         let mut verbs: Option<(EffectVerbKind, EffectVerbKind)> = None;
         let mut callees: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for ae in &a.effects {
             for be in &b.effects {
+                if skip_network && ae.resource == "Network" && be.resource == "Network" {
+                    continue;
+                }
                 if self.two_effects_conflict(ae, be) {
                     if verbs.is_none() {
                         resource = ae.resource.clone();
@@ -1916,6 +1985,7 @@ impl<'a> ConcurrencyChecker<'a> {
             // Set below, once `effects` is populated — it needs the effect set
             // to confirm the call touches the `Network` resource.
             is_safe_network_fanout: false,
+            is_ephemeral_network_fanout: false,
             is_constant_init: stmt_is_constant_init(stmt),
         };
 
@@ -1994,6 +2064,14 @@ impl<'a> ConcurrencyChecker<'a> {
         info.is_safe_network_fanout = stmt_fanout_args_safe(stmt, &self.function_bodies)
             && info.effects.iter().any(|e| e.resource == "Network");
 
+        // A2b-2 Phase 1: an ephemeral network fan-out is a safe network fan-out
+        // whose callee borrows nothing — so it cannot share a connection object
+        // with a sibling call, and its `Network` ops touch a freshly-opened,
+        // private connection. Two of them may overlap; `statements_conflict`
+        // relaxes the `Network`↔`Network` conflict for such pairs.
+        info.is_ephemeral_network_fanout = info.is_safe_network_fanout
+            && stmt_callee_has_no_borrow_params(stmt, &self.function_bodies);
+
         info
     }
 
@@ -2023,8 +2101,43 @@ impl<'a> ConcurrencyChecker<'a> {
             return true;
         }
 
+        // A2b-2 Phase 1: two *ephemeral* network fan-outs (borrow-free free-fn
+        // network calls — e.g. `http_get("a"); http_get("b")`) open disjoint,
+        // freshly-created connections, so their `Network`-resource effects
+        // (`sends`/`receives`) do not conflict. Skip only `Network`↔`Network`
+        // pairs; any *other* shared resource a callee touches still serializes
+        // through `two_effects_conflict` (a data dependency was already ruled
+        // out above). See `is_ephemeral_network_fanout` and
+        // docs/spikes/network-resource-granularity.md.
+        if a.is_ephemeral_network_fanout && b.is_ephemeral_network_fanout {
+            return self.effects_conflict_excluding_network(&a.effects, &b.effects);
+        }
+
         // Effect conflict
         self.effects_conflict(&a.effects, &b.effects)
+    }
+
+    /// Like [`Self::effects_conflict`] but ignores every effect pair where
+    /// BOTH sides touch the `Network` resource. Used only for two ephemeral
+    /// network fan-outs (see [`Self::statements_conflict`]): their network I/O
+    /// is on disjoint fresh connections, so `Network`↔`Network` is safe, while
+    /// any non-`Network` resource conflict they carry is still honored.
+    fn effects_conflict_excluding_network(
+        &self,
+        a_effects: &[StmtEffect],
+        b_effects: &[StmtEffect],
+    ) -> bool {
+        for a in a_effects {
+            for b in b_effects {
+                if a.resource == "Network" && b.resource == "Network" {
+                    continue;
+                }
+                if self.two_effects_conflict(a, b) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Check if two sets of effects have a conflict.

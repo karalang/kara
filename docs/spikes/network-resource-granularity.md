@@ -1,8 +1,14 @@
 # Design spike — finer `Network` effect-resource granularity (A2b-2 Blocker A)
 
-**Status:** design spike / **PROPOSAL — not decided**, 2026-07-09. No code
-change accompanies this document; it scopes the work so it can be picked up
-deliberately.
+**Status:** design spike, 2026-07-09. **Phase 1 SHIPPED 2026-07-10** (the
+scoped ephemeral-call conflict relaxation — see §8); **Phase 0 (conflict-table
+reconciliation, §4) and Phase 2 (full parameterized-`Network`) remain open.**
+The original proposal scoped the work into phases so it could be picked up
+incrementally; Phase 1 is now implemented in `src/concurrency.rs` as
+`is_ephemeral_network_fanout` + `effects_conflict_excluding_network` — it
+sidesteps Phase 0/Phase 2 by relaxing only the narrow, provably-sound ephemeral
+case rather than changing the global network-verb semantics or the resource
+model.
 **Context:** [`phase-5-diagnostics.md` § Auto-par conflict model / A2b-2](../implementation_checklist/phase-5-diagnostics.md).
 A2b-2's arg-safe + borrow-param fan-out slices shipped (they lift the
 coroutine-boundary *gate*), but the **headline** — "two independent network
@@ -217,10 +223,15 @@ Implement § Parameterized Resources for real and parameterize `Network`:
 1. **Phase 0 (independent cleanup, small):** reconcile the conflict-table
    divergence (§4) — decide the intended network-verb semantics and make the two
    tables agree. This is worth doing regardless and de-risks both paths.
-2. **Phase 1 = Path A, scoped to ephemeral calls:** the sound fast unblock for
-   the `http_get(a); http_get(b)` flagship. Ships the headline demo; contained;
-   no effect-model change. Gate it exactly on the ephemeral (no-connection-in-
-   signature) shape to stay sound.
+2. **Phase 1 = Path A, scoped to ephemeral calls — ✅ SHIPPED 2026-07-10.** The
+   sound fast unblock for the `http_get(a); http_get(b)` flagship. Ships the
+   headline demo; contained; no effect-model change. Gated exactly on the
+   ephemeral shape (`is_ephemeral_network_fanout` = a safe network fan-out whose
+   callee declares no borrow param, so it cannot receive a shared connection and
+   must open its own). `statements_conflict` skips `Network`↔`Network` conflicts
+   for two such statements (`effects_conflict_excluding_network`); a borrow-param
+   call stays serial, and any non-`Network` shared resource still conflicts. See
+   the `[~]` A2b-2 sub-entry in `phase-5-diagnostics.md` for the full test list.
 3. **Phase 2 = Path B:** the principled parameterized-`Network` implementation,
    which subsumes Phase 1, covers connection-bound ops, and lands the long-
    specced parameterized-resource feature generally. Take this on deliberately
@@ -233,9 +244,11 @@ the destination either way.
 
 - **Phase 0:** ~small. Risk: changing the diagnostics conflict semantics could
   shift user-facing effect-conflict diagnostics — needs a test pass.
-- **Phase 1:** ~small–medium, analysis-only, memory-safety-neutral (no codegen).
-  Risk: getting the "ephemeral / provably-different-connection" predicate right
-  (fail-closed); reuse the A2b-2 arg-safety scaffolding.
+- **Phase 1:** ✅ shipped. Was ~small–medium, analysis-only, memory-safety-neutral
+  (no codegen) — as predicted, it reused the A2b-2 arg-safety scaffolding
+  (`is_safe_network_fanout`) and added only the borrow-free-callee predicate; the
+  fan-out rides the existing return-slot `par_run` path, so the codegen surface
+  was untouched and the ASAN suite stayed green.
 - **Phase 2:** medium–large. Touches AST→effectchecker→concurrency + `design.md`.
   Risk: soundness of the distinctness graph (must be conservative on aliasing);
   the key-surface decision (§5 (i) vs (ii)); interaction with provider-rooted

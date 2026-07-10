@@ -6413,4 +6413,33 @@ fn main() {
             assert_eq!(out.trim(), "11\n22", "got {out:?}");
         }
     }
+
+    #[test]
+    fn test_e2e_a2b2_ephemeral_send_recv_fanout_runs() {
+        // A2b-2 Phase 1: two *ephemeral* network calls that `sends(Network)`
+        // AND `receives(Network)` — the real `http_get("a"); http_get("b")`
+        // shape (owned `String` param, literal arg), NOT the synthetic
+        // `reads(Network)` one — now group and fan out. Before Phase 1 the
+        // send/recv conflict kept this exact shape serial; now the ephemeral
+        // relaxation groups it. Pins that the newly-formed group codegens +
+        // runs and that the ordered-output capture keeps stdout byte-identical
+        // to sequential execution. The owned-String-param + literal-arg shape
+        // here is the one the memory_sanitizer variant proves double-free-clean
+        // (the coroutine owns and drops the moved-in `String` exactly once).
+        let out = run_program(
+            r#"
+fn get_a(u: String) -> i64 with sends(Network) receives(Network) { return 11; }
+fn get_b(u: String) -> i64 with sends(Network) receives(Network) { return 22; }
+fn main() {
+    let x = get_a("http://a");
+    let y = get_b("http://b");
+    println(x);
+    println(y);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "11\n22", "got {out:?}");
+        }
+    }
 }

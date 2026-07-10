@@ -533,18 +533,21 @@ fn test_nontimer_suspend_calls_serialize() {
     );
 }
 
-// ── Conflicting network calls STILL serialize (post-A2b-2) ────────
+// ── A2b-2 Phase 1: ephemeral send/recv network calls fan out ──────
 
 #[test]
-fn test_network_boundary_calls_still_serialize() {
-    // Post-A2b-2, the arg-safe exemption admits these two arg-free network
-    // calls PAST the coroutine-boundary gate — but they still stay serial,
-    // because they `sends(Network)` AND `receives(Network)` on the SAME
-    // `Network` resource, and `(Sends,Sends)`/`(Receives,Receives)` conflict.
-    // So the serialization now comes from the conflict model, not the boundary
-    // gate. This complements `test_a2b2_independent_network_reads_parallelize`:
-    // independent `reads(Network)` calls parallelize; genuinely-conflicting
-    // network calls (a send/recv pair on one resource) do not.
+fn test_a2b2_ephemeral_network_sends_receives_fanout() {
+    // A2b-2 Phase 1 flagship. Two borrow-free free-fn network calls that
+    // `sends(Network)` AND `receives(Network)` — the real `http_get("a");
+    // http_get("b")` shape, not the synthetic `reads(Network)` one — now fan
+    // out. Both are *ephemeral* network fan-outs (borrow-free callees ⇒ each
+    // opens its own private connection), so `statements_conflict` relaxes the
+    // `Network`↔`Network` conflict that previously kept them serial (via
+    // `(Sends,Sends)`/`(Receives,Receives)`). Before Phase 1 this exact case
+    // stayed serial (the old `test_network_boundary_calls_still_serialize`).
+    // Contrast `test_a2b2_borrow_param_network_sends_receives_stays_serial`,
+    // which pins that a *borrow-param* send/recv pair (a possibly-shared
+    // connection) still serializes.
     let analysis = analyze(
         r#"
         fn get_a() -> i64 with sends(Network) receives(Network) { return 1; }
@@ -557,9 +560,51 @@ fn test_network_boundary_calls_still_serialize() {
     );
 
     let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "two ephemeral send/recv network calls should fan out (A2b-2 Phase 1), got {:?}",
+        main_fc.parallel_groups
+    );
+    let g = &main_fc.parallel_groups[0];
+    assert!(g.statement_indices.contains(&0) && g.statement_indices.contains(&1));
+}
+
+// ── Borrow-param network calls STILL serialize (shared-conn soundness) ──
+
+#[test]
+fn test_a2b2_borrow_param_network_sends_receives_stays_serial() {
+    // The Phase 1 `Network`-conflict relaxation is gated on *ephemeral* calls
+    // — a borrow-free callee that cannot be handed a shared connection. A
+    // callee that BORROWS a parameter (`ref Conn`) could be operating on the
+    // same connection object as its sibling; overlapping two `sends`/`receives`
+    // on one socket races. This pass carries no connection-identity info to
+    // tell same-conn from different-conn, so a borrow-param send/recv pair is
+    // NOT ephemeral and stays serial — the `(Sends,Sends)`/`(Receives,Receives)`
+    // conflict is not relaxed. (Distinguishing distinct borrowed connections is
+    // the Phase 2 parameterized-`Network` follow-up.)
+    let analysis = analyze(
+        r#"
+        fn send_on(c: ref Conn) -> i64 with sends(Network) receives(Network) { return 1; }
+        fn main() {
+            let conn = 0;
+            let x = send_on(conn);
+            let y = send_on(conn);
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    // Statements 1 and 2 are the two `send_on(conn)` calls (after the `let
+    // conn`). They must NOT co-group — the callee borrows, so the relaxation
+    // does not apply and the send/recv conflict serializes them.
+    let calls_grouped = main_fc
+        .parallel_groups
+        .iter()
+        .any(|g| g.statement_indices.contains(&1) && g.statement_indices.contains(&2));
     assert!(
-        main_fc.parallel_groups.is_empty(),
-        "network coroutine boundaries must stay serialized until A2b-2, got {:?}",
+        !calls_grouped,
+        "borrow-param send/recv network calls must stay serial (shared-conn soundness), got {:?}",
         main_fc.parallel_groups
     );
 }

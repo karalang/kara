@@ -15026,6 +15026,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_a2b2_ephemeral_send_recv_owned_param_fanout_clean() {
+        // A2b-2 Phase 1: two *ephemeral* network calls that `sends(Network)`
+        // AND `receives(Network)` — the real `http_get` shape — with an OWNED
+        // `String` param fed a literal arg. Before Phase 1 the send/recv
+        // `Network` conflict kept this pair serial, so the fanned-out codegen
+        // path was never reached for the send/recv shape; Phase 1's ephemeral
+        // relaxation now groups it. Memory-safety proof: each coroutine takes
+        // ownership of the moved-in `String` (a heap value materialized from
+        // the literal) and returns it, so the value must be freed EXACTLY once
+        // across the fork/join — it flows param → return-slot bit-copy → parent
+        // (sole drop owner), with the branch's own cleanup discarded. A literal
+        // arg names no parent binding, so there is no caller-side drop to
+        // double-cancel (the coroutine-owned-param hazard cannot fire). A
+        // double-free or leak surfaces under LSan/ASan. Companion to the
+        // `reads(Network)` variant `asan_auto_par_network_effect_owned_heap_fanout_clean`,
+        // which could not exercise the send/recv-conflict path.
+        assert_clean_asan_run(
+            r#"
+fn get_a(u: String) -> String with sends(Network) receives(Network) { return u; }
+fn get_b(u: String) -> String with sends(Network) receives(Network) { return u; }
+fn main() {
+    let x = get_a("aaaaaaaaaaaaaaaaaaaa");
+    let y = get_b("bbbbbbbbbbbbbbbbbbbb");
+    println(x);
+    println(y);
+}
+"#,
+            &["aaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbb"],
+            "asan_a2b2_ephemeral_send_recv_owned_param_fanout_clean",
+        );
+    }
+
+    #[test]
     fn asan_auto_par_allocating_calls_clean() {
         let label = "auto_par_allocating_calls";
         if !asan_available() {
