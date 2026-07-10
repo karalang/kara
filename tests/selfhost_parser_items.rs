@@ -894,7 +894,7 @@ fn rust_render(src: &str) -> String {
 // B-2026-07-09-11 niche fix) but crashes at runtime on basic inputs. See the
 // note in tests/selfhost_parser.rs. Un-ignore once B-2026-07-09-12 is fixed.
 #[test]
-#[ignore = "B-2026-07-09-12: selfhost parser builds but crashes at runtime (pre-existing port memory-safety bug)"]
+#[ignore = "B-2026-07-10-4: item/type parser crashes at runtime (distinct from B-2026-07-09-12; NOT auto-par — fails with KARAC_AUTO_PAR=0 too)"]
 fn selfhost_parser_matches_rust_parser_items() {
     // 1. Crate-root program: a driver over the Kāra `parse_item_str` +
     //    `render_item`. The six selfhost modules are copied verbatim (step 2).

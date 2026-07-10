@@ -102,6 +102,46 @@ fn test_data_dependency_serializes() {
     );
 }
 
+#[test]
+fn test_mut_ref_self_calls_serialize() {
+    // B-2026-07-09-12: two sequential `let x = self.mut_method()` calls that
+    // mutate the receiver (a parser cursor) must NOT be auto-parallelized —
+    // they share `self` and have a strict ordering dependency through it. A
+    // `mut ref self` method that only advances a plain scalar field carries no
+    // `writes(Resource)` effect, so the effect-verb heuristic alone missed the
+    // conflict; combined with the `Let` arm not collecting RHS inner-writes, the
+    // auto-parallelizer raced three such calls in the self-hosted parser's
+    // `parse_if` (SEGV on every control-flow expression). The fix records `self`
+    // as written by a `mut ref self` call so the calls conflict and stay serial.
+    let analysis = analyze(
+        r#"
+        struct Cursor { pos: i64 }
+        impl Cursor {
+            fn step(mut ref self) -> i64 {
+                self.pos = self.pos + 1;
+                self.pos
+            }
+            fn run(mut ref self) -> i64 {
+                let a = self.step();
+                let b = self.step();
+                a + b
+            }
+        }
+        fn main() {}
+        "#,
+    );
+    let run_fc = get_function(&analysis, "Cursor.run");
+    // Statements 0 (`let a = self.step()`) and 1 (`let b = self.step()`) must
+    // never land in the same parallel group.
+    assert!(
+        run_fc.parallel_groups.iter().all(|g| {
+            !(g.statement_indices.contains(&0) && g.statement_indices.contains(&1))
+        }),
+        "two mut-ref-self cursor advances must serialize, got groups {:?}",
+        run_fc.parallel_groups
+    );
+}
+
 // ── A map-mutating loop serializes against a later read of the map ──
 
 #[test]

@@ -2000,6 +2000,16 @@ impl<'a> ConcurrencyChecker<'a> {
                 // The value expression may read variables and call functions
                 self.collect_expr_reads(value, &mut info.reads);
                 self.collect_expr_effects(value, &mut info);
+                // The RHS may also WRITE outer state as a side effect — a
+                // `mut ref self` / `mut ref T` call mutates its receiver / a
+                // `mut`-passed argument. Record those writes so a later stmt
+                // that reads (or writes) the same place serializes against
+                // this one. Without this, `let then_block = self.parse_block()`
+                // recorded no write on `self`, so three sequential
+                // cursor-advancing `self.parse_*()` calls looked independent
+                // and the auto-parallelizer raced them (B-2026-07-09-12).
+                // Mirrors the `StmtKind::Expr` arm's inner-write collection.
+                self.collect_expr_inner_writes(value, &mut info.defines);
             }
             StmtKind::LetUninit { name, .. } => {
                 info.defines.insert(name.clone());
@@ -2015,6 +2025,9 @@ impl<'a> ConcurrencyChecker<'a> {
                 self.collect_pattern_bindings(pattern, &mut info.let_introduced);
                 self.collect_expr_reads(value, &mut info.reads);
                 self.collect_expr_effects(value, &mut info);
+                // RHS side-effect writes (mut-ref receiver / mut arg) — see the
+                // `StmtKind::Let` arm (B-2026-07-09-12).
+                self.collect_expr_inner_writes(value, &mut info.defines);
                 self.collect_block_reads(else_block, &mut info.reads);
                 self.collect_block_effects(else_block, &mut info);
                 self.collect_block_inner_writes(else_block, &mut info.defines);
@@ -2967,7 +2980,23 @@ impl<'a> ConcurrencyChecker<'a> {
                 // reads of the same name. Without this, two `a.push(...)`
                 // / `a.push(...)` calls are seen as read-only on `a` and
                 // the auto-parallelizer races them on shared Vec state.
-                if self.method_effects_imply_receiver_mutation(method) {
+                //
+                // A `mut ref self` method ALSO mutates its receiver — through
+                // the borrow — even when it carries no resource-effect verb.
+                // A parser cursor advance (`self.pos = self.pos + 1` inside
+                // `self.parse_block()`) writes a plain scalar field, which is
+                // ownership-level mutation with NO `writes(Resource)` effect,
+                // so the effect heuristic above misses it. Without the
+                // receiver-mode check, three sequential cursor-advancing calls
+                // (`self.parse_expr_bp(0)`, `self.parse_block()`,
+                // `self.parse_else()` in `parse_if`) recorded no write on
+                // `self`, so the data-dependency check saw them as independent
+                // and the auto-parallelizer raced them through `karac_par_run`
+                // — corrupting the shared parser state (B-2026-07-09-12: the
+                // self-hosted parser SEGV'd on every `if`/`loop`/`for`/`while`).
+                if self.method_effects_imply_receiver_mutation(method)
+                    || self.method_receiver_is_mut_ref(method)
+                {
                     self.collect_assign_target_defines(object, writes);
                 }
                 self.collect_expr_inner_writes(object, writes);
@@ -3042,6 +3071,24 @@ impl<'a> ConcurrencyChecker<'a> {
             }
         }
         false
+    }
+
+    /// Returns `true` if any method named `method` (matched as `<Type>.<method>`)
+    /// declares a `mut ref self` receiver. Such a method CAN mutate the receiver
+    /// through the borrow independent of any resource-effect verb, so a call to
+    /// it must be treated as writing its receiver for the auto-parallelizer's
+    /// data-dependency gate. Conservative: matches on the method name across all
+    /// types (like `method_effects_imply_receiver_mutation`), which can only
+    /// over-serialize, never under-serialize — the sound direction for auto-par.
+    /// This is the receiver-mode counterpart to the effect-verb heuristic and
+    /// catches plain-field mutation (a parser cursor advance) that carries no
+    /// `writes(Resource)` effect (B-2026-07-09-12).
+    fn method_receiver_is_mut_ref(&self, method: &str) -> bool {
+        let suffix = format!(".{}", method);
+        self.method_bodies.iter().any(|(key, f)| {
+            (key == method || key.ends_with(&suffix))
+                && matches!(f.self_param, Some(SelfParam::MutRef))
+        })
     }
 
     /// Walk a block's statements and record any outer-scope names

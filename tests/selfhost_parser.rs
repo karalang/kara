@@ -678,15 +678,17 @@ fn rust_render(src: &str) -> String {
 // struct-payload pack), #38 (borrowed index-field enum scrutinee dangle), and
 // #39 (bare variant name shared across enums mis-resolving in a match) — all
 // landed, so this oracle now runs as a normal gated test.
-// IGNORED — B-2026-07-09-12: with the niche `Option[shared]` build panic fixed
-// (B-2026-07-09-11), the self-hosted parser now COMPILES but SEGFAULTS/heap-
-// corrupts at runtime on basic inputs (a pre-existing Cluster-1 memory-safety
-// bug in the parser port, never exercised because the port never built while
-// this oracle silently skipped). Un-ignore once B-2026-07-09-12 is fixed. The
-// test-integrity fix below (compiler panic/crash → hard failure, not a vacuous
-// skip) is what surfaces that class going forward.
+// UN-IGNORED 2026-07-10 (B-2026-07-09-12 EXPRESSION-parser half FIXED): the
+// runtime SEGV on every control-flow expression was an auto-parallelization
+// CORRECTNESS bug — `parse_if` (and `parse_while`/`parse_for`/`parse_loop`)
+// auto-parallelized three sequential `mut ref self` calls
+// (`parse_expr_bp`/`parse_block`/`parse_else`) that share the parser cursor,
+// racing them via `karac_par_run`. Fixed in `src/concurrency.rs`: a `let x =
+// self.mut_method()` now records `self` as written, so the calls conflict and
+// stay serial. This EXPRESSION oracle now passes; the sibling ITEM/TYPE parser
+// oracles stay ignored against a DISTINCT residual (`B-2026-07-10-4`, not
+// auto-par — crashes with `KARAC_AUTO_PAR=0` too).
 #[test]
-#[ignore = "B-2026-07-09-12: selfhost parser builds but crashes at runtime (pre-existing port memory-safety bug)"]
 fn selfhost_parser_matches_rust_parser() {
     // 1. Generate the crate-root program: imports of the Kāra parser +
     //    renderer, a per-input driver, and `main`. The `span`/`token`/`lexer`/
