@@ -96,6 +96,31 @@ fn expr_is_constant_init(expr: &Expr) -> bool {
         ExprKind::MapLiteral(pairs) => pairs
             .iter()
             .all(|(k, v)| expr_is_constant_init(k) && expr_is_constant_init(v)),
+        // Empty-collection constructors — `Vec.new()` / `String.new()` — do
+        // ~zero work: they materialize an empty `{ptr, len, cap}` descriptor
+        // with NO heap allocation (the first `push`/grow is what allocates).
+        // The `allocates(Heap)` effect the constructor carries is conservative
+        // for that *potential later* growth, not for the constructor itself, so
+        // for the cost model an empty `Vec.new()` is constant-init exactly like
+        // a literal. Without this, a hot prologue like
+        // `let n = x & M; let buf = Vec.new();` counts TWO non-constant stmts,
+        // clears the `<= 1` trivial gate in `find_parallel_groups`, and fans out
+        // a ~70μs-spawn par group *per call* — e.g. kata #405 `to_hex`, whose
+        // default (auto-par) build blew up 40–66× instructions (and
+        // non-deterministically) vs its `KARAC_AUTO_PAR=0` seq lane
+        // (B-2026-07-09-14). Matches this filter's case-2 rationale: an empty
+        // constructor is never the "work" branch, so overlapping it with a
+        // sibling computation buys only spawn overhead, never speedup. Only the
+        // zero-arg `new` of the two genuinely lazy/empty collections is
+        // recognized — `Map.new()` / `Set.new()` may allocate an initial table,
+        // so they are deliberately excluded (conservative).
+        ExprKind::Call { callee, args } if args.is_empty() => matches!(
+            &callee.kind,
+            ExprKind::Path { segments, .. }
+                if segments.len() == 2
+                    && segments[1] == "new"
+                    && matches!(segments[0].as_str(), "Vec" | "String")
+        ),
         _ => false,
     }
 }

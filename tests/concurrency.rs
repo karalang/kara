@@ -1181,6 +1181,46 @@ fn test_cost_model_byte_lit_let_init_counts_as_constant() {
 }
 
 #[test]
+fn test_cost_model_empty_vec_new_counts_as_constant() {
+    // Distillation of the kata #405 `to_hex` auto-par blowup (B-2026-07-09-14).
+    // `Vec.new()` / `String.new()` materialize an empty `{ptr, len, cap}`
+    // descriptor with NO heap allocation (the first push/grow allocates), so
+    // they do ~zero work — but pre-fix `expr_is_constant_init` recognized only
+    // literals, not empty constructors. In a hot function's prologue
+    // `let hexd = ".."; let n = num & M; let buf = Vec.new();` that left
+    // `non_constant_count` = 2 (the `& M` bitand AND `Vec.new()`), clearing the
+    // `<= 1` trivial gate and fanning out a ~70μs-spawn par group PER CALL.
+    // Over the millions of `to_hex` calls in the #405 render loop, that blew the
+    // default (auto-par) build up to 40–66× its `KARAC_AUTO_PAR=0` seq-lane
+    // instructions, non-deterministically (503B vs 9.5B). Unlike the byte-lit
+    // sibling above, this shape is DISCRIMINATING: without recognizing the empty
+    // `Vec.new()` as constant-init the group has two non-constant stmts and is
+    // NOT trivial, so this test fails pre-fix and passes post-fix.
+    let analysis = analyze(
+        r#"
+        fn to_hex(num: i64) -> i64 {
+            let hexd: String = "0123456789abcdef";
+            let mut n = num & 0xffffffffi64;
+            let mut buf: Vec[i64] = Vec.new();
+            buf.push(n + hexd.len());
+            buf.len()
+        }
+        "#,
+    );
+    let fc = get_function(&analysis, "to_hex");
+    for group in &fc.parallel_groups {
+        assert!(
+            group.is_trivial,
+            "Group {:?} (reason: {:?}) should be trivial — its only non-constant \
+             stmt is the `num & M` bitand; the String literal and the empty \
+             `Vec.new()` are both zero-work constant-init, so fanning out buys \
+             only spawn overhead, never speedup (B-2026-07-09-14)",
+            group.statement_indices, group.reason
+        );
+    }
+}
+
+#[test]
 fn test_cost_model_multi_string_lit_counts_as_constant() {
     // Sibling to the ByteLit test. `MultiStringLit` (Kāra's multi-line
     // string literal form) is textual data with no runtime work, parity
