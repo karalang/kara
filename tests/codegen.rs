@@ -6818,6 +6818,53 @@ fn main() {
     }
 
     #[test]
+    fn e2e_sorted_set_int_iter_min_max_codegen() {
+        // B-2026-07-09-16: `SortedSet[i64]` iterates in ASCENDING order (backed
+        // by `KaracMap` storage + a `karac_map_sorted_keys` materialize at the
+        // for-loop / min / max observation points). Byte-identical to the
+        // `karac run` interpreter (`BTreeMap`) oracle. `try_insert` (dup 1)
+        // routes through the shared `compile_set_method` and is now unblocked.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut s: SortedSet[i64] = SortedSet.new();\n\
+                 let _ = s.insert(5_i64); let _ = s.insert(1_i64);\n\
+                 let _ = s.insert(3_i64); let _ = s.try_insert(1_i64);\n\
+                 let mut out: String = \"\";\n\
+                 for x in s { out.push_str(f\"{x},\"); }\n\
+                 println(out);\n\
+                 match s.min() { Some(v) => println(v), None => println(\"none\") }\n\
+                 match s.max() { Some(v) => println(v), None => println(\"none\") }\n\
+                 let mut e: SortedSet[i64] = SortedSet.new();\n\
+                 match e.min() { Some(v) => println(v), None => println(\"none\") }\n\
+             }",
+        ) {
+            assert_eq!(out, "1,3,5,\n1\n5\nnone\n");
+        }
+    }
+
+    #[test]
+    fn e2e_sorted_set_string_iter_min_max_codegen() {
+        // `SortedSet[String]` iterates lexicographically ascending; min/max
+        // CLONE the picked key (the sorted buffer aliases the set's owned key
+        // data), so the returned `Option[String]` owns its payload.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut s: SortedSet[String] = SortedSet.new();\n\
+                 let _ = s.insert(\"banana\"); let _ = s.insert(\"apple\");\n\
+                 let _ = s.insert(\"cherry\"); let _ = s.insert(\"apple\");\n\
+                 let mut out: String = \"\";\n\
+                 for w in s { out.push_str(f\"{w} \"); }\n\
+                 println(out);\n\
+                 match s.min() { Some(v) => println(v), None => println(\"none\") }\n\
+                 match s.max() { Some(v) => println(v), None => println(\"none\") }\n\
+                 println(s.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "apple banana cherry \napple\ncherry\n3\n");
+        }
+    }
+
+    #[test]
     fn e2e_map_try_insert_question_propagation_codegen() {
         // `Map.try_insert` composes with `?`: a helper returning
         // `Result[(), AllocError]` propagates any `Err` and discards the

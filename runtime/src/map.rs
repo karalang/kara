@@ -754,6 +754,52 @@ pub unsafe extern "C" fn karac_map_remove_old(
     }
 }
 
+/// Collect all live keys into a freshly-`malloc`'d buffer of `len * key_size`
+/// bytes, SORTED ascending by `cmp_fn` (a codegen-emitted comparator returning
+/// `<0` / `0` / `>0`, the same 3-way sign the interpreter's `value_compare`
+/// yields). Writes the key count through `out_len` and returns the buffer (NULL
+/// for an empty map). Backs `SortedSet`/`SortedMap`'s ordered observation points
+/// — the `for`-loop walks the buffer in order, and `min` / `max` read `buf[0]` /
+/// `buf[len-1]`. The buffer holds a bit-copy of each key slot (for a `String`
+/// key that is the `{ptr,len,cap}` header — an ALIAS into the map's owned
+/// buffer, valid for the read-only ordered walk); the caller frees ONLY the
+/// returned buffer via `free`, never the individual keys.
+#[no_mangle]
+pub unsafe extern "C" fn karac_map_sorted_keys(
+    map: *const c_void,
+    out_len: *mut usize,
+    cmp_fn: unsafe extern "C" fn(*const c_void, *const c_void) -> i32,
+) -> *mut u8 {
+    let m = &*(map as *const KaracMap);
+    let n = m.len;
+    if !out_len.is_null() {
+        *out_len = n;
+    }
+    if n == 0 {
+        return ptr::null_mut();
+    }
+    let ks = m.key_size;
+    // Gather pointers to each live key slot, sort by the comparator, then gather
+    // the sorted keys into the output buffer. Sorting pointers (not the bytes)
+    // keeps the comparator operating on the map's stable key storage.
+    let mut keys: Vec<*const u8> = Vec::with_capacity(n);
+    for slot in 0..m.capacity {
+        if *m.status.add(slot) == BUCKET_OCCUPIED {
+            keys.push(m.key_ptr(slot) as *const u8);
+        }
+    }
+    keys.sort_by(|&a, &b| cmp_fn(a as *const c_void, b as *const c_void).cmp(&0));
+    let buf = alloc(Layout::array::<u8>(n * ks).unwrap());
+    if buf.is_null() {
+        crate::fatal::write_stderr(b"panic: out of memory\n");
+        std::process::abort();
+    }
+    for (i, &kp) in keys.iter().enumerate() {
+        ptr::copy_nonoverlapping(kp, buf.add(i * ks), ks);
+    }
+    buf
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_contains(map: *const c_void, key: *const c_void) -> bool {
     (*(map as *const KaracMap)).lookup(key).is_some()

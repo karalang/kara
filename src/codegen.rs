@@ -2958,6 +2958,14 @@ pub(super) struct Codegen<'ctx> {
     /// kept distinct so codegen can pick the right method dispatch and the
     /// Display fn can pick the `Set{...}` brace style.
     pub(crate) set_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// Variable names bound to a `SortedSet[T]` / `SortedMap[K, V]`. These share
+    /// `Set`/`Map`'s `KaracMap`-backed storage (so they live in
+    /// `set_elem_types` / `map_key_types` and reuse `compile_set_method` /
+    /// `compile_map_method` for all order-independent ops), but must observe
+    /// their keys in ASCENDING order at iteration (`for`, `keys`/`values`/
+    /// `entries`) and at `min`/`max`. Codegen consults this set at those
+    /// observation points to inject a sort; empty for plain `Set`/`Map`.
+    pub(crate) sorted_collection_vars: std::collections::HashSet<String>,
     /// Per-variable Set element type name string (e.g. `"i64"`, `"String"`)
     /// for hash/eq fn selection. Mirrors `map_key_type_names`.
     pub(crate) set_elem_type_names: HashMap<String, String>,
@@ -3038,6 +3046,7 @@ pub(super) struct Codegen<'ctx> {
     /// clear sibling of `karac_map_free_with_val_drop_fn` (slice 3r).
     pub(crate) karac_map_clear_with_val_drop_fn_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_iter_new_fn: FunctionValue<'ctx>,
+    pub(crate) karac_map_sorted_keys_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_iter_next_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_iter_free_fn: FunctionValue<'ctx>,
     /// `i64 karac_string_decode_char(*const u8 data, i64 len, i64 byte_offset, *mut u32 out_cp)`.
@@ -5391,6 +5400,16 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // karac_map_sorted_keys(map: ptr, out_len: ptr, cmp_fn: ptr) -> ptr
+        // Returns a malloc'd, ascending-sorted copy of the map's keys (SortedSet
+        // / SortedMap ordered iteration + min/max). Caller frees the buffer.
+        let map_sorted_keys_ty = ptr_type.fn_type(&[ptr_md, ptr_md, ptr_md], false);
+        let karac_map_sorted_keys_fn = module.add_function(
+            "karac_map_sorted_keys",
+            map_sorted_keys_ty,
+            Some(Linkage::External),
+        );
+
         // karac_string_decode_char(data: ptr, len: i64, byte_offset: i64,
         //                          out_codepoint: ptr) -> i64
         // Drives `for c in s` / `for c in s.chars()` lowering. Returns the
@@ -5804,6 +5823,7 @@ impl<'ctx> Codegen<'ctx> {
             var_result_payload_te: HashMap::new(),
             map_key_type_exprs: HashMap::new(),
             set_elem_types: HashMap::new(),
+            sorted_collection_vars: std::collections::HashSet::new(),
             set_elem_type_names: HashMap::new(),
             set_elem_type_exprs: HashMap::new(),
             string_vars: HashSet::new(),
@@ -5826,6 +5846,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_map_iter_new_fn,
             karac_map_iter_next_fn,
             karac_map_iter_free_fn,
+            karac_map_sorted_keys_fn,
             karac_string_decode_char_fn,
             karac_string_encode_char_fn,
             karac_map_entry_fn,

@@ -1657,6 +1657,96 @@ impl<'ctx> super::Codegen<'ctx> {
             .copied()
             .unwrap_or(i64_t.into());
 
+        // `SortedSet[T]`: iterate keys in ASCENDING order. Materialize the
+        // sorted-key buffer once and walk it by index, then free it — instead
+        // of the hash-order `karac_map_iter`. The element binding is identical
+        // to the hash path (a borrow-like alias into the set's key data, which
+        // the freed header buffer does not own), so `Set[String]` semantics
+        // carry over unchanged.
+        if self.sorted_collection_vars.contains(var_name) {
+            let elem_te = self
+                .set_elem_type_exprs
+                .get(var_name)
+                .cloned()
+                .ok_or_else(|| {
+                    format!("SortedSet iteration: unknown element type for '{var_name}'")
+                })?;
+            let (buf, len) = self.emit_sorted_keys_buf(set_handle, &elem_te)?;
+            let idx_slot = self.create_entry_alloca(fn_val, "sset.for.i", i64_t.into());
+            self.builder
+                .build_store(idx_slot, i64_t.const_zero())
+                .unwrap();
+
+            let cond_bb = self.context.append_basic_block(fn_val, "sset.for.cond");
+            let body_bb = self.context.append_basic_block(fn_val, "sset.for.body");
+            let cont_bb = self.context.append_basic_block(fn_val, "sset.for.cont");
+            let exit_bb = self.context.append_basic_block(fn_val, "sset.for.exit");
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.loop_stack.push(LoopFrame {
+                label: label.map(str::to_string),
+                continue_bb: cont_bb,
+                break_bb: exit_bb,
+                result_slot: None,
+                cleanup_depth: self.scope_cleanup_actions.len(),
+            });
+
+            self.builder.position_at_end(cond_bb);
+            let i = self
+                .builder
+                .build_load(i64_t, idx_slot, "sset.for.i.v")
+                .unwrap()
+                .into_int_value();
+            let in_range = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, i, len, "sset.for.more")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(in_range, body_bb, exit_bb)
+                .unwrap();
+
+            self.builder.position_at_end(body_bb);
+            let eptr = unsafe {
+                self.builder
+                    .build_gep(elem_ty, buf, &[i], "sset.for.eptr")
+                    .unwrap()
+            };
+            let elem_val = self
+                .builder
+                .build_load(elem_ty, eptr, "sset.for.elem")
+                .unwrap();
+            self.bind_pattern(pattern, elem_val)?;
+            if let PatternKind::Binding(elem_name) = &pattern.kind {
+                if let Some(elem_te2) = self.set_elem_type_exprs.get(var_name).cloned() {
+                    self.register_var_from_type_expr(elem_name, &elem_te2);
+                }
+            }
+            self.compile_loop_body_with_cleanup(body, cont_bb)?;
+
+            self.builder.position_at_end(cont_bb);
+            let i2 = self
+                .builder
+                .build_load(i64_t, idx_slot, "sset.for.i2")
+                .unwrap()
+                .into_int_value();
+            let inc = self
+                .builder
+                .build_int_add(i2, i64_t.const_int(1, false), "sset.for.inc")
+                .unwrap();
+            self.builder.build_store(idx_slot, inc).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.loop_stack.pop();
+
+            self.builder.position_at_end(exit_bb);
+            // `free(NULL)` is a no-op, so freeing an empty-set (len == 0) null
+            // buffer is safe.
+            self.builder
+                .build_call(self.free_fn, &[buf.into()], "")
+                .unwrap();
+            return Ok(self.context.i64_type().const_int(0, false).into());
+        }
+
         let iter_ptr = self
             .builder
             .build_call(self.karac_map_iter_new_fn, &[set_handle.into()], "set.iter")

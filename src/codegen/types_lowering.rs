@@ -1051,7 +1051,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Mirror of `extract_map_kv_types` for the single-type-parameter Set.
     pub(super) fn extract_set_elem_type(&self, te: &TypeExpr) -> Option<BasicTypeEnum<'ctx>> {
         if let TypeKind::Path(path) = &te.kind {
-            if path.segments.first().map(|s| s.as_str()) != Some("Set") {
+            // `SortedSet[T]` shares `Set[T]`'s `KaracMap`-backed storage; the
+            // only difference is ordered iteration (handled at the for-loop /
+            // min/max observation points via `sorted_collection_vars`).
+            if !matches!(
+                path.segments.first().map(|s| s.as_str()),
+                Some("Set") | Some("SortedSet")
+            ) {
                 return None;
             }
             let args = path.generic_args.as_ref()?;
@@ -1070,7 +1076,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Mirror of `extract_map_key_name`.
     pub(super) fn extract_set_elem_name(te: &TypeExpr) -> Option<String> {
         if let TypeKind::Path(path) = &te.kind {
-            if path.segments.first().map(|s| s.as_str()) != Some("Set") {
+            if !matches!(
+                path.segments.first().map(|s| s.as_str()),
+                Some("Set") | Some("SortedSet")
+            ) {
                 return None;
             }
             let args = path.generic_args.as_ref()?;
@@ -1481,7 +1490,9 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn is_set_new_call(&self, expr: &Expr) -> bool {
         if let ExprKind::Call { callee, .. } = &expr.kind {
             if let ExprKind::Path { segments, .. } = &callee.kind {
-                return segments.len() == 2 && segments[0] == "Set" && segments[1] == "new";
+                return segments.len() == 2
+                    && (segments[0] == "Set" || segments[0] == "SortedSet")
+                    && segments[1] == "new";
             }
         }
         false

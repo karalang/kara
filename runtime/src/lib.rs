@@ -142,6 +142,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         map::karac_map_iter_new,
         map::karac_map_iter_next,
         map::karac_map_iter_free,
+        map::karac_map_sorted_keys,
         map::karac_map_entry,
         map::karac_map_lookup_slot,
     );

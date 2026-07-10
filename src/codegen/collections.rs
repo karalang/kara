@@ -433,6 +433,84 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(new_handle.into())
             }
+            "min" | "max" => {
+                // `SortedSet.min()` / `max() -> Option[T]`. Materialize the
+                // ascending sorted keys; empty -> `None`, else `Some(buf[0])`
+                // (min) / `Some(buf[len-1])` (max). The buffer holds bit-copies
+                // of the key slots (for a heap element, an ALIAS into the set's
+                // owned key buffer), so the picked element is CLONED into an
+                // independent owned value before the buffer is freed — the
+                // returned `Option` owns its payload, the set keeps its key.
+                // (`min`/`max` are SortedSet-only in the typechecker, so any var
+                // reaching here is sorted.)
+                let elem_te = self
+                    .set_elem_type_exprs
+                    .get(var_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("SortedSet.{method}: unknown element type for '{var_name}'")
+                    })?;
+                let fn_val = self.current_fn.unwrap();
+                let (buf, len) = self.emit_sorted_keys_buf(set_handle, &elem_te)?;
+                let is_max = method == "max";
+                let some_bb = self.context.append_basic_block(fn_val, "sset.mm.some");
+                let none_bb = self.context.append_basic_block(fn_val, "sset.mm.none");
+                let merge_bb = self.context.append_basic_block(fn_val, "sset.mm.merge");
+                let empty = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        len,
+                        i64_t.const_zero(),
+                        "sset.mm.empty",
+                    )
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(empty, none_bb, some_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(some_bb);
+                let idx = if is_max {
+                    self.builder
+                        .build_int_sub(len, i64_t.const_int(1, false), "sset.mm.idx")
+                        .unwrap()
+                } else {
+                    i64_t.const_zero()
+                };
+                let eptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, buf, &[idx], "sset.mm.eptr")
+                        .unwrap()
+                };
+                let clone_fn = self.emit_clone_fn_for_type_expr(&elem_te);
+                let dst = self.create_entry_alloca(fn_val, "sset.mm.clone", elem_ty);
+                self.builder
+                    .build_call(clone_fn, &[eptr.into(), dst.into()], "")
+                    .unwrap();
+                let val = self
+                    .builder
+                    .build_load(elem_ty, dst, "sset.mm.val")
+                    .unwrap();
+                let some_payload_words = self.coerce_to_payload_words(val, 3)?;
+                // Buffer is non-null here (len > 0); free the header array.
+                self.builder
+                    .build_call(self.free_fn, &[buf.into()], "")
+                    .unwrap();
+                let some_end_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(none_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(merge_bb);
+                let agg = self.build_option_some_via_phis(
+                    &some_payload_words,
+                    some_end_bb,
+                    none_bb,
+                    "sset.mm.opt",
+                );
+                Ok(agg)
+            }
             _ => Err(format!("codegen: Set.{method} not yet implemented")),
         }
     }
@@ -548,6 +626,210 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(self.karac_map_iter_free_fn, &[iter_handle.into()], "")
             .unwrap();
+    }
+
+    /// Emit (once per element type, `LinkOnceODR`) an ascending comparator
+    /// `i32 karac_sortcmp_<T>(*const T a, *const T b)` returning `-1`/`0`/`1` —
+    /// the codegen half of `SortedSet`/`SortedMap` ordering, passed as the
+    /// `cmp_fn` of `karac_map_sorted_keys`. Supports integer (any width, signed
+    /// or unsigned, plus `char`/`bool`) and `String` keys — the same surface as
+    /// `Vec.binary_search`; other element types (derived-`Ord` structs/enums)
+    /// stay interpreter-only for now, rejected here with an actionable message.
+    pub(super) fn emit_sorted_key_cmp_fn(
+        &mut self,
+        elem_te: &TypeExpr,
+    ) -> Result<inkwell::values::FunctionValue<'ctx>, String> {
+        let mangled = Self::mangled_type_name(elem_te);
+        let fn_name = format!("karac_sortcmp_{mangled}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Ok(f);
+        }
+        let elem_name = match &elem_te.kind {
+            TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+            _ => String::new(),
+        };
+        let is_uint = matches!(elem_name.as_str(), "u8" | "u16" | "u32" | "u64" | "usize");
+        let is_int = is_uint
+            || matches!(
+                elem_name.as_str(),
+                "i8" | "i16" | "i32" | "i64" | "isize" | "char" | "bool"
+            );
+        let is_string = elem_name == "String";
+        if !is_int && !is_string {
+            return Err(format!(
+                "codegen: `SortedSet`/`SortedMap` with element/key type `{elem_name}` is not yet \
+                 supported under `karac build` (only integer and String keys sort in codegen); \
+                 run under `karac run` for other `Ord` element types."
+            ));
+        }
+        let ctx = self.context;
+        let i32_t = ctx.i32_type();
+        let i64_t = ctx.i64_type();
+        let ptr_ty = ctx.ptr_type(AddressSpace::default());
+        let fn_ty = i32_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let func =
+            self.module
+                .add_function(&fn_name, fn_ty, Some(inkwell::module::Linkage::LinkOnceODR));
+        let saved = self.builder.get_insert_block();
+        let entry = ctx.append_basic_block(func, "entry");
+        self.builder.position_at_end(entry);
+        let a = func.get_nth_param(0).unwrap().into_pointer_value();
+        let b = func.get_nth_param(1).unwrap().into_pointer_value();
+
+        let (lt, gt) = if is_int {
+            let elem_ty = self.llvm_type_for_type_expr(elem_te).into_int_type();
+            let av = self
+                .builder
+                .build_load(elem_ty, a, "sc.a")
+                .unwrap()
+                .into_int_value();
+            let bv = self
+                .builder
+                .build_load(elem_ty, b, "sc.b")
+                .unwrap()
+                .into_int_value();
+            let widen = |v: IntValue<'ctx>, s: &mut Self| -> IntValue<'ctx> {
+                if v.get_type().get_bit_width() >= 64 {
+                    v
+                } else if is_uint {
+                    s.builder.build_int_z_extend(v, i64_t, "sc.w").unwrap()
+                } else {
+                    s.builder.build_int_s_extend(v, i64_t, "sc.w").unwrap()
+                }
+            };
+            let aw = widen(av, self);
+            let bw = widen(bv, self);
+            (
+                self.builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, aw, bw, "sc.lt")
+                    .unwrap(),
+                self.builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, aw, bw, "sc.gt")
+                    .unwrap(),
+            )
+        } else {
+            // String key: each param points at a `{ptr, len, cap}` header.
+            let vec_ty = self.vec_struct_type();
+            let load_field = |s: &mut Self, base: PointerValue<'ctx>, idx, tag: &str| {
+                let p = s
+                    .builder
+                    .build_struct_gep(vec_ty, base, idx, &format!("{tag}.p"))
+                    .unwrap();
+                (p, tag.to_string())
+            };
+            let (ap_p, _) = load_field(self, a, 0, "sc.a.ptr");
+            let a_ptr = self
+                .builder
+                .build_load(ptr_ty, ap_p, "sc.a.ptr.v")
+                .unwrap()
+                .into_pointer_value();
+            let (al_p, _) = load_field(self, a, 1, "sc.a.len");
+            let a_len = self
+                .builder
+                .build_load(i64_t, al_p, "sc.a.len.v")
+                .unwrap()
+                .into_int_value();
+            let (bp_p, _) = load_field(self, b, 0, "sc.b.ptr");
+            let b_ptr = self
+                .builder
+                .build_load(ptr_ty, bp_p, "sc.b.ptr.v")
+                .unwrap()
+                .into_pointer_value();
+            let (bl_p, _) = load_field(self, b, 1, "sc.b.len");
+            let b_len = self
+                .builder
+                .build_load(i64_t, bl_p, "sc.b.len.v")
+                .unwrap()
+                .into_int_value();
+            let cmp_fn = self
+                .module
+                .get_function("karac_string_cmp")
+                .unwrap_or_else(|| {
+                    let ft = i64_t.fn_type(
+                        &[ptr_ty.into(), i64_t.into(), ptr_ty.into(), i64_t.into()],
+                        false,
+                    );
+                    self.module.add_function(
+                        "karac_string_cmp",
+                        ft,
+                        Some(inkwell::module::Linkage::External),
+                    )
+                });
+            let raw = self
+                .builder
+                .build_call(
+                    cmp_fn,
+                    &[a_ptr.into(), a_len.into(), b_ptr.into(), b_len.into()],
+                    "sc.scmp",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let zero = i64_t.const_zero();
+            (
+                self.builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, raw, zero, "sc.lt")
+                    .unwrap(),
+                self.builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, raw, zero, "sc.gt")
+                    .unwrap(),
+            )
+        };
+        let neg1 = i32_t.const_int((-1i64) as u64, true);
+        let pos1 = i32_t.const_int(1, false);
+        let zero32 = i32_t.const_zero();
+        let gt_sel = self
+            .builder
+            .build_select(gt, pos1, zero32, "sc.gtsel")
+            .unwrap()
+            .into_int_value();
+        let res = self
+            .builder
+            .build_select(lt, neg1, gt_sel, "sc.cmp")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_return(Some(&res)).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Ok(func)
+    }
+
+    /// Call `karac_map_sorted_keys` on `handle` for element type `elem_te`,
+    /// returning `(buf_ptr, len)` — an ascending-sorted, freshly-malloc'd copy
+    /// of the collection's keys and its element count. The caller must `free`
+    /// `buf_ptr` (non-null only when `len > 0`). Shared by the sorted `for`-loop
+    /// and `min`/`max`.
+    pub(super) fn emit_sorted_keys_buf(
+        &mut self,
+        handle: PointerValue<'ctx>,
+        elem_te: &TypeExpr,
+    ) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let cmp_fn = self.emit_sorted_key_cmp_fn(elem_te)?;
+        let cmp_ptr = cmp_fn.as_global_value().as_pointer_value();
+        let len_slot = self.create_entry_alloca(fn_val, "sk.len", i64_t.into());
+        let buf = self
+            .builder
+            .build_call(
+                self.karac_map_sorted_keys_fn,
+                &[handle.into(), len_slot.into(), cmp_ptr.into()],
+                "sk.buf",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let _ = ptr_ty;
+        let len = self
+            .builder
+            .build_load(i64_t, len_slot, "sk.len.v")
+            .unwrap()
+            .into_int_value();
+        Ok((buf, len))
     }
 
     /// The narrow-scalar coercion hint for a collection LITERAL's elements.

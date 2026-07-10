@@ -168,7 +168,10 @@ pub(super) fn slice_inner_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
 /// Pull the element `TypeExpr` out of `Set[T]`.
 pub(super) fn set_inner_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
     if let TypeKind::Path(path) = &te.kind {
-        if path.segments.first().map(|s| s.as_str()) == Some("Set") {
+        if matches!(
+            path.segments.first().map(|s| s.as_str()),
+            Some("Set") | Some("SortedSet")
+        ) {
             if let Some(args) = &path.generic_args {
                 if let Some(GenericArg::Type(elem)) = args.first() {
                     return Some(elem.clone());
@@ -177,6 +180,20 @@ pub(super) fn set_inner_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
         }
     }
     None
+}
+
+/// True iff `te` is a `SortedSet[T]` / `SortedMap[K, V]` — an ordered collection
+/// whose codegen shares `Set`/`Map`'s `KaracMap` storage but must observe keys
+/// in ascending order at iteration / min / max sites. Drives the
+/// `sorted_collection_vars` marker.
+pub(super) fn is_sorted_collection_type(te: &TypeExpr) -> bool {
+    if let TypeKind::Path(path) = &te.kind {
+        return matches!(
+            path.segments.first().map(|s| s.as_str()),
+            Some("SortedSet") | Some("SortedMap")
+        );
+    }
+    false
 }
 
 /// Pull the (key, value) `TypeExpr`s out of `Map[K, V]`.

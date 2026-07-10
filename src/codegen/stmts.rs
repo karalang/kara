@@ -1976,6 +1976,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                             detected = true;
                         }
+                        // `SortedSet[T]` / `SortedMap[K,V]` register above under
+                        // the `Set`/`Map` side-tables (shared `KaracMap`
+                        // storage); mark them so iteration + min/max observe
+                        // ascending order.
+                        if crate::codegen::helpers::is_sorted_collection_type(te) {
+                            self.sorted_collection_vars.insert(var_name.clone());
+                        }
                     }
                     // Fall back on the typechecker-recorded surface type for
                     // the binding when no explicit annotation was written.

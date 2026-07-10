@@ -603,6 +603,49 @@ fn main() {
     }
 
     #[test]
+    fn asan_sorted_set_string_iter_min_max_no_leak() {
+        // B-2026-07-09-16: `SortedSet[String]` ordered observation. The
+        // `karac_map_sorted_keys` buffer holds ALIASES into the set's owned key
+        // data; the for-loop binds them borrow-like (no free) and frees only the
+        // header buffer, while `min`/`max` CLONE the picked key so the returned
+        // `Option[String]` owns an independent buffer. LSan flags a leak if a
+        // clone is dropped or the header buffer is not freed; ASan flags a
+        // double-free if a for-loop binding or a min/max result aliases (and
+        // frees) the set's key. Looped so any imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut n: i64 = 0i64;
+    while n < 3i64 {
+        let mut s: SortedSet[String] = SortedSet.new();
+        let _ = s.insert(f"banana-{n}-pad-pad");
+        let _ = s.insert(f"apple-{n}-pad-pad");
+        let _ = s.insert(f"cherry-{n}-pad-pad");
+        let mut out: String = "";
+        for w in s { out.push_str(w); out.push_str("|"); }
+        println(out);
+        match s.min() { Some(v) => println(v), None => println("none") }
+        match s.max() { Some(v) => println(v), None => println("none") }
+        n = n + 1i64;
+    }
+}
+"#,
+            &[
+                "apple-0-pad-pad|banana-0-pad-pad|cherry-0-pad-pad|",
+                "apple-0-pad-pad",
+                "cherry-0-pad-pad",
+                "apple-1-pad-pad|banana-1-pad-pad|cherry-1-pad-pad|",
+                "apple-1-pad-pad",
+                "cherry-1-pad-pad",
+                "apple-2-pad-pad|banana-2-pad-pad|cherry-2-pad-pad|",
+                "apple-2-pad-pad",
+                "cherry-2-pad-pad",
+            ],
+            "asan_sorted_set_string_iter_min_max_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_std_mem_take_heap_no_leak_no_double_free() {
         // roadmap Phase 8 § std.mem — `take[T: Default](dest: mut ref T) -> T`
         // over a heap-owning type. `take` monomorphizes `replace(dest,
