@@ -1484,7 +1484,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.owned_struct_params.contains(p.as_str())
                         || self.for_loop_owned_agg_vars.contains(p.as_str()))
         );
-        if !is_param_field {
+        // B-2026-07-09-12 clone-on-extract (field-access-move form) — the source is
+        // a Vec field of a shared-enum-payload VIEW (`let a = c.args`). Same hazard
+        // as the destructure form: the moved-out Vec aliases the box's buffer +
+        // element handles, and the leaf's own drop plus the box's rc-drop both free
+        // them. Deep-copy the buffer, and for a `Vec[shared]` also rc-INC each
+        // element (the box keeps its originals). The bare-`shared` field-move is
+        // already balanced by `compile_field_access`'s read-inc, so only the Vec
+        // form needs this.
+        let is_view_field = matches!(
+            &value.kind,
+            ExprKind::FieldAccess { object, .. }
+                if matches!(&object.kind, ExprKind::Identifier(p)
+                    if self.shared_enum_payload_view_vars.contains_key(p.as_str()))
+        );
+        if !is_param_field && !is_view_field {
             return;
         }
         let slot_ptr = match self.variables.get(var_name) {
@@ -1499,6 +1513,14 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             let copied = self.emit_vecstr_defensive_copy(cur, elem_ty, elem_te.as_ref());
             let _ = self.builder.build_store(slot_ptr, copied);
+        }
+        if is_view_field {
+            if let Some(heap_type) = elem_te
+                .as_ref()
+                .and_then(|te| self.shared_heap_type_for_type_expr(te))
+            {
+                self.rc_inc_vec_shared_elements(slot_ptr, heap_type);
+            }
         }
     }
 

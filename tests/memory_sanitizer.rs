@@ -19601,6 +19601,49 @@ fn main() {
     }
 
     #[test]
+    fn asan_shared_enum_view_field_access_move_vec_shared_no_double_free() {
+        // B-2026-07-09-12 (clone-on-extract half — FIELD-ACCESS-MOVE form): a
+        // `Vec[shared]` field moved out of a shared-enum-payload VIEW by field
+        // access into a `let` (`let a = c.args`), NOT a destructure. The moved-out
+        // Vec aliased the box's buffer + element handles; the leaf's per-element
+        // rc-dec drop AND the box's rc-drop both freed each element box (SEGV /
+        // heap corruption). `deep_copy_owned_struct_param_field_move`, extended to
+        // view sources, deep-copies the buffer and rc-INCs each element. The bare-
+        // shared and Option[shared] field-move forms are already balanced by
+        // `compile_field_access`'s read-inc. Looped x20 under LSan.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Lit(i64), Call(CallNode) }
+struct CallNode { args: Vec[Expr], tag: i64 }
+fn ev(e: Expr) -> i64 {
+    match e {
+        Lit(n) => n,
+        Call(c) => {
+            let a = c.args;
+            let mut acc = c.tag;
+            for x in a { acc = acc + ev(x); }
+            acc
+        }
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let mut v: Vec[Expr] = Vec.new();
+        v.push(Expr.Lit(5)); v.push(Expr.Lit(6)); v.push(Expr.Lit(7));
+        total = total + ev(Expr.Call(CallNode { args: v, tag: 100 }));
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["2360"],
+            "shared_enum_view_field_access_move_vec_shared",
+        );
+    }
+
+    #[test]
     fn asan_shared_enum_view_destructure_vec_shared_and_option_shared_no_double_free() {
         // B-2026-07-09-12 (clone-on-extract half — Vec[shared] + Option[shared]
         // leaves): the AST sequence-child (`CallNode { args: Vec[Expr] }`) and
