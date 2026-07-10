@@ -5179,6 +5179,49 @@ fn main() {
     }
 
     #[test]
+    fn asan_generic_tail_fstring_no_double_free() {
+        // A generic (mono) fn whose IMPLICIT TAIL is a bare `f"…"`. The mono
+        // path lacked the InterpolatedStringLit-tail cap suppression the
+        // non-generic `compile_function` has, so the accumulator buffer was
+        // freed between the return-value load and `ret` and the caller's
+        // binding then freed the dangling pointer again — a double-free (and a
+        // use-after-free when the caller read it). Surfaced via `describe[T:
+        // Display](x) { f"..{x}.." }`; the explicit-`return`/`let`-bound forms
+        // already had suppression. Covers a `Display` struct arg, a primitive,
+        // a String arg, and a no-interp tail — each returned String is read
+        // (println) so a UAF trips under ASAN; looped to accumulate any leak.
+        assert_clean_asan_run(
+            r#"
+struct P { x: i64, y: i64 }
+impl Display for P { fn to_string(ref self) -> String { f"({self.x}, {self.y})" } }
+fn describe[T: Display](item: T) -> String { f"item is {item} padded padded padded" }
+fn tag[T](item: T) -> String { f"constant tail padded padded padded" }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        println(describe(P { x: i, y: 2i64 }));
+        println(describe(42i64));
+        println(describe("hi".to_string()));
+        println(tag(7i64));
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "item is (0, 2) padded padded padded",
+                "item is 42 padded padded padded",
+                "item is hi padded padded padded",
+                "constant tail padded padded padded",
+                "item is (1, 2) padded padded padded",
+                "item is 42 padded padded padded",
+                "item is hi padded padded padded",
+                "constant tail padded padded padded",
+            ],
+            "generic_tail_fstring_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_println_ref_string_param_over_heap_source() {
         // `s: ref String` parameter, heap-source caller. The
         // identifier `s` inside `show` loads through the ref param

@@ -1581,6 +1581,27 @@ impl<'ctx> super::Codegen<'ctx> {
             // own path in `compile_expr`; that path is reached only when
             // the block left a terminator, so it's excluded here.)
             self.suppress_cleanup_for_tail_return(&func.body);
+            // InterpolatedStringLit-tail suppression — the mono twin of
+            // `compile_function`'s block (functions.rs). When a generic fn's
+            // final expression is a bare `f"…"`, the loaded {data, len, cap} is
+            // the return value, but the f-string accumulator's queued
+            // `FreeVecBuffer` would free `data` between the return-value load
+            // and `ret` — handing the caller a dangling pointer that its own
+            // binding then frees again (double-free; the `describe[T:
+            // Display](x) { f"..{x}.." }` shape). `suppress_cleanup_for_tail_-
+            // return` only covers Identifier-tail moves, so without this a mono
+            // tail f-string leaked the suppression the non-generic path already
+            // had. Zero the acc's `cap` so its cleanup no-ops; the caller owns
+            // the buffer. Guarded on the syntactic f-string tail exactly like
+            // `compile_function`.
+            if matches!(
+                func.body.final_expr.as_deref().map(|e| &e.kind),
+                Some(ExprKind::InterpolatedStringLit(_))
+            ) {
+                if let Some(acc) = self.last_fstr_acc.take() {
+                    self.zero_vec_alloca_cap(acc);
+                }
+            }
             self.emit_scope_cleanup();
             if let Some(val) = result {
                 // Scalar width coercion at the tail-ret boundary, mirroring the

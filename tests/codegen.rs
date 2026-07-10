@@ -4376,6 +4376,34 @@ fn main() {
         }
     }
 
+    /// A generic (monomorphized) fn whose IMPLICIT TAIL expression is a bare
+    /// `f"…"` — the mono path was missing the InterpolatedStringLit-tail cap
+    /// suppression that `compile_function` (non-generic) has, so the tail
+    /// f-string's accumulator was freed between the return-value load and `ret`
+    /// and the caller then freed the dangling buffer again (double-free —
+    /// surfaced by `describe[T: Display](x) { f"..{x}.." }`; the `let`-bound and
+    /// explicit-`return` forms already worked). Covers a `Display` struct, a
+    /// primitive, and a String arg through one generic fn, plus a no-interp tail
+    /// f-string — the memory safety is pinned by
+    /// `tests/memory_sanitizer.rs::asan_generic_tail_fstring_no_double_free`.
+    #[test]
+    fn e2e_generic_tail_fstring_return_codegen() {
+        if let Some(out) = run_program(
+            "struct P { x: i64, y: i64 }\n\
+             impl Display for P { fn to_string(ref self) -> String { f\"({self.x}, {self.y})\" } }\n\
+             fn describe[T: Display](item: T) -> String { f\"item is {item}\" }\n\
+             fn tag[T](item: T) -> String { f\"constant tail here\" }\n\
+             fn main() {\n\
+                 println(describe(P { x: 1i64, y: 2i64 }));\n\
+                 println(describe(42i64));\n\
+                 println(describe(\"hi\".to_string()));\n\
+                 println(tag(7i64));\n\
+             }",
+        ) {
+            assert_eq!(out, "item is (1, 2)\nitem is 42\nitem is hi\nconstant tail here\n");
+        }
+    }
+
     /// B-2026-07-03-11 (narrow-width facet): a generic function with a
     /// non-generic NARROW return type. `fn narrow[T](x: T) -> u8 { 255 }`
     /// used to (a) fail module verification — the mono tail-return emitted
