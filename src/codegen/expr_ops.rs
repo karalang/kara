@@ -2969,6 +2969,88 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(r.into()))
     }
 
+    /// `x.cmp(y) -> Ordering` for a user struct/enum whose type derives (or
+    /// hand-implements) `Ord` — the method form of the `<`/`>` operators
+    /// (`compile_ordered_user_cmp`). Reuses the SAME recursive lexicographic
+    /// comparator (`emit_cmp_fn_for_type_expr` → `karac_cmp_<T>`), so the
+    /// method agrees with the operators and with the interpreter's
+    /// `value_compare`. The comparator returns a general negative/zero/positive
+    /// `i64`, so the `Ordering` tag is built by SIGN-SELECT (`< 0 → Less=0`,
+    /// `> 0 → Greater=2`, else `Equal=1`) — the primitive-`cmp` pattern, NOT the
+    /// String `raw+1` trick (which assumes a strict -1/0/+1). Returns `None` when
+    /// no comparator can be emitted (non-orderable type), letting the caller
+    /// fall through. roadmap Phase 8 § Eq/Ord.
+    pub(super) fn compile_user_cmp_to_ordering(
+        &mut self,
+        type_name: &str,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![type_name.to_string()],
+                generic_args: None,
+                span: crate::token::Span::default(),
+            }),
+            span: crate::token::Span::default(),
+        };
+        let Some(cmp_fn) = self.emit_cmp_fn_for_type_expr(&te) else {
+            return Ok(None);
+        };
+        let Some(cur_fn) = self.current_fn else {
+            return Ok(None);
+        };
+        let ls = lhs.into_struct_value();
+        let rs = rhs.into_struct_value();
+        let a_slot = self.create_entry_alloca(cur_fn, "ord.cmp.a", ls.get_type().into());
+        let b_slot = self.create_entry_alloca(cur_fn, "ord.cmp.b", rs.get_type().into());
+        self.builder.build_store(a_slot, ls).unwrap();
+        self.builder.build_store(b_slot, rs).unwrap();
+        let ord = self
+            .builder
+            .build_call(cmp_fn, &[a_slot.into(), b_slot.into()], "ord.cmp.raw")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_zero();
+        let lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, ord, zero, "ord.cmp.lt")
+            .unwrap();
+        let gt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, ord, zero, "ord.cmp.gt")
+            .unwrap();
+        let tag_gt = self
+            .builder
+            .build_select(
+                gt,
+                i64_t.const_int(2, false),
+                i64_t.const_int(1, false),
+                "ord.cmp.tg",
+            )
+            .unwrap()
+            .into_int_value();
+        let tag = self
+            .builder
+            .build_select(lt, zero, tag_gt, "ord.cmp.tag")
+            .unwrap()
+            .into_int_value();
+        let ord_struct_ty = self
+            .enum_layouts
+            .get("Ordering")
+            .map(|l| l.llvm_type)
+            .unwrap_or_else(|| self.context.struct_type(&[i64_t.into()], false));
+        let agg = ord_struct_ty.get_undef();
+        let agg = self
+            .builder
+            .build_insert_value(agg, tag, 0, "ord.cmp.ord")
+            .unwrap();
+        Ok(Some(agg.into_struct_value().into()))
+    }
+
     pub(super) fn compile_binop_typed(
         &mut self,
         op: &BinOp,

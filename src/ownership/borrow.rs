@@ -96,6 +96,15 @@ impl<'a> super::OwnershipChecker<'a> {
         method_call: &Expr,
         arg_index: usize,
     ) -> bool {
+        // Relational-trait methods (`a.cmp(b)` / `a.eq(b)` …) borrow both
+        // operands (`other: ref Self`), so the arg is a read — matching the
+        // operator forms and the `use_classifier` twin. Without it a
+        // `#[derive(Ord)]` type's `.cmp` arg (no registered method mode) falls
+        // to the consume default and false-rejects on reuse. roadmap Phase 8 §
+        // Eq/Ord.
+        if is_relational_method_call(method_call) {
+            return true;
+        }
         let Some(key) = self.resolved_method_mode_key(method_call) else {
             return false;
         };
@@ -599,6 +608,12 @@ impl<'a> super::OwnershipChecker<'a> {
     /// default: if we can't prove the receiver is consumed, we assume it
     /// isn't.
     pub(crate) fn method_call_consumes_receiver(&self, method_call: &Expr) -> bool {
+        // Relational-trait methods borrow their receiver (`ref self`), so
+        // `a.cmp(b)` reads `a` rather than consuming it — mirroring the operator
+        // forms and the `use_classifier` twin. roadmap Phase 8 § Eq/Ord.
+        if is_relational_method_call(method_call) {
+            return false;
+        }
         let Some(key) = self.resolved_method_mode_key(method_call) else {
             return false;
         };
@@ -806,6 +821,16 @@ fn proj_compatible(a: &Projection, b: &Projection) -> bool {
 }
 
 /// Render a place for diagnostics: `v`, `c.inner`, `arr[..]`, `v[..]`.
+/// True when `expr` is a `MethodCall` on a relational-trait method
+/// (`cmp`/`eq`/`ne`/`lt`/`le`/`gt`/`ge`/`partial_cmp`) — the calls that borrow
+/// both operands. Twin of the `use_classifier` helper. roadmap Phase 8 § Eq/Ord.
+fn is_relational_method_call(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::MethodCall { method, .. } if crate::lowering::is_relational_operator_method(method)
+    )
+}
+
 fn render_place(p: &PlaceExpr) -> String {
     let mut s = p.root.clone();
     for proj in &p.projections {

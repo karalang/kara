@@ -1383,6 +1383,44 @@ fn test_eq_ord_direct_method_calls() {
 }
 
 #[test]
+fn test_derive_ord_cmp_method() {
+    // roadmap Phase 8 § Eq/Ord: `.cmp() -> Ordering` on a `#[derive(Ord)]`
+    // struct/enum — the method form of the already-working `<`/`>` operators,
+    // reusing the same lexicographic order (`value_compare`). Struct fields
+    // compare in DECLARATION order; enum variants by declaration index. This
+    // is what unblocks `min`/`max`/`clamp` and `sort_by` on user Ord types.
+    assert_eq!(
+        run(r#"
+            #[derive(Ord, Eq, PartialEq, PartialOrd)]
+            struct Rec { name: String, age: i64 }
+            #[derive(Ord, Eq, PartialEq, PartialOrd)]
+            enum Priority { Low, Med, High }
+            fn tag(o: Ordering) -> String {
+                match o { Less => "lt".to_string(), Equal => "eq".to_string(), Greater => "gt".to_string() }
+            }
+            fn main() {
+                let r1 = Rec { name: "alice".to_string(), age: 30 };
+                let r2 = Rec { name: "alice".to_string(), age: 40 };
+                let r3 = Rec { name: "bob".to_string(), age: 10 };
+                println(tag(r1.cmp(r2)));
+                println(tag(r1.cmp(r3)));
+                println(tag(r2.cmp(r1)));
+                let lo = Priority.Low;
+                let hi = Priority.High;
+                let md = Priority.Med;
+                println(tag(lo.cmp(hi)));
+                println(tag(hi.cmp(md)));
+                println(tag(md.cmp(md)));
+                // min/max/clamp on struct types now resolve (they call .cmp)
+                let mx = max(r1, r3);
+                println(mx.name);
+            }
+        "#),
+        "lt\nlt\ngt\nlt\ngt\neq\nbob\n"
+    );
+}
+
+#[test]
 fn test_string_literal() {
     assert_eq!(
         run(r#"fn main() { println("hello world"); }"#),

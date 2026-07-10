@@ -239,7 +239,7 @@ impl<'a> super::TypeChecker<'a> {
     /// codegen consumer (`emit_sort_by_key_inline_thunk`) consults
     /// `Program.user_ord_typed_exprs` to dispatch to the user's compiled
     /// `Type.cmp` indirectly.
-    fn has_user_impl_ord(&self, name: &str) -> bool {
+    pub(super) fn has_user_impl_ord(&self, name: &str) -> bool {
         self.env
             .impls
             .iter()

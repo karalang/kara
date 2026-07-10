@@ -3343,6 +3343,46 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // `.cmp(other)` on a `#[derive(Ord)]` struct/enum returns `Ordering` —
+        // the method form of the `<`/`>` operators, which already work for such
+        // types via the lexicographic `karac_cmp_<T>` comparator (codegen) /
+        // `value_compare` (interpreter). The derive registers NO `cmp` entry in
+        // `env.impls`, so without this intercept a Named receiver falls through
+        // to the `NoMethodFound` arm ("no method 'cmp' on type 'P'"), breaking
+        // `p.cmp(q)`, `min`/`max`/`clamp` on struct/enum types (their bodies
+        // call `a.cmp(b)`), sorting, and any `fn f[T: Ord]` body. Gated to the
+        // DERIVED case (`!has_user_impl_ord`) so a hand-written `impl Ord` still
+        // resolves through the normal impl-table path. Mirrors the String `cmp`
+        // handler (`stdlib_seq.rs`) and the primitive Ord builtin-impl
+        // (`env_build.rs`). roadmap Phase 8 § Eq/Ord.
+        if method == "cmp" {
+            if let Type::Named { name, .. } = &receiver_for_lookup {
+                let name = name.clone();
+                if self.type_supports_ord(&receiver_for_lookup) && !self.has_user_impl_ord(&name) {
+                    if args.len() != 1 {
+                        self.type_error(
+                            format!("'cmp' expects 1 argument, found {}", args.len()),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                        for arg in args {
+                            self.infer_expr(&arg.value);
+                        }
+                    } else {
+                        let arg_ty = self.infer_expr(&args[0].value);
+                        self.check_assignable(
+                            &receiver_for_lookup,
+                            &arg_ty,
+                            args[0].value.span.clone(),
+                        );
+                    }
+                    return Type::Named {
+                        name: "Ordering".to_string(),
+                        args: Vec::new(),
+                    };
+                }
+            }
+        }
         // Opaque foreign types have no methods by definition — impl blocks
         // on them are rejected at `E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS`,
         // so the generic "method not found" diagnostic that would otherwise

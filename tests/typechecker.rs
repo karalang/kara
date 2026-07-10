@@ -6200,6 +6200,49 @@ fn test_ord_cmp_returns_comparison_ordering() {
 }
 
 #[test]
+fn test_derive_ord_cmp_method_resolves_to_ordering() {
+    // roadmap Phase 8 § Eq/Ord: `.cmp()` on a `#[derive(Ord)]` struct/enum
+    // resolves and returns `Ordering` (the method form of the `<`/`>`
+    // operators). The derive registers no `cmp` in `env.impls`, so without the
+    // intercept the Named receiver would hard-error `no method 'cmp'`.
+    typecheck_ok(
+        "#[derive(Ord, Eq, PartialEq, PartialOrd)]\n\
+         struct Rec { name: String, age: i64 }\n\
+         #[derive(Ord, Eq, PartialEq, PartialOrd)]\n\
+         enum Pri { Low, High }\n\
+         fn main() {\n\
+             let a = Rec { name: \"a\", age: 1 };\n\
+             let b = Rec { name: \"b\", age: 2 };\n\
+             let r: Ordering = a.cmp(b);\n\
+             let _eq: bool = r == Ordering.Less;\n\
+             let lo = Pri.Low;\n\
+             let hi = Pri.High;\n\
+             let _o: Ordering = lo.cmp(hi);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_cmp_rejected_on_non_ord_struct() {
+    // `.cmp()` is admitted only for a type that supports Ord — a plain struct
+    // (no `#[derive(Ord)]`, no `impl Ord`) is rejected, not silently poisoned.
+    let errors = typecheck_errors(
+        "struct Plain { x: i64 }\n\
+         fn main() {\n\
+             let a = Plain { x: 1 };\n\
+             let b = Plain { x: 2 };\n\
+             let _ = a.cmp(b);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("cmp") && e.message.contains("Plain")),
+        "expected no-method-'cmp'-on-'Plain' rejection, got: {errors:?}"
+    );
+}
+
+#[test]
 fn test_redefining_one_stdlib_type_keeps_sibling_module_items() {
     // B-2026-06-30-11 regression guard. Redefining ONE always-injected stdlib
     // type (`struct Response`, exported by `http.kara`) must NOT drop that

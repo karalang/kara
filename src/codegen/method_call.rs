@@ -2501,6 +2501,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     let agg = self.builder.build_insert_value(agg, tag, 0, "ord").unwrap();
                     return Ok(agg.into_struct_value().into());
                 }
+                // A non-String struct pair reaching here is a user struct/enum
+                // whose `#[derive(Ord)]` the typechecker admitted for `.cmp`
+                // (`expr_method_call.rs`). Route through the same lexicographic
+                // comparator the `<`/`>` operators use, converting its i64 sign
+                // to an `Ordering` tag. roadmap Phase 8 § Eq/Ord.
+                if let Some(type_name) = self.inferred_receiver_type(object) {
+                    if let Some(v) = self.compile_user_cmp_to_ordering(&type_name, lhs, rhs)? {
+                        return Ok(v);
+                    }
+                }
             }
         }
 

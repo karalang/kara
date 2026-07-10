@@ -7247,6 +7247,42 @@ fn main() {
         }
     }
 
+    /// roadmap Phase 8 § Eq/Ord: `.cmp() -> Ordering` on a `#[derive(Ord)]`
+    /// struct/enum under codegen — the method form of the `<`/`>` operators,
+    /// routed through the SAME lexicographic `karac_cmp_<T>` comparator via
+    /// `compile_user_cmp_to_ordering` (sign-select to the Ordering tag). Also
+    /// exercises `min`/`max` on a struct type (their bodies call `.cmp`), which
+    /// were uncallable before. Output must match the interpreter oracle
+    /// (`test_derive_ord_cmp_method`).
+    #[test]
+    fn e2e_derive_ord_cmp_method_codegen() {
+        if let Some(out) = run_program(
+            "#[derive(Ord, Eq, PartialEq, PartialOrd)]\n\
+             struct Rec { name: String, age: i64 }\n\
+             #[derive(Ord, Eq, PartialEq, PartialOrd)]\n\
+             enum Priority { Low, Med, High }\n\
+             fn tag(o: Ordering) -> String {\n\
+                 match o { Less => \"lt\".to_string(), Equal => \"eq\".to_string(), Greater => \"gt\".to_string() }\n\
+             }\n\
+             fn main() {\n\
+                 let r1 = Rec { name: \"alice\".to_string(), age: 30i64 };\n\
+                 let r2 = Rec { name: \"alice\".to_string(), age: 40i64 };\n\
+                 let r3 = Rec { name: \"bob\".to_string(), age: 10i64 };\n\
+                 println(tag(r1.cmp(r2)));\n\
+                 println(tag(r1.cmp(r3)));\n\
+                 println(tag(r2.cmp(r1)));\n\
+                 let lo = Priority.Low; let hi = Priority.High; let md = Priority.Med;\n\
+                 println(tag(lo.cmp(hi)));\n\
+                 println(tag(hi.cmp(md)));\n\
+                 println(tag(md.cmp(md)));\n\
+                 let mx = max(r1, r3);\n\
+                 println(mx.name);\n\
+             }",
+        ) {
+            assert_eq!(out, "lt\nlt\ngt\nlt\ngt\neq\nbob\n");
+        }
+    }
+
     /// roadmap Phase 8 § std.mem — `swap` / `replace` compiled. Both are
     /// `#[compiler_builtin]` intrinsics intercepted in `compile_call`:
     /// `swap` load/load/store/store exchanges two `mut ref` places; `replace`

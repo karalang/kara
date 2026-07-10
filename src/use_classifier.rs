@@ -933,6 +933,18 @@ impl<'a> UseClassifier<'a> {
     }
 
     fn method_consumes_receiver(&self, method_call: &Expr) -> bool {
+        // A relational-trait method (`a.cmp(b)` / `a.eq(b)` / `a.lt(b)` …)
+        // BORROWS its receiver — its canonical signature is `ref self` (design.md
+        // § comparisons borrow), so comparing a value must not consume it. The
+        // operator forms (`a < b`) already read both operands via
+        // `callee_is_relational_operator`; the explicit method-call form must
+        // agree, else `p1.cmp(p2)` followed by any reuse of `p1`/`p2` (or
+        // `min`/`max`/`sort_by` bodies) false-rejects as a use-after-move. This
+        // fires before the resolved-mode lookup because a `#[derive(Ord)]` type
+        // registers no method mode. roadmap Phase 8 § Eq/Ord.
+        if is_relational_method_call(method_call) {
+            return false;
+        }
         let Some(key) = self.resolved_method_mode_key(method_call) else {
             return false;
         };
@@ -955,6 +967,14 @@ impl<'a> UseClassifier<'a> {
     /// without it a borrowed struct arg was treated as a container-store
     /// consume and the binding spuriously RC-promoted (B-2026-06-12-8).
     fn method_arg_is_borrow_position(&self, method_call: &Expr, arg_index: usize) -> bool {
+        // A relational-trait method borrows BOTH operands — its `other` param is
+        // `ref Self` — so `a.cmp(b)` reads `b` rather than consuming it. Same
+        // rationale as the receiver arm in `method_consumes_receiver`; without
+        // it the arg falls to the consume default and `p1.cmp(p2)` then reusing
+        // `p2` false-rejects. roadmap Phase 8 § Eq/Ord.
+        if is_relational_method_call(method_call) {
+            return true;
+        }
         let Some(key) = self.resolved_method_mode_key(method_call) else {
             return false;
         };
@@ -1003,6 +1023,19 @@ impl<'a> UseClassifier<'a> {
             }
         }
     }
+}
+
+/// True when `expr` is a `MethodCall` whose method is a relational-trait
+/// method (`cmp`/`eq`/`ne`/`lt`/`le`/`gt`/`ge`/`partial_cmp`) — the calls that
+/// BORROW both operands (`ref self, other: ref Self`; design.md § comparisons
+/// borrow). Used by the receiver/arg borrow classification so an explicit
+/// `a.cmp(b)` on a non-Copy type is a read, not a consume — matching the
+/// operator forms and unblocking `.cmp()` on `#[derive(Ord)]` types.
+fn is_relational_method_call(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::MethodCall { method, .. } if crate::lowering::is_relational_operator_method(method)
+    )
 }
 
 fn collect_unit_variant_names(tc: &TypeCheckResult) -> HashSet<String> {

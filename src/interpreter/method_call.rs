@@ -1374,6 +1374,34 @@ impl<'a> super::Interpreter<'a> {
             return v;
         }
 
+        // `.cmp(other)` on a `#[derive(Ord)]` struct/enum receiver returns
+        // `Ordering` — the method form of the `<`/`>` operators. `value_compare`
+        // already orders `Value::Struct` (declaration-order fields) and
+        // `Value::EnumVariant` (variant index then payload) lexicographically —
+        // the same ordering the operators use — so this just wraps its result
+        // in the `Ordering` enum. The typechecker (`expr_method_call.rs`) admits
+        // the call for a derived-Ord Named receiver; this makes it evaluate.
+        // roadmap Phase 8 § Eq/Ord.
+        if method == "cmp"
+            && args.len() == 1
+            && matches!(
+                &obj,
+                Value::Struct { .. } | Value::SharedStruct(_) | Value::EnumVariant { .. }
+            )
+        {
+            let other = self.eval_expr_inner(&args[0].value);
+            let ord = value_compare(&obj, &other);
+            return Value::EnumVariant {
+                enum_name: "Ordering".to_string(),
+                variant: match ord {
+                    std::cmp::Ordering::Less => "Less".to_string(),
+                    std::cmp::Ordering::Equal => "Equal".to_string(),
+                    std::cmp::Ordering::Greater => "Greater".to_string(),
+                },
+                data: EnumData::Unit,
+            };
+        }
+
         // Primitive value-receiver dispatch for the builtin Eq/Ord methods.
         // The typechecker registers `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`cmp` for
         // every integer width, bool, char, String, and the F32/F64 total-
