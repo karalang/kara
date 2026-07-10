@@ -482,19 +482,21 @@ jobs:
       - uses: actions/checkout@v4
 
       # Install LLVM 18.1 via `KyleMayes/install-llvm-action` — the standard
-      # GH-Actions LLVM installer. Extracts LLVM to a job-scoped directory
-      # ($env:LLVM_PATH) so it never collides with the runner's preinstalled
-      # LLVM 20 (a Chocolatey install-then-downgrade attempt writes into
-      # `C:\Program Files\LLVM\` where LLVM 20 already lives — the mixed
-      # tree failed llvm-sys 181's version probe on the first Stage 4 run).
+      # GH-Actions LLVM installer. `directory` is load-bearing on Windows:
+      # without it, the action extracts to `C:\Program Files\LLVM`, which
+      # is where the runner's preinstalled LLVM 20 already lives; the two
+      # trees merge and `llvm-config` reports the wrong version, tripping
+      # llvm-sys 181's version probe ("No suitable version of LLVM was
+      # found system-wide or pointed to by LLVM_SYS_181_PREFIX"). Pinning
+      # to `$RUNNER_TEMP/llvm` guarantees a clean extract with no overlap.
       # The follow-up step pins `LLVM_SYS_181_PREFIX` at the extracted
-      # prefix so `llvm-sys 181`'s build script finds 18.1's `llvm-config`;
-      # `bin/` on PATH is required for the runtime `libLLVM-18.dll` load
-      # at test time.
+      # prefix so llvm-sys picks up 18.1's `llvm-config`, and adds `bin/`
+      # to PATH for the runtime `libLLVM-18.dll` load at test time.
       - name: Install LLVM 18
         uses: KyleMayes/install-llvm-action@v2
         with:
           version: "18.1.8"
+          directory: ${{ runner.temp }}/llvm
 
       - name: Point llvm-sys 181 at the installed LLVM
         shell: pwsh
