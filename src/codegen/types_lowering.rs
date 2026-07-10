@@ -144,6 +144,27 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn llvm_type_for_type_expr(&self, ty: &TypeExpr) -> BasicTypeEnum<'ctx> {
         match &ty.kind {
             TypeKind::Path(path) => {
+                // Associated-type projection `C.Item` inside a monomorph: a
+                // 2-segment path whose head is a bound generic param. Resolve
+                // `C` → its concrete type name (`type_subst_names`), then look
+                // up that type's `type Item = <ty>` binding and lower THAT.
+                // Without this the projection collapses to `segments.first()`
+                // (`"C"`) below and a `fn get[C: Container](c: C) -> C.Item`
+                // mono lowered its return type to the wrong shape (LLVM
+                // verifier: return-type vs body mismatch). Gated on the head
+                // being a live generic param so a genuine 2-segment path
+                // (module / enum-variant type) is untouched.
+                if path.segments.len() == 2 {
+                    if let Some(concrete) = self.type_subst_names.get(&path.segments[0]) {
+                        if let Some(bound_ty) = self
+                            .assoc_type_bindings
+                            .get(&(concrete.clone(), path.segments[1].clone()))
+                            .cloned()
+                        {
+                            return self.llvm_type_for_type_expr(&bound_ty);
+                        }
+                    }
+                }
                 let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
                 // Refinement alias (`type Email = String where …`): lower to
                 // the base's layout (phase-9 step 4). A refinement is

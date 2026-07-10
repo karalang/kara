@@ -770,6 +770,38 @@ fn main() {
     }
 
     #[test]
+    fn asan_generic_assoc_type_projection_heap_return_no_leak() {
+        // A generic fn with an associated-type PROJECTION return
+        // (`fn get[C: Container](c: C) -> C.Item`) whose concrete associated
+        // type is a HEAP `Vec[i64]`. The projection now lowers to the concrete
+        // `{ptr,i64,i64}` (previously it hit the i64 default and failed the LLVM
+        // verifier), so the returned Vec's buffer must be owned by the caller
+        // and freed exactly once — no leak (the mono must not drop it at its own
+        // scope exit) and no double-free. Looped to accumulate any imbalance.
+        assert_clean_asan_run(
+            r#"
+trait Container { type Item; fn make(ref self) -> Self.Item; }
+struct VecMaker { base: i64 }
+impl Container for VecMaker {
+    type Item = Vec[i64];
+    fn make(ref self) -> Vec[i64] { [self.base, self.base + 1i64, self.base + 2i64] }
+}
+fn build[C: Container](c: C) -> C.Item { c.make() }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let v = build(VecMaker { base: i });
+        println(f"{v.len()}");
+        i = i + 1i64;
+    }
+}
+"#,
+            &["3", "3", "3"],
+            "generic_assoc_type_projection_heap_return_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_single_element_fstring_vec_return_no_double_free() {
         // B-2026-07-04-1: a fn returning a SINGLE-element `Vec[String]` whose
         // element is an f-string literal (`return Vec[f"…"]`) double-freed the

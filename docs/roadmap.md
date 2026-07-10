@@ -442,9 +442,9 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 - [ ] Standard impls: numeric widening/narrowing, `String` from literals, `Option`/`Result` wrapping. *(Slice 1: numeric widening table shipped (19 impls: signed→signed, unsigned→unsigned, unsigned→wider-signed, f32→f64). Narrowing (needs TryFrom), `String` from literals, `Option`/`Result` wrapping pending.)*
 
 ### Associated Types
-- [ ] Associated type declarations in traits (`type Item`) and binding in impls (`type Item = i64`)
-- [ ] Projection syntax (`I.Item`) in type position and `where` clauses
-- [ ] Equality constraints in `where` clauses (`where I.Item = i64`)
+- [x] Associated type declarations in traits (`type Item`) and binding in impls (`type Item = i64`). Full across parse → resolve → typecheck → both backends: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; … }` works; the typechecker stores bindings in `TypeEnv.impl_assoc_types` keyed `(type, assoc)`. This is what backs `TryFrom`/`TryInto` (associated `Error`) and the Iterator protocol (associated `Item`).
+- [x] Projection syntax (`I.Item`) in type position and `where` clauses. A projection is a 2-segment `TypeKind::Path` lowered to `Type::AssocProjection` (typechecker) when the head is a generic param in scope; `resolve_assoc_projections` substitutes it. Works in a fn signature (`fn get[C: Container](c: C) -> C.Item`), param/return/local positions, and where clauses — interpreter throughout, and codegen after the mono type-lowering resolved the projection to the concrete associated type (`assoc_type_bindings`; previously a projection return type collapsed to `segments.first()` and failed the LLVM verifier). Generic-impl (GAT) bindings whose RHS references the impl's own params are a follow-on.
+- [x] Equality constraints in `where` clauses (`where I.Item = i64`) — accepted and enforced in both backends.
 
 ### Iterator Traits
 - [ ] `trait Iterator { type Item; fn next(mut ref self) -> Option[Self.Item] }` — core iteration protocol using associated types

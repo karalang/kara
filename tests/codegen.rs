@@ -4404,6 +4404,39 @@ fn main() {
         }
     }
 
+    /// Associated-type PROJECTION in a generic fn's signature under codegen —
+    /// `fn get[C: Container](c: C) -> C.Item { c.first() }`. The mono lowered
+    /// `C.Item` to the i64/`{}` default (only `segments.first()` was read),
+    /// mismatching the body's real return value at the LLVM verifier. Codegen
+    /// now resolves the projection: inside the mono `C` → its concrete type name
+    /// (`type_subst_names`), then the concrete impl's `type Item = <ty>` binding
+    /// (`assoc_type_bindings`). Covers an i64 associated type, a `Vec[i64]`
+    /// associated type, and a fresh-String one (a returned heap FIELD is a
+    /// separate ownership follow-on and not exercised here).
+    #[test]
+    fn e2e_generic_assoc_type_projection_return_codegen() {
+        if let Some(out) = run_program(
+            "trait Container { type Item; fn first(ref self) -> Self.Item; }\n\
+             struct IntBox { v: i64 }\n\
+             impl Container for IntBox { type Item = i64; fn first(ref self) -> i64 { self.v } }\n\
+             struct VecMaker { }\n\
+             impl Container for VecMaker { type Item = Vec[i64]; fn first(ref self) -> Vec[i64] { [10i64, 20i64, 30i64] } }\n\
+             struct Greeter { }\n\
+             impl Container for Greeter { type Item = String; fn first(ref self) -> String { \"hello\".to_string() } }\n\
+             fn get_first[C: Container](c: C) -> C.Item { c.first() }\n\
+             fn main() {\n\
+                 let a = get_first(IntBox { v: 7i64 });\n\
+                 println(f\"{a}\");\n\
+                 let v = get_first(VecMaker {});\n\
+                 println(f\"{v.len()}\");\n\
+                 let s = get_first(Greeter {});\n\
+                 println(s);\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n3\nhello\n");
+        }
+    }
+
     /// B-2026-07-03-11 (narrow-width facet): a generic function with a
     /// non-generic NARROW return type. `fn narrow[T](x: T) -> u8 { 255 }`
     /// used to (a) fail module verification — the mono tail-return emitted

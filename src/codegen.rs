@@ -1271,6 +1271,20 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) stderr_global: inkwell::values::GlobalValue<'ctx>,
     /// LLVM struct types for Kāra structs (struct name → LLVM type).
     pub(crate) struct_types: HashMap<String, StructType<'ctx>>,
+    /// Associated-type bindings from CONCRETE (non-generic) impl blocks,
+    /// keyed by `(target_type_name, assoc_type_name)` → the bound `TypeExpr`.
+    /// Populated once in `compile_program` from every `impl <Trait> for T {
+    /// type Assoc = <ty>; … }`. Consulted by `llvm_type_for_type_expr` to
+    /// resolve an associated-type PROJECTION (`C.Item`) that appears in a
+    /// generic fn's signature: inside a monomorph the leading segment `C`
+    /// resolves to its concrete type name via `type_subst_names`, and this
+    /// table maps `(concrete, "Item")` → the bound type. Without it a
+    /// `fn get[C: Container](c: C) -> C.Item` mono lowered its return type to
+    /// the `i64`/`{}` default and failed module verification against the body's
+    /// real (concrete) return value. Generic-impl bindings (`impl[T] … for
+    /// Box[T] { type Item = T }`, where the RHS references the impl's params)
+    /// are a follow-on — only concrete bindings are recorded here.
+    pub(crate) assoc_type_bindings: HashMap<(String, String), crate::ast::TypeExpr>,
     /// State-struct LLVM types for the network-event-loop state-machine
     /// transform (phase 6 line 26). Key: network-boundary function key
     /// (`name` for free fns, `Type.method` for impl methods — same shape
@@ -5621,6 +5635,7 @@ impl<'ctx> Codegen<'ctx> {
             stdout_global,
             stderr_global,
             struct_types: HashMap::new(),
+            assoc_type_bindings: HashMap::new(),
             state_struct_types: HashMap::new(),
             state_machine_poll_fns: HashMap::new(),
             state_machine_state_constructors: HashMap::new(),
@@ -6454,6 +6469,44 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
+    /// Populate `assoc_type_bindings` from every CONCRETE (non-generic) impl
+    /// block's associated-type bindings — `impl <Trait> for T { type Assoc =
+    /// <ty>; … }` → `(T, "Assoc") -> <ty>`. Called early in `compile_program`
+    /// (before any monomorph is declared) so `llvm_type_for_type_expr` can
+    /// resolve an associated-type projection (`C.Item`) in a generic fn's
+    /// signature. Only NON-generic impls are recorded: a generic impl's binding
+    /// RHS may reference the impl's own params (`impl[T] … for Box[T] { type
+    /// Item = T }`), which would need per-instantiation substitution — a
+    /// follow-on. Baked-stdlib collections seed the typechecker's equivalent
+    /// table (`impl_assoc_types`) but are handled by codegen's own container
+    /// lowering, so they need no entry here.
+    fn populate_assoc_type_bindings(&mut self, program: &Program) {
+        for item in &program.items {
+            if let Item::ImplBlock(imp) = item {
+                if imp.generic_params.is_some() {
+                    continue;
+                }
+                let Some(target) = crate::codegen::helpers::impl_target_name(&imp.target_type)
+                else {
+                    continue;
+                };
+                for impl_item in &imp.items {
+                    if let ImplItem::AssocType(binding) = impl_item {
+                        // Skip GAT bindings (`type Mapped[U] = …`) — their RHS
+                        // is parameterized and needs the projection's own args
+                        // to resolve; the non-parameterized case is what the
+                        // generic-fn projection return type needs.
+                        if binding.generic_params.is_some() {
+                            continue;
+                        }
+                        self.assoc_type_bindings
+                            .insert((target.clone(), binding.name.clone()), binding.ty.clone());
+                    }
+                }
+            }
+        }
+    }
+
     fn compile_program(&mut self, program: &Program) -> Result<(), String> {
         // Decide whether `emit_panic` needs the runtime fault-category prefix
         // before ANY function compiles — the first panic site bakes the
@@ -6515,6 +6568,10 @@ impl<'ctx> Codegen<'ctx> {
         // mismatch surfaced by the Weave dogfood: `{i64,i64,i64}` slots fed a
         // `String`/`f64`/`i64` row).
         self.populate_type_alias_bases(program);
+        // Associated-type bindings from concrete impls — so an
+        // associated-type projection (`C.Item`) in a generic fn's signature
+        // resolves to the concrete bound type during monomorphization.
+        self.populate_assoc_type_bindings(program);
         // Two-pass struct declaration with `declare_enums` interleaved, so a
         // struct field that names a user enum lowers at the enum's real
         // tagged-union shape instead of collapsing to the `i64` fall-through
