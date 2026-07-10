@@ -791,6 +791,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_accessor_let_payload.clear();
         self.for_loop_owned_agg_vars.clear();
         self.owned_struct_params.clear();
+        self.shared_enum_payload_view_vars.clear();
         self.rc_fallback_heap_types.clear();
         // Per-function reset of the name-keyed local-variable type side-
         // tables. These mirror exactly what `register_var_from_type_expr`

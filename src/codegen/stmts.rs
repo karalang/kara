@@ -5346,6 +5346,16 @@ impl<'ctx> super::Codegen<'ctx> {
             None
         };
 
+        // B-2026-07-09-12 clone-on-extract — is the source a shared-enum-payload
+        // VIEW (`match e { Call(c) => { let CallNode { .. } = c } }`)? Unlike a
+        // callee-owned source it has NO registered struct-drop; the box's rc-drop
+        // owns its heap. Each extracted leaf therefore ALIASES the box's heap and
+        // must be DUPLICATED so the leaf owns it independently (below).
+        let view_src: bool = !fresh
+            && callee_owned_src.is_none()
+            && matches!(&value.kind, ExprKind::Identifier(root)
+                if self.shared_enum_payload_view_vars.contains_key(root.as_str()));
+
         for (idx, fname) in field_names.iter().enumerate() {
             let Some(field_te) = field_tes.get(idx).cloned() else {
                 continue;
@@ -5421,6 +5431,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         self.zero_struct_field_move_cap(src_ptr, &struct_name, fname);
                     }
+                } else if view_src {
+                    // B-2026-07-09-12 clone-on-extract — the source is a shared-enum
+                    // payload VIEW; the leaf aliases the box's heap. Duplicate it in
+                    // place (deep-copy a buffer / rc-inc a shared handle) so the leaf
+                    // owns it independently and the box's rc-drop does not double-free
+                    // the moved-out child, then register the leaf's own cleanup.
+                    // Per-field: an unsupported shape (Vec[shared] / Vec[agg] /
+                    // Option / Map / Set) is left as the status-quo view alias.
+                    if let Some(slot) = self.variables.get(&name).copied() {
+                        self.clone_on_extract_view_field(&name, slot.ptr, &field_te);
+                    }
                 }
                 // B-2026-07-03-27 — an `Option[<user struct/enum>]` field. The
                 // branches above don't cover it: `destructure_field_needs_cleanup`
@@ -5434,7 +5455,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // has no `Option` arm), so no double registration. Runs for both
                 // the fresh and callee-owned sources — the field's own `Option`
                 // drop is orthogonal to the source's `StructDrop` (which skips it).
-                if self.option_field_agg_drop_ok(&field_te) {
+                if self.option_field_agg_drop_ok(&field_te) && !view_src {
                     let source_owned = fresh
                         || matches!(&value.kind, ExprKind::Identifier(n)
                             if !self.ref_params.contains_key(n.as_str()));
@@ -5474,6 +5495,81 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Ok(())
+    }
+
+    /// B-2026-07-09-12 clone-on-extract — duplicate a single destructure LEAF that
+    /// was moved out of a shared-enum-payload VIEW so it owns its heap
+    /// independently of the box, then register the leaf's own scope-exit cleanup.
+    /// The RC box's rc-drop stays the sole owner of the ORIGINAL, so nothing
+    /// double-frees. Handles the shapes whose copy the drop exactly balances:
+    /// bare `shared` (rc-inc), String / `Vec[heap-free elem]` (buffer deep-copy),
+    /// and a nested fully-clone-duplicable struct. Any other shape (`Vec[shared]`,
+    /// `Vec[String/agg]`, `Option`, `Map`, `Set`, a non-duplicable struct) is left
+    /// as the pre-existing view alias — no worse than before, just not yet
+    /// move-out-capable (the residual tail of this bug).
+    fn clone_on_extract_view_field(
+        &mut self,
+        var_name: &str,
+        leaf_ptr: PointerValue<'ctx>,
+        field_te: &TypeExpr,
+    ) {
+        // Bare `shared` handle → rc-inc + scope-exit rc-dec. The leaf's own dec
+        // (or its consumer's, when moved) balances the inc; the box's rc-drop
+        // balances the box's original ref.
+        if let Some(heap_type) = self.shared_heap_type_for_type_expr(field_te) {
+            self.rc_inc_shared_handle_at_slot(leaf_ptr, heap_type);
+            self.track_rc_var(var_name, leaf_ptr, heap_type);
+            return;
+        }
+        let vec_ty = self.vec_struct_type();
+        // String → deep-copy the buffer + track (element-free, so outer copy is
+        // complete).
+        if self.is_string_type_expr(field_te) {
+            let i8t = self.context.i8_type().into();
+            if let Ok(val) = self.builder.build_load(vec_ty, leaf_ptr, "viewdup.str") {
+                let copied = self.emit_vecstr_defensive_copy(val, i8t, None);
+                let _ = self.builder.build_store(leaf_ptr, copied);
+            }
+            self.track_vec_var(leaf_ptr, Some(i8t));
+            return;
+        }
+        // Vec whose element carries NO heap of its own (`Vec[i64]`, `Vec[bool]`) →
+        // the outer `{ptr,len,cap}` deep-copy is a complete duplicate. A
+        // `Vec[shared]` / `Vec[String]` / `Vec[agg]` element still aliases the
+        // box's per-element heap after an outer copy, so bail on those.
+        if let Some(elem_ty) = self.extract_vec_elem_type(field_te) {
+            let elem_has_own_heap = crate::codegen::helpers::vec_inner_type_expr(field_te)
+                .map(|e| {
+                    self.type_expr_has_drop_heap(&e)
+                        || self.shared_heap_type_for_type_expr(&e).is_some()
+                })
+                .unwrap_or(true);
+            if elem_has_own_heap {
+                return;
+            }
+            if let Ok(val) = self.builder.build_load(vec_ty, leaf_ptr, "viewdup.vec") {
+                let copied = self.emit_vecstr_defensive_copy(val, elem_ty, None);
+                let _ = self.builder.build_store(leaf_ptr, copied);
+            }
+            self.track_vec_var(leaf_ptr, Some(elem_ty));
+            return;
+        }
+        // Nested fully-clone-duplicable struct (String / Vec[heap-free] / nested
+        // such — the `struct_clone_fully_duplicates` shape, whose
+        // `deep_copy_struct_heap_fields_in_place` and struct-drop are symmetric).
+        if let TypeKind::Path(p) = &field_te.kind {
+            if let Some(head) = p.segments.first() {
+                if self.struct_types.contains_key(head.as_str())
+                    && !self.shared_types.contains_key(head.as_str())
+                    && self.struct_clone_fully_duplicates(head.as_str(), &mut Vec::new())
+                {
+                    let name = head.clone();
+                    self.deep_copy_struct_heap_fields_in_place(leaf_ptr, &name);
+                    self.track_struct_var(&name, leaf_ptr);
+                }
+            }
+        }
+        // Any other shape: leave the status-quo view alias.
     }
 
     /// Finish an owned `let (a, b) = <expr>` tuple destructure: queue scope-exit

@@ -19552,6 +19552,55 @@ fn main() {
     }
 
     #[test]
+    fn asan_shared_enum_view_destructure_bare_shared_child_no_double_free() {
+        // B-2026-07-09-12 (clone-on-extract half): a shared-enum whose struct
+        // payload carries BARE-SHARED children (`BinNode { left: Expr, right: Expr
+        // }`, the AST binary-node shape). The arm binds the payload as a VIEW
+        // (`Bin(b)`, not deep-cloned because it is shared-bearing) then
+        // DESTRUCTURES it (`let BinNode { left, right, op } = b`) and CONSUMES the
+        // moved-out shared children (`eval(left)`, `eval(right)`). Pre-fix the
+        // extracted `left`/`right` aliased the RC box's inline handles, so the
+        // recursive consume rc-dec AND the box's rc-drop both freed each child box
+        // — a double-free. The clone-on-extract fix rc-INCs each bare-shared child
+        // at the destructure (`clone_on_extract_view_field`) so the leaf co-owns
+        // the box; the leaf's consume balances the inc, the box's rc-drop balances
+        // its original ref. Also covers the String LEAF (`n.name`) via the Lit arm.
+        // Looped x20 so a per-iteration double-free / leak hits the LSan gate.
+        assert_clean_asan_run(
+            r#"
+struct LitNode { name: String, val: i64 }
+shared enum Expr { Lit(LitNode), Bin(BinNode) }
+struct BinNode { left: Expr, right: Expr, op: i64 }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Lit(n) => n.val,
+        Bin(b) => {
+            let BinNode { left, right, op } = b;
+            eval(left) + eval(right) + op
+        }
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let a = Expr.Lit(LitNode { name: "a_long_name_for_heap_visibility_xxxxxxxx".to_string(), val: 3 });
+        let bn = Expr.Lit(LitNode { name: "b_long_name_for_heap_visibility_xxxxxxxx".to_string(), val: 4 });
+        let inner = Expr.Bin(BinNode { left: a, right: bn, op: 10 });
+        let c = Expr.Lit(LitNode { name: "c_long_name_for_heap_visibility_xxxxxxxx".to_string(), val: 5 });
+        let tree = Expr.Bin(BinNode { left: inner, right: c, op: 100 });
+        total = total + eval(tree);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["2440"],
+            "shared_enum_view_destructure_bare_shared_child",
+        );
+    }
+
+    #[test]
     fn asan_shared_enum_struct_payload_child_moveout_no_double_free() {
         // B-2026-07-09-12 (copy-supported half): a for-loop over a `Vec[shared
         // enum]` whose arm DESTRUCTURES the struct payload and MOVES a heap child

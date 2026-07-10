@@ -432,6 +432,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.track_struct_var(tn, alloca);
                             }
                         } else {
+                            // B-2026-07-09-12 clone-on-extract — a shared-enum struct
+                            // payload NOT deep-cloned above (it carries shared /
+                            // Option[shared] / Vec[shared] children, so it stays a
+                            // VIEW aliasing the RC box's inline payload) is recorded
+                            // here. A later `let S { .. } = <this view>` destructure
+                            // consults the map to DUPLICATE each moved-out heap child
+                            // (deep-copy a buffer, rc-inc a shared handle) so the leaf
+                            // owns it independently and the box's rc-drop — the sole
+                            // owner of the view — does not double-free the moved-out
+                            // child.
+                            if self.pattern_binding_scrutinee_is_shared_enum
+                                && self.struct_types.contains_key(tn)
+                                && !self.shared_types.contains_key(tn)
+                            {
+                                self.shared_enum_payload_view_vars
+                                    .insert(name.clone(), tn.to_string());
+                            }
                             // The user-struct arm is skipped for an `Option`/`Result`
                             // scrutinee: a `Some(h)` / `Ok(h)` struct payload is owned
                             // by the Option's inline/boxed cleanup, so tracking it here

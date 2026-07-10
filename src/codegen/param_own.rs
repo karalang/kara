@@ -491,6 +491,39 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Rc-INC the shared box handle stored at `slot` (an 8-byte RC pointer word),
+    /// null-guarded. The "copy" of a shared handle is a refcount bump so the copy
+    /// co-owns the box, symmetric with the drop's rc-DEC. Used by the
+    /// B-2026-07-09-12 clone-on-extract (view-destructure) path.
+    pub(super) fn rc_inc_shared_handle_at_slot(
+        &self,
+        slot: PointerValue<'ctx>,
+        heap_type: StructType<'ctx>,
+    ) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let handle = self
+            .builder
+            .build_load(ptr_ty, slot, "viewdup.handle")
+            .unwrap()
+            .into_pointer_value();
+        let is_null = self
+            .builder
+            .build_is_null(handle, "viewdup.isnull")
+            .unwrap();
+        let do_bb = self.context.append_basic_block(fn_val, "viewdup.inc.do");
+        let cont_bb = self.context.append_basic_block(fn_val, "viewdup.inc.cont");
+        self.builder
+            .build_conditional_branch(is_null, cont_bb, do_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        self.emit_refcount_inc_by_type(heap_type, handle);
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+        self.builder.position_at_end(cont_bb);
+    }
+
     /// Copy one aggregate field in place per its TypeExpr. String/Vec → outer
     /// buffer copy; nested struct → recurse; tuple → recurse per element;
     /// everything else (primitive, borrow, ignored kinds) → no-op.

@@ -1888,6 +1888,18 @@ pub(super) struct Codegen<'ctx> {
     /// independent (B-2026-06-10-2). Cleared per-function alongside
     /// `ref_params`.
     pub(crate) owned_struct_params: HashSet<String>,
+    /// B-2026-07-09-12 clone-on-extract — names of struct-typed bindings that are
+    /// a by-value VIEW of a shared-enum RC box's inline payload (`match e { Call(c)
+    /// => … }`, `c` aliasing the box's `CallNode`). Mapped to the payload struct
+    /// type. Unlike a callee-owned struct (which carries its own `StructDrop`), a
+    /// view is UNTRACKED — the box's rc-drop is the sole owner. When such a view is
+    /// destructured (`let CallNode { callee, args } = c`) the extracted leaves
+    /// alias the box's heap; `finish_owned_struct_destructure` consults this map to
+    /// DUPLICATE each moved-out heap child (deep-copy a buffer, rc-inc a shared
+    /// handle) so the leaf owns it independently and the box's drop does not
+    /// double-free. Populated in `pattern_binding.rs` at the view bind; cleared
+    /// per-function alongside `owned_struct_params`.
+    pub(crate) shared_enum_payload_view_vars: std::collections::HashMap<String, String>,
     /// SoA layout metadata (layout name → SoaLayout). **Origin-only** (slice 5):
     /// keyed by the `layout <name>` block's name, consulted to resolve a
     /// `LayoutId::Soa(<block>)` to its struct shape, to populate the layout
@@ -5685,6 +5697,7 @@ impl<'ctx> Codegen<'ctx> {
             for_loop_owned_agg_vars: HashSet::new(),
             enumerate_index_pattern: None,
             owned_struct_params: HashSet::new(),
+            shared_enum_payload_view_vars: std::collections::HashMap::new(),
             fn_param_ref: HashMap::new(),
             extern_link_names: HashMap::new(),
             fn_return_type_names: HashMap::new(),
