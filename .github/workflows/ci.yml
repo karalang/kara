@@ -504,6 +504,21 @@ jobs:
           echo "LLVM_SYS_181_PREFIX=$env:LLVM_PATH" >> $env:GITHUB_ENV
           echo "$env:LLVM_PATH\bin" >> $env:GITHUB_PATH
 
+      # Diagnostic: llvm-sys 181's build script probes `<PREFIX>/bin/llvm-config[.exe]`
+      # for a version match; the official LLVM Windows NSIS installer has
+      # historically omitted `llvm-config.exe`, and if that's what's tripping
+      # the "No suitable version of LLVM was found" error, this will show it.
+      - name: Probe extracted LLVM tree
+        shell: pwsh
+        run: |
+          Write-Host "== LLVM_PATH = $env:LLVM_PATH =="
+          Write-Host "== Root =="
+          Get-ChildItem $env:LLVM_PATH | Select-Object -ExpandProperty Name
+          Write-Host "== bin\ =="
+          Get-ChildItem "$env:LLVM_PATH\bin" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "llvm|clang" } | Select-Object -First 20 -ExpandProperty Name
+          Write-Host "== llvm-config* anywhere =="
+          Get-ChildItem $env:LLVM_PATH -Recurse -Filter "llvm-config*" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
