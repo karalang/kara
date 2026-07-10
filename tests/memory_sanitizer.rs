@@ -19552,6 +19552,52 @@ fn main() {
     }
 
     #[test]
+    fn asan_callee_owned_struct_vec_nested_shared_entry_copy_no_uaf() {
+        // B-2026-07-09-12 (render UAF): a copy-supported struct passed BY VALUE
+        // (`render_block(b: Block)`, callee-owned → entry deep-copied) whose
+        // `Vec[Stmt]` element `Stmt::Exp(ExprStmt)` nests a bare `shared` field
+        // (`ExprStmt { expr: Expr }`). The entry-copy recursed into the nested
+        // struct but `deep_copy_one_aggregate_field` had no bare-`shared` arm, so
+        // `expr` was shallow-aliased — the callee-owned copy's drop AND the caller's
+        // drop both rc-dec'd the same Expr box (the self-hosted renderer read
+        // `ExprStmt.expr` back as a garbage Error node). Fix: the bare-shared arm
+        // rc-INCs it; the paired B-2026-07-10-1 len-zeroing keeps the moved-out
+        // source's combined drop from unbalancing the inc. `render_block` by value +
+        // destructure + per-stmt consume, looped x20 under LSan.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Lit(IntLit), Blk(Block) }
+struct IntLit { val: i64, span: i64 }
+struct ExprStmt { expr: Expr, span: i64 }
+enum Stmt { Exp(ExprStmt) }
+struct Block { stmts: Vec[Stmt], span: i64 }
+fn render_expr(e: Expr) -> i64 { match e { Lit(n) => n.val, Blk(b) => render_block(b) } }
+fn render_stmt(s: Stmt) -> i64 { match s { Exp(n) => { let ExprStmt { expr, span } = n; render_expr(expr) } } }
+fn render_block(b: Block) -> i64 {
+    let Block { stmts, span } = b;
+    let mut acc = span;
+    for s in stmts { acc = acc + render_stmt(s); }
+    acc
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let mut sv: Vec[Stmt] = Vec.new();
+        sv.push(Stmt.Exp(ExprStmt { expr: Expr.Lit(IntLit { val: 7, span: 0 }), span: 0 }));
+        sv.push(Stmt.Exp(ExprStmt { expr: Expr.Lit(IntLit { val: 11, span: 0 }), span: 0 }));
+        total = total + render_expr(Expr.Blk(Block { stmts: sv, span: 100 }));
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["2360"],
+            "callee_owned_struct_vec_nested_shared_entry_copy",
+        );
+    }
+
+    #[test]
     fn asan_letbound_struct_vec_shared_elem_moved_into_enum_ctor_no_uaf() {
         // B-2026-07-10-1: a LET-BOUND struct with a `Vec[<enum owning a shared
         // field>]` field AND an `Option[shared]` field, MOVED whole into a
