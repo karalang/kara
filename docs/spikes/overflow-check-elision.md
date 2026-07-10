@@ -76,3 +76,7 @@ also unblock autovectorization — 1.25× there). A scoped block-level `#[wrappi
 Rust's `-C overflow-checks` + `wrapping_*` + `unchecked_*`. That is the honest tradeoff:
 safe by default, fast on request — and Kāra already sits level with checked-Rust everywhere
 else.
+
+The scoped block-level opt-out this recommends is now tracked as [`deferred.md`](../deferred.md)
+§ Scoped `#[wrapping]` / `#[checked]` Arithmetic Regions (P2), with the inlining-boundary /
+generic-propagation layering questions and a real-frequency promotion gate.

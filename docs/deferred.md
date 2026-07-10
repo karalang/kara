@@ -2795,6 +2795,40 @@ A compiler-internal pass that pattern-matches common safe-indexing idioms (`for 
 
 ---
 
+### Scoped `#[wrapping]` / `#[checked]` Arithmetic Regions
+
+A block- (and function-) scoped attribute that flips the default integer-overflow behavior for the bare arithmetic operators (`+ - * << >> …`) lexically inside the annotated region: `#[wrapping] { … }` makes bare operators two's-complement-wrap (straight-line `add`/`sub`/`mul`, no `llvm.s*.with.overflow` + trap branch), and `#[checked] { … }` re-arms trapping inside an `embedded`-profile (wrapping-default) region. It is the *mid-granularity* opt-out between the per-operation `wrapping_*` / `checked_*` method families (v1, shipped) and the project-wide profile default — the overflow-check counterpart of the § Karac-Side Bounds-Check Elimination Pass above (both recover the cost of a safety check on a hot region without weakening the default). Prior art: Zig's block-scoped `@setRuntimeSafety(false)`, Rust's `Wrapping` newtype.
+
+**Why deferred:** The layering questions are genuinely unsettled and the empirical motivation is thin. (1) *Semantics of "scope."* The attribute must be **lexical, not dynamic** — `#[wrapping] { foo() }` wraps only the operators textually inside the braces, never `foo`'s body — and, critically, must **not depend on inlining**: if the optimizer later inlines `foo` into a wrapping region, `foo`'s arithmetic must not silently start wrapping, so the wrapping-ness has to be bound per-operator at the AST level before any inlining pass runs. Generic propagation (does a `#[wrapping]` region reach into a monomorphized callee body? — no, same firewall as the call boundary) and nesting (innermost attribute wins; `#[checked]` inside `#[wrapping]` re-arms the trap) also need pinning. (2) *Name collision.* This arithmetic-region `#[checked]` currently shares a spelling with the contract-survival `#[checked]` of § Production Contract Checking (P1) — disambiguating the two (a distinct spelling for one, or a shared-attribute-with-argument scheme) is part of resolving the layering. (3) *Motivation.* The v1 opt-out surface already covers every per-site case: `wrapping_*` methods produce identical straight-line, autovectorizable code per operation (the block form is only ergonomics + a region-wide autovec unblock over those methods — see [`spikes/overflow-check-elision.md`](spikes/overflow-check-elision.md)), and Kāra already sits level with safety-matched `rustc -C overflow-checks=on` across the corpus; the only gap is vs *unchecked* `rustc -O`, which the scoped block would close for a region at the cost of that region's guarantee. Building it before a real workload shows the per-op `wrapping_*` verbosity is friction risks designing the inlining/generic semantics for a hypothetical.
+
+**Promotion gate:** Promote to P1 (or P0 v1.x) when post-v1 user data shows a real workload with a hot arithmetic region where (a) the per-operation `wrapping_*` rewrite is materially verbose or obscures the code, AND (b) the region-wide `#[wrapping]` delivers a measured >1.3× win over the trapping default (the arithmetic-kernel gap band measured in the elision spike). The trigger is *frequency in real code*, not theoretical coverage — one deliberately-wrapping hash kernel that reads fine with three `wrapping_mul` calls does not justify the attribute.
+
+**Why non-breaking:** Purely additive. Programs without the attribute are unaffected — bare arithmetic keeps its profile default (trap in `app`/`lib`, wrap in `embedded`). The escape hatch stays deliberately **local and greppable** — a bounded lexical region, never a project-wide `overflow-checks=off` flag that would strip the guarantee invisibly (the loud-failure property the trapping default exists to provide — see design.md § Integer overflow, "Why trap by default").
+
+**Design shape (sketch — finalize at promotion):**
+
+```kara
+fn fnv1a(bytes: Slice[u8]) -> u64 {
+    mut h: u64 = 14695981039346656037
+    #[wrapping] {
+        for b in bytes {
+            h = h ^ (b as u64)
+            h = h * 1099511628211    // bare * wraps here; no trap branch; loop autovectorizes
+        }
+    }
+    h                                // outside the region: trap-default restored
+}
+```
+
+- Codegen-only switch: a per-region flag read when lowering each arithmetic-operator node (`nsw`/bare op vs `emit_checked_int_arith`, `src/codegen/expr_ops.rs`). Type-checking, effect-checking, and the `panics` surface are untouched — arithmetic overflow is already outside the effect system (design.md, the `panics`-producing primitives list: "Arithmetic overflow is not a `panics` atom").
+- Region membership bound at the AST/operator level *before* inlining, so it is a source-lexical fact rather than an optimizer-dependent one.
+- Nesting composes innermost-wins; `#[checked]` is the inverse region, primarily for `embedded`-profile code that wants a trapping island.
+- `karac explain` affordance: point at a bare operator and report which region (if any) governs its overflow behavior.
+
+**Cross-reference:** design.md § Integer overflow (the trapping default + "Why trap by default", the `checked_*`/`wrapping_*`/`saturating_*`/`overflowing_*` method families that are the v1 per-site opt-out, and the one-line deferral note that points here); [`spikes/overflow-check-elision.md`](spikes/overflow-check-elision.md) (ran + rejected the compile-time-prover alternative — this scoped opt-out is the lever it recommends instead); P2 § Karac-Side Bounds-Check Elimination Pass (the bounds-check counterpart — same "recover a safety-check cost on a hot region" shape and promotion-by-real-frequency gate); P1 § Production Contract Checking (the `#[checked]` spelling this collides with); [`implementation_checklist/phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md) (`emit_checked_int_arith`, the overflow-check emission site the flag would gate).
+
+---
+
 ### `Vec.sort_by` FFI-Boundary Comparator Inlining
 
 **SHIPPED 2026-05-29** — Path B (per-call-site monomorphized emit) landed across two slices: **Slice 6.1** (`Vec[i64]`) at karac commit `1fbd942e` and **Slice 6.4** (integer-tuple / integer-field-struct elems + runtime length dispatch) at karac commit `053ef6e6`. The promotion gate ("≥2 distinct non-synthetic workloads show >1.3× perf gap") fired via [kata 16 (3Sum Closest)](../../kara-katas/leetcode/1-100/16-3sum-closest/README.md) at 1.55× behind Rust pre-fix and [kata 56 (Merge Intervals)](../../kara-katas/leetcode/1-100/56-merge-intervals/README.md) at 1.50× behind Rust pre-fix. Post-ship: kata 16 at 1.06× of Rust (94% of gap closed), kata 56 at 1.06× of Rust (88% closed); both seq inner loops are now codegen-identical to Rust's monomorphized `sort_by`. Active tracker for further sub-slices and remaining deferred shapes (String / Float / Pointer / 3-word-struct elements; larger sort algo for the runtime path) lives at [`docs/implementation_checklist/phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md) Slice 6 trigger entry. **Entry preserved below for historical record + design context the post-v1 follow-ups will need.**
