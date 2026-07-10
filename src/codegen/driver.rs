@@ -1450,14 +1450,12 @@ pub(super) fn native_target_is_aarch64() -> bool {
 /// stay raw (they match SysV's eightbyte register classification by luck, per
 /// the green x86-64 CI).
 ///
-/// **Windows x64 is deliberately excluded.** Its struct ABI differs from SysV
-/// (large aggregates are passed by reference, not `byval`-on-stack; ≤ 16 B ones
-/// go by reference too rather than in two registers), and the clang-linux
-/// oracle this fix is verified against does not cover it. Applying the SysV
-/// convention there would be an unverified guess, so Windows keeps its
-/// pre-existing raw-struct lowering until it gets its own classifier (tracked
-/// with the deferred Windows producer work). `KARAC_FORCE_TARGET_ARCH=x86_64`
-/// overrides for local SysV testing.
+/// **Windows x64 is deliberately excluded** — it has its own classifier gated
+/// by [`native_target_is_windows_x86_64`] (B-2026-07-09-8, Microsoft x64
+/// aggregate convention: register-passed only at exact 1/2/4/8-byte POT sizes,
+/// everything else by reference / sret; no `byval`, since the caller allocates
+/// the copy and passes its address). `KARAC_FORCE_TARGET_ARCH=x86_64` forces
+/// this SysV branch for local testing.
 pub(super) fn native_target_is_x86_64() -> bool {
     if let Ok(forced) = std::env::var("KARAC_FORCE_TARGET_ARCH") {
         return forced == "x86_64" || forced == "x86-64" || forced == "amd64";
@@ -1465,6 +1463,37 @@ pub(super) fn native_target_is_x86_64() -> bool {
     let triple = TargetMachine::get_default_triple();
     let s = triple.as_str().to_string_lossy();
     (s.starts_with("x86_64") || s.starts_with("amd64")) && !s.contains("windows")
+}
+
+/// Whether the build target is **Windows x64** (Microsoft x64 calling
+/// convention). Gates the `#[repr(C)]` struct-by-value classifier for
+/// `pub extern "C" fn` exports on Windows (B-2026-07-09-8). The Microsoft x64
+/// aggregate rules differ from SysV:
+///
+/// - **Params**: an aggregate whose ABI size is exactly 1, 2, 4, or 8 bytes is
+///   passed in a single integer register (coerced to `iN`); every other size
+///   (including 3/5/6/7 and anything > 8, so > 16 B is NOT the threshold like
+///   on SysV) is passed **by reference** — the caller places a copy on its
+///   stack and passes the address in the arg register as a plain `ptr` (no
+///   LLVM `byval` attribute; the copy is caller-owned by convention).
+/// - **Returns**: same POT-≤-8 register rule (returned in RAX via coerced
+///   `iN`); every other size is returned via `sret` (result pointer as the
+///   first arg, function returns `void`).
+///
+/// `KARAC_FORCE_TARGET_ARCH=windows_x86_64` (or `win_x86_64` / `x86_64-windows`)
+/// forces this branch for signature-match testing on a non-Windows host —
+/// identical IR lowers identically through LLVM, so a Linux dev box can
+/// verify the coercions without a Windows CI runner.
+pub(super) fn native_target_is_windows_x86_64() -> bool {
+    if let Ok(forced) = std::env::var("KARAC_FORCE_TARGET_ARCH") {
+        return forced == "windows_x86_64"
+            || forced == "win_x86_64"
+            || forced == "x86_64-windows"
+            || forced == "x86_64_windows";
+    }
+    let triple = TargetMachine::get_default_triple();
+    let s = triple.as_str().to_string_lossy();
+    (s.starts_with("x86_64") || s.starts_with("amd64")) && s.contains("windows")
 }
 
 fn create_native_target_machine(cpu_override: Option<&str>) -> Result<TargetMachine, String> {

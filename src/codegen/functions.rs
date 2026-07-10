@@ -68,6 +68,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.arm64_repr_c_struct_return_coercion(&name)
         } else if self.target_is_x86_64 {
             self.x86_64_repr_c_struct_return_class(&name)
+        } else if self.target_is_windows_x86_64 {
+            self.win_x64_repr_c_struct_return_class(&name)
         } else {
             Ok(Arm64ReturnClass::Direct)
         }
@@ -207,6 +209,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.arm64_repr_c_struct_coercion(&name)?
                         } else if self.target_is_x86_64 {
                             self.x86_64_repr_c_struct_param_class(&name)?
+                        } else if self.target_is_windows_x86_64 {
+                            self.win_x64_repr_c_struct_param_class(&name)?
                         } else {
                             super::types_lowering::Arm64ParamClass::Direct
                         };
@@ -548,12 +552,15 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // x86-64 SysV indirect struct param (B-2026-07-09-2 Slice 3c): a
         // larger-than-16 B `#[repr(C)]` struct is MEMORY class, passed as a `ptr
-        // byval(%Struct)`. The `byval` attribute is ABI-load-bearing on x86-64 —
+        // byval(%Struct)`. The `byval` attribute is ABI-load-bearing on SysV —
         // it tells the backend the caller has placed a copy on the stack and the
         // callee reads through the pointer (matches `clang`'s `ptr byval(...)`).
-        // AArch64 does NOT use `byval` (its indirect params are plain pointers),
-        // so this is x86-64-only. The LLVM param index is the Kāra index shifted
-        // by +1 when the fn also returns via `sret` (the leading result pointer).
+        // AArch64 does NOT use `byval` (its indirect params are plain pointers);
+        // **Windows x64 also does not** (Microsoft x64 says the caller allocates
+        // the copy and passes its address, which a plain `ptr` captures — see
+        // `win_x64_repr_c_struct_param_class` doc, B-2026-07-09-8). So this is
+        // SysV-only. The LLVM param index is the Kāra index shifted by +1 when
+        // the fn also returns via `sret` (the leading result pointer).
         if self.target_is_x86_64 {
             if let Some(indirect) = self.indirect_struct_params.get(&func.name).cloned() {
                 use inkwell::types::AnyType;

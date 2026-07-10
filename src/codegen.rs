@@ -3176,13 +3176,22 @@ pub(super) struct Codegen<'ctx> {
     /// `#[repr(C)]` struct-by-value ABI: HFA / ≤ 16 B register coercion, and the
     /// larger-than-16 B indirect/`sret` cases (B-2026-07-09-2).
     pub(crate) target_is_aarch64: bool,
-    /// Whether the build target is x86-64 — computed once at construction.
-    /// x86-64 SysV matches the raw-struct lowering for `#[repr(C)]` structs
-    /// ≤ 16 B (eightbyte register classification, by luck), so those need no
-    /// adaptation. A struct larger than 16 B is MEMORY class, which the raw
-    /// lowering does NOT match — it gets a `byval` param / `sret` return
-    /// (B-2026-07-09-2 Slice 3c). `false` outside x86-64.
+    /// Whether the build target is x86-64 **System V** (Linux / macOS / BSD)
+    /// — computed once at construction. SysV matches the raw-struct lowering
+    /// for `#[repr(C)]` structs ≤ 16 B (eightbyte register classification, by
+    /// luck), so those need no adaptation. A struct larger than 16 B is MEMORY
+    /// class, which the raw lowering does NOT match — it gets a `byval` param
+    /// / `sret` return (B-2026-07-09-2 Slice 3c). **Windows x64 is a distinct
+    /// gate** (`target_is_windows_x86_64`); this flag is `false` there.
     pub(crate) target_is_x86_64: bool,
+    /// Whether the build target is **Windows x64** (Microsoft x64) — computed
+    /// once at construction. Distinct from `target_is_x86_64` (SysV): the
+    /// Microsoft x64 aggregate ABI passes 1/2/4/8-byte aggregates in a single
+    /// integer register (coerced to `iN`) and passes everything else by
+    /// reference (plain `ptr`, caller-owned copy) with `sret` for non-POT
+    /// returns — no eightbyte splitting, no HFA, no `byval` (B-2026-07-09-8).
+    /// `false` outside Windows x64.
+    pub(crate) target_is_windows_x86_64: bool,
     /// Per-function record of `#[repr(C)]` struct params coerced to an AAPCS
     /// register type on AArch64 (B-2026-07-09-2): fn name → `[(param_index,
     /// struct_name)]`. The declared LLVM param at `param_index` is the coerced
@@ -5842,6 +5851,8 @@ impl<'ctx> Codegen<'ctx> {
                 && driver::native_target_is_aarch64(),
             target_is_x86_64: !crate::target::active_target_is_wasm()
                 && driver::native_target_is_x86_64(),
+            target_is_windows_x86_64: !crate::target::active_target_is_wasm()
+                && driver::native_target_is_windows_x86_64(),
             arm64_coerced_struct_params: HashMap::new(),
             indirect_struct_params: HashMap::new(),
             abi_adapted_export_names: std::collections::HashSet::new(),

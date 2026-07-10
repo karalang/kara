@@ -299,6 +299,19 @@ jobs:
         env:
           KARAC_FORCE_TARGET_ARCH: aarch64
 
+      # Windows x64 `#[repr(C)]` struct-by-value ABI signature match
+      # (B-2026-07-09-8). Same trick as the arm64 leg above — force the target
+      # classifier via KARAC_FORCE_TARGET_ARCH and diff the emitted LLVM
+      # signatures against the Microsoft x64 rules (1/2/4/8-byte aggregates
+      # coerce to `iN`; every other size passes as a plain `ptr` — no `byval`
+      # — and returns via `sret`). Runs on the Linux runner so a regression
+      # trips *before* the flakier `codegen-e2e-windows` job (Stage 4) has to;
+      # that job is the paired real-execution confirmation on native Windows.
+      - name: Windows x64 repr(C) struct ABI signature match (forced arch)
+        run: cargo test --features llvm --test abi_repr_c_struct
+        env:
+          KARAC_FORCE_TARGET_ARCH: windows_x86_64
+
       # LLJIT-productionization Slice 1 follow-up: re-run the codegen E2E suite
       # through the JIT execution lane (not just AOT). `KARAC_TEST_JIT=1` routes
       # `tests/codegen.rs`'s runner to a `karac_jit_runner` subprocess (which
@@ -438,13 +451,100 @@ jobs:
           test_build_auto_boxed
           test_project_lib_table
 
-  # NOTE: the former STAGE 3 leg (Codegen E2E on macOS x86_64, Intel `macos-13`)
+  # 4-target matrix STAGE 4 — Windows x86-64 (native `windows-latest`). The
+  # producer path emits Windows-native artifacts (`.lib` / `.dll` + import lib
+  # via `llvm-ar` / `clang -shared` with a `/EXPORT:`-per-symbol list, cfg(windows)
+  # in `src/codegen/driver.rs`), and the Microsoft x64 aggregate ABI classifier
+  # (B-2026-07-09-8) lives in codegen with no Linux CI coverage — this leg is
+  # the paired real-execution confirmation, closing the "Windows producer
+  # unverified" caveat that the roadmap Tier-5 entry has carried. LLVM 18 comes
+  # from Chocolatey (`llvm --version=18.1.8`, MSVC-linkable prebuilt);
+  # `LLVM_SYS_181_PREFIX` points at its install root so `llvm-sys 181` finds
+  # `llvm-config.exe`, and the DLL lives under `bin/` which Chocolatey adds to
+  # PATH. `dtolnay/rust-toolchain@stable` defaults to
+  # `stable-x86_64-pc-windows-msvc` on windows-latest, so the runtime staticlib
+  # emits `karac_runtime.lib` (MSVC naming — see `resolve_runtime_path`
+  # cfg(windows) branch), not the unix `libkarac_runtime.a`. NON-REQUIRED until
+  # it has a green streak (mirrors the other matrix legs).
+  #
+  # Scope mirrors the Linux arm64 leg: the codegen E2E oracle + the producer
+  # library-artifact + `#[repr(C)]` enum/struct round-trips. The B-2026-07-09-8
+  # Microsoft x64 struct-by-value coercion is proven both by the signature-match
+  # tests (any host with `KARAC_FORCE_TARGET_ARCH=windows_x86_64`, run below —
+  # identical IR ⇒ identical ABI) AND by a real execution: the `test_build_repr_c_struct`
+  # producer test builds a `.lib`, links it from a C host (clang), and reads back
+  # struct-by-value round-trip data. If the classifier regresses, this test flips.
+  codegen-e2e-windows:
+    name: Codegen E2E (Windows x86-64, LLVM 18)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Chocolatey ships LLVM 18.1.x prebuilts installed to
+      # `C:\Program Files\LLVM\`. Add that as the LLVM_SYS_181_PREFIX; the
+      # DLL under `bin/` is auto-added to PATH by the installer.
+      - name: Install LLVM 18 (Chocolatey)
+        shell: pwsh
+        run: |
+          choco install -y llvm --version=18.1.8
+          echo "LLVM_SYS_181_PREFIX=C:\Program Files\LLVM" >> $env:GITHUB_ENV
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: llvm-e2e-windows
+
+      # Same lean→full archive dance as the other codegen-e2e legs. On Windows
+      # MSVC the artifact is `karac_runtime.lib` (see `resolve_runtime_path`
+      # cfg(windows)); the lean sibling name is `karac_runtime_min.lib`. Uses
+      # `bash` so the `cp` invocation matches the Linux legs verbatim (Git for
+      # Windows' bash is bundled on windows-latest runners).
+      - name: Build runtime staticlib archives (lean → full)
+        shell: bash
+        run: |
+          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
+          cp target/release/karac_runtime.lib target/release/karac_runtime_min.lib
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+
+      - name: Codegen E2E (Windows x86-64)
+        run: cargo test --features llvm --test codegen
+
+      # Windows x64 `#[repr(C)]` struct-by-value ABI signature match
+      # (B-2026-07-09-8). Runs natively (no env forcing needed — the
+      # Windows x86-64 host trips `win_x64_active()` directly), asserts the
+      # emitted LLVM signatures match the Microsoft x64 rules: 1/2/4/8-byte
+      # aggregates coerce to `iN`; every other size passes as a plain `ptr`
+      # (NO `byval`) and returns via `sret`. Paired with the execution proof
+      # in the producer-mode step below.
+      - name: Windows x64 repr(C) struct ABI signature match
+        run: cargo test --features llvm --test abi_repr_c_struct
+
+      # The producer library-artifact + `#[repr(C)]` enum + struct-by-value
+      # round-trips — the direct execution confirmation for the artifact + ABI
+      # work on Windows. If the B-2026-07-09-8 classifier regresses, the
+      # struct-by-value case flips (a C host reads back wrong data / crashes).
+      - name: Producer-mode E2E (library artifacts + repr(C) enums + structs, Windows x64)
+        run: >
+          cargo test --features llvm --test cli --
+          test_build_repr_c_enum
+          test_build_repr_c_struct
+          test_build_crate_type
+          test_build_auto_boxed
+          test_project_lib_table
+
+  # (The former STAGE 3 leg — Codegen E2E on macOS x86_64, Intel `macos-13` —
   # was dropped 2026-07-09. It only covered the intersection of two things the
   # matrix already tests — x86-64 codegen+execution (the `codegen-e2e` job on
   # ubuntu-latest, ELF/SysV) and the macOS producer link path (`codegen-e2e-macos`
   # on arm64, Mach-O) — so it added no unique coverage, and the scarce `macos-13`
   # Intel runners left it queued for 1h+ without allocating. The matrix is now
-  # Linux x86-64, Linux arm64, macOS arm64 (+ the Windows build/clippy jobs).
+  # Linux x86-64, Linux arm64, macOS arm64, Windows x86-64 — Stage 4 above closes
+  # what was previously "the Windows build/clippy jobs" gap.)
 
   # Tier 2 of the CI test-coverage tiers (docs/spikes/ci-test-coverage.md): the
   # `--features llvm` memory-sanitizer suite — ASAN catches use-after-free /

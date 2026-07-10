@@ -49,14 +49,36 @@ fn arm64_forced() -> bool {
         .unwrap_or(false)
 }
 
-/// True when the x86-64 SysV struct ABI is in effect: either forced via the env
-/// or running natively on an x86-64 host (the common `cargo test` case — the
-/// `codegen-e2e` CI job is x86-64, so these run there for free). Any other
-/// forced arch disables them.
+/// True when the x86-64 **SysV** struct ABI is in effect: either forced via the
+/// env or running natively on an x86-64 Linux/macOS/BSD host (the common `cargo
+/// test` case — the `codegen-e2e` CI job is x86-64, so these run there for
+/// free). Native Windows x86-64 is EXCLUDED (it hits `win_x64_active` instead —
+/// its aggregate ABI differs entirely from SysV, so applying SysV assertions
+/// there would spuriously fail). Any other forced arch disables the SysV tests.
 fn x86_64_active() -> bool {
     match std::env::var("KARAC_FORCE_TARGET_ARCH") {
         Ok(v) => v == "x86_64" || v == "x86-64" || v == "amd64",
-        Err(_) => cfg!(target_arch = "x86_64"),
+        Err(_) => cfg!(target_arch = "x86_64") && !cfg!(target_os = "windows"),
+    }
+}
+
+/// True when the **Windows x64** (Microsoft x64) struct ABI is in effect:
+/// forced via `KARAC_FORCE_TARGET_ARCH=windows_x86_64` (or `win_x86_64` /
+/// `x86_64-windows`), or running natively on a Windows x86-64 host. Gates the
+/// B-2026-07-09-8 signature-match tests. Identical IR lowers identically
+/// through LLVM, so a Linux CI runner with the env forced verifies the
+/// coercions match — the Windows CI runner is not required for signature
+/// checks (it is for the execution round-trip, tracked separately as
+/// Stage 4).
+fn win_x64_active() -> bool {
+    match std::env::var("KARAC_FORCE_TARGET_ARCH") {
+        Ok(v) => {
+            v == "windows_x86_64"
+                || v == "win_x86_64"
+                || v == "x86_64-windows"
+                || v == "x86_64_windows"
+        }
+        Err(_) => cfg!(target_arch = "x86_64") && cfg!(target_os = "windows"),
     }
 }
 
@@ -307,5 +329,185 @@ fn x86_64_big_struct_combined_sret_then_byval() {
     assert!(
         line.contains("byval(") && line.contains("i64 %2"),
         "byval struct param must follow the sret pointer, scalar last:\n{line}"
+    );
+}
+
+// ── Windows x64 (Microsoft x64, B-2026-07-09-8) ────────────────────
+//
+// The Microsoft x64 aggregate ABI differs from SysV: an aggregate goes in a
+// single integer register ONLY at exact 1/2/4/8-byte POT sizes (no eightbyte
+// splitting, no HFA); every other size is passed **by reference** — the caller
+// places a copy on the stack and passes a plain `ptr` (NO `byval` attribute —
+// the caller-owned-copy semantics don't need LLVM's byval model). Returns
+// follow the same POT-≤-8 rule (RAX via coerced `iN`); everything else uses
+// `sret`. These tests run under `KARAC_FORCE_TARGET_ARCH=windows_x86_64` on
+// any host (identical IR ⇒ identical ABI) or natively on Windows.
+
+fn assert_win_x64_param(struct_def: &str, field_ty: &str, expect_param: &str) {
+    if !win_x64_active() {
+        eprintln!("skip: Windows x64 struct ABI not active");
+        return;
+    }
+    let src = format!("{struct_def}\npub extern \"C\" fn probe(s: P) -> {field_ty} {{ s.a }}\n");
+    let line = define_line(&ir_for(&src), "probe");
+    assert!(
+        line.contains(expect_param),
+        "expected coerced param `{expect_param}` in:\n{line}"
+    );
+    // Windows never uses byval — the caller allocates the copy and passes
+    // its address; a plain `ptr` captures the convention.
+    assert!(
+        !line.contains("byval("),
+        "Windows x64 param must NOT carry `byval` (caller-owned copy convention):\n{line}"
+    );
+    // The raw struct type must NOT appear as the param.
+    assert!(
+        !line.contains("%P ") && !line.contains("%struct.P"),
+        "param still raw-struct (uncoerced):\n{line}"
+    );
+}
+
+#[test]
+fn win_x64_single_i32_param_coerces_to_i32() {
+    // 4-byte aggregate → single integer register (i32).
+    assert_win_x64_param("#[repr(C)]\npub struct P { a: i32 }", "i32", "i32");
+}
+
+#[test]
+fn win_x64_single_i64_param_coerces_to_i64() {
+    // 8-byte aggregate → single integer register (i64). Contrast with SysV,
+    // where a `{i64,i64}` (16 B) also goes in two regs — Windows would spill
+    // that to memory (see the big-struct test below).
+    assert_win_x64_param("#[repr(C)]\npub struct P { a: i64 }", "i64", "i64");
+}
+
+#[test]
+fn win_x64_paired_i32_param_coerces_to_i64() {
+    // 8-byte aggregate {i32,i32} → single integer register (i64), like the
+    // single-i64 case (raw size, not element structure, drives the coercion).
+    assert_win_x64_param("#[repr(C)]\npub struct P { a: i32, b: i32 }", "i32", "i64");
+}
+
+#[test]
+fn win_x64_16_byte_struct_passed_indirect_ptr() {
+    // {i64,i64} = 16 B. On SysV this fits in two regs (raw struct works by
+    // luck). On Windows x64 there is no eightbyte splitting: 16 B is > 8,
+    // so it goes by reference as a plain `ptr` (no `byval`).
+    assert_win_x64_param("#[repr(C)]\npub struct P { a: i64, b: i64 }", "i64", "ptr");
+}
+
+#[test]
+fn win_x64_big_struct_passed_indirect_ptr() {
+    // >16 B aggregate → by reference (plain `ptr`, no `byval`).
+    assert_win_x64_param(
+        "#[repr(C)]\npub struct P { a: i64, b: i64, c: i64 }",
+        "i64",
+        "ptr",
+    );
+}
+
+#[test]
+fn win_x64_all_float_struct_treated_as_size_bucket() {
+    // Microsoft x64 has NO HFA — a struct of two doubles (16 B) does NOT go
+    // in two v-regs like on AArch64; it falls under the > 8-byte rule and
+    // is passed by reference. Same treatment as `{i64, i64}` above.
+    assert_win_x64_param("#[repr(C)]\npub struct P { a: f64, b: f64 }", "f64", "ptr");
+}
+
+fn assert_win_x64_return(struct_def: &str, ctor: &str, expect_ret: &str) {
+    if !win_x64_active() {
+        return;
+    }
+    let src = format!("{struct_def}\npub extern \"C\" fn make() -> P {{ {ctor} }}\n");
+    let line = define_line(&ir_for(&src), "make");
+    let ret = line
+        .strip_prefix("define ")
+        .and_then(|s| s.split(" @make(").next())
+        .unwrap_or("")
+        .trim();
+    assert_eq!(
+        ret, expect_ret,
+        "unexpected Windows x64 return type in:\n{line}"
+    );
+}
+
+#[test]
+fn win_x64_single_i64_return_coerces_to_i64() {
+    // 8-byte aggregate returns in RAX as `i64`.
+    assert_win_x64_return("#[repr(C)]\npub struct P { a: i64 }", "P { a: 42 }", "i64");
+}
+
+#[test]
+fn win_x64_paired_i32_return_coerces_to_i64() {
+    // {i32,i32} = 8 B → `i64` in RAX.
+    assert_win_x64_return(
+        "#[repr(C)]\npub struct P { a: i32, b: i32 }",
+        "P { a: 1, b: 2 }",
+        "i64",
+    );
+}
+
+#[test]
+fn win_x64_single_i32_return_coerces_to_i32() {
+    // 4-byte aggregate returns in EAX (LLVM `i32`).
+    assert_win_x64_return("#[repr(C)]\npub struct P { a: i32 }", "P { a: 7 }", "i32");
+}
+
+#[test]
+fn win_x64_16_byte_return_uses_sret() {
+    // 16 B > 8 → sret (contrast SysV where {i64,i64} returns raw in
+    // rax/rdx). Result pointer first, return type void.
+    if !win_x64_active() {
+        return;
+    }
+    let src = "#[repr(C)]\npub struct P { a: i64, b: i64 }\n\
+               pub extern \"C\" fn make(x: i64) -> P { P { a: x, b: x } }\n";
+    let line = define_line(&ir_for(src), "make");
+    assert!(
+        line.starts_with("define void @make(") && line.contains("sret("),
+        "Windows x64 >8B return must be void + `sret(...)`:\n{line}"
+    );
+}
+
+#[test]
+fn win_x64_big_return_uses_sret() {
+    // >16 B aggregate return → sret. (Same code path as the 16-B case, but
+    // covers the standard "large struct" shape.)
+    if !win_x64_active() {
+        return;
+    }
+    let src = "#[repr(C)]\npub struct P { a: i64, b: i64, c: i64 }\n\
+               pub extern \"C\" fn make(x: i64) -> P { P { a: x, b: x, c: x } }\n";
+    let line = define_line(&ir_for(src), "make");
+    assert!(
+        line.starts_with("define void @make(") && line.contains("sret("),
+        "Windows x64 >8B return must be void + `sret(...)`:\n{line}"
+    );
+}
+
+#[test]
+fn win_x64_big_combined_sret_then_plain_ptr() {
+    // Combined sret + indirect param on Windows: the sret pointer is first,
+    // the param is a **plain** `ptr` (NOT `ptr byval(...)` like SysV — the
+    // Microsoft convention is caller-owned copy passed by address).
+    if !win_x64_active() {
+        return;
+    }
+    let src = "#[repr(C)]\npub struct P { a: i64, b: i64, c: i64 }\n\
+               pub extern \"C\" fn rt(s: P, d: i64) -> P { P { a: s.a + d, b: s.b, c: s.c } }\n";
+    let line = define_line(&ir_for(src), "rt");
+    assert!(
+        line.starts_with("define void @rt(ptr sret("),
+        "sret result pointer must be first:\n{line}"
+    );
+    assert!(
+        !line.contains("byval("),
+        "Windows x64 indirect param must NOT be `ptr byval(...)`:\n{line}"
+    );
+    // The scalar `d: i64` follows as `%2` (0 is sret, 1 is the indirect
+    // struct pointer, 2 is the scalar).
+    assert!(
+        line.contains("i64 %2"),
+        "scalar param must follow sret + indirect ptr:\n{line}"
     );
 }

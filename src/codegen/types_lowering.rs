@@ -1997,6 +1997,70 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Windows x64 (Microsoft x64) classification for a `#[repr(C)]` struct
+    /// passed **by value** (B-2026-07-09-8). Reuses the existing
+    /// [`Arm64ParamClass`] enum — `Coerced` covers register-passing, `Indirect`
+    /// covers by-reference — since it exactly names the three outcomes; the
+    /// enum's AArch64 name predates the Windows path (rename is a follow-on
+    /// cleanup, not a semantic issue).
+    ///
+    /// **Microsoft x64 aggregate rules** (MSDN "x64 calling convention"):
+    /// an aggregate whose ABI size is exactly 1, 2, 4, or 8 bytes goes in a
+    /// single integer register, coerced to the size-matched `iN`; every other
+    /// size (3, 5, 6, 7, or > 8 bytes — the threshold is 8, NOT 16 like SysV)
+    /// is passed **by reference**: the caller places a copy on its stack and
+    /// passes the address as a plain `ptr`. There is no HFA concept
+    /// (float-only aggregates follow the same POT-≤-8 rule) and no eightbyte
+    /// splitting (aggregates never span two arg registers).
+    ///
+    /// The LLVM `byval` attribute is deliberately NOT applied on Windows: the
+    /// Microsoft convention is "caller allocates the copy and passes its
+    /// address," which a plain `ptr` param captures directly. (SysV's `byval`
+    /// exists because LLVM otherwise has to model the callee-side copy
+    /// semantics; Windows does not need that.)
+    pub(super) fn win_x64_repr_c_struct_param_class(
+        &mut self,
+        struct_name: &str,
+    ) -> Result<Arm64ParamClass<'ctx>, String> {
+        let Some(st) = self.struct_types.get(struct_name).copied() else {
+            return Ok(Arm64ParamClass::Direct);
+        };
+        let size = self.ensure_target_data()?.get_abi_size(&st);
+        Ok(match size {
+            0 => Arm64ParamClass::Direct,
+            1 => Arm64ParamClass::Coerced(self.context.i8_type().into()),
+            2 => Arm64ParamClass::Coerced(self.context.i16_type().into()),
+            4 => Arm64ParamClass::Coerced(self.context.i32_type().into()),
+            8 => Arm64ParamClass::Coerced(self.context.i64_type().into()),
+            _ => Arm64ParamClass::Indirect,
+        })
+    }
+
+    /// Windows x64 (Microsoft x64) classification for a `#[repr(C)]` struct
+    /// **returned** by value (B-2026-07-09-8). Same POT-≤-8 register rule as
+    /// the param path: exactly 1/2/4/8-byte aggregates return in RAX coerced
+    /// to `iN`; every other size uses `sret` (result pointer as the first
+    /// arg, function returns `void` — identical LLVM representation to the
+    /// SysV `sret` case, though the ABI register differs: RCX on Windows vs
+    /// RDI on SysV, which the LLVM backend routes based on the triple).
+    pub(super) fn win_x64_repr_c_struct_return_class(
+        &mut self,
+        struct_name: &str,
+    ) -> Result<Arm64ReturnClass<'ctx>, String> {
+        let Some(st) = self.struct_types.get(struct_name).copied() else {
+            return Ok(Arm64ReturnClass::Direct);
+        };
+        let size = self.ensure_target_data()?.get_abi_size(&st);
+        Ok(match size {
+            0 => Arm64ReturnClass::Direct,
+            1 => Arm64ReturnClass::Coerced(self.context.i8_type().into()),
+            2 => Arm64ReturnClass::Coerced(self.context.i16_type().into()),
+            4 => Arm64ReturnClass::Coerced(self.context.i32_type().into()),
+            8 => Arm64ReturnClass::Coerced(self.context.i64_type().into()),
+            _ => Arm64ReturnClass::Sret(st),
+        })
+    }
+
     // ── Shared type helpers ─────────────────────────────────────────
 
     /// Check if a type name refers to a shared (RC) type.

@@ -121,17 +121,22 @@ impl<'ctx> super::Codegen<'ctx> {
                      See design.md § Exported C ABI (Slice 4 Path B)."
                 ));
             }
-            // AArch64 (B-2026-07-09-2): an export with an AAPCS-coerced `#[repr(C)]`
-            // struct param takes a register-coerced type this call site doesn't
-            // pack. Reject the internal call rather than pass a mismatched arg
-            // (the boxed-export pattern — extract a non-exported helper).
+            // An export with a per-target-coerced `#[repr(C)]` struct
+            // param/return takes a register-coerced type / indirect ptr / sret
+            // slot this call site doesn't pack. Reject the internal call rather
+            // than pass a mismatched arg (the boxed-export pattern — extract a
+            // non-exported helper). Covers AAPCS on AArch64 (B-2026-07-09-2),
+            // SysV MEMORY class on x86-64 (B-2026-07-09-2 Slice 3c), and the
+            // Microsoft x64 aggregate rules on Windows (B-2026-07-09-8).
             if self.abi_adapted_export_names.contains(n) {
                 return Err(format!(
-                    "cannot call `{n}` from Kāra code on AArch64: it is a `pub extern \"C\" fn` \
-                     whose `#[repr(C)]` struct param/return uses the AAPCS C-boundary ABI \
-                     (register-coerced for ≤ 16 B, a pointer to a caller copy for > 16 B). Move \
-                     the body into a non-exported helper and call that from Kāra; keep `{n}` as \
-                     the thin C-facing export. Tracked: B-2026-07-09-2."
+                    "cannot call `{n}` from Kāra code: it is a `pub extern \"C\" fn` whose \
+                     `#[repr(C)]` struct param/return uses the C-boundary ABI (per-target: \
+                     AAPCS on AArch64 — register-coerced ≤ 16 B, indirect ptr > 16 B; SysV on \
+                     x86-64 — `byval`/`sret` for > 16 B; Microsoft x64 on Windows — coerced iN \
+                     at exactly 1/2/4/8 B, plain-ptr indirect / sret otherwise). Move the body \
+                     into a non-exported helper and call that from Kāra; keep `{n}` as the thin \
+                     C-facing export. Tracked: B-2026-07-09-2 / B-2026-07-09-8."
                 ));
             }
         }
