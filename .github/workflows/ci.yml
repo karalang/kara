@@ -481,23 +481,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Chocolatey ships LLVM 18.1.x prebuilts installed to
-      # `C:\Program Files\LLVM\`. Add that as the LLVM_SYS_181_PREFIX; the
-      # DLL under `bin/` is auto-added to PATH by the installer.
-      #
-      # `--allow-downgrade` is load-bearing: the `windows-latest` runner
-      # comes with a newer LLVM (20.x today) preinstalled, and choco
-      # refuses a downgrade without the flag ("A newer version of llvm
-      # (v20.x) is already installed. Use --allow-downgrade or --force to
-      # attempt to install older versions.", exit 1). llvm-sys 181 needs
-      # 18.1.x specifically — LLVM 20 headers/libs won't satisfy it — so
-      # the downgrade is the point of this step.
-      - name: Install LLVM 18 (Chocolatey)
+      # Install LLVM 18.1 via `KyleMayes/install-llvm-action` — the standard
+      # GH-Actions LLVM installer. Extracts LLVM to a job-scoped directory
+      # ($env:LLVM_PATH) so it never collides with the runner's preinstalled
+      # LLVM 20 (a Chocolatey install-then-downgrade attempt writes into
+      # `C:\Program Files\LLVM\` where LLVM 20 already lives — the mixed
+      # tree failed llvm-sys 181's version probe on the first Stage 4 run).
+      # The follow-up step pins `LLVM_SYS_181_PREFIX` at the extracted
+      # prefix so `llvm-sys 181`'s build script finds 18.1's `llvm-config`;
+      # `bin/` on PATH is required for the runtime `libLLVM-18.dll` load
+      # at test time.
+      - name: Install LLVM 18
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "18.1.8"
+
+      - name: Point llvm-sys 181 at the installed LLVM
         shell: pwsh
         run: |
-          choco install -y llvm --version=18.1.8 --allow-downgrade
-          echo "LLVM_SYS_181_PREFIX=C:\Program Files\LLVM" >> $env:GITHUB_ENV
-          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+          echo "LLVM_SYS_181_PREFIX=$env:LLVM_PATH" >> $env:GITHUB_ENV
+          echo "$env:LLVM_PATH\bin" >> $env:GITHUB_PATH
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
