@@ -1834,6 +1834,23 @@ pub(super) struct Codegen<'ctx> {
     /// element types; removed when a later `let` rebinds the name (shadow); all
     /// cleared per-function alongside `owned_vecstr_params`.
     pub(crate) for_loop_borrow_vars: HashSet<String>,
+    /// `let g = coll.get(k)` (also `.first()` / `.last()`) bindings whose RHS is
+    /// a borrow-returning collection accessor — `Map`/`SortedMap` `.get` returns
+    /// an `Option[V]` whose payload ALIASES the bucket's stored value, and
+    /// `Vec`/`Slice`/`Array` `.get`/`.first`/`.last` return `Option[ref T]`
+    /// aliasing element storage (the class `scrutinee_is_borrow_call`
+    /// recognizes for a DIRECT `match coll.get(k)` scrutinee). The let-site
+    /// already suppresses `g`'s own scope-exit drop, but the intermediate
+    /// binding hid the alias property from a later `match g { Some(v) => <move
+    /// v> }` / `if let Some(v) = g`: the arm treated `g` as an owned `Option`,
+    /// so an escaping/dropped payload freed the aliased buffer a second time —
+    /// double-freeing against the collection's own element drop. This records
+    /// the binding name → its `Option[..]` type so `scrutinee_is_borrowed_binding`
+    /// re-admits it into the borrow protection (the `Map` payload clones on
+    /// escape via `borrow_get_payload_clone_te`; the `ref`-typed `Vec` payload
+    /// self-gates to alias-only, matching the direct form exactly). Cleared
+    /// per-function alongside `for_loop_borrow_vars`. B-2026-07-09-13.
+    pub(crate) borrow_accessor_let_payload: std::collections::HashMap<String, crate::ast::TypeExpr>,
     /// Heap-owning **struct/enum** `for`-loop element bindings (B-2026-07-04-17).
     /// Like `for_loop_borrow_vars` the binding is a bit-copy alias of the
     /// container slot whose heap the container's per-element drop frees — but
@@ -5622,6 +5639,7 @@ impl<'ctx> Codegen<'ctx> {
             entry_slot_ref_vars: HashMap::new(),
             owned_vecstr_params: HashSet::new(),
             for_loop_borrow_vars: HashSet::new(),
+            borrow_accessor_let_payload: std::collections::HashMap::new(),
             for_loop_owned_agg_vars: HashSet::new(),
             enumerate_index_pattern: None,
             owned_struct_params: HashSet::new(),

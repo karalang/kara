@@ -3763,6 +3763,48 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (`Option[ref T]`, which `option_inline_payload_elem`
                 // rejects anyway).
                 if let PatternKind::Binding(var_name) = &pattern.kind {
+                    // B-2026-07-09-13: `let g = coll.get(k)` (also `.first()` /
+                    // `.last()`) where the RHS is a borrow-returning stdlib
+                    // collection accessor — `Map`/`SortedMap` `.get` yields an
+                    // `Option[V]` whose payload ALIASES the bucket's stored
+                    // value, and `Vec`/`Slice`/`Array`/`VecDeque`
+                    // `.get`/`.first`/`.last` yield `Option[ref T]` aliasing
+                    // element storage. `g`'s own scope-exit drop is (correctly)
+                    // suppressed by the borrow model, but without recording the
+                    // binding the alias property is lost at a later `match g` /
+                    // `if let Some(v) = g`, so an arm that MOVES or drops `v`
+                    // frees the aliased buffer a second time — double-freeing
+                    // against the collection's element drop. Record the binding
+                    // → its `Option[..]` type so `scrutinee_is_borrowed_binding`
+                    // re-admits it into the borrow protection, matching what the
+                    // DIRECT `match coll.get(k)` scrutinee already gets via
+                    // `scrutinee_is_borrow_call`: a `Map` payload clones on
+                    // escape (`borrow_get_payload_clone_te`), a `ref`-typed
+                    // `Vec` payload self-gates to alias-only. Receiver-gated to
+                    // the known stdlib collections so a user type's owned-return
+                    // `.get` is untouched.
+                    if let ExprKind::MethodCall { object, method, .. } = &value.kind {
+                        if matches!(method.as_str(), "get" | "first" | "last")
+                            && matches!(
+                                self.inferred_receiver_type(object).as_deref(),
+                                Some("Map")
+                                    | Some("SortedMap")
+                                    | Some("Vec")
+                                    | Some("Slice")
+                                    | Some("Array")
+                                    | Some("VecDeque")
+                            )
+                        {
+                            if let Some(te) = self
+                                .enum_inst_type_exprs
+                                .get(&(value.span.offset, value.span.length))
+                                .cloned()
+                            {
+                                self.borrow_accessor_let_payload
+                                    .insert(var_name.clone(), te);
+                            }
+                        }
+                    }
                     // Call-shaped RHS (constructors `Some(..)`/`Ok(..)` +
                     // user-fn returns) OR a non-Call RHS that still yields a
                     // FRESH-owned enum — `let x = if c { Some(a) } else

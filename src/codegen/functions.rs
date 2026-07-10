@@ -781,6 +781,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.entry_slot_ref_vars.clear();
         self.owned_vecstr_params.clear();
         self.for_loop_borrow_vars.clear();
+        self.borrow_accessor_let_payload.clear();
         self.for_loop_owned_agg_vars.clear();
         self.owned_struct_params.clear();
         self.rc_fallback_heap_types.clear();

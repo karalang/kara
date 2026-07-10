@@ -5873,6 +5873,56 @@ fn main() {
     }
 
     #[test]
+    fn asan_letbound_map_get_moveout_no_double_free() {
+        // B-2026-07-09-13: `let g = m.get(k); match g { Some(v) => <move v> }`.
+        // `Map.get` returns an `Option[V]` whose String payload ALIASES the
+        // bucket's stored value; moving `v` out and dropping it (here via
+        // `println` consuming the returned String) freed that buffer a second
+        // time against the Map's own value drop (`karac_map_free_with_drop_vec`)
+        // — a double-free the DIRECT `match m.get(k)` form was already protected
+        // from, but the intermediate `let g` binding hid the alias property.
+        // `borrow_accessor_let_payload` re-admits the binding into the
+        // clone-on-escape protection so the escaping payload is an independent
+        // buffer. Covers the bare-String value, a `#[derive(Hash)]`-struct KEY
+        // (the shape that first surfaced the glibc tcache abort), and the
+        // `if let` sibling; looped so any per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct P { x: i64, y: i64 }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(1i64, f"val-{i}-padding-padding-padding");
+        m.insert(2i64, f"other-{i}-padding-padding-padding");
+        let g = m.get(1i64);
+        match g {
+            Some(v) => println(v),
+            None => println("miss"),
+        };
+        let mut sm: Map[P, String] = Map.new();
+        sm.insert(P { x: 1i64, y: 2i64 }, f"struct-{i}-padding-padding-padding");
+        sm.insert(P { x: 3i64, y: 4i64 }, f"skey-{i}-padding-padding-padding");
+        let sg = sm.get(P { x: 1i64, y: 2i64 });
+        if let Some(v) = sg {
+            println(v);
+        };
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "val-0-padding-padding-padding",
+                "struct-0-padding-padding-padding",
+                "val-1-padding-padding-padding",
+                "struct-1-padding-padding-padding",
+            ],
+            "letbound_map_get_moveout_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_map_contains_key_set_contains_no_double_free() {
         // Slice 3d: the `bool`-returning reads — `Map.contains_key` and
         // `Set.contains` — on fresh-temp receivers. No borrow escapes, so the

@@ -22600,6 +22600,38 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_map_get_letbound_moveout_emits_payload_clone() {
+        // B-2026-07-09-13: the SAME escaping-payload clone must fire when the
+        // `Map.get` result is bound to an intermediate `let` and matched
+        // through the binding (`let g = m.get(k); match g { Some(x) => x }`).
+        // The `let` indirection made the scrutinee an identifier, which
+        // `scrutinee_is_borrow_call` (method-call-only) didn't recognize, so the
+        // clone was skipped and the escaping alias double-freed against the
+        // Map's value drop. `borrow_accessor_let_payload` re-admits the binding
+        // into the borrow protection, so the clone fires exactly as in the
+        // direct form.
+        let src = r#"
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(7, "a heap string padded out beyond thirty-six bytes!");
+    let g = m.get(7);
+    let s = match g {
+        Some(x) => x,
+        None => "n".to_string(),
+    };
+    println(s.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("borrow.clone.tmp"),
+            "the let-bound Map.get escaping payload must clone (borrow.clone.tmp) \
+             just like the direct form; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_structpat_boxed_destructure_suppresses_box_fields() {
         // Slice 3t: `match o { Some(Holder { name, id }) => … }` over a named
         // boxed `Option[Holder]` binding — the consumed fields' caps are

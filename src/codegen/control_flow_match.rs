@@ -847,7 +847,9 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(n) => n.as_str(),
             _ => return false,
         };
-        self.ref_params.contains_key(name) || self.for_loop_borrow_vars.contains(name)
+        self.ref_params.contains_key(name)
+            || self.for_loop_borrow_vars.contains(name)
+            || self.borrow_accessor_let_payload.contains_key(name)
     }
 
     pub(super) fn scrutinee_is_borrow_call(&self, scrutinee: &Expr) -> bool {
@@ -892,19 +894,28 @@ impl<'ctx> super::Codegen<'ctx> {
     /// pre-existing, narrower leak/double-free is never made worse by a
     /// partial clone).
     fn borrow_get_payload_clone_te(&mut self, scrutinee: &Expr) -> Option<TypeExpr> {
-        if !self.scrutinee_is_borrow_call(scrutinee) {
-            return None;
-        }
-        // Only `get` — `first`/`last` have no Map overload, and their Vec
-        // forms are ref-typed (rejected escapes).
-        let ExprKind::MethodCall { method, .. } = &scrutinee.kind else {
-            return None;
+        // A `let g = m.get(k)` binding re-enters here as an IDENTIFIER scrutinee
+        // (`match g { … }` / `if let Some(v) = g`); its recorded `Option[V]`
+        // type comes from `borrow_accessor_let_payload`, not the span-keyed
+        // `enum_inst_type_exprs` (which keys on the get-CALL span, not the
+        // identifier use). B-2026-07-09-13.
+        let te = if let ExprKind::Identifier(name) = &scrutinee.kind {
+            self.borrow_accessor_let_payload.get(name)?.clone()
+        } else {
+            if !self.scrutinee_is_borrow_call(scrutinee) {
+                return None;
+            }
+            // Only `get` — `first`/`last` have no Map overload, and their Vec
+            // forms are ref-typed (rejected escapes).
+            let ExprKind::MethodCall { method, .. } = &scrutinee.kind else {
+                return None;
+            };
+            if method != "get" {
+                return None;
+            }
+            let key = (scrutinee.span.offset, scrutinee.span.length);
+            self.enum_inst_type_exprs.get(&key)?.clone()
         };
-        if method != "get" {
-            return None;
-        }
-        let key = (scrutinee.span.offset, scrutinee.span.length);
-        let te = self.enum_inst_type_exprs.get(&key)?.clone();
         let TypeKind::Path(p) = &te.kind else {
             return None;
         };
