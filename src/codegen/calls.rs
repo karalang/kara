@@ -1570,48 +1570,48 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(agg.into());
                 }
                 // Generic struct: field-by-field reconstruction from
-                // sequential words. Covers the v1.x kata workloads where
-                // small (≤3-word) plain-struct payloads are reasonable;
-                // larger payloads stay on the deferred path until the
-                // Option layout widens further.
+                // sequential words. Each field consumes as many words as its
+                // LLVM width demands (1 for a scalar, 2 for a Slice, 3 for a
+                // String/Vec, recursively for nested structs), so a payload
+                // like `AppError { msg: String }` correctly claims all three
+                // words for its single String field. Covers the v1.x kata
+                // workloads that fit inside the ≤3-word Option/Result payload
+                // budget; larger payloads stay on the deferred path until the
+                // layout widens further.
                 let n_fields = st.count_fields() as usize;
                 let words = [w0, w1, w2];
+                let zero = i64_t.const_zero();
                 let mut agg = st.get_undef();
+                let mut cursor = 0usize;
                 for i in 0..n_fields {
-                    if i >= words.len() {
-                        break;
-                    }
-                    let word = words[i];
                     let field_ty = st
                         .get_field_type_at_index(i as u32)
                         .ok_or_else(|| format!("or.pl.struct: field {} type missing", i))?;
-                    let field_val: BasicValueEnum<'ctx> = match field_ty {
-                        BasicTypeEnum::IntType(it) if it.get_bit_width() == 64 => word.into(),
-                        BasicTypeEnum::IntType(it) if it.get_bit_width() < 64 => self
-                            .builder
-                            .build_int_truncate(word, it, "or.pl.s.tr")
-                            .unwrap()
-                            .into(),
-                        BasicTypeEnum::IntType(it) => self
-                            .builder
-                            .build_int_z_extend(word, it, "or.pl.s.zx")
-                            .unwrap()
-                            .into(),
-                        BasicTypeEnum::FloatType(ft) => {
-                            self.builder.build_bit_cast(word, ft, "or.pl.s.fc").unwrap()
-                        }
-                        BasicTypeEnum::PointerType(_) => self
-                            .builder
-                            .build_int_to_ptr(word, ptr_ty, "or.pl.s.itop")
-                            .unwrap()
-                            .into(),
-                        _ => word.into(),
+                    let need = self.payload_words_for_type(field_ty);
+                    if cursor >= words.len() {
+                        break;
+                    }
+                    // Feed this field its own window of words (padding with
+                    // zero when the field straddles the end of the budget).
+                    let fw0 = words[cursor];
+                    let fw1 = if cursor + 1 < words.len() {
+                        words[cursor + 1]
+                    } else {
+                        zero
                     };
+                    let fw2 = if cursor + 2 < words.len() {
+                        words[cursor + 2]
+                    } else {
+                        zero
+                    };
+                    let field_val =
+                        self.rebuild_value_from_payload_words(field_ty, fw0, fw1, fw2)?;
                     agg = self
                         .builder
                         .build_insert_value(agg, field_val, i as u32, "or.pl.s.iv")
                         .unwrap()
                         .into_struct_value();
+                    cursor += need.max(1);
                 }
                 Ok(agg.into())
             }
@@ -1623,6 +1623,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(i64_t.const_zero().into())
             }
             _ => Ok(w0.into()),
+        }
+    }
+
+    /// Number of i64 payload words an LLVM type occupies when packed into an
+    /// Option/Result payload by `coerce_to_payload_words`. Scalars are one
+    /// word; a Slice is two ({ptr,len}); a String/Vec is three
+    /// ({ptr,len,cap}); a nested struct is the sum of its fields. Used by
+    /// `rebuild_value_from_payload_words` to advance its word cursor
+    /// field-by-field so multi-word fields claim their full span.
+    fn payload_words_for_type(&self, ty: BasicTypeEnum<'ctx>) -> usize {
+        match ty {
+            BasicTypeEnum::StructType(st) => {
+                if st == self.vec_struct_type() {
+                    3
+                } else if st == self.slice_struct_type() {
+                    2
+                } else {
+                    (0..st.count_fields())
+                        .filter_map(|i| st.get_field_type_at_index(i))
+                        .map(|ft| self.payload_words_for_type(ft))
+                        .sum::<usize>()
+                        .max(1)
+                }
+            }
+            _ => 1,
         }
     }
 }

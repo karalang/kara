@@ -1463,79 +1463,90 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_scope_cleanup_for_error_path();
         self.pending_errdefer_payload = None;
 
-        // Cross-error-type conversion: when the typechecker recorded a target
-        // type for this `?` site, look up the LLVM function `Target.from` and
-        // call it on the inner err payload. The user-impl `T.from` LLVM
-        // function is already compiled by the impl-block pass.
+        // Cross-error-type conversion + multi-word error propagation
+        // (B-2026-07-09-20). The inner `?` error is carried as uniform i64
+        // payload words; a String / Vec / multi-field-struct error is MULTI-WORD
+        // and every word must round-trip. Extract all the inner error's words
+        // (gated on the INNER value's LLVM width, not the outer return type's —
+        // the two can differ, e.g. inner `Result[_, String]` vs outer
+        // `Result[_, AppError]`), then, when the typechecker recorded a target
+        // error type, convert via the user-impl `Target.from(e: SourceError)`
+        // and re-decompose the converted value into words.
         let key = (outer_span.offset, outer_span.length);
-        let propagated_payload: BasicValueEnum<'ctx> =
+        let w0_i = w0.into_int_value();
+        let inner_word_count =
+            (val.into_struct_value().get_type().count_fields() as usize).saturating_sub(1);
+        let zerow = i64_t.const_int(0, false);
+        let w1_i = if inner_word_count >= 2 {
+            self.builder
+                .build_extract_value(val.into_struct_value(), 2, "q_w1r")
+                .unwrap()
+                .into_int_value()
+        } else {
+            zerow
+        };
+        let w2_i = if inner_word_count >= 3 {
+            self.builder
+                .build_extract_value(val.into_struct_value(), 3, "q_w2r")
+                .unwrap()
+                .into_int_value()
+        } else {
+            zerow
+        };
+
+        // The converted TARGET error value (`Target.from(source)`), or `None`
+        // when this `?` needs no cross-error conversion.
+        let converted_err: Option<BasicValueEnum<'ctx>> =
             if let Some(target) = self.question_conversions.get(&key).cloned() {
                 let qualified = format!("{}.from", target);
-                if let Some(from_fn) = self.module.get_function(&qualified) {
-                    // The inner err payload was unpacked into the uniform
-                    // i64 word `w0` by the enum-payload codegen, but
-                    // `Target.from(e: SourceError)` is declared at the
-                    // surface level taking the error type itself — for any
-                    // `struct SourceError { ... }` LLVM lowers that to the
-                    // struct shape. Reconstitute the struct value from the
-                    // i64 word so the call's argument matches the param
-                    // type. Single-field structs (the common error-wrapper
-                    // shape) take field 0 from `w0`; other shapes pass `w0`
-                    // through unchanged (the typechecker rejects these
-                    // before reaching codegen, so this is just a safety
-                    // fallback).
+                self.module.get_function(&qualified).map(|from_fn| {
+                    // Reconstruct the SOURCE error at `from`'s param type from
+                    // ALL its words (a `String` param is the 3-word
+                    // `{ptr,len,cap}`, not a single `i64`), then convert.
                     let arg_ty = from_fn.get_nth_param(0).unwrap().get_type();
-                    let arg: BasicValueEnum<'ctx> = match arg_ty {
-                        BasicTypeEnum::StructType(st) if st.count_fields() == 1 => {
-                            let undef = st.get_undef();
-                            self.builder
-                                .build_insert_value(undef, w0, 0, "q_from_arg")
-                                .unwrap()
-                                .into_struct_value()
-                                .into()
-                        }
-                        _ => w0,
-                    };
-                    let call_site = self
-                        .builder
+                    let arg = self
+                        .rebuild_value_from_payload_words(arg_ty, w0_i, w1_i, w2_i)
+                        .unwrap_or(w0);
+                    self.builder
                         .build_call(from_fn, &[arg.into()], "q_from")
-                        .unwrap();
-                    call_site.try_as_basic_value().unwrap_basic()
-                } else {
-                    // No matching impl emitted — propagate raw payload.
-                    // The typechecker should have rejected this case; staying
-                    // permissive keeps codegen non-fatal on unexpected inputs.
-                    w0
-                }
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                })
             } else {
-                w0
+                None
             };
 
-        // The error-payload slot is a uniform i64 word (matches the
-        // tag+i64-words enum lowering). User-impl `Target.from(e)` returns
-        // the target type's value — a struct for any `struct MyError { ... }`.
-        // Coerce so `insertvalue` agrees with the slot's element type;
-        // single-field structs (the common error-wrapper shape) extract to
-        // their inner field.
-        let propagated_word = self.coerce_to_i64(propagated_payload)?;
+        // Payload words to write into the returned Err slot. The number of slots
+        // is the OUTER return enum's payload word count.
+        let outer_word_count = (enum_ty.count_fields() as usize).saturating_sub(1);
+        let ret_words: Vec<inkwell::values::IntValue<'ctx>> = match converted_err {
+            // Converted: decompose the target error value into its words (a
+            // multi-word `Target` needs all of them).
+            Some(v) => self
+                .coerce_to_payload_words(v, outer_word_count.max(1))
+                .unwrap_or_else(|_| vec![w0_i]),
+            // No conversion: the inner words ARE the error's words.
+            None => vec![w0_i, w1_i, w2_i],
+        };
 
         if self.current_fn_name == "main" && self.main_result_err_te.is_some() {
-            // `?` error propagation inside `main() -> Result[(), E]`: `main`'s
-            // LLVM signature is the C entry `i32`, so we cannot `ret` the
-            // `{tag, …}` Err aggregate (verify failure — B-2026-06-12-9).
-            // Instead reconstruct the source-typed error from the propagated
-            // payload word and emit the design.md § Entry Point error exit
-            // (`Error: {e}\n` to stderr, exit 1). Single-word E reconstructs
-            // exactly; a multi-word E sees only w0 here — the same documented
-            // limitation as the wider-E `?` Err-binding path above.
-            let err_val = match self.main_result_err_te.clone() {
-                Some(te) => {
-                    let e_ty = self.llvm_type_for_type_expr(&te);
-                    let zero = i64_t.const_int(0, false);
-                    self.rebuild_value_from_payload_words(e_ty, propagated_word, zero, zero)
-                        .unwrap_or_else(|_| propagated_word.into())
-                }
-                None => propagated_word.into(),
+            // `?` inside `main() -> Result[(), E]`: `main`'s LLVM signature is
+            // the C entry `i32`, so we emit the design.md § Entry Point error
+            // exit with the source-typed error VALUE rather than returning the
+            // `{tag, …}` aggregate (B-2026-06-12-9). Use the converted value
+            // directly, or reconstruct the source error at E's type from all
+            // its words.
+            let err_val = match converted_err {
+                Some(v) => v,
+                None => match self.main_result_err_te.clone() {
+                    Some(te) => {
+                        let e_ty = self.llvm_type_for_type_expr(&te);
+                        self.rebuild_value_from_payload_words(e_ty, w0_i, w1_i, w2_i)
+                            .unwrap_or(w0)
+                    }
+                    None => w0,
+                },
             };
             self.emit_main_result_err_exit(err_val);
         } else if self.current_fn_ret_is_niche() {
@@ -1548,17 +1559,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 .const_null();
             self.builder.build_return(Some(&null)).unwrap();
         } else {
-            let ret_struct = {
-                let undef = enum_ty.get_undef();
-                let s1 = self
+            // Build the Err aggregate: tag 0 at field 0, then every payload
+            // word at fields 1..=outer_word_count.
+            let mut agg = self
+                .builder
+                .build_insert_value(
+                    enum_ty.get_undef(),
+                    i64_t.const_int(0, false),
+                    0,
+                    "q_ret_tag",
+                )
+                .unwrap();
+            for (i, w) in ret_words.iter().enumerate() {
+                if i >= outer_word_count {
+                    break;
+                }
+                agg = self
                     .builder
-                    .build_insert_value(undef, i64_t.const_int(0, false), 0, "q_ret_tag")
+                    .build_insert_value(agg, *w, (i + 1) as u32, "q_ret_val")
                     .unwrap();
-                self.builder
-                    .build_insert_value(s1, propagated_word, 1, "q_ret_val")
-                    .unwrap()
-            };
-            self.builder.build_return(Some(&ret_struct)).unwrap();
+            }
+            self.builder.build_return(Some(&agg)).unwrap();
         }
 
         // Ok/Some block: clear any frames a recovered earlier `?` had
