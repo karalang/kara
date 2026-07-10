@@ -37,13 +37,17 @@ impl<'a> super::Interpreter<'a> {
         } else {
             String::new()
         };
-        let default_msg = if name == "todo" {
-            "not yet implemented"
-        } else {
-            "entered unreachable code"
+        let default_msg = match name {
+            "todo" => "not yet implemented",
+            "panic" => "explicit panic",
+            _ => "entered unreachable code",
         };
         let full_msg = if msg.is_empty() {
             default_msg.to_string()
+        } else if name == "panic" {
+            // `panic("msg")` surfaces the user message verbatim (mirrors
+            // codegen's `compile_diverge`); todo/unreachable annotate instead.
+            msg
         } else {
             format!("{}: {}", default_msg, msg)
         };

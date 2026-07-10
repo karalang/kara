@@ -10752,6 +10752,47 @@ fn main() reads(ResA) reads(ResB) {
         }
     }
 
+    /// B-2026-07-09-9: `panic()` is a diverging prelude primitive, lowered
+    /// inline via `compile_diverge` exactly like `todo`/`unreachable` — so a
+    /// `panic()` tail in a value-returning fn emits an `unreachable`
+    /// terminator, not a `ret <placeholder>` mismatch.
+    #[test]
+    fn test_ir_panic_tail_emits_unreachable_not_ret() {
+        let ir = ir_for(
+            "struct FakeClock { t: i64 }\n\
+             fn boom() -> FakeClock { panic(\"kaboom\") }\n\
+             fn main() { let _c = boom(); }",
+        );
+        let body = function_body(&ir, "boom").expect("boom body");
+        assert!(
+            body.contains("unreachable"),
+            "diverging `panic()` tail should emit an `unreachable` terminator; body was:\n{}",
+            body
+        );
+        assert!(
+            !body.contains("ret i64"),
+            "diverging `panic()` tail must not emit `ret i64 <placeholder>`; body was:\n{}",
+            body
+        );
+    }
+
+    /// B-2026-07-09-9: `panic("msg")` runs end-to-end — exits 1 and surfaces
+    /// the user message VERBATIM (no "not yet implemented"/"entered unreachable
+    /// code" prefix, which are `todo`/`unreachable`'s defaults).
+    #[test]
+    fn test_e2e_panic_prints_message_verbatim() {
+        if let Some(cap) = run_program_capturing("fn main() { panic(\"kaboom\"); }") {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains("kaboom")
+                    && !cap.stdout.contains("not yet implemented")
+                    && !cap.stdout.contains("entered unreachable code"),
+                "panic() must surface its message verbatim; stdout={:?}",
+                cap.stdout
+            );
+        }
+    }
+
     // ── println signedness round-trips ───────────────────────────
     //
     // Pre-fix `println(x: i32)` passed the raw i32 to printf "%lld";

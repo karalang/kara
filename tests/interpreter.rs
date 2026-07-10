@@ -2357,6 +2357,33 @@ fn test_todo_records_runtime_error() {
     );
 }
 
+#[test]
+fn test_panic_records_runtime_error_verbatim() {
+    // B-2026-07-09-9: `panic("msg")` is a diverging prelude primitive
+    // (mirrors todo/unreachable). Unlike those, its user message is surfaced
+    // VERBATIM — no "not yet implemented"/"entered unreachable code" prefix —
+    // since `panic` is the explicit user-facing form.
+    let errors = runtime_errors(r#"fn main() { panic("boom"); }"#);
+    assert!(
+        errors.iter().any(|e| e.message.contains("boom")
+            && !e.message.contains("not yet implemented")
+            && !e.message.contains("entered unreachable code")),
+        "expected panic() to surface its message verbatim, got {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_panic_no_arg_uses_default_message() {
+    // Bare `panic()` falls back to the "explicit panic" default.
+    let errors = runtime_errors(r#"fn main() { panic(); }"#);
+    assert!(
+        errors.iter().any(|e| e.message.contains("explicit panic")),
+        "expected bare panic() to surface the default message, got {:?}",
+        errors
+    );
+}
+
 // ── Result/Option & ? operator ──────────────────────────────────
 
 #[test]

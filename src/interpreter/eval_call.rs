@@ -1093,7 +1093,7 @@ impl<'a> super::Interpreter<'a> {
         // Built-in functions
         if let ExprKind::Identifier(name) = &callee.kind {
             match name.as_str() {
-                "todo" | "unreachable" => {
+                "todo" | "unreachable" | "panic" => {
                     return self.eval_builtin_diverge(name, args, span);
                 }
                 "Some" => {

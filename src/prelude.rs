@@ -1374,6 +1374,7 @@ pub static STDLIB_METHOD_STABILITY: LazyLock<HashMap<String, StabilityPayload>> 
 pub const PRELUDE_FUNCTIONS: &[&str] = &[
     "todo",
     "unreachable",
+    "panic",
     "dbg",
     "print",
     "println",
