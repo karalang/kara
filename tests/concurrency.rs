@@ -134,9 +134,10 @@ fn test_mut_ref_self_calls_serialize() {
     // Statements 0 (`let a = self.step()`) and 1 (`let b = self.step()`) must
     // never land in the same parallel group.
     assert!(
-        run_fc.parallel_groups.iter().all(|g| {
-            !(g.statement_indices.contains(&0) && g.statement_indices.contains(&1))
-        }),
+        run_fc
+            .parallel_groups
+            .iter()
+            .all(|g| { !(g.statement_indices.contains(&0) && g.statement_indices.contains(&1)) }),
         "two mut-ref-self cursor advances must serialize, got groups {:?}",
         run_fc.parallel_groups
     );
