@@ -1368,13 +1368,19 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(Some(phi.as_basic_value()));
         }
 
-        // unwrap / expect: panic on tag == 0 (None/Err), otherwise
-        // reconstitute the inner value from payload words. `expect` accepts
-        // a single string-message arg; both methods otherwise produce the
-        // same code shape. The message-arg is compiled for side-effects /
-        // typecheck completeness but the panic text is fixed at the call
-        // site for v1 — runtime panic formatting is a deferred polish.
-        if method == "expect" {
+        // unwrap / expect / unwrap_err / expect_err: the extract-or-panic
+        // family. `unwrap`/`expect` extract the Some/Ok payload (tag != 0) and
+        // panic on tag == 0 (None/Err); the `_err` mirrors extract the Err
+        // payload of a `Result` (tag == 0) and panic on tag == 1 (Ok). Both
+        // extract the SAME payload words w0..w2 — a tagged union overlays the
+        // Ok/Err payloads — and the reconstituted inner type differs (T vs E),
+        // supplied by the typechecker via `method_unwrap_inner_types` (E for the
+        // `_err` variants). `expect`/`expect_err` accept a single string-message
+        // arg, compiled for side-effects / typecheck completeness; the panic text
+        // is fixed at the call site for v1.
+        let is_err_variant = method == "unwrap_err" || method == "expect_err";
+        let is_expect = method == "expect" || method == "expect_err";
+        if is_expect {
             for a in args {
                 let _ = self.compile_expr(&a.value)?;
             }
@@ -1389,21 +1395,24 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.unwrap();
         let fail_bb = self.context.append_basic_block(fn_val, "or.unwrap.fail");
         let ok_bb = self.context.append_basic_block(fn_val, "or.unwrap.ok");
-        let zero = i64_t.const_int(0, false);
-        let is_absent = self
+        // Panic tag: `_err` variants fail on Ok (tag == 1); the normal variants
+        // fail on None/Err (tag == 0).
+        let fail_tag = i64_t.const_int(if is_err_variant { 1 } else { 0 }, false);
+        let should_fail = self
             .builder
-            .build_int_compare(IntPredicate::EQ, tag, zero, "or.is_absent")
+            .build_int_compare(IntPredicate::EQ, tag, fail_tag, "or.should_fail")
             .unwrap();
         self.builder
-            .build_conditional_branch(is_absent, fail_bb, ok_bb)
+            .build_conditional_branch(should_fail, fail_bb, ok_bb)
             .unwrap();
 
         // Fail block: panic with a concise message naming the operation.
         self.builder.position_at_end(fail_bb);
-        let msg = if method == "expect" {
-            "expect() called on None/Err"
-        } else {
-            "unwrap() called on None/Err"
+        let msg = match method {
+            "expect" => "expect() called on None/Err",
+            "expect_err" => "expect_err() called on Ok",
+            "unwrap_err" => "unwrap_err() called on Ok",
+            _ => "unwrap() called on None/Err",
         };
         self.emit_panic(msg);
         self.builder.build_unreachable().unwrap();

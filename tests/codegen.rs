@@ -9048,6 +9048,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_result_unwrap_err_expect_err() {
+        // B-2026-07-09-10: `Result::unwrap_err()` / `expect_err()` — the
+        // Err-extracting, Ok-panicking mirrors of `unwrap`/`expect`. Codegen
+        // panics on the Ok tag (tag == 1) and reconstitutes the Err payload
+        // (inner type E, from `method_unwrap_inner_types`), sharing the
+        // extract-or-panic shape with `unwrap`. Covers a scalar `Err(i64)`, a
+        // heap `Err(String)` on a fresh-temp receiver (the common `f().unwrap_err()`
+        // shape), and `expect_err`. `unwrap` on the Ok side stays correct.
+        let output = run_program(
+            "fn parse(ok: bool) -> Result[i64, i64] {\n\
+             \x20   if ok { Result.Ok(42) } else { Result.Err(99) }\n\
+             }\n\
+             fn emsg(ok: bool) -> Result[i64, String] {\n\
+             \x20   if ok { Result.Ok(1) } else { Result.Err(\"the error message here\".to_string()) }\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(parse(true).unwrap());\n\
+             \x20   println(parse(false).unwrap_err());\n\
+             \x20   println(emsg(false).unwrap_err());\n\
+             \x20   println(emsg(false).expect_err(\"wanted an error\"));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(
+            output,
+            "42\n99\nthe error message here\nthe error message here\n"
+        );
+    }
+
+    #[test]
     fn e2e_enum_heap_payload_eq_compares_by_content() {
         // A variant with a concrete `String` payload compares by *content*, not
         // by pointer word — the variant-aware `compile_enum_eq` rebuilds the

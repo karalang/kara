@@ -68,6 +68,50 @@ impl<'a> super::Interpreter<'a> {
                     other => other.clone(),
                 });
             }
+            "unwrap_err" => {
+                return Some(match obj {
+                    Value::EnumVariant {
+                        variant,
+                        data: EnumData::Tuple(vals),
+                        ..
+                    } if variant == "Err" => vals.first().cloned().unwrap_or(Value::Unit),
+                    Value::EnumVariant { variant, .. } if variant == "Ok" => {
+                        return Some(self.record_runtime_error(
+                            format!("called unwrap_err() on {}", variant),
+                            span,
+                        ));
+                    }
+                    other => other.clone(),
+                });
+            }
+            "expect_err" => {
+                let msg = if let Some(arg) = args.first() {
+                    match self.eval_expr_inner(&arg.value) {
+                        Value::String(s) => s,
+                        v => format!("{}", v),
+                    }
+                } else {
+                    String::new()
+                };
+                return Some(match obj {
+                    Value::EnumVariant {
+                        variant,
+                        data: EnumData::Tuple(vals),
+                        ..
+                    } if variant == "Err" => vals.first().cloned().unwrap_or(Value::Unit),
+                    Value::EnumVariant { variant, .. } if variant == "Ok" => {
+                        return Some(self.record_runtime_error(
+                            if msg.is_empty() {
+                                format!("expect_err() called on {}", variant)
+                            } else {
+                                format!("{}: {}", msg, variant)
+                            },
+                            span,
+                        ));
+                    }
+                    other => other.clone(),
+                });
+            }
             "unwrap_or" => {
                 // `unwrap_or(default)` — eager fallback (the arg is always
                 // evaluated, matching Rust semantics, unlike `unwrap_or_else`).

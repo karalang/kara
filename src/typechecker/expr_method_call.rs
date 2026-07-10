@@ -1482,7 +1482,15 @@ impl<'a> super::TypeChecker<'a> {
         let is_builtin_unwrap_family =
             matches!(
                 method,
-                "unwrap" | "expect" | "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or"
+                "unwrap"
+                    | "expect"
+                    | "is_some"
+                    | "is_none"
+                    | "is_ok"
+                    | "is_err"
+                    | "unwrap_or"
+                    | "unwrap_err"
+                    | "expect_err"
             ) && matches!(callee_type_name.as_deref(), Some("Option") | Some("Result"));
         if !is_builtin_unwrap_family {
             if let Some(type_name) = callee_type_name {
@@ -1769,7 +1777,15 @@ impl<'a> super::TypeChecker<'a> {
         // uniformity even though codegen only consumes the tag.
         if matches!(
             method,
-            "unwrap" | "expect" | "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or"
+            "unwrap"
+                | "expect"
+                | "is_some"
+                | "is_none"
+                | "is_ok"
+                | "is_err"
+                | "unwrap_or"
+                | "unwrap_err"
+                | "expect_err"
         ) {
             // `unwrap_or(default)` eagerly evaluates its fallback — infer it
             // here (where `args` is still the method-call arg list, before the
@@ -1791,10 +1807,22 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             };
             if let Some(Type::Named { name, args }) = receiver_named {
-                let inner_ty = match (name.as_str(), args.first()) {
-                    ("Option", Some(t)) => Some(t.clone()),
-                    ("Result", Some(t)) => Some(t.clone()),
-                    _ => None,
+                // `unwrap_err` / `expect_err` extract the ERR payload of a
+                // `Result[T, E]`, so their reconstituted inner type is `E` (the
+                // SECOND type arg), not `T`. Every other family member (incl. the
+                // uniform `is_*` recording) uses the first arg. `_err` is not a
+                // valid method on `Option` (no Err half).
+                let inner_ty = if matches!(method, "unwrap_err" | "expect_err") {
+                    if name == "Result" {
+                        args.get(1).cloned()
+                    } else {
+                        None
+                    }
+                } else {
+                    match name.as_str() {
+                        "Option" | "Result" => args.first().cloned(),
+                        _ => None,
+                    }
                 };
                 if let Some(inner_ty) = inner_ty {
                     let resolved = resolve_type_var_top(&inner_ty, &self.env.substitutions);
@@ -1809,7 +1837,7 @@ impl<'a> super::TypeChecker<'a> {
                     // resolution (field-access dispatch keys off
                     // `var_type_names` populated from `pattern_binding_types`).
                     return match method {
-                        "unwrap" | "expect" | "unwrap_or" => resolved,
+                        "unwrap" | "expect" | "unwrap_or" | "unwrap_err" | "expect_err" => resolved,
                         "is_some" | "is_none" | "is_ok" | "is_err" => Type::Bool,
                         _ => unreachable!(),
                     };

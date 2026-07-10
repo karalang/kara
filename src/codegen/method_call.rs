@@ -1289,7 +1289,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // entirely.
         if matches!(
             method,
-            "unwrap" | "expect" | "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or"
+            "unwrap"
+                | "expect"
+                | "is_some"
+                | "is_none"
+                | "is_ok"
+                | "is_err"
+                | "unwrap_or"
+                | "unwrap_err"
+                | "expect_err"
         ) {
             if let Some(value) =
                 self.try_compile_option_result_method(object, method, args, call_span)?
