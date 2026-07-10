@@ -19595,6 +19595,47 @@ fn main() {
     }
 
     #[test]
+    fn asan_letbound_result_option_heap_unwrap_no_double_free() {
+        // B-2026-07-10-2: `unwrap`/`unwrap_err`/`expect` on a LET-BOUND
+        // Option/Result receiver with a HEAP payload. The extracted String is a
+        // shallow alias of the receiver's inline buffer; unwrap CONSUMES the
+        // receiver, so its scope-exit drop must be disarmed or it double-frees the
+        // buffer the returned value now owns. Fix:
+        // `suppress_inline_option_result_binding_move` zeros the tracked receiver
+        // slot. Looped x20 under LSan.
+        assert_clean_asan_run(
+            r#"
+fn rok(ok: bool) -> Result[String, i64] {
+    if ok { Result.Ok("the ok payload padded out".to_string()) } else { Result.Err(1) }
+}
+fn rerr(ok: bool) -> Result[i64, String] {
+    if ok { Result.Ok(1) } else { Result.Err("the err payload padded out".to_string()) }
+}
+fn opt(some: bool) -> Option[String] {
+    if some { Some("the some payload padded".to_string()) } else { None }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let a = rok(true);
+        let sa = a.unwrap();
+        let b = rerr(false);
+        let sb = b.unwrap_err();
+        let c = opt(true);
+        let sc = c.expect("wanted some");
+        total = total + (sa.len() as i64) + (sb.len() as i64) + (sc.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["1480"],
+            "letbound_result_option_heap_unwrap_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_letbound_struct_vec_shared_elem_moved_into_enum_ctor_no_uaf() {
         // B-2026-07-10-1: a LET-BOUND struct with a `Vec[<enum owning a shared
         // field>]` field AND an `Option[shared]` field, MOVED whole into a

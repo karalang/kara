@@ -1458,6 +1458,15 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?
         };
+        // B-2026-07-10-2 — the extracted payload is a SHALLOW alias of the
+        // receiver's inline/boxed heap buffer. `unwrap`/`expect`/`unwrap_err`/
+        // `expect_err` CONSUME the receiver, so a LET-BOUND receiver's scope-exit
+        // drop must be disarmed or it frees the buffer the returned value now
+        // solely owns (double-free). This zeros a tracked inline/boxed
+        // `Option`/`Result` identifier receiver's slot; it no-ops for a
+        // fresh-temp receiver (not an identifier — already single-owned) and for
+        // a non-heap payload (not in the tracked sets).
+        self.suppress_inline_option_result_binding_move(object);
         Ok(Some(value))
     }
 
