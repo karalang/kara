@@ -103,6 +103,26 @@ conservatively serializes them. The auto-par table is the outlier. This both
 (a) suggests the intended end-state (network verbs are not blanket-conflicting)
 and (b) is a latent inconsistency worth reconciling regardless of this spike.
 
+**Phase 0 caveat — the diagnostics table is currently *unwired* (2026-07-10
+recon).** `effectchecker.rs::effects_conflict` is called only by
+`EffectChecker::find_conflicts`, which in turn has **no production caller** —
+it is exercised solely by `tests/effectchecker.rs`. So the divergence has **no
+live user-facing effect today**: no diagnostic actually consults the `=> false`
+network rule. Two consequences for Phase 0: (i) reconciling the tables is
+near-zero *risk* (nothing in the pipeline shifts) but also near-zero *value*
+until `find_conflicts` is wired into a real diagnostic (e.g. validating an
+explicit `par { … }` block); (ii) **do not "make them agree" by copying the
+diagnostics `(Sends,Sends) => false` into auto-par.** Phase 1 established the
+real answer is connection-identity-dependent — two *ephemeral* (borrow-free,
+distinct-connection) sends don't conflict, but two sends on a *shared* borrowed
+connection do. A flat `=> false` would greenlight the shared-connection race
+(and if `find_conflicts` were later wired to gate `par {}` blocks, it would
+wrongly accept `par { send(conn); send(conn); }`). The correct reconciliation
+unifies **toward the Phase 2 connection-identity model**, not toward either
+flat table. Phase 1's `effects_conflict_excluding_network` is the auto-par-side
+down payment on that: it already encodes "ephemeral ⇒ non-conflicting, shared ⇒
+conflicting" for the cases it can prove.
+
 ## 5. Proposed model — parameterize `Network` by connection identity
 
 The resource for a network op should be the **connection**, not `"Network"`.
@@ -220,9 +240,16 @@ Implement § Parameterized Resources for real and parameterize `Network`:
 
 ## 8. Recommendation & phasing
 
-1. **Phase 0 (independent cleanup, small):** reconcile the conflict-table
-   divergence (§4) — decide the intended network-verb semantics and make the two
-   tables agree. This is worth doing regardless and de-risks both paths.
+1. **Phase 0 (independent cleanup, small — but lower-priority than first
+   scoped):** reconcile the conflict-table divergence (§4) — decide the intended
+   network-verb semantics and make the two tables agree. **2026-07-10 recon
+   reprioritizes this:** the diagnostics table is *unwired* (only tests call
+   `find_conflicts`), so reconciling it now is near-zero risk **and** near-zero
+   value — there is no live diagnostic to fix. It becomes worthwhile only when
+   paired with *wiring* `find_conflicts` into a real diagnostic (e.g. gating
+   `par {}` blocks), and even then it must unify toward the Phase 2
+   connection-identity answer, not a flat table (see §4 caveat). Treat Phase 0
+   as a rider on Phase 2, not a standalone quick win.
 2. **Phase 1 = Path A, scoped to ephemeral calls — ✅ SHIPPED 2026-07-10.** The
    sound fast unblock for the `http_get(a); http_get(b)` flagship. Ships the
    headline demo; contained; no effect-model change. Gated exactly on the
