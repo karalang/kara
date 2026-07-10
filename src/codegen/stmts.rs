@@ -5533,10 +5533,28 @@ impl<'ctx> super::Codegen<'ctx> {
             self.track_vec_var(leaf_ptr, Some(i8t));
             return;
         }
+        // `Vec[shared]` (`Block.stmts: Vec[Stmt]`, `CallExpr.args: Vec[Expr]`) →
+        // deep-copy the outer buffer, rc-INC each element box, and register the
+        // per-element rc-dec drop (`track_owned_destructure_field_cleanup` routes a
+        // `Vec[shared]` to `emit_vec_elem_rc_dec_fn`). The leaf then independently
+        // co-owns every element; the box's rc-drop keeps its originals.
+        if let Some(inner) = crate::codegen::helpers::vec_inner_type_expr(field_te) {
+            if let Some(heap_type) = self.shared_heap_type_for_type_expr(&inner) {
+                if let Some(elem_ty) = self.extract_vec_elem_type(field_te) {
+                    if let Ok(val) = self.builder.build_load(vec_ty, leaf_ptr, "viewdup.vshared") {
+                        let copied = self.emit_vecstr_defensive_copy(val, elem_ty, None);
+                        let _ = self.builder.build_store(leaf_ptr, copied);
+                    }
+                    self.rc_inc_vec_shared_elements(leaf_ptr, heap_type);
+                    self.track_owned_destructure_field_cleanup(var_name, leaf_ptr, field_te);
+                    return;
+                }
+            }
+        }
         // Vec whose element carries NO heap of its own (`Vec[i64]`, `Vec[bool]`) →
         // the outer `{ptr,len,cap}` deep-copy is a complete duplicate. A
-        // `Vec[shared]` / `Vec[String]` / `Vec[agg]` element still aliases the
-        // box's per-element heap after an outer copy, so bail on those.
+        // `Vec[String]` / `Vec[agg]` element still aliases the box's per-element
+        // heap after an outer copy, so bail on those.
         if let Some(elem_ty) = self.extract_vec_elem_type(field_te) {
             let elem_has_own_heap = crate::codegen::helpers::vec_inner_type_expr(field_te)
                 .map(|e| {
@@ -5552,6 +5570,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 let _ = self.builder.build_store(leaf_ptr, copied);
             }
             self.track_vec_var(leaf_ptr, Some(elem_ty));
+            return;
+        }
+        // `Option[shared]` (`Block.tail: Option[Expr]`, `IfNode.else: Option[Expr]`)
+        // → rc-INC the `Some` box in place (`deep_copy_option_inline_payload_in_place`'s
+        // shared leg) and register the tag-guarded scope-exit rc-dec +
+        // move-suppression metadata (`track_rc_option_var`, which also records
+        // `var_option_shared_heap` so a consumed/reassigned leaf is balanced). The
+        // box's rc-drop keeps its own `Some` ref.
+        if let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(field_te) {
+            self.deep_copy_option_inline_payload_in_place(leaf_ptr, field_te);
+            if let Some(option_ty) = self.enum_layouts.get("Option").map(|l| l.llvm_type) {
+                self.track_rc_option_var(var_name, leaf_ptr, option_ty, inner_info.heap_type);
+            }
             return;
         }
         // Nested fully-clone-duplicable struct (String / Vec[heap-free] / nested

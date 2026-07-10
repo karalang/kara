@@ -524,6 +524,78 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(cont_bb);
     }
 
+    /// Rc-INC every element of a `Vec[shared]` value at `vec_field_ptr` whose
+    /// outer `{ptr,len,cap}` buffer was just deep-copied, so the duplicated Vec
+    /// independently co-owns each element box. Mirrors the whole-Vec drop's
+    /// per-element rc-DEC (`emit_vec_elem_rc_dec_fn`: load handle, null-check,
+    /// rc-dec). VIEW-SCOPED (B-2026-07-09-12 clone-on-extract): deliberately NOT
+    /// wired into the shared `deep_copy_*` param-copy machinery, whose earlier
+    /// `Vec[shared]` arm double-inc'd against other per-site inc paths (the
+    /// reverted param-path leak). Here the only inc is this one and the leaf's own
+    /// per-element rc-dec drop balances it.
+    pub(super) fn rc_inc_vec_shared_elements(
+        &mut self,
+        vec_field_ptr: PointerValue<'ctx>,
+        heap_type: StructType<'ctx>,
+    ) {
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let vec_ty = self.vec_struct_type();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let (Ok(data_pp), Ok(len_pp)) = (
+            self.builder
+                .build_struct_gep(vec_ty, vec_field_ptr, 0, "viewvsh.data.pp"),
+            self.builder
+                .build_struct_gep(vec_ty, vec_field_ptr, 1, "viewvsh.len.pp"),
+        ) else {
+            return;
+        };
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_pp, "viewvsh.data")
+            .unwrap()
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_load(i64_t, len_pp, "viewvsh.len")
+            .unwrap()
+            .into_int_value();
+        let loop_bb = self.context.append_basic_block(fn_val, "viewvsh.loop");
+        let body_bb = self.context.append_basic_block(fn_val, "viewvsh.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "viewvsh.exit");
+        let pre_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+        self.builder.position_at_end(loop_bb);
+        let idx_phi = self.builder.build_phi(i64_t, "viewvsh.i").unwrap();
+        idx_phi.add_incoming(&[(&i64_t.const_int(0, false), pre_bb)]);
+        let i = idx_phi.as_basic_value().into_int_value();
+        let in_range = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "viewvsh.cmp")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(in_range, body_bb, exit_bb)
+            .unwrap();
+        self.builder.position_at_end(body_bb);
+        // Each element slot is one pointer-width RC handle.
+        let slot = unsafe {
+            self.builder
+                .build_gep(ptr_ty, data, &[i], "viewvsh.slot")
+                .unwrap()
+        };
+        self.rc_inc_shared_handle_at_slot(slot, heap_type);
+        let body_end = self.builder.get_insert_block().unwrap();
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "viewvsh.next")
+            .unwrap();
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+        idx_phi.add_incoming(&[(&next, body_end)]);
+        self.builder.position_at_end(exit_bb);
+    }
+
     /// Copy one aggregate field in place per its TypeExpr. String/Vec → outer
     /// buffer copy; nested struct → recurse; tuple → recurse per element;
     /// everything else (primitive, borrow, ignored kinds) → no-op.
@@ -1005,7 +1077,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Only the inline-`{ptr,len,cap}` payload class is handled here (the same
     /// class `option_inline_payload_elem` recognises); `field_copy_supported`'s
     /// `Option` arm gates callers to exactly that, keeping copy == drop.
-    fn deep_copy_option_inline_payload_in_place(
+    pub(super) fn deep_copy_option_inline_payload_in_place(
         &mut self,
         field_ptr: PointerValue<'ctx>,
         opt_te: &TypeExpr,

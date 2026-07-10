@@ -19601,6 +19601,58 @@ fn main() {
     }
 
     #[test]
+    fn asan_shared_enum_view_destructure_vec_shared_and_option_shared_no_double_free() {
+        // B-2026-07-09-12 (clone-on-extract half — Vec[shared] + Option[shared]
+        // leaves): the AST sequence-child (`CallNode { args: Vec[Expr] }`) and
+        // optional-child (`NodeData { tail: Option[Expr] }`) shapes, both moved out
+        // of a shared-enum-payload VIEW via destructure and consumed. Pre-fix the
+        // extracted `args` elements / `tail` `Some` box aliased the RC box's heap,
+        // so the leaf's consume AND the box's rc-drop double-freed them. The
+        // clone-on-extract fix deep-copies the Vec buffer + rc-INCs each element
+        // (`rc_inc_vec_shared_elements`) and rc-INCs the `Some` box
+        // (`deep_copy_option_inline_payload_in_place` + `track_rc_option_var`).
+        // Looped x20 under the LSan gate.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Lit(i64), Call(CallNode), Node(NodeData) }
+struct CallNode { args: Vec[Expr], tag: i64 }
+struct NodeData { val: i64, tail: Option[Expr] }
+fn ev(e: Expr) -> i64 {
+    match e {
+        Lit(n) => n,
+        Call(c) => {
+            let CallNode { args, tag } = c;
+            let mut acc = tag;
+            for a in args { acc = acc + ev(a); }
+            acc
+        }
+        Node(nd) => {
+            let NodeData { val, tail } = nd;
+            match tail { Some(t) => val + ev(t), None => val }
+        }
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let mut v: Vec[Expr] = Vec.new();
+        v.push(Expr.Lit(5)); v.push(Expr.Lit(6)); v.push(Expr.Lit(7));
+        let leaf = Expr.Node(NodeData { val: 9, tail: None });
+        v.push(Expr.Node(NodeData { val: 3, tail: Some(leaf) }));
+        let call = Expr.Call(CallNode { args: v, tag: 100 });
+        total = total + ev(call);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["2600"],
+            "shared_enum_view_destructure_vec_shared_and_option_shared",
+        );
+    }
+
+    #[test]
     fn asan_shared_enum_struct_payload_child_moveout_no_double_free() {
         // B-2026-07-09-12 (copy-supported half): a for-loop over a `Vec[shared
         // enum]` whose arm DESTRUCTURES the struct payload and MOVES a heap child
