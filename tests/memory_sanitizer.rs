@@ -504,6 +504,105 @@ fn main() {
     }
 
     #[test]
+    fn asan_map_try_insert_heap_value_overwrite_no_double_free() {
+        // B-2026-07-09-15: `Map[i64, String].try_insert` on the fallible path
+        // must have the SAME single-drop contract as the panicking `insert`.
+        // On an overwrite the runtime copies the OLD value out into the
+        // `Some(old)` payload (the match binding owns + drops it once) and the
+        // bucket adopts the NEW value (the map's handle-drop frees it once).
+        // ASan flags a double-free if either the old value is also freed by the
+        // map, or the new value's adoption double-copies. Looped so any
+        // per-iteration imbalance accumulates; f-strings force non-foldable heap.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        let _ = m.try_insert(i, f"val-{i}-padding-padding-padding");
+        i = i + 1i64;
+    }
+    let mut j: i64 = 0i64;
+    while j < 4i64 {
+        match m.try_insert(j, f"new-{j}-padding-padding-padding") {
+            Ok(o) => match o { Some(v) => println(v), None => println("none") },
+            Err(_) => println("oom"),
+        }
+        j = j + 1i64;
+    }
+    match m.get(2i64) { Some(v) => println(v), None => println("none") }
+}
+"#,
+            &[
+                "val-0-padding-padding-padding",
+                "val-1-padding-padding-padding",
+                "val-2-padding-padding-padding",
+                "val-3-padding-padding-padding",
+                "new-2-padding-padding-padding",
+            ],
+            "asan_map_try_insert_heap_value_overwrite_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_map_try_insert_heap_key_duplicate_no_leak() {
+        // `Map[String, i64].try_insert` with a DUPLICATE heap key: the incoming
+        // key is deep-copied (owned-param defensive copy), but on the update
+        // path the map keeps its stored key and does NOT adopt the incoming
+        // one — so the deep-copied buffer is orphaned and must be freed exactly
+        // once (the no-adopt leak fix, B-2026-06-20-9 sibling). LSan flags the
+        // leak if the free is missing; ASan flags a double-free if it aliases
+        // the map's stored key. Every key uses the SAME literal so every insert
+        // after the first is an update.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut i: i64 = 0i64;
+    while i < 5i64 {
+        let k: String = f"stable-key-padding-padding";
+        match m.try_insert(k, i) {
+            Ok(o) => match o { Some(v) => println(v), None => println("fresh") },
+            Err(_) => println("oom"),
+        }
+        i = i + 1i64;
+    }
+    println(m.len());
+}
+"#,
+            &["fresh", "0", "1", "2", "3", "1"],
+            "asan_map_try_insert_heap_key_duplicate_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_set_try_insert_heap_element_duplicate_no_leak() {
+        // `Set[String].try_insert` with a DUPLICATE heap element: same no-adopt
+        // contract as Set.insert (B-2026-06-20-12) on the fallible path — the
+        // deep-copied incoming element must be freed once on the duplicate
+        // branch, never aliasing the stored element.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    let mut i: i64 = 0i64;
+    while i < 5i64 {
+        let e: String = f"stable-elem-padding-padding";
+        match s.try_insert(e) {
+            Ok(b) => println(b),
+            Err(_) => println("oom"),
+        }
+        i = i + 1i64;
+    }
+    println(s.len());
+}
+"#,
+            &["true", "false", "false", "false", "false", "1"],
+            "asan_set_try_insert_heap_element_duplicate_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_std_mem_take_heap_no_leak_no_double_free() {
         // roadmap Phase 8 § std.mem — `take[T: Default](dest: mut ref T) -> T`
         // over a heap-owning type. `take` monomorphizes `replace(dest,

@@ -3020,6 +3020,7 @@ pub(super) struct Codegen<'ctx> {
     /// the flag contract of `karac_map_free_with_drop_vec`.
     pub(crate) karac_map_free_with_val_drop_fn_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_insert_old_fn: FunctionValue<'ctx>,
+    pub(crate) karac_map_try_insert_fn: FunctionValue<'ctx>,
     /// Borrowed-String-key insert: deep-copies the key only on a fresh
     /// insertion, so a slice-into-source key (`m.insert(s[a..b], v)`)
     /// allocates once per distinct key instead of once per call.
@@ -5287,6 +5288,19 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // karac_map_try_insert(map, key, val, out_old_val, out_failed_bytes) -> i32
+        // Fallible sibling of insert_old (Map/Set/SortedSet.try_insert, phase-8
+        // item 8): 0 = fresh (Ok(None)), 1 = updated (Ok(Some(old))), 2 = OOM
+        // (Err(AllocError.OutOfMemory{*out_failed_bytes}), map unchanged).
+        let map_try_insert_ty = context
+            .i32_type()
+            .fn_type(&[ptr_md, ptr_md, ptr_md, ptr_md, ptr_md], false);
+        let karac_map_try_insert_fn = module.add_function(
+            "karac_map_try_insert",
+            map_try_insert_ty,
+            Some(Linkage::External),
+        );
+
         // karac_map_get(map: ptr, key: ptr, out_val: ptr) -> i1
         let map_get_ty = context
             .bool_type()
@@ -5791,6 +5805,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_map_free_with_drop_vec_fn,
             karac_map_free_with_val_drop_fn_fn,
             karac_map_insert_old_fn,
+            karac_map_try_insert_fn,
             karac_map_insert_borrowed_str_old_fn,
             karac_map_get_fn,
             karac_map_remove_old_fn,

@@ -866,6 +866,150 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(cmp.into())
             }
+            "try_insert" => {
+                // Fallible-allocation companion (phase-8-stdlib-floor item 8):
+                // `Map.try_insert(k, v) -> Result[Option[V], AllocError]`. Uses
+                // the generic pointer runtime path (`karac_map_try_insert`) for
+                // all maps — mono and borrowed-key are perf fast paths
+                // orthogonal to fallibility, so they are intentionally not
+                // mirrored here. Success reuses the panicking `insert` arm's
+                // `Option[V]` construction and wraps it in `Result.Ok`; an OOM
+                // during growth (status 2) becomes `Result.Err(AllocError.
+                // OutOfMemory{bytes})` with the map left unchanged.
+                if args.len() < 2 {
+                    return Err("Map.try_insert requires key and value arguments".to_string());
+                }
+                let fn_val = self.current_fn.unwrap();
+                // Owned-path key/value compilation with the SAME move semantics
+                // as `insert` (defensive-copy owned params, disarm f-string
+                // accumulators + source scope-exit frees so the map is the
+                // unique owner of any adopted buffer).
+                let key_val = self.compile_expr(&args[0].value)?;
+                self.suppress_fstr_acc_if_moved_out(&args[0].value);
+                let key_val = self.maybe_defensive_copy_param_arg(&args[0].value, key_val);
+                let val_val = self.compile_expr(&args[1].value)?;
+                self.suppress_fstr_acc_if_moved_out(&args[1].value);
+                let val_val = self.maybe_defensive_copy_param_arg(&args[1].value, val_val);
+                self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                self.suppress_source_vec_cleanup_for_arg(&args[1].value);
+                self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[1].value);
+                self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[1].value);
+                self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[1].value);
+
+                let key_slot = self.create_entry_alloca(fn_val, "map.try.key", key_ty);
+                let val_slot = self.create_entry_alloca(fn_val, "map.try.val", val_ty);
+                let old_slot = self.create_entry_alloca(fn_val, "map.try.old", val_ty);
+                let bytes_slot = self.create_entry_alloca(fn_val, "map.try.bytes", i64_t.into());
+                self.builder.build_store(key_slot, key_val).unwrap();
+                self.builder.build_store(val_slot, val_val).unwrap();
+
+                let i32_t = self.context.i32_type();
+                let status = self
+                    .builder
+                    .build_call(
+                        self.karac_map_try_insert_fn,
+                        &[
+                            map_handle.into(),
+                            key_slot.into(),
+                            val_slot.into(),
+                            old_slot.into(),
+                            bytes_slot.into(),
+                        ],
+                        "map.try.status",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+
+                let oom_bb = self.context.append_basic_block(fn_val, "map.try.oom");
+                let ok_bb = self.context.append_basic_block(fn_val, "map.try.ok");
+                let done_bb = self.context.append_basic_block(fn_val, "map.try.done");
+                let is_oom = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        status,
+                        i32_t.const_int(2, false),
+                        "map.try.is_oom",
+                    )
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_oom, oom_bb, ok_bb)
+                    .unwrap();
+
+                // OOM: Result.Err(AllocError.OutOfMemory{bytes}). The map is
+                // unchanged, so any incoming owned key/value buffers we
+                // deep-copied are orphaned — free them here (the same
+                // duplicate-key leak the `insert` arm guards, extended to the
+                // value since nothing was stored).
+                self.builder.position_at_end(oom_bb);
+                let bytes = self
+                    .builder
+                    .build_load(i64_t, bytes_slot, "map.try.bytes.v")
+                    .unwrap()
+                    .into_int_value();
+                self.free_str_vec_buffer_if_heap(key_val);
+                self.free_str_vec_buffer_if_heap(val_val);
+                let err_result = self.build_alloc_oom_result(bytes)?;
+                let oom_end_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                // Success: build Option[V] (Some(old) if updated, None if
+                // fresh) and wrap in Result.Ok.
+                self.builder.position_at_end(ok_bb);
+                let existed = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        status,
+                        i32_t.const_int(1, false),
+                        "map.try.existed",
+                    )
+                    .unwrap();
+                let some_bb = self.context.append_basic_block(fn_val, "map.try.some");
+                let none_bb = self.context.append_basic_block(fn_val, "map.try.none");
+                let opt_merge_bb = self.context.append_basic_block(fn_val, "map.try.optmerge");
+                self.builder
+                    .build_conditional_branch(existed, some_bb, none_bb)
+                    .unwrap();
+                // Updated an existing key: the map kept its stored key and did
+                // NOT adopt the incoming one, so free the deep-copied key buffer
+                // (duplicate-key leak, B-2026-06-20-9 sibling).
+                self.builder.position_at_end(some_bb);
+                self.free_str_vec_buffer_if_heap(key_val);
+                let old_val = self
+                    .builder
+                    .build_load(val_ty, old_slot, "map.try.oldv")
+                    .unwrap();
+                let some_payload_words = self.coerce_to_payload_words(old_val, 3)?;
+                let some_end_bb = self.builder.get_insert_block().unwrap();
+                self.builder
+                    .build_unconditional_branch(opt_merge_bb)
+                    .unwrap();
+                self.builder.position_at_end(none_bb);
+                self.builder
+                    .build_unconditional_branch(opt_merge_bb)
+                    .unwrap();
+                self.builder.position_at_end(opt_merge_bb);
+                let opt_agg = self.build_option_some_via_phis(
+                    &some_payload_words,
+                    some_end_bb,
+                    none_bb,
+                    "map.try.opt",
+                );
+                let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[opt_agg])?;
+                let ok_end_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                self.builder.position_at_end(done_bb);
+                let phi = self
+                    .builder
+                    .build_phi(err_result.get_type(), "map.try.result")
+                    .unwrap();
+                phi.add_incoming(&[(&err_result, oom_end_bb), (&ok_result, ok_end_bb)]);
+                Ok(phi.as_basic_value())
+            }
             "insert" => {
                 if args.len() < 2 {
                     return Err("Map.insert requires key and value arguments".to_string());

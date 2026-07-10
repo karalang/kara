@@ -285,6 +285,85 @@ impl KaracMap {
             Layout::array::<u8>(old_cap * (self.key_size + self.val_size).max(1)).unwrap();
         dealloc(old_kv, kv_layout);
     }
+
+    /// Fallible sibling of [`alloc_storage`]: returns `None` on OOM — after
+    /// releasing any partial allocation — instead of dereferencing a null
+    /// `alloc` result (the historical abort/segfault). Backs the growth path of
+    /// `karac_map_try_insert` (the `Map.try_insert` fallible-allocation
+    /// companion, phase-8-stdlib-floor item 8).
+    unsafe fn alloc_storage_fallible(
+        capacity: usize,
+        key_size: usize,
+        val_size: usize,
+    ) -> Option<(*mut u8, *mut u8)> {
+        let status_layout = Layout::array::<u8>(capacity).ok()?;
+        let status = alloc(status_layout);
+        if status.is_null() {
+            return None;
+        }
+        ptr::write_bytes(status, BUCKET_EMPTY, capacity);
+
+        let kv_size = (key_size + val_size).max(1);
+        let kv_layout = match Layout::array::<u8>(capacity * kv_size) {
+            Ok(l) => l,
+            Err(_) => {
+                dealloc(status, status_layout);
+                return None;
+            }
+        };
+        let kv = alloc(kv_layout);
+        if kv.is_null() {
+            dealloc(status, status_layout);
+            return None;
+        }
+        Some((status, kv))
+    }
+
+    /// Fallible sibling of [`resize`]: doubles capacity via
+    /// [`alloc_storage_fallible`]. On OOM the map is left **completely
+    /// unchanged** — nothing is swapped in, no rehash runs, the old storage is
+    /// intact — and the attempted allocation size (status + kv arrays) is
+    /// returned as `Err(bytes)`. The new storage is allocated *before* any
+    /// `self` field is mutated, so the failure path needs no rollback.
+    unsafe fn try_resize(&mut self) -> Result<(), u64> {
+        let new_cap = self.capacity * 2;
+        let (new_status, new_kv) =
+            match Self::alloc_storage_fallible(new_cap, self.key_size, self.val_size) {
+                Some(pair) => pair,
+                None => {
+                    let kv_size = (self.key_size + self.val_size).max(1);
+                    let bytes = (new_cap as u64)
+                        .saturating_add((new_cap as u64).saturating_mul(kv_size as u64));
+                    return Err(bytes);
+                }
+            };
+
+        let old_status = self.status;
+        let old_kv = self.kv;
+        let old_cap = self.capacity;
+
+        self.status = new_status;
+        self.kv = new_kv;
+        self.capacity = new_cap;
+        self.len = 0;
+        self.tombstones = 0;
+
+        for i in 0..old_cap {
+            if *old_status.add(i) == BUCKET_OCCUPIED {
+                let kv_size = self.key_size + self.val_size;
+                let key = old_kv.add(i * kv_size) as *const c_void;
+                let val = old_kv.add(i * kv_size + self.key_size) as *const c_void;
+                self.insert(key, val);
+            }
+        }
+
+        let status_layout = Layout::array::<u8>(old_cap).unwrap();
+        dealloc(old_status, status_layout);
+        let kv_layout =
+            Layout::array::<u8>(old_cap * (self.key_size + self.val_size).max(1)).unwrap();
+        dealloc(old_kv, kv_layout);
+        Ok(())
+    }
 }
 
 struct KaracMapIter {
@@ -462,6 +541,73 @@ pub unsafe extern "C" fn karac_map_insert_old(
     );
     *m.status.add(slot) = BUCKET_OCCUPIED;
     exists
+}
+
+/// Fallible sibling of [`karac_map_insert_old`]: the runtime backing for the
+/// `Map.try_insert` / `Set.try_insert` / `SortedSet.try_insert` fallible-
+/// allocation companions (phase-8-stdlib-floor item 8). Behaves exactly like
+/// `karac_map_insert_old` — copies any displaced old value into `out_old_val`,
+/// distinguishing a fresh insertion from an update — **except** the load-factor
+/// growth routes through [`try_resize`], which leaves the map untouched on OOM
+/// instead of aborting. Return code:
+///   * `0` — fresh insertion; `out_old_val` untouched (`Ok(None)`).
+///   * `1` — updated an existing key; old value copied to `out_old_val`
+///     (`Ok(Some(old))`).
+///   * `2` — OOM during growth; the map is unchanged, nothing is written to
+///     `out_old_val`, and the attempted allocation byte count is stored through
+///     `out_failed_bytes` (`Err(AllocError.OutOfMemory{bytes})`).
+///
+/// Codegen (`compile_map_try_insert`) branches on the code: `2` builds the
+/// `Result.Err`; `0`/`1` reuse the panicking `Map.insert` arm's `Option[V]`
+/// construction and wrap it in `Result.Ok`. Growth is the *only* allocation an
+/// insert performs (the slot write is copy-only), so making `try_resize`
+/// fallible makes the whole operation fallible.
+#[no_mangle]
+pub unsafe extern "C" fn karac_map_try_insert(
+    map: *mut c_void,
+    key: *const c_void,
+    val: *const c_void,
+    out_old_val: *mut c_void,
+    out_failed_bytes: *mut u64,
+) -> i32 {
+    let m = &mut *(map as *mut KaracMap);
+    // Grow before probing so find_insert_slot always finds a slot — but do it
+    // fallibly. On OOM the map is unchanged; report the attempted bytes.
+    if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
+        if let Err(bytes) = m.try_resize() {
+            if !out_failed_bytes.is_null() {
+                *out_failed_bytes = bytes;
+            }
+            return 2;
+        }
+    }
+    let (slot, exists) = m.find_insert_slot(key);
+    let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
+    let kv_offset = slot * (m.key_size + m.val_size);
+    if exists {
+        ptr::copy_nonoverlapping(
+            m.kv.add(kv_offset + m.key_size),
+            out_old_val as *mut u8,
+            m.val_size,
+        );
+    } else {
+        ptr::copy_nonoverlapping(key as *const u8, m.kv.add(kv_offset), m.key_size);
+        m.len += 1;
+        if was_tombstone {
+            m.tombstones -= 1;
+        }
+    }
+    ptr::copy_nonoverlapping(
+        val as *const u8,
+        m.kv.add(kv_offset + m.key_size),
+        m.val_size,
+    );
+    *m.status.add(slot) = BUCKET_OCCUPIED;
+    if exists {
+        1
+    } else {
+        0
+    }
 }
 
 /// Borrowed-key insert for **String-keyed** maps (`key_size == 24`, the
@@ -841,5 +987,72 @@ mod tests {
         assert_eq!(offset_of!(KaracMap, capacity), 16);
         assert_eq!(offset_of!(KaracMap, len), 24);
         assert_eq!(offset_of!(KaracMap, tombstones), 32);
+    }
+
+    use std::ffi::c_void;
+
+    unsafe extern "C" fn i64_hash(k: *const c_void) -> u64 {
+        // Trivial identity-ish hash; adequate for a correctness test.
+        let v = std::ptr::read_unaligned(k as *const i64);
+        (v as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    }
+    unsafe extern "C" fn i64_eq(a: *const c_void, b: *const c_void) -> bool {
+        std::ptr::read_unaligned(a as *const i64) == std::ptr::read_unaligned(b as *const i64)
+    }
+
+    /// `karac_map_try_insert` success paths: fresh insert returns 0, an update
+    /// returns 1 and copies the old value out, growth across many inserts (which
+    /// drives `try_resize`) stays correct, and every key round-trips through
+    /// `get`. OOM (code 2) is not reachable in a unit test without an allocator
+    /// shim, so the E2E + interpreter-oracle codegen tests cover the shape; here
+    /// the invariant is that the fallible path is behavior-identical to
+    /// `insert_old` on the success branch.
+    #[test]
+    fn try_insert_fresh_update_and_growth() {
+        unsafe {
+            let map = super::karac_map_new(8, 8, i64_hash, i64_eq);
+            let mut old: i64 = 0;
+            let mut failed: u64 = 0;
+            // 64 fresh inserts (forces several try_resize growths from cap 8).
+            for i in 0..64i64 {
+                let v = i * 10;
+                let code = super::karac_map_try_insert(
+                    map,
+                    &i as *const i64 as *const c_void,
+                    &v as *const i64 as *const c_void,
+                    &mut old as *mut i64 as *mut c_void,
+                    &mut failed as *mut u64,
+                );
+                assert_eq!(code, 0, "fresh insert of {i} should return 0");
+            }
+            assert_eq!(super::karac_map_len(map), 64);
+            // Update an existing key: returns 1 with the old value copied out.
+            let k = 7i64;
+            let nv = 9999i64;
+            old = -1;
+            let code = super::karac_map_try_insert(
+                map,
+                &k as *const i64 as *const c_void,
+                &nv as *const i64 as *const c_void,
+                &mut old as *mut i64 as *mut c_void,
+                &mut failed as *mut u64,
+            );
+            assert_eq!(code, 1, "update should return 1");
+            assert_eq!(old, 70, "old value of key 7 was 7*10");
+            assert_eq!(super::karac_map_len(map), 64, "update must not grow len");
+            // Every key round-trips, and the updated one reads the new value.
+            for i in 0..64i64 {
+                let mut got: i64 = -1;
+                let hit = super::karac_map_get(
+                    map,
+                    &i as *const i64 as *const c_void,
+                    &mut got as *mut i64 as *mut c_void,
+                );
+                assert!(hit, "key {i} must be present");
+                let expected = if i == 7 { 9999 } else { i * 10 };
+                assert_eq!(got, expected, "value for key {i}");
+            }
+            super::karac_map_free(map);
+        }
     }
 }

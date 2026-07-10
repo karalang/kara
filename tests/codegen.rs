@@ -6742,6 +6742,105 @@ fn main() {
     }
 
     #[test]
+    fn e2e_map_try_insert_fallible_codegen() {
+        // phase-8-stdlib-floor item 8 (B-2026-07-09-15): `Map.try_insert(k, v)`
+        // lowers to `karac_map_try_insert` and returns `Result[Option[V],
+        // AllocError]` — `Ok(None)` on a fresh insert, `Ok(Some(old))` on an
+        // overwrite, `Err` on OOM. The host never OOMs, so verify the fresh vs.
+        // overwrite discrimination + that growth across many inserts stays
+        // correct (drives `try_resize`). Byte-identical to the `karac run`
+        // interpreter oracle.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut m: Map[i64, i64] = Map.new();\n\
+                 match m.try_insert(1_i64, 10_i64) {\n\
+                     Ok(o) => match o { None => println(\"fresh\"), Some(v) => println(v) },\n\
+                     Err(_) => println(\"oom\"),\n\
+                 }\n\
+                 match m.try_insert(1_i64, 20_i64) {\n\
+                     Ok(o) => match o { None => println(\"fresh\"), Some(v) => println(v) },\n\
+                     Err(_) => println(\"oom\"),\n\
+                 }\n\
+                 let mut i = 0_i64;\n\
+                 while i < 100_i64 { let _ = m.try_insert(i, i * 2_i64); i = i + 1_i64; }\n\
+                 println(m.len());\n\
+                 match m.try_insert(50_i64, 999_i64) {\n\
+                     Ok(o) => match o { None => println(\"fresh\"), Some(v) => println(v) },\n\
+                     Err(_) => println(\"oom\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "fresh\n10\n100\n100\n");
+        }
+    }
+
+    #[test]
+    fn e2e_map_try_insert_heap_value_codegen() {
+        // `Map[i64, String].try_insert` — the `Ok` payload is `Option[String]`,
+        // a heap value that must pack into the `Result` payload and round-trip
+        // exactly like the panicking `Map.insert`'s `Option[String]`. Exercises
+        // the multi-word `Option` reconstruction on the fallible path.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut m: Map[i64, String] = Map.new();\n\
+                 match m.try_insert(1_i64, \"hello\") {\n\
+                     Ok(o) => match o { None => println(\"fresh\"), Some(v) => println(v) },\n\
+                     Err(_) => println(\"oom\"),\n\
+                 }\n\
+                 match m.try_insert(1_i64, \"world\") {\n\
+                     Ok(o) => match o { None => println(\"fresh\"), Some(v) => println(v) },\n\
+                     Err(_) => println(\"oom\"),\n\
+                 }\n\
+                 match m.get(1_i64) { Some(v) => println(v), None => println(\"none\") }\n\
+             }",
+        ) {
+            assert_eq!(out, "fresh\nhello\nworld\n");
+        }
+    }
+
+    #[test]
+    fn e2e_set_try_insert_fallible_codegen() {
+        // `Set.try_insert(k) -> Result[bool, AllocError]`: `Ok(true)` newly
+        // inserted, `Ok(false)` duplicate. Set is `Map[T, ()]`, routed through
+        // the same `karac_map_try_insert`.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut s: Set[i64] = Set.new();\n\
+                 match s.try_insert(7_i64) { Ok(b) => println(b), Err(_) => println(\"oom\") }\n\
+                 match s.try_insert(7_i64) { Ok(b) => println(b), Err(_) => println(\"oom\") }\n\
+                 let mut i = 0_i64;\n\
+                 while i < 50_i64 { let _ = s.try_insert(i); i = i + 1_i64; }\n\
+                 println(s.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "true\nfalse\n50\n");
+        }
+    }
+
+    #[test]
+    fn e2e_map_try_insert_question_propagation_codegen() {
+        // `Map.try_insert` composes with `?`: a helper returning
+        // `Result[(), AllocError]` propagates any `Err` and discards the
+        // `Option[V]` old value on success.
+        if let Some(out) = run_program(
+            "fn fill(m: mut ref Map[i64, i64]) -> Result[(), AllocError] {\n\
+                 m.try_insert(1_i64, 100_i64)?;\n\
+                 m.try_insert(2_i64, 200_i64)?;\n\
+                 Ok(())\n\
+             }\n\
+             fn main() {\n\
+                 let mut m: Map[i64, i64] = Map.new();\n\
+                 match fill(m) {\n\
+                     Ok(_) => println(m.len()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n");
+        }
+    }
+
+    #[test]
     fn e2e_try_push_question_propagation_codegen() {
         // `try_push` composes with `?` and `Ok(())` (Result[(), AllocError]).
         if let Some(out) = run_program(
@@ -17622,11 +17721,13 @@ fn main() {
     fn test_try_companion_instance_codegen_rejected_cleanly() {
         // Fallible-allocation `try_*` companions whose codegen lowering is still
         // blocked are interpreter-only; `karac build` must fail loud with the
-        // actionable item-8 message rather than mis-lower. The remaining blocked
-        // surface is the Map/Set/SortedSet family (it needs a fallible
-        // `karac_map_*` runtime API): both `try_insert` and `try_clone` on a Map
-        // hit the guard. `try_clone` on a Vec/String/VecDeque now compiles, so we
-        // exercise the guard through a `Map` receiver's `try_clone`.
+        // actionable item-8 message rather than mis-lower. `Map`/`Set`
+        // `try_insert` now compiles (B-2026-07-09-15, via the fallible
+        // `karac_map_try_insert` runtime path), but `try_clone` on a Map/Set is
+        // still blocked (its fallible clone needs the whole `karac_map_*` clone
+        // surface made fallible). `try_clone` on a Vec/String/VecDeque compiles,
+        // so we exercise the remaining guard through a `Map` receiver's
+        // `try_clone`.
         let mut parsed = karac::parse(
             "fn main() {\n\
                  let mut m: Map[String, i64] = Map.new();\n\

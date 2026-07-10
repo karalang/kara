@@ -129,6 +129,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         map::karac_map_free_with_val_drop_fn,
         map::karac_map_insert,
         map::karac_map_insert_old,
+        map::karac_map_try_insert,
         map::karac_map_insert_borrowed_str_old,
         map::karac_map_get,
         map::karac_map_remove,

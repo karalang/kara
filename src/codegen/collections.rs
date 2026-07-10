@@ -169,6 +169,115 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(inserted.into())
             }
+            "try_insert" => {
+                // Fallible-allocation companion (phase-8-stdlib-floor item 8):
+                // `Set.try_insert(k) -> Result[bool, AllocError]`. Set lowers to
+                // `Map[T, ()]` (val_size 0), so this routes through the generic
+                // fallible `karac_map_try_insert`. status 0 = fresh
+                // (`Ok(true)` — newly inserted), 1 = duplicate (`Ok(false)`),
+                // 2 = OOM during growth (`Err(AllocError.OutOfMemory{bytes})`,
+                // set unchanged).
+                if args.is_empty() {
+                    return Err("Set.try_insert requires a value argument".to_string());
+                }
+                let fn_val = self.current_fn.unwrap();
+                let elem_val = self.compile_expr(&args[0].value)?;
+                self.suppress_fstr_acc_if_moved_out(&args[0].value);
+                let elem_val = self.maybe_defensive_copy_param_arg(&args[0].value, elem_val);
+                self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                let elem_slot = self.create_entry_alloca(fn_val, "set.try.elem", elem_ty);
+                self.builder.build_store(elem_slot, elem_val).unwrap();
+                // val_size == 0 → the out-old and val slots are a shared dummy.
+                let dummy = self.create_entry_alloca(fn_val, "set.try.dummy", i8_t.into());
+                let bytes_slot = self.create_entry_alloca(fn_val, "set.try.bytes", i64_t.into());
+                let i32_t = self.context.i32_type();
+                let status = self
+                    .builder
+                    .build_call(
+                        self.karac_map_try_insert_fn,
+                        &[
+                            set_handle.into(),
+                            elem_slot.into(),
+                            dummy.into(),
+                            dummy.into(),
+                            bytes_slot.into(),
+                        ],
+                        "set.try.status",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+
+                let oom_bb = self.context.append_basic_block(fn_val, "set.try.oom");
+                let ok_bb = self.context.append_basic_block(fn_val, "set.try.ok");
+                let done_bb = self.context.append_basic_block(fn_val, "set.try.done");
+                let is_oom = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        status,
+                        i32_t.const_int(2, false),
+                        "set.try.is_oom",
+                    )
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_oom, oom_bb, ok_bb)
+                    .unwrap();
+
+                // OOM: the set is unchanged, so the deep-copied incoming element
+                // is orphaned — free it (heap elements only). Then Err.
+                self.builder.position_at_end(oom_bb);
+                let bytes = self
+                    .builder
+                    .build_load(i64_t, bytes_slot, "set.try.bytes.v")
+                    .unwrap()
+                    .into_int_value();
+                if self.llvm_ty_is_vec_struct(elem_ty) {
+                    self.free_str_vec_buffer_if_heap(elem_val);
+                }
+                let err_result = self.build_alloc_oom_result(bytes)?;
+                let oom_end_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                // OK: inserted == (status == 0). On the duplicate path the set
+                // kept its stored element and did NOT adopt the incoming one —
+                // free the orphaned copy (heap elements only, the B-2026-06-20-12
+                // no-adopt leak fix mirrored for the fallible path).
+                self.builder.position_at_end(ok_bb);
+                let inserted = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        status,
+                        i32_t.const_int(0, false),
+                        "set.try.inserted",
+                    )
+                    .unwrap();
+                if self.llvm_ty_is_vec_struct(elem_ty) {
+                    let dup_bb = self.context.append_basic_block(fn_val, "set.try.dup");
+                    let cont_bb = self.context.append_basic_block(fn_val, "set.try.cont");
+                    self.builder
+                        .build_conditional_branch(inserted, cont_bb, dup_bb)
+                        .unwrap();
+                    self.builder.position_at_end(dup_bb);
+                    self.free_str_vec_buffer_if_heap(elem_val);
+                    self.builder.build_unconditional_branch(cont_bb).unwrap();
+                    self.builder.position_at_end(cont_bb);
+                }
+                let ok_result =
+                    self.build_nonshared_enum_value("Result", "Ok", &[inserted.into()])?;
+                let ok_end_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                self.builder.position_at_end(done_bb);
+                let phi = self
+                    .builder
+                    .build_phi(err_result.get_type(), "set.try.result")
+                    .unwrap();
+                phi.add_incoming(&[(&err_result, oom_end_bb), (&ok_result, ok_end_bb)]);
+                Ok(phi.as_basic_value())
+            }
             "contains" => {
                 if args.is_empty() {
                     return Err("Set.contains requires a value argument".to_string());
