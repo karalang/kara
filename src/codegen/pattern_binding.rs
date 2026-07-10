@@ -386,27 +386,68 @@ impl<'ctx> super::Codegen<'ctx> {
                 let bound_type = self.var_type_names.get(name.as_str()).cloned();
                 if !self.pattern_binding_is_borrow {
                     if let Some(tn) = bound_type.as_deref() {
-                        // The user-struct arm is skipped for an `Option`/`Result`
-                        // scrutinee: a `Some(h)` / `Ok(h)` struct payload is owned
-                        // by the Option's inline/boxed cleanup, so tracking it here
-                        // would double-free. `Response`/`HttpError` keep their
-                        // by-name handling (their own move-suppression covers them).
-                        // B-2026-06-14-31 — also skipped for a user `shared enum`
-                        // scrutinee: a `Wrapped(w)` struct payload bound here is a
-                        // by-value VIEW of the RC box's inline payload, so its
-                        // Vec/String buffer aliases the buffer the still-live box
-                        // owns. `track_struct_var`'s `__karac_drop_struct_<S>` would
-                        // `free` that buffer prematurely, double-freeing against the
-                        // box's rc-drop walker (the sole owner). Same shape as the
-                        // Option/Result skip just above.
-                        let is_copy_supported_user_struct = !self
-                            .pattern_binding_scrutinee_is_option_result
-                            && !self.pattern_binding_scrutinee_is_shared_enum
+                        // B-2026-07-09-12 — a user `shared enum` scrutinee whose
+                        // `Wrapped(w)` struct payload is bound here. The
+                        // reconstructed struct is a by-value VIEW of the RC box's
+                        // inline payload (B-2026-06-14-31): its String/Vec buffers
+                        // and shared inner handles alias the buffers the still-live
+                        // box owns. Read-only, that view is sound (the box's
+                        // rc-drop is the sole owner). But if the arm MOVES a heap
+                        // child OUT of the view — `let Id { name, .. } = n; name`
+                        // returns the extracted String — both the escaped child and
+                        // the box's rc-drop free the same buffer (double-free).
+                        // FIX: upgrade the view to an OWNED deep clone in place. The
+                        // box keeps its untouched original; the binding owns
+                        // independent heap, and its scope-exit struct-drop frees
+                        // exactly the clone. This reduces the shared-enum case to
+                        // the already-sound owned-payload path below
+                        // (`track_struct_var` + the move-out suppression set), and
+                        // is sound for ANY refcount (a genuinely shared rc>1 box is
+                        // never mutated — each binding gets its own copy).
+                        //
+                        // GATED on `struct_clone_fully_duplicates` (NOT the wider
+                        // `aggregate_param_copy_supported_struct`): the clone is
+                        // applied only to a payload `emit_struct_clone_fn`
+                        // reproduces as a fully independent deep copy — String /
+                        // Vec[non-shared] / nested such struct. A payload carrying a
+                        // shared / `Option[shared]` / `Vec[shared]` / enum / Map /
+                        // Set field is excluded: the clone infra shallow-copies a
+                        // shared handle with no refcount bump, so cloning it aliases
+                        // the element and later SEGVs / double-frees (the wider
+                        // copy-supported predicate admits those because the
+                        // deep-copy-ON-ENTRY path — not the clone path — handles
+                        // them). Excluded payloads keep the pre-existing view
+                        // behavior (read-only sound); a move-out of THEIR heap
+                        // children is the remaining open half of B-2026-07-09-12,
+                        // tracked in the ledger.
+                        if self.pattern_binding_scrutinee_is_shared_enum
                             && self.struct_types.contains_key(tn)
                             && !self.shared_types.contains_key(tn)
-                            && self.aggregate_param_copy_supported_struct(tn, &mut Vec::new());
-                        if matches!(tn, "Response" | "HttpError") || is_copy_supported_user_struct {
-                            self.track_struct_var(tn, alloca);
+                            && self.struct_clone_fully_duplicates(tn, &mut Vec::new())
+                        {
+                            if let Some(clone_fn) = self.emit_struct_clone_fn(tn) {
+                                self.builder
+                                    .build_call(clone_fn, &[alloca.into(), alloca.into()], "")
+                                    .unwrap();
+                                self.track_struct_var(tn, alloca);
+                            }
+                        } else {
+                            // The user-struct arm is skipped for an `Option`/`Result`
+                            // scrutinee: a `Some(h)` / `Ok(h)` struct payload is owned
+                            // by the Option's inline/boxed cleanup, so tracking it here
+                            // would double-free. `Response`/`HttpError` keep their
+                            // by-name handling (their own move-suppression covers them).
+                            let is_copy_supported_user_struct = !self
+                                .pattern_binding_scrutinee_is_option_result
+                                && !self.pattern_binding_scrutinee_is_shared_enum
+                                && self.struct_types.contains_key(tn)
+                                && !self.shared_types.contains_key(tn)
+                                && self.aggregate_param_copy_supported_struct(tn, &mut Vec::new());
+                            if matches!(tn, "Response" | "HttpError")
+                                || is_copy_supported_user_struct
+                            {
+                                self.track_struct_var(tn, alloca);
+                            }
                         }
                     }
                 }

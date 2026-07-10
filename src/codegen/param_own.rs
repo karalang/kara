@@ -365,6 +365,78 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Does `emit_struct_clone_fn` produce a fully INDEPENDENT deep copy of this
+    /// struct — every heap field duplicated into its own allocation with no
+    /// aliasing back to the source? This is STRICTLY narrower than
+    /// `aggregate_param_copy_supported_struct`, which describes what the
+    /// deep-copy-ON-ENTRY path (`deep_copy_*_in_place`) can duplicate. That path
+    /// handles `Vec[shared]` / `Option[shared]` (rc-inc'ing the shared elements);
+    /// the CLONE path (`emit_clone_fn_for_type_expr`) does NOT — it shallow-copies
+    /// a shared handle with no refcount bump, so cloning a struct that transitively
+    /// owns a shared element aliases it and later double-frees / SEGVs. This
+    /// predicate therefore admits ONLY String, primitive, `Vec`/`VecDeque` of a
+    /// clone-duplicable element, and nested clone-duplicable structs; it bails on
+    /// any shared type, `Option`/`Result`/enum, `Map`/`Set`, or `Slice` field. It
+    /// gates the B-2026-07-09-12 deep-clone-on-bind so only the shapes the clone
+    /// infra reproduces exactly are upgraded from view to owned copy.
+    pub(super) fn struct_clone_fully_duplicates(
+        &self,
+        struct_name: &str,
+        stack: &mut Vec<String>,
+    ) -> bool {
+        if stack.iter().any(|s| s == struct_name) {
+            return false;
+        }
+        if self.shared_types.contains_key(struct_name) {
+            return false;
+        }
+        let Some(ftes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
+            return false;
+        };
+        stack.push(struct_name.to_string());
+        let ok = ftes
+            .iter()
+            .all(|fte| self.clone_field_fully_duplicates(fte, stack));
+        stack.pop();
+        ok
+    }
+
+    fn clone_field_fully_duplicates(&self, fte: &TypeExpr, stack: &mut Vec<String>) -> bool {
+        match &fte.kind {
+            TypeKind::Tuple(elems) => elems
+                .iter()
+                .all(|e| self.clone_field_fully_duplicates(e, stack)),
+            // Borrows carry no owned heap — the clone leaves them as shared views
+            // and the struct drop never frees them.
+            TypeKind::Ref(_) | TypeKind::MutRef(_) => true,
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str).unwrap_or("");
+                match head {
+                    "String" => true,
+                    // Vec/VecDeque clone deep-copies the buffer AND clones each
+                    // element — sound only when the element itself fully
+                    // duplicates (so a `Vec[shared]` bails here: its element clone
+                    // would shallow-copy the handle).
+                    "Vec" | "VecDeque" => match p.generic_args.as_ref().and_then(|a| a.first()) {
+                        Some(crate::ast::GenericArg::Type(elem_te)) => {
+                            self.clone_field_fully_duplicates(elem_te, stack)
+                        }
+                        _ => false,
+                    },
+                    _ if is_primitive_type_name(head) => true,
+                    _ if self.shared_types.contains_key(head) => false,
+                    _ if self.struct_types.contains_key(head) => {
+                        self.struct_clone_fully_duplicates(head, stack)
+                    }
+                    // Option / Result / user enum (the clone infra's niche +
+                    // shared-payload gaps), Map / Set, Slice, and unknowns → bail.
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// B-2026-07-04-7 — is an `Option[P]` payload `P` (a non-shared user
     /// struct/enum) deep-COPYABLE, so `field_copy_supported`'s `Option` arm can
     /// admit it (making the owning struct callee-owned and its `OptionInline`

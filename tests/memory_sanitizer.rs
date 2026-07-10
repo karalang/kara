@@ -19511,6 +19511,72 @@ fn main() {
     }
 
     #[test]
+    fn asan_shared_enum_struct_payload_child_moveout_no_double_free() {
+        // B-2026-07-09-12 (copy-supported half): a for-loop over a `Vec[shared
+        // enum]` whose arm DESTRUCTURES the struct payload and MOVES a heap child
+        // OUT of it (`let Id { name, .. } = n; name` returns the extracted
+        // String). The reconstructed struct payload `n` is a by-value VIEW of the
+        // RC box's inline buffer; without the fix the returned `name` and the
+        // box's rc-drop both free the same String buffer — a double-free (the
+        // minimal parser-runtime repro). The fix upgrades the view to an OWNED
+        // deep clone at the shared-enum match bind, gated on
+        // `struct_clone_fully_duplicates` (payload heap is String / Vec[non-
+        // shared] / nested such — reproduced exactly by `emit_struct_clone_fn`).
+        // Second variant exercises the Vec[non-shared] clone leg (`Row { cells:
+        // Vec[i64] }`, sum a moved-out Vec). Looped so a per-iteration double-free
+        // or leak is visible to the Linux-CI LSan gate.
+        assert_clean_asan_run(
+            r#"
+struct Id { name: String, span: i64 }
+struct Row { first: String, cells: Vec[i64] }
+shared enum Node { Ident(Id), Rowed(Row) }
+fn render_ident(e: Node) -> String {
+    match e {
+        Ident(n) => { let Id { name, span } = n; name }
+        Rowed(r) => { let Row { first, cells } = r; first }
+    }
+}
+fn sum_row(e: Node) -> i64 {
+    match e {
+        Ident(_) => 0,
+        Rowed(r) => {
+            let Row { first, cells } = r;
+            let mut acc: i64 = 0;
+            for c in cells { acc = acc + c; }
+            acc
+        }
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut last = "".to_string();
+    let mut k: i64 = 0;
+    while k < 20 {
+        let mut out = "".to_string();
+        let mut v: Vec[Node] = Vec.new();
+        v.push(Node.Ident(Id { name: "hi".to_string(), span: 1 }));
+        let mut cs: Vec[i64] = Vec.new();
+        cs.push(3); cs.push(4);
+        v.push(Node.Rowed(Row { first: "row".to_string(), cells: cs }));
+        for e in v { out.push_str(render_ident(e)); }
+        let mut v2: Vec[Node] = Vec.new();
+        let mut cs2: Vec[i64] = Vec.new();
+        cs2.push(5); cs2.push(6); cs2.push(7);
+        v2.push(Node.Rowed(Row { first: "r2".to_string(), cells: cs2 }));
+        for e in v2 { total = total + sum_row(e); }
+        last = out;
+        k = k + 1;
+    }
+    println(last);
+    println(total);
+}
+"#,
+            &["hirow", "360"],
+            "shared_enum_struct_payload_child_moveout_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_shared_enum_boxed_struct_payload_moveout_no_double_free() {
         // B-2026-06-20: a shared-enum variant whose struct payload is heap-BOXED
         // (`Blk(Block)` / `Iff(IfNode)` — wider than the payload area). The box
