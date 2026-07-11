@@ -594,6 +594,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // different function inline.
             let saved_bb = self.builder.get_insert_block();
             let saved_fn = self.current_fn;
+            // The mono body is compiled INLINE mid-caller; `compile_mono_function`
+            // sets `current_fn_name` to the mono's name so a valueless `return;`
+            // in a void mono emits `ret void` — not the caller's identity. Without
+            // this, a mono compiled inside `main` inherited `current_fn_name ==
+            // "main"` and a bare `return;` mis-emitted `ret i32 0` (main's exit-code
+            // signature) into the void mono (B-2026-07-11-28).
+            let saved_fn_name = std::mem::take(&mut self.current_fn_name);
             let saved_vars = std::mem::take(&mut self.variables);
             let saved_var_types = std::mem::take(&mut self.var_type_names);
             // The mono body is compiled INLINE, mid-caller — so its tensor
@@ -701,6 +708,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_type_names = saved_var_types;
             self.variables = saved_vars;
             self.current_fn = saved_fn;
+            self.current_fn_name = saved_fn_name;
             if let Some(bb) = saved_bb {
                 self.builder.position_at_end(bb);
             }
@@ -1317,6 +1325,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .ok_or_else(|| format!("Mono '{}' not declared", mangled))?;
 
         self.current_fn = Some(fn_val);
+        // Identify the mono by its own name (mirrors `compile_function`), so a
+        // valueless `return;` in a void mono checks against the right identity —
+        // the caller saved/restores this around the inline body (B-2026-07-11-28).
+        self.current_fn_name = func.name.clone();
         self.variables.clear();
         self.var_type_names.clear();
         // Per-binding layout carrier (slice 5): the caller's map was swapped out
@@ -1612,19 +1624,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             self.emit_scope_cleanup();
-            if let Some(val) = result {
-                // Scalar width coercion at the tail-ret boundary, mirroring the
-                // non-generic path (`compile_function`, functions.rs). A mono
-                // declared `-> u8` whose body tail is the i64 literal `255`
-                // would otherwise emit `ret i64 255` into an `i8`-returning fn
-                // and fail module verification; `coerce_to_current_ret_type`
-                // truncates to the declared narrow return width (no-op for
-                // matching / non-scalar returns). Narrow-width return from a
-                // generic mono (B-2026-07-03-N).
-                let val = self.coerce_to_current_ret_type(val);
-                self.builder.build_return(Some(&val)).unwrap();
-            } else {
-                self.builder.build_return(None).unwrap();
+            // A VOID monomorph whose body tail still compiled to a value must
+            // `ret void`, mirroring the non-generic `compile_function` guard
+            // (functions.rs, `fn_returns_void`). A statement-position tail `if`
+            // yields a default `i64 0` from `compile_block`, so without this
+            // guard `fn f[T](x: T) { if true { } }` monomorphized to
+            // `ret i64 0` in a void function and failed module verification
+            // ("non-void return in Function of void return type", B-2026-07-11-28).
+            // `compile_mono_function` uses the conventional by-value return ABI
+            // (no sret / niche / box paths here), so a void LLVM return type is
+            // always a true unit-returning fn — no result to store elsewhere.
+            let fn_returns_void = self
+                .current_fn
+                .and_then(|f| f.get_type().get_return_type())
+                .is_none();
+            match result {
+                Some(val) if !fn_returns_void => {
+                    // Scalar width coercion at the tail-ret boundary, mirroring
+                    // the non-generic path. A mono declared `-> u8` whose body
+                    // tail is the i64 literal `255` would otherwise emit
+                    // `ret i64 255` into an `i8`-returning fn and fail module
+                    // verification; `coerce_to_current_ret_type` truncates to the
+                    // declared narrow return width (no-op for matching /
+                    // non-scalar returns). Narrow-width return from a generic
+                    // mono (B-2026-07-03-N).
+                    let val = self.coerce_to_current_ret_type(val);
+                    self.builder.build_return(Some(&val)).unwrap();
+                }
+                _ => {
+                    self.builder.build_return(None).unwrap();
+                }
             }
         }
         // Leave the frame stack as the caller swapped it in

@@ -4516,6 +4516,42 @@ fn main() {
         }
     }
 
+    /// B-2026-07-11-28: a GENERIC monomorph with a VOID return whose body TAIL is
+    /// a statement-position `if` (or `while`) emitted `ret i64 0` into a void LLVM
+    /// function — module verification failed ("non-void return in Function of
+    /// void return type"). A statement-position `if` yields a default `i64 0` from
+    /// `compile_block`, and the mono return-emission ret-ed it without the
+    /// `fn_returns_void` guard the non-generic `compile_function` path has (the
+    /// uncovered sibling of the same-site narrow-width return fix). The generic
+    /// comparison / `Ord` bound was a red herring — `if true { }` triggers it.
+    /// Covers: bare `if`, `if/else`, `if { return; }`, and the `T: Ord`
+    /// compare-and-swap shape; plus value-returning and narrow-`u8` monos to lock
+    /// the non-void arm against regression.
+    #[test]
+    fn e2e_generic_void_fn_tail_if_returns_void() {
+        if let Some(out) = run_program(
+            "fn noop[T](x: T) { if true { } }\n\
+             fn choose[T: Ord](x: T, y: T) { if x > y { } else { } }\n\
+             fn early[T: Ord](x: T, y: T) { if x > y { return; } }\n\
+             fn cmp_swap[T: Ord](xs: mut ref Vec[T], i: i64, j: i64) {\n\
+             \x20   if xs[i] > xs[j] { let t = xs[i]; xs[i] = xs[j]; xs[j] = t; }\n\
+             }\n\
+             fn bigger[T: Ord](x: T, y: T) -> i64 { if x > y { 1 } else { 0 } }\n\
+             fn to_u8[T](x: T) -> u8 { 255 }\n\
+             fn main() {\n\
+             \x20   noop(7); choose(3, 1); early(3, 1);\n\
+             \x20   let mut v: Vec[i64] = [5, 2, 9, 1];\n\
+             \x20   cmp_swap(mut v, 0, 1);\n\
+             \x20   println(f\"{v[0]}\");\n\
+             \x20   println(f\"{bigger(9, 4)}\");\n\
+             \x20   println(f\"{to_u8(0)}\");\n\
+             }",
+        ) {
+            // cmp_swap(v,0,1): 5>2 → swap → v[0]=2; bigger(9,4)=1; to_u8=255.
+            assert_eq!(out, "2\n1\n255\n");
+        }
+    }
+
     /// B-2026-07-03-11: dispatch a trait method called through a GENERIC
     /// TYPE-PARAMETER BOUND under `karac build`. `fn use_it[X: Tagged](x: X)`
     /// calling `x.tag()` used to die with "no handler for method tag on
