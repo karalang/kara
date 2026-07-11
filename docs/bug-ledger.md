@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **352 surfaced · 7 open · 343 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **353 surfaced · 7 open · 344 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -103,9 +103,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **352 surfaced 
 | B-2026-07-11-9 | 2026-07-11 | ergonomics | low | Two low-severity ergonomics gaps surfaced by the JSON dogfood. (1) `String.chars()` returns an `Iterator[char]` with no `.len()` and no `[i]` indexing, and there is no `collect()` / `to_vec()` — so any random-access char parser must hand-roll a `Vec[char]` materialization loop (`for c in s.chars() { v.push(c) }`). (2) An accumulator built in a loop and moved out via an early `return` inside that loop fires a `perf[rc-fallback]` (`out`/`items`/`entries` in the JSON parser): the ownership analysis treats the loop-branch `return` (consume) and the fall-through `push` (use) as a potential reuse-after-consume, though the `return` is terminal and the two are mutually exclusive. | backlog (stdlib Iterator.collect; ownership RC-fallback precision) |
 | B-2026-07-11-10 | 2026-07-11 | typechecker | low | Pushing an empty `Vec.new()` into a `Vec[Vec[i64]]` does not infer the inner element type from the receiver/method signature — `out.push(Vec.new())` where `out: Vec[Vec[i64]]` fails typecheck with "expected 'Vec<i64>', found 'Vec<?T0>'", requiring an explicit `let empty: Vec[i64] = Vec.new(); out.push(empty)`. The expected argument type of `push` (Vec[i64]) is statically known, so a more complete bidirectional inference would propagate it into the empty `Vec.new()` literal (Rust infers the analogous `v.push(Vec::new())`). LOW severity / ergonomics only: it is a CLEAN, actionable typecheck error (not a cryptic message, not a run/build divergence), and the one-line type annotation is idiomatic rather than a contortion — so the kata was NOT routed around, just annotated. Surfaced while adding the Gosper's-hack bitmask variant, whose k==0 case pushes the single empty combination; the DFS solvers never hit it because their empty combination comes from `path.clone()` of an already-typed empty `path`. REPRO: `fn main(){ let mut out: Vec[Vec[i64]] = Vec.new(); out.push(Vec.new()); println(f"{out.len()}"); }`. FIX DIRECTION: thread the expected type from the call argument position into the `Vec.new()` associated-call inference (expected-type propagation for empty container constructors in argument position), then the annotation becomes unnecessary. | annotate-to-workaround; not a run/build divergence |
 
-### Fixed (343)
+### Fixed (344)
 
-<details><summary>343 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>344 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -445,6 +445,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **352 surfaced 
 | B-2026-07-10-1 | codegen | high | SILENT WRONG-VALUE miscompile (NOT a crash / UAF — distinct from B-2026-07-09-12): the self-hosted parser's block STATEMENT expressions read back as… | this commit |
 | B-2026-07-10-2 | codegen | medium | `Option`/`Result` `unwrap` / `expect` / `unwrap_err` / `expect_err` on a LET-BOUND receiver with a HEAP payload double-frees | this commit |
 | B-2026-07-10-3 | codegen | low | Memory leak: `match … { Err(e) => println(e.heapfield) }` where `e` is a struct bound out of an enum/Result payload and the heap field is passed DIRE… | this commit |
+| B-2026-07-10-8 | codegen | high | A function whose value is a top-level `if`-expression with FLOAT type miscompiled: `fn relu(x: f32) -> f32 { if x > 0.0 { x } else { 0.0 } }` failed… | 514ee12c |
 | B-2026-07-11-1 | ownership | low | `Vector[T, N]` (a fixed-size SIMD value) was not classified Copy, so a bare rebind `let e1 = ux;` where `ux: Vector[f64, 2]` was treated as a MOVE an… | this commit |
 | B-2026-07-11-2 | codegen | high | Indexing a Vec[T]/Slice[T]/Array[T,N] (read OR write) with a NARROWER-than-i64 integer index — e.g | this commit |
 | B-2026-07-11-3 | resolver+typecheck+interp+codegen | high | An explicit `par { }` block's top-level `let` bindings did not ESCAPE the block: `par { let a = fa(); let b = fb(); } /* use a, b */` failed with `er… | ed07aed |
