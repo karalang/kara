@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **353 surfaced · 6 open · 345 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **353 surfaced · 5 open · 346 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -100,11 +100,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **353 surfaced 
 | B-2026-07-10-7 | 2026-07-10 | codegen | high | Reading a field from a LITERAL-constructed SoA binding segfaults under codegen. `let world: Vec[Particle] = [Particle{..}, Particle{..}]` with `layout world: Vec[Particle] { group gp { pos } group gv { vel } }`, then `world[1].pos` (any SoA field/index read) → SIGSEGV (exit 139) in the compiled binary; the tree-walk interpreter (KARAC_RUN_JIT=0) computes it correctly (run-vs-build divergence + memory unsafety on a valid program). Narrowly isolated: SoA-literal + `world.len()` works; PUSH-built SoA + `world[1].pos` works; plain AoS (no layout) literal + read works — ONLY literal-construction × SoA field/index read crashes. Likely the SoA collection-literal builder allocates the SoA vec header (ptr-per-group + len/cap) but does not allocate/populate the per-group backing-array pointers the way the push/index-store path does, so the read derefs a garbage/uninitialized group pointer. | docs/implementation_checklist/phase-10-targets.md (CG-4 / GPU-GATE-1 gate kata builds `world` via push pending this); src/codegen/collections.rs SoA literal construction |
 | B-2026-07-11-1 | 2026-07-11 | codegen | low | Turbofish-inferred raw-pointer binding loses its pointee in codegen: `let p = ptr.null[u8](); unsafe { p.read() }` fails with 'no handler for method read on variable p', while the annotated form `let p: *const u8 = ptr.null()` works. Root cause: a turbofish constructor's `*const T` return does not thread T=u8 into the binding's type as a clean `Type::Pointer` reaching the read's receiver `obj_ty`, so the typechecker's `Type::Pointer` method arm never records `pointer_method_receiver_pointees` and codegen's `raw_pointer_pointee_types` has no entry. Pre-existing (reproduces on 5931619, before the E_RAW_POINTER_UNRESOLVED_POINTEE slice). Surfaced because the E_RAW diagnostic recommends `ptr.null[u8]()` as a fix-it — the annotation fix-it is the reliable one until this lands. Typechecks fine (no type error); codegen-only. FIX DIRECTION: register the pointee for an inferred (non-annotated) pointer let-binding from its inferred `Type::Pointer` type, or ensure the turbofish return-type substitution yields a `Type::Pointer` at the binding's use-site occurrences. | — |
 | B-2026-07-11-9 | 2026-07-11 | ergonomics | low | Two low-severity ergonomics gaps surfaced by the JSON dogfood. (1) `String.chars()` returns an `Iterator[char]` with no `.len()` and no `[i]` indexing, and there is no `collect()` / `to_vec()` — so any random-access char parser must hand-roll a `Vec[char]` materialization loop (`for c in s.chars() { v.push(c) }`). (2) An accumulator built in a loop and moved out via an early `return` inside that loop fires a `perf[rc-fallback]` (`out`/`items`/`entries` in the JSON parser): the ownership analysis treats the loop-branch `return` (consume) and the fall-through `push` (use) as a potential reuse-after-consume, though the `return` is terminal and the two are mutually exclusive. | backlog (stdlib Iterator.collect; ownership RC-fallback precision) |
-| B-2026-07-11-10 | 2026-07-11 | typechecker | low | Pushing an empty `Vec.new()` into a `Vec[Vec[i64]]` does not infer the inner element type from the receiver/method signature — `out.push(Vec.new())` where `out: Vec[Vec[i64]]` fails typecheck with "expected 'Vec<i64>', found 'Vec<?T0>'", requiring an explicit `let empty: Vec[i64] = Vec.new(); out.push(empty)`. The expected argument type of `push` (Vec[i64]) is statically known, so a more complete bidirectional inference would propagate it into the empty `Vec.new()` literal (Rust infers the analogous `v.push(Vec::new())`). LOW severity / ergonomics only: it is a CLEAN, actionable typecheck error (not a cryptic message, not a run/build divergence), and the one-line type annotation is idiomatic rather than a contortion — so the kata was NOT routed around, just annotated. Surfaced while adding the Gosper's-hack bitmask variant, whose k==0 case pushes the single empty combination; the DFS solvers never hit it because their empty combination comes from `path.clone()` of an already-typed empty `path`. REPRO: `fn main(){ let mut out: Vec[Vec[i64]] = Vec.new(); out.push(Vec.new()); println(f"{out.len()}"); }`. FIX DIRECTION: thread the expected type from the call argument position into the `Vec.new()` associated-call inference (expected-type propagation for empty container constructors in argument position), then the annotation becomes unnecessary. | annotate-to-workaround; not a run/build divergence |
 
-### Fixed (345)
+### Fixed (346)
 
-<details><summary>345 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>346 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -453,6 +452,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **353 surfaced 
 | B-2026-07-11-5 | codegen | high | Matching a `ref`-scrutinee enum and using a non-i64-word payload (String / bool / narrow int / float) miscompiles: the via-ptr fast path binds the le… | this commit |
 | B-2026-07-11-6 | codegen | high | A `Vec[struct]` bound as an enum payload loses its element TypeExpr, so `for e in entries { e.field }` binds the element without a struct type and th… | this commit |
 | B-2026-07-11-7 | codegen | high | `?` on a `Result[<concrete user enum>, E]` truncates the multi-word Ok payload to its first word: `let v = pv()?` where `pv() -> Result[Json, String]… | this commit |
+| B-2026-07-11-10 | typechecker | low | Pushing an empty `Vec.new()` into a `Vec[Vec[i64]]` does not infer the inner element type from the receiver/method signature — `out.push(Vec.new())`… | this commit |
 
 </details>
 

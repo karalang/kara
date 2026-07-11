@@ -1797,6 +1797,24 @@ fn test_vec_new_push_in_loop_then_return_no_spurious_mismatch() {
     );
 }
 
+#[test]
+fn test_push_empty_vec_new_into_nested_vec_infers_element() {
+    // B-2026-07-11-10: pushing an empty `Vec.new()` into a `Vec[Vec[i64]]`
+    // must infer the inner element type from the receiver's element type
+    // (`Vec[i64]`), without the `let empty: Vec[i64] = Vec.new()` annotation.
+    // Pre-fix this reported a spurious `expected 'Vec<i64>', found 'Vec<?T0>'`:
+    // the `push` arm unified the receiver element `Vec[i64]` with the arg
+    // `Vec[?T0]` (binding `?T0 = i64`) but only top-level-resolved before the
+    // assignability check, leaving the arg's nested `?T0` stale.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut out: Vec[Vec[i64]] = Vec.new();\n\
+             out.push(Vec.new());\n\
+             println(f\"{out.len()}\");\n\
+         }",
+    );
+}
+
 // ── Lint-level slice 7 — lint_name on TypeError carry-through ──
 //
 // Every warning emitted by the compiler must record the lint name in

@@ -16,7 +16,9 @@ use crate::token::Span;
 use std::collections::HashMap;
 
 use super::env::{FunctionSig, ImplInfo};
-use super::inference::{resolve_type_var_top, substitute_type_params, unify_types};
+use super::inference::{
+    resolve_type_var_top, resolve_type_vars, substitute_type_params, unify_types,
+};
 use super::types::{
     clone_self_type_for, is_numeric, iterator_item_type_for, method_callee_type_name,
     receiver_for_method_lookup, type_display, ConstArg, FloatSize, IntSize, SubstValue, Type,
@@ -2896,12 +2898,36 @@ impl<'a> super::TypeChecker<'a> {
                     &mut self.env.substitutions,
                     &mut self.env.const_substitutions,
                 );
-                // Resolve `elem` so a successful unification doesn't
-                // leave the assignability check comparing the stale
-                // typevar against the (now-pinned) arg type and emitting
-                // a spurious `?T → ArgT` mismatch diagnostic.
-                let resolved_elem = resolve_type_var_top(&elem, &self.env.substitutions);
-                self.check_assignable(&resolved_elem, &arg_ty, args[0].value.span.clone());
+                // Resolve BOTH sides through the substitutions the unify
+                // just populated, so the assignability check doesn't
+                // compare against a stale typevar. `resolve_type_var_top`
+                // only reaches the TOP level — enough for the scalar case
+                // (`let mut v = Vec.new(); v.push(5)` pins the receiver's
+                // element var), but NOT for an empty container constructor
+                // in argument position: `out.push(Vec.new())` with
+                // `out: Vec[Vec[i64]]` unifies `Vec[i64]` with `Vec[?T0]`
+                // (binding `?T0 = i64`), yet the arg's NESTED `?T0` stayed
+                // unresolved and reported a spurious `Vec[i64]` vs
+                // `Vec[?T0]` mismatch (B-2026-07-11-10). Deep-resolving the
+                // arg makes the empty-constructor push infer without the
+                // `let empty: Vec[i64] = Vec.new()` annotation.
+                let no_names = HashMap::new();
+                let no_const_names = HashMap::new();
+                let resolved_elem = resolve_type_vars(
+                    &elem,
+                    &self.env.substitutions,
+                    &no_names,
+                    &self.env.const_substitutions,
+                    &no_const_names,
+                );
+                let resolved_arg = resolve_type_vars(
+                    &arg_ty,
+                    &self.env.substitutions,
+                    &no_names,
+                    &self.env.const_substitutions,
+                    &no_const_names,
+                );
+                self.check_assignable(&resolved_elem, &resolved_arg, args[0].value.span.clone());
                 return Type::Unit;
             }
         }
