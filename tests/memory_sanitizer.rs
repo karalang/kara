@@ -1271,6 +1271,109 @@ fn main() {
     }
 
     #[test]
+    fn asan_option_heap_moved_from_recursive_shared_enum_into_mut_ref_self_method_no_double_free() {
+        // B-2026-07-11-37: an `Option[String]` moved out of a RECURSIVE shared-enum
+        // variant payload (`ContNode.label`, reached via `Expr.Cont` / `Expr.Wrap`)
+        // and passed BY VALUE to a `mut ref self` method (`label_ref`) double-freed
+        // the `Some` payload — once via the callee's arm drop, once via the caller's
+        // scope-exit `FreeInlineOptionPayload` (the by-value arg transfer never nulled
+        // the caller slot). The free-fn call path already zeroed the moved slot
+        // (`suppress_inline_option_result_binding_move`); the method-call path did
+        // not. AOT/JIT aborted (`free(): double free detected`); the interpreter was
+        // correct — a run/build divergence with no diagnostic. Discriminators are all
+        // in-shape: the RECURSIVE `Wrap` sibling (its `e3` path) is required to change
+        // the enum's drop glue; a `None`-carrying `Cont` (`e2`) exercises the no-move
+        // arm. Loops so the double-free (a `Some`-payload UAF/double-free) is
+        // observable on every iteration.
+        //
+        // Leak detection is OFF here on purpose: this exact shape ALSO carries a
+        // SEPARATE, pre-existing leak — dropping a recursive `shared enum` whose
+        // payload struct holds an `Option[String]` field never frees that payload
+        // (reproduces with a bare `let e = Expr.Cont(...)` and NO method call at all,
+        // so it is orthogonal to this by-value-arg fix; tracked as its own ledger
+        // entry). Full-leak `assert_clean_asan_run` would fail on that unrelated leak
+        // and mask this double-free regression. A double-free / UAF still aborts
+        // under ASAN with LSan off, so `status.success()` is a faithful gate for the
+        // defect this test pins.
+        assert_no_double_free_leaks_allowed(
+            r#"
+shared enum Expr { Cont(ContNode), Wrap(WrapNode) }
+struct ContNode { label: Option[String] }
+struct WrapNode { inner: Expr }
+struct R { labels: Vec[String], hits: i64 }
+impl R {
+  fn in_scope(ref self, name: ref String) -> bool {
+    let mut i = 0;
+    loop {
+      if i >= self.labels.len() { return false; }
+      if self.labels[i] == name { return true; }
+      i = i + 1;
+    }
+  }
+  fn label_ref(mut ref self, label: Option[String]) {
+    match label {
+      Some(l) => { if not self.in_scope(l) { self.hits = self.hits + 1; } }
+      None => {}
+    }
+  }
+  fn walk(mut ref self, e: Expr) {
+    match e {
+      Cont(n) => { let ContNode { label } = n; self.label_ref(label); }
+      Wrap(n) => { let WrapNode { inner } = n; self.walk(inner); }
+    }
+  }
+}
+fn main() {
+  let mut round: i64 = 0;
+  while round < 50 {
+    let mut r = R { labels: Vec.new(), hits: 0 };
+    let e1 = Expr.Cont(ContNode { label: Some("continue-label-payload-xxxxxxxxxxxxxxxxxxxx".to_string()) });
+    r.walk(e1);
+    let e2 = Expr.Cont(ContNode { label: None });
+    r.walk(e2);
+    let e3 = Expr.Wrap(WrapNode { inner: Expr.Cont(ContNode { label: Some("nested-label-payload-yyyyyyyyyyyyyyyyyyyy".to_string()) }) });
+    r.walk(e3);
+    println(r.hits.to_string());
+    round = round + 1;
+  }
+}
+"#,
+            &["2"; 50],
+            "asan_option_heap_moved_from_recursive_shared_enum_into_mut_ref_self_method_no_double_free",
+        );
+    }
+
+    /// Like [`assert_clean_asan_run`] but with LeakSanitizer OFF — asserts the
+    /// program runs to completion with the expected stdout and NO double-free /
+    /// use-after-free (both of which ASAN aborts on regardless of leak
+    /// detection). Use ONLY when the program's shape carries a SEPARATE,
+    /// independently-tracked steady-state leak that would otherwise mask the
+    /// use-after-free / double-free the test exists to pin. Every other case
+    /// must use the full-leak [`assert_clean_asan_run`].
+    fn assert_no_double_free_leaks_allowed(src: &str, expected_stdout: &[&str], label: &str) {
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan_no_leak_check(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) with leak \
+             detection OFF — that means a double-free / use-after-free, not a leak. \
+             See stderr above for the ASAN report. stdout was: {stdout:?}",
+            status.code(),
+        );
+        let got: Vec<&str> = stdout.lines().collect();
+        assert_eq!(
+            got, expected_stdout,
+            "[{label}] stdout mismatch under ASAN (no-leak-check)",
+        );
+    }
+
+    #[test]
     fn asan_for_loop_var_into_tuple_push_no_double_free() {
         // B-2026-07-04-3: an inline tuple `(i, x)` whose heap component `x` is a
         // `for`-loop element variable, pushed into a Vec, double-freed the heap

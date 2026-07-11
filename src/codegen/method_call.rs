@@ -3329,6 +3329,33 @@ impl<'ctx> super::Codegen<'ctx> {
                             );
                         }
                     }
+                    // B-2026-07-11-37 — the method-call sibling of the by-value
+                    // Option/Result/boxed MOVE suppression the free-fn path already
+                    // applies (`compile_call`, call_dispatch.rs:1535). An inline-heap
+                    // `Option[String]` (or `Result` / boxed-enum) binding moved by
+                    // value into a `mut ref self` method that OWNS + frees it never
+                    // had its caller slot nulled here — so the callee's arm-drop AND
+                    // the caller's scope-exit `FreeInlineOptionPayload` freed the same
+                    // payload (double-free; interpreter correct — a run/build
+                    // divergence with no diagnostic). Zero the source slot so the
+                    // caller's tag/cap guard skips. Gated OUT of a return-passthrough
+                    // (`fn take(mut ref self, o) -> Option { o }` — the callee hands
+                    // `o` back and the caller's RESULT binding owns it, so the source
+                    // must stay live); `find_function_ast` resolves the `Type.method`
+                    // key against the impl blocks, and the method's `self` occupies
+                    // param 0 so the source arg maps to declared param `pidx = i + 1`.
+                    // By-ref args never reach here (every `is_ref` arm `continue`s
+                    // above), so no borrow gate is needed; the helper self-guards on
+                    // the inline/boxed payload sets, leaving shared `Option[shared T]`
+                    // (rc inc/dec balanced) and untracked args untouched.
+                    let arg_flows_into_return = self
+                        .program_snapshot
+                        .as_deref()
+                        .and_then(|p| super::declarations::find_function_ast(p, &qualified))
+                        .is_some_and(|f| crate::ast::fn_returns_param(f, pidx));
+                    if !arg_flows_into_return {
+                        self.suppress_inline_option_result_binding_move(&a.value);
+                    }
                     compiled_args.push(val.into());
                 }
                 // Niche-ABI pack/unpack at the `obj.method(...)` boundary
