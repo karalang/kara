@@ -3463,6 +3463,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 // in both `method_bodies` and `effects.inferred_effects`, so
                 // iterating the latter covers both. Matches the renderer in
                 // `concurrency_report::render_stmt_effects`.
+                let from = info.effects.len();
                 let suffix = format!(".{}", method);
                 for key in self.effects.inferred_effects.keys() {
                     if key.ends_with(&suffix) {
@@ -3476,6 +3477,19 @@ impl<'a> ConcurrencyChecker<'a> {
                 }
                 // Also try bare method name (matches free-function shape).
                 self.add_function_effects(method, info);
+                // Slice 3: parameterized-resource keys for a method call. Resolve
+                // the EXACT receiver-type method via `method_callee_types` (keyed
+                // by the method-call span, which equals the receiver span) so the
+                // callee's declared `Db[id]` param substitutes with THESE args
+                // (method params exclude the receiver, so arg positions align).
+                if let Some(types) = self.types {
+                    if let Some(mkey) = types
+                        .method_callee_types
+                        .get(&SpanKey::from_span(&expr.span))
+                    {
+                        self.apply_parameterized_keys(mkey, args, from, info);
+                    }
+                }
                 self.collect_expr_effects(object, info);
                 for arg in args {
                     self.collect_expr_effects(&arg.value, info);

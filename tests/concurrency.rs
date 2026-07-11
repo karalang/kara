@@ -970,6 +970,76 @@ fn test_slice3_unparameterized_resource_unaffected() {
     );
 }
 
+#[test]
+fn test_slice3_method_call_distinct_partition_keys_parallelize() {
+    // Slice 3 on METHOD calls: a method with a parameterized resource
+    // (`writes(Db[id])`) on DISTINCT receivers with DISTINCT literal partition
+    // keys parallelizes. Distinct receivers already avoid a receiver conflict;
+    // the partition keys are what clear the shared-`Db` write-write conflict
+    // (Slice 2's receiver fan-out is Network-only, so this Db case relies on the
+    // partition-key mechanism). Needs type info to resolve the exact
+    // receiver-type method (`method_callee_types`) → routed through
+    // `analyze_typed`.
+    let analysis = analyze_typed(
+        r#"
+        effect resource Db;
+        struct Handle { fd: i64 }
+        impl Handle {
+            fn write_at(ref self, id: i64) with writes(Db[id]) { }
+        }
+        fn main() {
+            let a = Handle { fd: 0 };
+            let b = Handle { fd: 1 };
+            a.write_at(1);
+            b.write_at(2);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    // Statements 2 and 3 (the two `write_at` calls, after the two `let`s).
+    let grouped = main_fc
+        .parallel_groups
+        .iter()
+        .any(|g| g.statement_indices.contains(&2) && g.statement_indices.contains(&3));
+    assert!(
+        grouped,
+        "distinct method partition keys should parallelize (Slice 3 method arm), got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_slice3_method_call_same_partition_key_serializes() {
+    // Same literal partition key on distinct receivers → same `Db` partition →
+    // serial (proven-identical), even though the receivers differ. Isolates the
+    // partition-key proven-identical rule from the receiver check.
+    let analysis = analyze_typed(
+        r#"
+        effect resource Db;
+        struct Handle { fd: i64 }
+        impl Handle {
+            fn write_at(ref self, id: i64) with writes(Db[id]) { }
+        }
+        fn main() {
+            let a = Handle { fd: 0 };
+            let b = Handle { fd: 1 };
+            a.write_at(1);
+            b.write_at(1);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    let grouped = main_fc
+        .parallel_groups
+        .iter()
+        .any(|g| g.statement_indices.contains(&2) && g.statement_indices.contains(&3));
+    assert!(
+        !grouped,
+        "identical method partition keys must serialize, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
 // ── A2b-2: independent network calls fan out (arg-safe shape) ─────
 
 #[test]

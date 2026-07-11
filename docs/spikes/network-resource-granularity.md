@@ -381,15 +381,21 @@ resource keeps `key == None` and behaves exactly as before. Tests:
   if a parameterized key must propagate through an INFERRED (private-fn) effect
   chain rather than a directly-declared `with` clause — deferred until a real
   program needs transitive parameterized effects.
-- **3b — richer keys (literal done; binding + method still open).** The literal
-  substitution shipped (3a). What remains: (i) a **binding** key — `update(a);
-  update(b)` where `a`/`b` are distinct non-shared non-param locals is
-  proven-disjoint (reuse Slice 2's no-body-aliasing reasoning) but currently
-  yields `None` → conservative serial; (ii) a **method-receiver** key —
-  `sends(Network[self])` substituted with the receiver — so parameterized method
-  resources fan out (today only the free-fn/associated `Call` arm is wired, not
-  `MethodCall`); (iii) the design's **runtime-partition** lowering for the
-  `unproven` case that a runtime key-compare could distinguish.
+- **3b — richer keys (literal + method arms done; binding + runtime-partition
+  open).** The literal substitution shipped (3a), and the **`MethodCall` arm is
+  now wired** (`a.write_at(1); b.write_at(2)` on `writes(Db[id])` — distinct
+  receivers + distinct partitions parallelize; resolves the exact receiver-type
+  method via `method_callee_types`, method params align with args since they
+  exclude the receiver). Note a same-receiver method pair still serializes on the
+  conservative receiver-mutation heuristic (any effectful method is treated as
+  mutating its receiver) — safe over-serialization, not a partition-key gap.
+  What remains: (i) a **binding value-key** — `update(a); update(b)` is
+  proven-disjoint ONLY if `a`/`b` are provably-distinct VALUES (const-folding /
+  algebraic distinctness — NOT object identity; two distinct bindings can hold
+  the same value, so Slice 2's binding-distinctness does NOT transfer to value
+  keys), currently `None` → conservative serial; (ii) the design's
+  **runtime-partition** lowering for `unproven` pairs a runtime key-compare could
+  distinguish.
 - **3c — conflict-table reconciliation (§4).** The proven-disjoint check is live;
   the remaining Phase-0 cleanup — making `effectchecker.rs::effects_conflict`
   agree with `concurrency.rs` on network verbs — is still open (and, per §4, a
