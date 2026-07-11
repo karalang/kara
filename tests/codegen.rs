@@ -60506,6 +60506,36 @@ fn main() {
         );
     }
 
+    // ── Static branch hints from effect analysis (`llvm.expect`) ─────────
+    //
+    // The `?` operator's failure arm is the cold path — an ordinary early
+    // return (not a panic, so no already-`cold` callee to signal it) — so its
+    // tag-is-failure condition is wrapped in `llvm.expect.i1(cond, false)` to
+    // lay out the Ok continuation as the hot fall-through. Advisory only.
+    #[test]
+    fn question_operator_emits_expect_hint() {
+        let ir = ir_for(
+            r#"
+fn maybe() -> Result[i64, String] { return Ok(5); }
+fn use_it() -> Result[i64, String] {
+    let n = maybe()?;
+    return Ok(n + 1);
+}
+fn main() { print(0); }
+"#,
+        );
+        let body = fn_body(&ir, "@use_it(");
+        // The `?` branch condition is the `llvm.expect.i1(..., false)` result.
+        assert!(
+            body.contains("call i1 @llvm.expect.i1(") && body.contains("i1 false"),
+            "`?` failure arm should be hinted unlikely via llvm.expect:\n{body}"
+        );
+        assert!(
+            body.contains("br i1 %expect,"),
+            "the `?` conditional branch should use the expect result:\n{body}"
+        );
+    }
+
     #[test]
     fn owned_value_ptr_param_emits_noalias() {
         // An OWNED value-semantics type that lowers to a single heap `ptr`

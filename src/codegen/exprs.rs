@@ -1318,6 +1318,34 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 
+    /// Wrap an `i1` condition in `llvm.expect.i1(cond, expected)` so LLVM lays
+    /// out the expected-value continuation as the hot fall-through and outlines
+    /// the other arm (Codegen Optimization § static branch hints). Purely
+    /// advisory — it feeds block placement / branch weights (the O2 pipeline's
+    /// LowerExpectIntrinsic pass converts it), never correctness. Falls back to
+    /// the raw condition if the intrinsic is somehow unavailable, so a hint is
+    /// never load-bearing.
+    fn expect_i1(
+        &self,
+        cond: inkwell::values::IntValue<'ctx>,
+        expected: bool,
+    ) -> inkwell::values::IntValue<'ctx> {
+        let i1 = self.context.bool_type();
+        let Some(intrinsic) = inkwell::intrinsics::Intrinsic::find("llvm.expect") else {
+            return cond;
+        };
+        let Some(decl) = intrinsic.get_declaration(&self.module, &[i1.into()]) else {
+            return cond;
+        };
+        let expected_val = i1.const_int(expected as u64, false);
+        self.builder
+            .build_call(decl, &[cond.into(), expected_val.into()], "expect")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value()
+    }
+
     /// Compile the `?` early-propagation operator for `Result[T,E]` and `Option[T]`.
     ///
     /// The operand is a `{ i64 tag, i64 w0 }` enum struct. Tag semantics:
@@ -1386,6 +1414,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let fail_bb = self.context.append_basic_block(cur_fn, "q_fail");
         let ok_bb = self.context.append_basic_block(cur_fn, "q_ok");
 
+        // Static branch hint (Codegen Optimization § `llvm.expect`): the `?`
+        // failure arm is the cold path — error propagation is the exception, the
+        // success continuation is the common case — but, unlike a panic/trap
+        // branch (whose target `__karac_panic_site_*` fn is already `cold`), the
+        // `?` failure arm is an ordinary early return with no cold callee, so
+        // LLVM has no signal it is unlikely. Wrap the tag-is-failure condition
+        // in `llvm.expect.i1(cond, false)` so the Ok continuation is laid out as
+        // the hot fall-through and the failure arm is outlined. Advisory only —
+        // affects block placement / branch weights, never correctness.
+        let is_failure = self.expect_i1(is_failure, false);
         self.builder
             .build_conditional_branch(is_failure, fail_bb, ok_bb)
             .unwrap();
