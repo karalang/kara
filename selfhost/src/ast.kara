@@ -712,6 +712,11 @@ pub struct AttrNode {
 pub struct UseDeclNode {
     pub is_pub: bool,
     pub segments: Vec[String],
+    // The names this declaration BINDS into scope. For `use a.b.c` and the
+    // single `import a.b.C` form this is the last segment; for a braced
+    // `import a.{X, Y as Z}` it is each item's alias-or-name (`[X, Z]`).
+    // Mirrors the seed's `UseDecl.path.last()` / `ImportDecl.items` binding set.
+    pub names: Vec[String],
     pub span: Span,
 }
 

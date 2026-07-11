@@ -231,6 +231,15 @@ const PROGRAM_CORPUS: &[&str] = &[
     "use foo.thing;\nfn thing() {}",
     // Two imports of the same last segment — dup.
     "use a.dup;\nuse b.dup;",
+    // ── `import` declarations ── single form binds the last segment; the braced
+    // group binds every listed item (with `as` aliases). Single-file mode binds
+    // without validating the module prefix, matching `karac::resolve`.
+    "import span.Span;\nfn f(x: Span) {}",
+    "import token.{Token, SpannedToken};\nfn f(t: Token) -> SpannedToken { t }",
+    "import m.{A, B, C};\nfn f(a: A, b: B, c: C) {}",
+    "import m.{X, Y};\nfn f() { Z }",
+    "import m.{One as Two};\nfn f(x: Two) {}",
+    "import m.Dup;\nfn Dup() {}",
 ];
 
 /// Byte offset shift between the Rust and Kāra spans — 0 (both resolve the

@@ -1254,6 +1254,7 @@ pub fn render_item(item: Item) -> String {
             let UseDeclNode {
                 is_pub,
                 segments,
+                names,
                 span,
             } = n;
             out.push_str("(use");

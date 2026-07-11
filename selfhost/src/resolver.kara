@@ -591,9 +591,16 @@ impl Resolver {
             // not validated — only the imported name is bound (matching the seed,
             // whose standalone `resolve()` reports no path errors either).
             Use(u) => {
-                let n = u.segments.len();
-                if n > 0 {
-                    self.define(u.segments[n - 1], u.span);
+                // Bind every name the declaration introduces — one for a single
+                // `use`/`import`, several for a braced `import mod.{A, B}`.
+                let cnt = u.names.len();
+                let mut i = 0;
+                loop {
+                    if i >= cnt {
+                        break;
+                    }
+                    self.define(u.names[i], u.span);
+                    i = i + 1;
                 }
             }
             Impl(_) => {}

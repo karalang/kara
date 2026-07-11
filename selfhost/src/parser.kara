@@ -2498,6 +2498,9 @@ impl Parser {
         match self.tokens[self.pos].token {
             // `use` carries neither attributes nor doc (seed parity) — both drop.
             Use => self.parse_use_decl(is_pub),
+            // `import` — the module-system form; supports the braced multi-item
+            // group `import mod.{A, B as C}` binding every listed name.
+            Import => self.parse_import_decl(is_pub),
             Const => self.parse_const_decl(is_pub, attrs, doc),
             Type => self.parse_type_alias_decl(is_pub, attrs, doc),
             Struct => self.parse_struct_def(is_pub, false, false, attrs, doc),
@@ -2570,11 +2573,120 @@ impl Parser {
         self.advance(); // `use`
         let segs = self.parse_dotted_path();
         self.eat_semicolon();
+        // A `use a.b.c` binds its LAST segment (the seed's `path.last()`).
+        let mut names: Vec[String] = Vec.new();
+        let n = segs.len();
+        if n > 0 {
+            names.push(dup_str(segs[n - 1]));
+        }
         Item.Use(UseDeclNode {
             is_pub: is_pub,
             segments: segs,
+            names: names,
             span: self.span_from(start),
         })
+    }
+
+    // `import mod.Item;` (single — binds the last segment) or
+    // `import mod.{A, B as C};` (braced group — binds each alias-or-name).
+    // Mirrors the seed's `ImportDecl` binding set; single-file mode binds
+    // without validating the module prefix (matches `karac::resolve`).
+    fn parse_import_decl(mut ref self, is_pub: bool) -> Item {
+        let start = self.current_span();
+        self.advance(); // `import`
+        let mut segs: Vec[String] = Vec.new();
+        let first = self.take_member_name();
+        segs.push(first);
+        let mut names: Vec[String] = Vec.new();
+        let mut braced = false;
+        loop {
+            if not self.at_dot() {
+                break;
+            }
+            // A `.{` opens the braced item group; anything else is a path segment.
+            let next_is_brace = if self.pos + 1 < self.tokens.len() {
+                match self.tokens[self.pos + 1].token {
+                    LeftBrace => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if next_is_brace {
+                self.advance(); // consume `.`
+                names = self.parse_import_group();
+                braced = true;
+                break;
+            }
+            self.advance(); // consume `.`
+            let nm = self.take_member_name();
+            segs.push(nm);
+        }
+        if not braced {
+            // Single import — the last segment is the bound item name.
+            let n = segs.len();
+            if n > 0 {
+                names.push(dup_str(segs[n - 1]));
+            }
+        }
+        self.eat_semicolon();
+        Item.Use(UseDeclNode {
+            is_pub: is_pub,
+            segments: segs,
+            names: names,
+            span: self.span_from(start),
+        })
+    }
+
+    // `{ A, B as C, ... }` import group — `self.pos` is AT the `{`. Returns each
+    // item's alias-or-name (the binding set). Trailing comma tolerated.
+    fn parse_import_group(mut ref self) -> Vec[String] {
+        self.expect_lbrace(); // consume {
+        let mut names: Vec[String] = Vec.new();
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            let at_rbrace = match self.tokens[self.pos].token {
+                RightBrace => true,
+                _ => false,
+            };
+            if at_rbrace {
+                break;
+            }
+            let nm = self.take_member_name();
+            // Optional `as ALIAS` — the alias is what binds.
+            let is_as = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    As => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if is_as {
+                self.advance(); // consume `as`
+                let rebound = self.take_member_name();
+                names.push(rebound);
+            } else {
+                names.push(nm);
+            }
+            let ate = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Comma => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if ate {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect_rbrace(); // consume }
+        names
     }
 
     // `const NAME: TYPE = VALUE;`
