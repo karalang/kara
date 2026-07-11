@@ -1183,6 +1183,20 @@ impl<'ctx> super::Codegen<'ctx> {
         None
     }
 
+    /// True when `te` denotes the `std.secret` `Secret[T]` wrapper (a path
+    /// whose last segment is `Secret`) and that stdlib type is in scope for
+    /// this compilation. Drives `<redacted>` emission in the derived-Display
+    /// field walk. Scoped via `secret_type_is_stdlib` so a user's own
+    /// `struct Secret` is unaffected.
+    fn field_type_is_stdlib_secret(&self, te: &crate::ast::TypeExpr) -> bool {
+        self.secret_type_is_stdlib
+            && matches!(
+                &te.kind,
+                crate::ast::TypeKind::Path(p)
+                    if p.segments.last().map(|s| s.as_str()) == Some("Secret")
+            )
+    }
+
     /// True when `te` is a leaf the f-string lowering can format directly: a
     /// primitive / String, or an all-unit enum (whose interpolation part is
     /// handled by `fstr_render_part` via `compile_unit_enum_display`).
@@ -1234,6 +1248,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 parts.push(P::Text(", ".to_string()));
             }
             parts.push(P::Text(format!("{fname}: ")));
+            let te = field_tes.get(i);
+            // std.secret: a `Secret[T]` field never renders its wrapped value
+            // in a derived Debug/Display — emit the literal `<redacted>`. This
+            // sits ahead of the nested-struct dispatch below, which would
+            // otherwise recurse into `Secret { inner: <value> }` and leak it.
+            // Nesting through non-`Secret` structs is covered automatically:
+            // the recursion into each nested struct hits this same check for
+            // its own `Secret` fields.
+            if te
+                .map(|t| self.field_type_is_stdlib_secret(t))
+                .unwrap_or(false)
+            {
+                parts.push(P::Text("<redacted>".to_string()));
+                continue;
+            }
             let field_expr = Expr {
                 kind: ExprKind::FieldAccess {
                     object: Box::new(base.clone()),
@@ -1241,7 +1270,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 },
                 span: base.span.clone(),
             };
-            let te = field_tes.get(i);
             match te.and_then(|t| self.display_field_struct_name(t)) {
                 Some(nested) => {
                     parts.extend(self.build_struct_display_parts(&field_expr, &nested)?);

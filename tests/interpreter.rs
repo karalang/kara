@@ -20776,3 +20776,27 @@ fn main() {
 "#);
     assert_eq!(out, "42\nhunter2\n");
 }
+
+#[test]
+fn test_secret_field_redacted_in_display() {
+    // A struct containing a `Secret[T]` field renders the field as
+    // `<redacted>` in the built-in / derived Display across every position
+    // (println, .to_string(), f-string) — never leaking the wrapped value.
+    // Matches codegen's `test_e2e_secret_field_redacted_in_display`.
+    let out = run_no_errors(
+        r#"
+import std.secret.{Secret};
+#[derive(Display)]
+struct Config { name: String, token: Secret[String] }
+fn main() {
+    let c = Config { name: "alice", token: Secret.new("hunter2") };
+    println(c);
+    println(c.to_string());
+    println(f"cfg={c}");
+}
+"#,
+    );
+    let expected = "Config { name: alice, token: <redacted> }\n".repeat(2)
+        + "cfg=Config { name: alice, token: <redacted> }\n";
+    assert_eq!(out, expected);
+}

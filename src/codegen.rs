@@ -1387,6 +1387,16 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) state_machine_return_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Field names in declaration order (struct name → field names).
     pub(crate) struct_field_names: HashMap<String, Vec<String>>,
+    /// True when the `std.secret` `Secret[T]` wrapper is in scope for this
+    /// compilation — i.e. a `StructDef` named `Secret` carrying
+    /// `stdlib_origin` was registered (the gated `import std.secret.{Secret};`
+    /// path). Read by the derived-Display field walk (`build_struct_display_parts`)
+    /// to emit `Secret`-typed fields as the literal `<redacted>` instead of
+    /// leaking the wrapped value. Scoped to the stdlib type so a user's
+    /// unrelated `struct Secret` renders normally (a `Secret` import and a
+    /// user `struct Secret` cannot coexist — the resolver rejects the
+    /// duplicate name — so the flag is unambiguous within one program).
+    pub(crate) secret_type_is_stdlib: bool,
     /// Field type-names in declaration order (struct name → per-field
     /// user-type name, or `None` if the field's declared type isn't a
     /// path / isn't a known user struct). Used to recover the inner
@@ -5768,6 +5778,7 @@ impl<'ctx> Codegen<'ctx> {
             module,
             builder,
             variables: HashMap::new(),
+            secret_type_is_stdlib: false,
             var_type_names: HashMap::new(),
             tuple_var_elem_type_names: HashMap::new(),
             inline_option_payload_vars: std::collections::HashSet::new(),

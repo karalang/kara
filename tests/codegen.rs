@@ -60959,6 +60959,31 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_secret_field_redacted_in_display() {
+        // A struct containing a `Secret[T]` field renders the field as
+        // `<redacted>` in the derived Display (build_struct_display_parts
+        // short-circuits ahead of the nested-struct recursion that would
+        // otherwise leak the wrapped value). `karac build` must match `karac
+        // run`. Soft-skips without the runtime archive.
+        if let Some(out) = run_program(
+            r#"
+import std.secret.{Secret};
+#[derive(Display)]
+struct Config { name: String, token: Secret[String] }
+fn main() {
+    let c = Config { name: "alice", token: Secret.new("hunter2") };
+    println(c);
+    println(c.to_string());
+    println(f"cfg={c}");
+}
+"#,
+        ) {
+            let line = "Config { name: alice, token: <redacted> }\n";
+            assert_eq!(out, format!("{line}{line}cfg={line}"));
+        }
+    }
+
+    #[test]
     fn owned_value_ptr_param_emits_noalias() {
         // An OWNED value-semantics type that lowers to a single heap `ptr`
         // (`Tensor` / `Map`) is moved into the callee — the sole live handle to

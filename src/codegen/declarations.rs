@@ -348,6 +348,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // type pass runs.
                 let names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
                 self.struct_field_names.insert(s.name.clone(), names);
+                // std.secret: note when the stdlib `Secret[T]` wrapper is in
+                // scope so the derived-Display field walk can redact it. Gated
+                // on `stdlib_origin` so a user's own `struct Secret` (which
+                // cannot coexist with the import) is not affected.
+                if s.name == "Secret" && s.stdlib_origin {
+                    self.secret_type_is_stdlib = true;
+                }
             }
         }
     }

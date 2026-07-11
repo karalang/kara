@@ -70,6 +70,24 @@ impl<'a> super::Interpreter<'a> {
     pub(crate) fn display_render(&self, v: &Value) -> String {
         match v {
             Value::Struct { name, fields } => {
+                // std.secret: never render a `Secret[T]`'s wrapped value in a
+                // built-in / derived Debug/Display. Redacting the whole value
+                // here (rather than only at containing-struct field sites)
+                // covers every render path uniformly — as a field, an array /
+                // map element, or a direct `println(secret)` — and matches
+                // codegen's field-level `<redacted>` on the tested surface
+                // (a struct with a `Secret` field). Scoped to the stdlib type
+                // via `defining_stdlib_origin` so a user's own `struct Secret`
+                // renders normally.
+                if name == "Secret"
+                    && self
+                        .typecheck_result
+                        .struct_info
+                        .get("Secret")
+                        .is_some_and(|si| si.defining_stdlib_origin)
+                {
+                    return "<redacted>".to_string();
+                }
                 let order: Vec<String> = self
                     .typecheck_result
                     .struct_info
