@@ -78,6 +78,120 @@ impl std::fmt::Display for DocBuildError {
     }
 }
 
+/// A compiler builtin surfaced in `karac doc` via the doc-only registry.
+///
+/// The builtins here (`assert` / `assert_eq` / `assert_ne`, `todo`,
+/// `unreachable`, `dbg`, `collect_all`) are *intercept-only*: the
+/// typechecker and codegen recognise them by name, and there is no stdlib
+/// `#[compiler_builtin]` declaration for the renderer to walk. Their
+/// signatures are variadic (`collect_all` is 2..=8 heterogeneous branches)
+/// or effect-shaped in ways a single Kāra decl can't express — see
+/// design.md § Compiler builtins — so a real stdlib decl is either
+/// impossible or actively misleading (an under-specified arity risks
+/// effect-attribution interference). Without this registry they were
+/// invisible to `karac doc`. This is the "doc-only builtin-signature
+/// registry" that closes that gap: it feeds the same page / index / search
+/// machinery as ordinary items, but the signature and prose are authored
+/// here rather than parsed from source, and the typechecker never sees them.
+struct BuiltinDoc {
+    name: &'static str,
+    signature: &'static str,
+    doc: &'static str,
+}
+
+/// The synthetic module path the builtins are grouped under in the doc
+/// site (`<root>/builtins/`).
+fn builtins_module_path() -> ModulePath {
+    vec!["builtins".to_string()]
+}
+
+/// Module-level prose shown atop the `builtins` module index and as the
+/// module-doc row on the global index.
+const BUILTINS_MODULE_DOC: &str = "Compiler builtins — callable from every \
+module without an `import`.\n\nThese are recognised by the compiler itself, \
+not defined in stdlib source: their semantics (the `Never` bottom type, \
+source-location capture, release-mode elision, the variadic gather shape) \
+cannot be expressed in pure Kāra. They are documented here so `karac doc` \
+and IDE tooling surface the same signatures the compiler enforces.";
+
+/// The doc-only builtin registry. Signatures and prose are authored from
+/// design.md § Compiler builtins; kept in source order matching that table.
+fn builtin_docs() -> Vec<BuiltinDoc> {
+    vec![
+        BuiltinDoc {
+            name: "assert",
+            signature: "fn assert(cond: bool) with panics",
+            doc: "Panics unless `cond` is `true`. Use for invariants whose \
+violation indicates a bug. Carries the `panics` effect, which propagates \
+to the caller's inferred effect set.\n\nAnnotated `#[track_caller]`: a \
+failing `assert` reports the *caller's* source location, not a frame inside \
+the builtin.",
+        },
+        BuiltinDoc {
+            name: "assert_eq",
+            signature: "fn assert_eq[T: Eq + Debug](left: T, right: T) with panics",
+            doc: "Panics unless `left == right`. Requires `T: Eq + Debug` — \
+the two values are printed via `Debug` in the failure message:\n\n```\n\
+assertion failed: a == b\n  left:  <left>\n  right: <right>\n```\n\n\
+Propagates `panics`; annotated `#[track_caller]` so the report points at \
+the call site.",
+        },
+        BuiltinDoc {
+            name: "assert_ne",
+            signature: "fn assert_ne[T: Eq + Debug](left: T, right: T) with panics",
+            doc: "Panics unless `left != right`. Requires `T: Eq + Debug`. On \
+failure:\n\n```\nassertion failed: a != b\n  value: <left>\n```\n\n\
+Propagates `panics`; annotated `#[track_caller]`.",
+        },
+        BuiltinDoc {
+            name: "dbg",
+            signature: "fn dbg[T: Debug](value: T) -> T",
+            doc: "Prints `value` (via `Debug`) to stderr with the source \
+file, line, and expression text, then returns it unchanged for inline use: \
+`let y = dbg(compute(x))`.\n\nUses the transparent `debugs` effect, so it \
+never changes a function's effect signature or concurrency behaviour, and \
+it is **stripped from release builds** (`karac build --release`). Use \
+`print` / `println` for intentional program output; `dbg` is for temporary \
+developer instrumentation only.",
+        },
+        BuiltinDoc {
+            name: "todo",
+            signature: "fn todo(message: String) -> Never with panics",
+            doc: "Marks unfinished code. Panics at runtime with the given \
+message, or `\"not yet implemented\"` when called as `todo()` with no \
+argument (the `message` argument is optional — both `todo()` and \
+`todo(\"reason\")` are valid).\n\nReturns `Never`, the bottom type, so it \
+type-checks in any expression position (an arm body, an `if` branch, a \
+`let` initializer). Propagates `panics`; annotated `#[track_caller]`.",
+        },
+        BuiltinDoc {
+            name: "unreachable",
+            signature: "fn unreachable(message: String) -> Never with panics",
+            doc: "Asserts a code path cannot be reached. Panics with the \
+given message, or `\"entered unreachable code\"` when called as \
+`unreachable()` (the `message` argument is optional). Returns `Never`, so \
+it is valid in any expression position and satisfies the divergence \
+requirement of a `let … else` block. Propagates `panics`; annotated \
+`#[track_caller]`.",
+        },
+        BuiltinDoc {
+            name: "collect_all",
+            signature: "fn collect_all(f1: Fn() -> Result[A1, E1], …, fn: Fn() -> Result[An, En]) \
+-> (Result[A1, E1], …, Result[An, En])",
+            doc: "Runs 2–8 closures in parallel and returns a **heterogeneous \
+tuple** with one `Result` per branch, position-bound (`output.0` is `f1`'s \
+outcome). Each branch keeps its own success and error type.\n\nGather mode: \
+every branch runs to completion regardless of a peer's `Err` — only a \
+*panic* cancels siblings, in which case the tuple is never constructed and \
+the panic dominates. The enclosing function's inferred effects are the \
+union of all branch effects (no special effect-system treatment).\n\n\
+Bare-expression branches are auto-wrapped: `collect_all(fetch_a(id), \
+fetch_b(id))` is shorthand for `collect_all(|| fetch_a(id), || \
+fetch_b(id))`. For a homogeneous, unbounded gather use `collect_all_vec`.",
+        },
+    ]
+}
+
 /// Render the doc tree for `tree` into `output_dir`. Each module produces
 /// one subdirectory; each documented item in that module produces one
 /// HTML page. A flat `index.html` at the root lists every page.
@@ -85,6 +199,12 @@ impl std::fmt::Display for DocBuildError {
 /// Items without a `doc_comment` are skipped. Items in the synthetic
 /// `std.prelude` module are skipped (they're compiler-internal stubs,
 /// not user-facing API).
+///
+/// The compiler builtins (`assert`, `todo`, `dbg`, `collect_all`, …) are
+/// always surfaced under a synthetic `builtins` module via the doc-only
+/// registry ([`builtin_docs`]) — they're callable from every project, so
+/// they appear in the sidebar, global index, and search index regardless
+/// of what the project itself documents.
 pub fn build_docs(
     tree: &ProgramTree,
     output_dir: &Path,
@@ -129,15 +249,36 @@ pub fn build_docs(
         }
     }
 
+    // Append the compiler-builtin doc entries. These are always present —
+    // the builtins are callable from every module — so they surface in the
+    // sidebar, global index, and search index of every generated site
+    // regardless of what the project documents.
+    let builtins = builtin_docs();
+    let builtins_mod = builtins_module_path();
+    let builtins_dir = module_output_dir(output_dir, &builtins_mod);
+    for b in &builtins {
+        let file_path = builtins_dir.join(format!("{}.html", b.name));
+        index_entries.push(IndexEntry {
+            module_path: builtins_mod.clone(),
+            item_name: b.name.to_string(),
+            kind: ItemKind::Function,
+            relative_href: relative_href(&file_path, output_dir),
+            summary: summarize_doc(b.doc),
+        });
+    }
+
     // Build the per-module doc lookup. Synthetic modules (e.g. the
     // prelude stub) are excluded — they don't have user-authored `//!`
     // doc and shouldn't show up in navigation.
-    let module_docs: Vec<(ModulePath, Option<String>)> = tree
+    let mut module_docs: Vec<(ModulePath, Option<String>)> = tree
         .modules
         .iter()
         .filter(|m| !m.is_synthetic)
         .map(|m| (m.path.clone(), m.module_doc_comment.clone()))
         .collect();
+    // The synthetic `builtins` module carries its own prose so both the
+    // global index and the per-module index render an explanatory header.
+    module_docs.push((builtins_mod.clone(), Some(BUILTINS_MODULE_DOC.to_string())));
 
     // Render pass: write item pages with the global sidebar.
     for module in &tree.modules {
@@ -181,6 +322,54 @@ pub fn build_docs(
             })?;
             result.written.push(file_path);
         }
+    }
+
+    // Render the compiler-builtin pages under `<root>/builtins/`, then the
+    // builtins module index. These reuse the same item-page / module-index
+    // renderers as ordinary items — only the signature and prose come from
+    // the registry instead of parsed source.
+    create_dir_all(&builtins_dir)?;
+    for b in &builtins {
+        let file_path = builtins_dir.join(format!("{}.html", b.name));
+        let sidebar = render_sidebar(&index_entries, &module_docs, &builtins_dir, output_dir);
+        let html = render_item_page_with_links(
+            b.name,
+            ItemKind::Function,
+            b.signature,
+            b.doc,
+            "", // no field/param extras for builtins
+            &sidebar,
+            &link_table,
+            &builtins_dir,
+            output_dir,
+        );
+        std::fs::write(&file_path, &html).map_err(|e| DocBuildError::WriteFile {
+            path: file_path.clone(),
+            source: e.to_string(),
+        })?;
+        result.written.push(file_path);
+    }
+    {
+        let items_in_module: Vec<&IndexEntry> = index_entries
+            .iter()
+            .filter(|e| e.module_path == builtins_mod)
+            .collect();
+        let module_index_path = builtins_dir.join("index.html");
+        let sidebar = render_sidebar(&index_entries, &module_docs, &builtins_dir, output_dir);
+        let html = render_module_index(
+            &builtins_mod,
+            &items_in_module,
+            Some(BUILTINS_MODULE_DOC),
+            &sidebar,
+            &link_table,
+            &builtins_dir,
+            output_dir,
+        );
+        std::fs::write(&module_index_path, html).map_err(|e| DocBuildError::WriteFile {
+            path: module_index_path.clone(),
+            source: e.to_string(),
+        })?;
+        result.written.push(module_index_path);
     }
 
     // Per-module index pages. Each non-synthetic module outside the

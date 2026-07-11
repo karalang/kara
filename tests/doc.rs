@@ -787,9 +787,11 @@ fn doc_emits_search_index_for_documented_items() {
 }
 
 #[test]
-fn doc_emits_empty_search_index_when_no_items_documented() {
-    // Project with no doc comments still produces a stable, empty JSON
-    // array — the file always exists at the published URL.
+fn doc_search_index_holds_only_builtins_when_no_user_items_documented() {
+    // Project with no documented user items still produces a stable,
+    // valid JSON array — the file always exists at the published URL.
+    // The compiler builtins are always present, so the array is never
+    // empty, but it must contain no user item.
     let scratch = ScratchDir::new("empty-search");
     scratch.write(
         "kara.toml",
@@ -810,7 +812,89 @@ fn doc_emits_empty_search_index_when_no_items_documented() {
     let json_path = scratch.root().join("dist/doc/search-index.json");
     assert!(json_path.exists());
     let json = fs::read_to_string(&json_path).unwrap();
-    assert_eq!(json, "[]");
+    // A valid, non-empty array carrying the always-present builtins.
+    assert!(json.starts_with('[') && json.ends_with(']'), "got: {json}");
+    assert!(
+        json.contains("\"name\":\"assert\""),
+        "expected the builtins in the search index; got: {json}"
+    );
+    // The undocumented user function must not appear.
+    assert!(
+        !json.contains("\"name\":\"undocumented\""),
+        "undocumented user item leaked into the index; got: {json}"
+    );
+}
+
+#[test]
+fn doc_surfaces_compiler_builtins_under_builtins_module() {
+    // The intercept-only compiler builtins (assert family, todo,
+    // unreachable, dbg, collect_all) have no stdlib decl, so they were
+    // invisible to `karac doc`. The doc-only builtin registry surfaces
+    // them under a synthetic `builtins` module: one page each, a module
+    // index, sidebar entries, and search-index rows — present in every
+    // project regardless of what the project itself documents.
+    let scratch = ScratchDir::new("builtins");
+    scratch.write(
+        "kara.toml",
+        "[package]\nname = \"anything\"\nedition = \"2026\"\n",
+    );
+    // A project with no documented items at all still surfaces builtins.
+    scratch.write("src/main.kara", "fn main() {}\n");
+
+    let out = karac_bin()
+        .arg("doc")
+        .current_dir(scratch.root())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let doc_root = scratch.root().join("dist/doc");
+
+    // One page per builtin under builtins/.
+    for name in [
+        "assert",
+        "assert_eq",
+        "assert_ne",
+        "dbg",
+        "todo",
+        "unreachable",
+        "collect_all",
+    ] {
+        let page = doc_root.join("builtins").join(format!("{name}.html"));
+        assert!(page.exists(), "expected builtin page {page:?}");
+    }
+
+    // A representative page renders its signature and prose.
+    let assert_eq_html = fs::read_to_string(doc_root.join("builtins/assert_eq.html")).unwrap();
+    assert!(
+        assert_eq_html.contains("fn assert_eq[T: Eq + Debug](left: T, right: T) with panics"),
+        "expected assert_eq signature; got:\n{assert_eq_html}"
+    );
+    assert!(assert_eq_html.contains("Panics unless"));
+
+    // The builtins module gets its own index page with the module prose.
+    let mod_index = fs::read_to_string(doc_root.join("builtins/index.html")).unwrap();
+    assert!(mod_index.contains("module <code>builtins</code>"));
+    assert!(
+        mod_index.contains("Compiler builtins"),
+        "expected module prose; got:\n{mod_index}"
+    );
+
+    // The global index and sidebar list the builtins module.
+    let index = fs::read_to_string(doc_root.join("index.html")).unwrap();
+    assert!(
+        index.contains("builtins"),
+        "expected builtins in global index"
+    );
+
+    // Search index carries the builtins with the fn kind.
+    let json = fs::read_to_string(doc_root.join("search-index.json")).unwrap();
+    assert!(json.contains("\"name\":\"collect_all\""));
+    assert!(json.contains("\"href\":\"builtins/collect_all.html\""));
 }
 
 #[test]
