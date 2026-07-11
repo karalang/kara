@@ -109,7 +109,7 @@ share the box (F4 fairness control — absolute numbers are single-box,
 lower than the laptop tables below because the load generator competes
 with the server for the 16 vCPUs). Node + Phoenix are dropped from the
 paid cohort (kept in the laptop supplement below); the cross-ISA x86
-confirmation (`c7i.4xlarge`) is the pending pair (phase-6 line 46).
+confirmation (`c7i.4xlarge`) is confirmed below (phase-6 line 46).
 
 **Framing — read first.** The headline for auto-par is the *source
 comparison* (four plain `let` bindings vs Rust `tokio::join!` / Go
@@ -175,6 +175,34 @@ the source comparison — and (b) throughput on independent **I/O**, which
 this CPU-only kernel cannot express. The control lane confirms auto-par
 *fires* (it costs a little here) without helping this workload; that is
 the correct, expected result, not a regression.
+
+### Cross-ISA confirmation — x86 EC2 (`c7i.4xlarge`)
+
+**Measured on 2026-07-11.** AWS `c7i.4xlarge` (16 vCPU Intel Sapphire
+Rapids), Ubuntu 24.04 amd64, identical `bench.sh --impls=k,r,j,g` cohort
+and methodology as the Graviton canonical above; karac built from `main`
+`5cc4a8be`. Purpose: show the **Kāra-vs-comparators ratio is
+ISA-invariant** — not ARM-cherry-picked (the dev box is itself arm64, so
+x86 is the missing ISA).
+
+| Impl | cold req/s | -c100 | -c1000 | -c5000 |
+|------|-----------|-------|--------|--------|
+| Rust | 50.0 | 337 [336..344] | 340 [339..346] | 253 [201..320] |
+| **Kāra** | 51.0 | **346 [345..349]** | 303 [297..322] | 312 [297..316] |
+| Go   | 55.0 | 397 [396..398] | 311 [302..341] | 36 [6..193] |
+| Java | 48.0 | 349 [346..353] | 261 [259..349] | 257 [257..257] |
+
+**The ratio holds.** At `-c100` Kāra is **1.03× Rust** on x86 vs 0.98× on
+Graviton — same performance class on both ISAs, Kāra within ±3 % of Rust
+regardless of architecture. Kāra again leads at `-c5000` (312, vs Rust
+253 / Java 257 / Go's 36 collapse) and is the most connection-stable
+impl. The x86 auto-par control lane matches Graviton — `KARAC_AUTO_PAR=0`
+within noise (ON 303 / OFF 296 at `-c100`; ON −6 % at `-c5000`): **no
+throughput win on CPU-bound work on either ISA**, consistent with the
+Graviton finding.
+
+**Cross-ISA summary — Kāra vs Rust @ `-c100`:** Graviton 0.98×, x86
+1.03×. The "no perf tax" backstop is architecture-independent.
 
 ---
 
