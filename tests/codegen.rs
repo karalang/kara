@@ -6825,6 +6825,26 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_float_if_return_phi_width() {
+        // Float sibling of the int if-width bug: an `f32`-returning fn whose body
+        // is `if c { x } else { 0.0 }` mismatched the phi operands (an f32 branch
+        // beside the default-f64 literal) and fell through to the `i64 0`
+        // placeholder → `ret i64 0` against `float`, failing module verification.
+        // `unify_float_branch_widths` truncates the f64 literal to the sibling f32
+        // before the phi. (Surfaced by GPU-LBM-4 allowing `if` in `#[gpu]` scalar
+        // kernels, but the bug is general — a plain float `if`-return.)
+        if let Some(out) = run_program(
+            "fn relu(x: f32) -> f32 { if x > 0.0 { x } else { 0.0 } }\n\
+             fn main() {\n\
+                 println(f\"{relu(3.0)}\");   // 3\n\
+                 println(f\"{relu(-2.0)}\");  // 0\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n0\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_narrow_int_arith_branch_phi_width() {
         // Regression for the narrow-int-arithmetic sibling of #7's literal case
         // (kata #125 valid-palindrome's `to_lower` / ASCII case-fold surface).

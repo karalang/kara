@@ -1081,6 +1081,7 @@ impl<'ctx> super::Codegen<'ctx> {
             (false, false) => {
                 if let (Some(tv), Some(ev)) = (then_val, else_val) {
                     let (tv, ev) = self.unify_int_branch_widths(tv, then_end_bb, ev, else_end_bb);
+                    let (tv, ev) = self.unify_float_branch_widths(tv, then_end_bb, ev, else_end_bb);
                     if tv.get_type() == ev.get_type() {
                         let phi = self.builder.build_phi(tv.get_type(), "ifval").unwrap();
                         phi.add_incoming(&[(&tv, then_end_bb), (&ev, else_end_bb)]);
@@ -1173,6 +1174,62 @@ impl<'ctx> super::Codegen<'ctx> {
         let t = self
             .builder
             .build_int_truncate(v, target, "ifw.trunc")
+            .unwrap();
+        if let Some(bb) = resume {
+            self.builder.position_at_end(bb);
+        }
+        t.into()
+    }
+
+    /// Float sibling of [`unify_int_branch_widths`]. A float literal (`0.0`)
+    /// lowers at the default `f64` width; when the sibling branch is `f32` (a
+    /// param / typed expr), the phi's operand types disagree and the whole `if`
+    /// falls through to the `i64 0` placeholder — an `f32`-returning fn whose
+    /// body is `if c { x } else { 0.0 }` then emits `ret i64 0` against `float`
+    /// and fails module verification. The typechecker has unified both branches
+    /// to one Kāra float type, so the `f64` side is always the literal artifact;
+    /// truncate it to the sibling's `f32` (an `f64`-typed fn never hits the
+    /// mismatch — its literals are already `f64`). Value-preserving, same
+    /// rationale as the integer case.
+    fn unify_float_branch_widths(
+        &self,
+        a: BasicValueEnum<'ctx>,
+        a_pred: BasicBlock<'ctx>,
+        b: BasicValueEnum<'ctx>,
+        b_pred: BasicBlock<'ctx>,
+    ) -> (BasicValueEnum<'ctx>, BasicValueEnum<'ctx>) {
+        let (BasicValueEnum::FloatValue(av), BasicValueEnum::FloatValue(bv)) = (a, b) else {
+            return (a, b);
+        };
+        let f64_t = self.context.f64_type();
+        let f32_t = self.context.f32_type();
+        let (a_is64, b_is64) = (av.get_type() == f64_t, bv.get_type() == f64_t);
+        if a_is64 && !b_is64 {
+            (self.fptrunc_branch_value_in_pred(av, f32_t, a_pred), b)
+        } else if b_is64 && !a_is64 {
+            (a, self.fptrunc_branch_value_in_pred(bv, f32_t, b_pred))
+        } else {
+            (a, b)
+        }
+    }
+
+    /// Float sibling of [`truncate_branch_value_in_pred`]: `fptrunc` a phi-bound
+    /// `f64` branch value down to `target` (`f32`) at the end of its predecessor,
+    /// so the result dominates the phi's incoming edge.
+    fn fptrunc_branch_value_in_pred(
+        &self,
+        v: inkwell::values::FloatValue<'ctx>,
+        target: inkwell::types::FloatType<'ctx>,
+        pred: BasicBlock<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let resume = self.builder.get_insert_block();
+        match pred.get_terminator() {
+            Some(term) => self.builder.position_before(&term),
+            None => self.builder.position_at_end(pred),
+        }
+        let t = self
+            .builder
+            .build_float_trunc(v, target, "ifw.fptrunc")
             .unwrap();
         if let Some(bb) = resume {
             self.builder.position_at_end(bb);

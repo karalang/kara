@@ -31,7 +31,9 @@
 //! effect-clean, so this emitter assumes a clean subset and only has to reject
 //! the shapes slice-0 has not *yet* grown to lower (not ill-formed programs).
 
-use crate::ast::{BinOp, Expr, ExprKind, Function, Param, StmtKind, TypeExpr, TypeKind, UnaryOp};
+use crate::ast::{
+    BinOp, Block, Expr, ExprKind, Function, Param, StmtKind, TypeExpr, TypeKind, UnaryOp,
+};
 
 /// Why a `#[gpu]` kernel could not be lowered to slice-0 WGSL. Every variant
 /// is a "slice-0 does not handle this *yet*" shape, not an ill-formed program
@@ -220,17 +222,29 @@ fn lower_expr(expr: &Expr, param_name: &str) -> Result<String, WgslError> {
             let inner = lower_expr(operand, param_name)?;
             Ok(format!("-({inner})"))
         }
+        // Value `if c { a } else { b }` → WGSL `select(b, a, c)` (GPU-LBM-4).
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            let (then_e, else_e) = if_branches(then_block, else_branch)?;
+            let cond = lower_expr(condition, param_name)?;
+            let t = lower_expr(then_e, param_name)?;
+            let e = lower_expr(else_e, param_name)?;
+            Ok(format!("select({e}, {t}, {cond})"))
+        }
         _ => Err(WgslError::UnsupportedBody(
-            "unsupported expression in a slice-0 GPU kernel body (numeric literals, \
-             `+ - * / %`, and unary `-` over the parameter only)"
+            "unsupported expression in a GPU kernel body (numeric literals, `+ - * / %`, \
+             unary `-`, comparisons, and value `if`/`else` over the parameter)"
                 .to_string(),
         )),
     }
 }
 
-/// The WGSL spelling of a binary arithmetic operator. Non-arithmetic operators
-/// (comparison / logical / bitwise) change the result type and are out of the
-/// slice-0 scalar-map scope.
+/// The WGSL spelling of a binary arithmetic or comparison operator. Comparisons
+/// (used only inside an `if` condition — GPU-LBM-4) produce `bool`; logical /
+/// bitwise operators remain out of scope.
 fn binop_str(op: &BinOp) -> Result<&'static str, WgslError> {
     match op {
         BinOp::Add => Ok("+"),
@@ -238,11 +252,67 @@ fn binop_str(op: &BinOp) -> Result<&'static str, WgslError> {
         BinOp::Mul => Ok("*"),
         BinOp::Div => Ok("/"),
         BinOp::Mod => Ok("%"),
+        BinOp::Gt => Ok(">"),
+        BinOp::Lt => Ok("<"),
+        BinOp::GtEq => Ok(">="),
+        BinOp::LtEq => Ok("<="),
+        BinOp::Eq => Ok("=="),
+        BinOp::NotEq => Ok("!="),
         _ => Err(WgslError::UnsupportedBody(
-            "only arithmetic operators (`+ - * / %`) are supported in a slice-0 GPU kernel"
+            "only arithmetic (`+ - * / %`) and comparison (`> < >= <= == !=`) operators \
+             are supported in a GPU kernel"
                 .to_string(),
         )),
     }
+}
+
+/// The WGSL comparison operator for a lowered comparison method name (`gt`, `lt`,
+/// …) — the post-lowering form the SoA emitter sees (`f32.gt(a, b)`). `None` for a
+/// non-comparison method.
+fn cmp_method_op(name: &str) -> Option<&'static str> {
+    match name {
+        "gt" => Some(">"),
+        "lt" => Some("<"),
+        "ge" => Some(">="),
+        "le" => Some("<="),
+        "eq" => Some("=="),
+        "ne" => Some("!="),
+        _ => None,
+    }
+}
+
+/// Extract the value expressions of `if cond { then } else { else }` used as a
+/// value. Both branches must be a single expression; the `else` may be a block
+/// (`else { .. }`) or another `if` (else-if chain, recursed by the caller). No
+/// `else` is an error — a value `if` needs both arms. WGSL has no statement `if`
+/// in this subset, so this lowers to `select(else, then, cond)`.
+fn if_branches<'a>(
+    then_block: &'a Block,
+    else_branch: &'a Option<Box<Expr>>,
+) -> Result<(&'a Expr, &'a Expr), WgslError> {
+    let block_value = |b: &'a Block| -> Result<&'a Expr, WgslError> {
+        if !b.stmts.is_empty() {
+            return Err(WgslError::UnsupportedBody(
+                "a GPU `if` branch must be a single expression (no locals)".to_string(),
+            ));
+        }
+        b.final_expr
+            .as_deref()
+            .ok_or_else(|| WgslError::UnsupportedBody("a GPU `if` branch has no value".to_string()))
+    };
+    let then_e = block_value(then_block)?;
+    let else_box = else_branch.as_deref().ok_or_else(|| {
+        WgslError::UnsupportedBody(
+            "a GPU `if` must have an `else` — it produces a value".to_string(),
+        )
+    })?;
+    let else_e = match &else_box.kind {
+        ExprKind::Block(b) => block_value(b)?,
+        // else-if chain: recurse on the whole `if`.
+        ExprKind::If { .. } => else_box,
+        _ => else_box,
+    };
+    Ok((then_e, else_e))
 }
 
 /// Format an `f64` literal as a WGSL float literal — always with a decimal
@@ -507,13 +577,32 @@ fn lower_soa_expr(
                         let inner = lower_soa_expr(&args[0].value, param_name, groups)?;
                         return Ok(format!("-({inner})"));
                     }
+                    // Post-lowering comparison: `a > b` → `f32.gt(a, b)` (GPU-LBM-4).
+                    if let (Some(op_str), 2) = (cmp_method_op(op), args.len()) {
+                        let l = lower_soa_expr(&args[0].value, param_name, groups)?;
+                        let r = lower_soa_expr(&args[1].value, param_name, groups)?;
+                        return Ok(format!("({l} {op_str} {r})"));
+                    }
                 }
             }
             Err(WgslError::UnsupportedBody(
                 "unsupported call in a struct GPU kernel body — only desugared arithmetic \
-                 (`+ - * / %`, unary `-`) is supported"
+                 (`+ - * / %`, unary `-`) and comparison (`> < >= <= == !=`) are supported"
                     .to_string(),
             ))
+        }
+        // Value `if c { a } else { b }` → WGSL `select(b, a, c)` (GPU-LBM-4).
+        // `if` survives lowering, so the SoA (codegen) emitter sees it too.
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            let (then_e, else_e) = if_branches(then_block, else_branch)?;
+            let cond = lower_soa_expr(condition, param_name, groups)?;
+            let t = lower_soa_expr(then_e, param_name, groups)?;
+            let e = lower_soa_expr(else_e, param_name, groups)?;
+            Ok(format!("select({e}, {t}, {cond})"))
         }
         ExprKind::Identifier(name) => Err(WgslError::UnsupportedBody(format!(
             "identifier `{name}` — a struct GPU kernel body accesses `<param>.<field>`, \
@@ -521,7 +610,7 @@ fn lower_soa_expr(
         ))),
         _ => Err(WgslError::UnsupportedBody(
             "unsupported expression in a struct GPU kernel body (field access, numeric \
-             literals, `+ - * / %`, unary `-`)"
+             literals, `+ - * / %`, unary `-`, comparisons, value `if`/`else`)"
                 .to_string(),
         )),
     }
@@ -798,6 +887,76 @@ mod tests {
             "#[gpu]\nfn step(p: Particle) -> Particle { Particle { pos: p.pos + p.vel } }\n",
         );
         let err = emit_kernel_soa(&func, &particle_groups()).unwrap_err();
+        assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
+    }
+
+    // ── GPU-LBM-4 control flow ───────────────────────────────────
+
+    #[test]
+    fn emits_scalar_if_as_select() {
+        // `if x > 0 { x } else { 0 }` → `select(0.0, input[i], (input[i] > 0.0))`.
+        let func =
+            parse_kernel("#[gpu]\nfn relu(x: f32) -> f32 { if x > 0.0 { x } else { 0.0 } }\n");
+        let wgsl = emit_kernel(&func).unwrap();
+        assert!(
+            wgsl.contains("output[i] = select(0.0, input[i], (input[i] > 0.0));"),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn emits_all_comparison_operators() {
+        for (src, op) in [
+            (">", ">"),
+            ("<", "<"),
+            (">=", ">="),
+            ("<=", "<="),
+            ("==", "=="),
+            ("!=", "!="),
+        ] {
+            let func = parse_kernel(&format!(
+                "#[gpu]\nfn k(x: f32) -> f32 {{ if x {src} 1.0 {{ x }} else {{ 0.0 }} }}\n"
+            ));
+            let wgsl = emit_kernel(&func).unwrap();
+            assert!(
+                wgsl.contains(&format!("(input[i] {op} 1.0)")),
+                "op {src}:\n{wgsl}"
+            );
+        }
+    }
+
+    #[test]
+    fn emits_soa_field_level_if() {
+        // A field expr with a value `if` over a field comparison.
+        let func = parse_kernel(
+            "#[gpu]\nfn upd(x: Cell) -> Cell { Cell { a: if x.c > 0.0 { x.a + x.c } else { x.a }, b: x.b, c: x.c } }\n",
+        );
+        let groups = vec![
+            SoaGpuGroup {
+                name: "ga".into(),
+                fields: vec!["a".into()],
+            },
+            SoaGpuGroup {
+                name: "gb".into(),
+                fields: vec!["b".into()],
+            },
+            SoaGpuGroup {
+                name: "gc".into(),
+                fields: vec!["c".into()],
+            },
+        ];
+        let wgsl = emit_kernel_soa(&func, &groups).unwrap();
+        assert!(
+            wgsl.contains("ga_out[i] = select(x_a, (x_a + x_c), (x_c > 0.0));"),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn rejects_if_without_else() {
+        // A value `if` needs an `else`.
+        let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { if x > 0.0 { x } }\n");
+        let err = emit_kernel(&func).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
     }
 }
