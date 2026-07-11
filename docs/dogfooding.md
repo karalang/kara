@@ -51,7 +51,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 |---|---|---|---|---|
 | **Parallax** | Auto-concurrency without `async`/coloring (fan-out + join) | ✅ shipped | auto-par codegen + HTTP FFI | 1 |
 | **Mend** | AI-first: structured compiler output as a machine fix-loop | ✅ shipped | `karac … --output=json` + `karac fix` | 1 |
-| **Slipstream** | Auto-concurrency + SoA layout + one source on CPU/GPU | 🔨 browser edition shipped, full-SoA | browser LBM wind tunnel (stateful grid + worker-pool fan-out + live angle-of-attack → stall) built — `examples/slipstream/`; **carried grid is an SoA `layout` block, byte-identical AoS↔SoA native + runs SoA in-browser** (per-layout-monomorphization slice 6); native-SDL2 CPU Phase 11 · GPU Phase 10 still planned | 1 |
+| **Slipstream** | Auto-concurrency + SoA layout + one source on CPU/GPU | 🔨 browser edition shipped, full-SoA | browser LBM wind tunnel (stateful grid + worker-pool fan-out + live angle-of-attack → stall) built — `examples/slipstream/`; **carried grid is an SoA `layout` block, byte-identical AoS↔SoA native + runs SoA in-browser** (per-layout-monomorphization slice 6); native-SDL2 CPU Phase 11; GPU **slice-0 spine landed** (`#[gpu]` element-wise map runs on Metal, 2026-07-03 — see `docs/spikes/gpu-wgsl-slice0.md`), but Slipstream's LBM GPU path is still unbuilt (needs CG-4 layout-group→buffer + struct/control-flow kernel bodies) | 1 |
 | **Cartographer** | Effect graph as a live architecture artifact | ✅ shipped | whole-program query + live WASM studio (D3 + Monaco) + per-callee blocking attribution — all design points covered | 2 |
 | **Husk** | `kernel` profile — no heap/panic/std, MMIO, ISRs | ⬜ planned | v8 hardware gaps (`#[repr]`, `#[interrupt]`, asm) | 2 |
 | **Weave** | Refinement types + contracts + effects together | ✅ shipped (CSV cut) | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
@@ -226,7 +226,9 @@ examples that show the interesting cases without being contrived.
 > verified by the committed CDP harness `verify_browser.mjs` (isolated, render
 > loop advancing, canvas evolving, multi-hundred-frame soak clean, wheel angle
 > control moves the wing). Honest cuts (keyboard/scroll rather than an HTML
-> slider, native-SDL2 CPU + GPU still Phase-11/10) are in the example README.
+> slider, native-SDL2 CPU still Phase-11; the LBM GPU path unbuilt — a GPU
+> slice-0 spine ships separately (`#[gpu]` element-wise map on Metal), but
+> Slipstream's kernel is beyond it, see below) are in the example README.
 >
 > **SIMD collide kernel — DONE 2026-07-11.** The collide pass (the pure per-cell
 > BGK relaxation, the inner hot path) now runs as a `Vector[f64, 2]` SIMD-128
@@ -395,6 +397,10 @@ fn simulate_tick(world: mut ref World) with writes(FluidGrid) {
 
 // GPU path: identical kernel, dispatched to the GPU.
 // Same source — no rewrite, no port.
+// NOTE: illustrative target — NOT yet implemented in the example. The GPU
+// slice-0 spine exists (a single-scalar `#[gpu]` element-wise map runs on
+// Metal today), but this struct-valued, control-flow kernel is beyond it —
+// blocked on CG-4 (layout-group→GPU-buffer) + richer `#[gpu]` kernel bodies.
 #[gpu]
 fn lbm_step_gpu(grid: ref Vec[LbmNode], viscosity: f32) -> Vec[LbmNode]
     with reads(FluidGrid), allocates(GpuBuffer)
@@ -433,8 +439,14 @@ ask "where is the threading code?" There isn't any. The compiler found it.
 implementations (Dan Schroeder's JavaScript version is ~300 lines). The CPU
 demo is unblocked after Phase 11 completes (auto-concurrency codegen lands in
 Phase 8 floor, but the full stdlib + FFI for SDL2 rendering need the long-tail
-in Phase 11). The GPU path requires Phase 10 but can be added later without
-changing the Kāra source — only the dispatch call changes.
+in Phase 11). The GPU path can be added later without changing the Kāra
+source — only the dispatch call changes. The Phase-10 GPU **spine has landed**
+(`#[gpu]` element-wise map runs on Metal via `gpu.dispatch`; front-end contract
+FE-1–4 + SL-1/2 and runtime CG-1/2/3 all done — `docs/spikes/gpu-wgsl-slice0.md`),
+but this demo's LBM kernel is still gated on the broader surface: **CG-4**
+(layout `group`s → coalesced GPU buffers, multi-buffer dispatch) and `#[gpu]`
+kernel bodies with structs + control flow, none of which the current
+single-scalar map floor supports.
 
 **Browser edition (cross-target capstone).** The same `simulate_tick` source
 also targets the browser: `--target=wasm_browser --features wasm-threads` runs
@@ -1228,7 +1240,7 @@ the "Ready when" column notes the compiler capability each is gated on.
 | 4 | **Tangle** | Now (ownership inference + `karac query ownership` exist) | Proves the no-`'a` safety claim at the hard shapes. Cheap, pure Kāra, backs the README ownership section directly. |
 | 5 | **Weave** | ✅ CSV cut built 2026-06-13 (`examples/weave/`) — runs under `karac run` (interpreter) **and** `karac build`s to a native binary, output byte-identical. Service cut still gated on `Pool[T]` + TLS + tracing | Correctness story for data engineers. Complements the concurrency story. |
 | 6 | **Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |
-| 7 | **Slipstream** | Browser edition ✅ built 2026-06-19 (`examples/slipstream/`); native-SDL2 CPU path after Phase 11 (long-tail stdlib + FFI); GPU path added later with no Kāra-source change | Visually striking, instantly explainable. |
+| 7 | **Slipstream** | Browser edition ✅ built 2026-06-19 (`examples/slipstream/`); native-SDL2 CPU path after Phase 11 (long-tail stdlib + FFI); GPU spine landed 2026-07-03 (`#[gpu]` element-wise map on Metal), but Slipstream's LBM GPU path still unbuilt — gated on CG-4 (layout-group→buffer) + struct/control-flow `#[gpu]` bodies | Visually striking, instantly explainable. |
 | 8 | **Husk** | Hardware gaps from v8 (`#[repr]`, `#[interrupt]`, inline asm, `no_std`) | Systems credibility. Validates the `kernel` profile. |
 
 **Parallax** and **Mend** together are the minimum viable showcase — they
@@ -1263,7 +1275,12 @@ double-free). The SIMD-128 inner kernel landed 2026-07-11: the collide pass is n
 a `Vector[f64, 2]` two-cells-per-lane kernel, byte-identical output, which drove
 the ownership `Copy`-classification fix for SIMD vectors (**B-2026-07-11-1**). The
 only remaining Slipstream gates are the native-SDL2 CPU edition (Phase 11) and the
-GPU path (Phase 10).
+GPU path. The GPU **slice-0 spine has landed** (2026-07-03 — a `#[gpu]`
+element-wise map runs on Metal via `gpu.dispatch`; front-end FE-1–4 + SL-1/2 and
+runtime CG-1/2/3, see `docs/spikes/gpu-wgsl-slice0.md`), but Slipstream's LBM GPU
+path remains unbuilt: its struct-valued, control-flow kernel is beyond the current
+single-scalar map floor, gated on **CG-4** (layout `group`s → coalesced GPU
+buffers) plus richer `#[gpu]` kernel bodies.
 
 ---
 
