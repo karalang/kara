@@ -1702,6 +1702,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(GenericArg::Type(payload)) =
                     p.generic_args.as_ref().and_then(|a| a.first())
                 {
+                    // B-2026-07-11-33: an `Option[shared T]` element. As a Vec
+                    // element the `Option` uses the TAGGED overlay
+                    // (`{tag:i64, payload_words}`), NOT the niche pointer, so the
+                    // drop must read the tag and, when `Some`, rc-dec the boxed
+                    // payload. `emit_option_drop_fn` does exactly that
+                    // (tag-guarded, delegating to the payload type's own drop —
+                    // an rc-dec for a shared struct/enum). Without this the
+                    // shared nodes inside a `Vec[Option[shared]]` leaked (the
+                    // Option arm returned `None` → buffer-only Vec cleanup; the
+                    // kata-23 merge-k-lists shape).
+                    if self.shared_heap_type_for_type_expr(payload).is_some() {
+                        return self.emit_option_drop_fn(payload);
+                    }
                     if self.option_payload_inline_recursive_drop_ok(payload)
                         || self.option_payload_struct_or_enum_drop_ok(payload)
                     {
