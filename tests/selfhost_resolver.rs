@@ -1,5 +1,5 @@
 //! Differential oracle for the self-hosted **resolver** (Phase 12, Resolver
-//! port Slices 1 + 2a). Sibling of `tests/selfhost_parser{,_items,_types}.rs`:
+//! port Slices 1–2b). Sibling of `tests/selfhost_parser{,_items,_types}.rs`:
 //! a shared corpus of bare top-level items is name-resolved by BOTH the Rust
 //! seed (`karac::resolve(karac::parse(src).program)`) and the Kāra resolver
 //! (`selfhost/src/resolver.kara::resolve_item`, built AOT via `karac build`),
@@ -15,8 +15,14 @@
 //!   `type` alias, and `const` — each resolved in fused "collect + resolve"
 //!   form (the declaration's own name is defined FIRST, so a self-referential
 //!   field / variant / const value resolves like the seed's two-pass
-//!   `collect` + `resolve_items` does for a single item). `trait` / `impl` /
-//!   `use` are a later slice.
+//!   `collect` + `resolve_items` does for a single item).
+//! - **Slice 2b** adds `trait` and `impl`: a trait scope exposing `Self` + the
+//!   trait's generics over each method's signature / optional default body; an
+//!   impl scope resolving the target type, then the (optional) trait path, then
+//!   `Self`, then each method body. Impl-method names are NOT scope bindings
+//!   (siblings dispatch via `self.m()`), mirroring the seed. `use` is a later
+//!   slice. Operator-trait / `Into` impl restrictions produce out-of-slice
+//!   error kinds, so the corpus avoids those trait names as impl targets.
 //!
 //! Only four error kinds are in scope — UndefinedName, UndefinedType,
 //! DuplicateDefinition, ReservedIdentifier. The corpus must therefore
@@ -100,6 +106,24 @@ const CORPUS: &[&str] = &[
     "const BadTy: Nope = 0;",
     "const Recur: i64 = Recur;",
     "const BadVal: i64 = missing;",
+    // ── Slice 2b: trait / impl items ──
+    // Traits — required method, default body, `Self` return, generic, bad
+    // param type, duplicate generic.
+    "trait Greet { fn hi(ref self) -> i64; }",
+    "trait Def { fn base(ref self) -> i64 { 0 } }",
+    "trait Mk { fn make() -> Self; }",
+    "trait Con[T] { fn get(ref self) -> T; }",
+    "trait BadParam { fn m(x: Nope); }",
+    "trait TDupGen[T, T] {}",
+    // Inherent impls on a seeded primitive target — clean, `Self` return +
+    // `self` body, undefined param type; plus undefined-target and (undefined)
+    // trait-path forms.
+    "impl i64 { fn dbl(ref self) -> i64 { 0 } }",
+    "impl i64 { fn id(ref self) -> Self { self } }",
+    "impl String { fn two(ref self) -> i64 { 0 } }",
+    "impl i64 { fn m(x: Missing) {} }",
+    "impl Nope { fn m() {} }",
+    "impl Show for i64 { fn show(ref self) -> i64 { 0 } }",
 ];
 
 /// Byte offset shift between the Rust and Kāra spans — 0 (both resolve the

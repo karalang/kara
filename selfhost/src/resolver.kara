@@ -35,6 +35,9 @@ import ast.{
     VariantTag,
     TypeAliasNode,
     ConstDeclNode,
+    TraitDefNode,
+    TraitMethodNode,
+    ImplBlockNode,
     GenericParamsNode,
     GenericParamNode,
     SelfMode,
@@ -305,9 +308,13 @@ impl Resolver {
             Const(c) => {
                 self.resolve_const(c);
             }
+            Trait(t) => {
+                self.resolve_trait(t);
+            }
+            Impl(i) => {
+                self.resolve_impl(i);
+            }
             Use(_) => {}
-            Trait(_) => {}
-            Impl(_) => {}
             ErrItem(_) => {}
         }
     }
@@ -438,18 +445,7 @@ impl Resolver {
         // Generic type params (bare names; bounds are a later slice).
         self.define_generics(generics);
         // Receiver: `self` is an ordinary scope entry when present.
-        match self_mode {
-            NoSelf => {}
-            OwnedSelf => {
-                self.define("self".to_string(), clone_span(span));
-            }
-            RefSelf => {
-                self.define("self".to_string(), clone_span(span));
-            }
-            MutRefSelf => {
-                self.define("self".to_string(), clone_span(span));
-            }
-        }
+        self.define_self_binding(self_mode, clone_span(span));
         // Params: define the binding, then resolve its type (order matters for
         // error ordering — resolve_items.rs:85-89).
         for p in params {
@@ -460,6 +456,145 @@ impl Resolver {
         match ret {
             Some(t) => {
                 self.resolve_type(t);
+            }
+            None => {}
+        }
+        self.resolve_block(body);
+        self.pop_scope();
+    }
+
+    // Define the `self` receiver binding when the function/method has one.
+    // Shared by `resolve_function` (free / impl-method path via
+    // `resolve_impl_method`) and `resolve_trait_method`. `NoSelf` is a free
+    // function — no receiver. The three borrow forms are indistinguishable to
+    // the resolver (all bind the name `self`), mirroring the seed's
+    // `if f.self_param.is_some()` define.
+    fn define_self_binding(mut ref self, self_mode: SelfMode, span: Span) {
+        match self_mode {
+            NoSelf => {}
+            OwnedSelf => {
+                self.define("self".to_string(), span);
+            }
+            RefSelf => {
+                self.define("self".to_string(), span);
+            }
+            MutRefSelf => {
+                self.define("self".to_string(), span);
+            }
+        }
+    }
+
+    // `resolve_trait_def` (resolve_items.rs:165). Define the trait name, then in
+    // a trait scope exposing `Self` (a type) and the trait's generic params,
+    // resolve every method's signature + optional default body. Supertraits,
+    // associated types, and trait-level effects are a later slice (the selfhost
+    // `TraitDefNode` omits them). Consumes the node.
+    fn resolve_trait(mut ref self, t: TraitDefNode) {
+        let TraitDefNode { is_pub, name, generics, methods, attributes, doc, span } = t;
+        self.define(name, clone_span(span));
+        self.push_scope();
+        // `Self` names the implementing type inside method signatures / bodies.
+        self.define("Self".to_string(), clone_span(span));
+        self.define_generics(generics);
+        for m in methods {
+            self.resolve_trait_method(m);
+        }
+        self.pop_scope();
+    }
+
+    // One trait method (`TraitItem::Method`, resolve_items.rs:199-241). A
+    // Function scope holds the method's generics / receiver / params; the
+    // OPTIONAL default body resolves WITHOUT a fresh scope (mirrors the seed's
+    // `resolve_block_no_scope` — the params already live in this scope). The
+    // method name is NOT a scope binding (sibling methods are reached via
+    // `self.m()`, never a bare lookup), so it is never defined — unlike a free
+    // function.
+    fn resolve_trait_method(mut ref self, m: TraitMethodNode) {
+        let TraitMethodNode { name, generics, self_mode, params, ret, body, span } = m;
+        self.push_scope();
+        self.define_generics(generics);
+        self.define_self_binding(self_mode, clone_span(span));
+        for p in params {
+            let FnParamNode { name: pn, ty: pty, span: psp } = p;
+            self.define(pn, psp);
+            self.resolve_type(pty);
+        }
+        match ret {
+            Some(rt) => {
+                self.resolve_type(rt);
+            }
+            None => {}
+        }
+        match body {
+            Some(b) => {
+                self.resolve_block_body(b);
+            }
+            None => {}
+        }
+        self.pop_scope();
+    }
+
+    // `resolve_impl_block` (resolve_items.rs:408). Push an impl scope, define the
+    // impl's generic params, resolve the TARGET type FIRST, then the trait path
+    // (`impl TRAIT for TARGET`), then define `Self`, then resolve each method
+    // body. The seed resolves the trait as a value path (`resolve_path_expr`),
+    // which — like `resolve_type`'s path arm — looks up the first segment and
+    // reports UndefinedType at the path span on a miss, so resolving the
+    // selfhost `trait_ty` (a `TypeExpr`) via `resolve_type` matches. Impls
+    // introduce no module-scope name (nothing to define at the item level).
+    // NOTE: the operator-trait / `Into` impl restrictions the seed also runs
+    // here produce OUT-OF-SLICE error kinds, so the corpus avoids operator /
+    // `Into` trait names as impl targets.
+    fn resolve_impl(mut ref self, imp: ImplBlockNode) {
+        let ImplBlockNode { generics, trait_ty, target_ty, methods, attributes, span } = imp;
+        self.push_scope();
+        self.define_generics(generics);
+        self.resolve_type(target_ty);
+        match trait_ty {
+            Some(tt) => {
+                self.resolve_type(tt);
+            }
+            None => {}
+        }
+        self.define("Self".to_string(), clone_span(span));
+        for m in methods {
+            self.resolve_impl_method(m);
+        }
+        self.pop_scope();
+    }
+
+    // An impl method is an always-bodied `FnDefNode`, resolved exactly like a
+    // free function's signature + body EXCEPT the method name is NOT defined as
+    // a scope binding (the seed calls `resolve_function`, which — unlike the
+    // selfhost free-function path — never defines the name; collect handles
+    // free-fn names, and impl-method names live in the impl's method table, not
+    // a lookup scope). The body pushes its own Block scope (the seed's impl
+    // methods route through the scope-pushing `resolve_block`, not the trait
+    // default's no-scope form).
+    fn resolve_impl_method(mut ref self, f: FnDefNode) {
+        let FnDefNode {
+            is_pub,
+            name,
+            generics,
+            self_mode,
+            params,
+            ret,
+            body,
+            attributes,
+            doc,
+            span,
+        } = f;
+        self.push_scope();
+        self.define_generics(generics);
+        self.define_self_binding(self_mode, clone_span(span));
+        for p in params {
+            let FnParamNode { name: pn, ty: pty, span: psp } = p;
+            self.define(pn, psp);
+            self.resolve_type(pty);
+        }
+        match ret {
+            Some(rt) => {
+                self.resolve_type(rt);
             }
             None => {}
         }
