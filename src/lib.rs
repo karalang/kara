@@ -705,6 +705,53 @@ fn push_diag(
 /// downstream phases would surface noise rooted in unresolved names, so we
 /// return early with just the parse / resolve diagnostics.
 pub fn run_playground(source: &str) -> PlaygroundResult {
+    let (mut diagnostics, artifacts) = run_static_checks(source);
+    let Some((program, typed)) = artifacts else {
+        // Parse or resolve hard-stopped — return the collected diagnostics
+        // without executing.
+        return PlaygroundResult {
+            stdout: Vec::new(),
+            diagnostics,
+            ok: false,
+        };
+    };
+
+    let pre_interp_diag_count = diagnostics.len();
+    let (stdout, runtime_errors) = run_on_interp_thread(|| {
+        let mut interp = interpreter::Interpreter::new(&program, &typed);
+        interp.captured_output = Some(Vec::new());
+        interp.run();
+        let errors = std::mem::take(&mut interp.runtime_errors);
+        let output = interp.captured_output.take().unwrap_or_default();
+        (output, errors)
+    });
+    for e in &runtime_errors {
+        push_diag(&mut diagnostics, "runtime", e.message.clone(), &e.span);
+    }
+
+    let ok = pre_interp_diag_count == 0 && runtime_errors.is_empty();
+    PlaygroundResult {
+        stdout,
+        diagnostics,
+        ok,
+    }
+}
+
+/// Shared static-check pipeline for [`check_source`] and [`run_playground`] —
+/// the single source of truth for phase ordering and the parse/resolve
+/// hard-stop posture. Runs parse → desugar → resolve → typecheck → lower →
+/// effect → ownership, pushing a normalized [`PlaygroundDiagnostic`] per error.
+/// Returns the collected diagnostics plus, when parse + resolve both succeeded
+/// (so execution is *possible*), the lowered program and its typecheck result
+/// for a caller that wants to go on and interpret. Parse and resolve errors are
+/// hard stops (downstream phases would surface noise rooted in unresolved
+/// names), signalled by a `None` artifact.
+fn run_static_checks(
+    source: &str,
+) -> (
+    Vec<PlaygroundDiagnostic>,
+    Option<(Program, TypeCheckResult)>,
+) {
     let mut diagnostics = Vec::new();
 
     let mut parsed = parse(source);
@@ -712,11 +759,7 @@ pub fn run_playground(source: &str) -> PlaygroundResult {
         for e in &parsed.errors {
             push_diag(&mut diagnostics, "parse", e.message.clone(), &e.span);
         }
-        return PlaygroundResult {
-            stdout: Vec::new(),
-            diagnostics,
-            ok: false,
-        };
+        return (diagnostics, None);
     }
 
     desugar_program(&mut parsed.program);
@@ -726,11 +769,7 @@ pub fn run_playground(source: &str) -> PlaygroundResult {
         for e in &resolved.errors {
             push_diag(&mut diagnostics, "resolve", e.message.clone(), &e.span);
         }
-        return PlaygroundResult {
-            stdout: Vec::new(),
-            diagnostics,
-            ok: false,
-        };
+        return (diagnostics, None);
     }
 
     let typed = typecheck(&parsed.program, &resolved);
@@ -750,25 +789,19 @@ pub fn run_playground(source: &str) -> PlaygroundResult {
         push_diag(&mut diagnostics, "ownership", e.message.clone(), &e.span);
     }
 
-    let pre_interp_diag_count = diagnostics.len();
-    let (stdout, runtime_errors) = run_on_interp_thread(|| {
-        let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
-        interp.captured_output = Some(Vec::new());
-        interp.run();
-        let errors = std::mem::take(&mut interp.runtime_errors);
-        let output = interp.captured_output.take().unwrap_or_default();
-        (output, errors)
-    });
-    for e in &runtime_errors {
-        push_diag(&mut diagnostics, "runtime", e.message.clone(), &e.span);
-    }
+    (diagnostics, Some((parsed.program, typed)))
+}
 
-    let ok = pre_interp_diag_count == 0 && runtime_errors.is_empty();
-    PlaygroundResult {
-        stdout,
-        diagnostics,
-        ok,
-    }
+/// Run `source` through the full **static-check** pipeline (parse → desugar →
+/// resolve → typecheck → effect → ownership) and return every diagnostic in the
+/// normalized [`PlaygroundDiagnostic`] form, WITHOUT executing the program. The
+/// interpreter-free sibling of [`run_playground`]: identical phase order and
+/// parse/resolve hard-stop posture (both delegate to [`run_static_checks`]), but
+/// no side effects. This is the entry point editor tooling — the `kara-lsp`
+/// language server — drives on every edit: static feedback only, never running
+/// user code.
+pub fn check_source(source: &str) -> Vec<PlaygroundDiagnostic> {
+    run_static_checks(source).0
 }
 
 #[cfg(test)]
@@ -888,5 +921,62 @@ mod playground_tests {
         );
         assert_eq!(result.stdout, vec!["ran anyway\n".to_string()]);
         assert!(result.diagnostics.iter().any(|d| d.phase == "typecheck"));
+    }
+
+    #[test]
+    fn check_source_clean_program_has_no_diagnostics() {
+        assert!(check_source("fn main() { let x = 1 + 2; }").is_empty());
+    }
+
+    #[test]
+    fn check_source_surfaces_parse_error() {
+        let diags = check_source("fn main() { let = ; }");
+        assert!(!diags.is_empty());
+        assert!(diags.iter().all(|d| d.phase == "parse"));
+    }
+
+    #[test]
+    fn check_source_surfaces_resolve_error_with_span() {
+        let diags = check_source("fn main() { let _ = undefined_name(); }");
+        let first = diags.first().expect("expected a diagnostic");
+        assert_eq!(first.phase, "resolve");
+        assert!(first.line >= 1 && first.column >= 1 && first.length > 0);
+    }
+
+    #[test]
+    fn check_source_surfaces_typecheck_error() {
+        let diags = check_source("fn main() { let x: i32 = \"not an int\"; }");
+        assert!(diags.iter().any(|d| d.phase == "typecheck"));
+    }
+
+    #[test]
+    fn check_source_does_not_execute_the_program() {
+        // The interpreter-free contract: a program whose ONLY observable
+        // effect is a runtime error (unwrap of None) must yield ZERO
+        // diagnostics from `check_source` — it type/effect/ownership-checks
+        // clean and is never run, so no `"runtime"` phase entry appears
+        // (whereas `run_playground` on the same source records one).
+        let diags =
+            check_source("fn main() panics { let x: Option[i32] = None; let _ = x.unwrap(); }");
+        assert!(
+            diags.iter().all(|d| d.phase != "runtime"),
+            "check_source must not execute; got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn check_source_matches_run_playground_static_prefix() {
+        // The two entry points must agree on the static (pre-interpreter)
+        // diagnostics — they share `run_static_checks`, and this pins that
+        // they stay in sync.
+        let src = "fn main() { let x: i32 = \"nope\"; let _ = undefined(); }";
+        let check = check_source(src);
+        let play = run_playground(src);
+        let play_static: Vec<_> = play
+            .diagnostics
+            .into_iter()
+            .filter(|d| d.phase != "runtime")
+            .collect();
+        assert_eq!(check, play_static);
     }
 }

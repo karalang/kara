@@ -710,10 +710,12 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 3`](../
 
 **Why v1, not Future.** Editor friction kills momentum. Every successful general-purpose language post-2015 shipped editor integration at or before v1. The cohort that tries Kāra in week 1 leaves and does not come back if VS Code support is missing. The analysis is reused — `karac query` and structured-diagnostic JSON already exist; the LSP binary is plumbing over the existing analysis surface plus IDE-side glue, not new compiler design.
 
+**Slice 1 landed 2026-07-11** — the `kara-lsp` workspace member (`lsp/`, mirrors `kernel/`/`playground/`), a stdio `lsp-server`/`lsp-types` transport, the `initialize`/`shutdown` handshake (advertising `textDocumentSync = FULL`), and **live diagnostics**: every `textDocument/didOpen`/`didChange`/`didSave` runs the new `karac::check_source` (the interpreter-free sibling of `run_playground`, extracted with it onto a shared `run_static_checks` so phase order stays single-sourced) and publishes the result via `textDocument/publishDiagnostics`; `didClose` clears them. Byte-span → LSP `Range` mapping is UTF-16-correct (matters for Kāra's non-ASCII source). Analysis is `catch_unwind`-guarded so a compiler-phase panic on half-typed source never drops the connection. No user code is executed (static feedback only). Verified end-to-end over an in-memory connection (`lsp/tests/server.rs`, 2 tests) plus 6 `analysis` unit tests; the by-value `serve(connection)` closes the clean-shutdown deadlock. Remaining floor items (hover, definition, completion, formatting, VS Code extension) are the next slices, each a thin layer on this connection.
+
 **v1 floor (must ship):**
-- [ ] `kara-lsp` binary — long-lived process wrapping `karac` analysis surface; LSP protocol over stdin/stdout.
+- [x] `kara-lsp` binary — long-lived process wrapping `karac` analysis surface; LSP protocol over stdin/stdout. **✓ (slice 1, 2026-07-11)** — `lsp/src/{main,lib}.rs`; stdio transport, initialize/shutdown handshake, FULL text sync.
 - [ ] Syntax highlighting (TextMate grammar; book infrastructure mostly exists).
-- [ ] Diagnostics streaming via `textDocument/publishDiagnostics` over existing `karac` structured-diagnostic JSON.
+- [x] Diagnostics streaming via `textDocument/publishDiagnostics` over existing `karac` structured-diagnostic JSON. **✓ (slice 1, 2026-07-11)** — over `karac::check_source` (parse → desugar → resolve → typecheck → effect → ownership; interpreter-free), phase carried as the diagnostic `code`, `catch_unwind`-guarded, UTF-16 ranges.
 - [ ] Go-to-definition (resolver symbol table).
 - [ ] Hover — type + effect signature (typechecker + effectchecker already produce this).
 - [ ] Find references (resolver symbol table).

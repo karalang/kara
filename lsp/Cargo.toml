@@ -1,0 +1,38 @@
+[package]
+name = "kara-lsp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Language server for Kāra (roadmap Track 3, `kara-lsp`). Built as a
+# separate workspace member (mirrors the `kernel/` + `playground/`
+# pattern) so the LSP protocol deps (`lsp-server`/`lsp-types`) don't
+# pollute the `karac` compiler crate or its wasm32 build surface. The
+# server is thin plumbing: a long-lived stdio process that drives
+# `karac`'s existing analysis surface and shapes the results into LSP
+# responses — the analysis is reused, not re-implemented (see
+# roadmap.md § Track 3, "plumbing over the existing analysis surface").
+#
+# Sliced delivery (roadmap.md § Track 3 v1 floor):
+#   - Slice 1: workspace skeleton + stdio initialize/shutdown handshake
+#              + live diagnostics via textDocument/publishDiagnostics
+#              over `karac::check_source` (this commit)
+#   - Slice 2: hover — type + effect signature
+#   - Slice 3: go-to-definition + document symbols (resolver/AST)
+#   - Slice 4: `.`-completion (type-aware)
+#   - Slice 5: formatting (wraps `karac fmt`) + VS Code extension
+
+[[bin]]
+name = "kara-lsp"
+path = "src/main.rs"
+
+[dependencies]
+karac = { path = ".." }
+# rust-analyzer's LSP crates: a lightweight synchronous transport
+# (`lsp-server`) plus the protocol type definitions (`lsp-types`). The
+# v1 LSP runs a batch query model over the existing analysis surface
+# (roadmap.md § Track 3, "Future direction"), so the synchronous
+# transport fits — no async runtime needed.
+lsp-server = "0.7"
+lsp-types = "0.97"
+serde_json = "1"
