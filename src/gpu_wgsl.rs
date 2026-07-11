@@ -516,9 +516,28 @@ fn reachable_helpers<'a>(
     (order, names)
 }
 
-/// Emit a reachable `#[gpu]` helper as a WGSL `fn name(p0: f32, …) -> f32 { return
-/// <body>; }`. Params are `f32` scalars (the GPU-LBM-5 floor); the body is lowered
-/// with each parameter resolving to itself (identity) and calls to other helpers
+/// The WGSL type of a `#[gpu]` helper parameter or return — a numeric scalar or
+/// `bool` (GPU-SLIP-2b). Numerics use the 32-bit `cast_ctor` mapping (f64→f32,
+/// i64→i32, u64→u32): WGSL is 32-bit, and a helper param declared `i64` to match
+/// Kāra's index arithmetic (`i % w`) maps to WGSL `i32` exactly as the kernel's
+/// index parameter already does (`i32(gid.x)`) — sound for the index domain,
+/// consistent with GPU-LBM-1's f64→f32.
+fn wgsl_helper_type(ty: &TypeExpr, position: &str) -> Result<&'static str, WgslError> {
+    if matches!(scalar_name(ty).as_deref(), Some("bool")) {
+        return Ok("bool");
+    }
+    cast_ctor(ty).ok_or_else(|| {
+        WgslError::UnsupportedSignature(format!(
+            "a GPU helper {position} must be a numeric scalar or bool"
+        ))
+    })
+}
+
+/// Emit a reachable `#[gpu]` helper as a WGSL `fn name(p0: T0, …) -> R { … }`.
+/// Each parameter carries its real WGSL scalar type (`i32`/`f32`/`u32`) and the
+/// return type may be a scalar or `bool` (GPU-SLIP-2b). The body is a sequence of
+/// `let` bindings (GPU-SLIP-2b) followed by the return expression; params and
+/// locals resolve to themselves (identity), calls to other helpers are
 /// recognized via `helper_names`.
 fn emit_helper_def(func: &Function, helper_names: &HashSet<String>) -> Result<String, WgslError> {
     if func.self_param.is_some() {
@@ -527,7 +546,9 @@ fn emit_helper_def(func: &Function, helper_names: &HashSet<String>) -> Result<St
             func.name
         )));
     }
-    let mut param_names = HashSet::new();
+    // `scope` = every identifier that lowers to itself: params first, then each
+    // `let` local as it is bound.
+    let mut scope: HashSet<String> = HashSet::new();
     let mut sig = String::new();
     for (i, p) in func.params.iter().enumerate() {
         let name = p.name().ok_or_else(|| {
@@ -536,29 +557,35 @@ fn emit_helper_def(func: &Function, helper_names: &HashSet<String>) -> Result<St
                 func.name
             ))
         })?;
-        wgsl_scalar(&p.ty, "helper parameter")?; // f32/i32/u32
+        let wty = wgsl_helper_type(&p.ty, "parameter")?; // f32/i32/u32 or bool
         if i > 0 {
             sig.push_str(", ");
         }
-        sig.push_str(&format!("{name}: f32"));
-        param_names.insert(name.to_string());
+        sig.push_str(&format!("{name}: {wty}"));
+        scope.insert(name.to_string());
     }
-    match &func.return_type {
-        Some(ty) => {
-            wgsl_scalar(ty, "helper return type")?;
-        }
+    let ret_ty = match &func.return_type {
+        Some(ty) => wgsl_helper_type(ty, "return type")?,
         None => {
             return Err(WgslError::UnsupportedSignature(format!(
-                "GPU helper `{}` must return a scalar",
+                "GPU helper `{}` must return a scalar or bool",
                 func.name
             )));
         }
+    };
+    // Body: leading `let` bindings then the return expression.
+    let (lets, ret) = kernel_body_parts(func)?;
+    let mut lets_wgsl = String::new();
+    for (name, value) in lets {
+        let resolve = |n: &str| -> Option<String> { scope.contains(n).then(|| n.to_string()) };
+        let rhs = lower_expr(value, &resolve, helper_names)?;
+        lets_wgsl.push_str(&format!("let {name} = {rhs}; "));
+        scope.insert(name.to_string());
     }
-    let body = kernel_return_expr(func)?;
-    let resolve = |n: &str| -> Option<String> { param_names.get(n).cloned() };
-    let body_wgsl = lower_expr(body, &resolve, helper_names)?;
+    let resolve = |n: &str| -> Option<String> { scope.contains(n).then(|| n.to_string()) };
+    let body_wgsl = lower_expr(ret, &resolve, helper_names)?;
     Ok(format!(
-        "fn {}({sig}) -> f32 {{ return {body_wgsl}; }}\n",
+        "fn {}({sig}) -> {ret_ty} {{ {lets_wgsl}return {body_wgsl}; }}\n",
         func.name
     ))
 }
@@ -1479,6 +1506,55 @@ mod tests {
             "{wgsl}"
         );
         assert!(wgsl.contains("output[i] = (sq(input[i]) + 1.0);"), "{wgsl}");
+    }
+
+    #[test]
+    fn emits_bool_helper_with_let_and_mixed_params() {
+        // GPU-SLIP-2b: a helper may return `bool`, take mixed-type params
+        // (`i64` maps to WGSL `i32`, `f32` stays), and bind `let` locals in its
+        // body — the `is_solid(x, y, s) -> bool` shape.
+        let fns = parse_fns(
+            "#[gpu]\nfn edge(x: i64, s: f32) -> bool { let lim = s * 2.0; x < 0 or x >= 3 or s > lim }\n\
+             #[gpu]\nfn pick(p: Cell, s: f32) -> Cell { Cell { a: if edge(0, s) { p.a } else { p.b }, b: p.b } }\n",
+        );
+        let edge = fns.iter().find(|f| f.name == "edge").unwrap();
+        let pick = fns.iter().find(|f| f.name == "pick").unwrap();
+        let groups = vec![
+            SoaGpuGroup {
+                name: "ga".into(),
+                fields: vec!["a".into()],
+            },
+            SoaGpuGroup {
+                name: "gb".into(),
+                fields: vec!["b".into()],
+            },
+        ];
+        let wgsl = emit_kernel_soa(pick, &groups, &[edge]).unwrap();
+        // Helper: bool return, `i32`/`f32` params (not hardcoded f32), a `let`.
+        assert!(
+            wgsl.contains(
+                "fn edge(x: i32, s: f32) -> bool { let lim = (s * 2.0); return (((x < 0) || (x >= 3)) || (s > lim)); }"
+            ),
+            "{wgsl}"
+        );
+        // Called in the SoA return's per-field select condition.
+        assert!(
+            wgsl.contains("ga_out[i] = select(p_b, p_a, edge(0, s_u[0]));"),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn rejects_bad_helper_return_type() {
+        // A helper returning a non-scalar/bool (e.g. a struct) is still rejected.
+        let fns = parse_fns(
+            "#[gpu]\nfn mk(v: f32) -> Cell { Cell { a: v, b: v } }\n\
+             #[gpu]\nfn k(x: f32) -> f32 { mk(x).a }\n",
+        );
+        let mk = fns.iter().find(|f| f.name == "mk").unwrap();
+        let k = fns.iter().find(|f| f.name == "k").unwrap();
+        let err = emit_kernel(k, &[mk]).unwrap_err();
+        assert!(matches!(err, WgslError::UnsupportedSignature(_)), "{err:?}");
     }
 
     #[test]
