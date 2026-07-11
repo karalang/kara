@@ -35,6 +35,7 @@ mod method_call_pool;
 mod method_call_process;
 mod method_call_rate_limiter;
 mod method_call_regex;
+mod method_call_secret;
 mod method_call_semaphore;
 mod method_call_seq;
 mod method_call_set;

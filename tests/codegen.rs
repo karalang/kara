@@ -10125,8 +10125,11 @@ fn main() {
             panic!("{}", msg);
         }
         // Mirror the real CLI pipeline: desugar (impl-Trait args,
-        // parallel assignment, …) runs between parse and resolve.
+        // parallel assignment, …) runs between parse and resolve, then gated
+        // stdlib imports (`import std.secret.{Secret};` etc.) are spliced in
+        // before resolve. A no-op for programs with no gated import.
         karac::desugar_program(&mut parsed.program);
+        karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -31643,8 +31646,11 @@ fn main() {
             panic!("{}", msg);
         }
         // Mirror the real CLI pipeline: desugar (impl-Trait args,
-        // parallel assignment, …) runs between parse and resolve.
+        // parallel assignment, …) runs between parse and resolve, then gated
+        // stdlib imports (`import std.secret.{Secret};` etc.) are spliced in
+        // before resolve. A no-op for programs with no gated import.
         karac::desugar_program(&mut parsed.program);
+        karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -60769,6 +60775,29 @@ fn main() { print(0); }
             "Array element read GEP should be inbounds:\n{}",
             fn_body(&ir, "@aget(")
         );
+    }
+
+    #[test]
+    fn test_e2e_secret_expose() {
+        // `std.secret.Secret[T]` — `.expose()` is a `#[compiler_builtin]` field
+        // borrow (returns the field-0 pointer under the `-> ref T` ABI). `karac
+        // build` output must match `karac run`. Soft-skips without the runtime
+        // archive, like the rest of the E2E suite.
+        if let Some(out) = run_program(
+            r#"
+import std.secret.{Secret};
+fn main() {
+    let s = Secret.new(42);
+    let v = s.expose();
+    println(v);
+    let t = Secret.new("hunter2");
+    let w = t.expose();
+    println(w);
+}
+"#,
+        ) {
+            assert_eq!(out, "42\nhunter2\n");
+        }
     }
 
     #[test]

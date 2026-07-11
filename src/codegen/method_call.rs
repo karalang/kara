@@ -3105,6 +3105,37 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_channel_method(object, method, args, call_span);
         }
 
+        // `Secret.expose() -> ref T` (std.secret): a `#[compiler_builtin]` field
+        // borrow. `inner` is field 0, so its address IS the receiver struct's
+        // base pointer (offset 0) — return that pointer as the `ref T`. The
+        // caller-side `let x = s.expose()` binds it as a deref-on-use ref-local
+        // (stmts.rs), and `user_ref_method_names` + `ref_return_inner_types`
+        // (auto-populated for every impl method whose return type is `ref`) wire
+        // the borrow ABI with no extra work. `expose_mut` is a follow-on slice —
+        // it falls through to a clean "no such method" error here (matching the
+        // interpreter) until its write-back path lands.
+        if method == "expose"
+            && args.is_empty()
+            && matches!(
+                self.inferred_receiver_type(object).as_deref(),
+                Some("Secret")
+            )
+        {
+            let name = match &object.kind {
+                ExprKind::Identifier(n) => n.clone(),
+                ExprKind::SelfValue => "self".to_string(),
+                _ => {
+                    return Err(
+                        "`Secret.expose` requires an identifier or `self` receiver".to_string()
+                    )
+                }
+            };
+            let recv_ptr = self.get_data_ptr(&name).ok_or_else(|| {
+                format!("`Secret.expose`: no storage pointer for receiver `{name}`")
+            })?;
+            return Ok(recv_ptr.into());
+        }
+
         // User impl-block method on a struct receiver: route `obj.method(args)`
         // through the `Type.method` function emitted by the impl-block pass.
         // Requires knowing the object's declared type; the typechecker stashes

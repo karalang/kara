@@ -20732,3 +20732,23 @@ fn test_module_binding_computed_unannotated() {
     );
     assert_eq!(out, "84\n126\n10\n");
 }
+
+#[test]
+fn test_secret_expose_reads_inner() {
+    // `std.secret.Secret[T]` — `Secret.new(v)` wraps a sensitive value and
+    // `.expose()` reads the inner value back (both Copy `i64` and non-Copy
+    // `String`). The `import` is required — `Secret` is a gated module, not
+    // in the prelude.
+    let out = run(r#"
+import std.secret.{Secret};
+fn main() {
+    let s = Secret.new(42);
+    let v = s.expose();
+    println(v);
+    let t = Secret.new("hunter2");
+    let w = t.expose();
+    println(w);
+}
+"#);
+    assert_eq!(out, "42\nhunter2\n");
+}

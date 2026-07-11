@@ -624,6 +624,12 @@ pub fn run_program_full(
             parsed.errors
         );
         desugar_program(&mut parsed.program);
+        // Splice gated stdlib modules (`import std.secret.{Secret};` etc.) into
+        // the program before resolve, matching the CLI single-file pipeline
+        // (`cli.rs`). A no-op for programs with no gated import. Without this,
+        // the lib interpreter entry diverges from `karac run` — a gated import
+        // binds to nothing and the first use errors.
+        crate::prelude::expand_gated_stdlib_imports(&mut parsed.program);
         let resolved = resolve(&parsed.program);
         assert!(
             resolved.errors.is_empty(),

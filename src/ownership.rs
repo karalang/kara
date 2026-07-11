@@ -26,6 +26,15 @@ mod par_helpers;
 mod rc_promote;
 mod ref_return;
 
+/// A `#[compiler_builtin]` function/method has a never-evaluated placeholder
+/// body (its real behavior is a codegen/interpreter intercept), so the
+/// ownership checker skips it — analyzing the placeholder would flag borrow
+/// forms the surface language deliberately doesn't support (e.g. the
+/// `Secret.expose` field-borrow placeholder spliced from `std.secret`).
+fn is_compiler_builtin_fn(f: &Function) -> bool {
+    f.attributes.iter().any(|a| a.is_bare("compiler_builtin"))
+}
+
 // Re-export for `cli::cmd_migrate` (phase-7 L215a): the migrate tool
 // reuses `build_fix_diff_edits` + `BindingKind` to emit the same type-
 // definition rewrite the `karac fix` diagnostic path produces, without
@@ -1504,7 +1513,15 @@ impl<'a> OwnershipChecker<'a> {
         let items: Vec<Item> = self.program.items.clone();
         for item in &items {
             match item {
-                Item::Function(f) => self.check_function(f, None, &prelude),
+                // Skip `#[compiler_builtin]` bodies everywhere — they are
+                // never-evaluated placeholders (the real behavior is a
+                // codegen/interpreter intercept), so ownership-checking them
+                // flags borrow forms the surface language deliberately doesn't
+                // support (e.g. `Secret.expose`'s field-borrow placeholder,
+                // spliced from the gated `std.secret` module into user code).
+                Item::Function(f) if !is_compiler_builtin_fn(f) => {
+                    self.check_function(f, None, &prelude)
+                }
                 Item::ImplBlock(imp) => {
                     let type_name = match &imp.target_type.kind {
                         TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
@@ -1512,6 +1529,9 @@ impl<'a> OwnershipChecker<'a> {
                     };
                     for item in &imp.items {
                         if let ImplItem::Method(method) = item {
+                            if is_compiler_builtin_fn(method) {
+                                continue;
+                            }
                             self.check_function(method, Some(&type_name), &prelude);
                         }
                     }
