@@ -2855,8 +2855,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                             if let Some(info) =
                                                 self.shared_types.get(inner_name.as_str()).cloned()
                                             {
-                                                shared_option_info =
-                                                    Some((var_name.clone(), info));
+                                                shared_option_info = Some((var_name.clone(), info));
                                             }
                                         }
                                     }
