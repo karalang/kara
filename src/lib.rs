@@ -868,6 +868,119 @@ pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
     })
 }
 
+/// Parse + desugar + resolve `source`, returning the program and resolve result
+/// when it parses. Unlike [`run_static_checks`] this stops before typecheck and
+/// keeps going through resolve errors — an unresolved name elsewhere must not
+/// hide the resolutions that DID succeed. The shared front end for the
+/// resolver-backed position queries ([`goto_definition`], [`document_symbols`]).
+fn resolve_source(source: &str) -> Option<(Program, ResolveResult)> {
+    let mut parsed = parse(source);
+    if !parsed.errors.is_empty() {
+        return None;
+    }
+    desugar_program(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    Some((parsed.program, resolved))
+}
+
+/// A definition location within the same source document, as a byte span.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefLocation {
+    pub span_offset: usize,
+    pub span_length: usize,
+}
+
+/// Go-to-definition query: resolve the identifier reference at `byte_offset` to
+/// its definition's source span (the innermost reference wins, mirroring
+/// [`hover_at`]). Returns `None` when the offset is not on a resolved reference,
+/// or when the reference resolves to a prelude/builtin whose definition has no
+/// source location (a synthetic zero-length span). Single-document today: the
+/// definition is in the same `source`.
+pub fn goto_definition(source: &str, byte_offset: usize) -> Option<DefLocation> {
+    let (_program, resolved) = resolve_source(source)?;
+
+    let mut best: Option<(usize, crate::resolver::SymbolId)> = None;
+    for (key, sym_id) in &resolved.resolutions {
+        let (start, len) = (key.0, key.1);
+        if byte_offset < start || byte_offset >= start.saturating_add(len) {
+            continue;
+        }
+        if best.is_none_or(|(blen, _)| len < blen) {
+            best = Some((len, *sym_id));
+        }
+    }
+    let (_, sym_id) = best?;
+    let sym = resolved.symbol_table.get_symbol(sym_id);
+    // A synthetic (offset 0, length 0) span means a prelude/builtin with no
+    // source definition to jump to.
+    if sym.span.length == 0 {
+        return None;
+    }
+    Some(DefLocation {
+        span_offset: sym.span.offset,
+        span_length: sym.span.length,
+    })
+}
+
+/// One entry in a document outline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolOutline {
+    pub name: String,
+    /// Coarse kind slug the editor layer maps to its symbol-kind enum:
+    /// `function` / `struct` / `enum` / `interface` / `constant` / `variable` /
+    /// `object`.
+    pub kind: &'static str,
+    pub span_offset: usize,
+    pub span_length: usize,
+}
+
+/// Document-outline query: every top-level user item (function, struct, enum,
+/// union, trait, trait-alias, const, module `let`, …) in source order.
+/// Prelude/builtin names — seeded into the root scope with a synthetic
+/// zero-length span — are excluded by the `span.length > 0` filter. Empty when
+/// the source does not parse.
+pub fn document_symbols(source: &str) -> Vec<SymbolOutline> {
+    use crate::resolver::{ScopeId, SymbolKind};
+    let Some((_program, resolved)) = resolve_source(source) else {
+        return Vec::new();
+    };
+    let mut out: Vec<SymbolOutline> = resolved
+        .symbol_table
+        .all_symbols()
+        .iter()
+        // Root scope + real (non-synthetic) span narrows to source-level names,
+        // but the root scope also holds enum variants and imports (referenceable
+        // bare), so map only the genuine top-level *item* kinds and skip the
+        // rest — a `_ => None` default keeps a newly added `SymbolKind` from
+        // silently leaking into the outline as an untyped entry.
+        .filter(|s| s.scope == ScopeId(0) && s.span.length > 0)
+        .filter_map(|s| {
+            let kind = match &s.kind {
+                SymbolKind::Function { .. } | SymbolKind::ExternFunction => "function",
+                SymbolKind::Struct { .. }
+                | SymbolKind::Union { .. }
+                | SymbolKind::DistinctType
+                | SymbolKind::OpaqueForeignType => "struct",
+                SymbolKind::Enum { .. } => "enum",
+                SymbolKind::Trait { .. } | SymbolKind::TraitAlias => "interface",
+                SymbolKind::TypeAlias => "class",
+                SymbolKind::Constant => "constant",
+                SymbolKind::Variable { .. } => "variable",
+                SymbolKind::EffectResource | SymbolKind::EffectGroup => "namespace",
+                _ => return None,
+            };
+            Some(SymbolOutline {
+                name: s.name.clone(),
+                kind,
+                span_offset: s.span.offset,
+                span_length: s.span.length,
+            })
+        })
+        .collect();
+    out.sort_by_key(|s| s.span_offset);
+    out
+}
+
 #[cfg(test)]
 mod playground_tests {
     use super::*;
@@ -1060,6 +1173,58 @@ mod playground_tests {
     #[test]
     fn hover_at_none_when_parse_fails() {
         assert!(hover_at("fn main() { let = ; }", 5).is_none());
+    }
+
+    #[test]
+    fn goto_definition_jumps_to_function_definition() {
+        // `helper` is defined at the top, called in `main`. Clicking the call
+        // must return the definition's name span.
+        let src = "fn helper() -> i64 { 1 }\nfn main() { let _ = helper(); }";
+        let call = src.rfind("helper").unwrap();
+        let def = goto_definition(src, call).expect("expected a definition");
+        // The definition span is the whole `fn helper() -> i64 { 1 }` item; it
+        // starts at the definition and contains the name.
+        assert_eq!(def.span_offset, 0);
+        assert!(src[def.span_offset..def.span_offset + def.span_length].contains("fn helper"));
+    }
+
+    #[test]
+    fn goto_definition_none_on_prelude_symbol() {
+        // `println` is a prelude builtin with no source definition.
+        let src = "fn main() { println(\"hi\"); }";
+        let call = src.find("println").unwrap();
+        assert!(goto_definition(src, call).is_none());
+    }
+
+    #[test]
+    fn goto_definition_none_off_any_reference() {
+        assert!(goto_definition("fn main() {}", 1).is_none()); // the `n` in `fn`
+    }
+
+    #[test]
+    fn document_symbols_lists_top_level_items_in_order() {
+        let src = "struct Point { x: i64 }\nfn area() -> i64 { 0 }\nenum Color { Red }";
+        let syms = document_symbols(src);
+        let got: Vec<(&str, &str)> = syms.iter().map(|s| (s.name.as_str(), s.kind)).collect();
+        assert_eq!(
+            got,
+            vec![("Point", "struct"), ("area", "function"), ("Color", "enum"),]
+        );
+    }
+
+    #[test]
+    fn document_symbols_excludes_prelude_and_locals() {
+        // Only `main` is a user top-level item; `println`/`Vec`/the local `x`
+        // must not appear.
+        let syms = document_symbols("fn main() { let x = 1; println(\"hi\"); }");
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "main");
+        assert_eq!(syms[0].kind, "function");
+    }
+
+    #[test]
+    fn document_symbols_empty_when_parse_fails() {
+        assert!(document_symbols("fn main( { ").is_empty());
     }
 
     #[test]

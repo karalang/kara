@@ -4,10 +4,11 @@
 //! [`serve`]; all the protocol logic lives here so it can be driven in-process
 //! over an in-memory connection ([`lsp_server::Connection::memory`]) by the
 //! integration tests. Features so far: the `initialize`/`shutdown` handshake,
-//! live diagnostics (`textDocument/publishDiagnostics`, slice 1) over
-//! [`analysis::diagnostics`], and type-of-expression hover
-//! (`textDocument/hover`, slice 2) over [`analysis::hover`]. No user code is
-//! ever executed — feedback is purely static.
+//! live diagnostics (`textDocument/publishDiagnostics`, slice 1), type-of-
+//! expression hover (`textDocument/hover`, slice 2), and go-to-definition +
+//! document outline (`textDocument/definition` + `textDocument/documentSymbol`,
+//! slice 3) — each a thin [`analysis`] call over a `karac` library query. No
+//! user code is ever executed — feedback is purely static.
 
 pub mod analysis;
 
@@ -19,10 +20,11 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
     Notification as _, PublishDiagnostics,
 };
-use lsp_types::request::{HoverRequest, Request as _};
+use lsp_types::request::{DocumentSymbolRequest, GotoDefinition, HoverRequest, Request as _};
 use lsp_types::{
-    HoverProviderCapability, InitializeParams, PublishDiagnosticsParams, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    DocumentSymbolResponse, GotoDefinitionResponse, HoverProviderCapability, InitializeParams,
+    Location, OneOf, PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri,
 };
 
 type LspResult = Result<(), Box<dyn Error + Sync + Send>>;
@@ -38,6 +40,8 @@ pub fn serve(connection: Connection) -> LspResult {
     let capabilities = ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
+        definition_provider: Some(OneOf::Left(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
         ..Default::default()
     };
     let init_params = connection.initialize(serde_json::to_value(capabilities)?)?;
@@ -154,6 +158,36 @@ fn handle_request(
             }
             Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
         },
+        GotoDefinition::METHOD => {
+            match serde_json::from_value::<lsp_types::GotoDefinitionParams>(params) {
+                Ok(p) => {
+                    let pos = p.text_document_position_params.position;
+                    let uri = p.text_document_position_params.text_document.uri;
+                    let resp = docs.get(&uri.to_string()).and_then(|text| {
+                        analysis::definition(text, pos).map(|range| {
+                            GotoDefinitionResponse::Scalar(Location {
+                                uri: uri.clone(),
+                                range,
+                            })
+                        })
+                    });
+                    lsp_server::Response::new_ok(id, resp)
+                }
+                Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
+            }
+        }
+        DocumentSymbolRequest::METHOD => {
+            match serde_json::from_value::<lsp_types::DocumentSymbolParams>(params) {
+                Ok(p) => {
+                    let uri = p.text_document.uri.to_string();
+                    let resp = docs.get(&uri).map(|text| {
+                        DocumentSymbolResponse::Nested(analysis::document_symbols(text))
+                    });
+                    lsp_server::Response::new_ok(id, resp)
+                }
+                Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
+            }
+        }
         _ => lsp_server::Response::new_err(
             id,
             METHOD_NOT_FOUND,

@@ -5,8 +5,8 @@
 //! (`main.rs`) is deliberately thin over this module.
 
 use lsp_types::{
-    Diagnostic, DiagnosticSeverity, Hover, HoverContents, MarkupContent, MarkupKind,
-    NumberOrString, Position, Range,
+    Diagnostic, DiagnosticSeverity, DocumentSymbol, Hover, HoverContents, MarkupContent,
+    MarkupKind, NumberOrString, Position, Range, SymbolKind,
 };
 use std::panic::AssertUnwindSafe;
 
@@ -114,6 +114,70 @@ pub fn hover(text: &str, position: Position) -> Option<Hover> {
         }),
         range: Some(index.range(info.span_offset, info.span_length)),
     })
+}
+
+/// Resolve the definition range for the reference at `position` (in the same
+/// document — single-file today). `None` when nothing navigable sits there
+/// (not a resolved reference, or a prelude/builtin with no source location).
+/// `catch_unwind`-guarded like [`diagnostics`].
+pub fn definition(text: &str, position: Position) -> Option<Range> {
+    let index = LineIndex::new(text);
+    let offset = index.offset(position);
+    let def =
+        match std::panic::catch_unwind(AssertUnwindSafe(|| karac::goto_definition(text, offset))) {
+            Ok(def) => def?,
+            Err(_) => {
+                eprintln!("kara-lsp: definition analysis panicked; returning no definition");
+                return None;
+            }
+        };
+    Some(index.range(def.span_offset, def.span_length))
+}
+
+/// Document outline: one flat [`DocumentSymbol`] per top-level item, in source
+/// order. `catch_unwind`-guarded like [`diagnostics`].
+pub fn document_symbols(text: &str) -> Vec<DocumentSymbol> {
+    let raw = match std::panic::catch_unwind(AssertUnwindSafe(|| karac::document_symbols(text))) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("kara-lsp: document-symbol analysis panicked; returning none");
+            return Vec::new();
+        }
+    };
+    let index = LineIndex::new(text);
+    raw.into_iter()
+        .map(|s| {
+            let range = index.range(s.span_offset, s.span_length);
+            #[allow(deprecated)] // `deprecated` field is required by the struct
+            DocumentSymbol {
+                name: s.name,
+                detail: None,
+                kind: symbol_kind(s.kind),
+                tags: None,
+                deprecated: None,
+                range,
+                // Flat outline: no separate name span yet, so the selection
+                // range is the whole item (must be ⊆ `range`, which equal is).
+                selection_range: range,
+                children: None,
+            }
+        })
+        .collect()
+}
+
+/// Map `karac`'s coarse kind slug to the LSP symbol kind.
+fn symbol_kind(slug: &str) -> SymbolKind {
+    match slug {
+        "function" => SymbolKind::FUNCTION,
+        "struct" => SymbolKind::STRUCT,
+        "enum" => SymbolKind::ENUM,
+        "interface" => SymbolKind::INTERFACE,
+        "constant" => SymbolKind::CONSTANT,
+        "variable" => SymbolKind::VARIABLE,
+        "class" => SymbolKind::CLASS,
+        "namespace" => SymbolKind::NAMESPACE,
+        _ => SymbolKind::OBJECT,
+    }
 }
 
 /// Run `source` through `karac`'s static-check pipeline and shape the result
@@ -264,5 +328,45 @@ mod tests {
     #[test]
     fn hover_none_on_keyword() {
         assert!(hover("fn f() {}", Position::new(0, 0)).is_none());
+    }
+
+    #[test]
+    fn definition_ranges_to_the_definition() {
+        let src = "fn helper() -> i64 { 1 }\nfn main() { let _ = helper(); }";
+        let idx = LineIndex::new(src);
+        // the call `helper` is on line 1; find its position
+        let call = src.rfind("helper").unwrap();
+        let range = definition(src, idx.position(call)).expect("expected a definition range");
+        // definition is the item on line 0.
+        assert_eq!(range.start, Position::new(0, 0));
+        assert!(range.end > range.start);
+    }
+
+    #[test]
+    fn definition_none_on_prelude() {
+        let src = "fn main() { println(\"hi\"); }";
+        let idx = LineIndex::new(src);
+        let call = src.find("println").unwrap();
+        assert!(definition(src, idx.position(call)).is_none());
+    }
+
+    #[test]
+    fn document_symbols_maps_kinds() {
+        let src = "struct Point { x: i64 }\nfn area() -> i64 { 0 }\nenum Color { Red }";
+        let syms = document_symbols(src);
+        let got: Vec<(&str, SymbolKind)> = syms.iter().map(|s| (s.name.as_str(), s.kind)).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Point", SymbolKind::STRUCT),
+                ("area", SymbolKind::FUNCTION),
+                ("Color", SymbolKind::ENUM),
+            ]
+        );
+        // Each symbol's selection range is within its range.
+        for s in &syms {
+            assert!(s.selection_range.start >= s.range.start);
+            assert!(s.selection_range.end <= s.range.end);
+        }
     }
 }

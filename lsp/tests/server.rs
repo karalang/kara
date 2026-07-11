@@ -196,3 +196,72 @@ fn server_clears_diagnostics_on_close() {
     drop(client);
     assert!(server_thread.join().unwrap().is_ok());
 }
+
+#[test]
+fn server_answers_definition_and_document_symbols() {
+    let (server, client) = Connection::memory();
+    let server_thread = thread::spawn(move || kara_lsp::serve(server));
+
+    req(&client, 1, "initialize", json!({"capabilities":{}}));
+    let init = recv(&client);
+    let Message::Response(Response {
+        result: Some(caps), ..
+    }) = init
+    else {
+        panic!("expected initialize response, got {init:?}");
+    };
+    assert_eq!(caps["capabilities"]["definitionProvider"], json!(true));
+    assert_eq!(caps["capabilities"]["documentSymbolProvider"], json!(true));
+    notify(&client, "initialized", json!({}));
+
+    let uri = "file:///d.kara";
+    let src = "fn helper() -> i64 { 1 }\nfn main() -> i64 { helper() }";
+    did_open(&client, uri, src);
+    next_diagnostics(&client); // consume the (empty) diagnostics publish
+
+    // go-to-definition on the `helper` call (line 1, char 19) → the `helper`
+    // definition, which starts at line 0.
+    req(
+        &client,
+        2,
+        "textDocument/definition",
+        json!({"textDocument":{"uri":uri},"position":{"line":1,"character":19}}),
+    );
+    let d = recv(&client);
+    let Message::Response(Response {
+        result: Some(loc), ..
+    }) = d
+    else {
+        panic!("expected definition response, got {d:?}");
+    };
+    assert_eq!(loc["uri"], json!(uri));
+    assert_eq!(loc["range"]["start"], json!({"line":0,"character":0}));
+
+    // document outline → both top-level functions, in order, kind FUNCTION (12).
+    req(
+        &client,
+        3,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    let ds = recv(&client);
+    let Message::Response(Response {
+        result: Some(syms), ..
+    }) = ds
+    else {
+        panic!("expected documentSymbol response, got {ds:?}");
+    };
+    let arr = syms.as_array().expect("documentSymbol returns an array");
+    let names: Vec<&str> = arr.iter().map(|s| s["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["helper", "main"]);
+    assert!(
+        arr.iter().all(|s| s["kind"] == json!(12)),
+        "all should be FUNCTION (kind 12): {arr:?}"
+    );
+
+    req(&client, 4, "shutdown", serde_json::Value::Null);
+    recv(&client);
+    notify(&client, "exit", serde_json::Value::Null);
+    drop(client);
+    assert!(server_thread.join().unwrap().is_ok());
+}
