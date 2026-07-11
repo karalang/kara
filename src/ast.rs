@@ -703,6 +703,16 @@ pub struct Program {
     /// enum's variant payload was instantiated with. See
     /// [`EnumInstTypeExprsTable`].
     pub enum_inst_type_exprs: EnumInstTypeExprsTable,
+    /// Sibling of [`enum_inst_type_exprs`](Self::enum_inst_type_exprs) for the
+    /// COMPLEMENT case: arg-less (concrete, non-generic) `Named` types — a user
+    /// `enum Json { … }` or `struct Point { … }`, keyed by expression span.
+    /// `enum_inst_type_exprs` deliberately excludes these (its consumers degrade
+    /// safely to the word-wise path for a concrete enum), but the `?`-Ok-payload
+    /// reconstruction (`reconstruct_question_ok_payload`) needs the payload's real
+    /// type to rebuild a MULTI-WORD value — without it, `?` on `Result[Json, E]`
+    /// truncated the 4-word `Json` Ok payload to its first word (B-2026-07-11-7).
+    /// Consumed ONLY by that reconstruction, so the extra non-`?` entries are inert.
+    pub concrete_named_type_exprs: EnumInstTypeExprsTable,
     /// Set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_borrow_modes`. Consumed by codegen
     /// to apply the ref-binding shim at match-arm leaf bindings under a

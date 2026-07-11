@@ -6369,6 +6369,40 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_question_on_result_concrete_enum() {
+        // B-2026-07-11-7: `?` on `Result[<concrete user enum>, E]` unwraps the Ok
+        // payload. The reconstruction (a) needs the enum's TYPE — which
+        // `enum_inst_type_exprs` (generic-only) dropped, truncating to `w0` and
+        // tripping module verification (`insertvalue`/`br` type mismatch) — and
+        // (b) needs the enum's FULL word span (a heap-bearing enum flattens to >3
+        // words, exceeding the old `rebuild_value_from_payload_words` cap → a
+        // dropped `cap` word → invalid free). Both fixed. Exercises a unit variant,
+        // a String payload moved out, and a wide `(i64, String)` tuple variant.
+        if let Some(out) = run_program(
+            "enum J { N, S(String), Pair(i64, String) }\n\
+             fn get(k: i64) -> Result[J, String] {\n\
+                 if k == 0 { Result.Ok(J.N) }\n\
+                 else { if k == 1 { Result.Ok(J.S(\"hi\")) } else { Result.Ok(J.Pair(7, \"x\")) } }\n\
+             }\n\
+             fn show(k: i64) -> Result[String, String] {\n\
+                 let v = get(k)?;\n\
+                 match v {\n\
+                     N => { Result.Ok(\"N\") }\n\
+                     S(s) => { Result.Ok(s) }\n\
+                     Pair(a, s) => { Result.Ok(f\"{a}:{s}\") }\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 match show(0) { Ok(r) => println(r), Err(_) => println(\"e\") }\n\
+                 match show(1) { Ok(r) => println(r), Err(_) => println(\"e\") }\n\
+                 match show(2) { Ok(r) => println(r), Err(_) => println(\"e\") }\n\
+             }",
+        ) {
+            assert_eq!(out, "N\nhi\n7:x\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_index_vec_field_through_self() {
         // Regression for the self-hosting lexer index blocker: indexing a
         // `Vec` field through the `self` receiver (`self.bytes[self.current]`)

@@ -12,16 +12,17 @@
 // literal token (precision-preserving), so the canonical output is exact and the
 // oracle has no float-formatting noise. Expected output: examples/json.expected.
 //
-//   KARAC_RUN_JIT=0 karac run examples/json.kara   # tree-walk interpreter
+//   karac run examples/json.kara     # JIT (or tree-walk via KARAC_RUN_JIT=0)
+//   karac build examples/json.kara   # native binary — output byte-identical
 //
-// This dogfood found four compiler bugs (its job, cf.
-// feedback_katas_are_bug_finders). THREE are fixed: a codegen panic binding a
-// String/bool enum payload under a `ref` match (B-2026-07-11-5), a Vec[struct]
-// enum-payload element-type loss (B-2026-07-11-6), and a spurious interpreter
-// `?`-error-return trace for handled errors (B-2026-07-11-8). One is still OPEN
-// and blocks the JIT / `karac build` path: `?` on `Result[<concrete user enum>]`
-// truncates the multi-word Ok payload (B-2026-07-11-7) — so run via the tree-walk
-// interpreter (`KARAC_RUN_JIT=0`) until that lands.
+// This dogfood found and fixed THREE compiler bugs (its job, cf.
+// feedback_katas_are_bug_finders): a codegen panic binding a String/bool enum
+// payload under a `ref` match (B-2026-07-11-5), a Vec[struct] enum-payload
+// element-type loss (B-2026-07-11-6), and — the one that had blocked native
+// build — `?` on `Result[<concrete user enum>]` truncating the multi-word Ok
+// payload (B-2026-07-11-7). It also surfaced an ergonomics gap
+// (B-2026-07-11-9: no `Iterator.collect()`). The kernel round-trips
+// byte-identical via both the interpreter and a native binary.
 
 // A JSON value. Recursion (Arr/Obj) is carried through Vec, so this is an
 // ordinary owned enum — no reference-counting.

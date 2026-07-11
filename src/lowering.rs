@@ -501,6 +501,24 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // Complement of the above: arg-less (concrete, non-generic) `Named` types —
+    // user enums/structs — keyed by span, EXCLUDING the `Result`/`Option`
+    // wrappers (a `?` operand's span records the unwrapped Ok type, never the
+    // wrapper, but guard anyway). The `?`-Ok-payload reconstruction needs these
+    // to rebuild a multi-word concrete-enum/struct payload that
+    // `enum_inst_type_exprs`'s `!args.is_empty()` filter drops (B-2026-07-11-7).
+    program.concrete_named_type_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Named { name, args }
+                if args.is_empty() && name != "Result" && name != "Option" =>
+            {
+                Some(((k.0, k.1), TypeChecker::type_to_type_expr(ty)))
+            }
+            _ => None,
+        })
+        .collect();
 }
 
 struct Lowerer<'a> {

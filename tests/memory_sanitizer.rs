@@ -381,6 +381,52 @@ fn main() {
     }
 
     #[test]
+    fn asan_question_on_result_heap_enum_no_leak_or_double_free() {
+        // B-2026-07-11-7 — `?` on `Result[<heap-bearing enum>, E]` reconstructs
+        // the Ok payload from its words. The old 3-word
+        // `rebuild_value_from_payload_words` truncated a 4-word enum
+        // (`J { S(String) }` flattens to {tag, ptr, len, cap}), losing `cap`, so
+        // the enum's drop freed the `String` with a garbage cap ("free(): invalid
+        // pointer"). Flat-copying the enum's full word span across from the
+        // Result's payload fixed it. Exercises BORROW-free MOVE-OUT of the String
+        // payload (`S(s) => Ok(s)`), a tuple-variant with a heap tail
+        // (`Pair(i64, String)`), and loop iteration — the double-free / invalid
+        // free surfaced immediately without the fix.
+        assert_clean_asan_run(
+            r#"
+enum J { N, S(String), Pair(i64, String) }
+fn get(k: i64) -> Result[J, String] {
+    if k == 0i64 { Result.Ok(J.S(f"str-{k}-padding-padding")) }
+    else { Result.Ok(J.Pair(k, f"pair-{k}-padding-padding")) }
+}
+fn take(k: i64) -> Result[String, String] {
+    let v = get(k)?;
+    match v {
+        N => { Result.Ok(f"n") }
+        S(s) => { Result.Ok(s) }
+        Pair(a, s) => { Result.Ok(f"{a}:{s}") }
+    }
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        match take(0i64) { Ok(r) => println(r), Err(_) => println("e") }
+        match take(1i64) { Ok(r) => println(r), Err(_) => println("e") }
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "str-0-padding-padding",
+                "1:pair-1-padding-padding",
+                "str-0-padding-padding",
+                "1:pair-1-padding-padding",
+            ],
+            "asan_question_on_result_heap_enum_no_leak_or_double_free",
+        );
+    }
+
+    #[test]
     fn asan_cstr_to_string_slice_view_not_freed_and_copy_clean() {
         // `CStr.to_string_slice()` returns a BORROWED `{ptr, len, cap=0}` view
         // over the literal's rodata bytes. The `cap == 0` drop-skip must keep

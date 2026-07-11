@@ -1642,6 +1642,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             self.llvm_type_for_type_expr(&te)
+        } else if let Some(te) = self.concrete_named_type_exprs.get(&key).cloned() {
+            // A CONCRETE (arg-less) user enum / struct Ok payload — e.g.
+            // `Result[Json, E]?` where `Json` is a wide enum. `enum_inst_type_exprs`
+            // excludes arg-less Named types, so without this the multi-word payload
+            // truncated to `w0` (its first word) → `insertvalue`/`br` verify failure
+            // downstream (B-2026-07-11-7). The lowering table already excludes the
+            // Result/Option wrappers.
+            self.llvm_type_for_type_expr(&te)
         } else {
             return Ok(w0);
         };
@@ -1656,6 +1664,42 @@ impl<'ctx> super::Codegen<'ctx> {
         let n_fields = sv.get_type().count_fields();
         let i64_t = self.context.i64_type();
         let zero = i64_t.const_int(0, false);
+        // A flat-i64 aggregate — the common enum layout `{i64 tag, i64…}`, or a
+        // POD struct of i64 words — can be rebuilt by copying ALL its payload
+        // words VERBATIM from the Result. `rebuild_value_from_payload_words` only
+        // carries 3 words (`w0`/`w1`/`w2`), so a payload wider than 3 words — every
+        // heap-bearing enum: `J { S(String) }` flattens to 4 words
+        // `{tag, ptr, len, cap}` — lost its last word (`cap` → undef), and the
+        // enum's later drop freed the `String` with a garbage cap ("free():
+        // invalid pointer"). Flat-copying the enum's full word span across from
+        // the Result's payload (fields 1..=nf) sidesteps the 3-word cap entirely
+        // (B-2026-07-11-7). The Result's payload area is at least as wide as the
+        // Ok payload, so every enum word has a source field.
+        if let BasicTypeEnum::StructType(est) = ok_llvm {
+            let nf = est.count_fields() as usize;
+            let result_payload_words = (n_fields as usize).saturating_sub(1);
+            let all_i64_words = (0..nf).all(|i| {
+                matches!(
+                    est.get_field_type_at_index(i as u32),
+                    Some(BasicTypeEnum::IntType(it)) if it.get_bit_width() == 64
+                )
+            });
+            if all_i64_words && nf >= 1 && nf <= result_payload_words {
+                let mut agg = est.get_undef();
+                for i in 0..nf {
+                    let w = self
+                        .builder
+                        .build_extract_value(sv, (i + 1) as u32, "q.ok.flatw")
+                        .unwrap();
+                    agg = self
+                        .builder
+                        .build_insert_value(agg, w, i as u32, "q.ok.flativ")
+                        .unwrap()
+                        .into_struct_value();
+                }
+                return Ok(agg.into());
+            }
+        }
         let w0_i = w0.into_int_value();
         let w1_i = if n_fields >= 3 {
             self.builder

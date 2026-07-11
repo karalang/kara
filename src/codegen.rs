@@ -2507,6 +2507,11 @@ pub(super) struct Codegen<'ctx> {
     /// rather than by pointer word. A missing entry degrades to the word-wise
     /// path (sound for scalar/unit enums), never a miscompile.
     pub(crate) enum_inst_type_exprs: HashMap<(usize, usize), TypeExpr>,
+    /// Arg-less (concrete, non-generic) `Named` type per expression span — the
+    /// complement of `enum_inst_type_exprs`. Consumed ONLY by
+    /// `reconstruct_question_ok_payload` to rebuild a multi-word concrete
+    /// enum/struct `?`-Ok payload the generic-only table drops (B-2026-07-11-7).
+    pub(crate) concrete_named_type_exprs: HashMap<(usize, usize), TypeExpr>,
     /// Instantiated generic-enum type per *local variable / parameter* name
     /// (`opt` → `Option[String]`). Populated during codegen traversal at let
     /// and parameter binding sites (cleared per function, like
@@ -5818,6 +5823,7 @@ impl<'ctx> Codegen<'ctx> {
             owned_temp_drops: HashMap::new(),
             raw_pointer_pointee_types: HashMap::new(),
             enum_inst_type_exprs: HashMap::new(),
+            concrete_named_type_exprs: HashMap::new(),
             enum_inst_var_types: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
@@ -6820,6 +6826,7 @@ impl<'ctx> Codegen<'ctx> {
         // argument a generic heap-payload enum's variant was instantiated
         // with, so `Some(String)` compares by content not pointer word.
         self.enum_inst_type_exprs = program.enum_inst_type_exprs.clone();
+        self.concrete_named_type_exprs = program.concrete_named_type_exprs.clone();
 
         // Phase 6 line 26 slice 8ab: snapshot the per-call effect-
         // variable substitution table. Slice 8y (entry 32) reads
