@@ -1762,21 +1762,27 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// Fold an explicit-discriminant expression to an `i64` — the v1 const
-    /// surface: integer literals, unary negation, and `+`/`-`/`*`/`/`/`%` +
-    /// bitwise / shift arithmetic over them. Overflow yields `None` (reported as
-    /// non-constant). Module-constant references are NOT folded here — they
-    /// resolve in a later pass — so a `let`-alias discriminant currently reports
-    /// `E_NON_CONSTANT_DISCRIMINANT` (a documented v1 residual, not silent).
-    fn fold_int_const(expr: &Expr) -> Option<i64> {
+    /// surface: integer literals, unary negation, `+`/`-`/`*`/`/`/`%` + bitwise
+    /// / shift arithmetic over them, and **references to module-level integer
+    /// constants** (an immutable `let` binding or a `const` decl, resolved
+    /// through `consts`). Overflow, a non-integer reference, an unknown name, or
+    /// a reference cycle yields `None` (reported as `E_NON_CONSTANT_DISCRIMINANT`
+    /// at the call site). `visiting` is the in-progress reference chain, so a
+    /// cyclic `let A = B; let B = A` alias folds to `None` rather than looping.
+    fn fold_int_const<'e>(
+        expr: &'e Expr,
+        consts: &HashMap<&'e str, &'e Expr>,
+        visiting: &mut Vec<&'e str>,
+    ) -> Option<i64> {
         match &expr.kind {
             ExprKind::Integer(v, _) => Some(*v),
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 operand,
-            } => Self::fold_int_const(operand)?.checked_neg(),
+            } => Self::fold_int_const(operand, consts, visiting)?.checked_neg(),
             ExprKind::Binary { op, left, right } => {
-                let l = Self::fold_int_const(left)?;
-                let r = Self::fold_int_const(right)?;
+                let l = Self::fold_int_const(left, consts, visiting)?;
+                let r = Self::fold_int_const(right, consts, visiting)?;
                 match op {
                     BinOp::Add => l.checked_add(r),
                     BinOp::Sub => l.checked_sub(r),
@@ -1791,8 +1797,35 @@ impl<'a> super::TypeChecker<'a> {
                     _ => None,
                 }
             }
+            // A bare reference to a module-level constant — `= SOME_CONST`. It
+            // parses as an `Identifier` or a single-segment `Path`. Resolve it
+            // through `consts` and fold the referent (which may itself reference
+            // another constant, so recurse under a cycle guard).
+            ExprKind::Identifier(name) => Self::fold_const_ref(name, consts, visiting),
+            ExprKind::Path {
+                segments,
+                generic_args: None,
+            } if segments.len() == 1 => Self::fold_const_ref(&segments[0], consts, visiting),
             _ => None,
         }
+    }
+
+    /// Resolve a module-constant name to its folded `i64` value, guarding
+    /// against a reference cycle (a name already on the `visiting` chain folds
+    /// to `None`). Helper for [`Self::fold_int_const`].
+    fn fold_const_ref<'e>(
+        name: &'e str,
+        consts: &HashMap<&'e str, &'e Expr>,
+        visiting: &mut Vec<&'e str>,
+    ) -> Option<i64> {
+        let value = consts.get(name)?;
+        if visiting.contains(&name) {
+            return None; // cyclic alias — treat as non-constant
+        }
+        visiting.push(name);
+        let folded = Self::fold_int_const(value, consts, visiting);
+        visiting.pop();
+        folded
     }
 
     /// Explicit discriminants on enum variants (design.md § Explicit
@@ -1819,6 +1852,23 @@ impl<'a> super::TypeChecker<'a> {
             explicit: bool,
             span: Span,
         }
+        // Module-level integer constants a discriminant may reference:
+        // immutable `let` bindings and `const` decls. `let mut` is excluded
+        // (reassignable → not a constant). Built from a copied-out `&Program`
+        // reference so the map's borrows are the program's lifetime, not tied to
+        // the later `&mut self` `type_error` calls. (No name collisions: the
+        // resolver already rejects duplicate module-item names.)
+        let program: &Program = self.program;
+        let consts: HashMap<&str, &Expr> = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::ConstDecl(c) => Some((c.name.as_str(), &c.value)),
+                Item::ModuleBinding(b) if !b.is_mut => Some((b.name.as_str(), &b.value)),
+                _ => None,
+            })
+            .collect();
+
         let mut folded: Vec<Folded> = Vec::with_capacity(e.variants.len());
         let mut nonconst: Vec<Span> = Vec::new();
         for v in &e.variants {
@@ -1832,7 +1882,7 @@ impl<'a> super::TypeChecker<'a> {
                     span: v.span.clone(),
                 }),
                 Some(expr) => {
-                    let value = Self::fold_int_const(expr);
+                    let value = Self::fold_int_const(expr, &consts, &mut Vec::new());
                     if value.is_none() {
                         nonconst.push(expr.span.clone());
                     }
@@ -1850,8 +1900,9 @@ impl<'a> super::TypeChecker<'a> {
         for span in nonconst {
             self.type_error(
                 "error[E_NON_CONSTANT_DISCRIMINANT]: an enum discriminant must be a constant \
-                 integer expression (an integer literal or arithmetic over integer literals); a \
-                 reference to another constant is not yet folded at the discriminant position"
+                 integer expression — an integer literal, arithmetic over such, or a reference to \
+                 an immutable module-level integer constant (`let`/`const`); a `let mut` binding, \
+                 a non-integer or unknown name, or a reference cycle is not a constant here"
                     .to_string(),
                 span,
                 TypeErrorKind::DiscriminantInvalid,

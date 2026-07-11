@@ -31916,9 +31916,55 @@ fn discriminant_payload_variant_transparent_repr_rejected() {
 }
 
 #[test]
-fn discriminant_non_constant_rejected() {
-    // A reference to another binding is not folded at the discriminant position.
-    let m = discriminant_err("let THREE: i64 = 3; enum E { A = THREE } fn main() {}");
+fn discriminant_const_reference_folds_and_accepts() {
+    // A reference to an immutable module-level `let` constant folds to its
+    // value, so the discriminant is accepted (const-ref residual, now closed).
+    typecheck_ok("let THREE: i64 = 3; enum E { A = THREE, B = 4 } fn main() {}");
+}
+
+#[test]
+fn discriminant_const_reference_chain_folds() {
+    // A const may reference an earlier const; the folder resolves the chain.
+    typecheck_ok(
+        "let A_VAL: i64 = 1; let B_VAL: i64 = A_VAL + 1;\n\
+         #[repr(u8)] enum E { X = A_VAL, Y(u32) = B_VAL } fn main() {}",
+    );
+}
+
+#[test]
+fn discriminant_const_decl_reference_folds() {
+    // A `const` decl (not just a `let` binding) is also a foldable referent.
+    typecheck_ok("const OP: i64 = 5; #[repr(u8)] enum E { A = OP, B = 1 } fn main() {}");
+}
+
+#[test]
+fn discriminant_const_reference_participates_in_checks() {
+    // The resolved value flows into the range check: `BIG` == 256 is out of
+    // range for u8.
+    let m = discriminant_err("let BIG: i64 = 256; #[repr(u8)] enum E { A = BIG } fn main() {}");
+    assert!(m.contains("E_DISCRIMINANT_OUT_OF_RANGE"), "{m}");
+}
+
+#[test]
+fn discriminant_const_reference_duplicate_detected() {
+    // A const-ref that resolves to the same value as a literal collides.
+    let m = discriminant_err(
+        "let ONE: i64 = 1; #[repr(u8)] enum E { A = 1, B(u32) = ONE } fn main() {}",
+    );
+    assert!(m.contains("E_DUPLICATE_DISCRIMINANT"), "{m}");
+}
+
+#[test]
+fn discriminant_mutable_binding_reference_rejected() {
+    // A `let mut` binding is reassignable → not a constant, so a reference to it
+    // is non-constant even though it holds an integer.
+    let m = discriminant_err("let mut COUNTER: i64 = 0; enum E { A = COUNTER } fn main() {}");
+    assert!(m.contains("E_NON_CONSTANT_DISCRIMINANT"), "{m}");
+}
+
+#[test]
+fn discriminant_unknown_name_rejected() {
+    let m = discriminant_err("enum E { A = NOPE } fn main() {}");
     assert!(m.contains("E_NON_CONSTANT_DISCRIMINANT"), "{m}");
 }
 
