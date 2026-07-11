@@ -260,9 +260,36 @@ fn lower_expr(
         ExprKind::Call { callee, args } => {
             lower_call(callee, args, &|e| lower_expr(e, resolve, helpers), helpers)
         }
+        // Scalar math intrinsic method (`e.sqrt()` → `sqrt(e)`) — GPU-SLIP-2a.
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            let builtin = math_intrinsic_wgsl(method, args.len()).ok_or_else(|| {
+                WgslError::UnsupportedBody(format!(
+                    "method `.{method}()` is not supported in a GPU kernel body"
+                ))
+            })?;
+            Ok(format!(
+                "{builtin}({})",
+                lower_expr(object, resolve, helpers)?
+            ))
+        }
+        // Numeric `as` cast (`e as f64` → `f32(e)`) — GPU-SLIP-2a.
+        ExprKind::Cast { expr, ty } => {
+            let ctor = cast_ctor(ty).ok_or_else(|| {
+                WgslError::UnsupportedBody(
+                    "unsupported `as` cast target in a GPU kernel body".to_string(),
+                )
+            })?;
+            Ok(format!("{ctor}({})", lower_expr(expr, resolve, helpers)?))
+        }
         _ => Err(WgslError::UnsupportedBody(
             "unsupported expression in a GPU kernel body (numeric literals, `+ - * / %`, \
-             unary `-`, comparisons, value `if`/`else`, `#[gpu]` helper calls)"
+             unary `-`, comparisons, value `if`/`else`, `.sqrt()`, `as` casts, `#[gpu]` \
+             helper calls)"
                 .to_string(),
         )),
     }
@@ -284,11 +311,43 @@ fn binop_str(op: &BinOp) -> Result<&'static str, WgslError> {
         BinOp::LtEq => Ok("<="),
         BinOp::Eq => Ok("=="),
         BinOp::NotEq => Ok("!="),
+        // Short-circuit logical operators (bool operands) — GPU-SLIP-2a. WGSL
+        // `&&`/`||` mirror Kāra `and`/`or`; used to compose the `stream` boundary
+        // and bounce-back conditions (`x == 0 or … or is_solid(…)`).
+        BinOp::And => Ok("&&"),
+        BinOp::Or => Ok("||"),
         _ => Err(WgslError::UnsupportedBody(
-            "only arithmetic (`+ - * / %`) and comparison (`> < >= <= == !=`) operators \
-             are supported in a GPU kernel"
+            "only arithmetic (`+ - * / %`), comparison (`> < >= <= == !=`), and logical \
+             (`and` / `or`) operators are supported in a GPU kernel"
                 .to_string(),
         )),
+    }
+}
+
+/// The WGSL builtin for a supported scalar math **method** call (`x.sqrt()` →
+/// `sqrt(x)`) — GPU-SLIP-2a. Only the nullary float intrinsics the LBM kernels
+/// need are allowed; `None` for any other method, so `buf.len()` and unknown
+/// methods fall through to their own handling / an error.
+fn math_intrinsic_wgsl(method: &str, arg_count: usize) -> Option<&'static str> {
+    match (method, arg_count) {
+        ("sqrt", 0) => Some("sqrt"),
+        ("abs", 0) => Some("abs"),
+        ("floor", 0) => Some("floor"),
+        ("ceil", 0) => Some("ceil"),
+        _ => None,
+    }
+}
+
+/// The WGSL numeric constructor for an `as` cast's target type — GPU-SLIP-2a.
+/// Every float cast targets `f32` (WGSL has no f64, per GPU-LBM-1); signed
+/// integer casts target `i32` (indices may go negative in neighbour math),
+/// unsigned target `u32`. `None` for a non-scalar or unsupported target.
+fn cast_ctor(ty: &TypeExpr) -> Option<&'static str> {
+    match scalar_name(ty)?.as_str() {
+        "f32" | "f64" => Some("f32"),
+        "i8" | "i16" | "i32" | "i64" | "isize" => Some("i32"),
+        "u8" | "u16" | "u32" | "u64" | "usize" => Some("u32"),
+        _ => None,
     }
 }
 
@@ -737,7 +796,7 @@ pub fn emit_kernel_soa(
     // local; then store each group's fields from the return struct. This is what
     // lets the real LBM `collide` body (`let rho`/`ux`/`uy` + the equilibrium
     // terms) run without hand-flattening it into one nested expression.
-    let (lets, ret) = soa_body_parts(func)?;
+    let (lets, ret) = kernel_body_parts(func)?;
     let mut locals: HashSet<String> = HashSet::new();
     let mut let_decls = String::new();
     for (name, value) in lets {
@@ -790,17 +849,19 @@ struct SoaCtx<'a> {
     locals: &'a HashSet<String>,
 }
 
-/// A struct-SoA GPU kernel body split into its leading `let` bindings
-/// (`(name, init)` in source order) and the final struct-valued return
-/// expression — all borrowed from the function AST.
-type SoaBody<'a> = (Vec<(&'a str, &'a Expr)>, &'a Expr);
+/// A GPU kernel body split into its leading `let` bindings (`(name, init)` in
+/// source order) and the final return expression — all borrowed from the
+/// function AST. Shared by the struct-SoA (GPU-SLIP-1) and stencil
+/// (GPU-SLIP-2a) emitters.
+type KernelBody<'a> = (Vec<(&'a str, &'a Expr)>, &'a Expr);
 
-/// Split a struct-SoA GPU kernel body into its leading `let` bindings and the
-/// final struct-valued return expression. Each statement before the return must
-/// be a simple `let <name> = <expr>;` (GPU-SLIP-1 — no `mut`, no destructuring,
-/// no statement-form early `return`); the return is the block's tail expression
-/// or a trailing `return <expr>;`.
-fn soa_body_parts(func: &Function) -> Result<SoaBody<'_>, WgslError> {
+/// Split a GPU kernel body into its leading `let` bindings and the final return
+/// expression. Each statement before the return must be a simple
+/// `let <name> = <expr>;` (no `mut`, no destructuring, no statement-form early
+/// `return`); the return is the block's tail expression or a trailing
+/// `return <expr>;`. Body-shape-generic — used by both the struct-SoA and
+/// stencil emitters.
+fn kernel_body_parts(func: &Function) -> Result<KernelBody<'_>, WgslError> {
     let block = &func.body;
     let (stmts, ret) = if let Some(tail) = &block.final_expr {
         (block.stmts.as_slice(), tail.as_ref())
@@ -950,6 +1011,28 @@ fn emit_kernel_stencil(
     let (helper_defs, helper_names) = emit_helpers(func, helpers)?;
 
     let first_group = groups[0].name.clone();
+    // Body: leading `let` bindings (GPU-SLIP-2a) then the struct-valued return.
+    // Each `let` lowers to a WGSL `let`, its name registered in `locals` so later
+    // bindings and the return resolve it to itself. The context is rebuilt per
+    // step (it borrows the growing `locals`); every other field is a stable
+    // borrow, so this is cheap.
+    let (lets, ret) = kernel_body_parts(func)?;
+    let mut locals: HashSet<String> = HashSet::new();
+    let mut let_decls = String::new();
+    for (name, value) in lets {
+        let ctx = StencilCtx {
+            buf: buf_name,
+            idx: idx_name,
+            groups,
+            helpers: &helper_names,
+            uniforms: &uniform_set,
+            first_group: &first_group,
+            locals: &locals,
+        };
+        let rhs = lower_stencil_expr(value, &ctx)?;
+        let_decls.push_str(&format!("    let {name} = {rhs};\n"));
+        locals.insert(name.to_string());
+    }
     let ctx = StencilCtx {
         buf: buf_name,
         idx: idx_name,
@@ -957,9 +1040,9 @@ fn emit_kernel_stencil(
         helpers: &helper_names,
         uniforms: &uniform_set,
         first_group: &first_group,
+        locals: &locals,
     };
-    let body = kernel_return_expr(func)?;
-    let stores = lower_stencil_return(body, &ctx)?;
+    let stores = lower_stencil_return(ret, &ctx)?;
 
     // The thread owns output element `gi`; the kernel's index parameter is the
     // same index as `i32` (WGSL array subscripts want i32/u32, and neighbour
@@ -971,7 +1054,7 @@ fn emit_kernel_stencil(
          \x20   let gi = gid.x;\n\
          \x20   if (gi >= arrayLength(&{first_group}_in)) {{ return; }}\n\
          \x20   let {idx_name} = i32(gi);\n\
-         {stores}\
+         {let_decls}{stores}\
          }}\n"
     ))
 }
@@ -990,6 +1073,8 @@ struct StencilCtx<'a> {
     uniforms: &'a HashSet<String>,
     /// `groups[0].name`, for the `arrayLength` behind `buf.len()`.
     first_group: &'a str,
+    /// `let`-bound scalar locals in scope (GPU-SLIP-2a); each lowers to itself.
+    locals: &'a HashSet<String>,
 }
 
 /// Lower a stencil kernel's struct-valued return into one output store per
@@ -1110,10 +1195,35 @@ fn lower_stencil_expr(expr: &Expr, ctx: &StencilCtx) -> Result<String, WgslError
         {
             Ok(format!("i32(arrayLength(&{}_in))", ctx.first_group))
         }
+        // Scalar math intrinsic method (`e.sqrt()` → `sqrt(e)`) — GPU-SLIP-2a.
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            let builtin = math_intrinsic_wgsl(method, args.len()).ok_or_else(|| {
+                WgslError::UnsupportedBody(format!(
+                    "method `.{method}()` is not supported in a stencil GPU kernel body"
+                ))
+            })?;
+            Ok(format!("{builtin}({})", lower_stencil_expr(object, ctx)?))
+        }
+        // Numeric `as` cast (`e as f64` → `f32(e)`) — GPU-SLIP-2a.
+        ExprKind::Cast { expr, ty } => {
+            let ctor = cast_ctor(ty).ok_or_else(|| {
+                WgslError::UnsupportedBody(
+                    "unsupported `as` cast target in a stencil GPU kernel body".to_string(),
+                )
+            })?;
+            Ok(format!("{ctor}({})", lower_stencil_expr(expr, ctx)?))
+        }
         // The index parameter → the thread index (the `i32(gid.x)` local).
         ExprKind::Identifier(name) if name == ctx.idx => Ok(ctx.idx.to_string()),
         // A scalar uniform parameter → its 1-element storage buffer.
         ExprKind::Identifier(name) if ctx.uniforms.contains(name) => Ok(format!("{name}_u[0]")),
+        // A `let`-bound scalar local (GPU-SLIP-2a) → its own WGSL name.
+        ExprKind::Identifier(name) if ctx.locals.contains(name) => Ok(name.clone()),
         ExprKind::Integer(n, _) => Ok(n.to_string()),
         ExprKind::Float(f, _) => lower_float(*f),
         ExprKind::Binary { op, left, right } => {
@@ -1890,6 +2000,61 @@ mod tests {
             ),
             "{wgsl}"
         );
+    }
+
+    #[test]
+    fn stencil_lowers_let_logical_sqrt_cast() {
+        // GPU-SLIP-2a: a stencil body may bind `let` locals, use `or`, cast an
+        // index to float, and call `.sqrt()` — the shapes the `stream` boundary
+        // math needs.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(g: Vec[Cell], i: i64, t: f32) -> Cell {\n\
+             \x20   let w = 4;\n\
+             \x20   let x = i % w;\n\
+             \x20   let d = (x as f32) - t;\n\
+             \x20   let m = (d * d).sqrt();\n\
+             \x20   Cell { a: if x == 0 or x == w - 1 { m } else { g[i].a } }\n\
+             }\n",
+        );
+        let groups = vec![SoaGpuGroup {
+            name: "ga".into(),
+            fields: vec!["a".into()],
+        }];
+        let wgsl = emit_kernel_soa(&func, &groups, &[]).expect("stencil should lower");
+        assert!(wgsl.contains("let w = 4;"), "{wgsl}");
+        assert!(wgsl.contains("let x = (i % w);"), "{wgsl}");
+        // `x as f32` → `f32(x)`; the uniform `t` → `t_u[0]`.
+        assert!(wgsl.contains("let d = (f32(x) - t_u[0]);"), "{wgsl}");
+        // `.sqrt()` → `sqrt(...)`.
+        assert!(wgsl.contains("let m = sqrt((d * d));"), "{wgsl}");
+        // `or` → `||`; the local `m` and neighbour `g[i].a` feed the select.
+        assert!(
+            wgsl.contains("ga_out[gi] = select(ga_in[i], m, ((x == 0) || (x == (w - 1))));"),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn scalar_lowers_logical_and_sqrt() {
+        // GPU-SLIP-2a in the scalar element-wise path: `and` + `.sqrt()`.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: f32) -> f32 { if x > 0.0 and x < 1.0 { x.sqrt() } else { x } }\n",
+        );
+        let wgsl = emit_kernel(&func, &[]).expect("scalar kernel should lower");
+        assert!(
+            wgsl.contains(
+                "select(input[i], sqrt(input[i]), ((input[i] > 0.0) && (input[i] < 1.0)))"
+            ),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_method_in_gpu_body() {
+        // A non-intrinsic method on a scalar body is still rejected.
+        let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { x.to_bits() }\n");
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
     }
 
     #[test]
