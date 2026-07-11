@@ -1,26 +1,34 @@
 //! Differential oracle for the self-hosted **resolver** (Phase 12, Resolver
-//! port Slice 1). Sibling of `tests/selfhost_parser{,_items,_types}.rs`: a
-//! shared corpus of bare top-level `fn` items is name-resolved by BOTH the
-//! Rust seed (`karac::resolve(karac::parse(src).program)`) and the Kāra
-//! resolver (`selfhost/src/resolver.kara::resolve_item`, built AOT via
-//! `karac build`), each rendered to the same canonical form — the ordered
-//! list of `(kind @offset:length)` tuples — and the two streams are diffed.
+//! port Slices 1 + 2a). Sibling of `tests/selfhost_parser{,_items,_types}.rs`:
+//! a shared corpus of bare top-level items is name-resolved by BOTH the Rust
+//! seed (`karac::resolve(karac::parse(src).program)`) and the Kāra resolver
+//! (`selfhost/src/resolver.kara::resolve_item`, built AOT via `karac build`),
+//! each rendered to the same canonical form — the ordered list of
+//! `(kind @offset:length)` tuples — and the two streams are diffed.
 //!
-//! ## Slice-1 scope + corpus discipline
+//! ## Scope + corpus discipline
 //!
-//! Slice 1 seeds ONLY the 16 `PRELUDE_PRIMITIVES` and resolves a single `fn`:
-//! generics (bare params), `self`, params + types, return type, and the body
-//! (Let/Assign/expr statements; the reachable `Expr` forms; block/if/loop/
-//! match scopes). Only four error kinds are in scope — UndefinedName,
-//! UndefinedType, DuplicateDefinition, ReservedIdentifier. The corpus must
-//! therefore reference no prelude name outside the 16 primitives (`Vec` /
+//! - **Slice 1** resolves a single `fn`: generics (bare params), `self`,
+//!   params + types, return type, and the body (Let/Assign/expr statements;
+//!   the reachable `Expr` forms; block/if/loop/match scopes).
+//! - **Slice 2a** adds the type/value DECLARATION items — `struct`, `enum`,
+//!   `type` alias, and `const` — each resolved in fused "collect + resolve"
+//!   form (the declaration's own name is defined FIRST, so a self-referential
+//!   field / variant / const value resolves like the seed's two-pass
+//!   `collect` + `resolve_items` does for a single item). `trait` / `impl` /
+//!   `use` are a later slice.
+//!
+//! Only four error kinds are in scope — UndefinedName, UndefinedType,
+//! DuplicateDefinition, ReservedIdentifier. The corpus must therefore
+//! reference no prelude name outside the 16 seeded primitives (`Vec` /
 //! `Option` / `println` / `Some` / ... are seeded on the Rust side but not yet
 //! on the Kāra side, so they would diverge), carry no attributes (the Rust
 //! `resolve()` runs attribute validation the Kāra side does not), and exercise
 //! duplicate / reserved definitions only through GENERIC params — whose span
-//! is the bare identifier. A `FnParamNode` has no separate name span (its span
-//! covers `name: TYPE`), so a duplicate / reserved PARAM would diverge on span
-//! (a name span is a later slice's work).
+//! is the bare identifier. A `FnParamNode` / `StructFieldNode` has no separate
+//! name span (its span covers `name: TYPE`), so a duplicate / reserved PARAM
+//! or FIELD would diverge on span (a name span is a later slice's work) — the
+//! type/value declarations therefore exercise dup/reserved only via generics.
 //!
 //! The Rust seed asserts every produced error is one of the four in-scope
 //! kinds, so a corpus entry that drifts out of the slice fails loudly rather
@@ -29,8 +37,9 @@
 use karac::resolver::ResolveErrorKind;
 use std::path::PathBuf;
 
-/// Bare top-level `fn` items — the only forms Slice 1 resolves. Types use only
-/// the 16 primitives; no prelude functions/types/variants, no attributes.
+/// Bare top-level items — the forms Slices 1 + 2a resolve (`fn` / `struct` /
+/// `enum` / `type` / `const`). Types use only the 16 primitives + generics +
+/// self-references; no prelude functions/types/variants, no attributes.
 const CORPUS: &[&str] = &[
     // Clean shapes.
     "fn ok() {}",
@@ -60,6 +69,37 @@ const CORPUS: &[&str] = &[
     "fn dup_generic[T, T]() {}",
     "fn reserved_generic[Fn]() {}",
     "fn reserved_split[split_by_variant]() {}",
+    // ── Slice 2a: type/value declaration items ──
+    // Structs — clean, generic, self-referential, tuple field.
+    "struct Unit {}",
+    "struct Point { x: i64, y: i64 }",
+    "struct Wrap[T] { val: T }",
+    "struct SelfRef { next: SelfRef }",
+    "struct TupField { p: (i64, bool) }",
+    // Struct undefined field type.
+    "struct BadField { x: Nope }",
+    "struct TwoField { a: i64, b: Missing }",
+    // Struct generic dup / reserved (name-only span).
+    "struct DupGen[T, T] {}",
+    "struct ResGen[Fn] {}",
+    // Enums — unit / tuple / struct variants, generic, undefined payloads.
+    "enum Dir { North, South }",
+    "enum MyOpt[T] { Nil, Held(T) }",
+    "enum Mixed { Plain, Pair(i64, bool), Named { f: i64 } }",
+    "enum BadTuple { V(Nope) }",
+    "enum BadStructV { V { f: Missing } }",
+    "enum EnumDupGen[T, T] { A }",
+    // Type aliases — clean, tuple, generic, undefined target, reserved param.
+    "type MyInt = i64;",
+    "type Pair = (i64, bool);",
+    "type Ident[T] = T;",
+    "type BadAlias = Nope;",
+    "type ResAlias[Fn] = i64;",
+    // Consts — clean, undefined type, self-referential value, undefined value.
+    "const N: i64 = 42;",
+    "const BadTy: Nope = 0;",
+    "const Recur: i64 = Recur;",
+    "const BadVal: i64 = missing;",
 ];
 
 /// Byte offset shift between the Rust and Kāra spans — 0 (both resolve the

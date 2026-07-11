@@ -28,6 +28,13 @@ import span.Span;
 import ast.{
     Item,
     FnDefNode,
+    StructDefNode,
+    StructFieldNode,
+    EnumDefNode,
+    VariantNode,
+    VariantTag,
+    TypeAliasNode,
+    ConstDeclNode,
     GenericParamsNode,
     GenericParamNode,
     SelfMode,
@@ -274,21 +281,138 @@ impl Resolver {
 
     // ── Item resolution (mirrors resolve_items.rs) ──
     //
-    // Slice 1 handles only functions; the other top-level forms are deferred.
+    // Slice 2a adds the type/value DECLARATION forms (struct / enum /
+    // type-alias / const) alongside Slice 1's function. Trait / impl / use land
+    // in a later slice. Each item is resolved in "fused collect + resolve" form
+    // — the declaration's own name is defined in the (global) current scope
+    // FIRST, so a self-referential field / variant / const value resolves the
+    // same way the seed's two-pass `collect` + `resolve_items` does for a
+    // single item (`struct Node { next: Node }`, `const X: i64 = X`).
     fn walk_item(mut ref self, item: Item) {
         match item {
             Func(f) => {
                 self.resolve_function(f);
             }
+            Struct(s) => {
+                self.resolve_struct(s);
+            }
+            Enum(e) => {
+                self.resolve_enum(e);
+            }
+            TypeAlias(t) => {
+                self.resolve_type_alias(t);
+            }
+            Const(c) => {
+                self.resolve_const(c);
+            }
             Use(_) => {}
-            Const(_) => {}
-            TypeAlias(_) => {}
-            Struct(_) => {}
-            Enum(_) => {}
             Trait(_) => {}
             Impl(_) => {}
             ErrItem(_) => {}
         }
+    }
+
+    // Define each bare generic type param (`[T, U]`) in the CURRENT scope via
+    // `define` — so a duplicate (`[T, T]`) is a DuplicateDefinition and a
+    // reserved name (`[Fn]`) is ReservedIdentifier, mirroring the seed's
+    // `define_generic_params`. Bounds / variance / const params are a later
+    // slice (the corpus carries bare params only). The caller owns scope
+    // push/pop; this only populates the current scope.
+    fn define_generics(mut ref self, generics: Option[GenericParamsNode]) {
+        match generics {
+            Some(g) => {
+                let GenericParamsNode { params: gparams, span: gspan } = g;
+                for gp in gparams {
+                    let GenericParamNode { name: gn, span: gsp } = gp;
+                    self.define(gn, gsp);
+                }
+            }
+            None => {}
+        }
+    }
+
+    // `resolve_struct_def` (resolve_items.rs:106). Define the struct name, then
+    // resolve each field's TYPE in a fresh scope that (when generic) holds the
+    // type params. The seed only pushes a scope for a GENERIC struct; pushing an
+    // empty scope for a non-generic one is oracle-equivalent (an empty scope is
+    // transparent to lookup and no field introduces a binding), so the two paths
+    // fuse. Consumes the node and moves its fields out.
+    fn resolve_struct(mut ref self, s: StructDefNode) {
+        let StructDefNode {
+            is_pub,
+            is_shared,
+            is_par,
+            name,
+            generics,
+            fields,
+            attributes,
+            doc,
+            span,
+        } = s;
+        self.define(name, clone_span(span));
+        self.push_scope();
+        self.define_generics(generics);
+        for field in fields {
+            let StructFieldNode { is_pub, is_mut, name: fname, ty: fty, span: fsp } = field;
+            self.resolve_type(fty);
+        }
+        self.pop_scope();
+    }
+
+    // `resolve_enum_def` + `resolve_enum_variants` (resolve_items.rs:133-163).
+    // Define the enum name, then in the (generic) param scope resolve every
+    // variant payload type — a `TupleV`'s `tuple_types` and a `StructV`'s
+    // `fields` (both empty for `UnitV`, so resolving both vectors is equivalent
+    // to the seed's per-`VariantKind` switch). Variant NAMES aren't scope
+    // bindings (they're reached as `Enum.Variant`).
+    fn resolve_enum(mut ref self, e: EnumDefNode) {
+        let EnumDefNode {
+            is_pub,
+            is_shared,
+            is_par,
+            name,
+            generics,
+            variants,
+            attributes,
+            doc,
+            span,
+        } = e;
+        self.define(name, clone_span(span));
+        self.push_scope();
+        self.define_generics(generics);
+        for v in variants {
+            let VariantNode { name: vname, tag, tuple_types, fields, span: vsp } = v;
+            for tt in tuple_types {
+                self.resolve_type(tt);
+            }
+            for field in fields {
+                let StructFieldNode { is_pub, is_mut, name: fname, ty: fty, span: fsp } = field;
+                self.resolve_type(fty);
+            }
+        }
+        self.pop_scope();
+    }
+
+    // `resolve_type_alias_def` (resolve_items.rs:482). Define the alias name,
+    // then resolve the target type in the (generic) param scope.
+    fn resolve_type_alias(mut ref self, t: TypeAliasNode) {
+        let TypeAliasNode { is_pub, name, generics, ty, attributes, doc, span } = t;
+        self.define(name, clone_span(span));
+        self.push_scope();
+        self.define_generics(generics);
+        self.resolve_type(ty);
+        self.pop_scope();
+    }
+
+    // `resolve_const_decl` (resolve_items.rs:477). Define the const name FIRST
+    // (the seed's `collect_const` registers it before pass 2), then resolve its
+    // declared type and its initializer expression — so `const X: i64 = X`
+    // resolves clean (name in scope) while `const X: i64 = Y` is UndefinedName.
+    fn resolve_const(mut ref self, c: ConstDeclNode) {
+        let ConstDeclNode { is_pub, name, ty, value, attributes, doc, span } = c;
+        self.define(name, clone_span(span));
+        self.resolve_type(ty);
+        self.resolve_expr(value);
     }
 
     // `collect_function` + `resolve_function` (resolve_items.rs:60-104) fused:
@@ -312,16 +436,7 @@ impl Resolver {
         self.define(name, clone_span(span));
         self.push_scope();
         // Generic type params (bare names; bounds are a later slice).
-        match generics {
-            Some(g) => {
-                let GenericParamsNode { params: gparams, span: gspan } = g;
-                for gp in gparams {
-                    let GenericParamNode { name: gn, span: gsp } = gp;
-                    self.define(gn, gsp);
-                }
-            }
-            None => {}
-        }
+        self.define_generics(generics);
         // Receiver: `self` is an ordinary scope entry when present.
         match self_mode {
             NoSelf => {}
