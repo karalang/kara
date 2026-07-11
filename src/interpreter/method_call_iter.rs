@@ -566,6 +566,30 @@ impl<'a> super::Interpreter<'a> {
                     return Some(acc);
                 }
             }
+            "sum" => {
+                // Terminal — drain the iterator, adding each yielded element
+                // to a running accumulator seeded from the first element (so
+                // the result carries the element's numeric type). An empty
+                // iterator sums to `0` (i64), matching the common case; codegen
+                // seeds from a type-recorded zero. B-2026-07-11-19.
+                if matches!(obj, Value::Iterator { .. }) {
+                    if !args.is_empty() {
+                        return Some(self.record_runtime_error(
+                            format!("Iterator.sum() takes no arguments, got {}", args.len()),
+                            span,
+                        ));
+                    }
+                    let mut iter_val = obj;
+                    let mut acc: Option<Value> = None;
+                    while let Some(item) = self.iterator_step(&mut iter_val) {
+                        acc = Some(match acc {
+                            None => item,
+                            Some(a) => self.eval_binary(&BinOp::Add, a, item, span, false),
+                        });
+                    }
+                    return Some(acc.unwrap_or(Value::Int(0)));
+                }
+            }
             "any" | "all" => {
                 // Short-circuit terminals. `any(pred)` returns true the
                 // first time `pred` returns true; `all(pred)` returns

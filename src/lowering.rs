@@ -107,6 +107,14 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Numeric `Iterator.sum()` / `Iterator.reduce(f)` terminal element types —
+    // codegen seeds its fused-loop accumulator with a width-correct zero. Same
+    // keying (MethodCall span). B-2026-07-11-19.
+    program.iter_terminal_elem_types = tc
+        .iter_terminal_elem_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Forward the channel-op element-type table so codegen's
     // `karac_runtime_channel_*` lowering knows the LLVM shape of `T` to size
     // the type-erased transfer + shape the recv/try_recv out slot. Sibling

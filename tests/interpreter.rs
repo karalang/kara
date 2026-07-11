@@ -13131,6 +13131,30 @@ fn main() {
 }
 
 #[test]
+fn test_iter_sum_terminal() {
+    // B-2026-07-11-19 — the numeric `sum()` terminal. Covers a bare
+    // `iter().sum`, a `map().sum`, a `filter().sum`, an f64 sum, an empty
+    // source (0), and a range sum.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4];
+    println(v.iter().sum().to_string());
+    println(v.iter().map(|x: i64| x * 2i64).sum().to_string());
+    println(v.iter().filter(|x: i64| x > 2i64).sum().to_string());
+    let f: Vec[f64] = [1.5, 2.5, 3.0];
+    println(f.iter().sum().to_string());
+    let e: Vec[i64] = [];
+    println(e.iter().sum().to_string());
+    println((1i64..5i64).sum().to_string());
+}
+"#,
+    );
+    // 10, 20, 7, 7, 0, 10
+    assert_eq!(output, "10\n20\n7\n7\n0\n10\n");
+}
+
+#[test]
 fn test_iter_fold_empty_returns_init_unchanged() {
     let output = run_no_errors(
         r#"

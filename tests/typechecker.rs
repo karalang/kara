@@ -14112,6 +14112,26 @@ fn test_iter_peekable_after_map_uses_mapped_type() {
 }
 
 #[test]
+fn test_iter_sum_rejects_non_numeric_element() {
+    // B-2026-07-11-19 — `sum()` is a numeric terminal; a String-element
+    // iterator has no numeric sum, so the typechecker must reject it rather
+    // than let codegen/interp fall over later.
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[String] = [f\"a\", f\"b\"];
+             let _s = v.iter().sum();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::TypeMismatch
+                && e.message.contains("numeric element type")),
+        "expected a numeric-element-type TypeMismatch for sum() over String, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
 fn test_iter_peek_on_plain_iterator_rejected() {
     // peek() is only on Peekable[T] — calling it on a bare Iterator
     // should raise a type error rather than silently dispatching.

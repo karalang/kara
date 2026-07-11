@@ -1190,6 +1190,15 @@ pub struct TypeCheckResult {
     /// (records the element type, not the receiver's whole type). Drives
     /// codegen's `karac_runtime_channel_*` `elem_size` + out-slot shape.
     pub channel_elem_types: HashMap<SpanKey, TypeExpr>,
+    /// Numeric iterator-terminal element types: span of an `Iterator.sum()` /
+    /// `Iterator.reduce(f)` MethodCall → the yielded element `TypeExpr`
+    /// (`i64` / `f64` / …). Codegen reads it to seed the fused-loop
+    /// accumulator with a correctly-typed zero (`sum`) so the reassignment
+    /// `acc = acc + x` type-checks for every numeric width, not just the
+    /// unsuffixed-literal i64 default. Same key shape / no-collision rationale
+    /// as `channel_elem_types` (records the element type; exactly one such
+    /// terminal writes a given MethodCall span). B-2026-07-11-19.
+    pub iter_terminal_elem_types: HashMap<SpanKey, TypeExpr>,
     /// `TaskHandle[T].join()` MethodCall span → the result type `T`. Drives
     /// codegen's cross-task result-transfer sizing so a non-scalar spawn
     /// return (`Vec`/`String`/struct) round-trips through `join` intact
@@ -1502,6 +1511,10 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → `Map[K,V]` / `Set[T]` `TypeExpr` of a fresh-temp
     /// Map/Set receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_mapset_types: HashMap<SpanKey, TypeExpr>,
+    /// MethodCall span → yielded element `TypeExpr` of a numeric
+    /// `Iterator.sum()` / `Iterator.reduce(f)` terminal. See the public copy
+    /// on `TypeCheckResult`.
+    pub(super) iter_terminal_elem_types: HashMap<SpanKey, TypeExpr>,
     /// MethodCall span → channel element `TypeExpr` for `Sender.send` /
     /// `Receiver.recv` / `Receiver.try_recv`. See the public copy on
     /// `TypeCheckResult` for the full rationale.
@@ -1729,6 +1742,7 @@ impl<'a> TypeChecker<'a> {
             method_unwrap_inner_types: HashMap::new(),
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
+            iter_terminal_elem_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
             stats_elem_types: HashMap::new(),
             gpu_dispatch_wgsl: HashMap::new(),
@@ -1914,6 +1928,7 @@ impl<'a> TypeChecker<'a> {
             method_unwrap_inner_types: self.method_unwrap_inner_types,
             temp_recv_elem_types: self.temp_recv_elem_types,
             temp_recv_mapset_types: self.temp_recv_mapset_types,
+            iter_terminal_elem_types: self.iter_terminal_elem_types,
             channel_elem_types: self.channel_elem_types,
             stats_elem_types: self.stats_elem_types,
             gpu_dispatch_wgsl: self.gpu_dispatch_wgsl,

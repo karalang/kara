@@ -6960,6 +6960,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_sum_terminal() {
+        // B-2026-07-11-19 — the numeric `sum()` terminal on a fused iterator
+        // chain. Before the fix it was rejected at TYPECHECK ("no method 'sum'
+        // on type 'Iterator'"). Now it desugars to `fold((0 as elem), |a, x| a +
+        // x)`, seeding the accumulator with a width-correct zero read from the
+        // typechecker-recorded element type. Covers: a bare `iter().sum`, a
+        // `map().sum`, a `filter().sum`, a two-stage `filter().map().sum`, an
+        // f64 sum (the zero must be `0.0`, not an i64 `0`), an empty source
+        // (sums to 0), and a `range` sum.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4, 5, 6];\n\
+                 println(f\"{v.iter().sum()}\");\n\
+                 println(f\"{v.iter().map(|x| x * x).sum()}\");\n\
+                 println(f\"{v.iter().filter(|x| x % 2 == 0).sum()}\");\n\
+                 println(f\"{v.iter().filter(|x| x > 2).map(|x| x * 10).sum()}\");\n\
+                 let f: Vec[f64] = [1.5, 2.5, 3.0];\n\
+                 println(f\"{f.iter().sum()}\");\n\
+                 let e: Vec[i64] = [];\n\
+                 println(f\"{e.iter().sum()}\");\n\
+                 println(f\"{(1..5).sum()}\");\n\
+             }",
+        ) {
+            // 21, 91 (1+4+9+16+25+36), 12 (2+4+6), 180 ((3+4+5+6)*10),
+            // 7 (1.5+2.5+3.0), 0, 10 (1+2+3+4)
+            assert_eq!(out, "21\n91\n12\n180\n7\n0\n10\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_over_iter_chain() {
         // B-2026-07-11-18 — `for x in <src>.iter().{map|filter}+ { .. }`. Before
         // the fix a map/filter adaptor iterable had no `compile_for` arm and fell

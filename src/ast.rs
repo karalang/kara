@@ -263,6 +263,13 @@ pub type MethodUnwrapInnerTypesTable = std::collections::HashMap<(usize, usize),
 /// through `compile_vec_method` (general-owned-temp-tracking spike, slice 3b).
 pub type TempRecvElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Side-table populated by the lowering pass from the typechecker's
+/// `iter_terminal_elem_types` map. Maps each numeric `Iterator.sum()` /
+/// `Iterator.reduce(f)` terminal `MethodCall` span to the yielded element
+/// `TypeExpr`. Codegen seeds the fused loop's accumulator with a width-correct
+/// `(0 as <elem>)` zero (B-2026-07-11-19).
+pub type IterTerminalElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
 /// Sibling of `TempRecvElemTypesTable` for `Map`/`Set` fresh-temp receivers
 /// (`make_map().get(k)`, `make_set().contains(x)`): `MethodCall` span → the
 /// receiver's whole `Map[K, V]` / `Set[T]` `TypeExpr`. Codegen materializes the
@@ -603,6 +610,11 @@ pub struct Program {
     /// empty otherwise. Fresh-temp `Map`/`Set` receiver types for codegen's
     /// slice-3d read-method redispatch + handle drop-tracking.
     pub temp_recv_mapset_types: TempRecvMapSetTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.iter_terminal_elem_types`;
+    /// empty otherwise. Numeric `Iterator.sum()` / `Iterator.reduce(f)` terminal
+    /// MethodCall span → yielded element `TypeExpr`, so codegen seeds the fused
+    /// loop's accumulator with a width-correct zero (B-2026-07-11-19).
+    pub iter_terminal_elem_types: IterTerminalElemTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.channel_elem_types`;
     /// empty otherwise. Channel-op element types for codegen's
     /// `karac_runtime_channel_*` lowering.

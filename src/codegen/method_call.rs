@@ -3844,6 +3844,25 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<iter-chain>.sum()` — the numeric-accumulation terminal on a fused
+        // iterator chain (B-2026-07-11-19). Same iterator-chain receiver gate as
+        // `fold`. Desugars to a `fold(<typed-zero>, |acc, x| acc + x)`, seeding
+        // the accumulator with a `(0 as <elem>)` cast so the width matches for
+        // every numeric element type. Fails closed to the loud dispatch error
+        // below when the element type wasn't recorded or the chain shape isn't
+        // one the shared peel understands.
+        if method == "sum"
+            && args.is_empty()
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            if let Some(v) = self.try_compile_iter_chain_sum(object, call_span)? {
+                return Ok(v);
+            }
+        }
+
         // General owned-temp tracking, slice 3b — element-type-aware read
         // methods (`get`/`first`/`last`/`get_unchecked`/`contains`) on a
         // FRESH-TEMP `Vec`/`VecDeque` receiver (`make_vec().get(0)`). Needs the
@@ -6721,6 +6740,59 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
         Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `<src>.iter().{map|filter}*.sum()` — the numeric-accumulation
+    /// terminal on a fused iterator chain (B-2026-07-11-19). Desugars to the
+    /// `fold` engine with a synthesized `(0 as <elem>)` init and an `acc + x`
+    /// body, so the whole shape reuses the shared map/filter fusion. The element
+    /// type is the one the typechecker recorded at this MethodCall span
+    /// (`iter_terminal_elem_types`); without it — or when `fold`'s peel rejects
+    /// the chain — this fails closed (`Ok(None)` → the loud dispatch error),
+    /// never a silent wrong answer.
+    fn try_compile_iter_chain_sum(
+        &mut self,
+        recv: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some(elem_te) = self
+            .iter_terminal_elem_types
+            .get(&(call_span.offset, call_span.length))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let sp = call_span.clone();
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let acc_p = format!("__sum_acc_{}", uid);
+        let x_p = format!("__sum_x_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        // `(0 as <elem>)` — a width-correct zero for any numeric element type
+        // (i8..i64 / isize, u8..u64 / usize, f32 / f64) without spelling a
+        // per-type literal suffix (`IntSuffix` has no isize/usize spelling).
+        let zero = Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(Expr {
+                    kind: ExprKind::Integer(0, None),
+                    span: sp.clone(),
+                }),
+                ty: elem_te,
+            },
+            span: sp.clone(),
+        };
+        let fold_body = Expr {
+            kind: ExprKind::Binary {
+                op: BinOp::Add,
+                left: Box::new(ident(&acc_p)),
+                right: Box::new(ident(&x_p)),
+            },
+            span: sp.clone(),
+        };
+        self.try_compile_iter_chain_fold(recv, &zero, &acc_p, &x_p, &fold_body, call_span)
     }
 
     /// Lower `<src>.iter().{map|filter}*.any(|x| pred)` / `.all(|x| pred)` — the

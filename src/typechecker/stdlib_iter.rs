@@ -4,9 +4,10 @@
 //! synthesizer invoked when the receiver is `Iterator[Item = T]`.
 
 use crate::ast::*;
+use crate::resolver::SpanKey;
 use crate::token::Span;
 
-use super::types::{IntSize, Type};
+use super::types::{is_numeric, type_display, IntSize, Type};
 use super::TypeErrorKind;
 
 impl<'a> super::TypeChecker<'a> {
@@ -160,6 +161,38 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 self.check_expr(&args[1].value, &f_ty);
                 acc_ty
+            }
+            "sum" => {
+                // `sum() -> T` — numeric terminal. Drains the iterator and adds
+                // the yielded elements from a zero of the element type. The
+                // yielded element `TypeExpr` is recorded span-keyed so codegen
+                // can seed its fused-loop accumulator with a correctly-typed
+                // zero (`acc = acc + x` must type-check at the element's width).
+                // B-2026-07-11-19.
+                if !args.is_empty() {
+                    self.type_error(
+                        "Iterator.sum() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                if !is_numeric(item) && !self.type_param_has_numeric_bound(item) {
+                    self.type_error(
+                        format!(
+                            "Iterator.sum() requires a numeric element type, found '{}'",
+                            type_display(item)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                self.iter_terminal_elem_types
+                    .insert(SpanKey::from_span(span), Self::type_to_type_expr(item));
+                item.clone()
             }
             "any" | "all" => {
                 // Short-circuit terminals — `any(pred) -> bool` /
@@ -712,6 +745,7 @@ impl<'a> super::TypeChecker<'a> {
                     "skip",
                     "skip_while",
                     "step_by",
+                    "sum",
                     "take",
                     "take_while",
                     "windows",

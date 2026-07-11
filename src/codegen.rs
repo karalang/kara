@@ -2344,6 +2344,13 @@ pub(super) struct Codegen<'ctx> {
     /// re-dispatches through `compile_map_method` / `compile_set_method`
     /// (general-owned-temp-tracking spike, slice 3d).
     pub(crate) temp_recv_mapset_types: HashMap<(usize, usize), TypeExpr>,
+    /// Per numeric iterator-terminal MethodCall (`Iterator.sum()` /
+    /// `Iterator.reduce(f)`) → yielded element `TypeExpr` side-table —
+    /// populated from `Program.iter_terminal_elem_types`. Key:
+    /// `(span.offset, span.length)` of the MethodCall. `try_compile_iter_chain_sum`
+    /// reads it to seed the fused-loop accumulator with a correctly-typed zero
+    /// so `acc = acc + x` type-checks for every numeric width (B-2026-07-11-19).
+    pub(crate) iter_terminal_elem_types: HashMap<(usize, usize), TypeExpr>,
     /// Per-channel-op MethodCall → element `TypeExpr` side-table — populated
     /// from `Program.channel_elem_types`. Key: `(span.offset, span.length)`
     /// of the `Sender.send` / `Receiver.recv` / `Receiver.try_recv`
@@ -5912,6 +5919,7 @@ impl<'ctx> Codegen<'ctx> {
             method_unwrap_inner_types: HashMap::new(),
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
+            iter_terminal_elem_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
             stats_elem_types: HashMap::new(),
             gpu_dispatch_wgsl: HashMap::new(),
@@ -6966,6 +6974,7 @@ impl<'ctx> Codegen<'ctx> {
         self.method_unwrap_inner_types = program.method_unwrap_inner_types.clone();
         self.temp_recv_elem_types = program.temp_recv_elem_types.clone();
         self.temp_recv_mapset_types = program.temp_recv_mapset_types.clone();
+        self.iter_terminal_elem_types = program.iter_terminal_elem_types.clone();
         self.channel_elem_types = program.channel_elem_types.clone();
         self.stats_elem_types = program.stats_elem_types.clone();
         self.gpu_dispatch_wgsl = program.gpu_dispatch_wgsl.clone();
