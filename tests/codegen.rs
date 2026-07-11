@@ -6540,6 +6540,52 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_pipeline_example() {
+        // examples/pipeline.kara — a functional log-analytics pipeline. Validates
+        // the sequential ITERATOR + CLOSURE surface: `iter()` chains of `map` /
+        // `filter` closures terminating in `fold` (aggregate) and `collect`
+        // (materialize), over heap-bearing (`String`-field) records. The `fold`
+        // terminal on a fused chain (B-2026-07-11-17) is exercised as counts
+        // (`fold(0, |acc, r| acc + 1)`), sums (`fold(0, |acc, x| acc + x)`), and a
+        // max (`fold` with an `if` body), across bare / filtered / mapped chains.
+        if let Some(out) = run_program(include_str!("../examples/pipeline.kara")) {
+            assert_eq!(
+                out,
+                "requests: 10\nok: 7\nserver_err: 2\nclient_err: 1\n\
+                 bytes_served: 18432\nmax_latency_ms: 210\navg_ok_latency_ms: 50\n\
+                 slow_paths: 3\n  /api/orders\n  /api/users\n  /assets/app\n"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_iter_chain_fold_terminal() {
+        // B-2026-07-11-17 — `fold(init, |acc, x| body)` on a fused iterator chain.
+        // Before the fix it fell through to the loud "no handler for method 'fold'
+        // on non-identifier receiver" dispatch error (the interpreter ran it), so
+        // any chain ending in `fold` failed `karac build`. Covers: a bare
+        // `iter().fold` sum, a `map().fold`, a `filter().fold`, a two-stage
+        // `filter().map().fold`, a `fold` whose body branches (max), a nonzero
+        // init, an empty source (folds to init), and a `range` fold.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4, 5, 6];\n\
+                 println(f\"{v.iter().fold(0, |a, x| a + x)}\");\n\
+                 println(f\"{v.iter().map(|x| x * x).fold(0, |a, x| a + x)}\");\n\
+                 println(f\"{v.iter().filter(|x| x % 2 == 0).fold(0, |a, x| a + x)}\");\n\
+                 println(f\"{v.iter().filter(|x| x > 2).map(|x| x * 10).fold(0, |a, x| a + x)}\");\n\
+                 println(f\"{v.iter().fold(0, |a, x| if x > a { x } else { a })}\");\n\
+                 println(f\"{v.iter().fold(100, |a, x| a - x)}\");\n\
+                 let e: Vec[i64] = [];\n\
+                 println(f\"{e.iter().fold(42, |a, x| a + x)}\");\n\
+                 println(f\"{(0..5).fold(0, |a, x| a + x)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "21\n91\n12\n180\n6\n79\n42\n10\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_index_vec_field_through_self() {
         // Regression for the self-hosting lexer index blocker: indexing a
         // `Vec` field through the `self` receiver (`self.bytes[self.current]`)

@@ -442,6 +442,34 @@ fn main() {
     }
 
     #[test]
+    fn asan_pipeline_example_no_leak() {
+        // examples/pipeline.kara under ASAN — the log-analytics pipeline runs
+        // `iter()` chains of `map`/`filter`/`fold`/`collect` over `Req` records
+        // whose `method`/`path` are heap `String`s. The `fold` terminal desugar
+        // (B-2026-07-11-17) inlines the chain into a `for` loop over the base
+        // source; this asserts that lowering leaks no source Vec, no per-element
+        // String, and no collected `Vec[String]` (the slow-paths materialization)
+        // across construct -> iterate -> aggregate -> drop.
+        assert_clean_asan_run(
+            include_str!("../examples/pipeline.kara"),
+            &[
+                "requests: 10",
+                "ok: 7",
+                "server_err: 2",
+                "client_err: 1",
+                "bytes_served: 18432",
+                "max_latency_ms: 210",
+                "avg_ok_latency_ms: 50",
+                "slow_paths: 3",
+                "  /api/orders",
+                "  /api/users",
+                "  /assets/app",
+            ],
+            "asan_pipeline_example_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_with_capacity_zero_no_leak() {
         // B-2026-07-11-15 — a `with_capacity(n)` whose `n` evaluates to 0 at
         // runtime leaked one byte per call. `karac_alloc_or_panic(0)` normalizes
