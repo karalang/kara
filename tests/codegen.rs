@@ -12487,6 +12487,34 @@ pub fn main() with writes(Console) {
     }
 
     #[test]
+    fn test_e2e_string_marshaling_round_trips_through_cstring() {
+        // The complete FFI String-marshaling loop (phase-8 "FFI — String
+        // marshaling"): a runtime-built Kāra `String` crosses the C boundary as
+        // a NUL-terminated `char*` and comes back losslessly. Outbound via the
+        // OWNING `CString` (`to_cstring` appends the NUL, owns the heap buffer)
+        // + `as_ptr`; inbound via `CStr.from_ptr` (borrows the caller's memory,
+        // libc `strlen` recomputes the length) + `to_string` (copies, validates
+        // UTF-8). The two halves are exercised individually elsewhere; this pins
+        // that they COMPOSE into a String→char*→String identity. `cs` outlives
+        // the borrowed pointer (drops at end of `main`), so `p` stays valid.
+        let src = r#"
+fn main() {
+    let s = "hello, " + "world";
+    let cs = s.to_cstring().unwrap();
+    let p = cs.as_ptr();
+    // Safety: `p` points into `cs`'s NUL-terminated buffer, live until main exits.
+    let back = unsafe { CStr.from_ptr(p) }.to_string().unwrap();
+    println(back);
+    println(back.len());
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "hello, world\n12\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_extern_link_name_binds_foreign_symbol() {
         // `#[link_name("strlen")]` redirects the emitted symbol from the
         // Kāra fn name (`measure`) to the foreign symbol (`strlen`), so a
