@@ -6765,6 +6765,43 @@ fn test_filesystem_write_and_read_roundtrip() {
 }
 
 #[test]
+fn test_filesystem_read_lines_splits_and_strips_newlines() {
+    // phase-8 `fs.read_lines()` slice: slurp a file and split into lines with
+    // Rust `str::lines()` semantics — split on `\n`, strip a trailing `\r`
+    // (CRLF), and a final newline yields no trailing empty element. Yields
+    // `Result[Vec[String], IoError]`.
+    let tmp = std::env::temp_dir().join("karac_test_fs_read_lines.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    // CRLF on the middle line + a trailing LF: expect ["one", "two", "three"].
+    std::fs::write(&tmp, "one\ntwo\r\nthree\n").expect("temp write");
+    let src = format!(
+        "fn main() with reads(FileSystem) {{
+             match FileSystem.read_lines(\"{path}\") {{
+                 Ok(lines) => {{
+                     println(lines.len());
+                     for l in lines {{ println(l); }}
+                 }}
+                 Err(_) => println(\"read error\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "3\none\ntwo\nthree\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_filesystem_read_lines_missing_file_returns_err() {
+    let src = "fn main() with reads(FileSystem) {
+                   match FileSystem.read_lines(\"/nonexistent_karac_rl_xyz.txt\") {
+                       Ok(_) => println(\"ok\"),
+                       Err(_) => println(\"err\"),
+                   }
+               }";
+    assert_eq!(run_no_errors(src), "err\n");
+}
+
+#[test]
 fn test_filesystem_read_nonexistent_file_returns_err() {
     let src = "fn main() {
                    let r = FileSystem.read_to_string(\"/nonexistent_karac_test_xyz.txt\");

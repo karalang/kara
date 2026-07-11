@@ -377,6 +377,31 @@ impl<'a> super::Interpreter<'a> {
                     Err(e) => io_err_value(io_error_from_std(&e)),
                 }
             }
+            // `fs.read_lines(path) -> Result[Vec[String], IoError]` — slurp then
+            // split into lines (Rust `str::lines()`: split on `\n`, strip a
+            // trailing `\r`, a final newline yields no trailing empty element).
+            ("FileSystem", "read_lines") => {
+                self.track_effect("reads(FileSystem)");
+                let path = match arg_vals.first() {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => {
+                        return self.record_runtime_error(
+                            "FileSystem.read_lines expects a String path".to_string(),
+                            span,
+                        );
+                    }
+                };
+                match std::fs::read_to_string(&path) {
+                    Ok(contents) => {
+                        let lines: Vec<Value> = contents
+                            .lines()
+                            .map(|l| Value::String(l.to_string()))
+                            .collect();
+                        io_ok(Value::array_of(lines))
+                    }
+                    Err(e) => io_err_value(io_error_from_std(&e)),
+                }
+            }
             ("FileSystem", "write") => {
                 self.track_effect("writes(FileSystem)");
                 let (path, contents) = match (arg_vals.first(), arg_vals.get(1)) {

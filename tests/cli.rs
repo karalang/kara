@@ -1484,6 +1484,37 @@ fn test_build_project_lists_discovered_modules() {
 
 #[cfg(feature = "llvm")]
 #[test]
+fn test_fs_read_lines_build_rejected_loudly() {
+    // phase-8 `fs.read_lines()` slice: interpreter-only at v1 (the
+    // `Result[Vec[String], IoError]` return codegen is a tracked follow-on,
+    // B-2026-07-11-38). `karac build` must fail LOUDLY at the call site with a
+    // helpful message — not a misleading downstream error or a silent no-op.
+    let tmp = scratch_project("fs-read-lines-reject");
+    write(
+        &tmp.join("m.kara"),
+        "fn main() with reads(FileSystem) {\n\
+         \x20   match fs.read_lines(\"x.txt\") { Ok(v) => { println(v.len()); } Err(_) => {} }\n\
+         }\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "m.kara"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "expected build to fail for fs.read_lines"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("read_lines") && stderr.contains("not yet"),
+        "expected a loud fs.read_lines codegen rejection; got: {stderr}",
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
 fn test_stdin_lines_run_and_build_parity() {
     // phase-8 `Stdin.lines()` slice: `for line in stdin.lines()` iterates
     // standard input a line at a time under BOTH `karac run` (interpreter/JIT)

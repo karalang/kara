@@ -1235,6 +1235,23 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_file_read_to_string(&_args[0].value);
         }
 
+        // `FileSystem.read_lines(path) -> Result[Vec[String], IoError]` — v1
+        // interpreter-only (the `Result[Vec[String], _]` return codegen is a
+        // tracked follow-on, B-2026-07-11-38). Reject LOUDLY at the call site
+        // so `karac build` fails with a clear message instead of a misleading
+        // downstream "no handler for len on <Ok payload>"; the ambient
+        // `fs.read_lines()` form is rejected symmetrically in `compile_ambient_ffi`.
+        if type_name == "FileSystem" && method == "read_lines" {
+            return Err(
+                "codegen: `fs.read_lines()` is not yet supported under `karac build` \
+                        (interpreter-only at v1; the `Result[Vec[String], IoError]` return \
+                        codegen is a tracked follow-on). Run it with `karac run`, or use \
+                        `fs.read_to_string(path)` + `String.split(\"\\n\")` for a \
+                        build-compatible slurp."
+                    .to_string(),
+            );
+        }
+
         // `FileSystem.write(path, contents) -> Result[Unit, IoError]`.
         // One-shot whole-file write (create-or-truncate); lowers to
         // `karac_runtime_fs_write` and unpacks the Unit-Ok KaracIoResult.
