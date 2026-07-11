@@ -81,11 +81,32 @@ const CORPUS: &[&str] = &[
     "fn shadow_ok() -> bool { let x = 1; let x = true; x }",
     // A block-local does NOT leak past its block (scoped env).
     "fn scope_leak() -> i64 { if true { let z = true; } let z = 1; z }",
+    // ── Slice 3: operator result types ──
+    // Comparisons + logical → BOOL; arithmetic / bitwise → the shared operand
+    // category (NUM op NUM → NUM; `+` polymorphic: STR + STR → STR); unary `-`/`~`
+    // → NUM, `not` → BOOL. Mismatch / cond anchors on the WHOLE operator span.
+    "fn cmp_ret_bad(n: i64) -> i64 { n > 0 }",
+    "fn cmp_ret_ok(n: i64) -> bool { n > 0 }",
+    "fn arith_ret_bad(n: i64) -> bool { n + 1 }",
+    "fn arith_ret_ok(n: i64) -> i64 { n + 1 }",
+    "fn bitwise_ret_bad(n: i64) -> bool { n & 1 }",
+    "fn logical_ret_bad(a: bool, b: bool) -> i64 { a and b }",
+    "fn neg_ret_bad(n: i64) -> bool { -n }",
+    "fn not_ret_bad(b: bool) -> i64 { not b }",
+    "fn bitnot_ret_bad(n: i64) -> bool { ~n }",
+    // `+` polymorphism: String concat yields STR, numeric add yields NUM.
+    "fn str_concat_bad(s: String) -> i64 { s + s }",
+    "fn str_concat_ok(s: String) -> String { s + s }",
+    "fn str_ne_ok(s: String) -> bool { s != s }",
+    "fn char_eq_ok(c: char) -> bool { c == c }",
+    // Operator result feeding a condition; and operand inference through a let.
+    "fn cmp_cond_ok(n: i64) { if n > 0 { } }",
+    "fn arith_cond_bad(n: i64) { if n + 1 { } }",
+    "fn operand_via_let(n: i64) -> bool { let x = n + 1; x > 0 }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
-    // A binary/comparison tail is UNKNOWN to Slice 2 (operator result typing is
-    // a later slice); the seed types `n > 0` as bool, and since ret IS bool
-    // both are clean — the carve-out must not false-positive.
-    "fn cmp_tail_ok(n: i64) -> bool { n > 0 }",
+    // A call result is UNKNOWN (call typing is a later slice); with a matching
+    // declared return the seed is clean, so the carve-out must not false-positive.
+    "fn call_ret_ok() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
     // ── multi-item programs — per-fn errors in traversal order ──
     "fn a() -> bool { 1 }\nfn b() -> i64 { 2 }\nfn c() -> String { 'x' }",
     "fn ok_a() -> i64 { 1 }\nfn bad_b() -> bool { 2 }",

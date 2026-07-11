@@ -17,6 +17,11 @@
 //     `let x = <expr>` binds `x` to the RHS's inferred category; an identifier
 //     expression infers by scanning the innermost scope MOST-RECENT-FIRST (so
 //     shadowing and block-locals behave — verified byte-identical vs the seed).
+//   * OPERATOR result types (Slice 3): comparisons + logical connectives infer
+//     BOOL; arithmetic / bitwise infer the shared operand category (NUM op NUM →
+//     NUM, and — polymorphically — STR + STR → STR); unary `-`/`~` → NUM, `not`
+//     → BOOL. So `if n > 0` is a valid bool condition while `if n + 1` is not,
+//     and `-> i64 { n > 0 }` is a mismatch — all verified against the seed.
 //   * Two checks, driven by inference over a full stmt/expr walk:
 //       - RETURN-TYPE mismatch: a fn whose declared `-> T` category is a known
 //         primitive and whose body-TAIL infers to a DIFFERENT known primitive
@@ -57,7 +62,9 @@ import ast.{
     IdentExpr,
     SpanNode,
     BinaryExpr,
+    BinOp,
     UnaryExpr,
+    UnaryOp,
     TupleExpr,
     CallExpr,
     CallArg,
@@ -357,6 +364,25 @@ impl Checker {
                 let c = self.lookup_cat(name);
                 ExprInfo { category: c, span: span }
             }
+            Binary(n) => {
+                // Recurse both operands (finds nested `if`s, infers operand
+                // categories), then compute the RESULT category from the
+                // operator. Comparisons / logical → BOOL; arithmetic / bitwise →
+                // the shared operand category (so NUM op NUM → NUM and, for `+`,
+                // STR + STR → STR); mismatched / unknown operands → UNKNOWN. The
+                // diagnostic anchors on the WHOLE binary-expr span (seed parity).
+                let BinaryExpr { op, left, right, span } = n;
+                let li = self.check_expr(left);
+                let ri = self.check_expr(right);
+                let rc = bin_result_cat(op, li.category, ri.category);
+                ExprInfo { category: rc, span: span }
+            }
+            Unary(n) => {
+                let UnaryExpr { op, operand, span } = n;
+                let oi = self.check_expr(operand);
+                let rc = un_result_cat(op, oi.category);
+                ExprInfo { category: rc, span: span }
+            }
             Blk(b) => self.check_block(b),
             If(n) => {
                 let IfExpr { cond, then_block, else_branch, span } = n;
@@ -426,6 +452,68 @@ fn cat_of_name(name: ref String) -> i64 {
 // i64 vs f64 (both NUM) is compatible, reproducing the seed's numeric leniency.
 fn cats_compatible(a: i64, b: i64) -> bool {
     a == b
+}
+
+// The RESULT category of a binary operator given its operand categories (Slice
+// 3). Comparisons and logical connectives always yield BOOL (the seed types
+// them bool regardless of operands, an incomparable-operand pair is a separate
+// InvalidBinaryOp the corpus avoids). Arithmetic / bitwise yield the SHARED
+// operand category when both operands agree on a known category — `n + 1` (NUM)
+// and, polymorphically, `s + s` (STR) — else UNKNOWN so an unknown operand
+// never drives a false mismatch.
+fn bin_result_cat(op: BinOp, l: i64, r: i64) -> i64 {
+    match op {
+        Eq => 1,
+        NotEq => 1,
+        Lt => 1,
+        LtEq => 1,
+        Gt => 1,
+        GtEq => 1,
+        And => 1,
+        Or => 1,
+        Add => same_or_unknown(l, r),
+        Sub => same_or_unknown(l, r),
+        Mul => same_or_unknown(l, r),
+        Div => same_or_unknown(l, r),
+        Mod => same_or_unknown(l, r),
+        BitAnd => same_or_unknown(l, r),
+        BitOr => same_or_unknown(l, r),
+        BitXor => same_or_unknown(l, r),
+        Shl => same_or_unknown(l, r),
+        Shr => same_or_unknown(l, r),
+        Range => 4,
+        RangeInclusive => 4,
+    }
+}
+
+// The shared operand category when both are the SAME known primitive, else
+// UNKNOWN.
+fn same_or_unknown(l: i64, r: i64) -> i64 {
+    if l == r and l <= 3 {
+        return l;
+    }
+    4
+}
+
+// The RESULT category of a unary operator. `-` / `~` on a NUM yield NUM; `not`
+// yields BOOL; `*` (deref) is UNKNOWN (pointee typing is a later slice).
+fn un_result_cat(op: UnaryOp, o: i64) -> i64 {
+    match op {
+        Neg => {
+            if o == 0 {
+                return 0;
+            }
+            4
+        }
+        BitNot => {
+            if o == 0 {
+                return 0;
+            }
+            4
+        }
+        Not => 1,
+        Deref => 4,
+    }
 }
 
 fn zero_span() -> Span {
