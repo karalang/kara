@@ -20632,3 +20632,20 @@ fn test_module_binding_local_shadow_takes_precedence() {
     );
     assert_eq!(out, "7\n100\n");
 }
+
+#[test]
+fn test_module_binding_computed_cross_referencing() {
+    // Parity with tests/codegen.rs::test_e2e_modbind_computed_cross_referencing_initializer
+    // (B-2026-07-11-16). A computed initializer referencing another binding.
+    let out = run_no_errors(
+        "let COUNT: i64 = 42i64;\n\
+         let DOUBLED: i64 = COUNT * 2i64;\n\
+         let TRIPLED: i64 = DOUBLED + COUNT;\n\
+         fn main() {\n\
+             println(COUNT);\n\
+             println(DOUBLED);\n\
+             println(TRIPLED);\n\
+         }",
+    );
+    assert_eq!(out, "42\n84\n126\n");
+}

@@ -129,12 +129,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             }
             let Some((llvm_ty, initializer)) = self.module_binding_init(b) else {
-                // Initializer shape not supported yet — skip emission.
-                // The typechecker rejects any shape outside the permitted
-                // surface earlier (§1280-1297); this arm only fires for
-                // forms slice 10 explicitly defers (special-form
-                // constructors that depend on unfilled wrapper-type
-                // codegen, identifier refs into other bindings, etc.).
+                // Not a foldable const shape. A COMPUTED / cross-referencing
+                // initializer (`let DOUBLED: i64 = COUNT * 2;`) with a declared
+                // type is deferred to `__karac_static_init`: declare a zero
+                // placeholder global and record the initializer to `compile_expr`
+                // there, before `main` (B-2026-07-11-16). Requires the declared
+                // type to size the global; an un-annotated computed binding still
+                // falls through to a skip (the read then errors — a loud
+                // build-time signal, never a silent miscompile).
+                if let Some(ty_expr) = &b.ty {
+                    let placeholder_ty = self.llvm_type_for_type_expr(ty_expr);
+                    if let Some(zero) = basic_zero_const(placeholder_ty) {
+                        let global = self.module.add_global(placeholder_ty, None, &b.name);
+                        global.set_initializer(&zero);
+                        // Non-constant: `__karac_static_init` writes it once,
+                        // even for an immutable `let` (mirrors the Map/Set path).
+                        global.set_constant(false);
+                        global.set_linkage(Linkage::Internal);
+                        self.module_bindings.insert(
+                            b.name.clone(),
+                            ModuleBindingInfo {
+                                global,
+                                llvm_ty: placeholder_ty,
+                                is_mut: b.is_mut,
+                                declared_type: b.ty.clone(),
+                            },
+                        );
+                        self.computed_module_inits
+                            .push((b.name.clone(), b.value.clone()));
+                    }
+                }
                 continue;
             };
             let global = self.module.add_global(llvm_ty, None, &b.name);
@@ -162,7 +186,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // type metadata is available; `main`'s entry emits a forward
         // `call` to it (a valid LLVM reference to an internal fn defined
         // later in the same module).
-        if !self.map_set_module_inits.is_empty() && self.static_init_fn.is_none() {
+        if (!self.map_set_module_inits.is_empty() || !self.computed_module_inits.is_empty())
+            && self.static_init_fn.is_none()
+        {
             let void_ty = self.context.void_type();
             let fn_ty = void_ty.fn_type(&[], false);
             let f = self
@@ -216,6 +242,29 @@ impl<'ctx> super::Codegen<'ctx> {
             let handle = self.build_map_new_handle(&name, is_set);
             if let Some(gp) = global_ptr {
                 self.builder.build_store(gp, handle).unwrap();
+            }
+        }
+
+        // Computed / cross-referencing initializers (B-2026-07-11-16): compile
+        // each stored initializer expr and store it into the binding's global.
+        // `compile_expr` handles `Identifier`→load the referenced global (a prior
+        // binding's value is already in place — declaration order is preserved,
+        // and each store here is visible to a later load) and `Binary`→arithmetic.
+        // Reseed the module-binding side tables once so a referenced binding's
+        // user-type / collection metadata is visible (mirrors the per-binding
+        // reseed the Map/Set loop does).
+        let computed = self.computed_module_inits.clone();
+        if !computed.is_empty() {
+            self.reseed_module_binding_side_tables();
+        }
+        for (name, init) in computed {
+            let global_ptr = self
+                .module_bindings
+                .get(&name)
+                .map(|i| i.global.as_pointer_value());
+            let Some(gp) = global_ptr else { continue };
+            if let Ok(val) = self.compile_expr(&init) {
+                self.builder.build_store(gp, val).unwrap();
             }
         }
         self.builder.build_return(None).unwrap();

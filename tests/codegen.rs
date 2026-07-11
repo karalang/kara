@@ -46329,6 +46329,30 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_modbind_computed_cross_referencing_initializer() {
+        // B-2026-07-11-16: a COMPUTED / cross-referencing module-binding
+        // initializer (`let DOUBLED = COUNT * 2`, referencing another binding) is
+        // not a foldable const shape, so it is deferred to `__karac_static_init`
+        // (compiled via `compile_expr`, stored before `main`). Declaration order
+        // is preserved, so `TRIPLED = DOUBLED + COUNT` sees DOUBLED's computed
+        // value. Matches the interpreter output exactly (run==build parity).
+        let output = run_program(
+            "let COUNT: i64 = 42;\n\
+             let DOUBLED: i64 = COUNT * 2;\n\
+             let TRIPLED: i64 = DOUBLED + COUNT;\n\
+             let SUM: i64 = 2 + 3 * 4;\n\
+             fn main() {\n\
+                 println(COUNT);\n\
+                 println(DOUBLED);\n\
+                 println(TRIPLED);\n\
+                 println(SUM);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "42\n84\n126\n14\n");
+    }
+
+    #[test]
     fn test_e2e_modbind_struct_field_read_annotated() {
         // Uppercase-receiver field access — `CFG.max` / nested
         // `OUTER.inner.field` on a value binding. The parser consumes the

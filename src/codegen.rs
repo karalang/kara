@@ -2582,6 +2582,16 @@ pub(super) struct Codegen<'ctx> {
     /// by `declare_module_bindings`; consumed by
     /// `finalize_module_binding_static_init`.
     pub(crate) map_set_module_inits: Vec<(String, bool)>,
+    /// Module bindings whose initializer is a COMPUTED / cross-referencing
+    /// expression (`let DOUBLED: i64 = COUNT * 2;`, referencing another module
+    /// binding, or any arithmetic the const-shape path can't fold) — the shapes
+    /// `module_binding_init` returns `None` for. Like the Map/Set entries, the
+    /// global is declared as a zero placeholder and the real value is computed
+    /// in `__karac_static_init` (before `main`) by `compile_expr`-ing the stored
+    /// initializer and storing the result — which handles `Identifier`→load the
+    /// referenced global and `Binary`→arithmetic. Declaration order is preserved
+    /// so a binding can reference an earlier one (B-2026-07-11-16).
+    pub(crate) computed_module_inits: Vec<(String, crate::ast::Expr)>,
     /// The synthesized `void __karac_static_init()` function, declared
     /// in `declare_module_bindings` when `map_set_module_inits` is
     /// non-empty so `main`'s entry can emit a forward `call` to it, and
@@ -5831,6 +5841,7 @@ impl<'ctx> Codegen<'ctx> {
             consts: HashMap::new(),
             module_bindings: HashMap::new(),
             map_set_module_inits: Vec::new(),
+            computed_module_inits: Vec::new(),
             static_init_fn: None,
             source_filename: None,
             source_filename_global: None,
