@@ -258,6 +258,27 @@ fn first_witness(
             if reassign_kills_by_reachability(uses, cfg, *cb, *ci, *ub, *ui) {
                 continue;
             }
+            // B-2026-07-11-9: the terminal-`return` consume shape — e.g. the
+            // loop-branch accumulator `while … { if … { return out } … } out`,
+            // whose two mutually-exclusive returns of `out` (the early one and
+            // the tail) pair as (C, U). The consume C sits in a block that
+            // TERMINATES the function (its only successor is the synthetic CFG
+            // exit — a `return <value>`), so there is no C → U path: control
+            // leaves the function on that path, and U runs only when C did not.
+            // With no reuse-after-consume, RC is spurious.
+            //
+            // Excluded — a use U inside a CLOSURE BODY (`closure_body_blocks`):
+            // the body executes at the closure's unknown future invocation, so a
+            // captured value consumed in the terminating outer scope IS a genuine
+            // trigger-2 RC (the closure may run after the consume). Gated to
+            // `Direct`; ClosureCapture / ContainerStore escapes keep firing.
+            if c.consume_origin == ConsumeOrigin::Direct {
+                let succ = &cfg.block(*cb).successors;
+                let c_terminates = !succ.is_empty() && succ.iter().all(|s| *s == cfg.exit);
+                if c_terminates && !cfg.closure_body_blocks.contains(ub) {
+                    continue;
+                }
+            }
             return Some(RcWitness {
                 binding: binding.to_string(),
                 consume_span: c.span.clone(),

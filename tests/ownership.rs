@@ -4383,6 +4383,64 @@ fn slice3_whole_root_capture_does_not_push_borrow_routes_through_rc_fallback() {
 }
 
 #[test]
+fn terminal_return_accumulator_no_rc_fallback() {
+    // B-2026-07-11-9: an accumulator built in a loop and moved out via an early
+    // `return` inside that loop, plus the tail `return`, must NOT trigger an RC
+    // fallback. The two returns of `out` are mutually exclusive — the early one
+    // terminates the function (no fall-through), so there is no reuse after the
+    // consume. Before the fix, the loop-branch `return out` (consume) and the
+    // tail `out` (other use) paired as a spurious DirectReuseAfterConsume.
+    let result = ownership_ok(
+        "fn build(n: i64) -> Vec[i64] {\n\
+        \x20    let mut out: Vec[i64] = Vec.new();\n\
+        \x20    let mut i = 0;\n\
+        \x20    while i < n {\n\
+        \x20        if i == 5 { return out; }\n\
+        \x20        out.push(i);\n\
+        \x20        i = i + 1;\n\
+        \x20    }\n\
+        \x20    out\n\
+        }",
+    );
+    assert!(
+        result
+            .rc_values
+            .get("build")
+            .and_then(|m| m.get("out"))
+            .is_none(),
+        "terminal-return accumulator `out` must NOT be RC-promoted; got: {:?}",
+        result.rc_values.get("build")
+    );
+}
+
+#[test]
+fn closure_capture_with_terminal_outer_consume_still_rc() {
+    // B-2026-07-11-9 guard: the terminal-return suppression must NOT weaken the
+    // genuine closure-capture RC. Here the closure body READS `cfg` (deferred to
+    // an unknown future invocation) and the outer scope's LAST statement consumes
+    // it via `log(cfg)` — a terminal block. The closure use lives in a
+    // `closure_body_blocks` sink, so RC must still fire.
+    let result = ownership_ok(
+        "struct Config { name: i64 }\n\
+         impl Config { fn id(ref self) -> i64 { self.name } }\n\
+         fn log(c: Config) { }\n\
+         fn make_handler(cfg: Config) {\n\
+        \x20    let h = || cfg.id();\n\
+        \x20    log(cfg);\n\
+         }",
+    );
+    let rc = result
+        .rc_values
+        .get("make_handler")
+        .and_then(|m| m.get("cfg"));
+    assert!(
+        rc.is_some(),
+        "closure-capture + terminal outer consume must still RC-promote `cfg`; got: {:?}",
+        result.rc_values.get("make_handler")
+    );
+}
+
+#[test]
 fn slice3_own_capture_does_not_push_borrow_routes_through_rc_fallback() {
     // `Own` paths route through the consume machinery (`Moved` state
     // + RC fallback for outer use), not borrow tracking. Slice 3's

@@ -210,6 +210,10 @@ pub struct Cfg {
     pub blocks: Vec<BasicBlock>,
     pub entry: BlockId,
     pub exit: BlockId,
+    /// B-2026-07-11-9: blocks that belong to a closure BODY (deferred execution).
+    /// A use recorded in one of these can occur at the closure's unknown future
+    /// invocation, so the terminal-return RC suppression excludes it.
+    pub closure_body_blocks: HashSet<BlockId>,
 }
 
 impl Cfg {
@@ -271,6 +275,7 @@ pub fn build_cfg_with_classification<'a>(
         blocks: builder.blocks,
         entry,
         exit,
+        closure_body_blocks: builder.closure_body_blocks,
     }
 }
 
@@ -402,6 +407,14 @@ struct CfgBuilder<'a> {
     /// which is sound for every predicate consumer (see the shadow-frame
     /// doc for the pairing argument).
     seen_names: HashSet<String>,
+    /// B-2026-07-11-9: blocks lowered inside a closure BODY (round 12.11 forks
+    /// the body into a sink block). A closure body executes at an unknown future
+    /// time, so a use recorded here can happen after an outer consume even when
+    /// that consume terminates the function — the terminal-return RC suppression
+    /// must NOT fire for such uses. `closure_depth` counts active closure-body
+    /// lowerings; every block minted while it is non-zero is recorded.
+    closure_body_blocks: HashSet<BlockId>,
+    closure_depth: usize,
 }
 
 impl<'a> CfgBuilder<'a> {
@@ -413,6 +426,8 @@ impl<'a> CfgBuilder<'a> {
             cleanup_rename_stack: Vec::new(),
             next_cleanup_id: 0,
             seen_names: HashSet::new(),
+            closure_body_blocks: HashSet::new(),
+            closure_depth: 0,
         }
     }
 
@@ -545,6 +560,9 @@ impl<'a> CfgBuilder<'a> {
             uses: Vec::new(),
             successors: Vec::new(),
         });
+        if self.closure_depth > 0 {
+            self.closure_body_blocks.insert(id);
+        }
         id
     }
 
@@ -1281,7 +1299,15 @@ impl<'a> CfgBuilder<'a> {
                 let after_creation = self.new_block();
                 self.add_edge(cur, closure_body_block);
                 self.add_edge(cur, after_creation);
+                // Tag the body root + every block minted while lowering `body`
+                // as closure-body (deferred execution). `after_creation` (the
+                // outer continuation) is minted above and stays untagged. Block
+                // IDs keep their original mint order so witness scan order is
+                // unperturbed (B-2026-07-11-9).
+                self.closure_body_blocks.insert(closure_body_block);
+                self.closure_depth += 1;
                 self.lower_expr(body, closure_body_block, exit, loops);
+                self.closure_depth -= 1;
                 after_creation
             }
 
