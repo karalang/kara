@@ -264,13 +264,44 @@ Implement § Parameterized Resources for real and parameterize `Network`:
    for two such statements (`effects_conflict_excluding_network`); a borrow-param
    call stays serial, and any non-`Network` shared resource still conflicts. See
    the `[~]` A2b-2 sub-entry in `phase-5-diagnostics.md` for the full test list.
-3. **Phase 2 = Path B:** the principled parameterized-`Network` implementation,
-   which subsumes Phase 1, covers connection-bound ops, and lands the long-
-   specced parameterized-resource feature generally. Take this on deliberately
-   as its own project — it is the "correct" end-state.
+3. **Phase 2 = Path B**, taken incrementally:
+   - **Slice 1 — associated-fn admission — ✅ SHIPPED 2026-07-11.** The
+     receiver-less openers (`TcpStream.connect` / `TlsStream.connect`, 2-segment
+     `Type.method(...)` with `self_param.is_none()`) fan out via
+     `resolve_assoc_callee`, reusing Phase 1's gates. No new type info needed —
+     an associated fn has no receiver, so it is structurally a free function.
+   - **Slice 2 — METHOD-call admission — SCOPED (empirically) 2026-07-11, NOT
+     yet built; blocked on receiver-type info.** A method's receiver *is* the
+     shared connection, so `a.read(); a.read()` on one stream must serialize
+     while `a.read(); b.read()` on distinct streams may fan out — soundness
+     hinges on proving the two receivers don't alias. Empirical probes settled
+     the landscape: **(i)** Kāra has **no body-level `ref`-binding** (`let b = ref a`
+     is a parse error — borrows are signature-level), so two distinct `let`
+     locals in a body **cannot alias via borrows** — good. **(ii)** BUT a
+     `shared` (RC) receiver aliases via plain assignment: `shared struct Conn` +
+     `let b = a` makes `a`/`b` the *same* object (verified: `a.bump()`→1,
+     `b.bump()`→2, `a.n`→2) and **checks clean** — so distinct roots do NOT imply
+     distinct objects for shared types. **(iii)** A `ref`/`mut ref` *param*
+     receiver may be aliased by the caller (cross-function). The AST-only
+     concurrency pass (`concurrency_analyze(program, effects)` — no type info)
+     cannot detect (ii)/(iii). **Sound Slice 2 therefore requires: a
+     `ref`/`mut ref self` method (borrowed receiver — no consuming-`self`
+     double-drop) + distinct receiver roots + a receiver that is provably
+     NON-shared and NOT a `ref`/`mut ref` param** — the last two need receiver-
+     type info threaded into the pass (a new `&TypeCheckResult`-shaped input
+     across ~10 call sites, several in tests that don't currently typecheck),
+     plus the race-sensitive admission logic and captured-mutation write-back
+     correctness for two mutated receivers in par branches. Failure mode is a
+     silent data race, so it must land with full ASAN + a race-shaped regression
+     suite. A real multi-part slice — schedule as a focused effort, do not rush.
+   - **Slice 3 — full parameterized-`Network`:** the principled end-state that
+     subsumes Slices 1–2, covers borrow-param connection-bound ops generally, and
+     lands the long-specced parameterized-resource feature. The "correct" model;
+     take on deliberately as its own project.
 
-Phase 1 is optional if the flagship value is wanted before Phase 2; Phase 2 is
-the destination either way.
+Phase 1 + Phase 2 Slice 1 already deliver the flagship value (free-fn `http_get`
+fan-out + associated `connect` openers); Slices 2–3 extend reach to method /
+connection-bound ops.
 
 ## 9. Effort / risk
 
