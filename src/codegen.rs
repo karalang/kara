@@ -4114,6 +4114,21 @@ impl<'ctx> Codegen<'ctx> {
             utf8_validate_type,
             Some(Linkage::External),
         );
+        // `karac_runtime_string_to_cstring(data: *const u8, len: usize,
+        //  out_cstr: *mut CString) -> bool`. Backs `String.to_cstring() ->
+        //  Result[CString, NulError]` (design.md § C-String Literals): scans the
+        //  bytes for an interior NUL; on none, allocates a `len + 1` buffer,
+        //  copies the bytes + appends a NUL, writes the owning `{ptr, len,
+        //  cap=len+1}` CString into `out_cstr`, and returns `true`; on an interior
+        //  NUL returns `false` (codegen builds `Err(NulError.InteriorNul)`).
+        let string_to_cstring_type = context
+            .bool_type()
+            .fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
+        let _karac_runtime_string_to_cstring_fn = module.add_function(
+            "karac_runtime_string_to_cstring",
+            string_to_cstring_type,
+            Some(Linkage::External),
+        );
         let response_set_status_type = context
             .void_type()
             .fn_type(&[ptr_type.into(), context.i16_type().into()], false);

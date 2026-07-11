@@ -3815,6 +3815,47 @@ impl<'ctx> super::Codegen<'ctx> {
             self.seeded_enum_names.insert("Utf8Error".to_string());
         }
 
+        // Stdlib `NulError` enum (`runtime/stdlib/nul_error.kara`) — returned in
+        // the `Err` arm of `String.to_cstring(ref self) -> Result[CString,
+        // NulError]` (design.md § C-String Literals). Reaches the typechecker via
+        // `STDLIB_PROGRAMS` but not codegen's `declare_enums`, so seed it — the
+        // `to_cstring` lowering builds `NulError.InteriorNul` on an interior-NUL
+        // reject and needs the layout (same rationale as `Utf8Error`). Tags in
+        // stdlib declaration order: InteriorNul = 0, Other = 1. Widest variant is
+        // `Other(String)` (3 payload words) → 4 i64 words; `Other`'s String drops
+        // via `VecOrString`, the `InteriorNul` variant is unit. The lowering only
+        // ever builds `InteriorNul`, but the full shape keeps user-side `Other`
+        // matching / construction sound.
+        if !self.enum_layouts.contains_key("NulError") {
+            let nul_error_type = self
+                .context
+                .struct_type(&[i64_t, i64_t, i64_t, i64_t], false);
+            let mut tags = HashMap::new();
+            tags.insert("InteriorNul".to_string(), 0u64);
+            tags.insert("Other".to_string(), 1u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("InteriorNul".to_string(), 0usize);
+            field_counts.insert("Other".to_string(), 1usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("InteriorNul".to_string(), Vec::new());
+            field_word_offsets.insert("Other".to_string(), vec![(0, 3usize)]);
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("InteriorNul".to_string(), Vec::new());
+            field_drop_kinds.insert("Other".to_string(), vec![EnumDropKind::VecOrString]);
+            self.enum_layouts.insert(
+                "NulError".to_string(),
+                EnumLayout {
+                    llvm_type: nul_error_type,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.seeded_enum_names.insert("NulError".to_string());
+        }
+
         // Stdlib `AllocError` enum (`runtime/stdlib/alloc_error.kara`) — the
         // `Err` payload of the fallible-allocation API (phase-8 § Fallible
         // Allocation API and OOM Handling). Baked into `STDLIB_PROGRAMS` so the

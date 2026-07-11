@@ -69,6 +69,13 @@ pub enum Value {
     /// representation, so `as_ptr()` is rejected at eval time with a
     /// pointer at compiled mode (see `try_eval_seq_method`'s CStr arm).
     CStr(Arc<Vec<u8>>),
+    /// `CString` — the owning C-string produced by `String.to_cstring()`
+    /// (design.md § C-String Literals, "Owning `CString`"). Bytes exclude the
+    /// trailing NUL, exactly like `CStr`; the ownership distinction that is
+    /// real under `karac build` (heap buffer + `Drop`) is unobservable in the
+    /// tree-walk interpreter, so the representation matches `CStr`. `as_ptr()`
+    /// is likewise rejected at eval time (no raw-pointer representation).
+    CString(Arc<Vec<u8>>),
     Unit,
     /// A `Type` pseudovalue — the comptime-only first-class type value
     /// (deferred.md § Comptime — Types as first-class values). Carries the
@@ -805,6 +812,9 @@ impl std::fmt::Display for Value {
             // at the language level; f-string interpolation rejects it at
             // typecheck via `type_supports_display`).
             Value::CStr(bytes) => write!(f, "{}", String::from_utf8_lossy(bytes)),
+            // Same lossy-UTF-8 debug courtesy as `CStr`; `CString` likewise
+            // does not coerce to String at the language level.
+            Value::CString(bytes) => write!(f, "{}", String::from_utf8_lossy(bytes)),
             Value::Unit => write!(f, "()"),
             // A `Type` pseudovalue renders as its canonical name — a
             // debug courtesy; comptime code reads it via `.name()`.
@@ -1172,6 +1182,7 @@ impl Value {
             Value::Char(_) => "Char",
             Value::String(_) => "String",
             Value::CStr(_) => "CStr",
+            Value::CString(_) => "CString",
             Value::Unit => "Unit",
             Value::TypeVal(_) => "TypeVal",
             Value::AstExpr(_) => "AstExpr",

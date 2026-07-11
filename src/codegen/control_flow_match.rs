@@ -2102,7 +2102,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // payload (`Ok(s)` from `CStr.to_string_slice()`, or a
                     // `String.slice()` result carried through an enum) got the
                     // 1-word default and truncated to just the pointer.
-                    Some("Vec") | Some("VecDeque") | Some("String") | Some("StringSlice") => 3,
+                    // `CString` (design.md § C-String Literals) shares the same
+                    // 3-word `{ptr, len, cap}` owning layout as `String`, so an
+                    // `Ok(cs)` binding from `Result[CString, NulError]` reconstructs
+                    // full-width (without this it took the 1-word default and
+                    // truncated to the pointer).
+                    Some("Vec") | Some("VecDeque") | Some("String") | Some("StringSlice")
+                    | Some("CString") => 3,
                     Some("Slice") => 2,
                     // Shared type (struct OR enum): RC heap pointer = exactly one
                     // word. Must precede the struct/enum arms (see the twin note
@@ -2187,10 +2193,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
-                    // `StringSlice` shares `String`'s `{ptr, len, cap}` shape.
-                    Some("Vec") | Some("VecDeque") | Some("String") | Some("StringSlice") => {
-                        self.vec_struct_type().into()
-                    }
+                    // `StringSlice` shares `String`'s `{ptr, len, cap}` shape;
+                    // `CString` (owning C-string) shares it too.
+                    Some("Vec") | Some("VecDeque") | Some("String") | Some("StringSlice")
+                    | Some("CString") => self.vec_struct_type().into(),
                     Some("Slice") => self.slice_struct_type().into(),
                     // Shared type (struct OR enum): the value is an RC heap
                     // pointer — a single `ptr`, not the inline tagged-union /
@@ -2505,7 +2511,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
         let target_ty: Option<BasicTypeEnum<'ctx>> =
             type_name.as_ref().and_then(|n| match n.as_str() {
-                "String" | "str" | "Vec" | "VecDeque" | "StringSlice" => {
+                "String" | "str" | "Vec" | "VecDeque" | "StringSlice" | "CString" => {
                     Some(self.vec_struct_type().into())
                 }
                 "Slice" => Some(self.slice_struct_type().into()),

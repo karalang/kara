@@ -256,7 +256,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // String binding via enum payload — the layout matches
                     // `Vec[u8]` (`{ptr, len, cap}` shape) so the same
                     // buffer-free cleanup applies. Element type is `u8`.
-                    if type_name == "String" {
+                    //
+                    // An owning `CString` payload (`Ok(cs)` from
+                    // `Result[CString, NulError]`, design.md § C-String Literals)
+                    // is `String`-shaped and owns its heap buffer (`cap > 0`), so
+                    // it takes the SAME `track_vec_var` buffer-free at end-of-arm
+                    // — without it the moved-out CString leaked every iteration
+                    // (its methods still route via the `CString.<method>` key, so
+                    // this is drop-only). `StringSlice` is deliberately excluded
+                    // (a borrow, `cap == 0`, nothing to free).
+                    if type_name == "String" || type_name == "CString" {
                         let u8_ty: BasicTypeEnum<'ctx> = self.context.i8_type().into();
                         self.vec_elem_types.insert(name.clone(), u8_ty);
                         bound_vec_elem = Some(u8_ty);

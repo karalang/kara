@@ -90,6 +90,11 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "VarError",
     "AllocError",
     "Utf8Error",
+    // `NulError` — returned by `String.to_cstring(ref self)` (design.md §
+    // C-String Literals). Stdlib enum in `runtime/stdlib/nul_error.kara`;
+    // scope-0 so the `Result[CString, NulError]` return resolves without an
+    // import, peer to `Utf8Error`.
+    "NulError",
     // Phase-8 entry-point contract Slice B (2026-06-13): `ExitCode`
     // newtype — `distinct type ExitCode = i32`, one of the three legal
     // `main()` return types (design.md § Entry Point). Scope-0 so
@@ -315,9 +320,18 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // surface (stub struct, no public fields) — values only arise from
     // the literal form at v1. Method surface (`as_ptr` / `len` /
     // `is_empty` / `as_bytes`) dispatches through the typechecker's
-    // `infer_cstr_method` arm, not an impl block. The owning `CString`
-    // joins this list when its Phase-8 slice lands.
+    // `infer_cstr_method` arm, not an impl block.
     "CStr",
+    // `CString` — the owning, heap-allocated C-string (design.md §
+    // C-String Literals, "Owning `CString`"). The `String`↔`CStr` analog:
+    // `CString` owns a `{ptr, len, cap}` buffer with a guaranteed trailing
+    // NUL (`len` excludes it, `cap == len + 1`), drops normally via the
+    // String buffer-free machinery, and `.as_ptr()` hands out the NUL-
+    // terminated pointer for FFI. Constructed by `String.to_cstring(ref
+    // self) -> Result[CString, NulError]`; no literal form. Method surface
+    // (`as_ptr` / `len` / `is_empty` / `as_bytes`) dispatches through the
+    // typechecker's `infer_cstring_method` arm, not an impl block.
+    "CString",
 ];
 
 /// Operator and conversion trait names visible without import. Lets
@@ -708,6 +722,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "utf8_error.kara",
         include_str!("../runtime/stdlib/utf8_error.kara"),
+    ),
+    (
+        "nul_error.kara",
+        include_str!("../runtime/stdlib/nul_error.kara"),
     ),
     // Phase-8 entry-point contract Slice B: `ExitCode` newtype, one of
     // the three legal `main()` return types. `distinct type = i32`;

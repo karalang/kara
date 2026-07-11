@@ -144,6 +144,45 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
+            // `String.to_cstring(ref self) -> Result[CString, NulError]`
+            // (design.md § C-String Literals). Copies the receiver's bytes into
+            // a fresh owning `CString` buffer with an appended trailing NUL —
+            // unless the receiver carries an interior NUL byte, which C would
+            // truncate at, in which case it is `Err(NulError.InteriorNul)`. The
+            // outbound counterpart of `CStr.to_string()`; both cross the
+            // UTF-8 ↔ C-bytes boundary explicitly (no coercion). Codegen lowers
+            // it via `karac_runtime_string_to_cstring`; the interpreter scans for
+            // an interior NUL and yields a `Value::CString`.
+            "to_cstring" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "'to_cstring' takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                // Record the `String.to_cstring` callee so codegen routes it
+                // precisely (the same hardcoded-arm pattern as `CStr.<method>`),
+                // rather than by method name alone — which would hijack a user
+                // type's own `to_cstring` method.
+                self.method_callee_types.insert(
+                    crate::resolver::SpanKey::from_span(span),
+                    "String.to_cstring".to_string(),
+                );
+                Type::Named {
+                    name: "Result".to_string(),
+                    args: vec![
+                        Type::Named {
+                            name: "CString".to_string(),
+                            args: vec![],
+                        },
+                        Type::Named {
+                            name: "NulError".to_string(),
+                            args: vec![],
+                        },
+                    ],
+                }
+            }
             // Length / emptiness predicates — runtime ships these and the
             // interpreter dispatches them; the typechecker enumeration was
             // catching up per the source comment below. Surfaced 2026-05-22
@@ -804,6 +843,64 @@ impl<'a> super::TypeChecker<'a> {
                     "to_string",
                     "to_string_slice",
                 ],
+                args,
+                span,
+            ),
+        }
+    }
+
+    /// Infer the return type of a method call on the owning `CString`
+    /// (design.md § C-String Literals, "Owning `CString`"). Same introspection
+    /// surface as the borrowed `CStr` — `as_ptr` (`*const u8` at the buffer's
+    /// NUL-terminated bytes), `len` / `is_empty` / `as_bytes` reporting the
+    /// source bytes excluding the trailing NUL — but no `to_string` /
+    /// `to_string_slice` (those convert C bytes back to UTF-8; a `CString` is
+    /// already an owned buffer the programmer built from a `String`, so the
+    /// round-trip has no use here). The distinction from `CStr` is ownership,
+    /// not surface: a `CString` owns its heap buffer and drops it, whereas a
+    /// `CStr` borrows.
+    pub(super) fn infer_cstring_method(
+        &mut self,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let require_no_args = |s: &mut Self, name: &str| {
+            if !args.is_empty() {
+                s.type_error(
+                    format!("'{}' takes no arguments", name),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+            }
+        };
+        match method {
+            "as_ptr" => {
+                require_no_args(self, "as_ptr");
+                Type::Pointer {
+                    is_mut: false,
+                    inner: Box::new(Type::UInt(UIntSize::U8)),
+                }
+            }
+            "len" => {
+                require_no_args(self, "len");
+                Type::Int(IntSize::I64)
+            }
+            "is_empty" => {
+                require_no_args(self, "is_empty");
+                Type::Bool
+            }
+            "as_bytes" => {
+                require_no_args(self, "as_bytes");
+                Type::Slice {
+                    element: Box::new(Type::UInt(UIntSize::U8)),
+                    mutable: false,
+                }
+            }
+            _ => self.require_known_method(
+                "CString",
+                method,
+                &["as_bytes", "as_ptr", "is_empty", "len"],
                 args,
                 span,
             ),

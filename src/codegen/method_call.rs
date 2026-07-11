@@ -675,6 +675,26 @@ impl<'ctx> super::Codegen<'ctx> {
             if key.as_str() == "CStr.to_string_slice" {
                 return self.compile_cstr_to_string_slice(object);
             }
+            // `CString` method dispatch (design.md § C-String Literals, owning
+            // form). The receiver compiles to the `{ptr, len, cap}` String-shaped
+            // aggregate `to_cstring` built; `as_ptr` / `len` / `is_empty` extract
+            // fields 0/1 exactly like `CStr`, but `as_bytes` must rebuild a 2-word
+            // `Slice[u8]` from ptr+len (the receiver is 3 words, not a slice), so
+            // `CString` gets its own helper.
+            if matches!(
+                key.as_str(),
+                "CString.as_ptr" | "CString.len" | "CString.is_empty" | "CString.as_bytes"
+            ) {
+                return self.compile_cstring_method(object, method);
+            }
+            // `String.to_cstring() -> Result[CString, NulError]` — the outbound
+            // conversion (copy + trailing NUL, interior-NUL reject). Keyed off the
+            // typechecker-recorded `String.to_cstring` so a user type's own
+            // `to_cstring` method (resolved through the impl path) is never
+            // hijacked.
+            if key.as_str() == "String.to_cstring" {
+                return self.compile_string_to_cstring(object);
+            }
         }
 
         // Phase 6 line 17 — stdlib `TcpListener` / `TcpStream`
@@ -7570,6 +7590,164 @@ impl<'ctx> super::Codegen<'ctx> {
                 method
             )),
         }
+    }
+
+    /// Lower a `CString` borrowed-surface method (design.md § C-String
+    /// Literals, "Owning `CString`"). The receiver is the `{ptr, len, cap}`
+    /// String-shaped aggregate `to_cstring` produced (field 0 the
+    /// NUL-terminated heap pointer, field 1 the source byte count excluding the
+    /// NUL, field 2 the capacity `len + 1`). `as_ptr` hands out field 0 (the
+    /// FFI handoff); `len` / `is_empty` read field 1. Unlike `CStr.as_bytes`
+    /// (whose receiver *is* a 2-word `{ptr, i64}` slice, returned unchanged),
+    /// `CString.as_bytes` rebuilds a fresh `Slice[u8]` `{ptr, len}` from fields
+    /// 0/1 — the 3-word owning aggregate is not itself slice-shaped. Args are
+    /// validated empty by `infer_cstring_method`.
+    fn compile_cstring_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let recv = self.compile_expr(object)?;
+        let agg = recv.into_struct_value();
+        match method {
+            "as_ptr" => Ok(self
+                .builder
+                .build_extract_value(agg, 0, "cstring.as_ptr")
+                .unwrap()),
+            "len" => Ok(self
+                .builder
+                .build_extract_value(agg, 1, "cstring.len")
+                .unwrap()),
+            "is_empty" => {
+                let len = self
+                    .builder
+                    .build_extract_value(agg, 1, "cstring.len")
+                    .unwrap()
+                    .into_int_value();
+                let zero = self.context.i64_type().const_zero();
+                Ok(self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, len, zero, "cstring.is_empty")
+                    .unwrap()
+                    .into())
+            }
+            "as_bytes" => {
+                let data = self
+                    .builder
+                    .build_extract_value(agg, 0, "cstring.ab.ptr")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_extract_value(agg, 1, "cstring.ab.len")
+                    .unwrap();
+                let slice_ty = self.slice_struct_type();
+                let with_ptr = self
+                    .builder
+                    .build_insert_value(slice_ty.get_undef(), data, 0, "cstring.ab.p")
+                    .unwrap();
+                let slice = self
+                    .builder
+                    .build_insert_value(with_ptr, len, 1, "cstring.ab.l")
+                    .unwrap();
+                Ok(slice.into_struct_value().into())
+            }
+            _ => Err(format!(
+                "codegen: no handler for CString method '{}' (typechecker admits \
+                 as_ptr/len/is_empty/as_bytes only — this is a codegen bug)",
+                method
+            )),
+        }
+    }
+
+    /// Lower `String.to_cstring(ref self) -> Result[CString, NulError]`
+    /// (design.md § C-String Literals). The receiver `{ptr, len, cap}` is only
+    /// READ (its bytes are copied into a fresh NUL-terminated buffer), so the
+    /// caller's `String` keeps its own scope-exit drop — no ownership transfer,
+    /// mirroring `CStr.to_string`. The runtime extern
+    /// `karac_runtime_string_to_cstring` scans for an interior NUL and either
+    /// writes an owning `CString` (`{ptr, len, cap=len+1}`) into an out-slot and
+    /// returns `true`, or returns `false` (interior NUL found). Codegen owns the
+    /// enum-tag assignment: `Result.Ok(CString)` on success, else
+    /// `Result.Err(NulError.InteriorNul)`. Structural twin of
+    /// `build_utf8_validated_result`.
+    pub(super) fn compile_string_to_cstring(
+        &mut self,
+        object: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let recv = self.compile_expr(object)?;
+        let agg = recv.into_struct_value();
+        let data_ptr = self
+            .builder
+            .build_extract_value(agg, 0, "tocstr.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let data_len = self
+            .builder
+            .build_extract_value(agg, 1, "tocstr.len")
+            .unwrap()
+            .into_int_value();
+
+        let cstring_ty = self.vec_struct_type();
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "codegen: String.to_cstring called outside a function".to_string())?;
+        let out_cstr = self.create_entry_alloca(fn_val, "tocstr.out", cstring_ty.into());
+
+        let f = self
+            .module
+            .get_function("karac_runtime_string_to_cstring")
+            .expect("karac_runtime_string_to_cstring declared in Codegen::new");
+        let ok = self
+            .builder
+            .build_call(
+                f,
+                &[data_ptr.into(), data_len.into(), out_cstr.into()],
+                "tocstr.ok",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // Result llvm-type copied out before any `&mut self` enum builder call.
+        let result_ty = self
+            .enum_layouts
+            .get("Result")
+            .map(|l| l.llvm_type)
+            .ok_or_else(|| "codegen: Result enum layout missing (codegen bug)".to_string())?;
+
+        let ok_bb = self.context.append_basic_block(fn_val, "tocstr.okbb");
+        let err_bb = self.context.append_basic_block(fn_val, "tocstr.errbb");
+        let merge_bb = self.context.append_basic_block(fn_val, "tocstr.merge");
+        self.builder
+            .build_conditional_branch(ok, ok_bb, err_bb)
+            .unwrap();
+
+        // Ok arm: Result.Ok(<owning CString the runtime wrote into out_cstr>).
+        // The Result payload words reinterpret the 3-word CString inline, exactly
+        // as the `Result[String, Utf8Error]` Ok arm reinterprets a String.
+        self.builder.position_at_end(ok_bb);
+        let cstr_val = self
+            .builder
+            .build_load(cstring_ty, out_cstr, "tocstr.load")
+            .unwrap();
+        let ok_val = self.build_nonshared_enum_value("Result", "Ok", &[cstr_val])?;
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let ok_end = self.builder.get_insert_block().unwrap();
+
+        // Err arm: Result.Err(NulError.InteriorNul) — the only failure the
+        // runtime signals (`ok == false` ⇔ interior NUL).
+        self.builder.position_at_end(err_bb);
+        let nul_err = self.build_nonshared_enum_value("NulError", "InteriorNul", &[])?;
+        let err_val = self.build_nonshared_enum_value("Result", "Err", &[nul_err])?;
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        let err_end = self.builder.get_insert_block().unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        let phi = self.builder.build_phi(result_ty, "tocstr.result").unwrap();
+        phi.add_incoming(&[(&ok_val, ok_end), (&err_val, err_end)]);
+        Ok(phi.as_basic_value())
     }
 
     /// Lower `CStr.to_string() -> Result[String, Utf8Error]` (phase-12

@@ -22012,6 +22012,88 @@ fn cstr_as_ptr_feeds_pointer_param_extern_call() {
     );
 }
 
+// ── Owning CString + String.to_cstring (Phase 8 — design.md § C-String
+//    Literals, "Owning `CString`") ──
+
+#[test]
+fn string_to_cstring_types_as_result_cstring_nulerror() {
+    // The outbound conversion returns an OWNING `CString` (analog of Rust's
+    // owning `CString`), fallible with `NulError`; the annotation pins the shape.
+    typecheck_ok(
+        "fn main() {\n    let r: Result[CString, NulError] = \"hi\".to_cstring();\n    let _ = r;\n}",
+    );
+}
+
+#[test]
+fn cstring_methods_type_correctly() {
+    // Same introspection surface as `CStr`: `as_ptr -> *const u8`, `len -> i64`,
+    // `is_empty -> bool`, `as_bytes -> Slice[u8]`.
+    typecheck_ok(
+        "fn main() {\n\
+         \x20   match \"hi\".to_cstring() {\n\
+         \x20       Ok(cs) => {\n\
+         \x20           let p: *const u8 = cs.as_ptr();\n\
+         \x20           let n: i64 = cs.len();\n\
+         \x20           let e: bool = cs.is_empty();\n\
+         \x20           let b: Slice[u8] = cs.as_bytes();\n\
+         \x20           let _ = (p, n, e, b);\n\
+         \x20       }\n\
+         \x20       Err(_) => {}\n\
+         \x20   }\n\
+         }",
+    );
+}
+
+#[test]
+fn to_cstring_rejects_arguments() {
+    let errors = typecheck_errors("fn main() {\n    let _ = \"x\".to_cstring(1);\n}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs),
+        "expected WrongNumberOfArgs, got: {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cstring_unknown_method_is_no_method_found_with_candidates() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+         \x20   match \"x\".to_cstring() {\n\
+         \x20       Ok(cs) => { cs.to_uppercase(); }\n\
+         \x20       Err(_) => {}\n\
+         \x20   }\n\
+         }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::NoMethodFound)
+        .map(|e| e.message.clone())
+        .expect("expected NoMethodFound diagnostic");
+    assert!(
+        msg.contains("CString"),
+        "diagnostic should name the CString receiver type: {msg}"
+    );
+}
+
+#[test]
+fn cstring_as_ptr_feeds_pointer_param_extern_call() {
+    // The motivating FFI shape: a runtime-built String → CString → as_ptr into a
+    // pointer-param host fn (the CString analog of the CStr `(ptr, len)` test).
+    typecheck_ok(
+        "effect resource Reporter;\n\
+         host fn report_ptr(ptr: *const u8) with writes(Reporter);\n\
+         pub fn main() with writes(Reporter) {\n\
+         \x20   let s = \"a\" + \"b\";\n\
+         \x20   match s.to_cstring() {\n\
+         \x20       Ok(cs) => report_ptr(cs.as_ptr()),\n\
+         \x20       Err(_) => {}\n\
+         \x20   }\n\
+         }",
+    );
+}
+
 // ── CStr.from_ptr — inbound raw-pointer constructor (LLVM-C FFI sub-q 4)
 
 #[test]

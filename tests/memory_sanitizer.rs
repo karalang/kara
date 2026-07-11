@@ -417,6 +417,54 @@ fn main() {
     }
 
     #[test]
+    fn asan_string_to_cstring_owning_buffer_freed_once() {
+        // `String.to_cstring()` returns an OWNING `CString` (`{ptr, len,
+        // cap=len+1}`, heap buffer + trailing NUL). Unlike the borrowed
+        // `to_string_slice` view, its `cap > 0` buffer MUST be freed exactly once
+        // at the `Ok(cs)` binding's scope exit — LSan catches a leak, ASan a
+        // double-free / use-after-free. Loop over a runtime-built (concatenated)
+        // String so any per-iteration leak/double-free accumulates and trips the
+        // sanitizer. The interior-NUL `Err` arm allocates nothing and must be
+        // leak-clean too.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let s = "cs-" + "buf";
+        match s.to_cstring() {
+            Ok(cs) => {
+                println(cs.len());
+                let b = cs.as_bytes();
+                println(b[0]);
+            }
+            Err(_) => println("ERR"),
+        }
+        let bad = "x\u{0}y";
+        match bad.to_cstring() {
+            Ok(_) => println("OK?"),
+            Err(_) => println("interior-nul"),
+        }
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "6",
+                "99",
+                "interior-nul",
+                "6",
+                "99",
+                "interior-nul",
+                "6",
+                "99",
+                "interior-nul",
+            ],
+            "asan_string_to_cstring_owning_buffer_freed_once",
+        );
+    }
+
+    #[test]
     fn asan_std_cmp_min_max_clamp_heap_ord_no_leak() {
         // roadmap Phase 8 § std.cmp — `min`/`max`/`clamp` are generic stdlib
         // free fns monomorphized on demand from `ordering.kara`. Over a

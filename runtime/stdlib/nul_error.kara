@@ -1,0 +1,19 @@
+// runtime/stdlib/nul_error.kara
+//
+// Error type returned by `String.to_cstring(ref self)` (design.md §
+// C-String Literals). A C string is bounded by its first NUL byte, so a
+// `String` carrying an interior NUL cannot be handed to C without silent
+// truncation — `to_cstring` rejects it with `NulError.InteriorNul`.
+//
+// Variant set mirrors the Kāra-idiomatic minimalism of `utf8_error.kara`
+// (the peer error for the inbound `CStr.to_string()` direction): a single
+// actionable failure mode plus a catch-all `Other` matching the `IoError`
+// shape for forward-compatibility. Rust's `std::ffi::NulError` also carries
+// the byte offset + the consumed bytes; Kāra deliberately drops that detail
+// here, exactly as `Utf8Error` drops `std::str::Utf8Error`'s offset. Lives
+// in the prelude so it does not need an import.
+
+enum NulError {
+    InteriorNul,
+    Other(String),
+}

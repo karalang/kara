@@ -1138,6 +1138,38 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `String.to_cstring(ref self) -> Result[CString, NulError]` (design.md
+        // § C-String Literals). The outbound conversion: copy the receiver's
+        // UTF-8 bytes into an owning `CString` (a trailing NUL is a compiled-
+        // mode buffer detail — `Value::CString` carries the NUL-excluded bytes,
+        // like `Value::CStr`), unless the receiver holds an interior NUL byte,
+        // which C would truncate at → `Err(NulError.InteriorNul)`. Mirrors the
+        // codegen `karac_runtime_string_to_cstring` reject rule.
+        if method == "to_cstring" {
+            if let Value::String(ref s) = obj {
+                let bytes = s.as_bytes();
+                return if bytes.contains(&0) {
+                    Value::EnumVariant {
+                        enum_name: "Result".to_string(),
+                        variant: "Err".to_string(),
+                        data: EnumData::Tuple(vec![Value::EnumVariant {
+                            enum_name: "NulError".to_string(),
+                            variant: "InteriorNul".to_string(),
+                            data: EnumData::Unit,
+                        }]),
+                    }
+                } else {
+                    Value::EnumVariant {
+                        enum_name: "Result".to_string(),
+                        variant: "Ok".to_string(),
+                        data: EnumData::Tuple(vec![Value::CString(std::sync::Arc::new(
+                            bytes.to_vec(),
+                        ))]),
+                    }
+                };
+            }
+        }
+
         // `CStr.to_string() -> Result[String, Utf8Error]` and its zero-copy
         // sibling `CStr.to_string_slice() -> Result[StringSlice, Utf8Error]` —
         // both UTF-8-validating, and MUST precede the generic Display

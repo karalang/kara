@@ -3165,6 +3165,19 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `CString` method dispatch — the owning C-string produced by
+        // `String.to_cstring()` (design.md § C-String Literals). Same hardcoded-
+        // arm pattern as `CStr`: record the `CString.<method>` callee so codegen
+        // routes it (no impl block backs the type), then infer via
+        // `infer_cstring_method` (`as_ptr` / `len` / `is_empty` / `as_bytes`).
+        if let Type::Named { name, .. } = &obj_ty_for_named {
+            if name == "CString" {
+                self.method_callee_types
+                    .insert(SpanKey::from_span(span), format!("CString.{}", method));
+                return self.infer_cstring_method(method, args, span);
+            }
+        }
+
         // `Client` / `Response` / `HttpError` / `RequestBuilder` method dispatch.
         if let Type::Named { name, .. } = &obj_ty_for_named {
             if matches!(

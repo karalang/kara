@@ -11792,6 +11792,90 @@ pub fn main() with writes(Console) {
     }
 
     #[test]
+    fn test_e2e_string_to_cstring_len_bytes_and_is_empty() {
+        // `String.to_cstring() -> Result[CString, NulError]` (design.md §
+        // C-String Literals, "Owning `CString`"). Ok path: the owning CString's
+        // introspection surface (`len` excludes the trailing NUL, `as_bytes`
+        // yields the source bytes, `is_empty`) matches `CStr`. Interpreter parity:
+        // tests/interpreter.rs::test_string_to_cstring_ok_len_and_bytes.
+        let src = r#"
+fn main() {
+    let s = "hello";
+    match s.to_cstring() {
+        Ok(cs) => {
+            println(cs.len());
+            let b = cs.as_bytes();
+            println(b[0]);
+            println(b[4]);
+            if cs.is_empty() { println("empty"); } else { println("non-empty"); }
+        }
+        Err(_) => println("ERR"),
+    }
+    let empty = "";
+    match empty.to_cstring() {
+        Ok(cs) => { println(cs.len()); if cs.is_empty() { println("empty"); } }
+        Err(_) => println("ERR"),
+    }
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "5\n104\n111\nnon-empty\n0\nempty\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_to_cstring_interior_nul_is_err() {
+        // A String with an interior NUL byte cannot become a CString (the C side
+        // would truncate at it) → `Err(NulError.InteriorNul)`. Parity with
+        // tests/interpreter.rs::test_string_to_cstring_interior_nul_is_err.
+        let src = r#"
+fn main() {
+    let s = "ab\u{0}cd";
+    match s.to_cstring() {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            NulError.InteriorNul => println("INTERIOR_NUL"),
+            NulError.Other(m) => println(m),
+        },
+    }
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "INTERIOR_NUL\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_to_cstring_as_ptr_feeds_libc_puts() {
+        // The motivating use case CString exists for (design.md § C-String
+        // Literals): hand a RUNTIME-CONSTRUCTED string to a C function. Unlike
+        // the `c"..."` literal (rodata), the buffer here is built at run time
+        // (concatenation), so it needs the owning `CString` + its appended NUL.
+        // Build → to_cstring → as_ptr → libc `puts` → link → run.
+        let src = r#"
+effect resource Console;
+
+unsafe extern "C" {
+    fn puts(s: *const u8) -> i32 with writes(Console);
+}
+
+pub fn main() with writes(Console) {
+    let s = "hello, " + "world";
+    match s.to_cstring() {
+        Ok(cs) => { puts(cs.as_ptr()); }
+        Err(_) => { println("ERR"); }
+    }
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "hello, world\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_extern_link_name_binds_foreign_symbol() {
         // `#[link_name("strlen")]` redirects the emitted symbol from the
         // Kāra fn name (`measure`) to the foreign symbol (`strlen`), so a

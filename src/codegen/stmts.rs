@@ -1960,6 +1960,18 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.string_vars.insert(var_name.clone());
                             detected = true;
                         }
+                        // An owning `CString` binding (design.md § C-String
+                        // Literals) is `String`-shaped and owns its `{ptr, len,
+                        // cap}` buffer, so it takes the same `string_vars`
+                        // buffer-free drop at scope exit. Its method surface
+                        // (`as_ptr`/`len`/`is_empty`/`as_bytes`) routes via the
+                        // typechecker-recorded `CString.<method>` dispatch key, so
+                        // `string_vars` membership here is drop-only (no String
+                        // method is admitted on a `CString`).
+                        if Self::is_cstring_type_expr(te) {
+                            self.string_vars.insert(var_name.clone());
+                            detected = true;
+                        }
                         if let Some(elem_ty) = self.extract_slice_elem_type(te) {
                             self.slice_elem_types.insert(var_name.clone(), elem_ty);
                             if let Some(inner) = slice_inner_type_expr(te) {
@@ -2034,6 +2046,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.var_elem_type_exprs.insert(var_name.clone(), elem_te);
                                     detected = true;
                                 }
+                            } else if surface == "CString" {
+                                // Inferred owning-`CString` binding (`let cs =
+                                // s.to_cstring().unwrap();`). String-shaped +
+                                // owns its buffer, so it takes the same
+                                // `string_vars` scope-exit buffer-free as a
+                                // `String`; unlike `StringSlice` its `cap > 0`, so
+                                // the free actually runs. Drop-only membership —
+                                // its methods route via the `CString.<method>`
+                                // dispatch key.
+                                self.string_vars.insert(var_name.clone());
+                                detected = true;
                             } else if surface == "String" || surface == "StringSlice" {
                                 // Inferred-String bindings (`let r = lcp(strs);`,
                                 // `let r = strs[0];` where the element is String)

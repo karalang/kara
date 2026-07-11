@@ -17448,6 +17448,93 @@ fn main() {
     assert_eq!(out, "hello\nINVALID\n");
 }
 
+// ── Owning CString + String.to_cstring (Phase 8 — design.md § C-String
+//    Literals, "Owning `CString`") ──
+//
+// `to_cstring` copies a String into an owning `CString` unless it holds an
+// interior NUL (→ `Err(NulError.InteriorNul)`). The introspection surface
+// (`len`/`is_empty`/`as_bytes`) matches `CStr`; `as_ptr` is rejected at eval
+// time (no raw pointers in the tree-walk). Codegen parity is pinned by
+// `tests/codegen.rs::test_e2e_string_to_cstring_*`.
+
+#[test]
+fn test_string_to_cstring_ok_len_and_bytes() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let s = "hello";
+    match s.to_cstring() {
+        Ok(cs) => {
+            println(cs.len());
+            let b = cs.as_bytes();
+            println(b[0]);
+            println(b[4]);
+            if cs.is_empty() { println("empty"); } else { println("non-empty"); }
+        }
+        Err(_) => println("ERR"),
+    }
+}
+"#,
+    );
+    assert_eq!(out, "5\n104\n111\nnon-empty\n");
+}
+
+#[test]
+fn test_string_to_cstring_len_excludes_nul_counts_utf8_bytes() {
+    // Mirrors the `CStr.len()` rule: byte count, NUL excluded; `café` is 5.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let s = "caf\u{e9}";
+    match s.to_cstring() {
+        Ok(cs) => println(cs.len()),
+        Err(_) => println("ERR"),
+    }
+}
+"#,
+    );
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn test_string_to_cstring_interior_nul_is_err() {
+    // A String carrying an interior NUL cannot become a CString (C truncates).
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let s = "ab\u{0}cd";
+    match s.to_cstring() {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            NulError.InteriorNul => println("INTERIOR_NUL"),
+            NulError.Other(m) => println(m),
+        },
+    }
+}
+"#,
+    );
+    assert_eq!(out, "INTERIOR_NUL\n");
+}
+
+#[test]
+fn test_string_to_cstring_empty_is_ok_empty() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let s = "";
+    match s.to_cstring() {
+        Ok(cs) => {
+            println(cs.len());
+            if cs.is_empty() { println("empty"); } else { println("non-empty"); }
+        }
+        Err(_) => println("ERR"),
+    }
+}
+"#,
+    );
+    assert_eq!(out, "0\nempty\n");
+}
+
 // ── Tensor[T, Shape] interpreter MVP (Phase 11) ─────────────────────
 
 #[test]

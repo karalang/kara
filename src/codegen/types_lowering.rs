@@ -955,6 +955,18 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// The OWNING `CString` type (design.md § C-String Literals). Unlike the
+    /// borrowed `CStr`, it owns a `{ptr, len, cap}` heap buffer (`cap == len +
+    /// 1`, trailing NUL) that must be freed at scope exit — hence a distinct
+    /// predicate from [`Self::is_cstr_type_expr`], used at binding-registration
+    /// sites to give a `CString` local the same buffer-free drop as a `String`.
+    pub(super) fn is_cstring_type_expr(te: &TypeExpr) -> bool {
+        matches!(
+            &te.kind,
+            TypeKind::Path(path) if path.segments.last().map(|s| s.as_str()) == Some("CString")
+        )
+    }
+
     /// Extract the key type name string from a `Map[K, V]` type expression.
     /// Returns a canonical mangled name suitable for `karac_hash_<name>` —
     /// path segment for named types, `tuple_T1_T2_…_Tn` for tuples (recursive).
@@ -1700,7 +1712,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // `cap == 0` (a non-owning borrow, so scope-exit drop's `cap > 0`
             // guard no-ops). design.md § StringSlice. Reusing the String shape
             // lets every String read-method lower unchanged on a StringSlice.
-            "String" | "str" | "StringSlice" | "VecDeque" | "Vec" => self.vec_struct_type().into(),
+            // `CString` (design.md § C-String Literals) is an OWNING C-string:
+            // a `{ptr, len, cap}` buffer identical in shape to `String`, with a
+            // guaranteed trailing NUL past `len` and `cap == len + 1`. Sharing
+            // the String shape lets it drop via the same `VecOrString` buffer
+            // free and lets every `{ptr,len,cap}` read-method lower unchanged.
+            "String" | "str" | "StringSlice" | "VecDeque" | "Vec" | "CString" => {
+                self.vec_struct_type().into()
+            }
             // Slice 8z: `pattern_binding_types` records the canonical
             // `"Slice"` surface name for `Type::Slice` parameters /
             // bindings (typechecker `record_pattern_inner_type` arm). The

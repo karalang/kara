@@ -35,9 +35,11 @@ impl<'a> super::Interpreter<'a> {
                     Value::Array(rc) => Value::Int(rc.read().unwrap().len() as i64),
                     Value::Slice { len, .. } => Value::Int(*len as i64),
                     Value::String(s) => Value::Int(s.len() as i64),
-                    // `CStr.len()` — source byte count, excluding the
-                    // trailing NUL (design.md § C-String Literals).
+                    // `CStr.len()` / `CString.len()` — source byte count,
+                    // excluding the trailing NUL (design.md § C-String
+                    // Literals). Both carry NUL-excluded bytes.
                     Value::CStr(b) => Value::Int(b.len() as i64),
+                    Value::CString(b) => Value::Int(b.len() as i64),
                     Value::Map(m) => Value::Int(m.len() as i64),
                     Value::SortedSet(s) => Value::Int(s.len() as i64),
                     Value::SortedMap(m) => Value::Int(m.len() as i64),
@@ -561,6 +563,9 @@ impl<'a> super::Interpreter<'a> {
                 if let Value::CStr(ref b) = obj {
                     return Some(Value::Bool(b.is_empty()));
                 }
+                if let Value::CString(ref b) = obj {
+                    return Some(Value::Bool(b.is_empty()));
+                }
             }
             "as_bytes" => {
                 // `CStr.as_bytes() -> Slice[u8]` — the N source bytes,
@@ -569,6 +574,17 @@ impl<'a> super::Interpreter<'a> {
                 // `String.bytes()` above (the return type is read-only
                 // `Slice[u8]`, so the copy is unobservable).
                 if let Value::CStr(ref b) = obj {
+                    let items: Vec<Value> = b.iter().map(|b| Value::Int(*b as i64)).collect();
+                    let len = items.len();
+                    return Some(Value::Slice {
+                        storage: Arc::new(std::sync::RwLock::new(items)),
+                        start: 0,
+                        len,
+                        mutable: false,
+                    });
+                }
+                // `CString.as_bytes()` — same NUL-excluded byte view as `CStr`.
+                if let Value::CString(ref b) = obj {
                     let items: Vec<Value> = b.iter().map(|b| Value::Int(*b as i64)).collect();
                     let len = items.len();
                     return Some(Value::Slice {
@@ -589,13 +605,15 @@ impl<'a> super::Interpreter<'a> {
                 // scope: the interpreter validates semantics; raw-pointer
                 // identity is a compiled-mode (memory representation)
                 // concern.
-                if let Value::CStr(_) = obj {
+                if let Value::CStr(_) | Value::CString(_) = obj {
                     panic!(
-                        "CStr.as_ptr() at {}:{} is not supported under `karac run`: \
+                        "{}.as_ptr() at {}:{} is not supported under `karac run`: \
                          the tree-walk interpreter has no raw-pointer representation \
                          (pointers exist for FFI/host-fn boundaries, which interpreted \
                          mode cannot call). Compile with `karac build` instead.",
-                        span.line, span.column
+                        obj.variant_name(),
+                        span.line,
+                        span.column
                     );
                 }
             }

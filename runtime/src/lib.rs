@@ -4592,6 +4592,64 @@ pub unsafe extern "C" fn karac_runtime_utf8_validate(
     }
 }
 
+/// `String.to_cstring(ref self) -> Result[CString, NulError]` codegen backing
+/// (design.md § C-String Literals). The outbound counterpart of
+/// `karac_runtime_cstr_to_string`. Scans `[data, data+len)` for an interior NUL
+/// byte — a C string is bounded by its first NUL, so an interior one would
+/// silently truncate the value; that case returns `false` (the caller builds
+/// `Err(NulError.InteriorNul)`). Otherwise it allocates a `len + 1` buffer,
+/// copies the `len` source bytes, appends the terminating NUL, and writes the
+/// owning CString (`{data, len, cap = len + 1}` — the `RuntimeKaracString`
+/// shape, `cap > 0` so the Kāra-side `Drop` frees it via the matching
+/// allocator) into `*out_cstr`, returning `true`. An empty input still
+/// allocates the 1-byte NUL buffer so `as_ptr()` yields a valid terminated
+/// pointer (and `cap == 1` keeps it drop-freed — no leak).
+///
+/// The bytes are only READ and COPIED, so the caller's source `String` keeps
+/// its own scope-exit drop (no ownership transfer), mirroring
+/// `karac_runtime_cstr_to_string`.
+///
+/// # Safety
+/// `out_cstr` must be a valid, writable pointer. `data` may be null only when
+/// `len == 0` (the empty string).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_string_to_cstring(
+    data: *const u8,
+    len: usize,
+    out_cstr: *mut RuntimeKaracString,
+) -> bool {
+    if out_cstr.is_null() {
+        return false;
+    }
+    let bytes: &[u8] = if data.is_null() || len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(data, len)
+    };
+    // Interior NUL → reject (the C side would truncate at it).
+    if bytes.contains(&0) {
+        return false;
+    }
+    // Allocate len + 1 for the trailing NUL (always ≥ 1, so never a zero-size
+    // Layout). Copy the source bytes, terminate.
+    let buf_len = bytes.len() + 1;
+    let layout = std::alloc::Layout::array::<u8>(buf_len).unwrap();
+    let buf = std::alloc::alloc(layout);
+    if buf.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+    if !bytes.is_empty() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+    }
+    *buf.add(bytes.len()) = 0;
+    (*out_cstr) = RuntimeKaracString {
+        data: buf,
+        len: bytes.len() as i64,
+        cap: buf_len as i64,
+    };
+    true
+}
+
 #[cfg(test)]
 mod cstr_to_string_tests {
     use super::{karac_runtime_cstr_to_string, RuntimeKaracString};
@@ -4657,6 +4715,79 @@ mod cstr_to_string_tests {
             let (ok, _, tag) = run(&[0xE2, 0x82]);
             assert!(!ok);
             assert_eq!(tag, 1, "IncompleteSequence");
+        }
+    }
+}
+
+#[cfg(test)]
+mod string_to_cstring_tests {
+    use super::{karac_runtime_string_to_cstring, RuntimeKaracString};
+
+    /// Drive the extern; return (ok, the FULL allocated buffer incl. trailing
+    /// NUL on Ok, reported len, reported cap). Frees the runtime-allocated
+    /// buffer so the test itself is leak-clean.
+    unsafe fn run(input: &[u8]) -> (bool, Option<Vec<u8>>, i64, i64) {
+        let mut out = RuntimeKaracString {
+            data: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        let ok = karac_runtime_string_to_cstring(input.as_ptr(), input.len(), &mut out);
+        if !ok {
+            return (false, None, 0, 0);
+        }
+        assert!(
+            !out.data.is_null(),
+            "Ok must allocate a NUL-terminated buffer"
+        );
+        // Read the whole `cap` bytes so we can assert the trailing NUL.
+        let full = std::slice::from_raw_parts(out.data, out.cap as usize).to_vec();
+        let layout = std::alloc::Layout::array::<u8>(out.cap as usize).unwrap();
+        std::alloc::dealloc(out.data, layout);
+        (true, Some(full), out.len, out.cap)
+    }
+
+    #[test]
+    fn copies_bytes_and_appends_nul() {
+        unsafe {
+            let (ok, buf, len, cap) = run("héllo".as_bytes());
+            assert!(ok);
+            let src = "héllo".as_bytes();
+            assert_eq!(len, src.len() as i64, "len excludes the NUL");
+            assert_eq!(cap, src.len() as i64 + 1, "cap includes the NUL");
+            let buf = buf.unwrap();
+            assert_eq!(&buf[..src.len()], src, "source bytes copied verbatim");
+            assert_eq!(buf[src.len()], 0, "trailing NUL appended");
+        }
+    }
+
+    #[test]
+    fn empty_still_allocates_nul_terminator() {
+        unsafe {
+            let (ok, buf, len, cap) = run(b"");
+            assert!(ok);
+            assert_eq!(len, 0);
+            assert_eq!(cap, 1, "empty CString is a lone NUL byte");
+            assert_eq!(buf.unwrap(), vec![0u8]);
+        }
+    }
+
+    #[test]
+    fn interior_nul_is_rejected() {
+        unsafe {
+            let (ok, buf, _, _) = run(b"ab\0cd");
+            assert!(!ok, "interior NUL must be rejected (C would truncate)");
+            assert!(buf.is_none());
+        }
+    }
+
+    #[test]
+    fn trailing_source_nul_also_rejected() {
+        // A NUL as the last source byte is still "interior" w.r.t. the appended
+        // terminator — it would make the value ambiguous, so reject it too.
+        unsafe {
+            let (ok, _, _, _) = run(b"abc\0");
+            assert!(!ok);
         }
     }
 }
