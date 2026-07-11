@@ -2037,6 +2037,65 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Phase-11 std.secret: reject `impl <Trait> for Secret[T]` for the
+        // trait set that would leak or structurally compare the wrapped
+        // value, defeating the whole point of the wrapper. Per design.md
+        // § Secret Type, `Secret[T]` deliberately withholds Debug/Display
+        // (no accidental `{:?}` in a log), Serialize/Deserialize (no serde
+        // round-trip onto the wire), every comparison/ordering/hash trait
+        // (structural `==` isn't constant-time — use `.ct_eq(...)`), the
+        // transparent-access traits Deref/Borrow/AsRef (reading must be the
+        // explicit, greppable `.expose()`), and `Copy` (a secret must not be
+        // silently duplicated). A hand-written impl of any of these
+        // reintroduces exactly the exposure path the type exists to prevent.
+        // Gate on the stdlib-defined `Secret` (a user's unrelated
+        // `struct Secret` is their own affair) and fire regardless of where
+        // the impl is authored — the stdlib itself never implements these for
+        // `Secret` either (equality is `ConstantTimeEq`, zeroing is
+        // `Zeroize`/`Drop`, none of which are on this list). Mirrors the
+        // `E_UNION_DROP_FORBIDDEN` early-return above.
+        const SECRET_FORBIDDEN_TRAITS: &[&str] = &[
+            "Debug",
+            "Display",
+            "Serialize",
+            "Deserialize",
+            "PartialEq",
+            "Eq",
+            "PartialOrd",
+            "Ord",
+            "Hash",
+            "Deref",
+            "Borrow",
+            "AsRef",
+            "Copy",
+        ];
+        if let Some(trait_str) = trait_name.as_deref() {
+            if type_name == "Secret"
+                && SECRET_FORBIDDEN_TRAITS.contains(&trait_str)
+                && self
+                    .env
+                    .structs
+                    .get("Secret")
+                    .is_some_and(|i| i.defining_stdlib_origin)
+            {
+                self.type_error(
+                    format!(
+                        "error[E_SECRET_TRAIT_FORBIDDEN]: cannot implement \
+                         `{trait_str}` for `Secret[T]` — the wrapper deliberately \
+                         withholds this trait so a secret cannot be printed, \
+                         serialized, or structurally compared by accident (see \
+                         design.md § Secret Type). Read the value with \
+                         `.expose()` where you genuinely need it; for equality \
+                         use the constant-time `.ct_eq(...)`, and rely on the \
+                         built-in `Zeroize`/`Drop` for wiping"
+                    ),
+                    imp.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return;
+            }
+        }
+
         // Phase 7 user-`impl Drop` dispatch — Prereq.1. Validate the
         // impl block matches `trait Drop { fn drop(mut ref self); }`
         // exactly: a single method named `drop`, receiver `mut ref

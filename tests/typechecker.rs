@@ -32040,3 +32040,155 @@ fn discriminant_manual_tag_method_typechecks() {
          fn main() {}",
     );
 }
+
+// ── std.secret slice — E_SECRET_TRAIT_FORBIDDEN ─────────────────
+//
+// `impl <Trait> for Secret[T]` is rejected for the trait set that would
+// leak or structurally compare the wrapped value (Debug/Display,
+// Serialize/Deserialize, the comparison/ordering/hash family, the
+// transparent-access traits Deref/Borrow/AsRef, and Copy). The gate is
+// scoped to the stdlib-defined `Secret` reached via a gated
+// `import std.secret.{Secret};`, so a user's unrelated `struct Secret`
+// is untouched. Mirrors the `E_UNION_DROP_FORBIDDEN` slice above.
+//
+// These tests run the gated-import expansion (parse → desugar →
+// expand_gated_stdlib_imports → resolve → typecheck), matching the CLI /
+// `run_program_full` pipeline; the plain `typecheck_errors` helper skips
+// gated expansion, so the imported `Secret` would bind to nothing.
+
+fn typecheck_errors_gated(source: &str) -> Vec<TypeError> {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let _ = karac::desugar_program(&mut parsed.program);
+    karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {}",
+        resolved
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    typecheck(&parsed.program, &resolved).errors
+}
+
+fn typecheck_ok_gated(source: &str) {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let _ = karac::desugar_program(&mut parsed.program);
+    karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let errors = typecheck(&parsed.program, &resolved).errors;
+    assert!(
+        errors.is_empty(),
+        "Type errors: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn secret_impl_debug_rejected() {
+    let errors = typecheck_errors_gated(
+        "import std.secret.{Secret};\n\
+         impl Debug for Secret[i64] {}\n\
+         fn main() {}",
+    );
+    let diag = errors
+        .iter()
+        .find(|e| e.message.contains("E_SECRET_TRAIT_FORBIDDEN"))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected E_SECRET_TRAIT_FORBIDDEN, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        diag.message.contains("`Debug`"),
+        "diagnostic should name the offending trait, got: {}",
+        diag.message,
+    );
+    assert!(
+        diag.message.contains("Secret"),
+        "diagnostic should name Secret, got: {}",
+        diag.message,
+    );
+}
+
+#[test]
+fn secret_impl_comparison_trait_rejected() {
+    // A comparison trait is blocked for a distinct reason (structural `==`
+    // isn't constant-time) — cover a second blocklist category.
+    let errors = typecheck_errors_gated(
+        "import std.secret.{Secret};\n\
+         impl PartialEq for Secret[i64] {}\n\
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_SECRET_TRAIT_FORBIDDEN")
+                && e.message.contains("`PartialEq`")),
+        "expected E_SECRET_TRAIT_FORBIDDEN naming PartialEq, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn secret_gate_is_stdlib_scoped() {
+    // A user's own `struct Secret` (NOT the gated stdlib type) is their
+    // own business — `impl Debug` on it must NOT trip the blocklist.
+    let mut parsed = parse(
+        "struct Secret[T] { inner: T }\n\
+         impl Debug for Secret[i64] {}\n\
+         fn main() {}",
+    );
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let _ = karac::desugar_program(&mut parsed.program);
+    karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    let errors = typecheck(&parsed.program, &resolved).errors;
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("E_SECRET_TRAIT_FORBIDDEN")),
+        "user struct Secret must not trip the stdlib-scoped blocklist, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn secret_non_blocklisted_trait_allowed() {
+    // `Drop` is NOT on the blocklist (item 3 — `impl Drop for Secret[T]`
+    // wipes the secret via Zeroize) — it must pass the trait gate. A valid
+    // `fn drop(mut ref self)` signature typechecks clean end to end.
+    typecheck_ok_gated(
+        "import std.secret.{Secret};\n\
+         impl Drop for Secret[i64] { fn drop(mut ref self) {} }\n\
+         fn main() {}",
+    );
+}
