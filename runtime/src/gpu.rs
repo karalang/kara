@@ -163,8 +163,7 @@ pub unsafe extern "C" fn karac_runtime_gpu_map_multi(
         .map(|&p| std::slice::from_raw_parts(p, byte_len))
         .collect();
 
-    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, elem_size))
-    else {
+    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, n)) else {
         crate::fatal::write_stderr(
             b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
         );
@@ -180,32 +179,40 @@ pub unsafe extern "C" fn karac_runtime_gpu_map_multi(
     }
 }
 
-/// C entry point for a struct-SoA `gpu.dispatch` — CG-4's codegen target.
+/// C entry point for a struct-SoA `gpu.dispatch` — CG-4 / GPU-LBM-3's codegen
+/// target. Handles multi-field layout groups (each group's element is a coalesced
+/// sub-struct of `group_strides[k]` bytes).
 ///
-/// Dispatches the kernel over `n_groups` coalesced input field-arrays
-/// (`in_ptrs[k]`, each `n * field_size` bytes) and returns a single **AoS**
-/// result buffer: the shader (bindings `0..n_groups` in, `n_groups..2*n_groups`
-/// out) writes `n_groups` output field-arrays, which are interleaved into one
-/// `n * aos_stride`-byte buffer — group `k`'s output element is copied to byte
-/// offset `field_offsets[k]` within each `aos_stride`-byte AoS element. The
-/// returned buffer is freshly `malloc`'d (via [`crate::alloc::karac_alloc_or_panic`])
-/// so the owned `Vec[S]` the compiler builds frees it with the matching `free`;
-/// the intermediate GPU group outputs are internal `Vec`s dropped here. Empty
+/// Dispatches the kernel over `n_groups` coalesced input group-arrays (`in_ptrs[k]`,
+/// each `n * group_strides[k]` bytes) and returns a single **AoS** result buffer.
+/// The shader (bindings `0..n_groups` in, `n_groups..2*n_groups` out) writes
+/// `n_groups` output group-arrays, which are scattered into one `n * aos_stride`
+/// buffer field by field: for each of the `n_fields` struct fields, field `f` lives
+/// in group `field_group[f]` at byte offset `field_src[f]` within that group's
+/// element, and is copied (`field_size` bytes) to byte offset `field_dst[f]` within
+/// each AoS element. The returned buffer is freshly `malloc`'d (via
+/// [`crate::alloc::karac_alloc_or_panic`]) so the owned `Vec[S]` frees it with the
+/// matching `free`; the GPU group outputs are internal `Vec`s dropped here. Empty
 /// (`n == 0` / `n_groups == 0`) returns a unique non-null allocation.
 ///
 /// # Safety
 ///
-/// `wgsl_ptr`/`wgsl_len` a valid UTF-8 shader; `in_ptrs` an array of `n_groups`
-/// pointers each to `n * field_size` valid bytes; `field_offsets` an array of
-/// `n_groups` `usize`s. The returned pointer transfers ownership to the caller.
-/// Aborts on no available GPU adapter (no CPU fallback), like the other entries.
+/// `wgsl_ptr`/`wgsl_len` a valid UTF-8 shader; `in_ptrs`/`group_strides` arrays of
+/// `n_groups` (each `in_ptrs[k]` to `n * group_strides[k]` valid bytes);
+/// `field_group`/`field_src`/`field_dst` arrays of `n_fields`. The returned pointer
+/// transfers ownership. Aborts on no available GPU adapter (no CPU fallback).
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn karac_runtime_gpu_dispatch_soa(
     wgsl_ptr: *const u8,
     wgsl_len: usize,
     n_groups: usize,
     in_ptrs: *const *const u8,
-    field_offsets: *const usize,
+    group_strides: *const usize,
+    n_fields: usize,
+    field_group: *const usize,
+    field_src: *const usize,
+    field_dst: *const usize,
     field_size: usize,
     aos_stride: usize,
     n: usize,
@@ -222,31 +229,35 @@ pub unsafe extern "C" fn karac_runtime_gpu_dispatch_soa(
         crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
         std::process::abort();
     };
-    let byte_len = n.saturating_mul(field_size);
+    let strides = std::slice::from_raw_parts(group_strides, n_groups);
     let in_ptr_slice = std::slice::from_raw_parts(in_ptrs, n_groups);
     let inputs: Vec<&[u8]> = in_ptr_slice
         .iter()
-        .map(|&p| std::slice::from_raw_parts(p, byte_len))
+        .zip(strides.iter())
+        .map(|(&p, &stride)| std::slice::from_raw_parts(p, n * stride))
         .collect();
 
-    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, field_size))
-    else {
+    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, n)) else {
         crate::fatal::write_stderr(
             b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
         );
         std::process::abort();
     };
-    debug_assert_eq!(outputs.len(), n_groups, "one output field-array per group");
+    debug_assert_eq!(outputs.len(), n_groups, "one output group-array per group");
 
-    // Interleave the per-group output field-arrays into one AoS buffer.
-    let offsets = std::slice::from_raw_parts(field_offsets, n_groups);
+    // Scatter each struct field from its group's output element to the AoS element.
+    let fgroup = std::slice::from_raw_parts(field_group, n_fields);
+    let fsrc = std::slice::from_raw_parts(field_src, n_fields);
+    let fdst = std::slice::from_raw_parts(field_dst, n_fields);
     let out = crate::alloc::karac_alloc_or_panic(aos_total);
-    for (obytes, &off) in outputs.iter().zip(offsets.iter()) {
-        debug_assert_eq!(obytes.len(), byte_len, "element-wise map preserves length");
+    for f in 0..n_fields {
+        let g = fgroup[f];
+        let src_buf = &outputs[g];
+        let gstride = strides[g];
         for i in 0..n {
             std::ptr::copy_nonoverlapping(
-                obytes.as_ptr().add(i * field_size),
-                out.add(i * aos_stride + off),
+                src_buf.as_ptr().add(i * gstride + fsrc[f]),
+                out.add(i * aos_stride + fdst[f]),
                 field_size,
             );
         }
@@ -263,7 +274,7 @@ async fn dispatch_bytes_async(wgsl: &str, input: &[u8], elem_size: usize) -> Opt
     // The single-buffer path is the `n_buffers == 1` case of the multi core:
     // input at `@binding(0)`, output at `@binding(1)` — byte-identical to the
     // slice-0 WGSL contract.
-    let mut outs = dispatch_multi_bytes_async(wgsl, &[input], elem_size).await?;
+    let mut outs = dispatch_multi_bytes_async(wgsl, &[input], input.len() / elem_size).await?;
     outs.pop()
 }
 
@@ -278,16 +289,15 @@ async fn dispatch_bytes_async(wgsl: &str, input: &[u8], elem_size: usize) -> Opt
 async fn dispatch_multi_bytes_async(
     wgsl: &str,
     inputs: &[&[u8]],
-    elem_size: usize,
+    elem_count: usize,
 ) -> Option<Vec<Vec<u8>>> {
     let n_buffers = inputs.len();
     if n_buffers == 0 {
         return Some(Vec::new());
     }
-    // All groups carry the same element count; derive the invocation count from
-    // the first (they are equal by construction — one element per logical row).
-    let byte_len = inputs[0].len() as u64;
-    let elem_count = inputs[0].len() / elem_size;
+    // Each group's output/staging buffer matches its input's byte length — groups
+    // can have different per-element strides (a multi-field group is wider).
+    // `elem_count` (one logical row per GPU thread) is passed explicitly.
 
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = instance
@@ -309,21 +319,23 @@ async fn dispatch_multi_bytes_async(
             })
         })
         .collect();
-    let output_bufs: Vec<wgpu::Buffer> = (0..n_buffers)
-        .map(|_| {
+    let output_bufs: Vec<wgpu::Buffer> = inputs
+        .iter()
+        .map(|bytes| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("gpu-cg4-output"),
-                size: byte_len,
+                size: bytes.len() as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             })
         })
         .collect();
-    let staging_bufs: Vec<wgpu::Buffer> = (0..n_buffers)
-        .map(|_| {
+    let staging_bufs: Vec<wgpu::Buffer> = inputs
+        .iter()
+        .map(|bytes| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("gpu-cg4-staging"),
-                size: byte_len,
+                size: bytes.len() as u64,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
@@ -378,8 +390,12 @@ async fn dispatch_multi_bytes_async(
         // One invocation per element; @workgroup_size(64) in the shader.
         pass.dispatch_workgroups((elem_count as u32).div_ceil(64), 1, 1);
     }
-    for (out_buf, staging) in output_bufs.iter().zip(staging_bufs.iter()) {
-        encoder.copy_buffer_to_buffer(out_buf, 0, staging, 0, byte_len);
+    for ((out_buf, staging), bytes) in output_bufs
+        .iter()
+        .zip(staging_bufs.iter())
+        .zip(inputs.iter())
+    {
+        encoder.copy_buffer_to_buffer(out_buf, 0, staging, 0, bytes.len() as u64);
     }
     queue.submit(Some(encoder.finish()));
 
@@ -485,7 +501,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let Some(outs) = pollster::block_on(dispatch_multi_bytes_async(
             PARTICLE_STEP_WGSL,
             &[&pos_bytes, &vel_bytes],
-            4,
+            256, // elem_count (one GPU thread per logical element)
         )) else {
             eprintln!("gpu-cg4: no GPU adapter available — skipping");
             return;
@@ -498,6 +514,59 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         for i in 0..256 {
             assert_eq!(pos_out[i], pos[i] + vel[i], "pos[{i}]");
             assert_eq!(vel_out[i], vel[i], "vel[{i}]");
+        }
+    }
+
+    // GPU-LBM-3b: heterogeneous group strides — a 2-field group `ab` bound as
+    // `array<G_ab>` (8-byte elements) alongside a 1-field group `cg` bound as
+    // `array<f32>` (4-byte). Proves the core handles per-group byte lengths.
+    const MULTI_FIELD_WGSL: &str = r#"
+struct G_ab { a: f32, b: f32 };
+@group(0) @binding(0) var<storage, read>       ab_in:  array<G_ab>;
+@group(0) @binding(1) var<storage, read>       cg_in:  array<f32>;
+@group(0) @binding(2) var<storage, read_write> ab_out: array<G_ab>;
+@group(0) @binding(3) var<storage, read_write> cg_out: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= arrayLength(&cg_in)) { return; }
+    let a = ab_in[i].a;
+    let b = ab_in[i].b;
+    let c = cg_in[i];
+    ab_out[i] = G_ab(a + c, b);
+    cg_out[i] = c;
+}
+"#;
+
+    #[test]
+    fn multi_field_group_stride_dispatch() {
+        let n = 128usize;
+        // ab group element = {a, b} (8 bytes); cg group element = {c} (4 bytes).
+        let mut ab_bytes = Vec::new();
+        let mut cg_bytes = Vec::new();
+        for i in 0..n {
+            ab_bytes.extend_from_slice(&(i as f32).to_le_bytes()); // a
+            ab_bytes.extend_from_slice(&((i as f32) * 2.0).to_le_bytes()); // b
+            cg_bytes.extend_from_slice(&(100.0f32).to_le_bytes()); // c
+        }
+        let Some(outs) = pollster::block_on(dispatch_multi_bytes_async(
+            MULTI_FIELD_WGSL,
+            &[&ab_bytes, &cg_bytes],
+            n,
+        )) else {
+            eprintln!("gpu-cg4: no GPU adapter available — skipping");
+            return;
+        };
+        assert_eq!(outs[0].len(), n * 8, "ab group is 8 bytes/elem");
+        assert_eq!(outs[1].len(), n * 4, "cg group is 4 bytes/elem");
+        for i in 0..n {
+            let a = f32::from_le_bytes(outs[0][i * 8..i * 8 + 4].try_into().unwrap());
+            let b = f32::from_le_bytes(outs[0][i * 8 + 4..i * 8 + 8].try_into().unwrap());
+            let c = f32::from_le_bytes(outs[1][i * 4..i * 4 + 4].try_into().unwrap());
+            assert_eq!(a, i as f32 + 100.0, "a[{i}]"); // a + c
+            assert_eq!(b, (i as f32) * 2.0, "b[{i}]"); // unchanged
+            assert_eq!(c, 100.0, "c[{i}]"); // unchanged
         }
     }
 }

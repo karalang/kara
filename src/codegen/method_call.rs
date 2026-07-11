@@ -10646,6 +10646,35 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(agg.into())
     }
 
+    /// Materialize `vals` as an `[N x i64]` stack array (alloca + element stores)
+    /// and return its pointer — used to pass the GPU-dispatch interleave descriptor
+    /// arrays (`group_strides`, `field_group/src/dst`) to the runtime.
+    fn build_i64_stack_array(
+        &self,
+        vals: &[u64],
+        name: &str,
+    ) -> inkwell::values::PointerValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        let ty = i64_t.array_type(vals.len().max(1) as u32);
+        let arr = self.builder.build_alloca(ty, name).unwrap();
+        for (idx, &v) in vals.iter().enumerate() {
+            let slot = unsafe {
+                self.builder
+                    .build_in_bounds_gep(
+                        ty,
+                        arr,
+                        &[i64_t.const_zero(), i64_t.const_int(idx as u64, false)],
+                        "gpu.desc.e",
+                    )
+                    .unwrap()
+            };
+            self.builder
+                .build_store(slot, i64_t.const_int(v, false))
+                .unwrap();
+        }
+        arr
+    }
+
     /// CG-4: lower `gpu.dispatch(kernel, buffer)` for a struct buffer bound with
     /// a `layout` block. The typechecker is layout-blind (it validated and left
     /// the WGSL to codegen), so here we recover the SoA group structure via
@@ -10663,19 +10692,6 @@ impl<'ctx> super::Codegen<'ctx> {
             return Err(
                 "gpu.dispatch: a `cold` layout group is not supported (CG-4 Path A)".to_string(),
             );
-        }
-        for g in &soa.groups {
-            if g.fields.len() != 1 {
-                // The emitter handles multi-field groups (GPU-LBM-3), but the
-                // runtime interleave is still single-field-per-group (Path A) —
-                // guard until GPU-LBM-3b adds the multi-field descriptor.
-                return Err(format!(
-                    "gpu.dispatch: layout group `{}` has {} fields — multi-field groups are \
-                     pending GPU-LBM-3b (runtime interleave); one field per group for now",
-                    g.name,
-                    g.fields.len()
-                ));
-            }
         }
         let num_groups = soa.num_groups;
         if num_groups == 0 {
@@ -10775,31 +10791,38 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_store(slot, *gp).unwrap();
         }
 
-        // field_offsets: `[num_groups x i64]`, group k's field byte offset in AoS
-        // (struct-field index × 4 — all fields f32).
-        let off_arr_ty = i64_t.array_type(num_groups as u32);
-        let offsets = self.builder.build_alloca(off_arr_ty, "gpu.offs").unwrap();
+        // Per-group + per-field interleave descriptor (all fields f32, 4 bytes):
+        //   group_strides[k] = (# fields in group k) × 4  (bytes per group element)
+        //   for each struct field f (flattened in group order):
+        //     field_group[f] = its group index
+        //     field_src[f]   = its byte offset within that group's element (j × 4)
+        //     field_dst[f]   = its byte offset within the AoS element (struct idx × 4)
+        let group_strides: Vec<u64> = soa
+            .groups
+            .iter()
+            .map(|g| (g.fields.len() * 4) as u64)
+            .collect();
+        let mut fld_group: Vec<u64> = Vec::new();
+        let mut fld_src: Vec<u64> = Vec::new();
+        let mut fld_dst: Vec<u64> = Vec::new();
         for (k, g) in soa.groups.iter().enumerate() {
-            let off = i64_t.const_int((g.field_indices[0] * 4) as u64, false);
-            let slot = unsafe {
-                self.builder
-                    .build_in_bounds_gep(
-                        off_arr_ty,
-                        offsets,
-                        &[i64_t.const_zero(), i64_t.const_int(k as u64, false)],
-                        "gpu.off.k",
-                    )
-                    .unwrap()
-            };
-            self.builder.build_store(slot, off).unwrap();
+            for (j, &struct_idx) in g.field_indices.iter().enumerate() {
+                fld_group.push(k as u64);
+                fld_src.push((j * 4) as u64);
+                fld_dst.push((struct_idx * 4) as u64);
+            }
         }
+        let n_fields = fld_group.len();
+        let strides_arr = self.build_i64_stack_array(&group_strides, "gpu.strides");
+        let fgroup_arr = self.build_i64_stack_array(&fld_group, "gpu.fgroup");
+        let fsrc_arr = self.build_i64_stack_array(&fld_src, "gpu.fsrc");
+        let fdst_arr = self.build_i64_stack_array(&fld_dst, "gpu.fdst");
 
-        // aos_stride = (# struct fields) × 4. Path A: one field per group ⇒
-        // `num_groups` fields, all f32 (4-byte, contiguous, no padding).
-        let n_fields: usize = soa.groups.iter().map(|g| g.fields.len()).sum();
+        // aos_stride = (# struct fields) × 4 (all f32, contiguous, no padding).
         let field_size = i64_t.const_int(4, false);
         let aos_stride = i64_t.const_int((n_fields * 4) as u64, false);
         let n_groups_v = i64_t.const_int(num_groups as u64, false);
+        let n_fields_v = i64_t.const_int(n_fields as u64, false);
 
         let dispatch_fn = self.gpu_dispatch_soa_fn();
         let aos_ptr = self
@@ -10811,7 +10834,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     wgsl_len.into(),
                     n_groups_v.into(),
                     in_ptrs.into(),
-                    offsets.into(),
+                    strides_arr.into(),
+                    n_fields_v.into(),
+                    fgroup_arr.into(),
+                    fsrc_arr.into(),
+                    fdst_arr.into(),
                     field_size.into(),
                     aos_stride.into(),
                     n.into(),

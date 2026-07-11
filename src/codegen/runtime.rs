@@ -6782,12 +6782,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_map", fn_ty, None)
     }
 
-    /// Lazily declare `karac_runtime_gpu_dispatch_soa` — CG-4's struct-SoA
-    /// dispatch entry. Signature `(wgsl_ptr, wgsl_len, n_groups, in_ptrs,
-    /// field_offsets, field_size, aos_stride, n) -> aos_ptr`: dispatches the
-    /// kernel over `n_groups` coalesced field-arrays and returns one interleaved
-    /// AoS buffer the owned `Vec[S]` frees. In the `gpu`-feature archive only,
-    /// auto-selected when referenced (the `karac_runtime_gpu_` symbol prefix).
+    /// Lazily declare `karac_runtime_gpu_dispatch_soa` — CG-4 / GPU-LBM-3's
+    /// struct-SoA dispatch entry. Signature `(wgsl_ptr, wgsl_len, n_groups,
+    /// in_ptrs, group_strides, n_fields, field_group, field_src, field_dst,
+    /// field_size, aos_stride, n) -> aos_ptr`: dispatches over `n_groups`
+    /// coalesced group-arrays (each element `group_strides[k]` bytes) and scatters
+    /// the outputs into one interleaved AoS buffer field by field. In the
+    /// `gpu`-feature archive only, auto-selected via the `karac_runtime_gpu_` prefix.
     pub(super) fn gpu_dispatch_soa_fn(&self) -> FunctionValue<'ctx> {
         if let Some(f) = self.module.get_function("karac_runtime_gpu_dispatch_soa") {
             return f;
@@ -6800,7 +6801,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 i64_t.into(), // wgsl_len
                 i64_t.into(), // n_groups
                 ptr_t.into(), // in_ptrs
-                ptr_t.into(), // field_offsets
+                ptr_t.into(), // group_strides
+                i64_t.into(), // n_fields
+                ptr_t.into(), // field_group
+                ptr_t.into(), // field_src
+                ptr_t.into(), // field_dst
                 i64_t.into(), // field_size
                 i64_t.into(), // aos_stride
                 i64_t.into(), // n
