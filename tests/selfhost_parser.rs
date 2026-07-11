@@ -18,7 +18,7 @@
 //! constant subtraction.
 
 use karac::ast::{BinOp, LiteralPattern, MatchArm, Pattern, PatternKind};
-use karac::ast::{Block, CallArg, Expr, ExprKind, Item, Stmt, StmtKind, UnaryOp};
+use karac::ast::{Block, CallArg, Expr, ExprKind, FieldInit, Item, Stmt, StmtKind, UnaryOp};
 use karac::token::{FloatSuffix, IntSuffix};
 use std::path::PathBuf;
 
@@ -201,6 +201,46 @@ const CORPUS: &[&str] = &[
     "match f(x) { 0 => a, _ => b }",
     "match pair { (Some(a), b) => a, _ => 0 }",
     "match x { n => match n { 0 => a, _ => b } }",
+    // Struct literals (struct-literal slice) — explicit fields, trailing comma,
+    // empty, shorthand, mixed, spread, nested value, field-value expressions.
+    "Point { x: 1 }",
+    "Point { x: 1, y: 2 }",
+    "Point { x: 1, y: 2, }",
+    "Foo {}",
+    "Point { x }",
+    "Point { x, y }",
+    "Point { x: 1, y }",
+    "Point { x: a + b }",
+    "Point { x: f(y) }",
+    "Wrapper { inner: Inner { v: 0 } }",
+    "Config { base: Base { n: 1 }, flag: true }",
+    "Point { x: 1, ..base }",
+    "Point { ..base }",
+    // Struct literal in value positions — call arg, return, let-binding, tuple.
+    "f(Point { x: 1 })",
+    "g(Point { x: 1 }, other)",
+    "{ return Point { x: 1 }; }",
+    "{ let p = Point { x: 1 }; p }",
+    "(Point { x: 1 }, Point { y: 2 })",
+    "Point { x: 1 }.x",
+    // Disambiguation: an uppercase name in a `no_struct_literal` position (a
+    // loop/branch condition) is a bare identifier, and the trailing `{ … }`
+    // opens the body — NOT a single-field shorthand struct literal.
+    "if Flag { x }",
+    "while Flag { x }",
+    "for i in Src { g(i) }",
+    // But a struct literal nested in a call inside a condition is unrestricted.
+    "if has(Point { x: 1 }) { y }",
+    // Real-world shapes lifted verbatim from the selfhost sources — field-access
+    // values (`clone_span`'s `Span { line: s.line, … }`), method-call values,
+    // literal fields, and the multi-field constructor forms the front-end must
+    // handle to process its own source.
+    "Span { line: s.line, column: s.column, offset: s.offset, length: s.length }",
+    "Span { line: 1, column: 1, offset: 0, length: 0 }",
+    "ResolveError { kind: kind, off: off, len: len }",
+    "IdentExpr { name: name, span: span }",
+    "CallExpr { callee: callee, args: args, span: sp }",
+    "SpanNode { span: self.span_from(start) }",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara::render_expr`) ──
@@ -320,6 +360,17 @@ fn render_rust_arg(a: &CallArg) -> String {
 /// ` @<offset-shift>:<length>` for a raw (non-Expr) span — stmt/block heads.
 fn span_tag(offset: usize, length: usize) -> String {
     format!(" @{}:{}", offset as i64 - OFFSET_SHIFT, length)
+}
+
+/// `(fld NAME @off:len VALUE)` — one struct-literal field. Must match
+/// `ast_render.kara::render_struct_field`.
+fn render_rust_field(f: &FieldInit) -> String {
+    format!(
+        "(fld {}{} {})",
+        f.name,
+        span_tag(f.span.offset, f.span.length),
+        render_rust_expr(&f.value)
+    )
 }
 
 /// Must match `ast_render.kara::render_stmt`.
@@ -637,6 +688,23 @@ fn render_rust_expr(e: &Expr) -> String {
             for a in arms {
                 out.push(' ');
                 out.push_str(&render_rust_match_arm(a));
+            }
+            out.push(')');
+            out
+        }
+        ExprKind::StructLiteral {
+            path,
+            fields,
+            spread,
+        } => {
+            let name = path.join("::");
+            let mut out = format!("(structlit {name}{sp}");
+            for f in fields {
+                out.push(' ');
+                out.push_str(&render_rust_field(f));
+            }
+            if let Some(s) = spread {
+                out.push_str(&format!(" (spread {})", render_rust_expr(s)));
             }
             out.push(')');
             out

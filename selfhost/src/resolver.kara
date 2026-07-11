@@ -62,6 +62,8 @@ import ast.{
     FieldAccessExpr,
     TupleIndexExpr,
     IndexExpr,
+    StructLitField,
+    StructLitExpr,
     IfExpr,
     ReturnExpr,
     WhileExpr,
@@ -1101,6 +1103,25 @@ impl Resolver {
                 }
             }
             Continue(_) => {}
+            StructLit(n) => {
+                // Resolve the struct type NAME (UndefinedName on miss — the seed
+                // emits `error_undefined_name` here, kind 0, at the WHOLE
+                // struct-literal span), then each field VALUE and the spread.
+                let StructLitExpr { name, fields, spread, span } = n;
+                if not self.lookup(name) {
+                    self.push_err(0, span.offset, span.length);
+                }
+                for f in fields {
+                    let StructLitField { name, value, shorthand, span } = f;
+                    self.resolve_expr(value);
+                }
+                match spread {
+                    Some(sv) => {
+                        self.resolve_expr(sv);
+                    }
+                    None => {}
+                }
+            }
             Match(n) => {
                 let MatchExpr { scrutinee, arms, span } = n;
                 self.resolve_expr(scrutinee);

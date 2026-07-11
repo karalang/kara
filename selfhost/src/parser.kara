@@ -36,6 +36,8 @@ import ast.{
     FieldAccessExpr,
     TupleIndexExpr,
     IndexExpr,
+    StructLitField,
+    StructLitExpr,
     Stmt,
     LetStmt,
     AssignStmt,
@@ -98,6 +100,15 @@ fn dup_str(s: ref String) -> String {
     out
 }
 
+// True iff `name`'s first character is uppercase — the seed's `starts_upper`
+// (src/parser.rs), which gates struct-literal recognition to Type-class names.
+fn starts_upper(name: ref String) -> bool {
+    for c in name.chars() {
+        return c.is_uppercase();
+    }
+    false
+}
+
 struct Parser {
     tokens: Vec[SpannedToken],
     pos: i64,
@@ -105,11 +116,16 @@ struct Parser {
     // loop, popped on exit; `break <ident>` consults it to tell a label
     // (`break outer`) from a value (`break x`) — the seed's `is_known_label`.
     loop_labels: Vec[String],
+    // When true, a bare `Name { … }` reads as `Name` followed by a body block,
+    // not a struct literal — set while parsing `if`/`while`/`for` conditions so
+    // the trailing `{` opens the loop/branch body. Mirrors the seed's
+    // `no_struct_literal` cursor flag (src/parser/exprs.rs).
+    no_struct_literal: bool,
 }
 
 impl Parser {
     fn new(tokens: Vec[SpannedToken]) -> Parser {
-        Parser { tokens: tokens, pos: 0, loop_labels: Vec.new() }
+        Parser { tokens: tokens, pos: 0, loop_labels: Vec.new(), no_struct_literal: false }
     }
 
     // True iff `name` is currently an in-scope loop label. The owned stack
@@ -648,7 +664,13 @@ impl Parser {
     fn parse_if(mut ref self) -> Expr {
         let start = self.current_span();
         self.advance(); // if
+        // The condition is a `no_struct_literal` position: a trailing `Name {`
+        // opens the branch body, not a struct literal. Save/restore so nested
+        // parses are unaffected (mirrors the seed's `parse_condition_expr`).
+        let saved = self.no_struct_literal;
+        self.no_struct_literal = true;
         let cond = self.parse_expr_bp(0);
+        self.no_struct_literal = saved;
         let then_block = self.parse_block();
         let else_branch = self.parse_else();
         Expr.If(IfExpr {
@@ -705,7 +727,10 @@ impl Parser {
     // `while cond { … }`. `while let` is deferred to Slice 3.
     fn parse_while(mut ref self, label: Option[String], start: Span) -> Expr {
         self.advance(); // while
+        let saved = self.no_struct_literal;
+        self.no_struct_literal = true;
         let cond = self.parse_expr_bp(0);
+        self.no_struct_literal = saved;
         let body = self.parse_block();
         Expr.While(WhileExpr {
             label: label,
@@ -720,7 +745,10 @@ impl Parser {
         self.advance(); // for
         let var = self.take_member_name();
         self.eat_in();
+        let saved = self.no_struct_literal;
+        self.no_struct_literal = true;
         let iter = self.parse_expr_bp(0);
+        self.no_struct_literal = saved;
         let body = self.parse_block();
         Expr.For(ForExpr {
             label: label,
@@ -990,6 +1018,12 @@ impl Parser {
     // Mirrors `src/parser/exprs.rs::parse_arg_list`: optional `name:` label,
     // optional call-site `mut`, then the argument expression.
     fn parse_arg_list(mut ref self) -> Vec[CallArg] {
+        // Struct literals in argument position are always unrestricted — a
+        // `Name { … }` arg is a struct literal even inside a condition
+        // (`while items.contains(P { x: 1 }) { … }`). Mirrors the seed's
+        // `parse_arg_list` wrapping `parse_arg_list_inner` in `with_struct_literals`.
+        let saved = self.no_struct_literal;
+        self.no_struct_literal = false;
         let mut args: Vec[CallArg] = Vec.new();
         loop {
             if self.pos >= self.tokens.len() {
@@ -1032,6 +1066,7 @@ impl Parser {
                 break;
             }
         }
+        self.no_struct_literal = saved;
         args
     }
 
@@ -1403,6 +1438,8 @@ impl Parser {
                 self.advance();
                 if self.at_loop_label() {
                     self.parse_labeled_loop(name, start)
+                } else if self.at_struct_literal_open(name) {
+                    self.parse_struct_literal_body(name, start)
                 } else {
                     Expr.Ident(IdentExpr {
                         name: name,
@@ -1420,11 +1457,191 @@ impl Parser {
         }
     }
 
+    // True iff the just-consumed uppercase identifier `name` begins a struct
+    // literal `Name { … }`. Requires the current token to be `{` and the
+    // following tokens to match the seed's `looks_like_struct_literal` shapes.
+    // `name` is borrowed (the caller still moves it into the AST node).
+    fn at_struct_literal_open(ref self, name: ref String) -> bool {
+        if not starts_upper(name) {
+            return false;
+        }
+        if self.pos >= self.tokens.len() {
+            return false;
+        }
+        let is_lbrace = match self.tokens[self.pos].token {
+            LeftBrace => true,
+            _ => false,
+        };
+        if not is_lbrace {
+            return false;
+        }
+        self.looks_like_struct_literal()
+    }
+
+    // Disambiguate `Name { … }` (struct literal) from `Name` followed by a block.
+    // Called with `self.pos` AT the opening `{` (the type name is already
+    // consumed), so this peeks one position further than the seed's
+    // `looks_like_struct_literal`. The unambiguous shapes — `{ ident :`,
+    // `{ ident ,`, `{ }`, `{ ..` — are always struct literals; the single-field
+    // shorthand `{ ident }` is a struct literal only outside a
+    // `no_struct_literal` position (a loop/branch condition).
+    fn looks_like_struct_literal(ref self) -> bool {
+        if self.pos + 2 >= self.tokens.len() {
+            return false;
+        }
+        let next_ident = match self.tokens[self.pos + 1].token {
+            Identifier(_) => true,
+            _ => false,
+        };
+        let next_rbrace = match self.tokens[self.pos + 1].token {
+            RightBrace => true,
+            _ => false,
+        };
+        let next_dotdot = match self.tokens[self.pos + 1].token {
+            DotDot => true,
+            _ => false,
+        };
+        if next_rbrace {
+            return true;
+        }
+        if next_dotdot {
+            return true;
+        }
+        let after_colon = match self.tokens[self.pos + 2].token {
+            Colon => true,
+            _ => false,
+        };
+        let after_comma = match self.tokens[self.pos + 2].token {
+            Comma => true,
+            _ => false,
+        };
+        let after_rbrace = match self.tokens[self.pos + 2].token {
+            RightBrace => true,
+            _ => false,
+        };
+        if next_ident and after_colon {
+            return true;
+        }
+        if next_ident and after_comma {
+            return true;
+        }
+        if next_ident and after_rbrace {
+            return not self.no_struct_literal;
+        }
+        false
+    }
+
+    // `Name { field: value, ..spread }`. Called with `self.pos` AT the opening
+    // `{`, `name`/`start` captured from the leading type name. Mirrors the
+    // seed's `parse_struct_literal_body`: explicit `name: value` fields, `name`
+    // shorthand (value = a synthesized identifier), and a trailing `..expr`
+    // struct-update spread which must come last.
+    fn parse_struct_literal_body(mut ref self, name: String, start: Span) -> Expr {
+        self.expect_lbrace(); // consume {
+        let mut fields: Vec[StructLitField] = Vec.new();
+        let mut spread: Option[Expr] = None;
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            let at_rbrace = match self.tokens[self.pos].token {
+                RightBrace => true,
+                _ => false,
+            };
+            if at_rbrace {
+                break;
+            }
+            let at_dotdot = match self.tokens[self.pos].token {
+                DotDot => true,
+                _ => false,
+            };
+            if at_dotdot {
+                self.advance(); // consume ..
+                let sv = self.parse_expr_bp(0);
+                spread = Some(sv);
+                // Optional trailing comma; spread is always last.
+                let ate_after_spread = match self.tokens[self.pos].token {
+                    Comma => true,
+                    _ => false,
+                };
+                if ate_after_spread {
+                    self.advance();
+                }
+                break;
+            }
+            let fstart = self.current_span();
+            let fname = self.take_member_name();
+            let has_colon = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Colon => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if has_colon {
+                self.advance(); // consume :
+                let value = self.parse_expr_bp(0);
+                fields.push(StructLitField {
+                    name: fname,
+                    value: value,
+                    shorthand: false,
+                    span: self.span_from(fstart),
+                });
+            } else {
+                // Shorthand `Name { x }` — the field name is also the value; the
+                // synthesized identifier reuses the field-name span (seed parity).
+                let fspan = self.span_from(fstart);
+                let vspan = Span {
+                    line: fspan.line,
+                    column: fspan.column,
+                    offset: fspan.offset,
+                    length: fspan.length,
+                };
+                let ident_val = Expr.Ident(IdentExpr {
+                    name: dup_str(fname),
+                    span: vspan,
+                });
+                fields.push(StructLitField {
+                    name: fname,
+                    value: ident_val,
+                    shorthand: true,
+                    span: fspan,
+                });
+            }
+            let ate = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Comma => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if ate {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect_rbrace(); // consume }
+        Expr.StructLit(StructLitExpr {
+            name: name,
+            fields: fields,
+            spread: spread,
+            span: self.span_from(start),
+        })
+    }
+
     // `(` expr `)` (grouping) or `(` e0 `,` e1 `,` ... `)` (tuple); `()` is the
     // unit (empty tuple). Mirrors `parse_paren_or_tuple`.
     fn parse_paren_or_tuple(mut ref self) -> Expr {
         let start = self.current_span();
         self.advance(); // consume (
+
+        // A parenthesized sub-expression is unrestricted — a struct literal
+        // nested in a condition (`if (P { x: 1 }).ok { … }`) still parses.
+        let saved = self.no_struct_literal;
+        self.no_struct_literal = false;
 
         let is_rp = if self.pos < self.tokens.len() {
             match self.tokens[self.pos].token {
@@ -1436,6 +1653,7 @@ impl Parser {
         };
         if is_rp {
             self.advance();
+            self.no_struct_literal = saved;
             return Expr.Tuple(TupleExpr {
                 elems: Vec.new(),
                 span: self.span_from(start),
@@ -1483,12 +1701,14 @@ impl Parser {
                 }
             }
             self.expect_rparen();
+            self.no_struct_literal = saved;
             Expr.Tuple(TupleExpr {
                 elems: elements,
                 span: self.span_from(start),
             })
         } else {
             self.expect_rparen();
+            self.no_struct_literal = saved;
             first
         }
     }

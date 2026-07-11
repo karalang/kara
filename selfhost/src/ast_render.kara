@@ -20,6 +20,8 @@ import ast.{
     FieldAccessExpr,
     TupleIndexExpr,
     IndexExpr,
+    StructLitField,
+    StructLitExpr,
     Stmt,
     LetStmt,
     AssignStmt,
@@ -569,12 +571,56 @@ pub fn render_expr(e: Expr) -> String {
             }
             out.push_str(")");
         }
+        StructLit(s) => {
+            let StructLitExpr {
+                name,
+                fields,
+                spread,
+                span,
+            } = s;
+            out.push_str("(structlit ");
+            out.push_str(name);
+            out.push_str(span_str(span.offset, span.length));
+            for f in fields {
+                out.push_str(" ");
+                out.push_str(render_struct_lit_field(f));
+            }
+            match spread {
+                Some(e) => {
+                    out.push_str(" (spread ");
+                    out.push_str(render_expr(e));
+                    out.push_str(")");
+                }
+                None => {}
+            }
+            out.push_str(")");
+        }
         Error(n) => {
             out.push_str("(error");
             out.push_str(span_str(n.span.offset, n.span.length));
             out.push_str(")");
         }
     }
+    out
+}
+
+// `(fld NAME @off:len VALUE)` — one struct-literal field initializer. Shorthand
+// (`Name { x }`) renders identically to `Name { x: x }` except for the narrower
+// spans, since the value is a synthesized identifier. The Rust seed reproduces
+// this in `tests/selfhost_parser.rs::render_rust_field`.
+fn render_struct_lit_field(f: StructLitField) -> String {
+    let StructLitField {
+        name,
+        value,
+        shorthand,
+        span,
+    } = f;
+    let mut out = "(fld ".to_string();
+    out.push_str(name);
+    out.push_str(span_str(span.offset, span.length));
+    out.push_str(" ");
+    out.push_str(render_expr(value));
+    out.push_str(")");
     out
 }
 

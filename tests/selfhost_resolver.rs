@@ -152,6 +152,18 @@ const CORPUS: &[&str] = &[
     // the path in isolation, so a bare `use` is clean).
     "use foo.bar;",
     "use a.b.c;",
+    // ── Struct literals ── A single-item body can only reference an UNDEFINED
+    // struct name (no cross-item def), so the type name surfaces as
+    // UndefinedName at the WHOLE struct-literal span (the seed's
+    // `error_undefined_name`); field values / spread resolve independently and
+    // AFTER the name.
+    "fn mk() { Undef { x: 1 } }",
+    "fn mk(a: i64) { Undef { x: a } }",
+    "fn mk() { Undef { x: missing } }",
+    "fn mk() { Undef {} }",
+    "fn mk(x: i64) { Undef { x } }",
+    "fn mk(b: i64) { Undef { x: 1, ..b } }",
+    "fn mk() { Undef { x: 1, ..missing } }",
 ];
 
 /// Multi-item programs for the program-level (two-pass) gate. These exercise
@@ -174,8 +186,21 @@ const PROGRAM_CORPUS: &[&str] = &[
     "fn f(e: E) {}\nenum E { X, Y }",
     // Inherent impl on a struct declared in the same program.
     "struct P { x: i64 }\nimpl P { fn get(ref self) -> i64 { self.x } }",
-    // Several clean items together (no struct literals — outside the subset).
+    // Several clean items together.
     "struct Point { x: i64, y: i64 }\nfn dist(p: Point) -> i64 { 0 }\nconst ZERO: i64 = 0;",
+    // Struct literal constructing a struct defined in the same program — clean,
+    // forward and backward, with field-value / spread resolution.
+    "struct Point { x: i64 }\nfn mk() -> Point { Point { x: 1 } }",
+    "fn mk() -> Point { Point { x: 1 } }\nstruct Point { x: i64 }",
+    "struct Point { x: i64 }\nfn mk(v: i64) -> Point { Point { x: v } }",
+    "struct Point { x: i64 }\nfn upd(base: Point) -> Point { Point { x: 1, ..base } }",
+    "struct Inner { v: i64 }\nstruct Outer { i: Inner }\nfn mk() -> Outer { Outer { i: Inner { v: 0 } } }",
+    // Struct literal on an UNDEFINED type, cross-item — UndefinedName at the
+    // struct-literal span; the sibling item is clean.
+    "fn ok_one() {}\nfn mk() { Undef { x: 1 } }",
+    // Field value referencing an undefined name — the type resolves, the value
+    // does not (error AFTER the clean name lookup).
+    "struct Point { x: i64 }\nfn mk() -> Point { Point { x: missing } }",
     // Top-level DuplicateDefinition — two functions with the same name.
     "fn dup() {}\nfn dup() {}",
     // Duplicate across item KINDS — a fn and a struct sharing a name.

@@ -178,6 +178,29 @@ pub struct IndexExpr {
     pub span: Span,
 }
 
+// One field initializer in a struct literal: `name: value`, or the shorthand
+// `name` (where `shorthand` is true and `value` is a synthesized identifier
+// expression equal to `name`). Mirrors `ast::FieldInit`. A plain struct holding
+// an `Expr` (shared handle) + scalars — legal to nest under `Vec[StructLitField]`.
+pub struct StructLitField {
+    pub name: String,
+    pub value: Expr,
+    pub shorthand: bool,
+    pub span: Span,
+}
+
+// `Name { f0: v0, f1: v1, ..spread }`. `name` is the single-segment type name —
+// the selfhost parser forms struct literals only from a bare uppercase
+// identifier (multi-segment paths are a later slice). `spread` is the optional
+// `..expr` struct-update source. Mirrors `ExprKind::StructLiteral`; span = the
+// leading type name's span extended over the closing brace.
+pub struct StructLitExpr {
+    pub name: String,
+    pub fields: Vec[StructLitField],
+    pub spread: Option[Expr],
+    pub span: Span,
+}
+
 
 // The recursive expression node (RC-backed). Slice 1 covers literals,
 // identifiers, `self`/`Self`, unary, binary, grouping, and tuples; the
@@ -229,6 +252,9 @@ pub shared enum Expr {
 
     // `match` expression (slice 3b). Payload declared after the loop nodes.
     Match(MatchExpr),
+
+    // `Name { field: value, ..spread }` struct literal (struct-literal slice).
+    StructLit(StructLitExpr),
 
     // Error-recovery placeholder. Named `Error` (not `Err`) to match the seed
     // and avoid colliding with `Result.Err` in codegen's error-exit heuristic
@@ -282,6 +308,7 @@ pub fn expr_span(e: ref Expr) -> Span {
         Break(n) => clone_span(n.span),
         Continue(n) => clone_span(n.span),
         Match(n) => clone_span(n.span),
+        StructLit(n) => clone_span(n.span),
         Error(n) => clone_span(n.span),
     }
 }
