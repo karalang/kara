@@ -78,6 +78,8 @@ import ast.{
     BindingPattern,
     TuplePattern,
     TupleVariantPattern,
+    StructFieldPat,
+    StructPattern,
     OrPattern,
     TypeExpr,
     PathType,
@@ -993,9 +995,11 @@ impl Resolver {
     fn resolve_stmt(mut ref self, st: Stmt) {
         match st {
             Let(l) => {
-                let LetStmt { is_mut, name, value, span } = l;
+                // Resolve the initializer in the OUTER scope first (so `let x =
+                // x` sees the prior `x`), then bind the pattern's variables.
+                let LetStmt { is_mut, pattern, value, span } = l;
                 self.resolve_expr(value);
-                self.define_shadowable(name, span);
+                self.bind_pattern(pattern);
             }
             Assign(a) => {
                 let AssignStmt { target, value, span } = a;
@@ -1229,6 +1233,29 @@ impl Resolver {
                 }
                 for e in elems {
                     self.bind_pattern(e);
+                }
+            }
+            StructPat(n) => {
+                // Resolve the constructor path (UndefinedName at the pattern span
+                // on miss), then each field: an explicit `name: sub` recurses,
+                // a shorthand `name` is a fresh binding (the seed's
+                // `resolve_pattern` Struct arm).
+                let StructPattern { segments, fields, has_rest, span } = n;
+                if segments.len() > 0 {
+                    if not self.lookup(segments[0]) {
+                        self.push_err(0, span.offset, span.length);
+                    }
+                }
+                for f in fields {
+                    let StructFieldPat { name, pattern, span } = f;
+                    match pattern {
+                        Some(sub) => {
+                            self.bind_pattern(sub);
+                        }
+                        None => {
+                            self.define_shadowable(name, span);
+                        }
+                    }
                 }
             }
             OrPat(n) => {

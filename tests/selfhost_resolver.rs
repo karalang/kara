@@ -244,6 +244,13 @@ const PROGRAM_CORPUS: &[&str] = &[
     "enum E { A, B }\nfn f() -> E { A }",
     "enum E { A(i64), B(i64) }\nfn f(e: E) -> i64 { match e { A(x) => x, B(x) => x } }",
     "fn f(e: E) -> i64 { match e { A(x) => x, _ => 0 } }\nenum E { A(i64), B }",
+    // Struct patterns bind their fields (shorthand + explicit + `..` rest) in
+    // both `let` destructuring and `match` arms; an undefined constructor path
+    // is UndefinedName at the pattern span.
+    "struct Point { x: i64, y: i64 }\nfn f(p: Point) -> i64 { let Point { x, y } = p; x + y }",
+    "struct Point { x: i64, y: i64 }\nfn f(p: Point) -> i64 { match p { Point { x: a, y: b } => a + b } }",
+    "struct P { a: i64, b: i64 }\nfn f(p: P) -> i64 { let P { a, .. } = p; a }",
+    "fn f(p: i64) -> i64 { match p { Undef { x } => x, _ => 0 } }",
     // A `use` import colliding with a declaration of the same name — dup.
     "use foo.thing;\nfn thing() {}",
     // Two imports of the same last segment — dup.

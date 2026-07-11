@@ -17,7 +17,7 @@
 //! are wrapper-independent. The corpus is single-line, so the shift is a plain
 //! constant subtraction.
 
-use karac::ast::{BinOp, LiteralPattern, MatchArm, Pattern, PatternKind};
+use karac::ast::{BinOp, FieldPattern, LiteralPattern, MatchArm, Pattern, PatternKind};
 use karac::ast::{Block, CallArg, Expr, ExprKind, FieldInit, Item, Stmt, StmtKind, UnaryOp};
 use karac::token::{FloatSuffix, IntSuffix};
 use std::path::PathBuf;
@@ -201,6 +201,17 @@ const CORPUS: &[&str] = &[
     "match f(x) { 0 => a, _ => b }",
     "match pair { (Some(a), b) => a, _ => 0 }",
     "match x { n => match n { 0 => a, _ => b } }",
+    // Struct patterns (struct-pattern slice) — shorthand fields, explicit
+    // sub-patterns, `..` rest, and nesting; in match arms and `let` bindings.
+    "match p { Point { x, y } => x }",
+    "match p { Point { x: a, y: b } => a }",
+    "match n { Node { val, .. } => val }",
+    "match e { CallExpr { callee, args, span } => callee }",
+    "match p { Wrap { inner: Point { x, y } } => x }",
+    "match o { Some(Point { x, y }) => x, None => 0 }",
+    "{ let Point { x, y } = p; x }",
+    "{ let CallArg { label, value, span } = a; value }",
+    "{ let Node { val, .. } = n; val }",
     // Struct literals (struct-literal slice) — explicit fields, trailing comma,
     // empty, shorthand, mixed, spread, nested value, field-value expressions.
     "Point { x: 1 }",
@@ -401,12 +412,12 @@ fn render_rust_stmt(s: &Stmt) -> String {
             value,
             ..
         } => {
-            let name = match &pattern.kind {
-                PatternKind::Binding(n) => n.clone(),
-                other => panic!("slice-2a let pattern must be a plain binding, got {other:?}"),
-            };
             let m = if *is_mut { " mut" } else { "" };
-            format!("(let{m} {name}{sp} {})", render_rust_expr(value))
+            format!(
+                "(let{m}{sp} {} {})",
+                render_rust_pattern(pattern),
+                render_rust_expr(value)
+            )
         }
         StmtKind::Assign { target, value } => format!(
             "(assign{sp} {} {})",
@@ -492,6 +503,22 @@ fn render_rust_pattern(p: &Pattern) -> String {
             out.push(')');
             out
         }
+        PatternKind::Struct {
+            path,
+            fields,
+            has_rest,
+        } => {
+            let mut out = format!("(pstruct {}{sp}", path.join("."));
+            for f in fields {
+                out.push(' ');
+                out.push_str(&render_rust_field_pat(f));
+            }
+            if *has_rest {
+                out.push_str(" ..");
+            }
+            out.push(')');
+            out
+        }
         PatternKind::Or(alts) => {
             let mut out = format!("(por{sp}");
             for el in alts {
@@ -506,6 +533,22 @@ fn render_rust_pattern(p: &Pattern) -> String {
              keep the corpus to the ported pattern forms or extend the renderer"
         ),
     }
+}
+
+/// `(pfield NAME @o:l [SUBPAT])` — one struct-pattern field. Must match
+/// `ast_render.kara::render_struct_field_pat`.
+fn render_rust_field_pat(f: &FieldPattern) -> String {
+    let mut out = format!(
+        "(pfield {}{}",
+        f.name,
+        span_tag(f.span.offset, f.span.length)
+    );
+    if let Some(sub) = &f.pattern {
+        out.push(' ');
+        out.push_str(&render_rust_pattern(sub));
+    }
+    out.push(')');
+    out
 }
 
 /// Must match `ast_render.kara::render_match_arm`.

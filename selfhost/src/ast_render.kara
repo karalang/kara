@@ -45,6 +45,8 @@ import ast.{
     BindingPattern,
     TuplePattern,
     TupleVariantPattern,
+    StructFieldPat,
+    StructPattern,
     OrPattern,
     MatchArm,
     MatchExpr,
@@ -193,7 +195,7 @@ fn render_stmt(s: Stmt) -> String {
         Let(n) => {
             let LetStmt {
                 is_mut,
-                name,
+                pattern,
                 value,
                 span,
             } = n;
@@ -201,9 +203,9 @@ fn render_stmt(s: Stmt) -> String {
             if is_mut {
                 out.push_str(" mut");
             }
-            out.push_str(" ");
-            out.push_str(name);
             out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_pattern(pattern));
             out.push_str(" ");
             out.push_str(render_expr(value));
             out.push_str(")");
@@ -774,6 +776,32 @@ pub fn render_pattern(p: Pattern) -> String {
             }
             out.push_str(")");
         }
+        StructPat(n) => {
+            let StructPattern {
+                segments,
+                fields,
+                has_rest,
+                span,
+            } = n;
+            out.push_str("(pstruct ");
+            let mut i = 0;
+            for seg in segments {
+                if i > 0 {
+                    out.push_str(".");
+                }
+                out.push_str(seg);
+                i = i + 1;
+            }
+            out.push_str(span_str(span.offset, span.length));
+            for f in fields {
+                out.push_str(" ");
+                out.push_str(render_struct_field_pat(f));
+            }
+            if has_rest {
+                out.push_str(" ..");
+            }
+            out.push_str(")");
+        }
         OrPat(n) => {
             let OrPattern { alts, span } = n;
             out.push_str("(por");
@@ -790,6 +818,29 @@ pub fn render_pattern(p: Pattern) -> String {
             out.push_str(")");
         }
     }
+    out
+}
+
+// `(pfield NAME @o:l [SUBPAT])` — one struct-pattern field. Shorthand omits the
+// sub-pattern (the field name is the binding). The Rust seed reproduces this in
+// `tests/selfhost_parser.rs::render_rust_field_pat`.
+fn render_struct_field_pat(f: StructFieldPat) -> String {
+    let StructFieldPat {
+        name,
+        pattern,
+        span,
+    } = f;
+    let mut out = "(pfield ".to_string();
+    out.push_str(name);
+    out.push_str(span_str(span.offset, span.length));
+    match pattern {
+        Some(sub) => {
+            out.push_str(" ");
+            out.push_str(render_pattern(sub));
+        }
+        None => {}
+    }
+    out.push_str(")");
     out
 }
 

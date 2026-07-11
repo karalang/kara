@@ -367,7 +367,10 @@ pub struct AssignStmt {
 // identifier; full patterns + `: T` annotations land with later slices.
 pub struct LetStmt {
     pub is_mut: bool,
-    pub name: String,
+    // The bound pattern — a plain binding (`let x = …`) or a destructuring
+    // pattern (`let CallArg { a, b } = …`, `let (x, y) = …`). Mirrors the seed's
+    // `StmtKind::Let.pattern`.
+    pub pattern: Pattern,
     pub value: Expr,
     pub span: Span,
 }
@@ -615,6 +618,25 @@ pub struct OrPattern {
     pub span: Span,
 }
 
+// One field of a struct pattern: `name` shorthand (`pattern` is None — the field
+// name is itself the binding) or `name: subpattern`. Mirrors `ast::FieldPattern`.
+pub struct StructFieldPat {
+    pub name: String,
+    pub pattern: Option[Pattern],
+    pub span: Span,
+}
+
+// `Path { f0, f1: sub, .. }` struct pattern (`CallArg { label, value, span }`,
+// `Point { x: a, y: b }`). `segments` is the constructor path; `has_rest` is the
+// trailing `..` (match remaining fields without binding). Mirrors
+// `PatternKind::Struct`.
+pub struct StructPattern {
+    pub segments: Vec[String],
+    pub fields: Vec[StructFieldPat],
+    pub has_rest: bool,
+    pub span: Span,
+}
+
 pub shared enum Pattern {
     WildcardPat(SpanNode),
     BindingPat(BindingPattern),
@@ -626,6 +648,7 @@ pub shared enum Pattern {
     BytePat(PatByte),
     TuplePat(TuplePattern),
     TupleVariantPat(TupleVariantPattern),
+    StructPat(StructPattern),
     OrPat(OrPattern),
     ErrPat(SpanNode),
 }

@@ -67,6 +67,8 @@ import ast.{
     PatByte,
     TuplePattern,
     TupleVariantPattern,
+    StructFieldPat,
+    StructPattern,
     OrPattern,
     MatchArm,
     MatchExpr,
@@ -649,13 +651,13 @@ impl Parser {
         if is_mut {
             self.advance();
         }
-        let name = self.take_member_name();
+        let pattern = self.parse_pattern();
         self.eat_equal();
         let value = self.parse_expr_bp(0);
         self.eat_semicolon();
         Stmt.Let(LetStmt {
             is_mut: is_mut,
-            name: name,
+            pattern: pattern,
             value: value,
             span: self.span_from(start),
         })
@@ -2327,6 +2329,14 @@ impl Parser {
                 } else {
                     false
                 };
+                let is_lbrace = if self.pos < self.tokens.len() {
+                    match self.tokens[self.pos].token {
+                        LeftBrace => true,
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
                 if is_lparen {
                     self.advance(); // `(`
                     let mut elems: Vec[Pattern] = Vec.new();
@@ -2353,6 +2363,10 @@ impl Parser {
                         elems: elems,
                         span: self.span_from(start),
                     })
+                } else if starts_upper(name) and is_lbrace {
+                    // `Name { f0, f1: sub, .. }` struct pattern — an uppercase
+                    // constructor followed by a brace field list.
+                    self.parse_struct_pattern(name, start)
                 } else {
                     Pattern.BindingPat(BindingPattern {
                         name: name,
@@ -2390,6 +2404,91 @@ impl Parser {
         self.expect_rparen();
         Pattern.TuplePat(TuplePattern {
             elems: elems,
+            span: self.span_from(start),
+        })
+    }
+
+    // `Name { f0, f1: sub, .. }` struct pattern — `self.pos` is AT the `{`, with
+    // the constructor `name`/`start` already captured. Fields are shorthand
+    // (`name`, a fresh binding) or `name: subpattern`; a trailing `..` sets
+    // `has_rest`. Mirrors the seed's struct-pattern parse.
+    fn parse_struct_pattern(mut ref self, name: String, start: Span) -> Pattern {
+        self.expect_lbrace(); // consume {
+        let mut segs: Vec[String] = Vec.new();
+        segs.push(name);
+        let mut fields: Vec[StructFieldPat] = Vec.new();
+        let mut has_rest = false;
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            let at_rbrace = match self.tokens[self.pos].token {
+                RightBrace => true,
+                _ => false,
+            };
+            if at_rbrace {
+                break;
+            }
+            let at_dotdot = match self.tokens[self.pos].token {
+                DotDot => true,
+                _ => false,
+            };
+            if at_dotdot {
+                self.advance(); // consume ..
+                has_rest = true;
+                let ate_after_rest = match self.tokens[self.pos].token {
+                    Comma => true,
+                    _ => false,
+                };
+                if ate_after_rest {
+                    self.advance();
+                }
+                break;
+            }
+            let fstart = self.current_span();
+            let fname = self.take_member_name();
+            let has_colon = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Colon => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if has_colon {
+                self.advance(); // consume :
+                let sub = self.parse_pattern();
+                fields.push(StructFieldPat {
+                    name: fname,
+                    pattern: Some(sub),
+                    span: self.span_from(fstart),
+                });
+            } else {
+                fields.push(StructFieldPat {
+                    name: fname,
+                    pattern: None,
+                    span: self.span_from(fstart),
+                });
+            }
+            let ate = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Comma => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if ate {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect_rbrace(); // consume }
+        Pattern.StructPat(StructPattern {
+            segments: segs,
+            fields: fields,
+            has_rest: has_rest,
             span: self.span_from(start),
         })
     }

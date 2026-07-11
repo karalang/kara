@@ -492,14 +492,21 @@ fn render_rust_stmt(s: &Stmt) -> String {
             value,
             ..
         } => {
-            let name = match &pattern.kind {
-                PatternKind::Binding(n) => n.clone(),
+            // Must match `ast_render.kara::render_stmt`'s Let arm: the statement
+            // span sits on the head, then the bound pattern, then the value.
+            let pat = match &pattern.kind {
+                PatternKind::Binding(n) => {
+                    format!(
+                        "(pbind {n}{})",
+                        span_tag(pattern.span.offset, pattern.span.length)
+                    )
+                }
                 other => {
                     panic!("slice-3c fn-body let pattern must be a plain binding, got {other:?}")
                 }
             };
             let m = if *is_mut { " mut" } else { "" };
-            format!("(let{m} {name}{sp} {})", render_rust_expr(value))
+            format!("(let{m}{sp} {pat} {})", render_rust_expr(value))
         }
         StmtKind::Assign { target, value } => format!(
             "(assign{sp} {} {})",
