@@ -107,10 +107,17 @@ pub fn hover(text: &str, position: Position) -> Option<Hover> {
             return None;
         }
     };
+    // Type in a fenced `kara` block; for a function reference, its effect
+    // signature on a line below (Kāra's flagship surface — effects belong next
+    // to the type).
+    let mut value = format!("```kara\n{}\n```", info.type_display);
+    if let Some(sig) = &info.effect_signature {
+        value.push_str(&format!("\n\n**effects:** {sig}"));
+    }
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: format!("```kara\n{}\n```", info.type_display),
+            value,
         }),
         range: Some(index.range(info.span_offset, info.span_length)),
     })
@@ -379,6 +386,26 @@ mod tests {
     #[test]
     fn hover_none_on_keyword() {
         assert!(hover("fn f() {}", Position::new(0, 0)).is_none());
+    }
+
+    #[test]
+    fn hover_renders_effect_signature_for_a_function() {
+        let src =
+            "effect resource Db;\nfn save(x: i64) with writes(Db) { }\nfn main() { save(1); }";
+        let idx = LineIndex::new(src);
+        let call = src.rfind("save").unwrap();
+        let h = hover(src, idx.position(call)).expect("expected hover");
+        match h.contents {
+            HoverContents::Markup(m) => {
+                assert!(m.value.contains("```kara"));
+                assert!(
+                    m.value.contains("**effects:** writes(Db)"),
+                    "effects line missing: {:?}",
+                    m.value
+                );
+            }
+            other => panic!("expected markup, got {other:?}"),
+        }
     }
 
     #[test]

@@ -826,6 +826,13 @@ pub fn check_source(source: &str) -> Vec<PlaygroundDiagnostic> {
 pub struct HoverInfo {
     /// Human-readable type, e.g. `i32`, `Vec[String]`, `String`.
     pub type_display: String,
+    /// Effect signature of the function under the cursor, when the hovered
+    /// expression resolves to one: a rendered effect list (`reads(Network),
+    /// writes(Db)`), `"_"` for a purely-polymorphic `with _`, or `"pure"` for a
+    /// function with no effects. `None` when the cursor is not on a function
+    /// reference (Kāra's effect system is the flagship surface, so a function's
+    /// effects belong right next to its type in hover).
+    pub effect_signature: Option<String>,
     /// Byte offset of the described expression.
     pub span_offset: usize,
     /// Byte length of the described expression.
@@ -843,8 +850,7 @@ pub struct HoverInfo {
 /// that type-checked even if other parts error — `run_static_checks` collects
 /// typecheck errors but keeps going, so `expr_types` is populated regardless.
 pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
-    let (_diagnostics, artifacts) = run_static_checks(source);
-    let (_program, typed) = artifacts?;
+    let (resolved, typed, effects) = analyze_for_hover(source)?;
 
     // `expr_types` is keyed by `SpanKey(offset, length)` — one entry per unique
     // span (a `MethodCall` shares its receiver's span and overwrites it with the
@@ -863,9 +869,104 @@ pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
     let (span_offset, span_length, ty) = best?;
     Some(HoverInfo {
         type_display: crate::typechecker::types::type_display(ty),
+        effect_signature: function_effect_signature(byte_offset, &resolved, &effects),
         span_offset,
         span_length,
     })
+}
+
+/// Parse + desugar + resolve + typecheck + effectcheck `source` for the hover
+/// query, which needs the type table (`expr_types`), the name resolutions +
+/// symbols (to spot a function reference), and the effect result together.
+/// `None` on parse errors; resolve/typecheck errors are kept going through so a
+/// half-typed buffer still hovers its checked parts.
+fn analyze_for_hover(source: &str) -> Option<(ResolveResult, TypeCheckResult, EffectCheckResult)> {
+    let mut parsed = parse(source);
+    if !parsed.errors.is_empty() {
+        return None;
+    }
+    desugar_program(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    let typed = typecheck(&parsed.program, &resolved);
+    // Match `run_static_checks`' phase order (lower before effectcheck); lowering
+    // does not rebuild `expr_types`, so the type lookup is unaffected.
+    lower(&mut parsed.program, &typed);
+    let effects = effectcheck(&parsed.program);
+    Some((resolved, typed, effects))
+}
+
+/// If the innermost name reference at `byte_offset` resolves to a **function**,
+/// render its effect signature. `None` otherwise. Declared effects win over
+/// inferred (a public fn shows what it promises); a purely-polymorphic `with _`
+/// renders `"_"`, and no effects renders `"pure"`.
+fn function_effect_signature(
+    byte_offset: usize,
+    resolved: &ResolveResult,
+    effects: &EffectCheckResult,
+) -> Option<String> {
+    let mut best: Option<(usize, crate::resolver::SymbolId)> = None;
+    for (key, sid) in &resolved.resolutions {
+        let (start, len) = (key.0, key.1);
+        if byte_offset >= start
+            && byte_offset < start.saturating_add(len)
+            && best.is_none_or(|(blen, _)| len < blen)
+        {
+            best = Some((len, *sid));
+        }
+    }
+    let (_, sid) = best?;
+    let sym = resolved.symbol_table.get_symbol(sid);
+    if !matches!(sym.kind, crate::resolver::SymbolKind::Function { .. }) {
+        return None;
+    }
+    Some(effect_signature_display(&sym.name, effects))
+}
+
+/// Render a function's effect signature for hover. Declared effects (what a
+/// public fn promises) take precedence over inferred.
+fn effect_signature_display(fn_name: &str, effects: &EffectCheckResult) -> String {
+    use crate::effectchecker::DeclaredEffects;
+    match effects.declared_effects.get(fn_name) {
+        Some(DeclaredEffects::Explicit(set)) => render_effect_set(set),
+        Some(DeclaredEffects::Polymorphic) => "_".to_string(),
+        Some(DeclaredEffects::PolymorphicWithFixed(set)) => {
+            let fixed = render_effect_set(set);
+            if fixed == "pure" {
+                "_".to_string()
+            } else {
+                format!("{fixed}, _")
+            }
+        }
+        Some(DeclaredEffects::None) | None => effects
+            .inferred_effects
+            .get(fn_name)
+            .map(render_effect_set)
+            .unwrap_or_else(|| "pure".to_string()),
+    }
+}
+
+/// Render an [`crate::effectchecker::EffectSet`] as a sorted, deduped list —
+/// `verb(resource)` for resource verbs, bare `verb` for the resource-less
+/// execution verbs (`blocks` / `suspends`). Empty → `"pure"`.
+fn render_effect_set(set: &crate::effectchecker::EffectSet) -> String {
+    if set.effects.is_empty() {
+        return "pure".to_string();
+    }
+    let mut parts: Vec<String> = set
+        .effects
+        .iter()
+        .map(|te| {
+            let verb = crate::effectchecker::verb_name(&te.effect.verb);
+            if te.effect.resource.is_empty() {
+                verb
+            } else {
+                format!("{verb}({})", te.effect.resource)
+            }
+        })
+        .collect();
+    parts.sort();
+    parts.dedup();
+    parts.join(", ")
 }
 
 /// Parse + desugar + resolve `source`, returning the program and resolve result
@@ -1248,6 +1349,32 @@ mod playground_tests {
         let info = hover_at(src, operand).expect("expected a hover result");
         assert_eq!(info.type_display, "i64");
         assert_eq!(info.span_length, 1); // just `x`, not `x + 1`
+    }
+
+    #[test]
+    fn hover_at_shows_effect_signature_for_a_function_call() {
+        let src =
+            "effect resource Db;\nfn save(x: i64) with writes(Db) { }\nfn main() { save(1); }";
+        let call = src.rfind("save").unwrap();
+        let info = hover_at(src, call).expect("expected hover");
+        assert_eq!(info.effect_signature.as_deref(), Some("writes(Db)"));
+    }
+
+    #[test]
+    fn hover_at_shows_pure_for_effectless_function() {
+        let src = "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { let _ = add(1, 2); }";
+        let call = src.rfind("add").unwrap();
+        let info = hover_at(src, call).expect("expected hover");
+        assert_eq!(info.effect_signature.as_deref(), Some("pure"));
+    }
+
+    #[test]
+    fn hover_at_no_effect_signature_on_a_local() {
+        let src = "fn f(x: i64) -> i64 { x }";
+        let body = src.rfind('x').unwrap();
+        let info = hover_at(src, body).expect("expected hover");
+        assert_eq!(info.type_display, "i64");
+        assert_eq!(info.effect_signature, None);
     }
 
     #[test]

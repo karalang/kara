@@ -4,13 +4,14 @@
 //! [`serve`]; all the protocol logic lives here so it can be driven in-process
 //! over an in-memory connection ([`lsp_server::Connection::memory`]) by the
 //! integration tests. Features so far: the `initialize`/`shutdown` handshake,
-//! live diagnostics (`textDocument/publishDiagnostics`, slice 1), type-of-
-//! expression hover (`textDocument/hover`, slice 2), go-to-definition +
-//! document outline (`textDocument/definition` + `textDocument/documentSymbol`,
-//! slice 3), whole-document formatting (`textDocument/formatting`, slice 4), and
-//! find-references (`textDocument/references`, slice 5) — each a thin
-//! [`analysis`] call over a `karac` library query. No user code is ever
-//! executed — feedback is purely static.
+//! live diagnostics (`textDocument/publishDiagnostics`, slice 1), hover showing
+//! type + effect signature (`textDocument/hover`, slices 2 & 6),
+//! go-to-definition + document outline (`textDocument/definition` +
+//! `textDocument/documentSymbol`, slice 3), whole-document formatting
+//! (`textDocument/formatting`, slice 4), and find-references
+//! (`textDocument/references`, slice 5) — each a thin [`analysis`] call over a
+//! `karac` library query. No user code is ever executed — feedback is purely
+//! static.
 
 pub mod analysis;
 
