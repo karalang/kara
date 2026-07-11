@@ -178,6 +178,24 @@ impl super::Parser {
                         None
                     };
                     (Some(name), val)
+                } else if name == "repr" && self.check(&Token::Transparent) {
+                    // `#[repr(transparent)]` — `transparent` is a reserved keyword
+                    // (it also introduces a `transparent effect` declaration), so
+                    // `parse_expression()` would reject it. Inside a `repr`
+                    // attribute the token is the layout claim, not the keyword, so
+                    // accept it as the bare identifier the downstream repr
+                    // consumers expect (`#[repr(transparent)]` parses like
+                    // `#[repr(C)]` / `#[repr(packed)]`). See design.md §
+                    // `#[repr(transparent)]` for distinct-type FFI.
+                    let kw_start = self.current_span();
+                    self.advance();
+                    (
+                        None,
+                        Some(Expr {
+                            span: self.span_from(&kw_start),
+                            kind: ExprKind::Identifier("transparent".to_string()),
+                        }),
+                    )
                 } else {
                     (None, Some(self.parse_expression()?))
                 };

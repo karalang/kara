@@ -3115,6 +3115,11 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // Phase 6 `Mutex` / `lock` — the `lock` target is not a
                 // `Mutex[T]` binding.
                 crate::typechecker::TypeErrorKind::LockTargetNotMutex => "E0260",
+                // `#[repr(transparent)]` carrier-shape violation (design.md §
+                // `#[repr(transparent)]` for distinct-type FFI). One numeric
+                // code for the family; the specific `E_REPR_TRANSPARENT_*`
+                // symbolic code is in the message.
+                crate::typechecker::TypeErrorKind::ReprTransparentInvalid => "E0803",
                 // Phase 8 `@` bindings slice 4 — owned scrutinee, outer
                 // `@` alias and an inner sub-pattern binding both claim
                 // non-Copy ownership of overlapping content (design.md

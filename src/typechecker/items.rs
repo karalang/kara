@@ -54,6 +54,7 @@ impl<'a> super::TypeChecker<'a> {
                     // explicit-marker lint + structural verifier.
                     self.check_struct_variance(s);
                     self.check_struct_invariants(s, &gp);
+                    self.check_repr_transparent_struct(s, &gp);
                     if s.is_par {
                         self.check_par_field_constraints("struct", &s.name, &s.fields);
                     }
@@ -62,6 +63,7 @@ impl<'a> super::TypeChecker<'a> {
                     let gp = Self::generic_param_names(&e.generic_params);
                     self.validate_all_bounds(&e.generic_params, &e.where_clause, &gp);
                     self.check_enum_variance(e);
+                    self.check_repr_transparent_enum(e);
                     if e.is_par {
                         for v in &e.variants {
                             if let VariantKind::Struct(fields) = &v.kind {
@@ -70,6 +72,8 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
+                Item::UnionDef(u) => self.check_repr_transparent_union(u),
+                Item::DistinctType(d) => self.check_repr_transparent_distinct(d),
                 // Variance markers are legal only on stdlib struct/enum
                 // declarations (design.md § Variance) — never on type
                 // aliases. The alias's other checks (bound enforcement,
@@ -1594,6 +1598,186 @@ impl<'a> super::TypeChecker<'a> {
         self.enclosing_bounds = saved_bounds;
         self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
         self.lint_override_stack.pop();
+    }
+
+    // ── `#[repr(transparent)]` carrier-shape validation ──────────────────
+    // design.md § `#[repr(transparent)]` for distinct-type FFI. The wrapper
+    // must be a single-data-field newtype so its ABI shape IS its inner
+    // field's. Each rule is a focused `E_REPR_TRANSPARENT_*` diagnostic.
+
+    /// Shared prologue: `true` iff `#[repr(transparent)]` is active, emitting
+    /// `E_REPR_TRANSPARENT_EXCLUSIVE` when it is combined with any other repr.
+    /// When it returns `false`, the carrier-specific checks are skipped.
+    fn repr_transparent_active(&mut self, attributes: &[Attribute], span: &Span) -> bool {
+        let names = super::repr_arg_head_names(attributes);
+        if !names.iter().any(|n| n == "transparent") {
+            return false;
+        }
+        if names.iter().any(|n| n != "transparent") {
+            self.type_error(
+                "error[E_REPR_TRANSPARENT_EXCLUSIVE]: `#[repr(transparent)]` cannot be \
+                 combined with any other `#[repr(...)]` (`C` / `packed` / `align(N)` / \
+                 `intN`) — `transparent` IS the layout claim, so another repr would \
+                 either contradict it or duplicate the inner type's claim"
+                    .to_string(),
+                span.clone(),
+                TypeErrorKind::ReprTransparentInvalid,
+            );
+        }
+        true
+    }
+
+    /// A zero-sized, alignment-one companion field permitted next to the single
+    /// data field of a `transparent` struct (design.md: `PhantomData[T]`, `()`,
+    /// `[T; 0]`, an empty unit struct). Structural for the first three; the
+    /// empty-unit-struct case consults `struct_info` for a zero-field struct.
+    fn is_zero_sized_companion(&self, ty: &TypeExpr) -> bool {
+        match &ty.kind {
+            // `()` — the unit type (parsed as `TypeKind::Unit`; a zero-element
+            // tuple also collapses here defensively).
+            TypeKind::Unit => true,
+            TypeKind::Tuple(elems) => elems.is_empty(),
+            // A zero-length array `[T; 0]` (when represented as `TypeKind::Array`).
+            TypeKind::Array { size, .. } => {
+                matches!(&size.kind, ExprKind::Integer(0, _))
+            }
+            TypeKind::Path(p) => {
+                let head = p.segments.last().map(|s| s.as_str()).unwrap_or("");
+                // `PhantomData[T]` carries no bytes by convention.
+                if head == "PhantomData" {
+                    return true;
+                }
+                // An empty unit struct (`struct Empty {}`) — zero fields.
+                self.env
+                    .structs
+                    .get(head)
+                    .map(|info| info.fields.is_empty())
+                    .unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+
+    /// `true` iff `ty` is a bare generic type parameter of the carrier (a
+    /// single-segment path naming a `gp` entry, no generic args). Such an inner
+    /// makes the wrapper's size depend on `T`; without a `Sized` bound (which
+    /// Kāra has no surface for) the layout is indeterminate — the
+    /// `E_REPR_TRANSPARENT_REQUIRES_SIZED` case.
+    fn is_bare_type_param(ty: &TypeExpr, gp: &[String]) -> bool {
+        if let TypeKind::Path(p) = &ty.kind {
+            return p.generic_args.is_none()
+                && p.segments.len() == 1
+                && gp.iter().any(|g| g == &p.segments[0]);
+        }
+        false
+    }
+
+    fn check_repr_transparent_struct(&mut self, s: &StructDef, gp: &[String]) {
+        if !self.repr_transparent_active(&s.attributes, &s.span) {
+            return;
+        }
+        let data_fields: Vec<&StructField> = s
+            .fields
+            .iter()
+            .filter(|f| !self.is_zero_sized_companion(&f.ty))
+            .collect();
+        match data_fields.len() {
+            0 => self.type_error(
+                "error[E_REPR_TRANSPARENT_REQUIRES_FIELD]: a `#[repr(transparent)]` \
+                 struct must have exactly one non-zero-sized field whose layout becomes \
+                 the whole struct's layout; this struct has none"
+                    .to_string(),
+                s.span.clone(),
+                TypeErrorKind::ReprTransparentInvalid,
+            ),
+            1 => {
+                if Self::is_bare_type_param(&data_fields[0].ty, gp) {
+                    self.type_error(
+                        format!(
+                            "error[E_REPR_TRANSPARENT_REQUIRES_SIZED]: the single field of a \
+                             `#[repr(transparent)]` struct is the bare type parameter \
+                             '{}', so the wrapper's size depends on it and its layout is \
+                             indeterminate; wrap a concrete or `Sized`-known type instead",
+                            data_fields[0].name
+                        ),
+                        data_fields[0].span.clone(),
+                        TypeErrorKind::ReprTransparentInvalid,
+                    );
+                }
+            }
+            _ => self.type_error(
+                "error[E_REPR_TRANSPARENT_REQUIRES_SINGLE_FIELD]: a `#[repr(transparent)]` \
+                 struct may have at most one non-zero-sized field (the rest must be \
+                 zero-sized, alignment-one companions like `PhantomData[T]` / `()` / \
+                 `[T; 0]`); this struct has more than one data field"
+                    .to_string(),
+                s.span.clone(),
+                TypeErrorKind::ReprTransparentInvalid,
+            ),
+        }
+    }
+
+    fn check_repr_transparent_enum(&mut self, e: &EnumDef) {
+        if !self.repr_transparent_active(&e.attributes, &e.span) {
+            return;
+        }
+        // Exactly one variant carrying exactly one field.
+        let ok = e.variants.len() == 1
+            && match &e.variants[0].kind {
+                VariantKind::Tuple(tys) => tys.len() == 1,
+                VariantKind::Struct(fields) => fields.len() == 1,
+                VariantKind::Unit => false,
+            };
+        if !ok {
+            self.type_error(
+                "error[E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT]: a `#[repr(transparent)]` \
+                 enum must have exactly one variant carrying exactly one field (the \
+                 discriminant-position marker with no runtime tag); multi-variant or \
+                 payload-less enums are rejected"
+                    .to_string(),
+                e.span.clone(),
+                TypeErrorKind::ReprTransparentInvalid,
+            );
+        }
+    }
+
+    fn check_repr_transparent_union(&mut self, u: &UnionDef) {
+        if !self.repr_transparent_active(&u.attributes, &u.span) {
+            return;
+        }
+        self.type_error(
+            "error[E_REPR_TRANSPARENT_UNION_FORBIDDEN]: `#[repr(transparent)]` is not \
+             permitted on a `union` — unions already give untagged byte reuse, so \
+             layering `transparent` on top is incoherent"
+                .to_string(),
+            u.span.clone(),
+            TypeErrorKind::ReprTransparentInvalid,
+        );
+    }
+
+    fn check_repr_transparent_distinct(&mut self, d: &DistinctTypeDef) {
+        if !self.repr_transparent_active(&d.attributes, &d.span) {
+            return;
+        }
+        // A `distinct type Foo = Inner` is a single-field newtype by
+        // construction, so the only shape rule is the unsized-generic guard.
+        let gp = Self::generic_param_names(&d.generic_params);
+        if Self::is_bare_type_param(&d.base_type, &gp) {
+            self.type_error(
+                format!(
+                    "error[E_REPR_TRANSPARENT_REQUIRES_SIZED]: the base of a \
+                     `#[repr(transparent)]` distinct type is the bare type parameter \
+                     '{}', so the wrapper's size depends on it and its layout is \
+                     indeterminate; wrap a concrete or `Sized`-known type instead",
+                    match &d.base_type.kind {
+                        TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                        _ => String::new(),
+                    }
+                ),
+                d.base_type.span.clone(),
+                TypeErrorKind::ReprTransparentInvalid,
+            );
+        }
     }
 
     /// Type-check a struct's `invariant` predicates (design.md § Contracts).

@@ -5936,6 +5936,29 @@ fn test_parser_indexed_call_still_parses_as_index_then_call() {
 // ── Distinct Type Declarations ──────────────────────────────────
 
 #[test]
+fn test_repr_transparent_parses_despite_reserved_keyword() {
+    // `transparent` is a reserved keyword (it also introduces a `transparent
+    // effect` declaration), so `#[repr(transparent)]` needs a targeted accept in
+    // the attribute-arg parser. Without it, this was a parse error. See design.md
+    // § `#[repr(transparent)]` for distinct-type FFI.
+    let prog = parse_ok("#[repr(transparent)] distinct type Fd = i32;");
+    if let Item::DistinctType(d) = &prog.items[0] {
+        assert!(
+            d.attributes.iter().any(|a| a.is_bare("repr")),
+            "the #[repr(transparent)] attribute is recorded on the item"
+        );
+    } else {
+        panic!("Expected DistinctType");
+    }
+}
+
+#[test]
+fn test_repr_transparent_parses_on_struct() {
+    let prog = parse_ok("#[repr(transparent)] struct Wrapper { inner: i32 }");
+    assert!(matches!(&prog.items[0], Item::StructDef(_)));
+}
+
+#[test]
 fn test_distinct_type_basic() {
     let prog = parse_ok("distinct type UserId = i64;");
     if let Item::DistinctType(d) = &prog.items[0] {

@@ -220,6 +220,33 @@ pub(super) fn has_repr_c(attributes: &[Attribute]) -> bool {
     false
 }
 
+/// The head name of every `#[repr(...)]` argument — `C`, `transparent`,
+/// `packed`, `align` (from `align(N)`), `i32`, … — across all `#[repr]`
+/// attributes on an item. Used by the `#[repr(transparent)]` carrier-shape
+/// validation to detect the attribute itself and its exclusivity with any other
+/// repr. `align(N)` / `packed(N)` arrive as an `ExprKind::Call` whose callee is
+/// the head identifier.
+pub(super) fn repr_arg_head_names(attributes: &[Attribute]) -> Vec<String> {
+    let mut names = Vec::new();
+    for attr in attributes {
+        if !attr.is_bare("repr") {
+            continue;
+        }
+        for arg in &attr.args {
+            match arg.value.as_ref().map(|e| &e.kind) {
+                Some(ExprKind::Identifier(n)) => names.push(n.clone()),
+                Some(ExprKind::Call { callee, .. }) => {
+                    if let ExprKind::Identifier(n) = &callee.kind {
+                        names.push(n.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    names
+}
+
 /// Returns `true` when `attributes` contains `#[derive(Display(snake_case))]`.
 pub(super) fn has_display_snake_case(attributes: &[Attribute]) -> bool {
     for attr in attributes {
@@ -447,6 +474,14 @@ pub enum TypeErrorKind {
     /// `karac run`'s lenient path downgrade-and-execute a program that
     /// `karac build` rejects, re-opening the divergence this kind closes.
     AtomicMissingOrdering,
+    /// A `#[repr(transparent)]` carrier violates a shape rule (design.md §
+    /// `#[repr(transparent)]` for distinct-type FFI). One kind for the whole
+    /// family; the specific rule is named by the symbolic code embedded in the
+    /// message (`E_REPR_TRANSPARENT_REQUIRES_SINGLE_FIELD` /
+    /// `_REQUIRES_FIELD` / `_ENUM_NOT_SINGLE_VARIANT` / `_UNION_FORBIDDEN` /
+    /// `_EXCLUSIVE` / `_REQUIRES_SIZED`), matching the `E_PTR_*` /
+    /// `E_RAW_POINTER_*` code-in-message convention.
+    ReprTransparentInvalid,
     /// A return-position `impl Trait` whose body yields two or more distinct
     /// concrete witness types (design.md § `impl Trait`: "one concrete return
     /// per monomorphization"). Codegen rejects it (no single type to
@@ -924,7 +959,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::MainReturnType
         | TypeErrorKind::MainErrNotDisplay
         | TypeErrorKind::CrossTaskUnsafeCapture
-        | TypeErrorKind::GpuNotSafe => None,
+        | TypeErrorKind::GpuNotSafe
+        | TypeErrorKind::ReprTransparentInvalid => None,
     }
 }
 

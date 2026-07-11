@@ -3625,6 +3625,37 @@ fn main() {
         }
     }
 
+    /// `#[repr(transparent)]` for distinct-type FFI (design.md § the same). The
+    /// wrapper's ABI shape IS its inner field's, so a `Fd = i32` passes to an
+    /// `extern "C"` `i32` param via `.raw()` with no conversion, and a single-
+    /// field-struct wrapper passes via field access — both round-trip through
+    /// libc `abs`. The layout guarantee (`size_of[Wrapper] == size_of[Inner]`) is
+    /// verified alongside. The attribute needs no dedicated codegen: distinct
+    /// types are already zero-cost and a single-field struct already lays out as
+    /// its field; the value the attribute adds is the typechecker's single-field
+    /// guarantee that makes the pass-through sound.
+    #[test]
+    fn repr_transparent_ffi_and_layout() {
+        let src = "#[repr(transparent)] distinct type Fd = i32;\n\
+                   #[repr(transparent)] struct Handle { inner: i32 }\n\
+                   unsafe extern \"C\" { fn abs(v: i32) -> i32; }\n\
+                   fn main() {\n\
+                   \x20   let fd: Fd = Fd(-7i32);\n\
+                   \x20   println(unsafe { abs(fd.raw()) });\n\
+                   \x20   let h = Handle { inner: -12i32 };\n\
+                   \x20   println(unsafe { abs(h.inner) });\n\
+                   \x20   println(size_of[Fd]());\n\
+                   \x20   println(size_of[Handle]());\n\
+                   \x20   println(size_of[i32]());\n\
+                   }\n";
+        if let Some(out) = run_program(src) {
+            assert_eq!(
+                out, "7\n12\n4\n4\n4\n",
+                "FFI round-trip + layout pass-through"
+            );
+        }
+    }
+
     /// B-2026-07-11-1: a TURBOFISH-inferred raw-pointer binding
     /// (`let p = ptr.null[u8]()`) — no annotation — must lower to a real `ptr`
     /// and register the pointee so a later pointer method compiles. Before the

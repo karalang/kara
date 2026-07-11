@@ -31701,3 +31701,109 @@ fn gpu_dispatch_rejects_i64_buffer() {
         errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
     );
 }
+
+// ── #[repr(transparent)] carrier-shape validation (design.md §
+//    `#[repr(transparent)]` for distinct-type FFI) ──
+
+fn repr_transparent_err(src: &str) -> String {
+    typecheck_errors(src)
+        .iter()
+        .find_map(|e| {
+            let m = e.to_string();
+            if m.contains("E_REPR_TRANSPARENT_") {
+                Some(m)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected an E_REPR_TRANSPARENT_* diagnostic, got: {:?}",
+                typecheck_errors(src)
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+            )
+        })
+}
+
+#[test]
+fn repr_transparent_distinct_type_accepts() {
+    typecheck_ok("#[repr(transparent)] distinct type Fd = i32; fn main() {}");
+}
+
+#[test]
+fn repr_transparent_single_field_struct_accepts() {
+    typecheck_ok("#[repr(transparent)] struct Wrapper { inner: i32 } fn main() {}");
+}
+
+#[test]
+fn repr_transparent_zero_sized_companion_accepts() {
+    // Exactly one non-zero-sized field; `()` is zero-sized so it is a permitted
+    // companion. (The design's canonical `PhantomData[T]` companion is handled by
+    // `is_zero_sized_companion`'s name arm, but `PhantomData` is not yet a prelude
+    // type in Kāra — `()` exercises the same allowance with a real type.)
+    typecheck_ok("#[repr(transparent)] struct Tagged { inner: i32, _pad: () } fn main() {}");
+}
+
+#[test]
+fn repr_transparent_single_variant_enum_accepts() {
+    typecheck_ok("#[repr(transparent)] enum Wrap { V(i32) } fn main() {}");
+}
+
+#[test]
+fn repr_transparent_multi_field_struct_rejected() {
+    let m = repr_transparent_err("#[repr(transparent)] struct M { a: i32, b: i32 } fn main() {}");
+    assert!(
+        m.contains("E_REPR_TRANSPARENT_REQUIRES_SINGLE_FIELD"),
+        "{m}"
+    );
+}
+
+#[test]
+fn repr_transparent_zero_field_struct_rejected() {
+    let m = repr_transparent_err("#[repr(transparent)] struct Z { } fn main() {}");
+    assert!(m.contains("E_REPR_TRANSPARENT_REQUIRES_FIELD"), "{m}");
+}
+
+#[test]
+fn repr_transparent_multi_variant_enum_rejected() {
+    let m = repr_transparent_err("#[repr(transparent)] enum E { A(i32), B(i32) } fn main() {}");
+    assert!(
+        m.contains("E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT"),
+        "{m}"
+    );
+}
+
+#[test]
+fn repr_transparent_payload_less_variant_rejected() {
+    let m = repr_transparent_err("#[repr(transparent)] enum E { A } fn main() {}");
+    assert!(
+        m.contains("E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT"),
+        "{m}"
+    );
+}
+
+#[test]
+fn repr_transparent_union_rejected() {
+    let m = repr_transparent_err("#[repr(transparent)] union U { a: i32, b: f32 } fn main() {}");
+    assert!(m.contains("E_REPR_TRANSPARENT_UNION_FORBIDDEN"), "{m}");
+}
+
+#[test]
+fn repr_transparent_combined_with_other_repr_rejected() {
+    let m = repr_transparent_err("#[repr(transparent, C)] struct W { inner: i32 } fn main() {}");
+    assert!(m.contains("E_REPR_TRANSPARENT_EXCLUSIVE"), "{m}");
+}
+
+#[test]
+fn repr_transparent_bare_type_param_struct_rejected() {
+    let m = repr_transparent_err("#[repr(transparent)] struct G[T] { inner: T } fn main() {}");
+    assert!(m.contains("E_REPR_TRANSPARENT_REQUIRES_SIZED"), "{m}");
+}
+
+#[test]
+fn repr_transparent_bare_type_param_distinct_rejected() {
+    let m = repr_transparent_err("#[repr(transparent)] distinct type D[T] = T; fn main() {}");
+    assert!(m.contains("E_REPR_TRANSPARENT_REQUIRES_SIZED"), "{m}");
+}
