@@ -457,7 +457,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **358 surfaced 
 | B-2026-07-11-12 | codegen | high | SILENT: `match ref_struct.field { Some(g) => .. | af0cc9d |
 | B-2026-07-11-13 | typecheck+codegen+interp | low | `String.chars()` random-access/length ergonomics (the gap-1 half of B-2026-07-11-9, which was marked fixed for gap 2 — the rc-fallback — only) | this commit |
 | B-2026-07-11-14 | codegen | med | LEAK: a user method on a FRESH-TEMP shared-struct receiver (`make().count()`) leaks the RC box + heap fields under LSan — a regression on `main`, the… | fbf97df |
-| B-2026-07-11-15 | codegen | medium | LEAK: `with_capacity(n)` with a runtime `n == 0` orphaned a 1-byte heap buffer | this commit |
+| B-2026-07-11-15 | codegen | medium | LEAK: `with_capacity(n)` with a runtime `n == 0` orphaned a 1-byte heap buffer | ae65a04 |
 
 </details>
 
