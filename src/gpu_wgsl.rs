@@ -32,8 +32,9 @@
 //! the shapes slice-0 has not *yet* grown to lower (not ill-formed programs).
 
 use crate::ast::{
-    BinOp, Block, Expr, ExprKind, Function, Param, StmtKind, TypeExpr, TypeKind, UnaryOp,
+    BinOp, Block, CallArg, Expr, ExprKind, Function, Param, StmtKind, TypeExpr, TypeKind, UnaryOp,
 };
+use std::collections::{HashMap, HashSet};
 
 /// Why a `#[gpu]` kernel could not be lowered to slice-0 WGSL. Every variant
 /// is a "slice-0 does not handle this *yet*" shape, not an ill-formed program
@@ -73,7 +74,7 @@ const WORKGROUP_SIZE: u32 = 64;
 /// read_write `output: array<f32>`, and a `@compute @workgroup_size(64) fn
 /// main` entry point — exactly the layout the runtime `dispatch_f32_map`
 /// expects.
-pub fn emit_kernel(func: &Function) -> Result<String, WgslError> {
+pub fn emit_kernel(func: &Function, helpers: &[&Function]) -> Result<String, WgslError> {
     let param = kernel_param(func)?;
     let param_name = param.name().ok_or_else(|| {
         WgslError::UnsupportedSignature(
@@ -102,11 +103,16 @@ pub fn emit_kernel(func: &Function) -> Result<String, WgslError> {
     }
     let scalar = param_scalar;
 
+    // `#[gpu]` helper functions reachable from the kernel body (GPU-LBM-5),
+    // emitted as WGSL `fn`s before `main`; their names are recognized as calls.
+    let (helper_defs, helper_names) = emit_helpers(func, helpers)?;
+
     let body_expr = kernel_return_expr(func)?;
-    let body_wgsl = lower_expr(body_expr, param_name)?;
+    let resolve = |n: &str| (n == param_name).then(|| "input[i]".to_string());
+    let body_wgsl = lower_expr(body_expr, &resolve, &helper_names)?;
 
     Ok(format!(
-        "@group(0) @binding(0) var<storage, read>       input:  array<{scalar}>;\n\
+        "{helper_defs}@group(0) @binding(0) var<storage, read>       input:  array<{scalar}>;\n\
          @group(0) @binding(1) var<storage, read_write> output: array<{scalar}>;\n\
          \n\
          @compute @workgroup_size({WORKGROUP_SIZE})\n\
@@ -198,28 +204,34 @@ fn kernel_return_expr(func: &Function) -> Result<&Expr, WgslError> {
     }
 }
 
-/// Lower one body expression to a WGSL text fragment. `param_name` is the sole
-/// kernel parameter; a reference to it lowers to the indexed input load
-/// `input[i]`.
-fn lower_expr(expr: &Expr, param_name: &str) -> Result<String, WgslError> {
+/// Lower one scalar body expression to a WGSL text fragment. `resolve` maps an
+/// identifier to its WGSL (the kernel's sole param → `input[i]`; a helper's params
+/// → themselves); `helpers` is the set of reachable `#[gpu]` helper names (for
+/// call recognition). Handles both the pre-lowering `Binary` operator form (the
+/// scalar kernel emitter runs at typecheck) and the post-lowering `<type>.<op>`
+/// call form (helper bodies on the SoA/codegen path), plus `#[gpu]` helper calls.
+fn lower_expr(
+    expr: &Expr,
+    resolve: &dyn Fn(&str) -> Option<String>,
+    helpers: &HashSet<String>,
+) -> Result<String, WgslError> {
     match &expr.kind {
-        ExprKind::Identifier(name) if name == param_name => Ok("input[i]".to_string()),
-        ExprKind::Identifier(name) => Err(WgslError::UnsupportedBody(format!(
-            "unknown identifier '{name}' in a slice-0 GPU kernel (only the parameter is in scope)"
-        ))),
+        ExprKind::Identifier(name) => resolve(name).ok_or_else(|| {
+            WgslError::UnsupportedBody(format!("unknown identifier '{name}' in a GPU kernel"))
+        }),
         ExprKind::Integer(n, _) => Ok(n.to_string()),
         ExprKind::Float(f, _) => lower_float(*f),
         ExprKind::Binary { op, left, right } => {
             let op_str = binop_str(op)?;
-            let l = lower_expr(left, param_name)?;
-            let r = lower_expr(right, param_name)?;
+            let l = lower_expr(left, resolve, helpers)?;
+            let r = lower_expr(right, resolve, helpers)?;
             Ok(format!("({l} {op_str} {r})"))
         }
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,
         } => {
-            let inner = lower_expr(operand, param_name)?;
+            let inner = lower_expr(operand, resolve, helpers)?;
             Ok(format!("-({inner})"))
         }
         // Value `if c { a } else { b }` → WGSL `select(b, a, c)` (GPU-LBM-4).
@@ -229,14 +241,17 @@ fn lower_expr(expr: &Expr, param_name: &str) -> Result<String, WgslError> {
             else_branch,
         } => {
             let (then_e, else_e) = if_branches(then_block, else_branch)?;
-            let cond = lower_expr(condition, param_name)?;
-            let t = lower_expr(then_e, param_name)?;
-            let e = lower_expr(else_e, param_name)?;
+            let cond = lower_expr(condition, resolve, helpers)?;
+            let t = lower_expr(then_e, resolve, helpers)?;
+            let e = lower_expr(else_e, resolve, helpers)?;
             Ok(format!("select({e}, {t}, {cond})"))
+        }
+        ExprKind::Call { callee, args } => {
+            lower_call(callee, args, &|e| lower_expr(e, resolve, helpers), helpers)
         }
         _ => Err(WgslError::UnsupportedBody(
             "unsupported expression in a GPU kernel body (numeric literals, `+ - * / %`, \
-             unary `-`, comparisons, and value `if`/`else` over the parameter)"
+             unary `-`, comparisons, value `if`/`else`, `#[gpu]` helper calls)"
                 .to_string(),
         )),
     }
@@ -279,6 +294,219 @@ fn cmp_method_op(name: &str) -> Option<&'static str> {
         "ne" => Some("!="),
         _ => None,
     }
+}
+
+/// The WGSL operator for a lowered arithmetic method name (`add`, `mul`, …) — the
+/// post-lowering call form. `None` for a non-arithmetic method.
+fn arith_method_op(name: &str) -> Option<&'static str> {
+    match name {
+        "add" => Some("+"),
+        "sub" => Some("-"),
+        "mul" => Some("*"),
+        "div" => Some("/"),
+        "rem" | "mod" => Some("%"),
+        _ => None,
+    }
+}
+
+/// The function name a call's callee names, for a bare identifier or a
+/// 1-segment path (a free `#[gpu]` helper). `None` for a 2-segment `<type>.<op>`
+/// operator method or any other callee.
+fn call_helper_name(callee: &Expr) -> Option<&str> {
+    match &callee.kind {
+        ExprKind::Identifier(n) => Some(n.as_str()),
+        ExprKind::Path { segments, .. } if segments.len() == 1 => Some(segments[0].as_str()),
+        _ => None,
+    }
+}
+
+/// Lower a `Call`: a 2-segment `<type>.<op>` operator method (arithmetic /
+/// comparison / unary `neg` — the post-lowering form) or a user `#[gpu]` helper
+/// call (GPU-LBM-5). `lower_arg` lowers each argument in the caller's context
+/// (kernel: field/`input[i]`; helper: identity). Shared by both emitter paths.
+fn lower_call(
+    callee: &Expr,
+    args: &[CallArg],
+    lower_arg: &dyn Fn(&Expr) -> Result<String, WgslError>,
+    helpers: &HashSet<String>,
+) -> Result<String, WgslError> {
+    // 2-segment path = a lowered operator method (`f32.add`, `f32.gt`, `f32.neg`).
+    if let ExprKind::Path { segments, .. } = &callee.kind {
+        if segments.len() == 2 {
+            let op = segments[1].as_str();
+            if let Some(o) = arith_method_op(op).or_else(|| cmp_method_op(op)) {
+                if args.len() == 2 {
+                    let l = lower_arg(&args[0].value)?;
+                    let r = lower_arg(&args[1].value)?;
+                    return Ok(format!("({l} {o} {r})"));
+                }
+            }
+            if op == "neg" && args.len() == 1 {
+                return Ok(format!("-({})", lower_arg(&args[0].value)?));
+            }
+        }
+    }
+    // A bare identifier / 1-segment path naming a reachable `#[gpu]` helper.
+    if let Some(name) = call_helper_name(callee) {
+        if helpers.contains(name) {
+            let lowered = args
+                .iter()
+                .map(|a| lower_arg(&a.value))
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(format!("{name}({})", lowered.join(", ")));
+        }
+    }
+    Err(WgslError::UnsupportedBody(
+        "unsupported call in a GPU kernel body — only arithmetic / comparison operators \
+         and `#[gpu]` helper functions are supported"
+            .to_string(),
+    ))
+}
+
+/// The `#[gpu]` helper functions transitively reachable from `root`'s body, in
+/// callee-before-caller order (WGSL requires a function be declared before use).
+/// `all` maps every `#[gpu]` function name to its `Function`; `root` itself is
+/// excluded. Also returns the set of reachable helper names (for call recognition
+/// during lowering).
+fn reachable_helpers<'a>(
+    root: &Function,
+    all: &HashMap<String, &'a Function>,
+) -> (Vec<&'a Function>, HashSet<String>) {
+    fn calls_in(expr: &Expr, all: &HashMap<String, &Function>, out: &mut Vec<String>) {
+        match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                if let Some(name) = call_helper_name(callee) {
+                    if all.contains_key(name) {
+                        out.push(name.to_string());
+                    }
+                }
+                for a in args {
+                    calls_in(&a.value, all, out);
+                }
+                calls_in(callee, all, out);
+            }
+            ExprKind::Binary { left, right, .. } => {
+                calls_in(left, all, out);
+                calls_in(right, all, out);
+            }
+            ExprKind::Unary { operand, .. } => calls_in(operand, all, out),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                calls_in(condition, all, out);
+                calls_in_block(then_block, all, out);
+                if let Some(e) = else_branch {
+                    calls_in(e, all, out);
+                }
+            }
+            ExprKind::Block(b) => calls_in_block(b, all, out),
+            ExprKind::StructLiteral { fields, .. } => {
+                for f in fields {
+                    calls_in(&f.value, all, out);
+                }
+            }
+            ExprKind::FieldAccess { object, .. } => calls_in(object, all, out),
+            _ => {}
+        }
+    }
+    fn calls_in_block(b: &Block, all: &HashMap<String, &Function>, out: &mut Vec<String>) {
+        if let Some(e) = &b.final_expr {
+            calls_in(e, all, out);
+        }
+        for s in &b.stmts {
+            if let StmtKind::Expr(e) = &s.kind {
+                calls_in(e, all, out);
+            }
+        }
+    }
+    fn visit<'a>(
+        f: &Function,
+        all: &HashMap<String, &'a Function>,
+        seen: &mut HashSet<String>,
+        order: &mut Vec<&'a Function>,
+    ) {
+        let mut called = Vec::new();
+        calls_in_block(&f.body, all, &mut called);
+        for name in called {
+            if let Some(&h) = all.get(&name) {
+                if seen.insert(name) {
+                    visit(h, all, seen, order); // callees first
+                    order.push(h);
+                }
+            }
+        }
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    seen.insert(root.name.clone());
+    let mut order = Vec::new();
+    visit(root, all, &mut seen, &mut order);
+    let names: HashSet<String> = order.iter().map(|f| f.name.clone()).collect();
+    (order, names)
+}
+
+/// Emit a reachable `#[gpu]` helper as a WGSL `fn name(p0: f32, …) -> f32 { return
+/// <body>; }`. Params are `f32` scalars (the GPU-LBM-5 floor); the body is lowered
+/// with each parameter resolving to itself (identity) and calls to other helpers
+/// recognized via `helper_names`.
+fn emit_helper_def(func: &Function, helper_names: &HashSet<String>) -> Result<String, WgslError> {
+    if func.self_param.is_some() {
+        return Err(WgslError::UnsupportedSignature(format!(
+            "GPU helper `{}` cannot take a self receiver",
+            func.name
+        )));
+    }
+    let mut param_names = HashSet::new();
+    let mut sig = String::new();
+    for (i, p) in func.params.iter().enumerate() {
+        let name = p.name().ok_or_else(|| {
+            WgslError::UnsupportedSignature(format!(
+                "GPU helper `{}` parameter must be a plain binding",
+                func.name
+            ))
+        })?;
+        wgsl_scalar(&p.ty, "helper parameter")?; // f32/i32/u32
+        if i > 0 {
+            sig.push_str(", ");
+        }
+        sig.push_str(&format!("{name}: f32"));
+        param_names.insert(name.to_string());
+    }
+    match &func.return_type {
+        Some(ty) => {
+            wgsl_scalar(ty, "helper return type")?;
+        }
+        None => {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "GPU helper `{}` must return a scalar",
+                func.name
+            )));
+        }
+    }
+    let body = kernel_return_expr(func)?;
+    let resolve = |n: &str| -> Option<String> { param_names.get(n).cloned() };
+    let body_wgsl = lower_expr(body, &resolve, helper_names)?;
+    Ok(format!(
+        "fn {}({sig}) -> f32 {{ return {body_wgsl}; }}\n",
+        func.name
+    ))
+}
+
+/// Emit the WGSL definitions of every `#[gpu]` helper reachable from `root`, in
+/// declaration order, and return them with the reachable-helper name set.
+fn emit_helpers(
+    root: &Function,
+    all_helpers: &[&Function],
+) -> Result<(String, HashSet<String>), WgslError> {
+    let all: HashMap<String, &Function> =
+        all_helpers.iter().map(|h| (h.name.clone(), *h)).collect();
+    let (order, names) = reachable_helpers(root, &all);
+    let mut defs = String::new();
+    for h in order {
+        defs.push_str(&emit_helper_def(h, &names)?);
+    }
+    Ok((defs, names))
 }
 
 /// Extract the value expressions of `if cond { then } else { else }` used as a
@@ -374,7 +602,11 @@ impl SoaGpuGroup {
 /// multi-field group is `array<G_<name>>` over an emitted WGSL sub-struct
 /// (GPU-LBM-3 coalesced group). `<param>.<field>` reads the group's materialized
 /// element; the returned struct literal stores each field into its group's output.
-pub fn emit_kernel_soa(func: &Function, groups: &[SoaGpuGroup]) -> Result<String, WgslError> {
+pub fn emit_kernel_soa(
+    func: &Function,
+    groups: &[SoaGpuGroup],
+    helpers: &[&Function],
+) -> Result<String, WgslError> {
     let param = kernel_param(func)?;
     let param_name = param.name().ok_or_else(|| {
         WgslError::UnsupportedSignature(
@@ -443,15 +675,19 @@ pub fn emit_kernel_soa(func: &Function, groups: &[SoaGpuGroup]) -> Result<String
         }
     }
 
+    // `#[gpu]` helper functions reachable from the kernel (GPU-LBM-5), emitted as
+    // WGSL `fn`s before the bindings.
+    let (helper_defs, helper_names) = emit_helpers(func, helpers)?;
+
     // The body is a struct literal; store each group's fields to its output.
     let body = kernel_return_expr(func)?;
-    let stores = lower_struct_return(body, param_name, groups)?;
+    let stores = lower_struct_return(body, param_name, groups, &helper_names)?;
 
     // arrayLength guard keys off the first input buffer (all equal length).
     let guard_group = &groups[0].name;
 
     Ok(format!(
-        "{structs}{decls}\n\
+        "{helper_defs}{structs}{decls}\n\
          @compute @workgroup_size({WORKGROUP_SIZE})\n\
          fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let i = gid.x;\n\
@@ -470,6 +706,7 @@ fn lower_struct_return(
     expr: &Expr,
     param_name: &str,
     groups: &[SoaGpuGroup],
+    helpers: &HashSet<String>,
 ) -> Result<String, WgslError> {
     let mut out = String::new();
     for g in groups {
@@ -477,7 +714,7 @@ fn lower_struct_return(
             let vals = g
                 .fields
                 .iter()
-                .map(|f| struct_field_wgsl(expr, f, param_name, groups))
+                .map(|f| struct_field_wgsl(expr, f, param_name, groups, helpers))
                 .collect::<Result<Vec<_>, _>>()?;
             out.push_str(&format!(
                 "    {}_out[i] = {}({});\n",
@@ -489,7 +726,7 @@ fn lower_struct_return(
             out.push_str(&format!(
                 "    {}_out[i] = {};\n",
                 g.name,
-                struct_field_wgsl(expr, &g.fields[0], param_name, groups)?
+                struct_field_wgsl(expr, &g.fields[0], param_name, groups, helpers)?
             ));
         }
     }
@@ -508,6 +745,7 @@ fn struct_field_wgsl(
     field: &str,
     param_name: &str,
     groups: &[SoaGpuGroup],
+    helpers: &HashSet<String>,
 ) -> Result<String, WgslError> {
     match &expr.kind {
         ExprKind::StructLiteral { fields, spread, .. } => {
@@ -521,7 +759,7 @@ fn struct_field_wgsl(
                     "the returned struct is missing field `{field}`"
                 ))
             })?;
-            lower_soa_expr(&init.value, param_name, groups)
+            lower_soa_expr(&init.value, param_name, groups, helpers)
         }
         ExprKind::Identifier(name) if name == param_name => {
             if groups.iter().any(|g| g.fields.iter().any(|gf| gf == field)) {
@@ -538,9 +776,9 @@ fn struct_field_wgsl(
             else_branch,
         } => {
             let (then_e, else_e) = if_branches(then_block, else_branch)?;
-            let cond = lower_soa_expr(condition, param_name, groups)?;
-            let t = struct_field_wgsl(then_e, field, param_name, groups)?;
-            let e = struct_field_wgsl(else_e, field, param_name, groups)?;
+            let cond = lower_soa_expr(condition, param_name, groups, helpers)?;
+            let t = struct_field_wgsl(then_e, field, param_name, groups, helpers)?;
+            let e = struct_field_wgsl(else_e, field, param_name, groups, helpers)?;
             Ok(format!("select({e}, {t}, {cond})"))
         }
         _ => Err(WgslError::UnsupportedBody(
@@ -559,6 +797,7 @@ fn lower_soa_expr(
     expr: &Expr,
     param_name: &str,
     groups: &[SoaGpuGroup],
+    helpers: &HashSet<String>,
 ) -> Result<String, WgslError> {
     match &expr.kind {
         ExprKind::FieldAccess { object, field } => {
@@ -581,68 +820,35 @@ fn lower_soa_expr(
         ExprKind::Float(f, _) => lower_float(*f),
         ExprKind::Binary { op, left, right } => {
             let op_str = binop_str(op)?;
-            let l = lower_soa_expr(left, param_name, groups)?;
-            let r = lower_soa_expr(right, param_name, groups)?;
+            let l = lower_soa_expr(left, param_name, groups, helpers)?;
+            let r = lower_soa_expr(right, param_name, groups, helpers)?;
             Ok(format!("({l} {op_str} {r})"))
         }
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,
         } => {
-            let inner = lower_soa_expr(operand, param_name, groups)?;
+            let inner = lower_soa_expr(operand, param_name, groups, helpers)?;
             Ok(format!("-({inner})"))
         }
-        // Post-desugar arithmetic: the operator-desugar pass rewrites `a + b`
-        // into `<type>.add(a, b)` (this emitter runs at codegen, *after* desugar,
-        // unlike the pre-desugar scalar `emit_kernel`). Map the `<type>.<op>` call
-        // back to the WGSL operator. (`Binary`/`Unary` above are kept for the
-        // pre-desugar emitter unit tests.)
-        ExprKind::Call { callee, args } => {
-            if let ExprKind::Path { segments, .. } = &callee.kind {
-                if segments.len() == 2 {
-                    let op = segments[1].as_str();
-                    let bin = match op {
-                        "add" => Some("+"),
-                        "sub" => Some("-"),
-                        "mul" => Some("*"),
-                        "div" => Some("/"),
-                        "rem" | "mod" => Some("%"),
-                        _ => None,
-                    };
-                    if let (Some(op_str), 2) = (bin, args.len()) {
-                        let l = lower_soa_expr(&args[0].value, param_name, groups)?;
-                        let r = lower_soa_expr(&args[1].value, param_name, groups)?;
-                        return Ok(format!("({l} {op_str} {r})"));
-                    }
-                    if op == "neg" && args.len() == 1 {
-                        let inner = lower_soa_expr(&args[0].value, param_name, groups)?;
-                        return Ok(format!("-({inner})"));
-                    }
-                    // Post-lowering comparison: `a > b` → `f32.gt(a, b)` (GPU-LBM-4).
-                    if let (Some(op_str), 2) = (cmp_method_op(op), args.len()) {
-                        let l = lower_soa_expr(&args[0].value, param_name, groups)?;
-                        let r = lower_soa_expr(&args[1].value, param_name, groups)?;
-                        return Ok(format!("({l} {op_str} {r})"));
-                    }
-                }
-            }
-            Err(WgslError::UnsupportedBody(
-                "unsupported call in a struct GPU kernel body — only desugared arithmetic \
-                 (`+ - * / %`, unary `-`) and comparison (`> < >= <= == !=`) are supported"
-                    .to_string(),
-            ))
-        }
+        // Post-lowering operator methods (`a + b` → `<type>.add(a, b)`) and
+        // `#[gpu]` helper calls — the SoA emitter runs at codegen, after lowering.
+        ExprKind::Call { callee, args } => lower_call(
+            callee,
+            args,
+            &|e| lower_soa_expr(e, param_name, groups, helpers),
+            helpers,
+        ),
         // Value `if c { a } else { b }` → WGSL `select(b, a, c)` (GPU-LBM-4).
-        // `if` survives lowering, so the SoA (codegen) emitter sees it too.
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
             let (then_e, else_e) = if_branches(then_block, else_branch)?;
-            let cond = lower_soa_expr(condition, param_name, groups)?;
-            let t = lower_soa_expr(then_e, param_name, groups)?;
-            let e = lower_soa_expr(else_e, param_name, groups)?;
+            let cond = lower_soa_expr(condition, param_name, groups, helpers)?;
+            let t = lower_soa_expr(then_e, param_name, groups, helpers)?;
+            let e = lower_soa_expr(else_e, param_name, groups, helpers)?;
             Ok(format!("select({e}, {t}, {cond})"))
         }
         ExprKind::Identifier(name) => Err(WgslError::UnsupportedBody(format!(
@@ -651,7 +857,7 @@ fn lower_soa_expr(
         ))),
         _ => Err(WgslError::UnsupportedBody(
             "unsupported expression in a struct GPU kernel body (field access, numeric \
-             literals, `+ - * / %`, unary `-`, comparisons, value `if`/`else`)"
+             literals, `+ - * / %`, unary `-`, comparisons, value `if`/`else`, helper calls)"
                 .to_string(),
         )),
     }
@@ -677,10 +883,90 @@ mod tests {
         panic!("no function item found in source");
     }
 
+    /// Parse all top-level `fn`s (for multi-function helper tests).
+    fn parse_fns(src: &str) -> Vec<Function> {
+        let result = crate::parse(src);
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        result
+            .program
+            .items
+            .into_iter()
+            .filter_map(|it| match it {
+                crate::ast::Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn emits_scalar_helper_call() {
+        // `upd` calls the `#[gpu]` helper `sq` — GPU-LBM-5.
+        let fns = parse_fns(
+            "#[gpu]\nfn sq(v: f32) -> f32 { v * v }\n\
+             #[gpu]\nfn upd(x: f32) -> f32 { sq(x) + 1.0 }\n",
+        );
+        let sq = fns.iter().find(|f| f.name == "sq").unwrap();
+        let upd = fns.iter().find(|f| f.name == "upd").unwrap();
+        let wgsl = emit_kernel(upd, &[sq]).unwrap();
+        assert!(
+            wgsl.contains("fn sq(v: f32) -> f32 { return (v * v); }"),
+            "{wgsl}"
+        );
+        assert!(wgsl.contains("output[i] = (sq(input[i]) + 1.0);"), "{wgsl}");
+    }
+
+    #[test]
+    fn emits_soa_helper_call() {
+        let fns = parse_fns(
+            "#[gpu]\nfn sq(v: f32) -> f32 { v * v }\n\
+             #[gpu]\nfn upd(x: Cell) -> Cell { Cell { a: sq(x.a), b: x.b } }\n",
+        );
+        let sq = fns.iter().find(|f| f.name == "sq").unwrap();
+        let upd = fns.iter().find(|f| f.name == "upd").unwrap();
+        let groups = vec![
+            SoaGpuGroup {
+                name: "ga".into(),
+                fields: vec!["a".into()],
+            },
+            SoaGpuGroup {
+                name: "gb".into(),
+                fields: vec!["b".into()],
+            },
+        ];
+        let wgsl = emit_kernel_soa(upd, &groups, &[sq]).unwrap();
+        assert!(
+            wgsl.contains("fn sq(v: f32) -> f32 { return (v * v); }"),
+            "{wgsl}"
+        );
+        assert!(wgsl.contains("ga_out[i] = sq(x_a);"), "{wgsl}");
+    }
+
+    #[test]
+    fn emits_transitive_helpers_callee_first() {
+        // `outer` → `mid` → `inner`; emitted callee-before-caller.
+        let fns = parse_fns(
+            "#[gpu]\nfn inner(v: f32) -> f32 { v + 1.0 }\n\
+             #[gpu]\nfn mid(v: f32) -> f32 { inner(v) * 2.0 }\n\
+             #[gpu]\nfn outer(x: f32) -> f32 { mid(x) }\n",
+        );
+        let inner = fns.iter().find(|f| f.name == "inner").unwrap();
+        let mid = fns.iter().find(|f| f.name == "mid").unwrap();
+        let outer = fns.iter().find(|f| f.name == "outer").unwrap();
+        let wgsl = emit_kernel(outer, &[inner, mid]).unwrap();
+        let ip = wgsl.find("fn inner").unwrap();
+        let mp = wgsl.find("fn mid").unwrap();
+        assert!(ip < mp, "inner must be declared before mid:\n{wgsl}");
+        assert!(wgsl.contains("output[i] = mid(input[i]);"), "{wgsl}");
+    }
+
     #[test]
     fn emits_the_canonical_double_kernel() {
         let func = parse_kernel("#[gpu]\nfn double(x: f32) -> f32 { x * 2.0 }\n");
-        let wgsl = emit_kernel(&func).expect("double kernel should lower");
+        let wgsl = emit_kernel(&func, &[]).expect("double kernel should lower");
 
         // The fixed boilerplate the runtime spine's binding layout requires.
         assert!(wgsl.contains("@group(0) @binding(0) var<storage, read>       input:  array<f32>;"));
@@ -699,7 +985,7 @@ mod tests {
     #[test]
     fn lowers_nested_arithmetic_with_precedence_parens() {
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { x * 3.0 + 1.0 }\n");
-        let wgsl = emit_kernel(&func).unwrap();
+        let wgsl = emit_kernel(&func, &[]).unwrap();
         // `x * 3.0 + 1.0` parses as `(x * 3.0) + 1.0`; parens preserve it.
         assert!(
             wgsl.contains("output[i] = ((input[i] * 3.0) + 1.0);"),
@@ -713,7 +999,7 @@ mod tests {
             let func = parse_kernel(&format!(
                 "#[gpu]\nfn k(x: f32) -> f32 {{ x {src_op} 2.0 }}\n"
             ));
-            let wgsl = emit_kernel(&func).unwrap();
+            let wgsl = emit_kernel(&func, &[]).unwrap();
             assert!(
                 wgsl.contains(&format!("output[i] = (input[i] {wgsl_op} 2.0);")),
                 "op {src_op}:\n{wgsl}"
@@ -724,14 +1010,14 @@ mod tests {
     #[test]
     fn lowers_unary_negation() {
         let func = parse_kernel("#[gpu]\nfn neg(x: f32) -> f32 { -x }\n");
-        let wgsl = emit_kernel(&func).unwrap();
+        let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(wgsl.contains("output[i] = -(input[i]);"), "{wgsl}");
     }
 
     #[test]
     fn lowers_via_explicit_return() {
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { return x * 2.0; }\n");
-        let wgsl = emit_kernel(&func).unwrap();
+        let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(wgsl.contains("output[i] = (input[i] * 2.0);"), "{wgsl}");
     }
 
@@ -740,21 +1026,21 @@ mod tests {
         // An integer literal in an f32 expression is a WGSL abstract-int that
         // converts to f32 in a float context — emit it verbatim.
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { x + 5.0 * 2.0 }\n");
-        let wgsl = emit_kernel(&func).unwrap();
+        let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(wgsl.contains("(5.0 * 2.0)"), "{wgsl}");
     }
 
     #[test]
     fn rejects_multiple_parameters() {
         let func = parse_kernel("#[gpu]\nfn k(x: f32, y: f32) -> f32 { x + y }\n");
-        let err = emit_kernel(&func).unwrap_err();
+        let err = emit_kernel(&func, &[]).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedSignature(_)), "{err:?}");
     }
 
     #[test]
     fn rejects_zero_parameters() {
         let func = parse_kernel("#[gpu]\nfn k() -> f32 { 1.0 }\n");
-        let err = emit_kernel(&func).unwrap_err();
+        let err = emit_kernel(&func, &[]).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedSignature(_)), "{err:?}");
     }
 
@@ -763,7 +1049,7 @@ mod tests {
         // Integer scalars are WGSL-native (4-byte) — `array<i32>`, integer
         // literal preserved.
         let func = parse_kernel("#[gpu]\nfn k(x: i32) -> i32 { x * 2 }\n");
-        let wgsl = emit_kernel(&func).unwrap();
+        let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(wgsl.contains("input:  array<i32>;"), "{wgsl}");
         assert!(wgsl.contains("output: array<i32>;"), "{wgsl}");
         assert!(wgsl.contains("output[i] = (input[i] * 2);"), "{wgsl}");
@@ -772,7 +1058,7 @@ mod tests {
     #[test]
     fn lowers_u32_kernel_over_u32_array() {
         let func = parse_kernel("#[gpu]\nfn k(x: u32) -> u32 { x + 1 }\n");
-        let wgsl = emit_kernel(&func).unwrap();
+        let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(wgsl.contains("input:  array<u32>;"), "{wgsl}");
         assert!(wgsl.contains("output[i] = (input[i] + 1);"), "{wgsl}");
     }
@@ -780,7 +1066,7 @@ mod tests {
     #[test]
     fn rejects_mismatched_param_and_return_scalar() {
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> i32 { 0 }\n");
-        let err = emit_kernel(&func).unwrap_err();
+        let err = emit_kernel(&func, &[]).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedSignature(_)), "{err:?}");
     }
 
@@ -789,7 +1075,7 @@ mod tests {
         // WGSL has no native i64/f64 — those stay a later increment.
         for ty in ["i64", "f64", "bool", "u8"] {
             let func = parse_kernel(&format!("#[gpu]\nfn k(x: {ty}) -> {ty} {{ x }}\n"));
-            let err = emit_kernel(&func).unwrap_err();
+            let err = emit_kernel(&func, &[]).unwrap_err();
             assert!(
                 matches!(err, WgslError::UnsupportedSignature(_)),
                 "{ty}: {err:?}"
@@ -800,28 +1086,28 @@ mod tests {
     #[test]
     fn rejects_missing_return_type() {
         let func = parse_kernel("#[gpu]\nfn k(x: f32) { let _y = x; }\n");
-        let err = emit_kernel(&func).unwrap_err();
+        let err = emit_kernel(&func, &[]).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedSignature(_)), "{err:?}");
     }
 
     #[test]
     fn rejects_unknown_identifier() {
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { y * 2.0 }\n");
-        let err = emit_kernel(&func).unwrap_err();
+        let err = emit_kernel(&func, &[]).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
     }
 
     #[test]
     fn rejects_body_with_locals() {
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { let y = x * 2.0; y }\n");
-        let err = emit_kernel(&func).unwrap_err();
+        let err = emit_kernel(&func, &[]).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
     }
 
     #[test]
     fn rejects_non_arithmetic_operator() {
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { x & 2.0 }\n");
-        let err = emit_kernel(&func).unwrap_err();
+        let err = emit_kernel(&func, &[]).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
     }
 
@@ -845,7 +1131,8 @@ mod tests {
         let func = parse_kernel(
             "#[gpu]\nfn step(p: Particle) -> Particle { Particle { pos: p.pos + p.vel, vel: p.vel } }\n",
         );
-        let wgsl = emit_kernel_soa(&func, &particle_groups()).expect("soa kernel should lower");
+        let wgsl =
+            emit_kernel_soa(&func, &particle_groups(), &[]).expect("soa kernel should lower");
         // Single-field groups bind plain `array<f32>`; inputs 0..n, outputs n..2n.
         assert!(
             wgsl.contains("@group(0) @binding(0) var<storage, read> gp_in: array<f32>;"),
@@ -890,7 +1177,7 @@ mod tests {
                 fields: vec!["c".into()],
             },
         ];
-        let wgsl = emit_kernel_soa(&func, &groups).unwrap();
+        let wgsl = emit_kernel_soa(&func, &groups, &[]).unwrap();
         assert!(wgsl.contains("struct G_ab { a: f32, b: f32 };"), "{wgsl}");
         assert!(
             wgsl.contains("@group(0) @binding(0) var<storage, read> ab_in: array<G_ab>;"),
@@ -918,7 +1205,7 @@ mod tests {
         // field copied through (GPU-LBM-4b's struct-value handling; previously an
         // unsupported non-struct-literal return).
         let func = parse_kernel("#[gpu]\nfn step(p: Particle) -> Particle { p }\n");
-        let wgsl = emit_kernel_soa(&func, &particle_groups()).unwrap();
+        let wgsl = emit_kernel_soa(&func, &particle_groups(), &[]).unwrap();
         assert!(wgsl.contains("gp_out[i] = p_pos;"), "{wgsl}");
         assert!(wgsl.contains("gv_out[i] = p_vel;"), "{wgsl}");
     }
@@ -929,7 +1216,7 @@ mod tests {
         let func = parse_kernel(
             "#[gpu]\nfn step(p: Particle) -> Particle { Particle { pos: p.pos + p.vel } }\n",
         );
-        let err = emit_kernel_soa(&func, &particle_groups()).unwrap_err();
+        let err = emit_kernel_soa(&func, &particle_groups(), &[]).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
     }
 
@@ -940,7 +1227,7 @@ mod tests {
         // `if x > 0 { x } else { 0 }` → `select(0.0, input[i], (input[i] > 0.0))`.
         let func =
             parse_kernel("#[gpu]\nfn relu(x: f32) -> f32 { if x > 0.0 { x } else { 0.0 } }\n");
-        let wgsl = emit_kernel(&func).unwrap();
+        let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(
             wgsl.contains("output[i] = select(0.0, input[i], (input[i] > 0.0));"),
             "{wgsl}"
@@ -960,7 +1247,7 @@ mod tests {
             let func = parse_kernel(&format!(
                 "#[gpu]\nfn k(x: f32) -> f32 {{ if x {src} 1.0 {{ x }} else {{ 0.0 }} }}\n"
             ));
-            let wgsl = emit_kernel(&func).unwrap();
+            let wgsl = emit_kernel(&func, &[]).unwrap();
             assert!(
                 wgsl.contains(&format!("(input[i] {op} 1.0)")),
                 "op {src}:\n{wgsl}"
@@ -988,7 +1275,7 @@ mod tests {
                 fields: vec!["c".into()],
             },
         ];
-        let wgsl = emit_kernel_soa(&func, &groups).unwrap();
+        let wgsl = emit_kernel_soa(&func, &groups, &[]).unwrap();
         assert!(
             wgsl.contains("ga_out[i] = select(x_a, (x_a + x_c), (x_c > 0.0));"),
             "{wgsl}"
@@ -999,7 +1286,7 @@ mod tests {
     fn rejects_if_without_else() {
         // A value `if` needs an `else`.
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { if x > 0.0 { x } }\n");
-        let err = emit_kernel(&func).unwrap_err();
+        let err = emit_kernel(&func, &[]).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
     }
 
@@ -1021,7 +1308,7 @@ mod tests {
                 fields: vec!["b".into()],
             },
         ];
-        let wgsl = emit_kernel_soa(&func, &groups).unwrap();
+        let wgsl = emit_kernel_soa(&func, &groups, &[]).unwrap();
         assert!(
             wgsl.contains("ga_out[i] = select(x_a, (x_a + x_b), (x_b > 0.0));"),
             "{wgsl}"

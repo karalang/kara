@@ -5887,7 +5887,17 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        match crate::gpu_wgsl::emit_kernel(kernel) {
+        // Other `#[gpu]` functions are candidate helpers the kernel may call
+        // (GPU-LBM-5); the emitter selects the reachable ones.
+        let helpers: Vec<&Function> = program
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Function(f) if f.is_gpu && f.name != *kernel_name => Some(f),
+                _ => None,
+            })
+            .collect();
+        match crate::gpu_wgsl::emit_kernel(kernel, &helpers) {
             Ok(wgsl) => {
                 self.gpu_dispatch_wgsl.insert(
                     SpanKey(args[0].value.span.offset, args[0].value.span.length),

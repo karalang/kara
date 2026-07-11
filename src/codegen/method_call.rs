@@ -10732,7 +10732,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 fields: g.fields.clone(),
             })
             .collect();
-        let wgsl = crate::gpu_wgsl::emit_kernel_soa(kernel, &manifest).map_err(|e| {
+        // Other `#[gpu]` functions are candidate helpers the kernel may call
+        // (GPU-LBM-5); the emitter selects + emits the reachable ones.
+        let helpers: Vec<&crate::ast::Function> = program
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                crate::ast::Item::Function(f) if f.is_gpu && &f.name != kernel_name => Some(f),
+                _ => None,
+            })
+            .collect();
+        let wgsl = crate::gpu_wgsl::emit_kernel_soa(kernel, &manifest, &helpers).map_err(|e| {
             format!(
                 "gpu.dispatch: cannot lower `{kernel_name}` to a GPU shader — {}",
                 e.reason()
