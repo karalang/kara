@@ -5391,15 +5391,29 @@ impl<'ctx> super::Codegen<'ctx> {
             None
         };
 
-        // B-2026-07-09-12 clone-on-extract — is the source a shared-enum-payload
-        // VIEW (`match e { Call(c) => { let CallNode { .. } = c } }`)? Unlike a
-        // callee-owned source it has NO registered struct-drop; the box's rc-drop
-        // owns its heap. Each extracted leaf therefore ALIASES the box's heap and
-        // must be DUPLICATED so the leaf owns it independently (below).
+        // B-2026-07-09-12 clone-on-extract — is the source a VIEW whose heap the
+        // source does NOT own (no registered struct-drop of its own)? Two source
+        // classes qualify:
+        //   (a) a shared-enum-payload VIEW (`match e { Call(c) => { let CallNode
+        //       { .. } = c } }`) — the box's rc-drop owns its heap; and
+        //   (b) a `for`-loop element bound out of an OWNED aggregate container
+        //       (`for a in v { let AttrNode { string_value } = a }`,
+        //       `for_loop_owned_agg_vars`, B-2026-07-10-4) — the loop binding `a`
+        //       is a bit-copy alias of `v`'s element slot, whose heap `v`'s
+        //       scope-exit per-element drain frees. In BOTH cases each extracted
+        //       leaf ALIASES the retained container's heap, so moving a leaf out
+        //       (and giving it its own scope-exit free) double-frees against the
+        //       container's drain unless the leaf is DUPLICATED first (below).
+        //       Per design.md §2601/§2751 bare `for` BORROWS the collection (it
+        //       is live after the loop), so taking an owned value out of the
+        //       borrowed element correctly requires a copy — this IS the borrow
+        //       semantics, not a workaround. (`.into_iter()` zero-copy consume is
+        //       a tracked perf follow-up.)
         let view_src: bool = !fresh
             && callee_owned_src.is_none()
             && matches!(&value.kind, ExprKind::Identifier(root)
-                if self.shared_enum_payload_view_vars.contains_key(root.as_str()));
+                if self.shared_enum_payload_view_vars.contains_key(root.as_str())
+                    || self.for_loop_owned_agg_vars.contains(root.as_str()));
 
         for (idx, fname) in field_names.iter().enumerate() {
             let Some(field_te) = field_tes.get(idx).cloned() else {
@@ -5629,6 +5643,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.track_rc_option_var(var_name, leaf_ptr, option_ty, inner_info.heap_type);
             }
             return;
+        }
+        // `Option[inline-heap]` — a non-shared payload whose heap lives inline in
+        // the Option words (`Option[String]`, `Option[Vec[..]]`) or in a box
+        // (`Option[<struct/enum>]`). The container's per-element Option drop frees
+        // the ORIGINAL `Some` payload, so the extracted leaf must own an
+        // INDEPENDENT copy. Deep-copy the `Some` payload in place (tag-guarded, a
+        // no-op on `None`), then register the leaf's own tag-guarded scope-exit
+        // Option free — the inline (String/Vec) and boxed (struct/enum) shapes use
+        // the matching tracker, mirroring `finish_owned_struct_destructure`'s split
+        // (B-2026-07-10-4: the residual attr-item double-free — `AttrNode` carries
+        // `string_value: Option[String]` / `Option[Expr]`).
+        if let Some(payload) = Self::option_payload_te(field_te) {
+            if self.option_payload_inline_recursive_drop_ok(&payload) {
+                self.deep_copy_option_inline_payload_in_place(leaf_ptr, field_te);
+                self.track_inline_option_payload_var(var_name, leaf_ptr, field_te);
+                return;
+            }
+            if self.option_payload_struct_or_enum_drop_ok(&payload) {
+                self.deep_copy_option_inline_payload_in_place(leaf_ptr, field_te);
+                self.track_inline_option_agg_payload_var(var_name, leaf_ptr, field_te);
+                return;
+            }
         }
         // Nested fully-clone-duplicable struct (String / Vec[heap-free] / nested
         // such — the `struct_clone_fully_duplicates` shape, whose

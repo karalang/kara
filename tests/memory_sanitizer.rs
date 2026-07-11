@@ -22460,6 +22460,88 @@ fn main() {
     }
 
     #[test]
+    fn asan_forloop_element_destructure_option_string_field_match_consume_no_double_free() {
+        // B-2026-07-10-4 (the residual attr-item double-free, minimal E1 form):
+        // DESTRUCTURING an `Option[String]` field OUT of a for-loop element and
+        // then match-consuming it. Bare `for` BORROWS the collection (design.md
+        // §2601/§2751), so `a` is a bit-copy VIEW of `items`'s element slot; the
+        // extracted `string_value` aliases the element's `Option[String]` buffer,
+        // which `items`'s scope-exit per-element drain frees. Without the
+        // clone-on-extract routing (`for_loop_owned_agg_vars` → `view_src` +
+        // `clone_on_extract_view_field`'s `Option[inline-heap]` leg) the match
+        // frees the aliased buffer AND the drain frees it again — a double-free
+        // (`corrupted size vs. prev_size in fastbins`). This is the exact shape of
+        // the 12 residual attribute-item crashers (`AttrNode.string_value`).
+        assert_clean_asan_run(
+            r#"
+struct AttrNode { string_value: Option[String] }
+fn parse_attrs() -> Vec[AttrNode] {
+    let mut a: Vec[AttrNode] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        a.push(AttrNode { string_value: Some("forloop_destructure_option_string_payload_xx".to_string()) });
+        i = i + 1;
+    }
+    a
+}
+fn main() {
+    let items = parse_attrs();
+    let mut n: i64 = 0;
+    for a in items {
+        let AttrNode { string_value } = a;
+        match string_value {
+            Some(s) => { n = n + s.len(); }
+            None => {}
+        }
+    }
+    println(n);
+}
+"#,
+            &["264"], // 6 * len("forloop_destructure_option_string_payload_xx") = 6 * 44
+            "forloop_element_destructure_option_string_field_match_consume_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_forloop_element_destructure_string_field_move_into_collector_no_double_free() {
+        // B-2026-07-10-4 sibling (E4 form): DESTRUCTURE a `String` field out of a
+        // for-loop element and MOVE it into a collector Vec. The borrowed-element
+        // leaf aliases `items`'s per-element buffer; moving it into `collected`
+        // gives `collected` an aliasing owner, so `collected`'s drain AND `items`'s
+        // per-element drain free the same buffer. Clone-on-extract's String leg
+        // deep-copies the leaf so `collected` owns an independent buffer. (The
+        // borrow-only sibling — `let A { s } = a; use s` without a move — is
+        // covered by `..._clean_shapes_stay_clean`, which the clone must keep leak-
+        // free: the extra copy is freed at scope exit.)
+        assert_clean_asan_run(
+            r#"
+struct A { s: String }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 5 { v.push(A { s: "forloop_destructure_string_move_into_collector_x".to_string() }); i = i + 1; }
+    v
+}
+fn main() {
+    let items = build();
+    let mut collected: Vec[String] = Vec.new();
+    for a in items {
+        let A { s } = a;
+        collected.push(s);
+    }
+    let mut n: i64 = 0;
+    for c in collected {
+        n = n + c.len();
+    }
+    println(n);
+}
+"#,
+            &["240"], // 5 * len("forloop_destructure_string_move_into_collector_x") = 5 * 48
+            "forloop_element_destructure_string_field_move_into_collector_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_forloop_bare_enum_element_whole_move_no_double_free() {
         // B-2026-07-05-2: the residual B-2026-07-04-17 left open — a BARE
         // `Vec[<user enum>]` element moved WHOLE to a new owner. `x` aliases the
