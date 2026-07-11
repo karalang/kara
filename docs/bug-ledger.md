@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **370 surfaced · 4 open · 364 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **371 surfaced · 4 open · 365 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -100,9 +100,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **370 surfaced 
 | B-2026-07-11-23 | 2026-07-11 | interp+codegen | medium | `mut ref` closure capture (mutation of a captured mutable local) is unimplemented: a closure that writes a captured name mutates a SNAPSHOT, not the outer binding. Stored closures drop the mutation in BOTH interp and codegen; the inlined iterator terminals (fold/any/all) DIVERGE — codegen inlines (mutates outer = design-correct) while the interpreter snapshots. | unfixed; repros below |
 | B-2026-07-11-24 | 2026-07-11 | codegen | high | Passing a `Vec[Vec[Option[shared]]]` ELEMENT by value to a consuming (cloning) callee corrupts the heap when the outer Vec GROWS in a loop — silent wrong answer at small sizes, double-free crash at larger; interpreter correct | kata #95 second surface |
 
-### Fixed (364)
+### Fixed (365)
 
-<details><summary>364 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>365 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -470,6 +470,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **370 surfaced 
 | B-2026-07-11-22 | codegen | high | DOUBLE-FREE: `for it in vec { match it { Variant(payload) => .. | 6dbe1fb |
 | B-2026-07-11-25 | codegen | high | SILENT MISCOMPILE: a GENERIC struct's ASSOCIATED function returning a struct (`impl[T] W[T] { fn make(x: T) -> W[T] { W{v:x} } }` called `W.make(7)`)… | 6b3fcac |
 | B-2026-07-11-26 | codegen+interp | medium | A fresh-temp ENUM scrutinee whose type has a user `impl Drop` SILENTLY SKIPPED that Drop in `if let` / `while let` / `let…else` / `match` — the user-… | this commit |
+| B-2026-07-11-27 | codegen | high | A gpu.dispatch result bound/assigned to a SoA `layout` variable SIGSEGVs: compile_gpu_dispatch_soa returns a standard AoS Vec {ptr,len,cap}, but a la… | codegen/exprs.rs + stmts.rs: bind/assign a gpu.dispatch result into a SoA `layout` variable via AoS->SoA scatter (compile_soa_let_from_gpu_dispatch / compile_soa_assign_from_gpu_dispatch, sharing soa_scatter_aos_into + the factored soa_push_value), instead of storing the AoS {ptr,len,cap} header raw into the multi-group SoA slot. |
 
 </details>
 
