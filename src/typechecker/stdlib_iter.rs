@@ -98,12 +98,16 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![item.clone()],
                 }
             }
-            "count" => {
-                // `count() -> i64` — terminal. Drains the iterator and
-                // returns the element count.
+            "count" | "len" => {
+                // `count() -> i64` / `len() -> i64` — terminal. Drains the
+                // iterator and returns the element count. `len` is accepted as
+                // an alias for `count` so the common `s.chars().len()` reach
+                // (from the Vec/String world) works — codegen already services
+                // it via the eager `Vec[char]` materialization
+                // (B-2026-07-11-9 gap 1).
                 if !args.is_empty() {
                     self.type_error(
-                        "Iterator.count() takes no arguments".to_string(),
+                        format!("Iterator.{method}() takes no arguments"),
                         span.clone(),
                         TypeErrorKind::WrongNumberOfArgs,
                     );

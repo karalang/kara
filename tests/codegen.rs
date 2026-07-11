@@ -7768,6 +7768,26 @@ fn main() {
     }
 
     #[test]
+    fn e2e_chars_count_and_len_codegen() {
+        // B-2026-07-11-9 gap 1: `s.chars().count()` (idiomatic) and its alias
+        // `s.chars().len()` return the char count. `chars()` compiles to an
+        // eager `Vec[char]`, so both extract that Vec's length. Pre-fix
+        // `count()` hit "no handler for method 'count' on non-identifier
+        // receiver" at codegen and `len()` was rejected at typecheck.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s: String = \"hello\";\n\
+                 println(f\"{s.chars().count()}\");\n\
+                 println(f\"{s.chars().len()}\");\n\
+                 let e: String = \"\";\n\
+                 println(f\"{e.chars().count()}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n5\n0\n");
+        }
+    }
+
+    #[test]
     fn e2e_iter_adaptor_map_filter_collect_to_vec_codegen() {
         // B-2026-07-03-25: `<iter>.map(f)/.filter(p)....collect()` into a `Vec`
         // failed codegen ("no handler for method 'collect' on non-identifier

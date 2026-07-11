@@ -11611,6 +11611,21 @@ fn test_string_chars_returns_iterator_char() {
 }
 
 #[test]
+fn test_string_chars_count_and_len_typecheck() {
+    // B-2026-07-11-9 gap 1: `s.chars().count()` and its alias `s.chars().len()`
+    // are terminal iterator methods returning i64. Pre-fix `.len()` was
+    // rejected with "no method 'len' on type 'Iterator'".
+    typecheck_ok(
+        r#"fn main() {
+            let s: String = "hello";
+            let a: i64 = s.chars().count();
+            let b: i64 = s.chars().len();
+            println(f"{a} {b}");
+        }"#,
+    );
+}
+
+#[test]
 fn test_string_chars_rejects_arguments() {
     let errors = typecheck_errors(r#"fn f() { let s = "hello"; s.chars(1); }"#);
     assert!(

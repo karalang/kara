@@ -512,9 +512,12 @@ impl<'a> super::Interpreter<'a> {
                     });
                 }
             }
-            "count" => {
+            "count" | "len" => {
                 // Terminal — drain the iterator (firing all adaptor
-                // closures) and count yielded elements.
+                // closures) and count yielded elements. `len` is an alias for
+                // `count` (matches the typechecker + codegen), so
+                // `s.chars().len()` works under the interpreter too
+                // (B-2026-07-11-9 gap 1).
                 if matches!(obj, Value::Iterator { .. }) {
                     let mut iter_val = obj;
                     let mut n: i64 = 0;

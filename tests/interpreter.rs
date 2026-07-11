@@ -11576,6 +11576,21 @@ fn test_string_char_at_and_count_interpreter() {
 }
 
 #[test]
+fn test_chars_count_and_len_interpreter() {
+    // B-2026-07-11-9 gap 1: `s.chars().count()` and its alias `s.chars().len()`
+    // drain the char-iterator and return the count. Mirrors the codegen E2E
+    // `e2e_chars_count_and_len_codegen`.
+    let output = run(r#"fn main() {
+        let s: String = "hello";
+        println(f"{s.chars().count()}");
+        println(f"{s.chars().len()}");
+        let e: String = "";
+        println(f"{e.chars().count()}");
+    }"#);
+    assert_eq!(output.trim(), "5\n5\n0");
+}
+
+#[test]
 fn test_chars_iterator_bound_to_variable_interpreter() {
     // B-2026-06-18-5 — `let it = s.chars()` (the char-iterator bound to a name),
     // then `it.collect()` / `for c in it`. The interpreter already snapshots

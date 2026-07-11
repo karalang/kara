@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **355 surfaced · 4 open · 349 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **356 surfaced · 4 open · 350 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -100,9 +100,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **355 surfaced 
 | B-2026-07-11-11 | 2026-07-11 | codegen | med | `.push()` (and other Vec/String methods) unsupported on a non-identifier receiver — a nested place expr like `self.scopes[i].names.push(x)` / `o.inners[0].xs.push(v)` fails codegen | phase-12 Resolver port |
 | B-2026-07-11-12 | 2026-07-11 | codegen | high | SILENT: `match ref_struct.field { Some(g) => ... }` on an Option/enum FIELD of a `ref`-bound struct binds the payload as an EMPTY/zeroed shallow copy — its Vec/heap fields read empty | phase-12 Resolver port |
 
-### Fixed (349)
+### Fixed (350)
 
-<details><summary>349 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>350 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -455,6 +455,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **355 surfaced 
 | B-2026-07-11-7 | codegen | high | `?` on a `Result[<concrete user enum>, E]` truncates the multi-word Ok payload to its first word: `let v = pv()?` where `pv() -> Result[Json, String]… | this commit |
 | B-2026-07-11-9 | ergonomics | low | RC-fallback false-positive on a loop accumulator moved out via an early `return`: an accumulator built in a loop and returned from a branch inside th… | 687df6c |
 | B-2026-07-11-10 | typechecker | low | Pushing an empty `Vec.new()` into a `Vec[Vec[i64]]` does not infer the inner element type from the receiver/method signature — `out.push(Vec.new())`… | this commit |
+| B-2026-07-11-13 | typecheck+codegen+interp | low | `String.chars()` random-access/length ergonomics (the gap-1 half of B-2026-07-11-9, which was marked fixed for gap 2 — the rc-fallback — only) | this commit |
 
 </details>
 

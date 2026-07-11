@@ -3386,7 +3386,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let borrow_local_recv =
             matches!(&object.kind, ExprKind::Identifier(n) if self.ref_params.contains_key(n));
         if (!matches!(&object.kind, ExprKind::Identifier(_)) || borrow_local_recv)
-            && matches!(method, "len" | "is_empty")
+            && matches!(method, "len" | "is_empty" | "count")
         {
             let recv_val = self.compile_expr(object)?;
             if let BasicValueEnum::StructValue(sv) = recv_val {
@@ -3421,7 +3421,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into_int_value();
                     return Ok(match method {
-                        "len" => len_val.into(),
+                        // `count` is the char-iterator length: `s.chars()`
+                        // compiles to a materialized `Vec[char]` here, so its
+                        // element count IS `len` (B-2026-07-11-9 gap 1).
+                        "len" | "count" => len_val.into(),
                         "is_empty" => self
                             .builder
                             .build_int_compare(
@@ -3452,7 +3455,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into_int_value();
                     return Ok(match method {
-                        "len" => len_val.into(),
+                        "len" | "count" => len_val.into(),
                         "is_empty" => self
                             .builder
                             .build_int_compare(
