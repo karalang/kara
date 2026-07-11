@@ -14730,6 +14730,56 @@ fn main() {
     }
 
     #[test]
+    fn asan_reshaper_headerless_dummy_free_repeat() {
+        // Headerless "reshaper" elision (KARAC_HEADERLESS_RESHAPER, default-OFF):
+        // an in-place link-permuting transform (reverse a sublist, LeetCode #92)
+        // that owns its input list, permutes links via head-insertion splices,
+        // and returns `dummy.next`. Under the flag the whole ListNode goes
+        // headerless (16 B, no rc word); the sentinel `dummy` (a fresh node NOT
+        // in the returned chain) must get a single-node free at scope exit. A
+        // prior bug leaked that dummy once per reversal when the walk reassigned
+        // `prev` off it (left > 1). Build + reverse + fold repeated 40× with a
+        // shifting left>1 window, so a per-iteration dummy leak trips
+        // LeakSanitizer (Linux) and any double-free trips ASAN. Runs clean under
+        // BOTH layouts: headered by default, headerless when the env flag is set
+        // (the flag-on leak gate is the point — run this test under
+        // `KARAC_HEADERLESS_RESHAPER=1` in the Linux-LSan harness).
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode { val: i64, mut next: Option[ListNode] }
+fn build(m: i64, seed: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: -1, next: None };
+    let mut tail = dummy; let mut j = 0i64;
+    while j < m { let node = ListNode { val: (j + seed) % 97i64, next: None }; tail.next = Some(node); tail = node; j = j + 1i64; }
+    dummy.next
+}
+fn reverse_between(head: Option[ListNode], left: i64, right: i64) -> Option[ListNode] {
+    let dummy = ListNode { val: 0, next: head };
+    let mut prev = dummy; let mut i = 1i64;
+    while i < left { match prev.next { Some(n) => { prev = n; } None => {} } i = i + 1i64; }
+    match prev.next { Some(cur) => { let mut j = left;
+        while j < right { match cur.next { Some(nxt) => { cur.next = nxt.next; nxt.next = prev.next; prev.next = Some(nxt); } None => {} } j = j + 1i64; } } None => {} }
+    dummy.next
+}
+fn fold(list: Option[ListNode], seed: i64) -> i64 { let mut a = seed; let mut c = list;
+    loop { match c { Some(n) => { a = (a * 131i64 + (n.val + 1i64)) % 1000000007i64; c = n.next; } None => break, } } a }
+fn main() {
+    let mut sum = 0i64; let mut k = 0i64;
+    while k < 40i64 {
+        let list = build(30i64, k);
+        let r = reverse_between(list, 2i64 + (k % 5i64), 12i64);
+        sum = (sum * 131i64 + fold(r, k)) % 1000000007i64;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#,
+            &["530882893"],
+            "reshaper_headerless_dummy_free_repeat",
+        );
+    }
+
+    #[test]
     fn asan_option_shared_walk_unwrap_cursor_repeat() {
         // Regression for the walk-cursor refcount pair (2026-06-05):
         // (1) `Option[shared T]` variable-assign released the old inner
