@@ -6684,6 +6684,33 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_wildcard_closure_param() {
+        // B-2026-07-11-19 — `|_|` wildcard closure params on the fused-chain
+        // terminals. The interpreter already accepted them; codegen's collect /
+        // fold / any / all engines required a `PatternKind::Binding` and bailed on
+        // a wildcard (`map(|_| 7).collect()` -> "no handler for collect"), a
+        // run-vs-build divergence. Codegen now binds a `_` param to a fresh
+        // throwaway name, both in the map/filter ADAPTERS and the terminal
+        // closures (`fold(0, |a, _| a + 1)` count idiom, `any(|_| ..)`).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4];\n\
+                 let m: Vec[i64] = v.iter().map(|_| 7).collect();\n\
+                 println(f\"{m.len()}\");\n\
+                 let k: Vec[i64] = v.iter().filter(|_| true).collect();\n\
+                 println(f\"{k.len()}\");\n\
+                 println(f\"{v.iter().fold(0, |a, _| a + 1)}\");\n\
+                 println(f\"{v.iter().filter(|x| x > 2).fold(0, |a, _| a + 1)}\");\n\
+                 println(f\"{v.iter().any(|_| true)}\");\n\
+                 println(f\"{v.iter().map(|_| 1).all(|x| x == 1)}\");\n\
+             }",
+        ) {
+            // m.len()=4, k.len()=4, count=4, filtered-count(>2)=2, any=true, all(==1)=true
+            assert_eq!(out, "4\n4\n4\n2\ntrue\ntrue\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_index_vec_field_through_self() {
         // Regression for the self-hosting lexer index blocker: indexing a
         // `Vec` field through the `self` receiver (`self.bytes[self.current]`)

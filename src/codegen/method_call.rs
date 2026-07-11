@@ -3726,14 +3726,15 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Closure { params, body, .. } = &args[1].value.kind {
                 if params.len() == 2 {
-                    if let (PatternKind::Binding(acc_p), PatternKind::Binding(x_p)) =
-                        (&params[0].pattern.kind, &params[1].pattern.kind)
-                    {
+                    if let (Some(acc_p), Some(x_p)) = (
+                        Self::closure_param_name(&params[0].pattern, "__fwa"),
+                        Self::closure_param_name(&params[1].pattern, "__fwx"),
+                    ) {
                         if let Some(v) = self.try_compile_iter_chain_fold(
                             object,
                             &args[0].value,
-                            acc_p,
-                            x_p,
+                            &acc_p,
+                            &x_p,
                             body,
                             call_span,
                         )? {
@@ -3756,11 +3757,11 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
                 if params.len() == 1 {
-                    if let PatternKind::Binding(param) = &params[0].pattern.kind {
+                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__aap") {
                         if let Some(v) = self.try_compile_iter_chain_any_all(
                             object,
                             method == "any",
-                            param,
+                            &param,
                             body,
                             call_span,
                         )? {
@@ -4811,6 +4812,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                             span: body.span.clone(),
                                         },
                                     )
+                                }
+                                // Wildcard param — `map(|_| 7)` / `filter(|_| ..)`.
+                                // The body ignores the element, so bind it to a
+                                // fresh throwaway name (the interpreter already
+                                // accepts `|_|`; this aligns codegen, B-2026-07-11-19).
+                                PatternKind::Wildcard => {
+                                    let wname = format!(
+                                        "__wild_{}_{}",
+                                        self.indexed_elem_counter,
+                                        steps.len()
+                                    );
+                                    (wname, (**body).clone())
                                 }
                                 _ => return Ok(None),
                             }
@@ -6349,10 +6362,15 @@ impl<'ctx> super::Codegen<'ctx> {
             if params.len() != 1 {
                 return None;
             }
-            let PatternKind::Binding(param) = &params[0].pattern.kind else {
-                return None;
+            // A wildcard adaptor param (`map(|_| ..)`) binds to a fresh throwaway
+            // name (the interpreter already accepts it, B-2026-07-11-19); a
+            // destructuring/complex param bails (fail closed).
+            let param = match &params[0].pattern.kind {
+                PatternKind::Binding(param) => param.clone(),
+                PatternKind::Wildcard => format!("__pw_{}", steps.len()),
+                _ => return None,
             };
-            steps.push((is_filter, param.clone(), (**body).clone()));
+            steps.push((is_filter, param, (**body).clone()));
             base = object;
         }
         steps.reverse(); // outermost-peeled → source order
@@ -6372,6 +6390,22 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         Some((base, steps))
+    }
+
+    /// The bound name for a single iterator-terminal closure param, synthesizing
+    /// a fresh throwaway for a `_` wildcard (the interpreter accepts `|_|` /
+    /// `|a, _|` — e.g. the `fold(0, |a, _| a + 1)` count idiom; this aligns
+    /// codegen, B-2026-07-11-19). Returns `None` for a destructuring / complex
+    /// param so the caller fails closed. The wildcard seed is fixed per role and
+    /// only ever names an UNREFERENCED binding (the body ignores a `_` param), and
+    /// each terminal desugars into its own block scope, so a fixed name cannot
+    /// collide across sites.
+    fn closure_param_name(pat: &Pattern, wildcard_seed: &str) -> Option<String> {
+        match &pat.kind {
+            PatternKind::Binding(n) => Some(n.clone()),
+            PatternKind::Wildcard => Some(wildcard_seed.to_string()),
+            _ => None,
+        }
     }
 
     /// Thread the "current element" expression through a peeled `map`/`filter`
