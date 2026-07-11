@@ -116,13 +116,45 @@ fn server_publishes_diagnostics_and_shuts_down_cleanly() {
     );
 
     // 3. edit to a clean buffer → diagnostics clear to empty.
-    did_change_full(&client, uri, 2, "fn main() { let x = 1 + 2; }");
+    did_change_full(&client, uri, 2, "fn f(a: i64) -> i64 { a }");
     assert!(
         next_diagnostics(&client).is_empty(),
         "clean buffer must clear diagnostics"
     );
 
-    // 4. shutdown / exit → the server thread returns Ok and the loop does not
+    // 4. hover over the `a` in the body (line 0, char 22) → `i64`.
+    req(
+        &client,
+        3,
+        "textDocument/hover",
+        json!({"textDocument":{"uri":uri},"position":{"line":0,"character":22}}),
+    );
+    let hv = recv(&client);
+    let Message::Response(Response {
+        result: Some(hover),
+        ..
+    }) = hv
+    else {
+        panic!("expected hover response, got {hv:?}");
+    };
+    assert_eq!(hover["contents"]["kind"], json!("markdown"));
+    assert_eq!(hover["contents"]["value"], json!("```kara\ni64\n```"));
+
+    // 5. hover where nothing typed sits (the `fn` keyword) → null result.
+    req(
+        &client,
+        4,
+        "textDocument/hover",
+        json!({"textDocument":{"uri":uri},"position":{"line":0,"character":0}}),
+    );
+    let hv2 = recv(&client);
+    assert!(
+        matches!(&hv2, Message::Response(Response { result, error, .. })
+            if result.as_ref().map(|v| v.is_null()).unwrap_or(true) && error.is_none()),
+        "expected null hover result, got {hv2:?}"
+    );
+
+    // 6. shutdown / exit → the server thread returns Ok and the loop does not
     //    hang.
     req(&client, 2, "shutdown", serde_json::Value::Null);
     let sd = recv(&client);

@@ -717,7 +717,7 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 3`](../
 - [ ] Syntax highlighting (TextMate grammar; book infrastructure mostly exists).
 - [x] Diagnostics streaming via `textDocument/publishDiagnostics` over existing `karac` structured-diagnostic JSON. **✓ (slice 1, 2026-07-11)** — over `karac::check_source` (parse → desugar → resolve → typecheck → effect → ownership; interpreter-free), phase carried as the diagnostic `code`, `catch_unwind`-guarded, UTF-16 ranges.
 - [ ] Go-to-definition (resolver symbol table).
-- [ ] Hover — type + effect signature (typechecker + effectchecker already produce this).
+- [~] Hover — type + effect signature (typechecker + effectchecker already produce this). **Type-of-expression hover ✓ (slice 2, 2026-07-11)** — `textDocument/hover` returns the inferred type of the innermost expression under the cursor (smallest containing `expr_types` span) as a fenced `kara` block, via the new `karac::hover_at` library query; position→byte-offset mapping is the UTF-16-correct inverse of the diagnostics range mapping, `catch_unwind`-guarded. Effect-signature hover on function names (using `EffectCheckResult.inferred/declared_effects`) is the remaining half of this item — a follow-up slice.
 - [ ] Find references (resolver symbol table).
 - [ ] Document symbols / outline (parser AST).
 - [ ] **Type-aware completion** — `.`-completion of methods/fields on the receiver type. Requires partial-parse + typecheck-of-incomplete-source (~4-6 weeks engineering). The line below which the LSP feels half-broken.

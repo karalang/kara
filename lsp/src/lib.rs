@@ -3,9 +3,11 @@
 //! The binary (`src/main.rs`) is a thin wrapper that wires stdio to
 //! [`serve`]; all the protocol logic lives here so it can be driven in-process
 //! over an in-memory connection ([`lsp_server::Connection::memory`]) by the
-//! integration tests. Slice 1 backs the `initialize`/`shutdown` handshake and
-//! live diagnostics (`textDocument/publishDiagnostics`) over
-//! [`analysis::diagnostics`]; no user code is ever executed.
+//! integration tests. Features so far: the `initialize`/`shutdown` handshake,
+//! live diagnostics (`textDocument/publishDiagnostics`, slice 1) over
+//! [`analysis::diagnostics`], and type-of-expression hover
+//! (`textDocument/hover`, slice 2) over [`analysis::hover`]. No user code is
+//! ever executed — feedback is purely static.
 
 pub mod analysis;
 
@@ -17,9 +19,10 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
     Notification as _, PublishDiagnostics,
 };
+use lsp_types::request::{HoverRequest, Request as _};
 use lsp_types::{
-    InitializeParams, PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri,
+    HoverProviderCapability, InitializeParams, PublishDiagnosticsParams, ServerCapabilities,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
 };
 
 type LspResult = Result<(), Box<dyn Error + Sync + Send>>;
@@ -28,12 +31,13 @@ type LspResult = Result<(), Box<dyn Error + Sync + Send>>;
 /// pump until the client shuts the server down. Consumes the connection so it
 /// is dropped on return (closing the writer channel — see [`main_loop`]).
 pub fn serve(connection: Connection) -> LspResult {
-    // Advertise only what slice 1 backs: full-document sync (so every edit
-    // hands us the whole buffer to re-analyze) drives the diagnostics loop.
-    // Additional capabilities (hover, definition, completion) are turned on as
-    // their slices land.
+    // Full-document sync (so every edit hands us the whole buffer to
+    // re-analyze) drives the diagnostics loop; hover is served from the same
+    // per-document text. Further capabilities (definition, completion) are
+    // turned on as their slices land.
     let capabilities = ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
         ..Default::default()
     };
     let init_params = connection.initialize(serde_json::to_value(capabilities)?)?;
@@ -61,9 +65,8 @@ fn main_loop(connection: Connection) -> LspResult {
                 if connection.handle_shutdown(&req)? {
                     return Ok(());
                 }
-                // Slice 1 advertises no request-driven features, so anything
-                // else is politely unhandled (the client tolerates this for
-                // capabilities we never announced).
+                let resp = handle_request(&docs, req);
+                connection.sender.send(Message::Response(resp))?;
             }
             Message::Notification(not) => {
                 handle_notification(&connection, &mut docs, not)?;
@@ -120,6 +123,43 @@ fn handle_notification(
         _ => {}
     }
     Ok(())
+}
+
+// JSON-RPC error codes (LSP inherits these from JSON-RPC 2.0).
+const METHOD_NOT_FOUND: i32 = -32601;
+const INVALID_PARAMS: i32 = -32602;
+
+/// Answer a client→server request. Every request must get exactly one
+/// response, so unhandled methods return a `MethodNotFound` error rather than
+/// silently dropping (which would hang the client).
+fn handle_request(
+    docs: &HashMap<String, String>,
+    req: lsp_server::Request,
+) -> lsp_server::Response {
+    let lsp_server::Request { id, method, params } = req;
+    match method.as_str() {
+        HoverRequest::METHOD => match serde_json::from_value::<lsp_types::HoverParams>(params) {
+            Ok(p) => {
+                let pos = p.text_document_position_params.position;
+                let uri = p
+                    .text_document_position_params
+                    .text_document
+                    .uri
+                    .to_string();
+                // Hover the last-known revision of the document. `None` (no
+                // typed expression under the cursor) serializes to a null
+                // result, which the LSP spec accepts as "no hover".
+                let hover = docs.get(&uri).and_then(|text| analysis::hover(text, pos));
+                lsp_server::Response::new_ok(id, hover)
+            }
+            Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
+        },
+        _ => lsp_server::Response::new_err(
+            id,
+            METHOD_NOT_FOUND,
+            format!("unhandled method: {method}"),
+        ),
+    }
 }
 
 /// Analyze `text` and publish the resulting diagnostics for `uri`.

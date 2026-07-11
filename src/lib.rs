@@ -817,6 +817,57 @@ pub fn check_source(source: &str) -> Vec<PlaygroundDiagnostic> {
     run_static_checks(source).0
 }
 
+/// A resolved editor-hover result: the display form of the inferred type of the
+/// innermost expression at a byte offset, plus that expression's span so the
+/// editor can underline exactly what was described. The normalized,
+/// compiler-internal-type-free surface editor tooling (`kara-lsp`) consumes —
+/// the hover sibling of [`PlaygroundDiagnostic`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoverInfo {
+    /// Human-readable type, e.g. `i32`, `Vec[String]`, `String`.
+    pub type_display: String,
+    /// Byte offset of the described expression.
+    pub span_offset: usize,
+    /// Byte length of the described expression.
+    pub span_length: usize,
+}
+
+/// Type-of-expression query for editor hover: run the static-check pipeline and
+/// return the inferred type of the **innermost** expression whose span contains
+/// `byte_offset` (the smallest containing span wins, so hovering inside `a + b`
+/// reports the operand under the cursor, not the whole sum). Returns `None` when
+/// the offset is not inside any typed expression, or when parse/resolve
+/// hard-stopped so no types were inferred. Never executes the program.
+///
+/// A half-typed buffer that still parses + resolves yields hovers for the parts
+/// that type-checked even if other parts error — `run_static_checks` collects
+/// typecheck errors but keeps going, so `expr_types` is populated regardless.
+pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
+    let (_diagnostics, artifacts) = run_static_checks(source);
+    let (_program, typed) = artifacts?;
+
+    // `expr_types` is keyed by `SpanKey(offset, length)` — one entry per unique
+    // span (a `MethodCall` shares its receiver's span and overwrites it with the
+    // result type, so there is no ambiguity from equal spans). Pick the smallest
+    // span that contains the offset for the most specific type.
+    let mut best: Option<(usize, usize, &crate::typechecker::types::Type)> = None;
+    for (key, ty) in &typed.expr_types {
+        let (start, len) = (key.0, key.1);
+        if byte_offset < start || byte_offset >= start.saturating_add(len) {
+            continue;
+        }
+        if best.is_none_or(|(_, blen, _)| len < blen) {
+            best = Some((start, len, ty));
+        }
+    }
+    let (span_offset, span_length, ty) = best?;
+    Some(HoverInfo {
+        type_display: crate::typechecker::types::type_display(ty),
+        span_offset,
+        span_length,
+    })
+}
+
 #[cfg(test)]
 mod playground_tests {
     use super::*;
@@ -975,6 +1026,40 @@ mod playground_tests {
             diags.iter().all(|d| d.phase != "runtime"),
             "check_source must not execute; got: {diags:?}"
         );
+    }
+
+    #[test]
+    fn hover_at_reports_declared_type_of_parameter_use() {
+        // The tail `a` in the body is an Identifier expression whose inferred
+        // type is the parameter's declared `i64`.
+        let src = "fn f(a: i64) -> i64 { a }";
+        let body_a = src.rfind('a').unwrap();
+        let info = hover_at(src, body_a).expect("expected a hover result");
+        assert_eq!(info.type_display, "i64");
+        assert_eq!(info.span_offset, body_a);
+        assert_eq!(info.span_length, 1);
+    }
+
+    #[test]
+    fn hover_at_picks_innermost_expression() {
+        // Hovering the `x` operand inside `x + 1` reports `x`'s type, not the
+        // whole sum's — the smallest containing span wins.
+        let src = "fn f(x: i64) -> i64 { x + 1 }";
+        let operand = src.rfind('x').unwrap();
+        let info = hover_at(src, operand).expect("expected a hover result");
+        assert_eq!(info.type_display, "i64");
+        assert_eq!(info.span_length, 1); // just `x`, not `x + 1`
+    }
+
+    #[test]
+    fn hover_at_none_outside_any_expression() {
+        // Offset 0 is the `f` in `fn` — a keyword, not a typed expression.
+        assert!(hover_at("fn f() {}", 0).is_none());
+    }
+
+    #[test]
+    fn hover_at_none_when_parse_fails() {
+        assert!(hover_at("fn main() { let = ; }", 5).is_none());
     }
 
     #[test]

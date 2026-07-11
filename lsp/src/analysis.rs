@@ -4,7 +4,10 @@
 //! is unit-testable without standing up a server. The server loop
 //! (`main.rs`) is deliberately thin over this module.
 
-use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
+use lsp_types::{
+    Diagnostic, DiagnosticSeverity, Hover, HoverContents, MarkupContent, MarkupKind,
+    NumberOrString, Position, Range,
+};
 use std::panic::AssertUnwindSafe;
 
 /// Byte-offset → LSP [`Position`] converter for one source document.
@@ -67,6 +70,50 @@ impl<'a> LineIndex<'a> {
             end: self.position(offset.saturating_add(length)),
         }
     }
+
+    /// Map an LSP [`Position`] (0-based line, UTF-16 character) back to a byte
+    /// offset — the inverse of [`Self::position`]. A `character` past the end
+    /// of its line clamps to the line end (before the newline); a `line` past
+    /// EOF clamps to the document end. Used to turn a hover/definition request
+    /// position into the byte offset `karac`'s span-keyed tables expect.
+    pub fn offset(&self, pos: Position) -> usize {
+        let line = pos.line as usize;
+        let Some(&line_start) = self.line_starts.get(line) else {
+            return self.source.len();
+        };
+        let mut utf16 = 0u32;
+        for (i, ch) in self.source[line_start..].char_indices() {
+            if utf16 >= pos.character || ch == '\n' {
+                return line_start + i;
+            }
+            utf16 += ch.len_utf16() as u32;
+        }
+        self.source.len()
+    }
+}
+
+/// Build a hover response for `position` in `text`: the inferred type of the
+/// innermost expression under the cursor, rendered as a fenced `kara` code
+/// block, ranged to that expression. `None` when nothing typed sits there.
+/// `catch_unwind`-guarded for the same reason as [`diagnostics`] — a phase
+/// panic on half-typed source must not drop the connection.
+pub fn hover(text: &str, position: Position) -> Option<Hover> {
+    let index = LineIndex::new(text);
+    let offset = index.offset(position);
+    let info = match std::panic::catch_unwind(AssertUnwindSafe(|| karac::hover_at(text, offset))) {
+        Ok(info) => info?,
+        Err(_) => {
+            eprintln!("kara-lsp: hover analysis panicked; returning no hover");
+            return None;
+        }
+    };
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: format!("```kara\n{}\n```", info.type_display),
+        }),
+        range: Some(index.range(info.span_offset, info.span_length)),
+    })
 }
 
 /// Run `source` through `karac`'s static-check pipeline and shape the result
@@ -170,5 +217,52 @@ mod tests {
         assert!(diags
             .iter()
             .all(|d| d.code == Some(NumberOrString::String("parse".to_string()))));
+    }
+
+    #[test]
+    fn offset_is_inverse_of_position() {
+        let src = "fn main() {\n    let x = 1;\n}";
+        let idx = LineIndex::new(src);
+        for probe in [0usize, 4, 16, 20, src.len()] {
+            let pos = idx.position(probe);
+            assert_eq!(idx.offset(pos), probe, "roundtrip failed at {probe}");
+        }
+    }
+
+    #[test]
+    fn offset_counts_utf16_and_clamps() {
+        let src = "let s = \"Kāra\";";
+        let idx = LineIndex::new(src);
+        // position (line 0, char 9) is just after the opening quote (byte 9,
+        // since "let s = \"" is 9 ASCII bytes).
+        assert_eq!(idx.offset(Position::new(0, 9)), 9);
+        // A character past the line end clamps to the line's end (EOF here).
+        assert_eq!(idx.offset(Position::new(0, 999)), src.len());
+        // A line past EOF clamps to the document end.
+        assert_eq!(idx.offset(Position::new(50, 0)), src.len());
+    }
+
+    #[test]
+    fn hover_reports_type_as_kara_code_block() {
+        let src = "fn f(a: i64) -> i64 { a }";
+        let idx = LineIndex::new(src);
+        let body_a = src.rfind('a').unwrap();
+        let pos = idx.position(body_a);
+        let h = hover(src, pos).expect("expected a hover");
+        match h.contents {
+            HoverContents::Markup(m) => {
+                assert_eq!(m.kind, MarkupKind::Markdown);
+                assert_eq!(m.value, "```kara\ni64\n```");
+            }
+            other => panic!("expected markup hover, got {other:?}"),
+        }
+        // Ranged to the single-char `a` under the cursor.
+        let r = h.range.expect("hover should carry a range");
+        assert_eq!(r.start, pos);
+    }
+
+    #[test]
+    fn hover_none_on_keyword() {
+        assert!(hover("fn f() {}", Position::new(0, 0)).is_none());
     }
 }
