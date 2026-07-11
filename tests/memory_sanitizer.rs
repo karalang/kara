@@ -14670,6 +14670,33 @@ fn main() with panics {
     }
 
     #[test]
+    fn asan_vec_of_shared_push_drop_singleton() {
+        // B-2026-07-11-33 guard (+ the B-36 investigation): a `Vec[shared]` /
+        // `Vec[Option[shared]]` rc-dec's its elements and frees its buffer at
+        // scope exit, for the small SINGLE-element shape. Under Linux LSan this
+        // is CLEAN — macOS `leaks` over-reported this shape (a false positive on
+        // the `karac_realloc_or_panic` buffer, whose custom-allocator wrapper
+        // the `leaks` tool doesn't track; B-36 was closed as a macOS-`leaks`
+        // artifact, not a real leak). This test is the authoritative (LSan) guard.
+        assert_clean_asan_run(
+            r#"
+shared struct N { val: i64, mut next: Option[N] }
+fn main() {
+    let n1 = N { val: 1, next: None };
+    let mut v: Vec[N] = Vec.new();
+    v.push(n1);
+    let a = N { val: 2, next: None };
+    let mut w: Vec[Option[N]] = Vec.new();
+    w.push(Some(a));
+    println(99);
+}
+"#,
+            &["99"],
+            "vec_of_shared_push_drop_singleton",
+        );
+    }
+
+    #[test]
     fn asan_shared_list_build_remove_repeat() {
         // Regression for the `shared struct` RC over-dec (2026-05-30): a
         // tail-cursor-built list, removed via `remove_nth_from_end`

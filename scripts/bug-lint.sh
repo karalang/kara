@@ -40,7 +40,7 @@ for i, line in enumerate(pathlib.Path(ledger).read_text().splitlines(), 1):
     if bid in seen:
         errs.append(f"line {i}: duplicate B-ID '{bid}' (also line {seen[bid]})")
     seen[bid] = i
-    if r.get("status") not in {"open","fixed"}:
+    if r.get("status") not in {"open","fixed","invalid","not-reproduced"}:
         errs.append(f"{bid}: bad status '{r.get('status')}'")
     if r.get("severity") not in {"high","med","low"}:
         errs.append(f"{bid}: bad severity '{r.get('severity')}'")
