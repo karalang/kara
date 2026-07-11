@@ -50,6 +50,7 @@ impl<'ctx> super::Codegen<'ctx> {
             "__schedule_touchstart" => self.compile_channel_schedule_touchstart(object, args),
             "__schedule_touchmove" => self.compile_channel_schedule_touchmove(object, args),
             "__schedule_touchend" => self.compile_channel_schedule_touchend(object, args),
+            "__schedule_input" => self.compile_channel_schedule_input(object, args),
             // The dispatch gate in `compile_method_call` only routes the
             // methods above here.
             _ => unreachable!("compile_channel_method: unexpected method `{method}`"),
@@ -640,6 +641,84 @@ impl<'ctx> super::Codegen<'ctx> {
             AttributeLoc::Function,
             self.context
                 .create_string_attribute("wasm-import-name", "__kara_keydown"),
+        );
+        f
+    }
+
+    /// `tx.__schedule_input()` — the compiler builtin backing
+    /// `std.web.events.input`. Identical shape to `__schedule_keydown`
+    /// (multi-shot, host owns the surviving cloned sender, non-unit payload);
+    /// only the payload differs: the host marshals each `input` event as an
+    /// `InputEvent` ({ value }, one `f64` = 8 bytes) into
+    /// `karac_runtime_event_scratch()` and `channel_send`s it. Takes no
+    /// argument. Same `--features wasm-threads` gate as the other host-async
+    /// producers (a sequential build has no thread to park in `recv`).
+    fn compile_channel_schedule_input(
+        &mut self,
+        object: &Expr,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if !args.is_empty() {
+            return Err("Sender.__schedule_input expects no arguments".to_string());
+        }
+        if crate::target::active_target_is_wasm() && !crate::target::wasm_threads_enabled() {
+            return Err(
+                "std.web.events.input (host-async input stream) requires `--features \
+                 wasm-threads` on this target: a sequential WASM build has no thread to block in \
+                 `recv` while the host event loop dispatches input events, so the channel could \
+                 never be fed. Rebuild with `--target=wasm_browser --features wasm-threads` \
+                 (design.md § Scheduler contract on WASM — Realization status)."
+                    .to_string(),
+            );
+        }
+        // Clone first — the surviving reference keeps the channel open across
+        // every event (the local `tx` in `input` drops at return).
+        let ch = self.compile_expr(object)?.into_pointer_value();
+        let clone_fn = self
+            .module
+            .get_function("karac_runtime_channel_clone")
+            .expect("karac_runtime_channel_clone declared in Codegen::new");
+        let cloned = self
+            .builder
+            .build_call(clone_fn, &[ch.into()], "input.chan.clone")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let i64_ty = self.context.i64_type();
+        let ch_i64 = self
+            .builder
+            .build_ptr_to_int(cloned, i64_ty, "input.chan.i64")
+            .unwrap();
+
+        let host_fn = self.get_or_declare_input_import();
+        self.builder
+            .build_call(host_fn, &[ch_i64.into()], "input.schedule")
+            .unwrap();
+        Ok(self.context.i64_type().const_zero().into())
+    }
+
+    /// Get-or-declare the `kara_host.__kara_input(i64) -> ()` wasm import
+    /// (compiler-emitted, sibling of `__kara_keydown`; the channel handle crosses
+    /// as an `i64`). The element layout (`InputEvent` = one `f64`) is fixed and
+    /// known to the glue, so it is not passed across.
+    fn get_or_declare_input_import(&self) -> inkwell::values::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("__kara_input") {
+            return f;
+        }
+        use inkwell::attributes::AttributeLoc;
+        let i64_ty = self.context.i64_type();
+        let fn_ty = self.context.void_type().fn_type(&[i64_ty.into()], false);
+        let f = self.module.add_function("__kara_input", fn_ty, None);
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-module", "kara_host"),
+        );
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-name", "__kara_input"),
         );
         f
     }

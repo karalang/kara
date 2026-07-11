@@ -321,10 +321,36 @@ async function main() {
     throw new Error(`scroll-down did not flatten the wing (grey height ${hSteep} -> ${hFlat})`);
   }
 
+  // Slider control: the `<input type=range>` drives the angle DIRECTLY through the
+  // DOM-element value channel (std.web.events.input — the new producer this slice
+  // adds). Unlike the incremental wheel, the slider's value IS the slope, so we
+  // set it high (steep wing) then low (flat wing) and assert the grey-height
+  // follows. Dispatch each value a few times because the channel coalesces (one
+  // un-drained value at a time) and the loop drains one per frame; a direct-set
+  // value means whichever lands wins. Proves `input()` reaches the render loop in
+  // a real browser, on the same service-instance spine as keydown/wheel.
+  stage("slider");
+  const setSlider = (v) => evalJs(`(() => {
+    const el = document.getElementById('angle');
+    el.value = String(${v});
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return el.valueAsNumber;
+  })()`);
+  for (let i = 0; i < 8; i++) { await setSlider(0.72); await sleep(120); }  // steep
+  await sleep(600);
+  const hSlideSteep = await wingHeight();
+  for (let i = 0; i < 8; i++) { await setSlider(0.05); await sleep(120); }  // flat
+  await sleep(600);
+  const hSlideFlat = await wingHeight();
+  if (!(hSlideSteep > hSlideFlat + 2)) {
+    throw new Error(`slider did not drive the wing angle (grey height steep ${hSlideSteep} vs flat ${hSlideFlat})`);
+  }
+
   console.log(
     `PASS — isolated, frames ${f0}->${f1}->${fSoak}->${fAfter}, ` +
     `content ${fpEarly} --evolves--> ${fpMid} --soak(${fAfter} frames)--> ${fpLate}, ` +
-    `wing angle: grey-height ${hMid} --steepen--> ${hSteep} --flatten--> ${hFlat}`
+    `wing angle: grey-height ${hMid} --steepen--> ${hSteep} --flatten--> ${hFlat}, ` +
+    `slider: steep ${hSlideSteep} --> flat ${hSlideFlat}`
   );
   clearTimeout(WATCHDOG);
   ws.close();

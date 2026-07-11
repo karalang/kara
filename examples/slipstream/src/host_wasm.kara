@@ -9,12 +9,14 @@
 //   * `animation_frames()` (std.web.time) yields once per requestAnimationFrame;
 //     `frames.recv()` parks the worker until the host fires the next frame — no
 //     `await` (design.md § Async Host APIs on WASM).
-//   * `keydown()` / `wheel()` (std.web.events) are event-data channels: the
-//     wing's angle of attack is live input. The loop drains the latest with a
-//     NON-blocking `try_recv` each frame, so input never stalls the render.
-//     Up/Down arrows (or scroll) steepen / flatten the wing; `R` resets. Past
-//     the stall angle the flow separates and the wake explodes — that turns the
-//     demo into a tool, not a screensaver.
+//   * `keydown()` / `wheel()` / `input()` (std.web.events) are event-data
+//     channels: the wing's angle of attack is live input. The loop drains the
+//     latest with a NON-blocking `try_recv` each frame, so input never stalls the
+//     render. Up/Down arrows (or scroll) steepen / flatten the wing and `R`
+//     resets; the `<input type=range>` **slider** sets the angle directly — its
+//     live `valueAsNumber` streams straight in as the slope, no `addEventListener`
+//     glue. Past the stall angle the flow separates and the wake explodes — that
+//     turns the demo into a tool, not a screensaver.
 //   * `put_pixels` hands the framebuffer to JS for the `ctx.putImageData` blit;
 //     `Vec[u8].as_ptr()` is the FFI handoff. The call is synchronous, so the
 //     buffer never dangles while in use.
@@ -25,7 +27,7 @@
 // out across the Web Worker pool with `TaskGroup.spawn`.
 
 import std.web.time.{animation_frames, Timer};
-import std.web.events.{keydown, KeyEvent, wheel, WheelEvent, Input};
+import std.web.events.{keydown, KeyEvent, wheel, WheelEvent, input, InputEvent, Input};
 import sim.{grid_w, grid_h, default_slope, steps_per_frame, default_workers,
     init_grid, substep, render_fb};
 
@@ -55,6 +57,7 @@ pub fn run() with writes(Display, Input, Timer) suspends panics {
     let frames = animation_frames();
     let keys = keydown();
     let wheels = wheel();
+    let slider = input();
     loop {
         frames.recv();
 
@@ -74,6 +77,15 @@ pub fn run() with writes(Display, Input, Timer) suspends panics {
         match wheels.try_recv() {
             Some(wv) => {
                 s = clamp_slope(s - wv.delta_y() * 0.0008);
+            }
+            None => {}
+        }
+        // The `<input type=range>` slider sets the angle directly: its live value
+        // (0..0.85) IS the slope, streamed in through the DOM-element value
+        // channel — the "true slider" the keyboard/scroll controls approximated.
+        match slider.try_recv() {
+            Some(ev) => {
+                s = clamp_slope(ev.value());
             }
             None => {}
         }

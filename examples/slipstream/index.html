@@ -30,6 +30,8 @@
   }
   #overlay b { color: #6fd3ff; font-weight: 600; }
   #note { opacity: .55; max-width: 640px; text-align: center; font-size: 12px; }
+  #anglectl { display: flex; align-items: center; gap: 10px; opacity: .85; }
+  #anglectl input[type=range] { width: 320px; accent-color: #6fd3ff; }
   code { color: #9ad0ff; }
 </style>
 </head>
@@ -39,12 +41,15 @@
     Air streams left-to-right past the tilted wing; the colour is vorticity, so
     the von Kármán wake lights up red/blue. The simulation grid is
     <b>state carried and evolved across frames</b> — the new thing on the
-    browser spine. <b>↑ / ↓ or scroll to rotate the wing; push past the stall
-    angle and the flow separates. <code>R</code> resets.</b></p>
+    browser spine. <b>Drag the slider (or ↑ / ↓ / scroll) to rotate the wing;
+    push past the stall angle and the flow separates. <code>R</code> resets.</b></p>
   <div id="stage">
     <canvas id="screen" width="256" height="96"></canvas>
     <div id="overlay">starting…</div>
   </div>
+  <label id="anglectl">angle of attack
+    <input type="range" id="angle" min="0" max="0.85" step="0.01" value="0.36" />
+  </label>
   <p id="note">The render loop is a plain blocking
     <code>loop { frames.recv(); /* advance fluid */ put_pixels(); }</code> — no
     <code>async</code>, no <code>await</code>. Each frame advances the D2Q9 solver
@@ -91,7 +96,11 @@
     }
   }
 
-  run({ put_pixels }).catch((e) => {
+  // The `<input type=range>` is the DOM-element value channel: the Kāra guest's
+  // `input()` producer drains this element's live `valueAsNumber` as the slope.
+  const angle = document.getElementById("angle");
+
+  run({ put_pixels }, { inputTarget: angle }).catch((e) => {
     // main() loops forever, so run() never resolves on success; a rejection is a
     // real failure (no SharedArrayBuffer / not cross-origin isolated).
     overlay.textContent = "error: " + (e && e.message ? e.message : e);

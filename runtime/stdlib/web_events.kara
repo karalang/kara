@@ -603,3 +603,56 @@ pub fn touchend() -> Receiver[TouchEvent] with writes(Input) {
     tx.__schedule_touchend();
     rx
 }
+
+// A form-control value change (`input` event) — the current numeric value of the
+// element the event fired on (a range slider, number field, etc.). Transparent
+// single-field struct: its physical layout (`value` as an `f64` at byte 0; 8
+// bytes total) is the contract the host glue marshals each `input` event into
+// before `channel_send` — keep it in sync with `src/wasm_glue.rs`
+// (`__kara_input`). Unlike the pointer/click producers the payload is NOT a
+// coordinate off the event: the host reads the *element's* value
+// (`event.target.valueAsNumber`, falling back to `parseFloat(value)`), so an
+// `<input type=range>` slider streams its live position directly. This is the
+// "true DOM-element value channel" the keyboard/wheel controls only approximated.
+pub struct InputEvent {
+    value: f64,
+}
+
+impl InputEvent {
+    fn value(ref self) -> f64 {
+        self.value
+    }
+}
+
+// Stream form-control value changes (`input` events) on a fresh channel,
+// indefinitely — a DOM-element value channel. Returns the receiving half; the
+// waiting side writes a plain blocking loop —
+//
+//     let slider = input();
+//     loop {
+//         let ev = slider.recv();
+//         set_angle(ev.value());   // <input type=range> streams its live value
+//     }
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and coalesced
+// exactly like the other producers (the host feeds a fresh value only once the
+// previous one is drained, so a fast drag collapses to the latest settled value
+// rather than accumulating every intermediate tick). Listener registers on
+// `opts.inputTarget` if given (browser: the `<input>` element; node test: an
+// EventTarget carrying `valueAsNumber` it dispatches synthetic `input` events
+// on), else `globalThis`/window — `input` events bubble, so a single-control
+// page needs no explicit target. Same `--features wasm-threads` requirement as
+// the other host-async producers.
+//
+// Mechanism: `Sender.__schedule_input` (a compiler builtin) clones the sender's
+// channel reference and hands the clone to the host's input listener, which owns
+// it for the listener's lifetime.
+pub fn input() -> Receiver[InputEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `InputEvent` (the
+    // producer never `send`/`recv`s itself — the host fires the send — so there
+    // is no downstream channel op to infer the element from; an unannotated
+    // `Channel.new()` only type-checks under the interpreter).
+    let (tx, rx): (Sender[InputEvent], Receiver[InputEvent]) = Channel.new();
+    tx.__schedule_input();
+    rx
+}

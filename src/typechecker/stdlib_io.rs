@@ -488,6 +488,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "__schedule_touchstart"
                 | "__schedule_touchmove"
                 | "__schedule_touchend"
+                | "__schedule_input"
         ) {
             let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
             let te = Self::type_to_type_expr(&resolved);
@@ -718,6 +719,22 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_keyup takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Unit
+                }
+                // Internal compiler builtin backing `std.web.events.input`
+                // (a DOM-element value channel; non-unit `InputEvent` = one
+                // `f64` payload). Borrows `self`, takes no argument, returns
+                // Unit; codegen clones the sender and hands it to the host input
+                // listener. Kept out of ordinary reach by the `__` prefix + the
+                // `writes(Input)` gating on the `input` wrapper.
+                "__schedule_input" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_input takes no arguments".to_string(),
                             span.clone(),
                             TypeErrorKind::WrongNumberOfArgs,
                         );

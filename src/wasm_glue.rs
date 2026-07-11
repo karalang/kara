@@ -526,6 +526,7 @@ pub fn render_glue(
             "{ name: \"__kara_touchstart\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_touchmove\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_touchend\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_input\", params: [\"bigint\"], ret: \"void\" }",
         ]
     } else {
         &[]
@@ -548,6 +549,7 @@ pub fn render_glue(
             "\"__kara_touchstart\"",
             "\"__kara_touchmove\"",
             "\"__kara_touchend\"",
+            "\"__kara_input\"",
         ]
     } else {
         &[]
@@ -1853,6 +1855,44 @@ async function runThreaded(hostImpls = {}, opts = {}) {
       };
       target.addEventListener("keyup", onKey);
     };
+    // __kara_input(chPtr: i64 [BigInt]) -> (): a MULTI-SHOT form-control value
+    // stream — a DOM-element value channel. Registers an "input" listener; each
+    // event marshals the element's CURRENT value as one little-endian f64 into
+    // the event-scratch buffer, then channel_send copies the 8-byte InputEvent
+    // payload (val_ptr=scratch, elem_size=8n). Unlike the pointer/click listeners
+    // the value is the ELEMENT's, not a coordinate off the event: read
+    // `e.target.valueAsNumber` (an <input type=range>/number field), falling back
+    // to parseFloat(value) for a non-numeric control. Coalesces like the others
+    // (feed a fresh value only once the worker drained the previous one), so a
+    // fast drag collapses to the latest settled value. Event source:
+    // `opts.inputTarget` (browser: the <input> element; node test: an EventTarget
+    // carrying `valueAsNumber` it dispatches synthetic "input" events on), else
+    // `globalThis` if it can addEventListener (input events bubble) — no source →
+    // no-op (recv just blocks). Not `{ passive }`; this listener never
+    // preventDefaults.
+    builtinHostImpls["__kara_input"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.inputTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      // InputEvent layout: { value: f64 @ 0 } = 8 bytes — kept in sync with
+      // runtime/stdlib/web_events.kara.
+      const scratch = serviceInstance.exports.karac_runtime_event_scratch();
+      const onInput = (e) => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        const el = (e && e.target) || target;
+        let v = el && typeof el.valueAsNumber === "number" ? el.valueAsNumber : NaN;
+        if (Number.isNaN(v)) v = el && el.value !== undefined ? parseFloat(el.value) : 0;
+        if (!Number.isFinite(v)) v = 0;
+        // Re-derive the view each event: a shared Memory's `.buffer` may be
+        // replaced on grow, so a cached DataView could go stale.
+        const dv = new DataView(memory.buffer, scratch, 8);
+        dv.setFloat64(0, v, true);
+        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 8n);
+      };
+      target.addEventListener("input", onInput);
+    };
     // __kara_clicks(chPtr: i64 [BigInt]) -> (): a MULTI-SHOT click-position
     // stream — the discrete "where did the user click" sibling of the continuous
     // __kara_pointer_moves. Registers a "click" listener; each event marshals
@@ -2585,7 +2625,8 @@ mod tests {
              { name: \"__kara_blur\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_touchstart\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_touchmove\", params: [\"bigint\"], ret: \"void\" }, \
-             { name: \"__kara_touchend\", params: [\"bigint\"], ret: \"void\" }];"
+             { name: \"__kara_touchend\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_input\", params: [\"bigint\"], ret: \"void\" }];"
         ));
         // The builtins are registered as builtins, and excluded from the
         // user contract (DECLARED_IMPORTS drives the missing-impl check and
@@ -2596,7 +2637,7 @@ mod tests {
              \"__kara_keydown\", \"__kara_keyup\", \"__kara_clicks\", \
              \"__kara_dblclick\", \"__kara_resize\", \"__kara_contextmenu\", \
              \"__kara_focus\", \"__kara_blur\", \"__kara_touchstart\", \
-             \"__kara_touchmove\", \"__kara_touchend\"];"
+             \"__kara_touchmove\", \"__kara_touchend\", \"__kara_input\"];"
         ));
         assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.

@@ -28,6 +28,8 @@ SharedArrayBuffer + the Web Worker pool; `serve.py` sets them, plain
 
 ## Controls
 
+- **Slider** (`<input type=range>`) — set the wing's angle of attack directly;
+  its live value streams in through the `std.web.events.input()` value channel.
 - **↑ / ↓** (or **scroll**) — steepen / flatten the wing's angle of attack.
 - **R** — reset to the default angle.
 
@@ -134,10 +136,15 @@ the compiler — the demo uses the natural shared-read fan-out, not a workaround
   wasn't classified `Copy` by the ownership checker, so aliasing a SIMD lane
   bundle for readability (`let e1 = ux;`) spuriously moved it; fixed in
   `src/ownership.rs` by adding the `Type::Vector` arm to `is_copy_type`.
-- The wing angle is exposed as **arrow-keys / scroll**, not an HTML `<input
-  type=range>` slider. A true DOM-element value channel would need a new
-  `std.web.events` producer (a DOM input-event stream) — a reasonable next
-  dogfood, but the keyboard/wheel channels are the already-proven surface.
+- The wing angle is now driven by a real HTML **`<input type=range>` slider**
+  (drag it to set the angle directly), alongside the arrow-keys / scroll controls.
+  That drove a new `std.web.events` producer — **`input()`**, the DOM-element
+  *value* channel: the slider's live `valueAsNumber` streams straight in as the
+  slope, no `addEventListener` glue (`host_wasm.kara` drains `input().try_recv()`).
+  It rides the same service-instance spine as `keydown`/`wheel`; the `slider` step
+  in `verify_browser.mjs` drags the range input over CDP and asserts the wing
+  responds (steep → flat). Producer round-trip pinned by
+  `tests/cli.rs::wasm_threads_input_payload_recv_e2e`.
 - The native **CPU SDL2** edition and the **GPU** path described in the roster
   remain Phase-11 / Phase-10 work; this is the browser edition, which the
   front-end spine already unblocks.
