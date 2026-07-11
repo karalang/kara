@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **376 surfaced · 6 open · 368 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **377 surfaced · 7 open · 368 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -101,6 +101,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **376 surfaced 
 | B-2026-07-11-29 | 2026-07-11 | codegen | high | Vec[Vec[Option[shared]]] deep-clone + consume + grow: force-cloned inner Vec's scope-exit drop LEAKS retained element handles, and at larger sizes specific clone combinations produce MALFORMED trees (extra nodes); interpreter correct | kata #95 second surface |
 | B-2026-07-11-30 | 2026-07-11 | ownership | low | Borrow-return source pinning is not applied to borrows nested in generic wrappers / borrowed collections: `-> Vec[ref T]` / `-> Option[ref T]` returns whose element sources are locals are accepted, while `-> ref T` / `-> ref Struct` returns are pinned. design.md § Feature 4 Part 3 says a container with a `ref` in a stored position is a borrowed collection whose scope is bounded by every borrowed source, so the escape should be pinned like the struct-field case. | tests/safety_design.rs::adversarial_escape_via_borrowed_collection_local (#[ignore]d, asserts the desired rejection; auto-enables when fixed); docs/implementation_checklist/phase-9-verification.md |
 | B-2026-07-11-32 | 2026-07-11 | codegen | high | DOUBLE-FREE: an index-based element swap of a NON-COPY `Vec` element (`let t = v[i]; v[i] = v[j]; v[j] = t;` over `Vec[String]`) aliases the heap buffers and double-frees at scope exit. Output is correct (values read before the free), but ASAN / a native run aborts (`free(): double free detected`). NON-generic — a plain `Vec[String]` triggers it; not specific to the generic heap. | unfixed; repro below |
+| B-2026-07-11-33 | 2026-07-11 | codegen | med | Vec[shared] / Vec[Option[shared]] element drop leaks the elements (buffer-only cleanup, no element rc-dec) | — |
 
 ### Fixed (368)
 
