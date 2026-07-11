@@ -6289,6 +6289,140 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(self.compile_expr(&block)?))
     }
 
+    /// Peel `map`/`filter` adaptors off a fused iterator chain, returning the
+    /// base source and the adaptors in source order — the shared front half of
+    /// the `fold` terminal (B-2026-07-11-17) and the `for`-over-chain desugar
+    /// (B-2026-07-11-18). Each step is `(is_filter, closure_param, body_or_pred)`.
+    ///
+    /// The base must be a source the `for`-loop already iterates CORRECTLY on its
+    /// own (an identity iterator source or a range); anything else — a plain
+    /// collection value, or an unrecognized adaptor MethodCall
+    /// (`enumerate`/`take`/`zip`/…) that the `for` lowering silently iterates zero
+    /// times — returns `None` so the caller fails closed rather than emit a
+    /// wrong-answer loop. A non-single-`Binding` adaptor closure also returns
+    /// `None`.
+    #[allow(clippy::type_complexity)]
+    fn peel_fused_map_filter_chain(recv: &Expr) -> Option<(&Expr, Vec<(bool, String, Expr)>)> {
+        let mut steps: Vec<(bool, String, Expr)> = Vec::new();
+        let mut base = recv;
+        loop {
+            let ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } = &base.kind
+            else {
+                break;
+            };
+            let is_filter = method == "filter";
+            if (method != "map" && !is_filter) || args.len() != 1 {
+                break;
+            }
+            let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
+                return None;
+            };
+            if params.len() != 1 {
+                return None;
+            }
+            let PatternKind::Binding(param) = &params[0].pattern.kind else {
+                return None;
+            };
+            steps.push((is_filter, param.clone(), (**body).clone()));
+            base = object;
+        }
+        steps.reverse(); // outermost-peeled → source order
+
+        let base_ok = match &base.kind {
+            ExprKind::MethodCall { method, args, .. } => {
+                args.is_empty()
+                    && matches!(
+                        method.as_str(),
+                        "iter" | "iter_mut" | "into_iter" | "chars" | "bytes" | "keys" | "values"
+                    )
+            }
+            ExprKind::Range { .. } => true,
+            _ => false,
+        };
+        if !base_ok {
+            return None;
+        }
+        Some((base, steps))
+    }
+
+    /// Thread the "current element" expression through a peeled `map`/`filter`
+    /// chain (source order), emitting `if <pred> { … }` for a filter and a
+    /// `let <param> = <current>`-bound body for a map — with the collect engine's
+    /// bind-or-elide (when `current` already IS the stage param, use the body
+    /// directly to keep the loop var's element type). At the terminal the
+    /// caller's `sink` turns the fully-adapted element into the loop-body
+    /// statements (a `push` for collect, an accumulate for fold, the user's body
+    /// for `for`). Shared by `fold` and the `for`-over-chain desugar.
+    fn build_fused_chain_body(
+        steps: &[(bool, String, Expr)],
+        i: usize,
+        current: Expr,
+        sink: &dyn Fn(Expr) -> Vec<Stmt>,
+        sp: &crate::token::Span,
+    ) -> Vec<Stmt> {
+        if i == steps.len() {
+            return sink(current);
+        }
+        let let_bind = |name: &str, value: Expr| Stmt {
+            kind: StmtKind::Let {
+                is_mut: false,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name.to_string()),
+                    span: sp.clone(),
+                },
+                ty: None,
+                value,
+            },
+            span: sp.clone(),
+        };
+        let current_is = |name: &str| matches!(&current.kind, ExprKind::Identifier(n) if n == name);
+        let (is_filter, param, body) = &steps[i];
+        let bind_or_use = |expr: &Expr| -> Expr {
+            if current_is(param) {
+                expr.clone()
+            } else {
+                Expr {
+                    kind: ExprKind::Block(Block {
+                        stmts: vec![let_bind(param, current.clone())],
+                        final_expr: Some(Box::new(expr.clone())),
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                }
+            }
+        };
+        if *is_filter {
+            // `if <pred> { <rest> }` — filter is identity on the element it lets
+            // through, so `current` is unchanged downstream.
+            let guard = bind_or_use(body);
+            let then_stmts = Self::build_fused_chain_body(steps, i + 1, current, sink, sp);
+            vec![Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::If {
+                        condition: Box::new(guard),
+                        then_block: Block {
+                            stmts: then_stmts,
+                            final_expr: None,
+                            span: sp.clone(),
+                        },
+                        else_branch: None,
+                    },
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            }]
+        } else {
+            // Map: the transformed value becomes the next stage's element.
+            let map_value = bind_or_use(body);
+            Self::build_fused_chain_body(steps, i + 1, map_value, sink, sp)
+        }
+    }
+
     /// Lower `<src>.iter().{map|filter}*.fold(init, |acc, x| body)` — a
     /// sequential `fold` terminal on a fused iterator chain — into a synthetic
     /// accumulator loop, mirroring the `collect` desugar's map/filter threading
@@ -6327,59 +6461,9 @@ impl<'ctx> super::Codegen<'ctx> {
         fold_body: &Expr,
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        // Peel `map`/`filter` adaptors off `recv` (outermost first), recording
-        // them source-order in `steps`. `true` = filter (`pred`), `false` = map
-        // (`body`); each carries its single closure param name.
-        let mut steps: Vec<(bool, String, Expr)> = Vec::new();
-        let mut base = recv;
-        loop {
-            let ExprKind::MethodCall {
-                object,
-                method,
-                args,
-                ..
-            } = &base.kind
-            else {
-                break;
-            };
-            let is_filter = method == "filter";
-            if (method != "map" && !is_filter) || args.len() != 1 {
-                break;
-            }
-            let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
-                return Ok(None);
-            };
-            if params.len() != 1 {
-                return Ok(None);
-            }
-            let PatternKind::Binding(param) = &params[0].pattern.kind else {
-                return Ok(None);
-            };
-            steps.push((is_filter, param.clone(), (**body).clone()));
-            base = object;
-        }
-        steps.reverse(); // outermost-peeled → source order
-
-        // The base must be a source the `for`-loop iterates CORRECTLY on its own
-        // (a `compile_for` peel arm handles it) — an identity iterator source or
-        // a range. Anything else — a plain collection value, or an unrecognized
-        // adaptor MethodCall (`enumerate`/`take`/`zip`/…) that the `for` lowering
-        // silently iterates zero times — is rejected (fail closed → the loud
-        // dispatch error), never emitted as a wrong-answer loop.
-        let base_ok = match &base.kind {
-            ExprKind::MethodCall { method, args, .. } => {
-                args.is_empty()
-                    && matches!(
-                        method.as_str(),
-                        "iter" | "iter_mut" | "into_iter" | "chars" | "bytes" | "keys" | "values"
-                    )
-            }
-            ExprKind::Range { .. } => true,
-            _ => false,
-        };
-        if !base_ok {
+        let Some((base, steps)) = Self::peel_fused_map_filter_chain(recv) else {
             return Ok(None);
-        }
+        };
 
         let uid = self.indexed_elem_counter;
         self.indexed_elem_counter += 1;
@@ -6398,30 +6482,10 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
 
-        // The loop-invariant accumulate-sink parameters, bundled so the recursive
-        // `build` stays within the argument-count lint.
-        struct FoldSink<'a> {
-            accname: &'a str,
-            acc_p: &'a str,
-            x_p: &'a str,
-            body: &'a Expr,
-        }
-
-        // Recursively thread `current` (the element expr) through the remaining
-        // adaptors, ending in the accumulate sink. Mirrors the collect engine's
-        // `build_body` map/filter arms (bind-or-elide when `current` already IS
-        // the stage param), but the terminal reassigns `__facc`.
-        fn build(
-            steps: &[(bool, String, Expr)],
-            i: usize,
-            current: Expr,
-            sink: &FoldSink,
-            sp: &crate::token::Span,
-        ) -> Vec<Stmt> {
-            let ident = |name: &str| Expr {
-                kind: ExprKind::Identifier(name.to_string()),
-                span: sp.clone(),
-            };
+        // Accumulate sink: bind the fold element param to the fully-adapted
+        // element (elide a redundant self-bind), bind the acc param to the
+        // running accumulator, then reassign it to the fold body's value.
+        let sink = |current: Expr| -> Vec<Stmt> {
             let let_bind = |name: &str, value: Expr| Stmt {
                 kind: StmtKind::Let {
                     is_mut: false,
@@ -6434,77 +6498,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 },
                 span: sp.clone(),
             };
-            let current_is =
-                |name: &str| matches!(&current.kind, ExprKind::Identifier(n) if n == name);
-
-            if i == steps.len() {
-                // Accumulate sink: bind the fold element param to `current` (elide
-                // a redundant self-bind), bind the acc param to the running
-                // accumulator, then reassign it to the fold body's value.
-                let mut out = Vec::new();
-                if !current_is(sink.x_p) {
-                    out.push(let_bind(sink.x_p, current));
-                }
-                out.push(let_bind(sink.acc_p, ident(sink.accname)));
-                out.push(Stmt {
-                    kind: StmtKind::Assign {
-                        target: ident(sink.accname),
-                        value: sink.body.clone(),
-                    },
-                    span: sp.clone(),
-                });
-                return out;
+            let current_is_x = matches!(&current.kind, ExprKind::Identifier(n) if n == x_p);
+            let mut out = Vec::new();
+            if !current_is_x {
+                out.push(let_bind(x_p, current));
             }
-
-            let (is_filter, param, body) = &steps[i];
-            let bind_or_use = |expr: &Expr| -> Expr {
-                if current_is(param) {
-                    expr.clone()
-                } else {
-                    Expr {
-                        kind: ExprKind::Block(Block {
-                            stmts: vec![let_bind(param, current.clone())],
-                            final_expr: Some(Box::new(expr.clone())),
-                            span: sp.clone(),
-                        }),
-                        span: sp.clone(),
-                    }
-                }
-            };
-            if *is_filter {
-                // `if <pred> { <rest> }` — filter is identity on the element it
-                // lets through, so `current` is unchanged downstream.
-                let guard = bind_or_use(body);
-                let then_stmts = build(steps, i + 1, current, sink, sp);
-                vec![Stmt {
-                    kind: StmtKind::Expr(Expr {
-                        kind: ExprKind::If {
-                            condition: Box::new(guard),
-                            then_block: Block {
-                                stmts: then_stmts,
-                                final_expr: None,
-                                span: sp.clone(),
-                            },
-                            else_branch: None,
-                        },
-                        span: sp.clone(),
-                    }),
-                    span: sp.clone(),
-                }]
-            } else {
-                // Map: the transformed value becomes the next stage's element.
-                let map_value = bind_or_use(body);
-                build(steps, i + 1, map_value, sink, sp)
-            }
-        }
-
-        let sink = FoldSink {
-            accname: &accname,
-            acc_p,
-            x_p,
-            body: fold_body,
+            out.push(let_bind(acc_p, ident(&accname)));
+            out.push(Stmt {
+                kind: StmtKind::Assign {
+                    target: ident(&accname),
+                    value: fold_body.clone(),
+                },
+                span: sp.clone(),
+            });
+            out
         };
-        let for_body = build(&steps, 0, ident(&elem_name), &sink, &sp);
+        let for_body = Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sp);
         let for_loop = Stmt {
             kind: StmtKind::Expr(Expr {
                 kind: ExprKind::For {
@@ -6548,6 +6557,105 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
         Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `for <pat> in <src>.iter().{map|filter}+ { <body> }` — a `for` loop
+    /// whose iterable is a fused iterator chain (B-2026-07-11-18).
+    ///
+    /// `compile_for` has explicit peel arms for identity sources (`.iter()` /
+    /// `.chars()` / ranges / `.enumerate()`), but a `.map(..)`/`.filter(..)`
+    /// adaptor iterable had NO arm and fell through to the dispatcher's silent
+    /// `_ =>` — the loop body ran ZERO times, a SILENT wrong-answer miscompile
+    /// (the interpreter iterated correctly). This routes such an iterable through
+    /// the same map/filter fusion as the `fold` terminal, with the USER'S loop
+    /// body as the sink: it peels the adaptors down to a base source the `for`
+    /// loop iterates correctly and emits
+    ///
+    /// ```text
+    /// for <elem> in <base> {
+    ///     <filter as `if <pred> { … }`, map as `let <p> = <body>`>
+    ///     let <pat> = <adapted-element>;  <user body>
+    /// }
+    /// ```
+    ///
+    /// Returns `Ok(None)` (so `compile_for`'s existing arms / fallthrough handle
+    /// it) when the iterable is NOT a `map`/`filter` chain — an empty adaptor
+    /// list (a bare `.iter()` etc. an existing arm already handles), or a shape
+    /// `peel_fused_map_filter_chain` rejects.
+    pub(super) fn try_compile_for_iter_chain(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        iterable: &Expr,
+        body: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some((base, steps)) = Self::peel_fused_map_filter_chain(iterable) else {
+            return Ok(None);
+        };
+        // No adaptors → a bare source `compile_for` already iterates correctly;
+        // let its existing arms handle it (this desugar is only for map/filter).
+        if steps.is_empty() {
+            return Ok(None);
+        }
+
+        self.indexed_elem_counter += 1;
+        let sp = iterable.span.clone();
+        // The loop var is the first adaptor's param, keeping the source element
+        // typed by the `for`-loop binding (as the collect/fold desugars do).
+        let elem_name = steps[0].1.clone();
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+
+        // Sink: bind the USER pattern to the fully-adapted element (eliding a
+        // redundant self-bind when the pattern is a plain identifier equal to the
+        // current element), then inline the user's loop body.
+        let sink = |current: Expr| -> Vec<Stmt> {
+            let mut out = Vec::new();
+            let elide = matches!(
+                (&pattern.kind, &current.kind),
+                (PatternKind::Binding(pn), ExprKind::Identifier(cn)) if pn == cn
+            );
+            if !elide {
+                out.push(Stmt {
+                    kind: StmtKind::Let {
+                        is_mut: false,
+                        pattern: pattern.clone(),
+                        ty: None,
+                        value: current,
+                    },
+                    span: sp.clone(),
+                });
+            }
+            out.extend(body.stmts.iter().cloned());
+            if let Some(fe) = &body.final_expr {
+                out.push(Stmt {
+                    kind: StmtKind::Expr((**fe).clone()),
+                    span: sp.clone(),
+                });
+            }
+            out
+        };
+        let for_body = Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sp);
+        let for_loop = Expr {
+            kind: ExprKind::For {
+                label: label.map(|s| s.to_string()),
+                pattern: Pattern {
+                    kind: PatternKind::Binding(elem_name),
+                    span: sp.clone(),
+                },
+                iterable: Box::new(base.clone()),
+                attributes: Vec::new(),
+                body: Block {
+                    stmts: for_body,
+                    final_expr: None,
+                    span: sp.clone(),
+                },
+            },
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&for_loop)?))
     }
 
     /// Lower `A.chain(B).collect()` for two plain identity SOURCES (`.iter()` /

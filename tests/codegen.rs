@@ -6586,6 +6586,40 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_over_iter_chain() {
+        // B-2026-07-11-18 — `for x in <src>.iter().{map|filter}+ { .. }`. Before
+        // the fix a map/filter adaptor iterable had no `compile_for` arm and fell
+        // through to the silent `_ =>`, running the body ZERO times (a silent
+        // wrong answer; the interpreter iterated correctly). Now the loop routes
+        // through the shared map/filter fusion with the user body as the sink.
+        // Covers map, filter, filter+map, `break`, and `continue`; each sum was 0
+        // pre-fix.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4, 5, 6];\n\
+                 let mut a = 0;\n\
+                 for x in v.iter().map(|x| x * 10) { a = a + x; }\n\
+                 println(f\"{a}\");\n\
+                 let mut b = 0;\n\
+                 for x in v.iter().filter(|x| x % 2 == 0) { b = b + x; }\n\
+                 println(f\"{b}\");\n\
+                 let mut c = 0;\n\
+                 for x in v.iter().filter(|x| x > 2).map(|x| x * x) { c = c + x; }\n\
+                 println(f\"{c}\");\n\
+                 let mut d = 0;\n\
+                 for x in v.iter().map(|x| x * 2) { if x > 8 { break; } d = d + x; }\n\
+                 println(f\"{d}\");\n\
+                 let mut e = 0;\n\
+                 for x in v.iter().map(|x| x * 2) { if x == 4 { continue; } e = e + x; }\n\
+                 println(f\"{e}\");\n\
+             }",
+        ) {
+            // a=210, b=12, c=86 (9+16+25+36), d=2+4+6+8=20, e=42-4=38
+            assert_eq!(out, "210\n12\n86\n20\n38\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_index_vec_field_through_self() {
         // Regression for the self-hosting lexer index blocker: indexing a
         // `Vec` field through the `self` receiver (`self.bytes[self.current]`)

@@ -100,6 +100,16 @@ impl<'ctx> super::Codegen<'ctx> {
             ..
         } = &iterable.kind
         {
+            // `for x in <src>.iter().{map|filter}+ { … }` — a fused-adaptor
+            // iterable. Without this it falls through to the silent `_ =>` arm
+            // below and the body runs ZERO times (B-2026-07-11-18). Routed
+            // through the same map/filter fusion as the `fold` terminal, with the
+            // user body as the sink; fails closed (`None`) for any other chain.
+            if args.len() == 1 && (method == "map" || method == "filter") {
+                if let Some(v) = self.try_compile_for_iter_chain(label, pattern, iterable, body)? {
+                    return Ok(v);
+                }
+            }
             if args.is_empty() && (method == "iter" || method == "into_iter") {
                 // Indexed receiver (`coll[i].iter()`): synthesize a
                 // temp identifier pointing into `coll`'s storage and

@@ -470,6 +470,33 @@ fn main() {
     }
 
     #[test]
+    fn asan_for_over_iter_chain_heap_elems_no_leak() {
+        // B-2026-07-11-18 — `for <p> in <src>.iter().{map|filter}+ { .. }` over
+        // HEAP elements. The desugar peels the adaptors into a `for` over the base
+        // source and binds the user pattern (`let p = <adapted element>`) before
+        // the body; over a `Vec[String]`, that must not leak the source Vec, a
+        // per-element String, or a mapped String. Exercises a String-yielding map
+        // (`|w| w.clone()`), a filter that drops elements, and a two-stage
+        // filter+map, each consumed by a body that prints the bound String.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let words: Vec[String] = ["alpha", "bb", "gamma", "dd", "epsilon"];
+    for w in words.iter().filter(|w| w.len() > 2).map(|w| w.clone()) {
+        println(w);
+    }
+    let nums: Vec[i64] = [1, 2, 3, 4, 5, 6];
+    for s in nums.iter().filter(|n| n % 2 == 0).map(|n| f"n={n}") {
+        println(s);
+    }
+}
+"#,
+            &["alpha", "gamma", "epsilon", "n=2", "n=4", "n=6"],
+            "asan_for_over_iter_chain_heap_elems_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_with_capacity_zero_no_leak() {
         // B-2026-07-11-15 — a `with_capacity(n)` whose `n` evaluates to 0 at
         // runtime leaked one byte per call. `karac_alloc_or_panic(0)` normalizes
