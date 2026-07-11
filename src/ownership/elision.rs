@@ -1492,14 +1492,6 @@ impl<'a> OwnershipChecker<'a> {
             if let Some(e) = &f.body.final_expr {
                 self.cluster_verify_expr(e, ClusterCtx::default(), &mut scan);
             }
-            if reshaper_enabled() && std::env::var("KARAC_RESHAPER_DEBUG").is_ok() {
-                eprintln!(
-                    "[reshaper] adopt-cand fn={} root={name} builder={builder} poisoned={:?} root_found={}",
-                    f.name,
-                    scan.poisoned.as_ref().map(|p| &p.0),
-                    scan.root.is_some()
-                );
-            }
             if scan.poisoned.is_none() && scan.root.is_some() {
                 let root = scan.root.clone().unwrap();
                 let mut bare_cursors = HashSet::new();
@@ -3149,16 +3141,19 @@ impl<'a> OwnershipChecker<'a> {
         // adopted-root let (count match — the candidate walker only
         // records let-position sites, and each adoption consumed one).
         let adopted: Vec<&&ElidedCluster> = of_t.iter().filter(|c| c.adopted).collect();
-        // EXPERIMENTAL (default-OFF): each reshaper call CONSUMES one
-        // builder result (moved in — its cleanup transfers to the
-        // reshaper's returned/adopted result), so it is accounted-for
-        // without a separate adoption. `builder_sites` counts calls to
-        // builders AND reshapers (both registered in `builders`); a
-        // reshaper call's consumed input is one of those builder results,
-        // so the balance is `builder_sites == adopted + reshaper_calls`.
-        // NOTE: loose — assumes each reshaper consumes a builder result;
-        // the tight version threads consumed-root provenance. See spike.
-        let reshaper_calls = if reshaper_enabled() {
+        // Under the reshaper extension (default-OFF), the coarse
+        // `builder_sites == adopted.len()` balance is replaced by a SOUND
+        // per-binding accounting (provenance-threaded): every `T` value
+        // produced by a `let x = <builder|reshaper>(...)` must be handled
+        // exactly once — either **adopted** (its root takes a free-walk)
+        // or **consumed by a reshaper call** (`reshaper(x, …)` moves it in,
+        // takes ownership, and produces a result that is itself an
+        // adoption candidate checked in turn). A reshaper's ONLY `T`
+        // parameter is its owned/consumed input, so a `T` binding passed
+        // to a reshaper is provably moved (not borrowed). `produced ==
+        // builder_sites` guarantees every builder/reshaper call sits in
+        // let position, so none escapes the check.
+        if reshaper_enabled() {
             let reshaper_names: HashSet<String> = self
                 .program
                 .items
@@ -3168,29 +3163,51 @@ impl<'a> OwnershipChecker<'a> {
                     _ => None,
                 })
                 .collect();
-            let mut n = 0usize;
-            walk_fn_exprs(&f.body, &mut |e, _| {
-                if let ExprKind::Call { callee, .. } = &e.kind {
-                    if let ExprKind::Identifier(b) = &callee.kind {
-                        if reshaper_names.contains(b.as_str()) {
-                            n += 1;
+            if !reshaper_names.is_empty() {
+                let adopted_roots: HashSet<&str> =
+                    adopted.iter().map(|c| c.root.as_str()).collect();
+                // `T` bindings moved into a reshaper call (consumed).
+                let mut reshaper_consumed: HashSet<String> = HashSet::new();
+                walk_fn_exprs(&f.body, &mut |e, _| {
+                    if let ExprKind::Call { callee, args } = &e.kind {
+                        if let ExprKind::Identifier(b) = &callee.kind {
+                            if reshaper_names.contains(b.as_str()) {
+                                for a in args {
+                                    if let ExprKind::Identifier(id) = &a.value.kind {
+                                        reshaper_consumed.insert(id.clone());
+                                    }
+                                }
+                            }
                         }
                     }
+                });
+                // Every `let x = <builder|reshaper for t>(...)` result.
+                let mut produced: Vec<(String, String)> = Vec::new();
+                collect_adoption_candidates(&f.body, builders, &mut produced);
+                let produced_t: Vec<&String> = produced
+                    .iter()
+                    .filter(|(_, b)| builders.get(b).is_some_and(|(m, _)| m == t))
+                    .map(|(x, _)| x)
+                    .collect();
+                // Every builder/reshaper call is a let-produced binding
+                // (no non-let-position builder call escapes the check).
+                if produced_t.len() != builder_sites {
+                    return (true, false);
                 }
-            });
-            n
-        } else {
-            0
-        };
-        if reshaper_enabled() && std::env::var("KARAC_RESHAPER_DEBUG").is_ok() {
-            eprintln!(
-                "[reshaper]   {fn_key}: builder_sites={builder_sites} adopted={} reshaper_calls={reshaper_calls} lits={lits_present} ret_t={ret_t} t_params={} of_t={}",
-                adopted.len(),
-                t_params.len(),
-                of_t.len()
-            );
+                // …and each is adopted xor reshaper-consumed.
+                let all_handled = produced_t
+                    .iter()
+                    .all(|x| adopted_roots.contains(x.as_str()) || reshaper_consumed.contains(*x));
+                if !all_handled {
+                    return (true, false);
+                }
+                if adopted.iter().any(|c| !c.fn_pure) {
+                    return (true, false);
+                }
+                return (true, true);
+            }
         }
-        if builder_sites != adopted.len() + reshaper_calls {
+        if builder_sites != adopted.len() {
             return (true, false);
         }
         if adopted.iter().any(|c| !c.fn_pure) {
@@ -3220,9 +3237,6 @@ impl<'a> OwnershipChecker<'a> {
             };
             // Surface scan with the free-fn Option[T] leniency.
             if self.program_member_scan(&t, true) {
-                if reshaper_enabled() && std::env::var("KARAC_RESHAPER_DEBUG").is_ok() {
-                    eprintln!("[reshaper] type={t} DISQUALIFIED by program_member_scan");
-                }
                 continue;
             }
             // The summarized fns whose two-sided contracts the gate
@@ -3256,12 +3270,6 @@ impl<'a> OwnershipChecker<'a> {
                         }
                         let (touches, covered) =
                             self.fn_covers_member(f, &f.name, &t, clusters, builders, true);
-                        if reshaper_enabled() && std::env::var("KARAC_RESHAPER_DEBUG").is_ok() {
-                            eprintln!(
-                                "[reshaper] type={t} fn={} touches={touches} covered={covered}",
-                                f.name
-                            );
-                        }
                         if touches {
                             if !covered {
                                 continue 'types;

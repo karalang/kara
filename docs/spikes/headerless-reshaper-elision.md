@@ -1,6 +1,6 @@
 # Design: Headerless RC-elision for in-place link-permuting reshapers
 
-**Status:** on branch `worktree-headerless-reshaper` (core commits already on `main`, gated OFF behind `KARAC_HEADERLESS_RESHAPER`). kata #92 flag-on is now **correct (147795689) + 16 B nodes + 0 leaks + no double-free** (§9 Update 5 — the leak is FIXED). Remaining before flipping the flag: tighten the loose builder-count relaxation (provenance-threaded), remove the gated debug, and a deterministic Linux-LSan sweep across #82/#83/#86/#92.
+**Status:** core (recognizer + analysis→16 B + rc-op guard + leak fix) is on `main`, gated OFF behind `KARAC_HEADERLESS_RESHAPER`. kata #92 flag-on is **correct (147795689) + 16 B nodes + 0 leaks + no double-free**. Flip-readiness (§9 Update 6): builder-count relaxation is now **provenance-threaded (sound)**, gated debug **removed**. Remaining before flipping: a deterministic Linux-LSan sweep via an env-gated memory_sanitizer test (macOS `leaks` verified clean but under-reports at tiny iteration counts).
 **Home once approved:** `docs/implementation_checklist/phase-7-codegen.md` (the design record for the `src/ownership/elision.rs` phases)
 **Surfaced by:** kata #92 (Reverse Linked List II) M5 rebench + profiling, 2026-07-11
 
@@ -183,3 +183,34 @@ Implemented the Update-4 fix. kata #92 flag-on is now **correct + 16 B + 0 leaks
 **Verification:** kata #92 flag-on full K → sink 147795689, `malloc #0x10`, `leaks` 0, guard-malloc (MallocScribble) exit 0. A 7-point window sweep (`left`=1..199 × various `right`) → all 0 leaks + no double-free + correct. Pass-through → 19900, 0 leaks. Family #82/#83/#86 → **byte-identical** output flag-on/off, 0 leaks (#82 stays headered — its shape isn't a recognized reshaper; #83/#86 partially headerless). Flag-off unchanged (24 B, 147795689). Full `cargo test --features llvm` = 515 passed / same 6 pre-existing JIT-env failures. fmt + clippy (both feature configs) clean.
 
 **Still before flipping the flag:** (1) replace the loose builder-call relaxation (`builder_sites == adopted + reshaper_calls`) with provenance-threaded consumed-root accounting; (2) remove the gated `KARAC_RESHAPER_DEBUG` scaffolding; (3) deterministic **Linux LSan** sweep (`scripts/lsan-local.sh` — macOS `leaks` under-reports) across the family + a discriminating oracle that rejects a non-permutation shape.
+
+### Update 6 (2026-07-11, cont.) — flip-readiness: sound accounting + debug removed
+
+Two flip-readiness items landed (still gated OFF).
+
+**Provenance-threaded builder-call accounting (sound).** Replaced the loose
+`builder_sites == adopted + reshaper_calls` count with a per-binding check in
+`fn_covers_member`: every `T` produced by a `let x = <builder|reshaper>(…)` must
+be handled exactly once — **adopted** (its root free-walks) OR **consumed by a
+reshaper call** (`reshaper(x, …)` moves it in; a reshaper's only `T` param is its
+owned/consumed input, so a `T` binding passed to one is provably moved, not
+borrowed). `produced == builder_sites` guarantees no non-let-position builder call
+escapes the check. This admits the build→reshaper→adopt chain and rejects any
+unhandled/escaping `T` value (which keeps `T` headered rather than miscompiling).
+
+**Removed** the `KARAC_RESHAPER_DEBUG` scaffolding (4 gated eprintln blocks).
+
+**Verification.** kata #92 flag-on: correct + 16 B + 0 leaks + guard-malloc clean.
+Family #82/#83/#86: byte-identical flag on/off, 0 leaks. Discriminating checks:
+(a) an unused `let orphan = build(…)` → adopted-and-freed (0 leaks), covering is
+correct; (b) a build result flowed through a non-reshaper (`steal`) → stays partly
+headered (`#0x10 #0x18`), correct output, 0 leaks, no double-free — the gate never
+miscompiles, it either covers-and-frees or keeps headered. Full
+`cargo test --features llvm` = 515 passed / same 6 pre-existing JIT-env failures.
+fmt + clippy (both configs) clean.
+
+**Only remaining before flipping the flag:** a deterministic **Linux LSan** pass
+(macOS `leaks` is verified clean here but under-reports at tiny iteration counts) —
+best as an env-gated `memory_sanitizer` test that builds a reshaper program with
+`KARAC_HEADERLESS_RESHAPER=1` and asserts no leak under the Linux ASan+LSan
+toolchain (`scripts/lsan-local.sh`).
