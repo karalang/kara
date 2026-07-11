@@ -1470,6 +1470,21 @@ impl<'a> Interpreter<'a> {
                     let val = self.eval_expr_inner(&c.value);
                     self.env.define(c.name.clone(), val);
                 }
+                // Module-level `let` / `let mut` binding (design.md § Module-Level
+                // Bindings). Codegen emits these as globals, but the interpreter
+                // never evaluated/bound them — so a module-level `let COUNT = 42`
+                // read from any function panicked with "variable not found;
+                // should be caught by resolver", a run-vs-build divergence. Evaluate
+                // the const-init RHS and bind the name in the global env, exactly
+                // like `ConstDecl` above (the resolver already enforces the
+                // constant-init rule + Const-class naming, and the typechecker
+                // checks the optional `: TYPE`). `is_mut` bindings define the same
+                // way; a later `NAME = v` reassignment resolves against this global
+                // slot through the normal assignment path.
+                Item::ModuleBinding(b) => {
+                    let val = self.eval_expr_inner(&b.value);
+                    self.env.define(b.name.clone(), val);
+                }
                 Item::ImplBlock(imp) => {
                     self.register_impl_methods(imp, /* skip_compiler_builtin = */ false);
                 }

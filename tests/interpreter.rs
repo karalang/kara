@@ -20576,3 +20576,59 @@ fn test_map_mutation_through_index_place_persists() {
                }";
     assert_eq!(run(src), "2\n");
 }
+
+// ── Module-level `let` / `let mut` bindings in the interpreter ──────
+//
+// Codegen emits these as globals and `run_program` (build+run) covered
+// them, but the interpreter never evaluated/bound them — a module-level
+// `let COUNT = 42` read from any function panicked ("variable not found;
+// should be caught by resolver"), a run-vs-build divergence. These pin the
+// run side; the codegen tests (tests/codegen.rs `test_e2e_modbind_*`) pin
+// the identical build output.
+
+#[test]
+fn test_module_binding_immutable_read() {
+    let out = run_no_errors(
+        "let COUNT: i64 = 42i64;\n\
+         let FLAG: bool = true;\n\
+         fn main() {\n\
+             println(COUNT);\n\
+             if FLAG { println(1i64); } else { println(0i64); }\n\
+         }",
+    );
+    assert_eq!(out, "42\n1\n");
+}
+
+#[test]
+fn test_module_binding_mut_reassignment_from_fn() {
+    // A `let mut` module binding accumulates across function calls — the
+    // reassignment resolves against the global slot.
+    let out = run_no_errors(
+        "let mut TOTAL: i64 = 0i64;\n\
+         fn add(n: i64) { TOTAL = TOTAL + n; }\n\
+         fn main() {\n\
+             add(10i64);\n\
+             add(5i64);\n\
+             println(TOTAL);\n\
+         }",
+    );
+    assert_eq!(out, "15\n");
+}
+
+#[test]
+fn test_module_binding_local_shadow_takes_precedence() {
+    // Parity with tests/codegen.rs::test_e2e_modbind_local_shadow_takes_precedence
+    // — a function-local binding shadows the module binding for its scope.
+    let out = run_no_errors(
+        "let mut COUNTER: i64 = 100i64;\n\
+         fn local_shadows() -> i64 {\n\
+             let COUNTER: i64 = 7i64;\n\
+             COUNTER\n\
+         }\n\
+         fn main() {\n\
+             println(local_shadows());\n\
+             println(COUNTER);\n\
+         }",
+    );
+    assert_eq!(out, "7\n100\n");
+}
