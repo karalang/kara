@@ -48126,6 +48126,98 @@ fn main() with writes(FileSystem) reads(FileSystem) {{
     }
 
     #[test]
+    fn test_e2e_fs_read_lines_splits_file_into_vec() {
+        // `FileSystem.read_lines(path) -> Result[Vec[String], IoError]`
+        // (B-2026-07-11-38): slurp a multi-line file, split on newlines,
+        // and iterate the resulting `Vec[String]`. Witnesses the whole
+        // vertical — the `karac_runtime_fs_read_lines` two-out-param FFI,
+        // the `Result.Ok(<Vec[String]>)` aggregate construction, and the
+        // per-element String drop (no leak). The middle blank line pins
+        // that empty lines survive as empty `String`s (not dropped).
+        let tmp = std::env::temp_dir().join("karac_e2e_fs_read_lines.txt");
+        let _ = std::fs::remove_file(&tmp);
+        std::fs::write(&tmp, b"alpha\nbeta\n\ndelta\n").expect("temp write");
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            r#"
+fn main() with reads(FileSystem) {{
+    match FileSystem.read_lines("{path}") {{
+        Ok(lines) => {{
+            println(lines.len().to_string());
+            for line in lines {{
+                println("[" + line + "]");
+            }}
+        }},
+        Err(_) => println("read-err"),
+    }}
+}}
+"#
+        );
+        let out = run_program(&src);
+        let _ = std::fs::remove_file(&tmp);
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "4\n[alpha]\n[beta]\n[]\n[delta]");
+        }
+    }
+
+    #[test]
+    fn test_e2e_lowercase_fs_read_lines_question_unwrap() {
+        // Lowercase `fs.read_lines(path)?` — the ambient-alias path
+        // (`ambient_resource_for_alias("fs")` → `compile_ambient_ffi`'s
+        // `("FileSystem", "read_lines")` arm → `compile_fs_read_lines_val`).
+        // The `?`-unwrap binds a `Vec[String]` local whose per-element
+        // String buffers must be freed at scope exit (B-38 leak caveat);
+        // summing the line lengths exercises a full drain + drop.
+        let tmp = std::env::temp_dir().join("karac_e2e_lc_fs_read_lines.txt");
+        let _ = std::fs::remove_file(&tmp);
+        std::fs::write(&tmp, b"first line\nsecond\n\nfourth line\n").expect("temp write");
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            r#"
+fn total_len(path: String) -> Result[i64, IoError] with reads(FileSystem) {{
+    let lines = fs.read_lines(path)?;
+    let mut total = 0;
+    for line in lines {{
+        total = total + line.len();
+    }}
+    Ok(total)
+}}
+fn main() with reads(FileSystem) {{
+    match total_len("{path}") {{
+        Ok(n) => println(n.to_string()),
+        Err(_) => println("read-err"),
+    }}
+}}
+"#
+        );
+        let out = run_program(&src);
+        let _ = std::fs::remove_file(&tmp);
+        if let Some(out) = out {
+            // "first line"(10) + "second"(6) + ""(0) + "fourth line"(11) = 27
+            assert_eq!(out.trim(), "27");
+        }
+    }
+
+    #[test]
+    fn test_e2e_fs_read_lines_missing_file_returns_err() {
+        // A read of a nonexistent path must land on the `Err(IoError…)`
+        // arm — the KaracIoResult error path builds `Result.Err` with the
+        // IoError variant tag (`error_kind - 1`), leaving the vec empty.
+        let src = r#"
+fn main() with reads(FileSystem) {
+    match FileSystem.read_lines("/nonexistent/karac-b38/xyz.txt") {
+        Ok(lines) => println(lines.len().to_string()),
+        Err(_) => println("io-err"),
+    }
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "io-err");
+        }
+    }
+
+    #[test]
     fn test_e2e_lowercase_stdout_stderr_split() {
         // Lowercase `stdout.println` / `stderr.println` must land on the same
         // streams as their capitalized forms: stdout line on fd 1, stderr line
@@ -48533,6 +48625,40 @@ fn read_cert(path: String) -> String {
 "#,
         );
         assert!(function_body(&ir, "read_cert").is_some());
+    }
+
+    #[test]
+    fn test_ir_read_lines_dispatches_to_runtime_ffi() {
+        // `FileSystem.read_lines(path) -> Result[Vec[String], IoError]`
+        // (B-2026-07-11-38) lowers to the two-out-param FFI
+        // `karac_runtime_fs_read_lines(out_io, out_vec, path_ptr, path_len)`.
+        let ir = ir_for(
+            r#"
+fn load(path: String) -> i64 {
+    match FileSystem.read_lines(path) {
+        Ok(lines) => lines.len(),
+        Err(_) => 0,
+    }
+}
+"#,
+        );
+        assert!(
+            ir.contains("declare void @karac_runtime_fs_read_lines"),
+            "expected read_lines FFI declaration; ir:\n{ir}"
+        );
+        let body = function_body(&ir, "load").expect("load fn must lower");
+        assert!(
+            body.contains("call void @karac_runtime_fs_read_lines"),
+            "load body should call the FFI; body:\n{body}"
+        );
+        // The Ok arm branches on the KaracIoResult error_kind and builds
+        // the Result via the named blocks / GEPs from `compile_fs_read_lines`.
+        for needle in ["rl.is_ok", "rl.vec.val"] {
+            assert!(
+                body.contains(needle),
+                "expected read_lines lowering marker '{needle}'; body:\n{body}"
+            );
+        }
     }
 
     // Regression guards documenting that the match-arm tail-binding path

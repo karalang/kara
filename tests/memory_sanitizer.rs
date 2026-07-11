@@ -1152,6 +1152,50 @@ fn main() {
     }
 
     #[test]
+    fn asan_fs_read_lines_vec_string_elements_freed() {
+        // B-2026-07-11-38: `fs.read_lines(path) -> Result[Vec[String], IoError]`
+        // returns a `Vec[String]` whose per-element String buffers are heap
+        // allocations the runtime hands over (`karac_runtime_fs_read_lines`).
+        // The `?`-unwrapped binding must free each element String AND the Vec
+        // buffer at scope exit — a missed element free leaks one buffer per
+        // line per iteration (LSan on Linux CI catches it). The program is
+        // self-contained: it writes the fixture with `fs.write`, then reads it
+        // back 30× so any per-iteration leak accumulates well past noise.
+        assert_clean_asan_run(
+            r#"
+fn count_bytes(path: String) -> Result[i64, IoError] with reads(FileSystem) {
+    let lines = fs.read_lines(path)?;
+    let mut total = 0;
+    for line in lines {
+        total = total + line.len();
+    }
+    Ok(total)
+}
+fn main() with reads(FileSystem) writes(FileSystem) {
+    match fs.write("/tmp/karac_asan_b38_read_lines.txt", "alpha-line\nbeta-line\n\ndelta-line\n") {
+        Ok(_) => {
+            let mut i: i64 = 0i64;
+            let mut last: i64 = 0i64;
+            while i < 30i64 {
+                match count_bytes("/tmp/karac_asan_b38_read_lines.txt") {
+                    Ok(n) => { last = n; },
+                    Err(_) => { last = -1i64; },
+                }
+                i = i + 1i64;
+            }
+            println(last.to_string());
+        },
+        Err(_) => println("write-err"),
+    }
+}
+"#,
+            // "alpha-line"(10)+"beta-line"(9)+""(0)+"delta-line"(10) = 29
+            &["29"],
+            "fs_read_lines_vec_string_elements_freed",
+        );
+    }
+
+    #[test]
     fn asan_single_element_fstring_vec_return_no_double_free() {
         // B-2026-07-04-1: a fn returning a SINGLE-element `Vec[String]` whose
         // element is an f-string literal (`return Vec[f"…"]`) double-freed the

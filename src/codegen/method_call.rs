@@ -9344,6 +9344,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 self.compile_file_read_to_string_val(arg_vals[0])
             }
+            ("FileSystem", "read_lines") => {
+                // Lowercase `fs.read_lines(path)`. Capitalized form is lowered
+                // via `assoc_call.rs` → `compile_fs_read_lines`; here the path
+                // is pre-compiled, so route to the value-core variant. B-38.
+                if arg_vals.len() != 1 {
+                    return Err(format!(
+                        "codegen: fs.read_lines expects 1 argument, found {}",
+                        arg_vals.len()
+                    ));
+                }
+                self.compile_fs_read_lines_val(arg_vals[0])
+            }
             ("FileSystem", "write") => {
                 // Lowercase `fs.write(path, contents)`. Capitalized form is
                 // lowered via `assoc_call.rs` → `compile_fs_write`; here both

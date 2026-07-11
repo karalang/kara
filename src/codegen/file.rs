@@ -484,6 +484,203 @@ impl<'ctx> super::Codegen<'ctx> {
         self.lower_kara_io_result(slot, FileOkKind::Unit)
     }
 
+    /// Compile `FileSystem.read_lines(path) -> Result[Vec[String], IoError]`
+    /// (B-2026-07-11-38). Slurps the file at `path` and splits it into a
+    /// `Vec[String]` of lines (trailing newline stripped per line). Unlike
+    /// the `StringPayload` reads this returns an aggregate the runtime
+    /// cannot pack into the KaracIoResult buffer fields, so the extern
+    /// takes *two* out-params: the KaracIoResult (Ok/Err status) and a
+    /// KaracVec slot the runtime fills with `RuntimeKaracString` elements.
+    /// On Ok the loaded KaracVec becomes the `Result.Ok` payload (a Vec is
+    /// 3 words, packing into Result's 4 payload words); on Err the vec is
+    /// left empty (`{null,0,0}`) and we build `Result.Err(IoError…)` from
+    /// the KaracIoResult exactly like `lower_kara_io_result`'s Err arm.
+    pub(super) fn compile_fs_read_lines(
+        &mut self,
+        path_arg: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let path_val = self.compile_expr(path_arg)?;
+        self.compile_fs_read_lines_val(path_val)
+    }
+
+    /// Value-core of `compile_fs_read_lines` (path already compiled). The
+    /// expr-taking wrapper serves the capitalized `FileSystem.read_lines`
+    /// associated-call path; this variant serves the lowercase
+    /// `fs.read_lines` ambient-alias path.
+    pub(super) fn compile_fs_read_lines_val(
+        &mut self,
+        path_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_ty = self.context.i64_type();
+        let i32_ty = self.context.i32_type();
+        let zero_i32 = i32_ty.const_int(0, false);
+
+        let path_sv = path_val.into_struct_value();
+        let path_ptr = self
+            .builder
+            .build_extract_value(path_sv, 0, "rl.path.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let path_len = self
+            .builder
+            .build_extract_value(path_sv, 1, "rl.path.len")
+            .unwrap()
+            .into_int_value();
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "File codegen called outside fn".to_string())?;
+        let io_slot = self.alloca_io_result_slot()?;
+        let vec_ty = self.vec_struct_type();
+        let vec_slot = self.create_entry_alloca(fn_val, "rl.vec.slot", vec_ty.into());
+
+        let f = self
+            .module
+            .get_function("karac_runtime_fs_read_lines")
+            .expect("karac_runtime_fs_read_lines declared in Codegen::new");
+        self.builder
+            .build_call(
+                f,
+                &[
+                    BasicMetadataValueEnum::PointerValue(io_slot),
+                    BasicMetadataValueEnum::PointerValue(vec_slot),
+                    BasicMetadataValueEnum::PointerValue(path_ptr),
+                    BasicMetadataValueEnum::IntValue(path_len),
+                ],
+                "fs.read_lines.call",
+            )
+            .unwrap();
+
+        // Branch on error_kind == 0 (Ok) vs != 0 (Err). The Err arm reuses
+        // the same IoError construction as `lower_kara_io_result`; the Ok
+        // arm loads the runtime-filled KaracVec and wraps it in Result.Ok.
+        let io_ty = self.kara_io_result_type();
+        let kind_ptr = self
+            .builder
+            .build_struct_gep(io_ty, io_slot, 1, "rl.io.kind.ptr")
+            .unwrap();
+        let error_kind = self
+            .builder
+            .build_load(i32_ty, kind_ptr, "rl.io.kind")
+            .unwrap()
+            .into_int_value();
+
+        let result_layout = self
+            .enum_layouts
+            .get("Result")
+            .ok_or_else(|| "Result layout not registered before File codegen".to_string())?;
+        let result_ty = result_layout.llvm_type;
+        let result_slot = self.create_entry_alloca(fn_val, "rl.result", result_ty.into());
+
+        let is_ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, error_kind, zero_i32, "rl.is_ok")
+            .unwrap();
+        let ok_bb = self.context.append_basic_block(fn_val, "rl.ok");
+        let err_bb = self.context.append_basic_block(fn_val, "rl.err");
+        let cont_bb = self.context.append_basic_block(fn_val, "rl.cont");
+        self.builder
+            .build_conditional_branch(is_ok, ok_bb, err_bb)
+            .unwrap();
+
+        // ── Ok arm: Result.Ok(<Vec[String]>) ─────────────────────────
+        self.builder.position_at_end(ok_bb);
+        let vec_val = self
+            .builder
+            .build_load(vec_ty, vec_slot, "rl.vec.val")
+            .unwrap();
+        let ok_agg = self.build_nonshared_enum_value("Result", "Ok", &[vec_val])?;
+        self.builder
+            .build_store(result_slot, ok_agg.into_struct_value())
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── Err arm: Result.Err(IoError…) ────────────────────────────
+        // Identical shape to `lower_kara_io_result`'s Err arm: Err tag 0,
+        // IoError variant tag = error_kind - 1, and the `Other(String)`
+        // message aggregate (ptr/len/len) in the trailing payload words.
+        self.builder.position_at_end(err_bb);
+        let msg_ptr_ptr = self
+            .builder
+            .build_struct_gep(io_ty, io_slot, 3, "rl.msg.ptr.ptr")
+            .unwrap();
+        let msg_ptr = self
+            .builder
+            .build_load(
+                self.context.ptr_type(inkwell::AddressSpace::default()),
+                msg_ptr_ptr,
+                "rl.msg.ptr",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let msg_len_ptr = self
+            .builder
+            .build_struct_gep(io_ty, io_slot, 4, "rl.msg.len.ptr")
+            .unwrap();
+        let msg_len = self
+            .builder
+            .build_load(i64_ty, msg_len_ptr, "rl.msg.len")
+            .unwrap()
+            .into_int_value();
+        let total_fields = result_ty.count_fields() as u64;
+        let zero_i64 = i64_ty.const_int(0, false);
+        let tag_ptr_err = self
+            .builder
+            .build_struct_gep(result_ty, result_slot, 0, "rl.err.tag")
+            .unwrap();
+        self.builder.build_store(tag_ptr_err, zero_i64).unwrap();
+        let err_kind_i64 = self
+            .builder
+            .build_int_z_extend(error_kind, i64_ty, "rl.io.kind.i64")
+            .unwrap();
+        let one_i64 = i64_ty.const_int(1, false);
+        let io_tag = self
+            .builder
+            .build_int_sub(err_kind_i64, one_i64, "rl.io.variant.tag")
+            .unwrap();
+        if total_fields > 1 {
+            let p1 = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 1, "rl.err.io.tag")
+                .unwrap();
+            self.builder.build_store(p1, io_tag).unwrap();
+        }
+        let msg_ptr_int = self
+            .builder
+            .build_ptr_to_int(msg_ptr, i64_ty, "rl.err.msg.ptr.i64")
+            .unwrap();
+        if total_fields > 2 {
+            let p2 = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 2, "rl.err.io.w0")
+                .unwrap();
+            self.builder.build_store(p2, msg_ptr_int).unwrap();
+        }
+        if total_fields > 3 {
+            let p3 = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 3, "rl.err.io.w1")
+                .unwrap();
+            self.builder.build_store(p3, msg_len).unwrap();
+        }
+        if total_fields > 4 {
+            let p4 = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 4, "rl.err.io.w2")
+                .unwrap();
+            self.builder.build_store(p4, msg_len).unwrap();
+        }
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── Cont ─────────────────────────────────────────────────────
+        self.builder.position_at_end(cont_bb);
+        let result = self
+            .builder
+            .build_load(result_ty, result_slot, "rl.result.val")
+            .unwrap();
+        Ok(result)
+    }
+
     /// Compile `file.read(buf)` — reads up to `buf.len()` bytes into
     /// `buf`'s backing storage. Returns `Result[usize, IoError]` with
     /// the byte count (0 = clean EOF).

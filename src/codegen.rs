@@ -4037,6 +4037,27 @@ impl<'ctx> Codegen<'ctx> {
             file_flush_type,
             Some(Linkage::External),
         );
+        // `FileSystem.read_lines(path)` — one-shot whole-file read split
+        // into a `Vec[String]` of lines: (out_io, out_vec, path_ptr,
+        // path_len) -> void. Two out-params: the KaracIoResult (Ok/Err
+        // status) *and* a KaracVec of RuntimeKaracString elements. The Ok
+        // payload is the Vec (built into the KaracVec slot); the Err path
+        // leaves the vec empty and fills the IoError through KaracIoResult.
+        // B-2026-07-11-38.
+        let fs_read_lines_type = file_call_void_type.fn_type(
+            &[
+                ptr_type.into(),
+                ptr_type.into(),
+                ptr_type.into(),
+                i64_type.into(),
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_fs_read_lines",
+            fs_read_lines_type,
+            Some(Linkage::External),
+        );
         // Close: (handle) -> void. Called by F4b's FreeFileHandle
         // cleanup action at scope exit.
         let file_close_type = context.void_type().fn_type(&[ptr_type.into()], false);

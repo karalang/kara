@@ -662,6 +662,114 @@ pub unsafe extern "C" fn karac_runtime_stdin_read_to_string(out: *mut KaracIoRes
     };
 }
 
+/// `fs.read_lines(path) -> Result[Vec[String], IoError]` codegen backing
+/// (B-2026-07-11-38). Reads the whole file and splits into lines with Rust
+/// `str::lines()` semantics: split on `\n`, strip a trailing `\r` (CRLF), a
+/// final newline yields no trailing empty element. Two out-params so the
+/// `Vec[String]` success payload and the `IoError` discriminator travel
+/// separately (a `Vec` is 3 words — it does not fit `KaracIoResult`'s single
+/// `value`):
+///
+///   - `out_io` (first, per the file-IO out-param-first convention): a
+///     `KaracIoResult` carrying ONLY the error discriminator — `ok(0)` on
+///     success, `err(&e)` (kind + optional `Other` message) on failure.
+///     Codegen branches on `out_io.error_kind` to build `Result.Ok` / `Err`.
+///   - `out_vec`: on success, the `Vec[String]` in Kāra `{ptr,len,cap}` shape,
+///     each element a heap `RuntimeKaracString` with `cap == len` — built
+///     exactly like `karac_runtime_env_args_into`, so the codegen scope-exit
+///     cleanup frees the element buffer and each String like any owned Kāra
+///     aggregate. On error (and for an empty file) the canonical `{null,0,0}`
+///     (matching `Vec.new()`, so cleanup is a no-op and no stale `cap>0` is
+///     ever freed).
+///
+/// # Safety
+///
+/// `path_ptr`/`path_len` describe a UTF-8 path (borrowed Kāra `String` bytes);
+/// `out_io` / `out_vec` point at writable codegen-allocated slots.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_fs_read_lines(
+    out_io: *mut KaracIoResult,
+    out_vec: *mut crate::KaracVec,
+    path_ptr: *const u8,
+    path_len: i64,
+) {
+    if out_io.is_null() || out_vec.is_null() {
+        return;
+    }
+    let empty_vec = crate::KaracVec {
+        data: ptr::null_mut(),
+        len: 0,
+        cap: 0,
+    };
+    let path = if path_ptr.is_null() || path_len <= 0 {
+        String::new()
+    } else {
+        let slice = std::slice::from_raw_parts(path_ptr, path_len as usize);
+        match std::str::from_utf8(slice) {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                *out_vec = empty_vec;
+                *out_io = err(&std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "read_lines: path is not valid UTF-8",
+                ));
+                return;
+            }
+        }
+    };
+    match std::fs::read_to_string(&path) {
+        Err(e) => {
+            *out_vec = empty_vec;
+            *out_io = err(&e);
+        }
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let count = lines.len();
+            if count == 0 {
+                *out_vec = empty_vec;
+            } else {
+                let elem_size = std::mem::size_of::<crate::RuntimeKaracString>();
+                let align = std::mem::align_of::<crate::RuntimeKaracString>();
+                let vec_layout = Layout::from_size_align(elem_size * count, align)
+                    .expect("read_lines Vec layout");
+                let buf = alloc(vec_layout) as *mut crate::RuntimeKaracString;
+                if buf.is_null() {
+                    std::alloc::handle_alloc_error(vec_layout);
+                }
+                for (i, line) in lines.iter().enumerate() {
+                    let bytes = line.as_bytes();
+                    let s = if bytes.is_empty() {
+                        crate::RuntimeKaracString {
+                            data: ptr::null_mut(),
+                            len: 0,
+                            cap: 0,
+                        }
+                    } else {
+                        let str_layout = Layout::array::<u8>(bytes.len()).unwrap();
+                        let str_buf = alloc(str_layout);
+                        if str_buf.is_null() {
+                            std::alloc::handle_alloc_error(str_layout);
+                        }
+                        ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
+                        crate::RuntimeKaracString {
+                            data: str_buf,
+                            len: bytes.len() as i64,
+                            cap: bytes.len() as i64,
+                        }
+                    };
+                    ptr::write(buf.add(i), s);
+                }
+                *out_vec = crate::KaracVec {
+                    data: buf as *mut u8,
+                    len: count as i64,
+                    cap: count as i64,
+                };
+            }
+            *out_io = ok(0);
+        }
+    }
+}
+
 /// `FileSystem.write(path, contents) -> Result[Unit, IoError]` — one-shot
 /// whole-file write (create-or-truncate). Codegen counterpart to the
 /// interpreter's `("FileSystem", "write")` arm (`std::fs::write`). Same
