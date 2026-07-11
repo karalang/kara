@@ -179,11 +179,18 @@ worker pools).
 (two of three rounds saw enough wrk-side timeouts that wrk suppressed
 the distribution table; req/s was still captured).
 
-c5000: two of three rounds completed zero requests within the 10 s
-window — Bandit's listener can't accept 5000 concurrent inbound TCP
-connections fast enough. Phoenix shows the same edge-case shape Node
-hits at -c1000 in the existing comparators. Probably fixable by
-tuning Bandit's acceptor pool size, tracked as a follow-up below.
+c5000: **highly variable** on this single-box macOS setup — some rounds
+settle around ~180–230 req/s, others complete near-zero within the 10 s
+window (the 2026-05-30 first run above happened to catch the near-zero
+end). **This is not an acceptor-pool limit** (see the resolved follow-up
+below): re-measured 2026-07-11, `wrk` reports **zero `connect` errors**
+at -c5000, so Bandit accepts all 5000 connections; the failures are
+downstream `read`/`timeout`. The cause is BEAM scheduler + CPU saturation
+from the four-process busy-loop fan-out at 5000-way concurrency,
+compounded by macOS loopback socket-state (TIME_WAIT / ephemeral-port
+pressure with `wrk` co-resident on the same box). It is the same
+CPU-bound wall the native impls hit at -c5000 (Go collapses to ~86 in the
+v8 canonical Graviton run), not a Phoenix misconfiguration.
 
 ### Headline numbers vs the other comparators (`-c100`)
 
@@ -254,10 +261,21 @@ phoenix/
   the Phoenix-vs-Kāra commercial framing ships; the existing table
   is from 2026-05-10 and three weeks of compiler work may have moved
   the Kāra numbers.
-- **Bandit acceptor pool tuning at -c5000.** Default `num_acceptors`
-  is small (~10); raising it (via Endpoint config's `:thousand_island_options`)
-  likely lifts the c5000 row above zero. Worth measuring whether
-  raising it also affects -c100 / -c1000 numbers before landing.
+- **Bandit acceptor pool tuning at -c5000 — RESOLVED 2026-07-11 (no
+  config change needed).** The original hypothesis (default `num_acceptors`
+  too small, ~10) does not hold on the current deps: ThousandIsland 1.4.3
+  (via Bandit 1.11.1) defaults `num_acceptors` to **100**, with
+  `num_connections: 16_384` per acceptor — ample headroom for 5000
+  connections. Measured directly: `wrk` reports **zero `connect` errors**
+  at -c5000 regardless of acceptor count, and sweeping `num_acceptors`
+  across 100 / 400 / 800 (via the Endpoint's `:thousand_island_options`)
+  leaves both the -c5000 result and the stable -c100 (~335–340 req/s)
+  unchanged. The -c5000 ceiling is downstream BEAM/CPU saturation + macOS
+  loopback socket-state, **not** the acceptor pool, so the default config
+  is left unchanged (a clean acceptor-count A/B is anyway confounded by
+  loopback TIME_WAIT accumulation across back-to-back high-conn runs; the
+  zero-`connect`-error invariant is what rules the pool out). Phase-6
+  line 47.
 - **Cowboy adapter cross-check.** Phoenix lets you swap Bandit for
   Cowboy with one config line; would be informative to capture both
   numbers, since Cowboy is the historical default and some Elixir
