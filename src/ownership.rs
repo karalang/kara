@@ -788,6 +788,16 @@ pub(crate) fn is_copy_type(ty: &Type, tc: &TypeCheckResult) -> bool {
     match ty {
         Type::Tuple(types) => types.iter().all(|t| is_copy_type(t, tc)),
         Type::Array { element, .. } => is_copy_type(element, tc),
+        // A `Vector[T, N]` is a fixed-size, register-resident SIMD value — a POD
+        // bundle of `N` scalar lanes, semantically `Copy` exactly like the
+        // fixed `Array` arm above (its lane type is always a primitive scalar,
+        // which is always `Copy`). Without this arm a vector fell through to
+        // non-`Copy`, so a bare rebind of a SIMD value (`let e1 = ux;` where
+        // `ux: Vector[f64, 2]`) was treated as a MOVE and every later use of the
+        // original binding fired a spurious use-after-move — even though a SIMD
+        // register copy neither allocates nor aliases owned state (B-2026-07-11-1,
+        // surfaced by Slipstream's `Vector[f64, 2]` collide kernel).
+        Type::Vector { element, .. } => is_copy_type(element, tc),
         Type::Slice { mutable, .. } => !mutable,
         // Raw pointers (`*const T` / `*mut T`) are `Copy`, regardless of
         // `const`/`mut` — copying a pointer is a bitwise scalar copy that

@@ -112,6 +112,95 @@ fn collide(n: LbmNode, om: f64) -> LbmNode {
     }
 }
 
+// SIMD collide: relax two horizontally-adjacent cells toward equilibrium in one
+// pass. Every arithmetic step is a `Vector[f64, 2]` op — one native / WASM
+// SIMD-128 instruction covering both cells — so the two-lane result is
+// bit-identical to `collide()` run on each cell separately (design.md § Portable
+// SIMD; the same lowering Fathom's `escape2` uses). The scalar
+// `if rho <= 0.0 { return n }` guard becomes a per-lane mask/select: a lane with
+// no mass keeps its original cell untouched. Unary `-` is not defined on vectors,
+// so each negation is `* -1.0` — an exact `fneg` for every finite lane, so the
+// `equil` linear terms stay bit-for-bit equal to the scalar body.
+fn collide2(a: LbmNode, b: LbmNode, om: f64) -> (LbmNode, LbmNode) {
+    let f0 = Vector[f64, 2](a.f0, b.f0);
+    let f1 = Vector[f64, 2](a.f1, b.f1);
+    let f2 = Vector[f64, 2](a.f2, b.f2);
+    let f3 = Vector[f64, 2](a.f3, b.f3);
+    let f4 = Vector[f64, 2](a.f4, b.f4);
+    let f5 = Vector[f64, 2](a.f5, b.f5);
+    let f6 = Vector[f64, 2](a.f6, b.f6);
+    let f7 = Vector[f64, 2](a.f7, b.f7);
+    let f8 = Vector[f64, 2](a.f8, b.f8);
+
+    let rho = f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8;
+    let ux = (f1 + f5 + f8 - f3 - f6 - f7) / rho;
+    let uy = (f4 + f7 + f8 - f2 - f5 - f6) / rho;
+
+    // Vectorized `equil` — the same expression tree, two lanes wide.
+    let usq = ux * ux + uy * uy;
+    let w0v = Vector[f64, 2].splat(4.0 / 9.0);
+    let wsv = Vector[f64, 2].splat(1.0 / 9.0);
+    let wdv = Vector[f64, 2].splat(1.0 / 36.0);
+    let onev = Vector[f64, 2].splat(1.0);
+    let c3 = Vector[f64, 2].splat(3.0);
+    let c45 = Vector[f64, 2].splat(4.5);
+    let c15 = Vector[f64, 2].splat(1.5);
+    let negone = Vector[f64, 2].splat(-1.0);
+
+    let e1 = ux;
+    let e2 = uy * negone;
+    let e3 = ux * negone;
+    let e4 = uy;
+    let e5 = ux - uy;
+    let e6 = e3 - uy;
+    let e7 = e3 + uy;
+    let e8 = ux + uy;
+
+    let eq0 = w0v * rho * (onev - c15 * usq);
+    let eq1 = wsv * rho * (onev + c3 * e1 + c45 * e1 * e1 - c15 * usq);
+    let eq2 = wsv * rho * (onev + c3 * e2 + c45 * e2 * e2 - c15 * usq);
+    let eq3 = wsv * rho * (onev + c3 * e3 + c45 * e3 * e3 - c15 * usq);
+    let eq4 = wsv * rho * (onev + c3 * e4 + c45 * e4 * e4 - c15 * usq);
+    let eq5 = wdv * rho * (onev + c3 * e5 + c45 * e5 * e5 - c15 * usq);
+    let eq6 = wdv * rho * (onev + c3 * e6 + c45 * e6 * e6 - c15 * usq);
+    let eq7 = wdv * rho * (onev + c3 * e7 + c45 * e7 * e7 - c15 * usq);
+    let eq8 = wdv * rho * (onev + c3 * e8 + c45 * e8 * e8 - c15 * usq);
+
+    let omv = Vector[f64, 2].splat(om);
+    let r0 = f0 + omv * (eq0 - f0);
+    let r1 = f1 + omv * (eq1 - f1);
+    let r2 = f2 + omv * (eq2 - f2);
+    let r3 = f3 + omv * (eq3 - f3);
+    let r4 = f4 + omv * (eq4 - f4);
+    let r5 = f5 + omv * (eq5 - f5);
+    let r6 = f6 + omv * (eq6 - f6);
+    let r7 = f7 + omv * (eq7 - f7);
+    let r8 = f8 + omv * (eq8 - f8);
+
+    // Per-lane guard: where a lane has no mass (rho <= 0), keep its original
+    // distribution — the vector form of scalar `if rho <= 0.0 { return n }`.
+    let dead = rho <= Vector[f64, 2].splat(0.0);
+    let g0 = dead.select(f0, r0);
+    let g1 = dead.select(f1, r1);
+    let g2 = dead.select(f2, r2);
+    let g3 = dead.select(f3, r3);
+    let g4 = dead.select(f4, r4);
+    let g5 = dead.select(f5, r5);
+    let g6 = dead.select(f6, r6);
+    let g7 = dead.select(f7, r7);
+    let g8 = dead.select(f8, r8);
+
+    let ca = LbmNode {
+        f0: g0[0], f1: g1[0], f2: g2[0], f3: g3[0], f4: g4[0],
+        f5: g5[0], f6: g6[0], f7: g7[0], f8: g8[0],
+    };
+    let cb = LbmNode {
+        f0: g0[1], f1: g1[1], f2: g2[1], f3: g3[1], f4: g4[1],
+        f5: g5[1], f6: g6[1], f7: g7[1], f8: g8[1],
+    };
+    (ca, cb)
+}
+
 // Is cell (x, y) inside the wing? A thin plate of half-length `half_len`, centred
 // ~1/3 across, tilted by slope `s`. Solid if the projection onto the plate axis
 // is within ±half_len and the distance from the axis is within ±half_thick. Pure
@@ -153,6 +242,15 @@ fn collide_band(grid: ref Vec[LbmNode], y0: i64, y1: i64) -> Vec[LbmNode] {
     let mut out: Vec[LbmNode] = Vec.new();
     let mut c = y0 * w;
     let c1 = y1 * w;
+    // Two cells per SIMD pass. Bands are whole rows and the grid width is even, so
+    // a band's cell count is always even and pairing never straddles a band edge;
+    // the scalar tail below is a safety net that never runs at even width.
+    while c + 1 < c1 {
+        let (ra, rb) = collide2(grid[c], grid[c + 1], om);
+        out.push(ra);
+        out.push(rb);
+        c = c + 2;
+    }
     while c < c1 {
         out.push(collide(grid[c], om));
         c = c + 1;

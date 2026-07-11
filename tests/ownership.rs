@@ -193,6 +193,25 @@ fn test_raw_const_pointer_is_copy() {
     );
 }
 
+#[test]
+fn test_vector_is_copy() {
+    // A `Vector[T, N]` is a fixed-size, register-resident SIMD POD — Copy like a
+    // fixed `Array` of primitives. Binding one to a new name (`let e1 = ux;`)
+    // COPIES it, so the original binding stays usable; without the Copy
+    // classification this fired a spurious use-after-move on the reuse of `ux` /
+    // `uy` after the rebind (B-2026-07-11-1, surfaced by Slipstream's
+    // `Vector[f64, 2]` collide kernel — the SIMD analog of `test_primitives_dont_move`).
+    ownership_ok(
+        "fn mix() -> Vector[f64, 2] {\n\
+             let ux = Vector[f64, 2].splat(2.0);\n\
+             let uy = Vector[f64, 2].splat(3.0);\n\
+             let e1 = ux;\n\
+             let e4 = uy;\n\
+             ux + uy + e1 + e4\n\
+         }",
+    );
+}
+
 // ── Move Tracking ───────────────────────────────────────────────
 
 #[test]

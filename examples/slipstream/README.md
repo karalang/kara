@@ -120,9 +120,20 @@ the compiler — the demo uses the natural shared-read fan-out, not a workaround
 
 ## Honest cuts and follow-ups
 
-- The inner kernel is **scalar**. A `Vector[f64, 2]` SIMD-128 collide/stream
-  pass (the same lowering Fathom's Mandelbrot kernel uses) is a tracked
-  follow-up; it would not change the output, only the per-substep cost.
+- The **collide** pass — the pure per-cell BGK relaxation, the inner hot path —
+  now runs as a `Vector[f64, 2]` SIMD-128 kernel (`collide2` in `sim.kara`): two
+  horizontally-adjacent cells per lane pair, the same lowering Fathom's Mandelbrot
+  kernel uses, with the scalar `if rho <= 0.0` guard as a per-lane mask/select.
+  Output is **byte-identical** to the scalar kernel — the native-oracle checksums
+  are unchanged (1582897806 / 793640938 / 680974524) and the built binary carries
+  packed-double ops (`mulpd`/`addpd`/`cmplepd`/`unpcklpd`) — so the win is
+  per-substep cost, not behaviour. The **stream** pass stays scalar: its per-cell
+  solid/boundary bounce-back branches and data-dependent neighbour gathers don't
+  map to a clean lane-pair pass. Building the SIMD collide surfaced and fixed a
+  real compiler gap (the dogfood's job): **B-2026-07-11-1** — a `Vector[T, N]`
+  wasn't classified `Copy` by the ownership checker, so aliasing a SIMD lane
+  bundle for readability (`let e1 = ux;`) spuriously moved it; fixed in
+  `src/ownership.rs` by adding the `Type::Vector` arm to `is_copy_type`.
 - The wing angle is exposed as **arrow-keys / scroll**, not an HTML `<input
   type=range>` slider. A true DOM-element value channel would need a new
   `std.web.events` producer (a DOM input-event stream) — a reasonable next

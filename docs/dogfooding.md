@@ -225,9 +225,22 @@ examples that show the interesting cases without being contrived.
 > (value correctness + ASAN; Linux LSan covers the leak arm). Real-browser
 > verified by the committed CDP harness `verify_browser.mjs` (isolated, render
 > loop advancing, canvas evolving, multi-hundred-frame soak clean, wheel angle
-> control moves the wing). Honest cuts (scalar inner kernel, keyboard/scroll
-> rather than an HTML slider, native-SDL2 CPU + GPU still Phase-11/10) are in the
-> example README.
+> control moves the wing). Honest cuts (keyboard/scroll rather than an HTML
+> slider, native-SDL2 CPU + GPU still Phase-11/10) are in the example README.
+>
+> **SIMD collide kernel — DONE 2026-07-11.** The collide pass (the pure per-cell
+> BGK relaxation, the inner hot path) now runs as a `Vector[f64, 2]` SIMD-128
+> kernel (`collide2` in `sim.kara`), two adjacent cells per lane pair — the same
+> lowering Fathom's Mandelbrot kernel uses, with the scalar `if rho <= 0.0` guard
+> as a per-lane mask/select. Output is **byte-identical** to the scalar kernel
+> (native-oracle checksums unchanged: 1582897806 / 793640938 / 680974524; the
+> built binary carries packed-double `mulpd`/`addpd`/`cmplepd`/`unpcklpd`). The
+> stream pass stays scalar (its per-cell bounce-back branches don't lane-pair
+> cleanly). The dogfood drove one `karac` fix (**B-2026-07-11-1**): a
+> `Vector[T, N]` wasn't classified `Copy` by the ownership checker, so aliasing a
+> SIMD lane bundle (`let e1 = ux;`) spuriously moved it — fixed by adding the
+> `Type::Vector` arm to `is_copy_type` (`src/ownership.rs`), regression
+> `tests/ownership.rs::test_vector_is_copy`.
 
 > **Landed — the `SoA layout` half is complete (slice 6, 2026-06-20).**
 > Slipstream's roster line bills it on *"SoA layout"*, and it now **ships SoA**:
@@ -1246,8 +1259,11 @@ full LBM D2Q9 kernel (a grid carried across frames), the collide+stream passes
 fanned across the Web Worker pool, and live angle-of-attack via the wheel/keydown
 channels. It drove the cross-task shared-capture fix **B-2026-06-19-11** (a
 read-only heap value captured by multiple sibling `spawn` tasks was a
-double-free). The remaining Slipstream gate is the SIMD-128 inner kernel, a pure
-demo-source follow-up (the `Vector[f64, 2]` lowering already ships).
+double-free). The SIMD-128 inner kernel landed 2026-07-11: the collide pass is now
+a `Vector[f64, 2]` two-cells-per-lane kernel, byte-identical output, which drove
+the ownership `Copy`-classification fix for SIMD vectors (**B-2026-07-11-1**). The
+only remaining Slipstream gates are the native-SDL2 CPU edition (Phase 11) and the
+GPU path (Phase 10).
 
 ---
 
