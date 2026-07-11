@@ -1883,11 +1883,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `Option[String]` / `Option[Vec[..]]` (slice 3p): the
                     // tag-guarded `emit_option_drop_fn` frees the inline `Some`
                     // payload, reached via the same named-type delegation.
-                    // Unsupported payloads (scalar / boxed / handle / tuple)
-                    // stay false.
+                    // `Option[shared T]` (B-2026-07-11-29): the same
+                    // `emit_option_drop_fn` reads the tag and rc-decs the boxed
+                    // shared payload — `vec_elem_agg_drop_for_type_expr` already
+                    // routes an `Option[shared]` *element* there, so the
+                    // recursive `Vec[Vec[Option[shared]]]` drop is exact too;
+                    // without this arm the outer drop fell to the one-level
+                    // buffer-only fast path and leaked every shared node inside
+                    // the inner Vecs (the #95 shape-DP `shapes` table).
+                    // Unsupported payloads (scalar / boxed non-shared / handle /
+                    // tuple) stay false.
                     "Option" => arg(0).is_some_and(|t| {
                         self.option_payload_inline_recursive_drop_ok(t)
                             || self.option_payload_struct_or_enum_drop_ok(t)
+                            || self.shared_heap_type_for_type_expr(t).is_some()
                     }),
                     // `Result[T, E]` (slice 3q): same delegation shape.
                     "Result" => match (arg(0), arg(1)) {

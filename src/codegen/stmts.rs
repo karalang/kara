@@ -2880,6 +2880,45 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                        // (f) Untyped let with a Vec-element Index RHS
+                        //     (`let s = v[i]`, `v: Vec[Option[shared T]]`) that
+                        //     was NOT borrow-elided — so
+                        //     `clone_owned_vec_index_element` (above) emitted
+                        //     `karac_clone_Option_Node`, a retain-inc of the
+                        //     element's inner. Like case (e), the binding thus
+                        //     already owns its +1, but it was left UNREGISTERED:
+                        //     no `var_option_shared_heap` entry, so a subsequent
+                        //     by-value pass got NO `share_option_shared_ref_for_arg`
+                        //     retain and NO scope-exit `RcDecOption`. A single
+                        //     pass "moved" the chain and worked by luck; passing
+                        //     the same `let s = v[i]` binding by value MORE THAN
+                        //     ONCE over-decremented (each callee exit-dec with no
+                        //     matching arg-inc) → premature free → use-after-free
+                        //     (B-2026-07-11-29 `let s = v[i]; clone_offset(s,..)`
+                        //     reuse leg). Register it so it joins the
+                        //     caller-retains model: one arg-site inc per pass
+                        //     balanced by the callee's exit dec, one scope-exit
+                        //     dec balancing the retain-clone's +1. NO extra inner
+                        //     inc is flagged — the retain-clone already inc'd
+                        //     (like cases b/c/e); the Identifier-only aliasing
+                        //     acquire below does not fire for an Index RHS. Gated
+                        //     on `!borrow_elided`: a borrow-elided `let s = v[i]`
+                        //     skipped the clone and is a pure alias the container
+                        //     still uniquely owns — registering a dec there would
+                        //     double-free.
+                        if shared_option_info.is_none() && !borrow_elided {
+                            if let ExprKind::Index { object, index } = &value.kind {
+                                if !matches!(&index.kind, ExprKind::Range { .. }) {
+                                    if let Some(elem_te) = self.vec_index_elem_type_expr(object) {
+                                        if let Some((_, info)) =
+                                            self.option_inner_shared_type_for_type_expr(&elem_te)
+                                        {
+                                            shared_option_info = Some((var_name.clone(), info));
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         // Aliasing acquire: when the RHS is an Identifier naming
                         // an existing `Option[shared T]` binding, the new
                         // binding is a SECOND owner of that chain and must inc

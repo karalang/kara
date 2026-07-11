@@ -1969,6 +1969,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
 
+                // A tracked `Option[shared T]` BINDING moved into a
+                // `Vec[Option[shared T]]` (`out.push(orig)` / `out.push(s)`):
+                // the container CO-OWNS the node — its per-element `RcDecOption`
+                // drop AND the source binding's own scope-exit `RcDecOption`
+                // both dec it. Under reference semantics the source stays a live
+                // alias (usable after the push), so this is co-ownership, not a
+                // move: inc the inner here so the container holds an independent
+                // +1. The RC sibling of the closure-env co-ownership inc just
+                // above, and the same `share_option_shared_ref_for_arg` retain
+                // that consuming CALL sites (`clone_offset(s, ..)`) already emit
+                // — push is a builtin so it never reaches the generic method-arg
+                // path that would apply it. A fresh `push(Some(..))` /
+                // `push(clone(..))` element is a non-Identifier arg (already owns
+                // its +1) → skipped, so no double count. Without this, pushing
+                // the same `Option[shared]` binding left the node UNDER-counted:
+                // the first of the two drops freed it while the other owner still
+                // pointed at it — a use-after-free (B-2026-07-11-29 `let s = v[i];
+                // out.push(s)` and `let orig = Some(..); out.push(orig)`).
+                self.share_option_shared_ref_for_arg(&args[0].value);
+
                 // Load current vec fields.
                 let data_ptr_ptr = self
                     .builder

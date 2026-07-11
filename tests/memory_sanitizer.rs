@@ -23352,6 +23352,168 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_vec_option_shared_index_reused_across_consuming_calls_no_uaf() {
+        // B-2026-07-11-29 layer 3 (corruption): a `Vec[Option[shared]]` ELEMENT
+        // read by index (`src[0]`) passed BY VALUE to a consuming (cloning)
+        // callee TWICE. The niche Vec-element read loads the inner pointer
+        // WITHOUT an inc, so the callee's `Option[shared]` param `RcDecOption`
+        // over-decremented the element the container still owns — freeing it
+        // mid-sequence; a later alloc reused the slot and the second `src[0]`
+        // read returned the wrong node (interpreter `4`, codegen corrupted /
+        // use-after-free). The Index companion `share_option_shared_index_ref_for_arg`
+        // now retains the loaded inner per pass, mirroring the Identifier /
+        // FieldAccess arg companions.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn clone_offset(node: Option[Node], delta: i64) -> Option[Node] {
+    match node {
+        None => None,
+        Some(n) => Some(Node { val: n.val + delta, left: clone_offset(n.left, delta), right: clone_offset(n.right, delta) }),
+    }
+}
+fn count_nodes(node: Option[Node]) -> i64 {
+    match node { None => 0, Some(n) => 1 + count_nodes(n.left) + count_nodes(n.right) }
+}
+fn main() {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None }));
+    let l0 = clone_offset(src[0], 10);
+    let l1 = clone_offset(src[0], 20);
+    println(count_nodes(l0) + count_nodes(l1));
+}
+"#,
+            &["4"], // two 2-node clones off the same live element
+            "vec_option_shared_index_reused_across_consuming_calls_no_uaf",
+        );
+    }
+
+    #[test]
+    fn asan_vecvec_option_shared_scope_exit_drop_no_leak() {
+        // B-2026-07-11-29 layer 4 (leak): dropping a `Vec[Vec[Option[shared]]]`
+        // local only freed the inner Vec BUFFERS one level deep and treated
+        // their `Option[shared]` elements as opaque, leaking every shared node
+        // inside (LSan). `te_recursive_drop_fully_supported` now accepts an
+        // `Option[shared T]` payload, so the outer drop routes to the
+        // strictly-recursive `emit_vec_drop_fn` (→ `emit_option_drop_fn`, which
+        // tag-guards and rc-decs the boxed shared payload) instead of the
+        // one-level buffer-only fast path.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn count_nodes(node: Option[Node]) -> i64 {
+    match node { None => 0, Some(n) => 1 + count_nodes(n.left) + count_nodes(n.right) }
+}
+fn mk() -> Vec[Vec[Option[Node]]] {
+    let mut shapes: Vec[Vec[Option[Node]]] = Vec.new();
+    let mut base: Vec[Option[Node]] = Vec.new();
+    base.push(Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None }));
+    shapes.push(base);
+    shapes
+}
+fn main() {
+    let shapes = mk();
+    let lefts = shapes[0];
+    println(count_nodes(lefts[0]));
+}
+"#,
+            &["2"], // the shared node + its child, dropped exactly once
+            "vecvec_option_shared_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_let_bound_vec_option_shared_reused_no_uaf() {
+        // B-2026-07-11-29 (`let s = v[i]` reuse leg): binding a
+        // `Vec[Option[shared]]` element (`let s = src[0]`) retain-clones the
+        // inner (`karac_clone_Option_Node`) but the binding was left UNREGISTERED
+        // in `var_option_shared_heap`, so subsequent by-value passes got no
+        // caller-retains arg-inc and the callee's exit-dec over-decremented on
+        // the second pass → use-after-free. Case (f) in stmts.rs now registers
+        // the `let s = v[i]` binding into the caller-retains model.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn clone_offset(node: Option[Node], delta: i64) -> Option[Node] {
+    match node {
+        None => None,
+        Some(n) => Some(Node { val: n.val + delta, left: clone_offset(n.left, delta), right: clone_offset(n.right, delta) }),
+    }
+}
+fn count_nodes(node: Option[Node]) -> i64 {
+    match node { None => 0, Some(n) => 1 + count_nodes(n.left) + count_nodes(n.right) }
+}
+fn main() {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None }));
+    let s = src[0];
+    let l0 = clone_offset(s, 10);
+    let l1 = clone_offset(s, 20);
+    println(count_nodes(l0) + count_nodes(l1));
+}
+"#,
+            &["4"],
+            "let_bound_vec_option_shared_reused_no_uaf",
+        );
+    }
+
+    #[test]
+    fn asan_push_bound_option_shared_binding_no_uaf() {
+        // B-2026-07-11-29 (push-move leg): pushing a tracked `Option[shared]`
+        // BINDING into a `Vec[Option[shared]]` (`out.push(orig)`) co-owns the
+        // node under reference semantics, but push (a builtin) never emitted the
+        // caller-retains inc that consuming CALL sites do, while the source
+        // binding's scope-exit `RcDecOption` still fired — freeing the node while
+        // the container still pointed at it (use-after-free). The push arm now
+        // emits `share_option_shared_ref_for_arg` for the moved binding.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn count_nodes(node: Option[Node]) -> i64 {
+    match node { None => 0, Some(n) => 1 + count_nodes(n.left) + count_nodes(n.right) }
+}
+fn main() {
+    let mut out: Vec[Option[Node]] = Vec.new();
+    let orig = Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None });
+    out.push(orig);
+    println(count_nodes(out[0]));
+}
+"#,
+            &["2"],
+            "push_bound_option_shared_binding_no_uaf",
+        );
+    }
+
+    #[test]
+    fn asan_struct_field_shares_vec_option_shared_index_no_leak() {
+        // B-2026-07-11-29 (struct-field share leg): sharing a
+        // `Vec[Option[shared]]` element DIRECTLY into a struct-literal field
+        // (`Node { left: src[0] }`) double-inc'd the node — `maybe_defensive_copy_param_arg`
+        // retain-cloned it (`karac_clone_Option_Node`) AND the field capture-inc
+        // fired — with no binding to carry a matching dec, so the node's rc never
+        // returned to zero and it leaked (LSan). The capture-inc is now skipped
+        // for an already-retained `v[i]` field value.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn count_nodes(node: Option[Node]) -> i64 {
+    match node { None => 0, Some(n) => 1 + count_nodes(n.left) + count_nodes(n.right) }
+}
+fn main() {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None }));
+    let mut cur: Vec[Option[Node]] = Vec.new();
+    cur.push(Some(Node { val: 0, left: src[0], right: None }));
+    cur.push(Some(Node { val: 9, left: src[0], right: None }));
+    println(count_nodes(cur[0]) + count_nodes(cur[1]));
+}
+"#,
+            &["6"], // two 3-node trees sharing the same left subtree
+            "struct_field_shares_vec_option_shared_index_no_leak",
+        );
+    }
+
     // ── B-2026-07-11-32: non-Copy element index-swap / projection-assign ──
     // An index-read of a NON-COPY Vec element in ASSIGNMENT-RHS position
     // (`s = v[i]`, `v[i] = v[j]`) aliased the source slot's buffer — the assign

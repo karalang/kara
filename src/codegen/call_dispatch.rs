@@ -1386,6 +1386,13 @@ impl<'ctx> super::Codegen<'ctx> {
             if !borrow_skip {
                 self.share_option_shared_field_ref_for_arg(&a.value, val);
             }
+            // Index companion: a direct `v[i]` element read carrying
+            // `Option[shared T]` loads the inner without an inc, so the
+            // callee's param `RcDecOption` would free the element the
+            // container still owns (B-2026-07-11-29). Inc the loaded inner.
+            if !borrow_skip {
+                self.share_option_shared_index_ref_for_arg(&a.value, val);
+            }
             compiled_args.push(BasicMetadataValueEnum::from(val));
             // B-2026-06-11-5: a block-construct call argument
             // (`take({ f"…" })`) had its tail acc suppressed by
@@ -4214,6 +4221,43 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(&field_te) else {
+            return;
+        };
+        self.emit_option_inner_rc_inc_for_loaded(val, inner_info.heap_type);
+    }
+
+    /// Index companion to `share_option_shared_ref_for_arg` /
+    /// `share_option_shared_field_ref_for_arg`: when the call arg is a plain
+    /// (non-range) Vec-element index `v[i]` whose element type is
+    /// `Option[shared T]`, inc the inner of the already-loaded value `val`. The
+    /// niche Vec-element read (`compile_index`'s niche path) LOADS the inner
+    /// pointer without an inc — the container still owns that +1 — so passing
+    /// it by value to a callee whose param queues an `RcDecOption`
+    /// over-decrements the element the container keeps, freeing it prematurely
+    /// (a use-after-free: a later alloc reuses the slot and a subsequent
+    /// `v[i]` read returns the wrong node). Inc the loaded inner so the callee
+    /// holds an independent +1; the container's per-element drop still owns
+    /// its own ref. This is the direct-`v[i]`-arg leg of B-2026-07-11-29 (the
+    /// #95 shape-DP `clone_offset(shapes[i][j], ..)`); the `let s = v[i]`
+    /// workaround already deep-clones via `clone_owned_vec_index_element`, and
+    /// a `let`-bound Identifier arg is covered by the Identifier companion.
+    /// Nested indices (`m[i][j]` over `Vec[Vec[Option[T]]]`) resolve through
+    /// `vec_index_elem_type_expr`'s recursive peel.
+    pub(super) fn share_option_shared_index_ref_for_arg(
+        &self,
+        arg_expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let ExprKind::Index { object, index } = &arg_expr.kind else {
+            return;
+        };
+        if matches!(&index.kind, ExprKind::Range { .. }) {
+            return;
+        }
+        let Some(elem_te) = self.vec_index_elem_type_expr(object) else {
+            return;
+        };
+        let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(&elem_te) else {
             return;
         };
         self.emit_option_inner_rc_inc_for_loaded(val, inner_info.heap_type);

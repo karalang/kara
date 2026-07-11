@@ -2098,8 +2098,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the IR and in count-free pins; skip it outright.
                     let init_is_none =
                         matches!(&field_init.value.kind, ExprKind::Identifier(n) if n == "None");
+                    // A direct `v[i]` field value (`Node { left: src[0] }`,
+                    // `src: Vec[Option[shared T]]`) was ALREADY retain-inc'd by
+                    // `maybe_defensive_copy_param_arg` above
+                    // (`expr_is_heap_vec_index` → `clone_owned_vec_index_element`
+                    // → `karac_clone_Option_Node`, which incs the inner). Adding
+                    // the capture-inc here too DOUBLE-counts: with no binding to
+                    // carry a matching scope-exit dec, the node's rc never
+                    // returns to zero and it leaks (B-2026-07-11-29
+                    // `Node { left: src[0] }`). The retain-clone's inc IS the
+                    // co-ownership inc, so skip the capture-inc for that shape;
+                    // an Identifier / field / fresh value still needs it.
+                    let already_retained = self.expr_is_heap_vec_index(&field_init.value);
                     if let Some(inner_heap) = opt_inner_heap {
-                        if !init_is_none && !self.rhs_yields_fresh_ref(&field_init.value) {
+                        if !init_is_none
+                            && !already_retained
+                            && !self.rhs_yields_fresh_ref(&field_init.value)
+                        {
                             self.emit_rc_inc_for_captured_option(val, inner_heap);
                         }
                     }
