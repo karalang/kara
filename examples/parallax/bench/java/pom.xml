@@ -35,6 +35,20 @@
     <!-- Drives the shaded jar name → target/parallax-bench-java.jar. -->
     <finalName>parallax-bench-java</finalName>
     <plugins>
+      <!-- Pin the compiler plugin. `maven.compiler.release` (above) is only
+           honored by maven-compiler-plugin >= 3.6. Stock Ubuntu 24.04 ships
+           Maven 3.8.7, whose default lifecycle binds the ancient plugin 3.1 —
+           which predates the `<release>` option, silently ignores it, and
+           falls back to `-source/-target 5`, rejected by JDK 9+ ("Source
+           option 5 is no longer supported"). Homebrew's newer Maven binds a
+           modern default plugin, which is why this only bit on the canonical
+           EC2 box (phase-6 P2 Graviton run), not the dev laptop. Pinning makes
+           the build reproducible regardless of the Maven distribution. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>

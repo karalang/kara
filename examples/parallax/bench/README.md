@@ -97,6 +97,91 @@ regression gate.
 
 ## Throughput results
 
+### Canonical — Graviton EC2 (v8, 2026-07-11)
+
+**Measured on 2026-07-11.** AWS `c7g.4xlarge` (16 vCPU Graviton3),
+Ubuntu 24.04 arm64, `wrk 4.1.0`, LLVM 18.1.3; karac built from `main`
+`d25bd8b`. Cohort **K/R/J/G** — Kāra + Rust + Java/Netty + Go, the
+canonical/headline cohort per
+[`docs/investigations/parallax_ec2_bench_plan.md`](../../../docs/investigations/parallax_ec2_bench_plan.md).
+`bench.sh --impls=k,r,j,g`, N=3 rounds × 10 s each. `wrk` and the server
+share the box (F4 fairness control — absolute numbers are single-box,
+lower than the laptop tables below because the load generator competes
+with the server for the 16 vCPUs). Node + Phoenix are dropped from the
+paid cohort (kept in the laptop supplement below); the cross-ISA x86
+confirmation (`c7i.4xlarge`) is the pending pair (phase-6 line 46).
+
+**Framing — read first.** The headline for auto-par is the *source
+comparison* (four plain `let` bindings vs Rust `tokio::join!` / Go
+goroutines+WaitGroup / Java `CompletableFuture.allOf`). This table is the
+**"no perf tax" backstop**: Kāra is in the *same performance class* as
+the mature stacks, **not** a req/s winner over them. The providers are
+CPU-bound busy loops (v1 has no `sleep_ms`), so the bench is a
+thread-pool-scheduling contest that *understates* the auto-par story —
+with real independent I/O the ergonomic win is larger, not smaller.
+
+#### Cold start (`-t1 -c1`, first ~1 s)
+
+| Impl | req/s | p50 ms | p75 ms | p90 ms | p99 ms | max ms |
+|------|-------|--------|--------|--------|--------|--------|
+| Rust | 53.6  | 18.6   | 18.6   | 18.7   | 19.9   | 19.9   |
+| **Kāra** | 53.0 | 18.6 | 18.6   | 18.6   | **19.2** | 19.2 |
+| Go   | 48.9  | 20.2   | 20.2   | 20.2   | 20.5   | 20.5   |
+| Java | 41.9  | 21.9   | 22.0   | 22.2   | 85.3   | 85.3   |
+
+Kāra and Rust are within 1 % on the per-request latency floor (Kāra p99
+19.2 vs 19.9 ms); Go trails ~1-2 ms; the JVM pays a warm-up tail (85 ms
+p99).
+
+#### Steady-state (sustained `wrk`)
+
+| Impl | -c   | req/s (median [min..max]) | p50 ms | p75 ms | p90 ms | p99 ms | max ms |
+|------|------|---------------------------|--------|--------|--------|--------|--------|
+| Rust | 100  | 379 [377..384]            | 237    | 319    | 430    | 817    | 1340   |
+| **Kāra** | 100 | **371 [370..371]**    | 260    | 292    | 324    | **378** | 498   |
+| Go   | 100  | 367 [365..368]            | 249    | 292    | 386    | 1290   | 1920   |
+| Java | 100  | 320 [317..325]            | 304    | 307    | 310    | 476    | 573    |
+| Rust | 1000 | 383 [383..388]            | 943    | 1530   | 1800   | 1970   | 2000   |
+| Kāra | 1000 | 333 [317..352]            | 1500   | 1760   | 1900   | 1990   | 2000   |
+| Go   | 1000 | 282 [281..318]            | 1840   | 1940   | 1970   | 1990   | 2000   |
+| Java | 1000 | 232 [230..320]            | 1120   | 1560   | 1820   | 1980   | 2000   |
+| Rust | 5000 | 325 [309..374]            | 943    | 1410   | 1770   | 1980   | 2000   |
+| Kāra | 5000 | 330 [325..343]            | 1380   | 1690   | 1870   | 1990   | 2000   |
+| Go   | 5000 | 86 [15..157]              | 1780   | 1880   | 1930   | 1930   | 1930   |
+| Java | 5000 | 230 [230..231]            | NA     | NA     | NA     | NA     | NA     |
+
+At `-c100` (clean, pre-saturation) Kāra is **0.98× Rust**, level with Go,
+ahead of the JVM — and holds the **lowest p99 under saturation** (378 ms
+vs Rust 817) via `karac_par_run`'s work-helping wait loop. Kāra is also
+the most connection-stable impl (371 → 333 → 330 across a 50× connection
+increase); Go collapses at `-c5000` (367 → 86, high variance).
+
+#### Auto-par control lane (within-Kāra, same binary + box)
+
+`KARAC_AUTO_PAR=0` vs the default, identical `wrk -t4` loop, median of 3:
+
+| -c   | auto-par ON | auto-par OFF | Δ |
+|------|-------------|--------------|---|
+| 100  | 340         | 371          | −8 % |
+| 1000 | 335         | 338          | −1 % (noise) |
+| 5000 | 319         | 326          | −2 % (noise) |
+
+**Honest read:** on this CPU-bound bench auto-par shows **no throughput
+benefit** — parity within noise at `-c1000`/`-c5000`, a ~8 % cost at
+`-c100`. This is expected: `wrk` already saturates all 16 cores via
+concurrent connections, so intra-request fan-out finds no idle cores and
+pays only coordination overhead. Auto-par's win is (a) ergonomic — see
+the source comparison — and (b) throughput on independent **I/O**, which
+this CPU-only kernel cannot express. The control lane confirms auto-par
+*fires* (it costs a little here) without helping this workload; that is
+the correct, expected result, not a regression.
+
+---
+
+_The Apple M5 Pro tables below are directional/supplementary only (v7) —
+laptop, not citable; superseded as the headline by the Graviton canonical
+above._
+
 **Measured on 2026-05-10** (post-G5 — cold-start baseline added
 alongside steady-state sweep; see History below). Apple M5 Pro
 (10P + 8E cores, 18 logical CPUs), 64 GB RAM, macOS 26.4.1,
