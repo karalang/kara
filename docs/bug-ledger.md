@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **373 surfaced · 4 open · 367 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **374 surfaced · 5 open · 367 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -99,6 +99,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **373 surfaced 
 | B-2026-07-11-19 | 2026-07-11 | typecheck+codegen | low | Iterator terminal/adaptor surface is incomplete beyond `collect`/`fold`/`any`/`all`: `sum`/`reduce`/`for_each` are rejected at TYPECHECK; `let it = v.iter()` (iter bound to a variable) breaks codegen. [UPDATE: `any`/`all` codegen terminals and `|_|` wildcard closure params are FIXED — see PROGRESS. `for_each` is BLOCKED by B-2026-07-11-23.] | unfixed; per-gap repros below |
 | B-2026-07-11-23 | 2026-07-11 | interp+codegen | medium | `mut ref` closure capture (mutation of a captured mutable local) is unimplemented: a closure that writes a captured name mutates a SNAPSHOT, not the outer binding. Stored closures drop the mutation in BOTH interp and codegen; the inlined iterator terminals (fold/any/all) DIVERGE — codegen inlines (mutates outer = design-correct) while the interpreter snapshots. | unfixed; repros below |
 | B-2026-07-11-29 | 2026-07-11 | codegen | high | Vec[Vec[Option[shared]]] deep-clone + consume + grow: force-cloned inner Vec's scope-exit drop LEAKS retained element handles, and at larger sizes specific clone combinations produce MALFORMED trees (extra nodes); interpreter correct | kata #95 second surface |
+| B-2026-07-11-30 | 2026-07-11 | ownership | low | Borrow-return source pinning is not applied to borrows nested in generic wrappers / borrowed collections: `-> Vec[ref T]` / `-> Option[ref T]` returns whose element sources are locals are accepted, while `-> ref T` / `-> ref Struct` returns are pinned. design.md § Feature 4 Part 3 says a container with a `ref` in a stored position is a borrowed collection whose scope is bounded by every borrowed source, so the escape should be pinned like the struct-field case. | tests/safety_design.rs::adversarial_escape_via_borrowed_collection_local (#[ignore]d, asserts the desired rejection; auto-enables when fixed); docs/implementation_checklist/phase-9-verification.md |
 
 ### Fixed (367)
 

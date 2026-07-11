@@ -76,6 +76,52 @@ const CORPUS: &[(&str, &str)] = &[
              println(len_plus(5));\n\
          }",
     ),
+    // ── Adversarial accept controls (mirror tests/safety_design.rs
+    // Section 2½). These are hostile-corpus *accept* cases — a borrow
+    // routed through a borrowed collection / generic wrapper / RC boundary
+    // with a genuinely-outliving source. Adding them here generalizes the
+    // "accept survives every semantics-preserving mutation" property from
+    // the plain-`ref` seeds to the adversarial accept surface, per the
+    // phase-9 tracker ("extend it over the new corpus so the property holds
+    // adversarially, not just on the hand-written seeds").
+    (
+        "adversarial_borrowed_collection_from_param",
+        "fn ok(s: ref String) -> Vec[ref String] {\n\
+             let mut v: Vec[ref String] = Vec.new();\n\
+             v.push(s);\n\
+             v\n\
+         }\n\
+         fn main() {\n\
+             let s = String.from(\"payload\");\n\
+             let v = ok(s);\n\
+             println(v.len());\n\
+         }",
+    ),
+    (
+        "adversarial_option_ref_from_param",
+        "fn wrap(s: ref String) -> Option[ref String] {\n\
+             Option.Some(s)\n\
+         }\n\
+         fn main() {\n\
+             let s = String.from(\"hi\");\n\
+             match wrap(s) {\n\
+                 Some(n) => println(n.len()),\n\
+                 None => println(0),\n\
+             }\n\
+         }",
+    ),
+    (
+        "adversarial_shared_struct_backpointer",
+        "shared struct Node {\n\
+             mut next: Option[Node],\n\
+             value: i64,\n\
+         }\n\
+         fn main() {\n\
+             let a = Node { next: Option.None, value: 1 };\n\
+             let b = Node { next: Option.Some(a), value: 2 };\n\
+             println(b.value);\n\
+         }",
+    ),
 ];
 
 // ── Mutation operators ───────────────────────────────────────────
