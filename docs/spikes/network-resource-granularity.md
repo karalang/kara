@@ -289,11 +289,26 @@ Implement § Parameterized Resources for real and parameterize `Network`:
      double-drop) + distinct receiver roots + a receiver that is provably
      NON-shared and NOT a `ref`/`mut ref` param** — the last two need receiver-
      type info threaded into the pass (a new `&TypeCheckResult`-shaped input
-     across ~10 call sites, several in tests that don't currently typecheck),
-     plus the race-sensitive admission logic and captured-mutation write-back
-     correctness for two mutated receivers in par branches. Failure mode is a
-     silent data race, so it must land with full ASAN + a race-shaped regression
-     suite. A real multi-part slice — schedule as a focused effort, do not rush.
+     across ~10 call sites; the receiver's type comes from `expr_types`, its
+     shared-ness from the AST decl's `is_shared` flag). **Codegen is NOT a
+     blocker (verified 2026-07-11).** Network methods are `mut ref self` (a read
+     advances the stream), but auto-par already handles a mutated captured
+     receiver correctly: `src/codegen/stmts.rs:914` falls back to sequential when
+     a captured-mutation name (`method_effects_imply_receiver_mutation` feeds
+     `StmtInfo.defines`) is read outside the group ("parallelization is an
+     optimization hint, not a semantic requirement"), and fans out only when the
+     receiver is unobserved after (the common `let d1 = s1.read(); let d2 =
+     s2.read(); use(d1); use(d2)` shape) — so a mutated receiver never yields a
+     silent-wrong-value. (An earlier probe of *explicit* `par { x = 1 }` showed
+     the mutation dropped — that is `par {}`'s deliberate branch-isolation
+     semantic, NOT the guarded auto-par path.) The residual risk is therefore
+     purely the concurrent-access RACE on an *aliased* receiver, which the
+     shared/ref-param exclusions rule out; the admitted case (two distinct
+     non-shared, non-param local roots) is provably distinct given finding (i)
+     (a non-shared `let b = a` MOVES `a`, and there is no `ref`-binding). Net:
+     buildable, but a race-sensitive multi-step slice (plumbing + admission +
+     conflict relaxation) that must land with full ASAN + shared-receiver /
+     ref-param / same-root serial pins. Schedule as a focused effort; do not rush.
    - **Slice 3 — full parameterized-`Network`:** the principled end-state that
      subsumes Slices 1–2, covers borrow-param connection-bound ops generally, and
      lands the long-specced parameterized-resource feature. The "correct" model;
