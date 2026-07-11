@@ -150,6 +150,43 @@ impl CompileProfile {
     }
 }
 
+/// Panic strategy — how a panic propagates once raised (design.md § Panic
+/// Strategy, phase-8-stdlib-floor `panic = "unwind" | "abort"` entry).
+///
+/// - `Unwind` — walk the stack running cleanup (RC decs, `Drop`s) to each
+///   frame, the substrate `catch_panic[T]` / `extern "C-unwind"` needs.
+/// - `Abort` — run the panic handler, then terminate immediately (no unwind
+///   tables, no cleanup walk). v1's model — smaller binaries, no `.eh_frame`.
+///
+/// Selected per profile via `[profile] panic = "unwind" | "abort"`; when the
+/// key is absent the profile-dependent default applies
+/// ([`ProfileConfig::panic_strategy`]). NOTE: only the manifest parse +
+/// defaults + threading land at v1 — the `Unwind` *codegen* (invoke /
+/// personality / landingpad split) is v1.x-gated, so recording `Unwind` here
+/// is inert until that slice lands; v1 codegen is abort-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PanicStrategy {
+    Unwind,
+    Abort,
+}
+
+impl PanicStrategy {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "unwind" => Some(Self::Unwind),
+            "abort" => Some(Self::Abort),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unwind => "unwind",
+            Self::Abort => "abort",
+        }
+    }
+}
+
 /// One typed `[profile]`-table knob that governs a runtime effect, paired
 /// with the effect it guards. Registered by a downstream knob entry (e.g.
 /// `panic_on_alloc_failure`, which guards `allocates(Heap)`) when the knob
@@ -192,6 +229,14 @@ pub struct ProfileConfig {
     /// `guarded_knobs`, so the moot-flag pass rejects it on `embedded`/`kernel`
     /// (heap already forbidden → the flag is meaningless).
     pub panic_on_alloc_failure: Option<bool>,
+    /// `[profile] panic = "unwind" | "abort"` (phase-8-stdlib-floor
+    /// `panic = "unwind" | "abort"` entry, slice 1). `None` = unset → the
+    /// profile-dependent default applies ([`Self::panic_strategy`]);
+    /// `Some(strategy)` = explicitly selected. Orthogonal to
+    /// `panic_on_alloc_failure` (that gates *whether* a panic is raised on OOM;
+    /// this gates *how* any panic propagates), so it registers no
+    /// `ProfileKnob` — it is meaningful under every profile.
+    pub panic: Option<PanicStrategy>,
 }
 
 impl ProfileConfig {
@@ -202,6 +247,7 @@ impl ProfileConfig {
             profile,
             guarded_knobs: Vec::new(),
             panic_on_alloc_failure: None,
+            panic: None,
         }
     }
 
@@ -210,6 +256,19 @@ impl ProfileConfig {
     /// typechecker's panicking-alloc rejection pass (item 4) gates on.
     pub fn panics_on_alloc_failure(&self) -> bool {
         self.panic_on_alloc_failure.unwrap_or(true)
+    }
+
+    /// Effective panic strategy — the explicit `[profile] panic` value, or the
+    /// profile-dependent default when unset. Defaults: `default` → `Unwind`
+    /// (the general/app profile); `embedded` / `kernel` → `Abort` (freestanding
+    /// / no-unwinder profiles). This is the value slice 9's abort-vs-unwind
+    /// codegen split (v1.x-gated) will read; at v1 nothing consumes it, so the
+    /// `Unwind` defaults are inert (codegen is abort-only).
+    pub fn panic_strategy(&self) -> PanicStrategy {
+        self.panic.unwrap_or(match self.profile {
+            CompileProfile::Default => PanicStrategy::Unwind,
+            CompileProfile::Embedded | CompileProfile::Kernel => PanicStrategy::Abort,
+        })
     }
 
     /// Moot-flag rejection scaffold. A knob that toggles a runtime effect is
@@ -1021,6 +1080,31 @@ fn parse_profile_table(
                         path: path.to_path_buf(),
                         key: "profile.panic_on_alloc_failure".to_string(),
                         expected: "a boolean (e.g. `panic_on_alloc_failure = false`)",
+                    });
+                }
+            },
+            // `panic = "unwind" | "abort"` (phase-8-stdlib-floor
+            // `panic = "unwind" | "abort"` entry, slice 1). A string naming the
+            // strategy; an unknown value names the valid set (mirroring how an
+            // unknown `[package].profile` string is rejected — the manifest
+            // layer reports invalid enum values via `InvalidFieldType`, it has
+            // no symbolic-code diagnostics). No `ProfileKnob`: the strategy is
+            // meaningful under every profile, so it is never moot.
+            "panic" => match val {
+                toml::Value::String(s) => {
+                    config.panic = Some(PanicStrategy::parse(s.as_str()).ok_or_else(|| {
+                        ManifestError::InvalidFieldType {
+                            path: path.to_path_buf(),
+                            key: "profile.panic".to_string(),
+                            expected: "one of \"unwind\" or \"abort\"",
+                        }
+                    })?);
+                }
+                _ => {
+                    return Err(ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "profile.panic".to_string(),
+                        expected: "a string (\"unwind\" or \"abort\")",
                     });
                 }
             },
@@ -4016,14 +4100,15 @@ max-memory-pages = 4096
 
     #[test]
     fn profile_table_unknown_key_soft_warns() {
-        // slice 1 — no knob keys recognised yet, so every key soft-warns
-        // (same drop-on-the-floor discipline as `[wasm]`).
-        let src = "[package]\nname = \"hello\"\n\n[profile]\npanic = \"abort\"\n";
+        // An unrecognised `[profile]` key soft-warns (drop-on-the-floor
+        // discipline, same as `[wasm]`). `overflow_checks` is a reserved-but-
+        // unimplemented future knob, so it stands in for "unknown" here.
+        let src = "[package]\nname = \"hello\"\n\n[profile]\noverflow_checks = true\n";
         let m = parse_manifest(&p(), src).unwrap();
         assert!(
             m.warnings
                 .iter()
-                .any(|w| w.message.contains("unknown key `[profile].panic`")),
+                .any(|w| w.message.contains("unknown key `[profile].overflow_checks`")),
             "expected a soft warning, got: {:?}",
             m.warnings,
         );
@@ -4143,6 +4228,85 @@ max-memory-pages = 4096
         match err {
             ManifestError::InvalidFieldType { key, .. } => {
                 assert_eq!(key, "profile.panic_on_alloc_failure");
+            }
+            other => panic!("expected InvalidFieldType, got {other:?}"),
+        }
+    }
+
+    // ===== `panic = "unwind" | "abort"` knob (phase-8-stdlib-floor slice 1) =====
+
+    #[test]
+    fn panic_strategy_abort_parsed() {
+        let src = "[package]\nname = \"hello\"\n\n[profile]\npanic = \"abort\"\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.profile_config.panic, Some(PanicStrategy::Abort));
+        assert_eq!(m.profile_config.panic_strategy(), PanicStrategy::Abort);
+        // Not a runtime-effect knob → registers no `ProfileKnob`.
+        assert!(m.profile_config.guarded_knobs.is_empty());
+    }
+
+    #[test]
+    fn panic_strategy_unwind_parsed() {
+        let src = "[package]\nname = \"hello\"\n\n[profile]\npanic = \"unwind\"\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.profile_config.panic, Some(PanicStrategy::Unwind));
+        assert_eq!(m.profile_config.panic_strategy(), PanicStrategy::Unwind);
+    }
+
+    #[test]
+    fn panic_strategy_default_profile_defaults_to_unwind() {
+        // No `[profile] panic` key → the `default` profile's default is unwind.
+        let m = parse_manifest(&p(), "[package]\nname = \"hello\"\n").unwrap();
+        assert_eq!(m.profile_config.panic, None);
+        assert_eq!(m.profile_config.panic_strategy(), PanicStrategy::Unwind);
+    }
+
+    #[test]
+    fn panic_strategy_embedded_and_kernel_default_to_abort() {
+        // Freestanding / no-unwinder profiles default to abort when unset.
+        for prof in ["embedded", "kernel"] {
+            let src = format!("[package]\nname = \"hello\"\nprofile = \"{prof}\"\n");
+            let m = parse_manifest(&p(), &src).unwrap();
+            assert_eq!(m.profile_config.panic, None, "{prof}");
+            assert_eq!(
+                m.profile_config.panic_strategy(),
+                PanicStrategy::Abort,
+                "{prof}"
+            );
+        }
+    }
+
+    #[test]
+    fn panic_strategy_explicit_overrides_profile_default() {
+        // An explicit `panic = "unwind"` beats the embedded profile's abort default.
+        let src = "[package]\nname = \"hello\"\nprofile = \"embedded\"\n\n[profile]\npanic = \"unwind\"\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.profile_config.panic_strategy(), PanicStrategy::Unwind);
+    }
+
+    #[test]
+    fn panic_strategy_unknown_value_names_valid_set() {
+        let src = "[package]\nname = \"hello\"\n\n[profile]\npanic = \"fast\"\n";
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, expected, .. } => {
+                assert_eq!(key, "profile.panic");
+                assert!(
+                    expected.contains("unwind") && expected.contains("abort"),
+                    "{expected}"
+                );
+            }
+            other => panic!("expected InvalidFieldType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn panic_strategy_non_string_hard_errors() {
+        let src = "[package]\nname = \"hello\"\n\n[profile]\npanic = true\n";
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => {
+                assert_eq!(key, "profile.panic");
             }
             other => panic!("expected InvalidFieldType, got {other:?}"),
         }
