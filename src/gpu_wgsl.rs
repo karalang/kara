@@ -478,6 +478,21 @@ fn reachable_helpers<'a>(
                 }
             }
             ExprKind::FieldAccess { object, .. } => calls_in(object, all, out),
+            // B-2026-07-11-20: a helper call can also sit inside an index
+            // (`coll[g_idx(…)]`), a method receiver/args, or a cast operand — the
+            // `stream` kernel puts `g_idx` in exactly these positions. Missing
+            // them left the helper ungathered, so codegen rejected the call.
+            ExprKind::Index { object, index } => {
+                calls_in(object, all, out);
+                calls_in(index, all, out);
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                calls_in(object, all, out);
+                for a in args {
+                    calls_in(&a.value, all, out);
+                }
+            }
+            ExprKind::Cast { expr, .. } => calls_in(expr, all, out),
             _ => {}
         }
     }
@@ -486,8 +501,12 @@ fn reachable_helpers<'a>(
             calls_in(e, all, out);
         }
         for s in &b.stmts {
-            if let StmtKind::Expr(e) = &s.kind {
-                calls_in(e, all, out);
+            match &s.kind {
+                StmtKind::Expr(e) => calls_in(e, all, out),
+                // B-2026-07-11-20: a `let` RHS can carry helper calls too
+                // (`let c = coll[g_idx(x, y, w)]`).
+                StmtKind::Let { value, .. } => calls_in(value, all, out),
+                _ => {}
             }
         }
     }
@@ -1045,6 +1064,7 @@ fn emit_kernel_stencil(
     // borrow, so this is cheap.
     let (lets, ret) = kernel_body_parts(func)?;
     let mut locals: HashSet<String> = HashSet::new();
+    let mut cell_aliases: HashMap<String, String> = HashMap::new();
     let mut let_decls = String::new();
     for (name, value) in lets {
         let ctx = StencilCtx {
@@ -1055,10 +1075,19 @@ fn emit_kernel_stencil(
             uniforms: &uniform_set,
             first_group: &first_group,
             locals: &locals,
+            cell_aliases: &cell_aliases,
         };
-        let rhs = lower_stencil_expr(value, &ctx)?;
-        let_decls.push_str(&format!("    let {name} = {rhs};\n"));
-        locals.insert(name.to_string());
+        // A whole-cell alias `let c = buf[<idx>]` has no single WGSL value (the
+        // cell spans one binding per group), so it emits no `let`; record the
+        // lowered index and resolve `c.field` per group later (GPU-SLIP-2c).
+        if let Some(idx_expr) = whole_cell_read(value, buf_name) {
+            let idx_wgsl = lower_stencil_expr(idx_expr, &ctx)?;
+            cell_aliases.insert(name.to_string(), idx_wgsl);
+        } else {
+            let rhs = lower_stencil_expr(value, &ctx)?;
+            let_decls.push_str(&format!("    let {name} = {rhs};\n"));
+            locals.insert(name.to_string());
+        }
     }
     let ctx = StencilCtx {
         buf: buf_name,
@@ -1068,6 +1097,7 @@ fn emit_kernel_stencil(
         uniforms: &uniform_set,
         first_group: &first_group,
         locals: &locals,
+        cell_aliases: &cell_aliases,
     };
     let stores = lower_stencil_return(ret, &ctx)?;
 
@@ -1102,6 +1132,23 @@ struct StencilCtx<'a> {
     first_group: &'a str,
     /// `let`-bound scalar locals in scope (GPU-SLIP-2a); each lowers to itself.
     locals: &'a HashSet<String>,
+    /// `let`-bound whole-cell aliases (GPU-SLIP-2c): `let c = buf[<idx>]` maps
+    /// `c` to the lowered index string, so `c.field` reads
+    /// `<group_of_field>_in[<idx>].field` (the LBM `stream` centre cell `c`).
+    cell_aliases: &'a HashMap<String, String>,
+}
+
+/// If `expr` is a whole-cell buffer read `buf[<idx>]` (an `Index` on the stencil
+/// buffer identifier, with no field access), return the index expression — the
+/// RHS shape of a cell-alias `let c = coll[idx(x, y, w)]` (GPU-SLIP-2c). `None`
+/// otherwise.
+fn whole_cell_read<'a>(expr: &'a Expr, buf: &str) -> Option<&'a Expr> {
+    if let ExprKind::Index { object, index } = &expr.kind {
+        if matches!(&object.kind, ExprKind::Identifier(b) if b == buf) {
+            return Some(index);
+        }
+    }
+    None
 }
 
 /// Lower a stencil kernel's struct-valued return into one output store per
@@ -1180,35 +1227,41 @@ fn stencil_field_wgsl(expr: &Expr, field: &str, ctx: &StencilCtx) -> Result<Stri
 /// a value read like `buf[j].a` is `f32`; WGSL types each from the AST context.
 fn lower_stencil_expr(expr: &Expr, ctx: &StencilCtx) -> Result<String, WgslError> {
     match &expr.kind {
-        // Neighbour read: `buf[j].field` → `<group_of_field>_in[<j>]{.field}`.
+        // Field read of a buffer cell — either an explicit neighbour read
+        // `buf[j].field` → `<group_of_field>_in[<j>]{.field}`, or a whole-cell
+        // alias `c.field` where `c` was bound `let c = buf[<idx>]` (GPU-SLIP-2c).
         ExprKind::FieldAccess { object, field } => {
-            if let ExprKind::Index {
-                object: base,
-                index,
-            } = &object.kind
-            {
-                if matches!(&base.kind, ExprKind::Identifier(b) if b == ctx.buf) {
-                    let g = ctx
-                        .groups
-                        .iter()
-                        .find(|g| g.fields.iter().any(|gf| gf == field))
-                        .ok_or_else(|| {
-                            WgslError::UnsupportedBody(format!(
-                                "field `{field}` is not a layout group of the GPU stencil buffer"
-                            ))
-                        })?;
-                    let j = lower_stencil_expr(index, ctx)?;
-                    return Ok(if g.is_multi() {
-                        format!("{}_in[{j}].{field}", g.name)
-                    } else {
-                        format!("{}_in[{j}]", g.name)
-                    });
+            let idx_wgsl: Option<String> = match &object.kind {
+                ExprKind::Index {
+                    object: base,
+                    index,
+                } if matches!(&base.kind, ExprKind::Identifier(b) if b == ctx.buf) => {
+                    Some(lower_stencil_expr(index, ctx)?)
                 }
-            }
-            Err(WgslError::UnsupportedBody(
-                "only neighbour reads `buf[index].field` are supported in a stencil GPU kernel body"
-                    .to_string(),
-            ))
+                ExprKind::Identifier(obj) => ctx.cell_aliases.get(obj).cloned(),
+                _ => None,
+            };
+            let j = idx_wgsl.ok_or_else(|| {
+                WgslError::UnsupportedBody(
+                    "a stencil field read must be a neighbour read `buf[index].field` or a \
+                     `let`-bound cell alias `c.field`"
+                        .to_string(),
+                )
+            })?;
+            let g = ctx
+                .groups
+                .iter()
+                .find(|g| g.fields.iter().any(|gf| gf == field))
+                .ok_or_else(|| {
+                    WgslError::UnsupportedBody(format!(
+                        "field `{field}` is not a layout group of the GPU stencil buffer"
+                    ))
+                })?;
+            Ok(if g.is_multi() {
+                format!("{}_in[{j}].{field}", g.name)
+            } else {
+                format!("{}_in[{j}]", g.name)
+            })
         }
         // `buf.len()` → element count as i32.
         ExprKind::MethodCall {
@@ -2131,6 +2184,64 @@ mod tests {
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { x.to_bits() }\n");
         let err = emit_kernel(&func, &[]).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
+    }
+
+    #[test]
+    fn stencil_lowers_cell_alias_local() {
+        // GPU-SLIP-2c: `let c = g[i]` binds the whole centre cell; `c.field`
+        // reads that cell's field (no WGSL `let` — the cell spans two bindings).
+        // This is the LBM `stream` centre-cell shape (`let c = coll[idx]; c.f0`).
+        let func = parse_kernel(
+            "#[gpu]\nfn k(g: Vec[Cell], i: i64) -> Cell {\n\
+             \x20   let c = g[i];\n\
+             \x20   Cell { a: c.a, b: if i == 0 { c.b } else { g[i - 1].b } }\n\
+             }\n",
+        );
+        let groups = vec![
+            SoaGpuGroup {
+                name: "ga".into(),
+                fields: vec!["a".into()],
+            },
+            SoaGpuGroup {
+                name: "gb".into(),
+                fields: vec!["b".into()],
+            },
+        ];
+        let wgsl = emit_kernel_soa(&func, &groups, &[]).expect("cell-alias stencil should lower");
+        // No `let c =` — the alias has no single WGSL value.
+        assert!(!wgsl.contains("let c ="), "{wgsl}");
+        // `c.a` → the centre cell's group-a binding at index `i`.
+        assert!(wgsl.contains("ga_out[gi] = ga_in[i];"), "{wgsl}");
+        // `c.b` (then) vs neighbour `g[i-1].b` (else), keyed by `gi`.
+        assert!(
+            wgsl.contains("gb_out[gi] = select(gb_in[(i - 1)], gb_in[i], (i == 0));"),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn gathers_helper_in_index_and_let_rhs() {
+        // B-2026-07-11-20: reachable_helpers must find helper calls inside an
+        // `Index` and a `let` RHS (`let c = g[flat(i, 0)]`), not only in
+        // struct-literal / `if`-condition positions — the `stream` kernel calls
+        // its `idx` helper exactly there. Missing it made codegen reject the call.
+        let fns = parse_fns(
+            "#[gpu]\nfn flat(a: i64, b: i64) -> i64 { a + b }\n\
+             #[gpu]\nfn k(g: Vec[Cell], i: i64) -> Cell { let c = g[flat(i, 0)]; Cell { a: c.a } }\n",
+        );
+        let flat = fns.iter().find(|f| f.name == "flat").unwrap();
+        let k = fns.iter().find(|f| f.name == "k").unwrap();
+        let groups = vec![SoaGpuGroup {
+            name: "ga".into(),
+            fields: vec!["a".into()],
+        }];
+        let wgsl = emit_kernel_soa(k, &groups, &[flat]).expect("helper in index should gather");
+        assert!(
+            wgsl.contains("fn flat(a: i32, b: i32) -> i32 { return (a + b); }"),
+            "{wgsl}"
+        );
+        // The cell alias `c = g[flat(i, 0)]`, so `c.a` reads `ga_in[flat(i, 0)]`.
+        assert!(wgsl.contains("ga_out[gi] = ga_in[flat(i, 0)];"), "{wgsl}");
     }
 
     #[test]
