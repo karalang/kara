@@ -6620,6 +6620,33 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_any_all_terminal() {
+        // B-2026-07-11-19 — the short-circuit `any`/`all` boolean terminals on a
+        // fused iterator chain. The typechecker and interpreter already accepted
+        // them; codegen had no terminal, so any chain ending in `any`/`all` hit
+        // the loud "no handler" dispatch error under `karac build`. Covers
+        // any-true / any-false / all-true / all-false, the empty-source edges
+        // (any -> false, all -> true), and adapters before the terminal
+        // (filter+any, map+all). All boolean results must match the interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4];\n\
+                 let e: Vec[i64] = [];\n\
+                 println(f\"{v.iter().any(|x| x > 3)}\");\n\
+                 println(f\"{v.iter().any(|x| x > 9)}\");\n\
+                 println(f\"{v.iter().all(|x| x > 0)}\");\n\
+                 println(f\"{v.iter().all(|x| x > 2)}\");\n\
+                 println(f\"{e.iter().any(|x| x > 0)}\");\n\
+                 println(f\"{e.iter().all(|x| x > 0)}\");\n\
+                 println(f\"{v.iter().filter(|x| x % 2 == 0).any(|x| x > 4)}\");\n\
+                 println(f\"{v.iter().map(|x| x * x).all(|x| x < 20)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "true\nfalse\ntrue\nfalse\nfalse\ntrue\nfalse\ntrue\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_index_vec_field_through_self() {
         // Regression for the self-hosting lexer index blocker: indexing a
         // `Vec` field through the `self` receiver (`self.bytes[self.current]`)

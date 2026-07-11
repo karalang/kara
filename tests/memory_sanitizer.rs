@@ -497,6 +497,28 @@ fn main() {
     }
 
     #[test]
+    fn asan_iter_chain_any_all_short_circuit_no_leak() {
+        // B-2026-07-11-19 — `any`/`all` short-circuit terminals over a chain whose
+        // `map` produces HEAP Strings. When the predicate decides early the loop
+        // `break`s mid-iteration; each per-element mapped String (the deciding one
+        // included) must be dropped, and the source `Vec[String]` freed once. `any`
+        // stops at the first match, `all` at the first failure — both mid-stream.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let words: Vec[String] = ["alpha", "beta", "gamma", "delta", "epsilon"];
+    let hit = words.iter().map(|w| f"[{w}]").any(|s| s.len() > 6);
+    let allshort = words.iter().map(|w| f"[{w}]").all(|s| s.len() < 5);
+    if hit { println("hit"); } else { println("miss"); }
+    if allshort { println("all-short"); } else { println("not-all"); }
+}
+"#,
+            &["hit", "not-all"],
+            "asan_iter_chain_any_all_short_circuit_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_with_capacity_zero_no_leak() {
         // B-2026-07-11-15 — a `with_capacity(n)` whose `n` evaluates to 0 at
         // runtime leaked one byte per call. `karac_alloc_or_panic(0)` normalizes

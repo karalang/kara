@@ -3744,6 +3744,33 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<iter-chain>.any(|x| pred)` / `.all(|x| pred)` — short-circuit boolean
+        // terminals on a fused iterator chain (B-2026-07-11-19). Same
+        // iterator-chain gate as `fold`.
+        if (method == "any" || method == "all")
+            && args.len() == 1
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                if params.len() == 1 {
+                    if let PatternKind::Binding(param) = &params[0].pattern.kind {
+                        if let Some(v) = self.try_compile_iter_chain_any_all(
+                            object,
+                            method == "any",
+                            param,
+                            body,
+                            call_span,
+                        )? {
+                            return Ok(v);
+                        }
+                    }
+                }
+            }
+        }
+
         // General owned-temp tracking, slice 3b — element-type-aware read
         // methods (`get`/`first`/`last`/`get_unchecked`/`contains`) on a
         // FRESH-TEMP `Vec`/`VecDeque` receiver (`make_vec().get(0)`). Needs the
@@ -6549,6 +6576,185 @@ impl<'ctx> super::Codegen<'ctx> {
                     for_loop,
                 ],
                 final_expr: Some(Box::new(ident(&accname))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `<src>.iter().{map|filter}*.any(|x| pred)` / `.all(|x| pred)` — the
+    /// short-circuit boolean terminals on a fused iterator chain
+    /// (B-2026-07-11-19). The typechecker and interpreter already accept them;
+    /// only codegen lacked a terminal, so the chain fell through to the loud
+    /// "no handler for method 'any'/'all'" dispatch error.
+    ///
+    /// Reuses the shared map/filter fusion (`peel_fused_map_filter_chain` +
+    /// `build_fused_chain_body`) with a short-circuit sink: a boolean result
+    /// seeded `false` (`any`) / `true` (`all`), flipped and `break`-ed the first
+    /// time the predicate decides the answer. Emits
+    ///
+    /// ```text
+    /// { let mut __aa = <false|true>;
+    ///   for <elem> in <base> {
+    ///       <adapters>;
+    ///       any:  if <pred> { __aa = true;  break; }
+    ///       all:  if <pred> {} else { __aa = false; break; }
+    ///   }
+    ///   __aa }
+    /// ```
+    ///
+    /// Fails closed (`Ok(None)` → the loud dispatch error) for any chain shape
+    /// the shared peel rejects.
+    fn try_compile_iter_chain_any_all(
+        &mut self,
+        recv: &Expr,
+        is_any: bool,
+        param: &str,
+        pred: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some((base, steps)) = Self::peel_fused_map_filter_chain(recv) else {
+            return Ok(None);
+        };
+
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let sp = call_span.clone();
+        let resname = format!("__aa_{}", uid);
+        let elem_name = steps
+            .first()
+            .map(|(_, p, _)| p.clone())
+            .unwrap_or_else(|| param.to_string());
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let bool_lit = |b: bool| Expr {
+            kind: ExprKind::Bool(b),
+            span: sp.clone(),
+        };
+
+        // Short-circuit sink: bind the predicate param to the fully-adapted
+        // element (elide a redundant self-bind), then on the deciding outcome set
+        // the result and `break`.
+        let sink = |current: Expr| -> Vec<Stmt> {
+            let current_is_param = matches!(&current.kind, ExprKind::Identifier(n) if n == param);
+            let guard = if current_is_param {
+                pred.clone()
+            } else {
+                Expr {
+                    kind: ExprKind::Block(Block {
+                        stmts: vec![Stmt {
+                            kind: StmtKind::Let {
+                                is_mut: false,
+                                pattern: Pattern {
+                                    kind: PatternKind::Binding(param.to_string()),
+                                    span: sp.clone(),
+                                },
+                                ty: None,
+                                value: current,
+                            },
+                            span: sp.clone(),
+                        }],
+                        final_expr: Some(Box::new(pred.clone())),
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                }
+            };
+            // `__aa = <is_any>; break;` — the deciding outcome.
+            let decide = vec![
+                Stmt {
+                    kind: StmtKind::Assign {
+                        target: ident(&resname),
+                        value: bool_lit(is_any),
+                    },
+                    span: sp.clone(),
+                },
+                Stmt {
+                    kind: StmtKind::Expr(Expr {
+                        kind: ExprKind::Break {
+                            label: None,
+                            value: None,
+                        },
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                },
+            ];
+            // `any`: decide when the predicate holds (then-branch). `all`: decide
+            // when it FAILS (else-branch), leaving the then-branch empty.
+            let (then_stmts, else_stmts) = if is_any {
+                (decide, None)
+            } else {
+                (Vec::new(), Some(decide))
+            };
+            vec![Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::If {
+                        condition: Box::new(guard),
+                        then_block: Block {
+                            stmts: then_stmts,
+                            final_expr: None,
+                            span: sp.clone(),
+                        },
+                        else_branch: else_stmts.map(|s| {
+                            Box::new(Expr {
+                                kind: ExprKind::Block(Block {
+                                    stmts: s,
+                                    final_expr: None,
+                                    span: sp.clone(),
+                                }),
+                                span: sp.clone(),
+                            })
+                        }),
+                    },
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            }]
+        };
+        let for_body = Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sp);
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(elem_name),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(base.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: for_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        // Seed: `any` starts false, `all` starts true.
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![
+                    Stmt {
+                        kind: StmtKind::Let {
+                            is_mut: true,
+                            pattern: Pattern {
+                                kind: PatternKind::Binding(resname.clone()),
+                                span: sp.clone(),
+                            },
+                            ty: None,
+                            value: bool_lit(!is_any),
+                        },
+                        span: sp.clone(),
+                    },
+                    for_loop,
+                ],
+                final_expr: Some(Box::new(ident(&resname))),
                 span: sp.clone(),
             }),
             span: sp.clone(),
