@@ -4465,10 +4465,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     &value.kind,
                     ExprKind::Identifier(n) if self.owned_vecstr_params.contains(n.as_str())
                 );
+                // B-2026-07-11-32: an index-read of a NON-COPY Vec element in
+                // ASSIGNMENT-RHS position (`s = v[i]`, the in-place swap
+                // `v[i] = v[j]` / `self.xs[i] = self.xs[j]`) otherwise ALIASES
+                // the source slot's buffer — `compile_vec_index` only loads the
+                // {ptr,len,cap} header, and (unlike the Let arm at ~2544) the
+                // assign path never cloned it — so the destination and the
+                // source element co-own the buffer and double-free at scope
+                // exit. Deep-clone it here, exactly as the Let arm does. We do
+                // NOT honour `vec_index_borrow_spans`: an assignment RHS is
+                // stored into an owning destination (it escapes the read), so it
+                // is never the transient read-only borrow that elision targets.
+                // `clone_owned_vec_index_element` is a no-op for every non
+                // heap-vec-index RHS (Identifier / Call / f-string / literal), so
+                // it is safe on the general path. `rhs_is_heap_vec_index` (the
+                // common `v[i]` shape) additionally arms the Identifier-target
+                // eager-free below so the overwritten LHS's own buffer is freed
+                // once the fresh clone replaces it.
+                let rhs_is_heap_vec_index =
+                    !rhs_is_owned_param && self.expr_is_heap_vec_index(value);
                 let val = if rhs_is_owned_param {
                     self.maybe_defensive_copy_param_arg(value, val)
                 } else {
-                    val
+                    self.clone_owned_vec_index_element(value, val)?
                 };
                 // Consume the f-string acc staging slot once compile_expr
                 // returns — even on the rare paths where the Assign arm
@@ -4839,7 +4858,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                     let trigger_eager_free = lhs_is_tracked_vec
                         && !rhs_is_self_alias
-                        && (staged_fstr_acc.is_some() || rhs_is_moved_alias || rhs_is_fresh);
+                        && (staged_fstr_acc.is_some()
+                            || rhs_is_moved_alias
+                            || rhs_is_fresh
+                            || rhs_is_heap_vec_index);
                     if trigger_eager_free {
                         if let Some(slot) = self.variables.get(name).copied() {
                             self.emit_free_vec_buffer_if_owned(slot.ptr);
@@ -4901,26 +4923,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         return Ok(());
                     }
                     self.compile_field_store(object, field, val, rhs_is_fresh)?;
-                    // `cells[i].name = f"…"` — a heap String field store on a
-                    // SoA element whose RHS is an f-string. `compile_soa_field_store`
-                    // MOVES the f-string's buffer header into the group slot
-                    // (and drops the old one), so the accumulator's own
-                    // `FreeVecBuffer` (registered in the InterpolatedStringLit
-                    // arm) must be neutralized — else both it and the SoA
-                    // per-element drop free the same buffer (a double-free / the
-                    // SIGTRAP this guards). The struct-literal field form is
-                    // already covered by `suppress_fstr_acc_if_moved_out`; this
-                    // is the direct-field-store peer. Gated to a SoA element
-                    // field target so AoS field stores keep their existing
-                    // (copy-based) acc handling.
+                    // B-2026-07-11-32 (with the `cells[i].name = f"…"` SoA case
+                    // it generalises): a heap String field store whose RHS is an
+                    // f-string (`p.name = f"…"`, `cells[i].name = f"…"`). The
+                    // store MOVES the accumulator's {ptr,len,cap} buffer header
+                    // into the field slot (and drops the old field value), so the
+                    // accumulator's own `FreeVecBuffer` (registered in the
+                    // InterpolatedStringLit arm) must be neutralised — else both
+                    // it and the field's scope-exit drop free the same buffer (a
+                    // double-free / the SIGTRAP this guards). `compile_field_store`
+                    // stores the header it is handed (a move) on every field
+                    // shape — AoS, SoA element, shared-struct field — so zeroing
+                    // the acc cap is uniformly correct; the field slot's own drop
+                    // stays the unique owner. Mirrors the Identifier-arm acc-zero
+                    // (~4888). The struct-literal field form is covered separately
+                    // by `suppress_fstr_acc_if_moved_out`.
                     if let Some(acc) = staged_fstr_acc {
-                        if let ExprKind::Index { object: base, .. } = &object.kind {
-                            if let ExprKind::Identifier(soa_name) = &base.kind {
-                                if self.active_soa_layout(soa_name).is_some() {
-                                    self.zero_vec_alloca_cap(acc);
-                                }
-                            }
-                        }
+                        self.zero_vec_alloca_cap(acc);
                     }
                 } else if let ExprKind::Index { object, index } = &target.kind {
                     // Heap-env closure Vec ELEMENT reassignment (`v[i] = make(j)` /
@@ -4935,28 +4954,53 @@ impl<'ctx> super::Codegen<'ctx> {
                         return Ok(());
                     }
                     self.compile_index_store(object, index, val)?;
+                    // B-2026-07-11-32: an f-string RHS stored into a Vec element
+                    // slot (`v[i] = f"…"`). `compile_vec_index_store` already
+                    // dropped the old element and MOVED the acc's {ptr,len,cap}
+                    // header into the slot, so the accumulator's own scope-exit
+                    // `FreeVecBuffer` would double-free that buffer — zero the acc
+                    // cap so it no-ops (the element's per-slot drop is the unique
+                    // owner). Mirrors the Identifier- and field-store acc-zero.
+                    if let Some(acc) = staged_fstr_acc {
+                        self.zero_vec_alloca_cap(acc);
+                    }
                     // A tracked Vec/String binding moved into an OWNING Vec's
-                    // heap-element slot (`out[j] = nb` where `out: Vec[Vec[T]]`)
-                    // must have its scope-exit cleanup suppressed: the container
-                    // now owns the buffer and frees it via its element-drop, so
-                    // without this both the source binding and the container free
-                    // it (double-free → SIGTRAP, B-2026-06-19-7). Mirrors the
-                    // Identifier-assign move-suppression above and `Vec.push`'s
-                    // `suppress_source_vec_cleanup_for_arg`. Gated to an owning
-                    // Vec target with a heap-struct element type so a slice/map
-                    // element store (borrowed / handle-owned) is untouched;
-                    // `suppress_source_vec_cleanup_for_arg` is itself a no-op for
-                    // a non-Identifier / non-tracked RHS.
-                    if let ExprKind::Identifier(container) = &object.kind {
-                        let owns_heap_elem = self
-                            .vec_elem_types
-                            .get(container.as_str())
-                            .is_some_and(|&et| self.llvm_ty_is_vec_struct(et))
-                            && !self.slice_elem_types.contains_key(container.as_str())
-                            && !self.map_key_types.contains_key(container.as_str());
-                        if owns_heap_elem {
-                            self.suppress_source_vec_cleanup_for_arg(value);
+                    // heap-element slot — either a bare `out[j] = nb`
+                    // (`out: Vec[Vec[T]]`) or a field-rooted `h.xs[j] = t` /
+                    // `self.xs[j] = t` (the generic-heap swap) — must have its
+                    // scope-exit cleanup suppressed: the container now owns the
+                    // buffer and frees it via its element-drop, so without this
+                    // both the source binding and the container free it
+                    // (double-free → SIGTRAP, B-2026-06-19-7 / B-2026-07-11-32).
+                    // Mirrors the Identifier-assign move-suppression above and
+                    // `Vec.push`'s `suppress_source_vec_cleanup_for_arg`. Gated to
+                    // an owning Vec target with a heap {ptr,len,cap} element type
+                    // so a slice/map element store (borrowed / handle-owned) is
+                    // untouched; `suppress_source_vec_cleanup_for_arg` is itself a
+                    // no-op for a non-Identifier / non-tracked RHS.
+                    let target_owns_heap_vec_elem = match &object.kind {
+                        ExprKind::Identifier(container) => {
+                            self.vec_elem_types
+                                .get(container.as_str())
+                                .is_some_and(|&et| self.llvm_ty_is_vec_struct(et))
+                                && !self.slice_elem_types.contains_key(container.as_str())
+                                && !self.map_key_types.contains_key(container.as_str())
                         }
+                        // `h.xs[j] = t` / `self.xs[j] = t`: the field is an owning
+                        // heap Vec whose element is a {ptr,len,cap} (String / Vec).
+                        // Resolve the element type via the same helper the clone
+                        // path uses (with monomorph type-param substitution) and
+                        // suppress the moved-in source binding.
+                        ExprKind::FieldAccess { .. } => {
+                            self.vec_index_elem_type_expr(object).is_some_and(|te| {
+                                self.is_string_type_expr(&te)
+                                    || self.extract_vec_elem_type(&te).is_some()
+                            })
+                        }
+                        _ => false,
+                    };
+                    if target_owns_heap_vec_elem {
+                        self.suppress_source_vec_cleanup_for_arg(value);
                     }
                     // Whole-element SoA store of a NAMED owned struct binding
                     // (`grid[i] = c`): the scatter in `compile_soa_index_store`

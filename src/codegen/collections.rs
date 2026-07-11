@@ -2207,9 +2207,14 @@ impl<'ctx> super::Codegen<'ctx> {
     ///     `Vec[E]` (`m[i]` over a `Vec[Vec[E]]`) → recurse to get `object`'s
     ///     type, then peel one `Vec[..]` layer → `E`.
     ///
-    /// Returns `None` for any other object shape (`self.field[i]`, a method
-    /// result, a non-Vec element), leaving the caller's prior behaviour.
-    fn vec_index_elem_type_expr(&self, object: &Expr) -> Option<TypeExpr> {
+    ///   - `object` is a struct-field access whose field is a `Vec[E]`
+    ///     (`self.xs[i]`, `h.items[i]`) → resolve the receiver's struct type,
+    ///     read the field's declared `Vec[E]`, substitute any active monomorph
+    ///     type params, then peel one Vec layer → `E`.
+    ///
+    /// Returns `None` for any other object shape (a method result, a non-Vec
+    /// element), leaving the caller's prior behaviour.
+    pub(super) fn vec_index_elem_type_expr(&self, object: &Expr) -> Option<TypeExpr> {
         match &object.kind {
             ExprKind::Identifier(name) => self.var_elem_type_exprs.get(name.as_str()).cloned(),
             ExprKind::Index {
@@ -2220,6 +2225,51 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Vec layer to get `object[k]`'s element type.
                 let object_te = self.vec_index_elem_type_expr(inner)?;
                 vec_inner_type_expr(&object_te)
+            }
+            ExprKind::FieldAccess {
+                object: recv,
+                field,
+            } => {
+                // `recv.field[i]` (`self.xs[i]`, `h.items[i]`): resolve `recv`'s
+                // struct type, read `field`'s declared `Vec[E]` TypeExpr, and
+                // peel one Vec layer → `E`. A GENERIC container field carries the
+                // bare type param (`xs: Vec[T]`), so first substitute the active
+                // monomorph bindings (`T → String` inside a `Heap[String]`
+                // method) — otherwise the peeled `T` would clone to the i64
+                // unknown-name default. Without this arm a field-rooted index
+                // read (`self.xs[i]`) shallow-aliased the container's buffer and
+                // double-freed at scope exit — the field-rooted leg of the
+                // non-Copy index-swap fix (B-2026-07-11-32).
+                let struct_name = self.type_name_of_expr(recv)?;
+                let field_names = self.struct_field_names.get(struct_name.as_str())?;
+                let idx = field_names.iter().position(|n| n == field)?;
+                let field_te = self
+                    .struct_field_type_exprs(struct_name.as_str())?
+                    .into_iter()
+                    .nth(idx)?;
+                let field_te = if self.type_subst_names.is_empty() {
+                    field_te
+                } else {
+                    let subst: std::collections::HashMap<String, TypeExpr> = self
+                        .type_subst_names
+                        .iter()
+                        .map(|(param, concrete)| {
+                            (
+                                param.clone(),
+                                TypeExpr {
+                                    kind: TypeKind::Path(PathExpr {
+                                        segments: vec![concrete.clone()],
+                                        generic_args: None,
+                                        span: field_te.span.clone(),
+                                    }),
+                                    span: field_te.span.clone(),
+                                },
+                            )
+                        })
+                        .collect();
+                    super::helpers::subst_type_params_in_type_expr(&field_te, &subst)
+                };
+                vec_inner_type_expr(&field_te)
             }
             _ => None,
         }
@@ -2257,12 +2307,33 @@ impl<'ctx> super::Codegen<'ctx> {
         // whose element is `E`). Without the nested case, `let x = m[i][j]`
         // shallow-aliased the innermost buffer and double-freed at the two
         // scope exits (the `matrix[i][j]` gap — surfaced binding a
-        // `chunks()/windows()` result element). `self.field[i]` (FieldAccess
-        // object) still keeps the prior behaviour.
+        // `chunks()/windows()` result element). A field-rooted index
+        // (`self.xs[i]`, `h.items[i]`) resolves the field's `Vec[E]` element
+        // through the FieldAccess arm of `vec_index_elem_type_expr` (with
+        // monomorph type-param substitution) — the generic-heap swap dogfood.
         let Some(elem_te) = self.vec_index_elem_type_expr(object) else {
             return Ok(val);
         };
         if super::vec_method::is_trivially_copyable_te(&elem_te) {
+            return Ok(val);
+        }
+        // Defensive: only deep-clone a `{ptr,len,cap}` (String / Vec) element
+        // when the read value's LLVM type actually IS that struct. A
+        // generic-monomorph FIELD-rooted read (`self.xs[i]` in a `Heap[String]`
+        // method) whose element type is currently mis-resolved to the i64
+        // default (a separate, pre-existing monomorph read bug —
+        // B-2026-07-11-35) loads an 8-byte scalar; handing that to the String /
+        // Vec clone fn would read 24 bytes off an 8-byte slot (misaligned
+        // `copy_nonoverlapping` → abort). Skipping the clone there preserves the
+        // prior behaviour rather than turning a wrong-typed read into a crash;
+        // every correctly-typed non-Copy read (the whole non-generic surface)
+        // still clones. Non-{ptr,len,cap} heap elements (plain structs, enums,
+        // Maps) are unaffected — their `val` type is not `vec_ty`, so the guard
+        // only fires on a String/Vec element whose read width is wrong.
+        let vec_ty = self.vec_struct_type();
+        let elem_is_vecstruct =
+            self.is_string_type_expr(&elem_te) || self.extract_vec_elem_type(&elem_te).is_some();
+        if elem_is_vecstruct && val.get_type() != vec_ty.into() {
             return Ok(val);
         }
         // Deep-clone via the per-type clone fn (src/dst slots), exactly as

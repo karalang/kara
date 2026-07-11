@@ -4596,6 +4596,44 @@ fn main() {
         }
     }
 
+    /// B-2026-07-11-32: the classic in-place index-swap idiom over a NON-COPY
+    /// element (`let t = v[i]; v[i] = v[j]; v[j] = t;` on `Vec[String]`) was a
+    /// silent double-free — an index-read in ASSIGNMENT-RHS position only loaded
+    /// the `{ptr,len,cap}` header (unlike the Let arm, which deep-clones), so the
+    /// destination and the source element co-owned the buffer and freed it twice
+    /// at scope exit. The output was correct (values read before the free), which
+    /// is why a native run printed the right answer THEN aborted `free(): double
+    /// free detected`. Now the assign-RHS index-read deep-clones (bare-`v[i]` and
+    /// field-rooted `h.xs[i]` alike), a named-binding RHS is move-suppressed into
+    /// the field-rooted slot, and an f-string temporary stored into a projection
+    /// place has its accumulator cap zeroed. Verifies the functional result over
+    /// both a bare `Vec[String]` swap and a struct-field `Vec[String]` swapped
+    /// through a `mut ref self` method; the memory-safety (no double-free / no
+    /// leak) is pinned in `tests/memory_sanitizer.rs::asan_index_swap_*`.
+    #[test]
+    fn e2e_index_swap_noncopy_element() {
+        if let Some(out) = run_program(
+            "struct H { xs: Vec[String] }\n\
+             impl H {\n\
+             \x20   fn swap(mut ref self, i: i64, j: i64) {\n\
+             \x20       let t = self.xs[i];\n\
+             \x20       self.xs[i] = self.xs[j];\n\
+             \x20       self.xs[j] = t;\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut v: Vec[String] = [f\"alpha\", f\"bravo\", f\"charlie\"];\n\
+             \x20   let t = v[0]; v[0] = v[1]; v[1] = t;\n\
+             \x20   println(v[0]); println(v[1]); println(v[2]);\n\
+             \x20   let mut h = H { xs: [f\"one\", f\"two\", f\"three\"] };\n\
+             \x20   h.swap(0, 2);\n\
+             \x20   println(h.xs[0]); println(h.xs[1]); println(h.xs[2]);\n\
+             }",
+        ) {
+            assert_eq!(out, "bravo\nalpha\ncharlie\nthree\ntwo\none\n");
+        }
+    }
+
     /// B-2026-07-03-11: dispatch a trait method called through a GENERIC
     /// TYPE-PARAMETER BOUND under `karac build`. `fn use_it[X: Tagged](x: X)`
     /// calling `x.tag()` used to die with "no handler for method tag on

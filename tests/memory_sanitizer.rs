@@ -23165,4 +23165,126 @@ fn main() {
             "vecvec_heap_element_consumed_by_value_no_double_free",
         );
     }
+
+    // ── B-2026-07-11-32: non-Copy element index-swap / projection-assign ──
+    // An index-read of a NON-COPY Vec element in ASSIGNMENT-RHS position
+    // (`s = v[i]`, `v[i] = v[j]`) aliased the source slot's buffer — the assign
+    // path only loaded the `{ptr,len,cap}` header, unlike the Let arm which
+    // deep-clones — so the destination and the source element co-owned the
+    // buffer and double-freed at scope exit. The natural in-place swap idiom
+    // `let t = v[i]; v[i] = v[j]; v[j] = t;` over any non-Copy element (String,
+    // Vec, struct) was therefore a silent double-free (correct output, then
+    // `free(): double free detected` on a hardened allocator / ASAN). Separately,
+    // an f-string TEMPORARY stored into a projection place (`v[i] = f"…"`,
+    // `p.field = f"…"`) never had its accumulator cap zeroed for the index /
+    // AoS-field targets, double-freeing the acc buffer. Fixed in
+    // src/codegen/stmts.rs (clone the index-read assign-RHS; generalise the
+    // acc-zero to the index/field stores).
+
+    #[test]
+    fn asan_index_swap_string_no_double_free() {
+        // The flagship: the classic swap idiom over `Vec[String]`. Before the
+        // fix `v[0] = v[1]` aliased slot 1's buffer, double-freeing at scope
+        // exit. Value semantics (interpreter oracle): the sequence swaps slots
+        // 0 and 1.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[String] = [f"alpha-padding", f"bravo-padding", f"charlie-pad"];
+    let t = v[0];
+    v[0] = v[1];
+    v[1] = t;
+    println(v[0]);
+    println(v[1]);
+    println(v[2]);
+}
+"#,
+            &["bravo-padding", "alpha-padding", "charlie-pad"],
+            "index_swap_string_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_index_swap_vecvec_no_double_free() {
+        // Same idiom with a `Vec[Vec[i64]]` (a non-Copy INNER Vec element): the
+        // inner `{ptr,len,cap}` was aliased on `v[0] = v[1]`. Confirms the clone
+        // fires for any non-trivially-copyable element, not just String.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[Vec[i64]] = [[10, 11], [20, 21], [30, 31]];
+    let t = v[0];
+    v[0] = v[1];
+    v[1] = t;
+    println(v[0][0]);
+    println(v[1][0]);
+    println(v[2][0]);
+}
+"#,
+            &["20", "10", "30"],
+            "index_swap_vecvec_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_index_read_into_var_no_double_free_or_leak() {
+        // `s = v[i]` — an index-read into an EXISTING (already heap-owning)
+        // binding. Two hazards in one: the RHS clone must fire (else `s` and
+        // `v[1]` alias → double-free), AND the overwritten old `s` buffer must
+        // be eagerly freed (else LeakSanitizer flags the orphaned "old-padding").
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[String] = [f"aa-padding", f"bb-padding"];
+    let mut s: String = f"old-padding";
+    s = v[1];
+    println(s);
+    println(v[0]);
+    println(v[1]);
+}
+"#,
+            &["bb-padding", "aa-padding", "bb-padding"],
+            "index_read_into_var_no_double_free_or_leak",
+        );
+    }
+
+    #[test]
+    fn asan_fstring_into_vec_element_no_double_free() {
+        // `v[i] = f"…"` — an f-string TEMPORARY stored into a Vec element slot.
+        // The store moves the acc buffer into the slot; the acc's own scope-exit
+        // free double-freed it until the index-store arm learned to zero the acc
+        // cap (mirroring the Identifier arm). The old element must also be freed
+        // (no leak).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[String] = [f"aa-padding", f"bb-padding"];
+    v[0] = f"zz-padding";
+    println(v[0]);
+    println(v[1]);
+}
+"#,
+            &["zz-padding", "bb-padding"],
+            "fstring_into_vec_element_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_fstring_into_struct_field_no_double_free() {
+        // `p.name = f"…"` — an f-string temporary stored into an AoS struct
+        // field. Same acc double-free as the Vec-element case; the field-store
+        // arm previously zeroed the acc only for SoA element fields.
+        assert_clean_asan_run(
+            r#"
+struct P { name: String }
+fn main() {
+    let mut p = P { name: f"aa-padding" };
+    p.name = f"zz-padding";
+    println(p.name);
+}
+"#,
+            &["zz-padding"],
+            "fstring_into_struct_field_no_double_free",
+        );
+    }
 }
