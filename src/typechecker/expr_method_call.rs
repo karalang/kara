@@ -5763,9 +5763,28 @@ impl<'a> super::TypeChecker<'a> {
             return vec_of(Type::Float(FloatSize::F32));
         }
 
-        // Buffer (arg 1): must be `Vec[f32|i32|u32]`. Infer it so its element
-        // type is recorded for codegen's element-typed read + the result type.
+        // Buffer (arg 1): `Vec[f32|i32|u32]` (scalar element-wise map) OR — CG-4 —
+        // `Vec[S]` over a POD `f32` struct `S` with a `layout` block (multi-buffer,
+        // one coalesced GPU buffer per group). Infer it so its element type is
+        // recorded for codegen's element-typed read + the result type.
         let buf_ty = self.infer_expr(&args[1].value);
+        // A `Vec[struct]` element (`Type::Named`, non-scalar) routes to the CG-4
+        // struct path; scalars are `Type::Float`/`Int`/`UInt`, never `Named`.
+        if let Type::Named { name, args: ta } = &buf_ty {
+            if name == "Vec" && ta.len() == 1 {
+                if let Type::Named {
+                    name: sname,
+                    args: sa,
+                } = &ta[0]
+                {
+                    if sa.is_empty() {
+                        let struct_ty = ta[0].clone();
+                        let sname = sname.clone();
+                        return self.infer_gpu_dispatch_soa(args, span, &struct_ty, &sname);
+                    }
+                }
+            }
+        }
         let elem = match &buf_ty {
             Type::Named { name, args: ta } if name == "Vec" && ta.len() == 1 => {
                 elem_spelling(&ta[0]).map(|s| (s, ta[0].clone()))
@@ -5862,6 +5881,141 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        self.record_expr_type(span, &result_vec);
+        result_vec
+    }
+
+    /// CG-4 struct-buffer path for `gpu.dispatch(kernel, buffer)`: a `Vec[S]`
+    /// over a POD all-`f32` struct `S` bound with a `layout` block dispatches as
+    /// a multi-buffer kernel — one coalesced GPU buffer per layout group. The
+    /// typechecker is **layout-blind**, so it only *validates* here; codegen
+    /// (which owns the SoA layout via `active_soa_layout`) emits the per-group
+    /// WGSL, so nothing is baked into `gpu_dispatch_wgsl`. Returns `Vec[S]`.
+    fn infer_gpu_dispatch_soa(
+        &mut self,
+        args: &[CallArg],
+        span: &Span,
+        struct_ty: &Type,
+        struct_name: &str,
+    ) -> Type {
+        // Single-segment type name of a `TypeExpr` (`Particle`, `f32`, …).
+        fn te_name(ty: &TypeExpr) -> Option<&str> {
+            match &ty.kind {
+                TypeKind::Path(p) if p.generic_args.is_none() && p.segments.len() == 1 => {
+                    Some(p.segments[0].as_str())
+                }
+                _ => None,
+            }
+        }
+        let result_vec = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![struct_ty.clone()],
+        };
+        let program = self.program;
+
+        // The element must be a real struct whose fields are all `f32` (the
+        // decided GPU precision; one WGSL `array<f32>` binding per group).
+        let sdef = program.items.iter().find_map(|it| match it {
+            Item::StructDef(s) if s.name == *struct_name => Some(s),
+            _ => None,
+        });
+        let Some(sdef) = sdef else {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_BUFFER]: `gpu.dispatch` buffer element `{struct_name}` \
+                     is not a struct"
+                ),
+                args[1].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return result_vec;
+        };
+        if !sdef.fields.iter().all(|f| te_name(&f.ty) == Some("f32")) {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_BUFFER]: a struct `gpu.dispatch` buffer requires every \
+                     field of `{struct_name}` to be `f32` (the decided GPU precision)"
+                ),
+                args[1].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return result_vec;
+        }
+
+        // The buffer must be a bare binding with a matching `layout` block — the
+        // SoA group structure is what maps to per-field GPU buffers. Name-match
+        // on `program.items`; codegen resolves the physical layout by the same
+        // name (`active_soa_layout`).
+        let ExprKind::Identifier(buf_name) = &args[1].value.kind else {
+            self.type_error(
+                "error[E_GPU_DISPATCH_BUFFER]: a struct `gpu.dispatch` buffer must be a bare \
+                 binding carrying a `layout` block"
+                    .to_string(),
+                args[1].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return result_vec;
+        };
+        if !program
+            .items
+            .iter()
+            .any(|it| matches!(it, Item::LayoutDef(l) if l.name == *buf_name))
+        {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_BUFFER]: `gpu.dispatch` on a struct buffer requires a \
+                     `layout` block for `{buf_name}` (each field group becomes a GPU buffer)"
+                ),
+                args[1].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return result_vec;
+        }
+
+        // Kernel: a bare `#[gpu] fn(S) -> S` over the same struct.
+        let ExprKind::Identifier(kernel_name) = &args[0].value.kind else {
+            self.type_error(
+                "error[E_GPU_DISPATCH_KERNEL]: the `gpu.dispatch` kernel must be a bare `#[gpu]` \
+                 function name"
+                    .to_string(),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return result_vec;
+        };
+        let kernel = program.items.iter().find_map(|it| match it {
+            Item::Function(f) if f.name == *kernel_name && f.is_gpu => Some(f),
+            _ => None,
+        });
+        let Some(kernel) = kernel else {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_KERNEL]: no `#[gpu]` function named `{kernel_name}` is \
+                     in scope for `gpu.dispatch`"
+                ),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return result_vec;
+        };
+        let param_ok = kernel.params.len() == 1
+            && kernel.params.first().and_then(|p| te_name(&p.ty)) == Some(struct_name);
+        let ret_ok = kernel.return_type.as_ref().and_then(te_name) == Some(struct_name);
+        if !param_ok || !ret_ok {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_KERNEL]: kernel `{kernel_name}` must map \
+                     `{struct_name} -> {struct_name}` for a struct buffer"
+                ),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return result_vec;
+        }
+
+        // No WGSL bake: the typechecker is layout-blind. Codegen emits the
+        // per-group multi-buffer shader via `active_soa_layout` +
+        // `gpu_wgsl::emit_kernel_soa`.
         self.record_expr_type(span, &result_vec);
         result_vec
     }

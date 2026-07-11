@@ -263,6 +263,168 @@ fn lower_float(f: f64) -> Result<String, WgslError> {
     }
 }
 
+// ── CG-4: struct-SoA multi-buffer emitter ───────────────────────────────────
+
+/// One layout group in GPU-binding order for the SoA emitter (Path A: one field
+/// per group). `field` is the struct field the group carries; `scalar` is its
+/// WGSL scalar spelling (`f32` for the CG-4 gate). Plain data built by codegen
+/// from the `SoaLayout` — keeps this emitter free of any codegen/inkwell type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoaGroupField {
+    pub field: String,
+    pub scalar: String,
+}
+
+/// Emit the WGSL compute shader for a CG-4 struct-SoA `#[gpu]` kernel
+/// `fn k(p: S) -> S` dispatched over a `layout`-blocked `Vec[S]`. `groups` lists
+/// the per-group fields in binding order. The shader binds `groups.len()` input
+/// buffers at `@binding(0..n)` and the same number of output buffers at
+/// `@binding(n..2n)` (the runtime `karac_runtime_gpu_map_multi` convention).
+/// Each `<param>.<field>` in the body reads the group's materialized input
+/// element; the returned struct literal `S { field: expr, … }` stores each
+/// field's value into its group's output buffer.
+pub fn emit_kernel_soa(func: &Function, groups: &[SoaGroupField]) -> Result<String, WgslError> {
+    let param = kernel_param(func)?;
+    let param_name = param.name().ok_or_else(|| {
+        WgslError::UnsupportedSignature(
+            "the GPU kernel parameter must be a plain binding".to_string(),
+        )
+    })?;
+    if groups.is_empty() {
+        return Err(WgslError::UnsupportedSignature(
+            "a struct GPU kernel needs at least one layout group".to_string(),
+        ));
+    }
+    let n = groups.len();
+
+    // Bindings: inputs at 0..n, outputs at n..2n.
+    let mut decls = String::new();
+    for (i, g) in groups.iter().enumerate() {
+        decls.push_str(&format!(
+            "@group(0) @binding({i}) var<storage, read> {}_in: array<{}>;\n",
+            g.field, g.scalar
+        ));
+    }
+    for (i, g) in groups.iter().enumerate() {
+        decls.push_str(&format!(
+            "@group(0) @binding({}) var<storage, read_write> {}_out: array<{}>;\n",
+            n + i,
+            g.field,
+            g.scalar
+        ));
+    }
+
+    // Materialize each group's element once: `let p_<field> = <field>_in[i];`.
+    let mut materialize = String::new();
+    for g in groups {
+        materialize.push_str(&format!(
+            "    let {param_name}_{f} = {f}_in[i];\n",
+            f = g.field
+        ));
+    }
+
+    // The body is a struct literal; each field's expr becomes an output store.
+    let body = kernel_return_expr(func)?;
+    let stores = lower_struct_return(body, param_name, groups)?;
+
+    // The arrayLength guard keys off the first input buffer (all equal length).
+    let guard_field = &groups[0].field;
+
+    Ok(format!(
+        "{decls}\n\
+         @compute @workgroup_size({WORKGROUP_SIZE})\n\
+         fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let i = gid.x;\n\
+         \x20   if (i >= arrayLength(&{guard_field}_in)) {{ return; }}\n\
+         {materialize}{stores}\
+         }}\n"
+    ))
+}
+
+/// Lower the kernel's returned struct literal `S { field: expr, … }` into one
+/// `<field>_out[i] = <expr>;` store per group, in group (binding) order.
+fn lower_struct_return(
+    expr: &Expr,
+    param_name: &str,
+    groups: &[SoaGroupField],
+) -> Result<String, WgslError> {
+    let ExprKind::StructLiteral { fields, spread, .. } = &expr.kind else {
+        return Err(WgslError::UnsupportedBody(
+            "a struct GPU kernel must return a struct literal `S { field: expr, ... }`".to_string(),
+        ));
+    };
+    if spread.is_some() {
+        return Err(WgslError::UnsupportedBody(
+            "struct-literal spread (`..`) is not supported in a GPU kernel".to_string(),
+        ));
+    }
+    let mut out = String::new();
+    for g in groups {
+        let init = fields.iter().find(|f| f.name == g.field).ok_or_else(|| {
+            WgslError::UnsupportedBody(format!(
+                "the returned struct is missing field `{}`",
+                g.field
+            ))
+        })?;
+        let val = lower_soa_expr(&init.value, param_name, groups)?;
+        out.push_str(&format!("    {}_out[i] = {val};\n", g.field));
+    }
+    Ok(out)
+}
+
+/// Lower one body expression for the SoA case. Like [`lower_expr`] but the sole
+/// scalar source is a `<param>.<field>` field access (→ the materialized
+/// `<param>_<field>` local), since the whole-struct parameter has no scalar
+/// WGSL form.
+fn lower_soa_expr(
+    expr: &Expr,
+    param_name: &str,
+    groups: &[SoaGroupField],
+) -> Result<String, WgslError> {
+    match &expr.kind {
+        ExprKind::FieldAccess { object, field } => {
+            if let ExprKind::Identifier(obj) = &object.kind {
+                if obj == param_name {
+                    if groups.iter().any(|g| &g.field == field) {
+                        return Ok(format!("{param_name}_{field}"));
+                    }
+                    return Err(WgslError::UnsupportedBody(format!(
+                        "field `{field}` is not a layout group of the GPU kernel parameter"
+                    )));
+                }
+            }
+            Err(WgslError::UnsupportedBody(
+                "only `<param>.<field>` field access is supported in a struct GPU kernel body"
+                    .to_string(),
+            ))
+        }
+        ExprKind::Integer(n, _) => Ok(n.to_string()),
+        ExprKind::Float(f, _) => lower_float(*f),
+        ExprKind::Binary { op, left, right } => {
+            let op_str = binop_str(op)?;
+            let l = lower_soa_expr(left, param_name, groups)?;
+            let r = lower_soa_expr(right, param_name, groups)?;
+            Ok(format!("({l} {op_str} {r})"))
+        }
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => {
+            let inner = lower_soa_expr(operand, param_name, groups)?;
+            Ok(format!("-({inner})"))
+        }
+        ExprKind::Identifier(name) => Err(WgslError::UnsupportedBody(format!(
+            "identifier `{name}` — a struct GPU kernel body accesses `<param>.<field>`, \
+             not the whole struct value"
+        ))),
+        _ => Err(WgslError::UnsupportedBody(
+            "unsupported expression in a struct GPU kernel body (field access, numeric \
+             literals, `+ - * / %`, unary `-`)"
+                .to_string(),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +590,76 @@ mod tests {
     fn rejects_non_arithmetic_operator() {
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { x & 2.0 }\n");
         let err = emit_kernel(&func).unwrap_err();
+        assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
+    }
+
+    // ── CG-4 struct-SoA emitter ──────────────────────────────────
+
+    fn particle_groups() -> Vec<SoaGroupField> {
+        vec![
+            SoaGroupField {
+                field: "pos".into(),
+                scalar: "f32".into(),
+            },
+            SoaGroupField {
+                field: "vel".into(),
+                scalar: "f32".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn emits_soa_particle_step() {
+        let func = parse_kernel(
+            "#[gpu]\nfn step(p: Particle) -> Particle { Particle { pos: p.pos + p.vel, vel: p.vel } }\n",
+        );
+        let wgsl = emit_kernel_soa(&func, &particle_groups()).expect("soa kernel should lower");
+        // One in + one out binding per group, inputs 0..n then outputs n..2n.
+        assert!(
+            wgsl.contains("@group(0) @binding(0) var<storage, read> pos_in: array<f32>;"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("@group(0) @binding(1) var<storage, read> vel_in: array<f32>;"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("@group(0) @binding(2) var<storage, read_write> pos_out: array<f32>;"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("@group(0) @binding(3) var<storage, read_write> vel_out: array<f32>;"),
+            "{wgsl}"
+        );
+        // Each field materialized once; guard keys off the first input.
+        assert!(wgsl.contains("let p_pos = pos_in[i];"), "{wgsl}");
+        assert!(wgsl.contains("let p_vel = vel_in[i];"), "{wgsl}");
+        assert!(
+            wgsl.contains("if (i >= arrayLength(&pos_in)) { return; }"),
+            "{wgsl}"
+        );
+        // Struct-construction return → per-field output stores; `p.field` reads
+        // lower to the materialized local.
+        assert!(wgsl.contains("pos_out[i] = (p_pos + p_vel);"), "{wgsl}");
+        assert!(wgsl.contains("vel_out[i] = p_vel;"), "{wgsl}");
+    }
+
+    #[test]
+    fn soa_rejects_non_struct_literal_return() {
+        // The whole-struct value `p` has no scalar WGSL form; the body must be a
+        // struct literal.
+        let func = parse_kernel("#[gpu]\nfn step(p: Particle) -> Particle { p }\n");
+        let err = emit_kernel_soa(&func, &particle_groups()).unwrap_err();
+        assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
+    }
+
+    #[test]
+    fn soa_rejects_missing_field_in_return() {
+        // The returned struct omits `vel`.
+        let func = parse_kernel(
+            "#[gpu]\nfn step(p: Particle) -> Particle { Particle { pos: p.pos + p.vel } }\n",
+        );
+        let err = emit_kernel_soa(&func, &particle_groups()).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
     }
 }
