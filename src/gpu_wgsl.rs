@@ -32,7 +32,8 @@
 //! the shapes slice-0 has not *yet* grown to lower (not ill-formed programs).
 
 use crate::ast::{
-    BinOp, Block, CallArg, Expr, ExprKind, Function, Param, StmtKind, TypeExpr, TypeKind, UnaryOp,
+    BinOp, Block, CallArg, Expr, ExprKind, Function, Param, PatternKind, StmtKind, TypeExpr,
+    TypeKind, UnaryOp,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -730,9 +731,35 @@ pub fn emit_kernel_soa(
     // WGSL `fn`s before the bindings.
     let (helper_defs, helper_names) = emit_helpers(func, helpers)?;
 
-    // The body is a struct literal; store each group's fields to its output.
-    let body = kernel_return_expr(func)?;
-    let stores = lower_struct_return(body, param_name, groups, &helper_names, &uniform_set)?;
+    // The body is an optional sequence of `let` bindings (GPU-SLIP-1) followed by
+    // the struct-valued return. Lower each `let <name> = <expr>;` to a WGSL `let`,
+    // registering `name` so later bindings (and the return) resolve it as a scalar
+    // local; then store each group's fields from the return struct. This is what
+    // lets the real LBM `collide` body (`let rho`/`ux`/`uy` + the equilibrium
+    // terms) run without hand-flattening it into one nested expression.
+    let (lets, ret) = soa_body_parts(func)?;
+    let mut locals: HashSet<String> = HashSet::new();
+    let mut let_decls = String::new();
+    for (name, value) in lets {
+        let ctx = SoaCtx {
+            param_name,
+            groups,
+            helpers: &helper_names,
+            uniforms: &uniform_set,
+            locals: &locals,
+        };
+        let rhs = lower_soa_expr(value, &ctx)?;
+        let_decls.push_str(&format!("    let {name} = {rhs};\n"));
+        locals.insert(name.to_string());
+    }
+    let ctx = SoaCtx {
+        param_name,
+        groups,
+        helpers: &helper_names,
+        uniforms: &uniform_set,
+        locals: &locals,
+    };
+    let stores = lower_struct_return(ret, &ctx)?;
 
     // arrayLength guard keys off the first input buffer (all equal length).
     let guard_group = &groups[0].name;
@@ -743,9 +770,83 @@ pub fn emit_kernel_soa(
          fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let i = gid.x;\n\
          \x20   if (i >= arrayLength(&{guard_group}_in)) {{ return; }}\n\
-         {materialize}{stores}\
+         {materialize}{let_decls}{stores}\
          }}\n"
     ))
+}
+
+/// Lowering context for a struct-SoA `#[gpu]` kernel body. Every field is a
+/// borrow, so the context is `Copy` and threads cheaply through the recursive
+/// lowering (mirrors [`StencilCtx`]). `locals` is the growing set of `let`-bound
+/// scalar names (GPU-SLIP-1) — an identifier in it lowers to itself.
+#[derive(Clone, Copy)]
+struct SoaCtx<'a> {
+    /// The struct-buffer element parameter name (`n` in `n.f0`).
+    param_name: &'a str,
+    groups: &'a [SoaGpuGroup],
+    helpers: &'a HashSet<String>,
+    uniforms: &'a HashSet<String>,
+    /// `let`-bound scalar locals in scope; each lowers to its own WGSL name.
+    locals: &'a HashSet<String>,
+}
+
+/// A struct-SoA GPU kernel body split into its leading `let` bindings
+/// (`(name, init)` in source order) and the final struct-valued return
+/// expression — all borrowed from the function AST.
+type SoaBody<'a> = (Vec<(&'a str, &'a Expr)>, &'a Expr);
+
+/// Split a struct-SoA GPU kernel body into its leading `let` bindings and the
+/// final struct-valued return expression. Each statement before the return must
+/// be a simple `let <name> = <expr>;` (GPU-SLIP-1 — no `mut`, no destructuring,
+/// no statement-form early `return`); the return is the block's tail expression
+/// or a trailing `return <expr>;`.
+fn soa_body_parts(func: &Function) -> Result<SoaBody<'_>, WgslError> {
+    let block = &func.body;
+    let (stmts, ret) = if let Some(tail) = &block.final_expr {
+        (block.stmts.as_slice(), tail.as_ref())
+    } else if let Some((last, init)) = block.stmts.split_last() {
+        if let StmtKind::Expr(Expr {
+            kind: ExprKind::Return(Some(inner)),
+            ..
+        }) = &last.kind
+        {
+            (init, inner.as_ref())
+        } else {
+            return Err(WgslError::UnsupportedBody(
+                "a GPU kernel body must end in a struct expression or `return <expr>;`".to_string(),
+            ));
+        }
+    } else {
+        return Err(WgslError::UnsupportedBody(
+            "a GPU kernel body is empty".to_string(),
+        ));
+    };
+    let mut lets = Vec::new();
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Let {
+                is_mut: false,
+                pattern,
+                value,
+                ..
+            } => {
+                if let PatternKind::Binding(name) = &pattern.kind {
+                    lets.push((name.as_str(), value));
+                } else {
+                    return Err(WgslError::UnsupportedBody(
+                        "a GPU kernel `let` must bind a simple name (no destructuring)".to_string(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(WgslError::UnsupportedBody(
+                    "a GPU kernel body supports only `let` bindings before the final expression"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    Ok((lets, ret))
 }
 
 /// Emit the WGSL for a **stencil** `#[gpu]` kernel
@@ -1059,20 +1160,14 @@ fn lower_stencil_expr(expr: &Expr, ctx: &StencilCtx) -> Result<String, WgslError
 /// `G_<name>(...)` constructor over its fields. The return may be a struct
 /// literal, the whole-input parameter, or a struct-valued `if` (GPU-LBM-4b) —
 /// see [`struct_field_wgsl`].
-fn lower_struct_return(
-    expr: &Expr,
-    param_name: &str,
-    groups: &[SoaGpuGroup],
-    helpers: &HashSet<String>,
-    uniforms: &HashSet<String>,
-) -> Result<String, WgslError> {
+fn lower_struct_return(expr: &Expr, ctx: &SoaCtx) -> Result<String, WgslError> {
     let mut out = String::new();
-    for g in groups {
+    for g in ctx.groups {
         if g.is_multi() {
             let vals = g
                 .fields
                 .iter()
-                .map(|f| struct_field_wgsl(expr, f, param_name, groups, helpers, uniforms))
+                .map(|f| struct_field_wgsl(expr, f, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
             out.push_str(&format!(
                 "    {}_out[i] = {}({});\n",
@@ -1084,7 +1179,7 @@ fn lower_struct_return(
             out.push_str(&format!(
                 "    {}_out[i] = {};\n",
                 g.name,
-                struct_field_wgsl(expr, &g.fields[0], param_name, groups, helpers, uniforms)?
+                struct_field_wgsl(expr, &g.fields[0], ctx)?
             ));
         }
     }
@@ -1098,14 +1193,7 @@ fn lower_struct_return(
 ///   `select(else.field, then.field, c)` (the LBM `collide` guard
 ///   `if rho <= 0 { n } else { … }`, decomposed to a per-field select with a
 ///   shared condition; GPU-LBM-4b).
-fn struct_field_wgsl(
-    expr: &Expr,
-    field: &str,
-    param_name: &str,
-    groups: &[SoaGpuGroup],
-    helpers: &HashSet<String>,
-    uniforms: &HashSet<String>,
-) -> Result<String, WgslError> {
+fn struct_field_wgsl(expr: &Expr, field: &str, ctx: &SoaCtx) -> Result<String, WgslError> {
     match &expr.kind {
         ExprKind::StructLiteral { fields, spread, .. } => {
             if spread.is_some() {
@@ -1118,11 +1206,15 @@ fn struct_field_wgsl(
                     "the returned struct is missing field `{field}`"
                 ))
             })?;
-            lower_soa_expr(&init.value, param_name, groups, helpers, uniforms)
+            lower_soa_expr(&init.value, ctx)
         }
-        ExprKind::Identifier(name) if name == param_name => {
-            if groups.iter().any(|g| g.fields.iter().any(|gf| gf == field)) {
-                Ok(format!("{param_name}_{field}"))
+        ExprKind::Identifier(name) if name == ctx.param_name => {
+            if ctx
+                .groups
+                .iter()
+                .any(|g| g.fields.iter().any(|gf| gf == field))
+            {
+                Ok(format!("{}_{field}", ctx.param_name))
             } else {
                 Err(WgslError::UnsupportedBody(format!(
                     "field `{field}` is not a layout group of the GPU kernel parameter"
@@ -1135,9 +1227,9 @@ fn struct_field_wgsl(
             else_branch,
         } => {
             let (then_e, else_e) = if_branches(then_block, else_branch)?;
-            let cond = lower_soa_expr(condition, param_name, groups, helpers, uniforms)?;
-            let t = struct_field_wgsl(then_e, field, param_name, groups, helpers, uniforms)?;
-            let e = struct_field_wgsl(else_e, field, param_name, groups, helpers, uniforms)?;
+            let cond = lower_soa_expr(condition, ctx)?;
+            let t = struct_field_wgsl(then_e, field, ctx)?;
+            let e = struct_field_wgsl(else_e, field, ctx)?;
             Ok(format!("select({e}, {t}, {cond})"))
         }
         _ => Err(WgslError::UnsupportedBody(
@@ -1152,19 +1244,17 @@ fn struct_field_wgsl(
 /// scalar source is a `<param>.<field>` field access (→ the materialized
 /// `<param>_<field>` local), since the whole-struct parameter has no scalar
 /// WGSL form.
-fn lower_soa_expr(
-    expr: &Expr,
-    param_name: &str,
-    groups: &[SoaGpuGroup],
-    helpers: &HashSet<String>,
-    uniforms: &HashSet<String>,
-) -> Result<String, WgslError> {
+fn lower_soa_expr(expr: &Expr, ctx: &SoaCtx) -> Result<String, WgslError> {
     match &expr.kind {
         ExprKind::FieldAccess { object, field } => {
             if let ExprKind::Identifier(obj) = &object.kind {
-                if obj == param_name {
-                    if groups.iter().any(|g| g.fields.iter().any(|gf| gf == field)) {
-                        return Ok(format!("{param_name}_{field}"));
+                if obj == ctx.param_name {
+                    if ctx
+                        .groups
+                        .iter()
+                        .any(|g| g.fields.iter().any(|gf| gf == field))
+                    {
+                        return Ok(format!("{}_{field}", ctx.param_name));
                     }
                     return Err(WgslError::UnsupportedBody(format!(
                         "field `{field}` is not a layout group of the GPU kernel parameter"
@@ -1180,25 +1270,22 @@ fn lower_soa_expr(
         ExprKind::Float(f, _) => lower_float(*f),
         ExprKind::Binary { op, left, right } => {
             let op_str = binop_str(op)?;
-            let l = lower_soa_expr(left, param_name, groups, helpers, uniforms)?;
-            let r = lower_soa_expr(right, param_name, groups, helpers, uniforms)?;
+            let l = lower_soa_expr(left, ctx)?;
+            let r = lower_soa_expr(right, ctx)?;
             Ok(format!("({l} {op_str} {r})"))
         }
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,
         } => {
-            let inner = lower_soa_expr(operand, param_name, groups, helpers, uniforms)?;
+            let inner = lower_soa_expr(operand, ctx)?;
             Ok(format!("-({inner})"))
         }
         // Post-lowering operator methods (`a + b` → `<type>.add(a, b)`) and
         // `#[gpu]` helper calls — the SoA emitter runs at codegen, after lowering.
-        ExprKind::Call { callee, args } => lower_call(
-            callee,
-            args,
-            &|e| lower_soa_expr(e, param_name, groups, helpers, uniforms),
-            helpers,
-        ),
+        ExprKind::Call { callee, args } => {
+            lower_call(callee, args, &|e| lower_soa_expr(e, ctx), ctx.helpers)
+        }
         // Value `if c { a } else { b }` → WGSL `select(b, a, c)` (GPU-LBM-4).
         ExprKind::If {
             condition,
@@ -1206,16 +1293,19 @@ fn lower_soa_expr(
             else_branch,
         } => {
             let (then_e, else_e) = if_branches(then_block, else_branch)?;
-            let cond = lower_soa_expr(condition, param_name, groups, helpers, uniforms)?;
-            let t = lower_soa_expr(then_e, param_name, groups, helpers, uniforms)?;
-            let e = lower_soa_expr(else_e, param_name, groups, helpers, uniforms)?;
+            let cond = lower_soa_expr(condition, ctx)?;
+            let t = lower_soa_expr(then_e, ctx)?;
+            let e = lower_soa_expr(else_e, ctx)?;
             Ok(format!("select({e}, {t}, {cond})"))
         }
+        // A `let`-bound scalar local (GPU-SLIP-1) → its own WGSL name. Checked
+        // before uniforms so a local may shadow a uniform, matching Kāra scoping.
+        ExprKind::Identifier(name) if ctx.locals.contains(name) => Ok(name.clone()),
         // A bare identifier naming a scalar uniform parameter → `<name>_u[0]`.
-        ExprKind::Identifier(name) if uniforms.contains(name) => Ok(format!("{name}_u[0]")),
+        ExprKind::Identifier(name) if ctx.uniforms.contains(name) => Ok(format!("{name}_u[0]")),
         ExprKind::Identifier(name) => Err(WgslError::UnsupportedBody(format!(
-            "identifier `{name}` — a struct GPU kernel body accesses `<param>.<field>` or a \
-             uniform, not the whole struct value"
+            "identifier `{name}` — a struct GPU kernel body accesses `<param>.<field>`, a \
+             uniform, or a `let` local, not the whole struct value"
         ))),
         _ => Err(WgslError::UnsupportedBody(
             "unsupported expression in a struct GPU kernel body (field access, numeric \
@@ -1331,6 +1421,67 @@ mod tests {
         );
         assert!(wgsl.contains("ga_out[i] = (x_a * k_u[0]);"), "{wgsl}");
         assert!(wgsl.contains("gb_out[i] = x_b;"), "{wgsl}");
+    }
+
+    #[test]
+    fn emits_soa_let_bindings() {
+        // GPU-SLIP-1: `let` locals in a struct-SoA body lower to WGSL `let`s and
+        // resolve to themselves in later expressions and the return. This is the
+        // shape the real LBM `collide` body needs (`let rho`/`ux` + equilibrium).
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: Cell, om: f32) -> Cell {\n\
+             \x20   let s = x.a + x.b;\n\
+             \x20   let scaled = s * om;\n\
+             \x20   Cell { a: x.a + scaled, b: scaled }\n\
+             }\n",
+        );
+        let groups = vec![
+            SoaGpuGroup {
+                name: "ga".into(),
+                fields: vec!["a".into()],
+            },
+            SoaGpuGroup {
+                name: "gb".into(),
+                fields: vec!["b".into()],
+            },
+        ];
+        let wgsl = emit_kernel_soa(&func, &groups, &[]).unwrap();
+        assert!(wgsl.contains("let s = (x_a + x_b);"), "{wgsl}");
+        assert!(wgsl.contains("let scaled = (s * om_u[0]);"), "{wgsl}");
+        assert!(wgsl.contains("ga_out[i] = (x_a + scaled);"), "{wgsl}");
+        assert!(wgsl.contains("gb_out[i] = scaled;"), "{wgsl}");
+    }
+
+    #[test]
+    fn soa_let_then_guarded_return() {
+        // A `let` local feeding a struct-valued `if` guard — the `collide` shape
+        // `if rho <= 0 { n } else { <relaxed> }` decomposed to per-field `select`.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(n: Cell) -> Cell {\n\
+             \x20   let rho = n.a + n.b;\n\
+             \x20   if rho <= 0.0 { n } else { Cell { a: n.a + rho, b: n.b } }\n\
+             }\n",
+        );
+        let groups = vec![
+            SoaGpuGroup {
+                name: "ga".into(),
+                fields: vec!["a".into()],
+            },
+            SoaGpuGroup {
+                name: "gb".into(),
+                fields: vec!["b".into()],
+            },
+        ];
+        let wgsl = emit_kernel_soa(&func, &groups, &[]).unwrap();
+        assert!(wgsl.contains("let rho = (n_a + n_b);"), "{wgsl}");
+        assert!(
+            wgsl.contains("ga_out[i] = select((n_a + rho), n_a, (rho <= 0.0));"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("gb_out[i] = select(n_b, n_b, (rho <= 0.0));"),
+            "{wgsl}"
+        );
     }
 
     #[test]
