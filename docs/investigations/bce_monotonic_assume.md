@@ -109,7 +109,39 @@ issue, plus measurement noise). Regression-guarded by
 test_ir_non_midpoint_binding_no_binsearch_assume,
 test_e2e_binsearch_midpoint_assume_is_sound}`. Bug ledger: `B-2026-06-16-1`.
 
-## Two-pointer idiom — the sliding-window extension (OPEN, kata #76)
+## Two-pointer idiom — RETRACTED as unsound (kata #76)
+
+> **Retracted 2026-07-10 (Phase-0 IR confirmation, `B-2026-07-10-5`).** The
+> extension proposed below **cannot be done soundly** and is NOT the source of
+> kata #76's gap. Two findings from the raw codegen IR (`ir_for()` probe on a
+> minimal two-pointer repro):
+>
+> 1. **`s[l]`'s check is soundly *required*, not elidable.** The surviving
+>    `icmp uge l, %v.len` guards a bound `l < n` that holds **only** through the
+>    algorithm's *semantic* invariant (`l ≤ r`, kept by `formed == required`) —
+>    not a syntactic fact. The minimal repro
+>    `while r < n { acc += s[r]; while acc > K { acc -= s[l]; l += 1 } r += 1 }`
+>    **genuinely OOBs** when `acc` stays `> K`. So `assume(l < n)` / `assume(l ≤ r)`
+>    would *inject UB* — a miscompile. Unlike the midpoint (locally provable from
+>    the dominating guard), the two-pointer upper bound is a loop invariant no
+>    syntactic assume can supply. `rust_ovf` bounds-checks `s[l]` identically, so
+>    it is **not** the kāra-vs-Rust differentiator either.
+> 2. **`s[r]` is already handled** — upper check compile-time-elided via the
+>    `r < n` guard (`len_alias`), lower/neg check folded by the existing
+>    `r.mono.fact` (`r ≥ 0`) monotone assume.
+> 3. **The count-table `Vec[i64]`-vs-`[i64;4]` difference is erased by the
+>    optimizer.** Raw IR shows `Vec` indexing far heavier (8 len-loads vs 1), but
+>    rebuilding kāra's mirror with `Array[i64,4]` moved the instruction count only
+>    12.457 B → 12.453 B (0.03%): the `Vec` `len` is loop-invariant, so LLVM
+>    hoists it and the pre-opt gap vanishes post-`O2`.
+>
+> The real ~1.12× gap (kāra 12.46 B vs `rust_ovf` 11.14 B instructions) is **real
+> but diffuse** (~4-5 instrs/outer-iteration), not one eliminable check. The only
+> un-ruled-out *sound* lead is whether `emit_monotone_assumes`' lower-bound
+> assumes need the midpoint fix's gated extra-pass to fold their neg-checks
+> (`binsearch_assume_emitted` is currently binsearch-only) — needs LLVM `opt` to
+> confirm, and would fold `s[r]`'s neg-check only, not close the whole gap. The
+> original (wrong) sketch is kept below for the record.
 
 **Surfaced by kata #76** (minimum-window-substring), the M5 re-bench. The
 canonical two-pointer sliding window
