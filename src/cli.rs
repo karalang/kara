@@ -5468,6 +5468,41 @@ fn manifest_wasm_knobs_for(
     }
 }
 
+/// Effective panic strategy for a single-file build, via the same lazy
+/// manifest walk-up as [`manifest_release_field_for`] (discover the manifest
+/// from the file's own directory; no manifest → the built-in default). Returns
+/// [`crate::manifest::ProfileConfig::panic_strategy`] — the `[profile] panic`
+/// selection or the profile default (abort at v1). phase-8
+/// `panic = "unwind" | "abort"` slice 2: the codegen build path gates on this
+/// via [`reject_unsupported_panic_strategy`]. `llvm`-gated — the only consumer
+/// is codegen (`karac run` has no abort/unwind distinction).
+#[cfg(feature = "llvm")]
+fn manifest_panic_strategy_for(
+    filename: &str,
+    output: OutputMode,
+) -> crate::manifest::PanicStrategy {
+    let file_dir = std::path::Path::new(filename)
+        .parent()
+        .map(|p| {
+            if p.as_os_str().is_empty() {
+                std::path::PathBuf::from(".")
+            } else {
+                p.to_path_buf()
+            }
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    match manifest::discover_project_root(&file_dir) {
+        Some(root) => match manifest::load_from_root(&root) {
+            Ok(m) => m.profile_config.panic_strategy(),
+            Err(e) => {
+                emit_manifest_error(&e, output);
+                process::exit(1);
+            }
+        },
+        None => crate::manifest::ProfileConfig::default().panic_strategy(),
+    }
+}
+
 /// Resolve the `[link]` directive for a single-file build by walking up
 /// from the file's own directory (the [`manifest_release_field_for`]
 /// discovery rule). No manifest → two empty vecs. Manifest-only: unlike the
@@ -6375,6 +6410,15 @@ fn cmd_build(
         } else {
             exe_name.to_string()
         };
+
+        // phase-8 `panic = "unwind" | "abort"` slice 2: the v1 backend is
+        // abort-only. Reject an explicit `panic = "unwind"` before codegen.
+        if let Err(e) =
+            reject_unsupported_panic_strategy(manifest_panic_strategy_for(filename, output))
+        {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
 
         if let Err(e) = crate::codegen::compile_to_object_with_hot_swap(
             &pipeline.parsed.program,
@@ -7688,6 +7732,30 @@ impl BuildCodegenStatus {
 /// module the diagnostic is prefixed with `file:line:col`; when the
 /// span is absent (e.g., synthesized post-concat) or ambiguous
 /// (collision across modules — rare in practice but possible when
+/// Reject a codegen build under `panic = "unwind"` (phase-8
+/// `panic = "unwind" | "abort"` slice 2). v1's backend is abort-only — it never
+/// emits the invoke / personality / landingpad machinery an unwinding panic
+/// needs (the `unwind` codegen is the v1.x-gated slice 9), so a build that
+/// selects `Unwind` cannot be honored and must fail loudly rather than silently
+/// produce abort-semantics behavior under an unwind-labelled build. Only an
+/// *explicit* `[profile] panic = "unwind"` reaches here: every profile defaults
+/// to `Abort` at v1 ([`crate::manifest::ProfileConfig::panic_strategy`]), so a
+/// normal build (no key, or `panic = "abort"`) passes. `Ok(())` on `Abort`.
+#[cfg(feature = "llvm")]
+fn reject_unsupported_panic_strategy(
+    strategy: crate::manifest::PanicStrategy,
+) -> Result<(), String> {
+    match strategy {
+        crate::manifest::PanicStrategy::Abort => Ok(()),
+        crate::manifest::PanicStrategy::Unwind => Err(
+            "`panic = \"unwind\"` is not supported by the v1 backend (abort-only). \
+             The unwinding-panic codegen (invoke / landingpad) is a v1.x feature; \
+             remove the `[profile] panic` key or set `panic = \"abort\"`."
+                .to_string(),
+        ),
+    }
+}
+
 /// two distinct files have identical leading bytes), the formatter
 /// falls back to the file-less `line:col` form. Per-file
 /// diagnostics for parse / cycles / resolve / typecheck still fire
@@ -7887,6 +7955,17 @@ fn run_multi_file_codegen(
         std::process::id(),
         mf.name.replace(['/', '\\'], "_"),
     ));
+
+    // phase-8 `panic = "unwind" | "abort"` slice 2: the v1 backend is
+    // abort-only. Reject an explicit `[profile] panic = "unwind"` (from this
+    // package's manifest) before codegen. Sourced from `mf` directly — the
+    // manifest is authoritative for a project build.
+    if let Err(e) = reject_unsupported_panic_strategy(mf.profile_config.panic_strategy()) {
+        return BuildCodegenStatus::Failed {
+            phase: "codegen".to_string(),
+            message: e,
+        };
+    }
 
     if let Err(e) = crate::codegen::compile_to_object_with_hot_swap(
         &pipeline.parsed.program,

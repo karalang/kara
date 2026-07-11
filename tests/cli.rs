@@ -1482,6 +1482,58 @@ fn test_build_project_lists_discovered_modules() {
     assert!(stdout.contains("<crate root>"));
 }
 
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_project_rejects_panic_unwind() {
+    // phase-8 `panic = "unwind" | "abort"` slice 2: the v1 backend is
+    // abort-only, so an explicit `[profile] panic = "unwind"` must fail the
+    // build loudly (before codegen/link — so this needs no runtime archive).
+    let tmp = scratch_project("panic-unwind-reject");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"demo\"\n\n[profile]\npanic = \"unwind\"\n",
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "expected build to fail under panic = \"unwind\"; stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("panic = \"unwind\"") && stderr.contains("abort-only"),
+        "expected the abort-only rejection message, got stderr: {stderr}",
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_project_accepts_panic_abort() {
+    // The sibling positive: an explicit `panic = "abort"` clears the slice-2
+    // gate (it is the v1 default). The build proceeds past the gate; whether
+    // the final link succeeds depends on the runtime archive, so this asserts
+    // only that the *gate*'s rejection message is absent (no false positive on
+    // the supported setting).
+    let tmp = scratch_project("panic-abort-accept");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"demo\"\n\n[profile]\npanic = \"abort\"\n",
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("not supported by the v1 backend"),
+        "panic = \"abort\" must not trip the unwind gate; stderr: {stderr}",
+    );
+}
+
 #[test]
 fn test_build_project_resolves_imported_type_associated_fn() {
     // B-2026-07-08-20: project-mode `karac build` ran a PER-MODULE typecheck

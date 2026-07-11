@@ -259,15 +259,26 @@ impl ProfileConfig {
     }
 
     /// Effective panic strategy — the explicit `[profile] panic` value, or the
-    /// profile-dependent default when unset. Defaults: `default` → `Unwind`
-    /// (the general/app profile); `embedded` / `kernel` → `Abort` (freestanding
-    /// / no-unwinder profiles). This is the value slice 9's abort-vs-unwind
-    /// codegen split (v1.x-gated) will read; at v1 nothing consumes it, so the
-    /// `Unwind` defaults are inert (codegen is abort-only).
+    /// default when unset.
+    ///
+    /// **v1 defaults every profile to `Abort`.** v1's panic model is abort-only
+    /// (the checklist's re-tiering note: the `unwind` codegen — invoke /
+    /// personality / landingpad — is v1.x-gated, and defaulting `app`/`lib` to
+    /// `unwind` would reverse the binary-size win the launch leads with by
+    /// pulling `.eh_frame` / DWARF unwind tables back in). The spec's
+    /// per-profile `app`/`lib` → `unwind` default is therefore the *v1.x*
+    /// end-state: when slice 9 lands the unwind codegen, the `default` arm here
+    /// flips to `Unwind`. Until then an *explicit* `panic = "unwind"` is the
+    /// only way to select `Unwind`, and the build entry rejects it loudly
+    /// (`reject_unsupported_panic_strategy`) — the correct interim posture.
     pub fn panic_strategy(&self) -> PanicStrategy {
         self.panic.unwrap_or(match self.profile {
-            CompileProfile::Default => PanicStrategy::Unwind,
-            CompileProfile::Embedded | CompileProfile::Kernel => PanicStrategy::Abort,
+            // v1: abort for every profile (see doc above). The `default` arm
+            // becomes `PanicStrategy::Unwind` when the slice-9 unwind codegen
+            // ships.
+            CompileProfile::Default | CompileProfile::Embedded | CompileProfile::Kernel => {
+                PanicStrategy::Abort
+            }
         })
     }
 
@@ -4254,17 +4265,11 @@ max-memory-pages = 4096
     }
 
     #[test]
-    fn panic_strategy_default_profile_defaults_to_unwind() {
-        // No `[profile] panic` key → the `default` profile's default is unwind.
-        let m = parse_manifest(&p(), "[package]\nname = \"hello\"\n").unwrap();
-        assert_eq!(m.profile_config.panic, None);
-        assert_eq!(m.profile_config.panic_strategy(), PanicStrategy::Unwind);
-    }
-
-    #[test]
-    fn panic_strategy_embedded_and_kernel_default_to_abort() {
-        // Freestanding / no-unwinder profiles default to abort when unset.
-        for prof in ["embedded", "kernel"] {
+    fn panic_strategy_unset_defaults_to_abort_on_every_profile() {
+        // v1 is abort-only: every profile defaults to abort when the key is
+        // absent (the spec's `default` → unwind is the v1.x end-state, gated on
+        // the slice-9 unwind codegen).
+        for prof in ["default", "embedded", "kernel"] {
             let src = format!("[package]\nname = \"hello\"\nprofile = \"{prof}\"\n");
             let m = parse_manifest(&p(), &src).unwrap();
             assert_eq!(m.profile_config.panic, None, "{prof}");
@@ -4278,8 +4283,8 @@ max-memory-pages = 4096
 
     #[test]
     fn panic_strategy_explicit_overrides_profile_default() {
-        // An explicit `panic = "unwind"` beats the embedded profile's abort default.
-        let src = "[package]\nname = \"hello\"\nprofile = \"embedded\"\n\n[profile]\npanic = \"unwind\"\n";
+        // An explicit `panic = "unwind"` beats the profile default (abort at v1).
+        let src = "[package]\nname = \"hello\"\n\n[profile]\npanic = \"unwind\"\n";
         let m = parse_manifest(&p(), src).unwrap();
         assert_eq!(m.profile_config.panic_strategy(), PanicStrategy::Unwind);
     }
