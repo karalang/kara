@@ -71,18 +71,15 @@ impl<'ctx> super::Codegen<'ctx> {
         new_cap: inkwell::values::IntValue<'ctx>,
         prefix: &str,
     ) -> inkwell::values::PointerValue<'ctx> {
-        let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let zero_val = i64_t.const_int(0, false);
-        let was_heap = self
-            .builder
-            .build_int_compare(
-                inkwell::IntPredicate::UGT,
-                cap,
-                zero_val,
-                &format!("{prefix}.was_heap"),
-            )
-            .unwrap();
+        // SSO: tag-aware owned-heap gate (`SGT cap, 0`) — an inline string
+        // (`cap < 0`) must NOT be realloc'd (its buffer is the struct itself),
+        // so it correctly takes the fresh-malloc + copy path below. Proven
+        // no-op today (no `cap` has bit 63 set); extends the Slice-1 free-gate
+        // hardening to the `String.push`/`push_str` grow path. NOTE: the fresh
+        // path's memcpy source (`data`) is still the raw field-0 load — making
+        // it the tag-aware inline data ptr is the coupled construction-flip task.
+        let was_heap = self.sso_string_is_owned_heap(cap);
         let realloc_bb = self
             .context
             .append_basic_block(fn_val, &format!("{prefix}.realloc"));
@@ -3152,11 +3149,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_memcpy(new_data, 1, data, 1, len)
                     .unwrap();
-                let zero_val = i64_t.const_int(0, false);
-                let was_heap = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::UGT, cap, zero_val, "tss.was_heap")
-                    .unwrap();
+                // SSO: use the tag-aware owned-heap gate (`SGT cap, 0`) so an
+                // inline string (`cap < 0`) is never freed. Proven no-op today
+                // (no `cap` has bit 63 set) — Slice-1 free-gate hardening
+                // extended to the from-slice free path. NOTE: the memcpy SOURCE
+                // above (`data`) is still the raw field-0 load; making it the
+                // tag-aware `string_data_ptr` is the coupled construction-flip
+                // task (SSO spike Slice 2, step 1's memcpy-source half).
+                let was_heap = self.sso_string_is_owned_heap(cap);
                 self.builder
                     .build_conditional_branch(was_heap, free_bb, after_free_bb)
                     .unwrap();
@@ -3448,12 +3448,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_memcpy(new_data, 8, data, 8, old_bytes)
                     .unwrap();
-                // Free old buffer if cap > 0 (heap-allocated).
-                let zero_val = i64_t.const_int(0, false);
-                let was_heap = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::UGT, cap, zero_val, "efs.was_heap")
-                    .unwrap();
+                // Free old buffer if owned-heap. SSO: tag-aware gate
+                // (`SGT cap, 0`) so an inline string (`cap < 0`) is never freed
+                // — proven no-op today, Slice-1 hardening extended here. The
+                // memcpy source (`data`) stays raw = the coupled flip task.
+                let was_heap = self.sso_string_is_owned_heap(cap);
                 let free_bb = self.context.append_basic_block(fn_val, "efs.free");
                 let after_free_bb = self.context.append_basic_block(fn_val, "efs.after_free");
                 self.builder
@@ -3811,11 +3810,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_memcpy(new_data, 8, data, 8, old_bytes)
                     .unwrap();
-                let zero_val = i64_t.const_int(0, false);
-                let was_heap = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::UGT, cap, zero_val, "tefs.was_heap")
-                    .unwrap();
+                // SSO: tag-aware owned-heap gate (`SGT cap, 0`) — inline
+                // (`cap < 0`) is never freed. Proven no-op today; Slice-1
+                // hardening extended to the from-slice free path. The memcpy
+                // source (`data`) stays raw = the coupled construction-flip task.
+                let was_heap = self.sso_string_is_owned_heap(cap);
                 let free_bb = self.context.append_basic_block(fn_val, "tefs.free");
                 let after_free_bb = self.context.append_basic_block(fn_val, "tefs.after_free");
                 self.builder

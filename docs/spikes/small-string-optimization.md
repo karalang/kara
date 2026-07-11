@@ -1,8 +1,12 @@
 # Spike: Small-String Optimization (SSO) for the runtime `String`
 
 **Status:** 🟢 **Slice 1 LANDED (layout + accessors + free-gate hardening, proven
-no-op).** Slice 2 (inline construction — *the win*) is the next dedicated session; its
-precise handoff is in the staged plan below. This doc is the campaign's living
+no-op); follow-up gate hardening landed 2026-07-11 — EVERY String buffer-free/realloc
+gate is now inline-safe (`SGT`), proven no-op (full suite + 590 ASAN/LSan + 2137
+codegen E2E green).** Slice 2 (inline construction — *the win*) is the next dedicated
+session; its precise handoff is in the staged plan below (step 1's gate half is now
+done — only the memcpy-source half + steps 2–4 + the construction flip remain, all
+coordinated + only-testable-with-construction). This doc is the campaign's living
 handoff: layout decision (now settled), staged slice plan, the tag-aware-accessor work
 list, and the verification matrix. Scoped 2026-06-12; Slice 1 landed 2026-07-09.
 
@@ -137,18 +141,32 @@ perf payoff lands in Slice 2.
     `synth_drop.rs`) now route through `sso_string_is_owned_heap` (`UGT`→`SGT`). Proven
     no-op: full suite + 562 ASAN cases + 2103 codegen E2E + 153 par_codegen all green,
     zero perf delta.
-  - *Deliberately deferred to Slice 2* (they need coordinated changes, not just a gate
-    flip, and are only testable once inline construction exists): the **grow/realloc
-    `was_heap` gates** in `vec_method.rs` (`tss`/`efs`/`tefs` from-slice builders, ~L3158
-    /L3455/L3817) — each also needs its memcpy *source* to become the tag-aware inline
-    data ptr, not the raw field-0 load. `FreeSoaGroups` (`runtime.rs`) is **NOT** in scope
-    (its `cap` is a SoA group count, never a String descriptor). Grow gates comparing
-    `new_len`/`doubled` to `cap` are unrelated and must stay `UGT`.
+  - **Follow-up gate hardening — GATE HALF landed 2026-07-11 (proven no-op).** The
+    remaining String-buffer `was_heap` gates now route through
+    `sso_string_is_owned_heap` (`UGT`→`SGT`): the three from-slice builders
+    (`tss`/`efs`/`tefs` in `vec_method.rs`) **and** `emit_string_buffer_grow` (the
+    `String.push`/`push_str` realloc-or-fresh gate, which the original list missed —
+    an inline string must never be `realloc`'d, it must take the fresh-malloc path).
+    So **every** String buffer-free/realloc gate is now inline-safe. Verified full
+    suite + 590 ASAN/LSan + 2137 codegen E2E + 158 par_codegen green, zero perf delta
+    (a real `cap` never has bit 63 set, so `SGT`≡`UGT`). **STILL DEFERRED to the flip
+    (the coordinated, only-testable-with-construction half):** each of these gates' memcpy
+    *source* (`data`, the raw field-0 load in the grow/fresh path) must become the
+    tag-aware `string_data_ptr` — that is coupled to inline construction and can't be a
+    no-op. `FreeSoaGroups` (`runtime.rs`) is **NOT** in scope (its `cap` is a SoA group
+    count, never a String descriptor). Grow gates comparing `new_len`/`doubled` to `cap`
+    are unrelated and must stay `UGT`.
 - **Slice 2 — inline construction (the win).** `substring`, runtime-built `StringLit`,
   concat, `to_string`, `push_str` result → build **inline** when `len ≤ 23`. Concrete
   checklist for the fresh session:
-  1. **Convert the remaining `was_heap` gates** (see Slice 1 deferral) to
-     `sso_string_is_owned_heap`, *and* fix their memcpy source to `string_data_ptr`.
+  1. ~~Convert the remaining `was_heap` gates to `sso_string_is_owned_heap`~~ —
+     **GATE HALF DONE 2026-07-11** (proven no-op; `tss`/`efs`/`tefs` + the missed
+     `emit_string_buffer_grow`, so every String buffer gate is inline-safe).
+     **Remaining:** fix each gate's memcpy *source* — the raw field-0 `data` load in
+     the grow/fresh path (`vec_method.rs` `emit_string_buffer_grow` line ~133; the
+     `tss`/`efs`/`tefs` builders' post-grow memcpy) — to `string_data_ptr` (step 2's
+     accessor), so an inline source is copied from the struct-self pointer. This is
+     the coupled, only-testable-with-construction half.
   2. **Tag-aware `string_data_ptr` / `string_len`** in codegen (mirror `runtime/src/sso.rs`):
      a *slot* form (GEP field-0 address for inline, load field-0 for heap) is clean; a
      *value* (SSA) form must **spill to an alloca** to take the inline self-pointer — this
