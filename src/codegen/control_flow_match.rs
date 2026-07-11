@@ -160,7 +160,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_borrow_flag = self.pattern_binding_is_borrow;
         self.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee)
             || self.scrutinee_is_borrowed_binding(scrutinee)
-            || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms);
+            || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms)
+            || self.scrutinee_is_readonly_owned_agg_loop_var(scrutinee, arms);
         // B-2026-06-13-13 residual A: when the scrutinee is the type-erased
         // `Option`/`Result`, its payload is owned by the dedicated inline/boxed
         // cleanup, not a per-field `EnumDrop` — so the pattern-binding struct
@@ -904,6 +905,41 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.scrutinee_is_borrowed_binding(root) {
             return false;
         }
+        self.no_arm_payload_escapes(arms)
+    }
+
+    /// True when the scrutinee is a bare `for`-loop element binding whose
+    /// container element is a heap-bearing user STRUCT / ENUM
+    /// (`for_loop_owned_agg_vars`) AND no arm moves a payload binding out.
+    ///
+    /// Such an element is registered under the deep-copy-on-whole-move
+    /// ("callee-entry-copy") model rather than `for_loop_borrow_vars`, so
+    /// `scrutinee_is_borrowed_binding` misses it — yet the loop var is still a
+    /// bit-copy alias of the container slot whose heap the container's
+    /// per-element drop owns. A `match it { A(x) => … }` that binds a payload
+    /// out of that element and never escapes it is a read-only VIEW: registering
+    /// x's own scope-exit drop double-frees against the element drop
+    /// (`for it in ref items { match it { A(x) => … } }`, `items: Vec[MyEnum]`).
+    /// Classing it as a borrow suppresses that drop. An ESCAPING payload stays
+    /// on the owned path (the whole-move deep-copy model), so the escape guard —
+    /// shared with `scrutinee_is_readonly_borrowed_place` — returns false there.
+    fn scrutinee_is_readonly_owned_agg_loop_var(
+        &self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> bool {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return false;
+        };
+        if !self.for_loop_owned_agg_vars.contains(name.as_str()) {
+            return false;
+        }
+        self.no_arm_payload_escapes(arms)
+    }
+
+    /// No arm moves any of its pattern's leaf bindings out of the arm body or
+    /// guard (the escape guard shared by the read-only borrow classifications).
+    fn no_arm_payload_escapes(&self, arms: &[MatchArm]) -> bool {
         for arm in arms {
             let mut names: Vec<String> = Vec::new();
             collect_pattern_bindings(&arm.pattern, &mut names);

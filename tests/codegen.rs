@@ -3851,6 +3851,43 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("240\n"));
     }
 
+    #[test]
+    fn for_loop_enum_element_direct_match_payload_read() {
+        // Direct `for it in items { match it { V(x) => … } }` on a heap-bearing
+        // user-enum element — matching the loop var DIRECTLY (no `let x = it`
+        // whole-move copy first, unlike the sibling above). The element is
+        // registered under the deep-copy-on-whole-move model
+        // (`for_loop_owned_agg_vars`), which `scrutinee_is_borrowed_binding`
+        // does NOT consult, so the struct payload `x` bound out of the borrowed
+        // element registered its own scope-exit drop and double-freed against
+        // the container's per-element drop. `match` now treats a non-escaping
+        // payload over such an element as a read-only view (drop suppressed).
+        // Covers a String-field read AND iterating a Vec payload field (both
+        // aliased through the element); the sink locks the value.
+        let src = "struct Named { name: String, tags: Vec[i64] }\n\
+                   enum Item { A(Named), B }\n\
+                   fn total(items: ref Vec[Item]) -> i64 {\n\
+                   \x20   let mut n = 0;\n\
+                   \x20   for it in items {\n\
+                   \x20       match it {\n\
+                   \x20           A(x) => { n = n + x.name.len(); for t in x.tags { n = n + t; } }\n\
+                   \x20           B => {}\n\
+                   \x20       }\n\
+                   \x20   }\n\
+                   \x20   n\n\
+                   }\n\
+                   fn main() {\n\
+                   \x20   let mut v: Vec[Item] = Vec.new();\n\
+                   \x20   let mut tg: Vec[i64] = Vec.new(); tg.push(10); tg.push(20);\n\
+                   \x20   v.push(Item.A(Named { name: \"hello\", tags: tg }));\n\
+                   \x20   v.push(Item.B);\n\
+                   \x20   println(total(v));\n\
+                   \x20   println(v.len());\n\
+                   }\n";
+        // name.len()=5 + tags 10+20 = 35; v still intact (len 2).
+        assert_eq!(run_program(src).as_deref(), Some("35\n2\n"));
+    }
+
     /// Reassign-and-use of the by-value loop local computes correctly on the
     /// build side too: `x = x * 2` scales the local, `total + x` reads it, so
     /// `(3*2)+(4*2) = 14` — matching `karac run`. (B-2026-06-30-6.)

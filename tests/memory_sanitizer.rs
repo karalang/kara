@@ -10180,6 +10180,48 @@ fn main() {
     }
 
     #[test]
+    fn asan_for_loop_owned_agg_elem_direct_match_no_double_free() {
+        // Direct `for it in items { match it { V(payload) => … } }` over a
+        // heap-bearing user-enum element (registered `for_loop_owned_agg_vars`,
+        // NOT `for_loop_borrow_vars`). The struct payload bound out of the
+        // borrowed element aliases the container slot's heap (a String buffer +
+        // a Vec buffer here); before the fix its scope-exit drop double-freed
+        // against the container's per-element drop when `v` unwound. Guards
+        // no-double-free (ASAN) / no-leak (LSan): every buffer reclaimed exactly
+        // once. ≥36-byte String so the fault is loud.
+        assert_clean_asan_run(
+            r#"
+struct Named { name: String, nums: Vec[i64] }
+enum Item { A(Named), B }
+fn total(items: ref Vec[Item]) -> i64 {
+    let mut n = 0;
+    for it in items {
+        match it {
+            A(x) => { n = n + x.name.len(); for t in x.nums { n = n + t; } }
+            B => {}
+        }
+    }
+    n
+}
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut tg: Vec[i64] = Vec.new();
+        tg.push(1); tg.push(2);
+        v.push(Item.A(Named { name: "owned-agg-elem-direct-match-payload-xx".to_string(), nums: tg }));
+        v.push(Item.B);
+        i = i + 1;
+    }
+    println(total(v));
+}
+"#,
+            &["246"],
+            "for_loop_owned_agg_elem_direct_match",
+        );
+    }
+
+    #[test]
     fn asan_module_scope_map_string_keys_no_double_free() {
         // Module-scope `Map.new()` (phase-8-stdlib-floor.md "Map.new() /
         // Set.new() as module-binding initialisers"). The handle lives in
