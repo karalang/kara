@@ -15367,6 +15367,37 @@ fn main() {
     }
 
     #[test]
+    fn asan_a2b2_associated_network_opener_owned_param_fanout_clean() {
+        // A2b-2 Phase 2 Slice 1: two *associated* (receiver-less) network
+        // openers — `Net.open("a"); Net.open("b")`, the `TcpStream.connect`
+        // shape — with an OWNED `String` param fed a literal arg, moved through
+        // to the return. Extends the Phase 1 ephemeral proof to the 2-segment
+        // associated-call codegen path (a fresh path that Phase 1 never fanned
+        // out). Memory-safety proof is identical to the free-fn variant: the
+        // coroutine owns the moved-in `String` and returns it, so it flows param
+        // → return-slot bit-copy → parent (sole drop owner) and is freed EXACTLY
+        // once across the fork/join; the literal arg names no parent binding, so
+        // no caller-side drop can double-cancel. A double-free or leak surfaces
+        // under LSan/ASan.
+        assert_clean_asan_run(
+            r#"
+struct Net { id: i64 }
+impl Net {
+    fn open(u: String) -> String with sends(Network) receives(Network) { return u; }
+}
+fn main() {
+    let x = Net.open("aaaaaaaaaaaaaaaaaaaa");
+    let y = Net.open("bbbbbbbbbbbbbbbbbbbb");
+    println(x);
+    println(y);
+}
+"#,
+            &["aaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbb"],
+            "asan_a2b2_associated_network_opener_owned_param_fanout_clean",
+        );
+    }
+
+    #[test]
     fn asan_auto_par_allocating_calls_clean() {
         let label = "auto_par_allocating_calls";
         if !asan_available() {

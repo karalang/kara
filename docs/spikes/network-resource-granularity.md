@@ -1,14 +1,19 @@
 # Design spike — finer `Network` effect-resource granularity (A2b-2 Blocker A)
 
 **Status:** design spike, 2026-07-09. **Phase 1 SHIPPED 2026-07-10** (the
-scoped ephemeral-call conflict relaxation — see §8); **Phase 0 (conflict-table
-reconciliation, §4) and Phase 2 (full parameterized-`Network`) remain open.**
-The original proposal scoped the work into phases so it could be picked up
-incrementally; Phase 1 is now implemented in `src/concurrency.rs` as
-`is_ephemeral_network_fanout` + `effects_conflict_excluding_network` — it
-sidesteps Phase 0/Phase 2 by relaxing only the narrow, provably-sound ephemeral
-case rather than changing the global network-verb semantics or the resource
-model.
+scoped ephemeral-call conflict relaxation — see §8). **Phase 2 STARTED
+2026-07-11 — Slice 1 (associated-fn admission) shipped:** the receiver-less
+openers (`TcpStream.connect` / `TlsStream.connect`, 2-segment `Type.method(...)`
+paths with no `self`) now fan out, via `resolve_assoc_callee` in
+`src/concurrency.rs` — a pragmatic reach-extension that reuses Phase 1's gates
+(an associated fn has no receiver, so it is structurally a free function) WITHOUT
+yet building the full connection-identity model. **Phase 0 (conflict-table
+reconciliation, §4) and the rest of Phase 2 — METHOD-call admission via
+receiver-identity + full parameterized-`Network` — remain open.** The original
+proposal scoped the work into phases so it could be picked up incrementally;
+Phase 1 + Phase 2 Slice 1 sidestep Phase 0 and the parameterized-resource model
+by relaxing/extending only the narrow, provably-sound receiver-less cases rather
+than changing the global network-verb semantics or the resource model.
 **Context:** [`phase-5-diagnostics.md` § Auto-par conflict model / A2b-2](../implementation_checklist/phase-5-diagnostics.md).
 A2b-2's arg-safe + borrow-param fan-out slices shipped (they lift the
 coroutine-boundary *gate*), but the **headline** — "two independent network

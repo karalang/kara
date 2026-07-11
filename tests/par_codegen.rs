@@ -6442,4 +6442,32 @@ fn main() {
             assert_eq!(out.trim(), "11\n22", "got {out:?}");
         }
     }
+
+    #[test]
+    fn test_e2e_a2b2_associated_network_opener_fanout_runs() {
+        // A2b-2 Phase 2 Slice 1: two *associated* (receiver-less) network
+        // openers — the `TcpStream.connect("a"); TcpStream.connect("b")` shape,
+        // a 2-segment `Type.method(...)` call with no `self`, owned `String`
+        // param, literal arg, real `sends(Network) receives(Network)` — now
+        // group and fan out (Phase 1 only reached bare free fns). Pins that the
+        // associated-call group codegens + runs and that ordered-output capture
+        // keeps stdout byte-identical to sequential execution.
+        let out = run_program(
+            r#"
+struct Net { id: i64 }
+impl Net {
+    fn open(u: String) -> i64 with sends(Network) receives(Network) { return 33; }
+}
+fn main() {
+    let x = Net.open("host-a");
+    let y = Net.open("host-b");
+    println(x);
+    println(y);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "33\n33", "got {out:?}");
+        }
+    }
 }

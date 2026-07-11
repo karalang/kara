@@ -968,7 +968,11 @@ fn expr_is_call_free(expr: &Expr) -> bool {
 /// (`(Sends,Sends)`/`(Receives,Receives)` on `Network`) — the exemption ONLY
 /// lifts the blanket coroutine-boundary EXCLUSION so two *independent*
 /// (disjoint-resource) network calls can group.
-fn stmt_fanout_args_safe(stmt: &Stmt, function_bodies: &HashMap<String, &Function>) -> bool {
+fn stmt_fanout_args_safe(
+    stmt: &Stmt,
+    function_bodies: &HashMap<String, &Function>,
+    method_bodies: &HashMap<String, &Function>,
+) -> bool {
     let value = match &stmt.kind {
         StmtKind::Let { value, .. } | StmtKind::Expr(value) => value,
         _ => return false,
@@ -976,25 +980,37 @@ fn stmt_fanout_args_safe(stmt: &Stmt, function_bodies: &HashMap<String, &Functio
     let ExprKind::Call { callee, args } = &value.kind else {
         return false;
     };
-    // Bare free-function callee only — a method call could move an owned
-    // receiver (no `Identifier`-arg suppression covers the receiver), and a
-    // computed callee is outside the conservative shape.
-    let callee_name = match &callee.kind {
-        ExprKind::Identifier(n) => n.clone(),
-        ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
+    // Resolve the callee's params. Admitted callee shapes: a bare free function
+    // (`Identifier` / 1-segment `Path`) OR a 2-segment ASSOCIATED-function path
+    // (`Type.connect(...)`, no `self` receiver — A2b-2 Phase 2 Slice 1). Neither
+    // has a receiver to move into the coroutine or to share between two calls,
+    // so both fit the double-drop reasoning below. A 2-segment path that is a
+    // METHOD (has `self` — its receiver IS a connection, e.g. `stream.read`) or
+    // is unresolvable (extern, associated-vs-method unknown) is rejected via
+    // `resolve_assoc_callee`, and a computed callee is outside the shape.
+    //
+    // For a free function the params may be absent (extern) — a literal argument
+    // is still safe, so the shape is admitted with `None` params (`param_is_borrow`
+    // is `false` on `None`, so any `Identifier` argument then fails, leaving only
+    // literal-arg extern calls). When present, the params tell us which positions
+    // BORROW their argument (`ref`/`mut ref`/`mut Slice` — not moved): an
+    // `Identifier` at a borrow position moves no owned binding into the coroutine,
+    // so it is fan-out-safe even though it names a binding (verified
+    // double-free-clean by
+    // `tests/memory_sanitizer.rs::asan_par_ref_string_arg_network_call_no_double_free`).
+    let callee_params: Option<&[Param]> = match &callee.kind {
+        ExprKind::Identifier(n) => function_bodies.get(n).map(|f| f.params.as_slice()),
+        ExprKind::Path { segments, .. } if segments.len() == 1 => function_bodies
+            .get(&segments[0])
+            .map(|f| f.params.as_slice()),
+        ExprKind::Path { segments, .. } if segments.len() == 2 => {
+            match resolve_assoc_callee(segments, method_bodies) {
+                Some(f) => Some(f.params.as_slice()),
+                None => return false,
+            }
+        }
         _ => return false,
     };
-    // The callee's declared params (when its body is in this program) tell us
-    // which positions BORROW their argument (`ref`/`mut ref`/`mut Slice` — not
-    // moved). An `Identifier` argument at a borrow position moves no owned
-    // binding into the coroutine, so it is fan-out-safe even though it names a
-    // binding (verified double-free-clean by
-    // `tests/memory_sanitizer.rs::asan_par_ref_string_arg_network_call_no_double_free`).
-    // Absent the body (extern / not in this program) the params are unknown and
-    // every name stays fail-closed.
-    let callee_params = function_bodies
-        .get(&callee_name)
-        .map(|f| f.params.as_slice());
     args.iter().enumerate().all(|(i, a)| {
         expr_is_call_free(&a.value)
             && (expr_is_binding_free(&a.value)
@@ -1017,9 +1033,35 @@ fn param_is_borrow(params: Option<&[Param]>, i: usize) -> bool {
     })
 }
 
+/// A2b-2 Phase 2 (Slice 1): resolve a 2-segment `Type.method` callee to its
+/// body IFF it is an ASSOCIATED function — one with NO `self` receiver
+/// (`self_param.is_none()`) — present in this program's `method_bodies`. These
+/// are the receiver-less connection *openers* (`TcpStream.connect`,
+/// `TlsStream.connect`): structurally identical to a free function, since there
+/// is no receiver to move into the coroutine or to share between two calls. A
+/// 2-segment path that resolves to a METHOD (`self_param.is_some()` — its
+/// receiver IS a live connection/listener, e.g. `stream.read`, `listener.accept`)
+/// is deliberately NOT admitted (returns `None`): overlapping two ops on one
+/// shared receiver would race. An unresolvable callee (extern — associated
+/// vs. method is unknown) also returns `None`, fail-closed. Returns `None` for a
+/// non-2-segment path so callers can branch on it uniformly.
+fn resolve_assoc_callee<'a>(
+    segments: &[String],
+    method_bodies: &HashMap<String, &'a Function>,
+) -> Option<&'a Function> {
+    if segments.len() != 2 {
+        return None;
+    }
+    let key = format!("{}.{}", segments[0], segments[1]);
+    method_bodies
+        .get(&key)
+        .copied()
+        .filter(|f| f.self_param.is_none())
+}
+
 /// A2b-2 Phase 1 companion to [`stmt_fanout_args_safe`]: true iff the
-/// statement's callee (resolved by the same bare-free-fn rule) is in this
-/// program and declares NO borrow parameter (`ref`/`mut ref`/`mut Slice`).
+/// statement's callee (resolved by the same free-fn / associated-fn rule) is in
+/// this program and declares NO borrow parameter (`ref`/`mut ref`/`mut Slice`).
 /// Combined with `is_safe_network_fanout` in `analyze_stmt` it yields
 /// `is_ephemeral_network_fanout` — see that field's doc for why a borrow-free
 /// callee proves two network calls use disjoint, freshly-opened connections
@@ -1029,6 +1071,7 @@ fn param_is_borrow(params: Option<&[Param]>, i: usize) -> bool {
 fn stmt_callee_has_no_borrow_params(
     stmt: &Stmt,
     function_bodies: &HashMap<String, &Function>,
+    method_bodies: &HashMap<String, &Function>,
 ) -> bool {
     let value = match &stmt.kind {
         StmtKind::Let { value, .. } | StmtKind::Expr(value) => value,
@@ -1037,20 +1080,35 @@ fn stmt_callee_has_no_borrow_params(
     let ExprKind::Call { callee, .. } = &value.kind else {
         return false;
     };
-    let callee_name = match &callee.kind {
-        ExprKind::Identifier(n) => n.clone(),
-        ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
+    // Mirror `stmt_fanout_args_safe`'s callee resolution: a bare free function
+    // or a 2-segment ASSOCIATED-function path (`Type.connect`, no `self`). Unlike
+    // that function, this one needs the params to exist — an extern callee (body
+    // absent) is fail-closed `false`, since its param modes are unknown.
+    let params: &[Param] = match &callee.kind {
+        ExprKind::Identifier(n) => match function_bodies.get(n) {
+            Some(f) => &f.params,
+            None => return false,
+        },
+        ExprKind::Path { segments, .. } if segments.len() == 1 => {
+            match function_bodies.get(&segments[0]) {
+                Some(f) => &f.params,
+                None => return false,
+            }
+        }
+        ExprKind::Path { segments, .. } if segments.len() == 2 => {
+            match resolve_assoc_callee(segments, method_bodies) {
+                Some(f) => &f.params,
+                None => return false,
+            }
+        }
         _ => return false,
     };
-    match function_bodies.get(&callee_name) {
-        Some(func) => !func.params.iter().any(|p| {
-            matches!(
-                p.ty.kind,
-                TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
-            )
-        }),
-        None => false,
-    }
+    !params.iter().any(|p| {
+        matches!(
+            p.ty.kind,
+            TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
+        )
+    })
 }
 
 /// True iff `expr` references no binding — used by `stmt_fanout_args_safe`
@@ -2074,8 +2132,9 @@ impl<'a> ConcurrencyChecker<'a> {
         // the Network-resource check keeps a non-network user `with suspends`
         // fn serial (its independence isn't established here). Now that
         // `info.effects` is populated, combine them.
-        info.is_safe_network_fanout = stmt_fanout_args_safe(stmt, &self.function_bodies)
-            && info.effects.iter().any(|e| e.resource == "Network");
+        info.is_safe_network_fanout =
+            stmt_fanout_args_safe(stmt, &self.function_bodies, &self.method_bodies)
+                && info.effects.iter().any(|e| e.resource == "Network");
 
         // A2b-2 Phase 1: an ephemeral network fan-out is a safe network fan-out
         // whose callee borrows nothing — so it cannot share a connection object
@@ -2083,7 +2142,7 @@ impl<'a> ConcurrencyChecker<'a> {
         // private connection. Two of them may overlap; `statements_conflict`
         // relaxes the `Network`↔`Network` conflict for such pairs.
         info.is_ephemeral_network_fanout = info.is_safe_network_fanout
-            && stmt_callee_has_no_borrow_params(stmt, &self.function_bodies);
+            && stmt_callee_has_no_borrow_params(stmt, &self.function_bodies, &self.method_bodies);
 
         info
     }

@@ -650,6 +650,81 @@ fn test_a2b2_borrow_param_network_sends_receives_stays_serial() {
     );
 }
 
+// ── A2b-2 Phase 2 Slice 1: associated (receiver-less) openers fan out ──
+
+#[test]
+fn test_a2b2_associated_network_connect_fanout() {
+    // A2b-2 Phase 2 Slice 1: associated (receiver-less) network *openers* now
+    // fan out. `Conn.connect("a"); Conn.connect("b")` — two 2-segment
+    // `Type.method(...)` calls with NO `self` receiver, literal args, and real
+    // `sends(Network) receives(Network)` — are ephemeral (no receiver to share,
+    // no borrowed connection), so `statements_conflict` relaxes their
+    // `Network`↔`Network` conflict and they group. This is the stdlib
+    // `TcpStream.connect(addr)` shape, extending Phase 1 beyond bare free fns.
+    let analysis = analyze(
+        r#"
+        struct Conn { fd: i64 }
+        impl Conn {
+            fn connect(addr: String) -> Conn with sends(Network) receives(Network) {
+                return Conn { fd: 0 };
+            }
+        }
+        fn main() {
+            let a = Conn.connect("host-a");
+            let b = Conn.connect("host-b");
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "two associated network openers should fan out (A2b-2 Phase 2 Slice 1), got {:?}",
+        main_fc.parallel_groups
+    );
+    let g = &main_fc.parallel_groups[0];
+    assert!(g.statement_indices.contains(&0) && g.statement_indices.contains(&1));
+}
+
+#[test]
+fn test_a2b2_method_network_call_stays_serial() {
+    // The associated-fn admission is gated on `self_param.is_none()`: a METHOD
+    // network call has a `self` receiver that IS the shared connection/listener
+    // (`l.accept(); l.accept()` on one listener would race), so it is NOT
+    // ephemeral and stays serial. Pins the associated-vs-method distinction
+    // that keeps Slice 1 sound. (A method call is an `ExprKind::MethodCall`,
+    // which the fan-out predicates reject outright; a UFCS `Type.method(recv)`
+    // would resolve to a `self`-carrying body and be rejected by
+    // `resolve_assoc_callee`.)
+    let analysis = analyze(
+        r#"
+        struct Listener { fd: i64 }
+        struct Conn { fd: i64 }
+        impl Listener {
+            fn accept(ref self) -> Conn with sends(Network) receives(Network) {
+                return Conn { fd: 0 };
+            }
+        }
+        fn main() {
+            let l = Listener { fd: 0 };
+            let a = l.accept();
+            let b = l.accept();
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    // Statements 1 and 2 (the two `l.accept()` calls) must NOT co-group.
+    let grouped = main_fc
+        .parallel_groups
+        .iter()
+        .any(|g| g.statement_indices.contains(&1) && g.statement_indices.contains(&2));
+    assert!(
+        !grouped,
+        "method network calls (shared `self` receiver) must stay serial, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
 // ── A2b-2: independent network calls fan out (arg-safe shape) ─────
 
 #[test]
