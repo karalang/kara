@@ -1415,6 +1415,54 @@ impl<'a> super::TypeChecker<'a> {
                 self.pointer_method_receiver_pointees
                     .insert(SpanKey::from_span(span), pointee);
             }
+            // `E_RAW_POINTER_UNRESOLVED_POINTEE` (design.md § "Method dispatch on
+            // raw pointers requires a known pointee"). A size/stride-dependent
+            // method (`read`/`write`/`offset`/`add` + unaligned/volatile) cannot
+            // be lowered when `T` is unresolved — the load/store width and GEP
+            // stride depend on it. `is_null` is EXEMPT (a null-bits check reads no
+            // pointee, so it accepts an unresolved `T`). A generic parameter `T`
+            // that is IN SCOPE (`fn f[T](p: *const T) { p.read() }`) is resolved
+            // per-instantiation at monomorphization and does NOT fire — that is
+            // exactly what `find_unbound_type_param` (which consults the enclosing
+            // generic bounds) distinguishes from an un-pinned metavariable.
+            // Emitted at the RECEIVER span (the user's question is "what type is
+            // `p`?"), and returns `Type::Error` to suppress the cascade (the
+            // binding-level infer error is already suppressed for the pointer
+            // construction — see `check_unsolved_type_param`).
+            let sized_ptr_op = matches!(
+                method,
+                "offset"
+                    | "add"
+                    | "read"
+                    | "read_unaligned"
+                    | "read_volatile"
+                    | "write"
+                    | "write_unaligned"
+                    | "write_volatile"
+            );
+            if sized_ptr_op {
+                let unresolved: Option<String> = {
+                    let in_scope: std::collections::HashSet<&str> =
+                        self.enclosing_bounds.keys().map(|s| s.as_str()).collect();
+                    super::inference::find_unbound_type_param(&inner_ty, &in_scope)
+                        .map(|s| s.to_string())
+                };
+                if let Some(pointee_name) = unresolved {
+                    self.type_error(
+                        format!(
+                            "error[E_RAW_POINTER_UNRESOLVED_POINTEE]: method '{method}' on a \
+                             raw pointer requires a known pointee type; the pointee type \
+                             '{pointee_name}' is unresolved at this call site. Annotate the \
+                             pointer's declared type (e.g. `let p: *const u8 = ...`), or pin it \
+                             with a turbofish on the originating constructor (e.g. \
+                             `ptr.null[u8]()`)."
+                        ),
+                        object.span.clone(),
+                        TypeErrorKind::CannotInferTypeParam,
+                    );
+                    return Type::Error;
+                }
+            }
             let arg_count_ok = |s: &mut Self, want: usize| -> bool {
                 if args.len() != want {
                     s.type_error(

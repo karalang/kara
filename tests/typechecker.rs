@@ -3764,6 +3764,91 @@ fn raw_pointer_write_wrong_type_rejected() {
     );
 }
 
+// ── E_RAW_POINTER_UNRESOLVED_POINTEE (design.md § "Method dispatch on raw
+//    pointers requires a known pointee"). A size/stride-dependent method needs a
+//    resolved `T`; construction is safe (deferred to the use site).
+
+#[test]
+fn raw_pointer_unresolved_construction_alone_accepts() {
+    // Construction is safe — `let p = ptr.null()` with an un-pinned pointee must
+    // NOT error at the binding (only a size-dependent USE requires a known T).
+    // `is_null` is pointee-agnostic, so using it keeps the program error-free.
+    typecheck_ok("fn main() { let p = ptr.null(); if p.is_null() { } }");
+}
+
+#[test]
+fn raw_pointer_unresolved_read_rejected_at_use_site() {
+    let errors = typecheck_errors("fn main() { let p = ptr.null(); unsafe { let _ = p.read(); } }");
+    let e = errors
+        .iter()
+        .find(|e| e.message.contains("E_RAW_POINTER_UNRESOLVED_POINTEE"))
+        .expect("expected E_RAW_POINTER_UNRESOLVED_POINTEE");
+    assert!(
+        e.message.contains("'read'") && e.message.contains("known pointee"),
+        "diagnostic names the method + the requirement: {}",
+        e.message
+    );
+    // The binding-level "cannot infer type parameter" error is suppressed — the
+    // focused diagnostic is the ONLY unresolved-pointee complaint.
+    let infer_errs = errors
+        .iter()
+        .filter(|e| e.message.contains("cannot infer type parameter"))
+        .count();
+    assert_eq!(
+        infer_errs, 0,
+        "no redundant binding-level infer error: {errors:?}"
+    );
+}
+
+#[test]
+fn raw_pointer_unresolved_write_rejected() {
+    let errors = typecheck_errors("fn main() { let p = ptr.null(); unsafe { p.write(0i64); } }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_RAW_POINTER_UNRESOLVED_POINTEE")),
+        "expected E_RAW_POINTER_UNRESOLVED_POINTEE on write, got: {errors:?}"
+    );
+}
+
+#[test]
+fn raw_pointer_unresolved_offset_rejected() {
+    let errors =
+        typecheck_errors("fn main() { let p = ptr.null(); unsafe { let _ = p.offset(1i64); } }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_RAW_POINTER_UNRESOLVED_POINTEE")),
+        "expected E_RAW_POINTER_UNRESOLVED_POINTEE on offset, got: {errors:?}"
+    );
+}
+
+#[test]
+fn raw_pointer_unresolved_is_null_accepts() {
+    // `is_null` reads no pointee → accepts an unresolved `T` (design slice 6).
+    typecheck_ok("fn main() { let p = ptr.null(); let _ = p.is_null(); }");
+}
+
+#[test]
+fn raw_pointer_annotated_binding_resolves_pointee() {
+    typecheck_ok("fn main() { let p: *const u8 = ptr.null(); unsafe { let _ = p.read(); } }");
+}
+
+#[test]
+fn raw_pointer_turbofish_constructor_resolves_pointee() {
+    // `ptr.null[u8]()` pins T at the constructor — typechecks with no
+    // unresolved-pointee error (the design's second fix-it). (Codegen threading
+    // of the turbofish pointee is tracked separately as B-2026-07-11-1.)
+    typecheck_ok("fn main() { let p = ptr.null[u8](); unsafe { let _ = p.read(); } }");
+}
+
+#[test]
+fn raw_pointer_generic_param_pointee_accepts() {
+    // A generic parameter `T` in scope is resolved per-instantiation at
+    // monomorphization — the check must NOT fire (design slice 4).
+    typecheck_ok("fn f[T](p: *const T) { unsafe { let _ = p.read(); } } fn main() {}");
+}
+
 #[test]
 fn test_opaque_type_by_value_inside_generic_behind_pointer_rejected() {
     // Boundary pin for the pointer exemption: the pointer makes only its

@@ -2721,6 +2721,19 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(inferred, Type::Error) {
             return;
         }
+        // A raw pointer whose pointee is unresolved is a LEGAL value —
+        // construction is safe (design.md § Raw Pointer Construction: "Building a
+        // raw pointer ... does not require unsafe; the construction itself has no
+        // UB risk"). `let p = ptr.null()` with an un-pinned `T` must NOT error at
+        // the binding; the pointee only has to be known where it is USED through a
+        // size-dependent method (`read`/`write`/`offset`/…), which the
+        // `E_RAW_POINTER_UNRESOLVED_POINTEE` check at the method-call site reports
+        // (design.md § "Method dispatch on raw pointers requires a known pointee":
+        // the diagnostic underlines the read site, not the construction). Deferring
+        // here is what makes that focused, single diagnostic possible.
+        if matches!(inferred, Type::Pointer { .. }) {
+            return;
+        }
         let unbound_type: Option<String> = {
             let in_scope: HashSet<&str> =
                 self.enclosing_bounds.keys().map(|s| s.as_str()).collect();
