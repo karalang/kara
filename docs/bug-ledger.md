@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **383 surfaced · 6 open · 374 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **383 surfaced · 5 open · 375 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -101,9 +101,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **383 surfaced 
 | B-2026-07-11-30 | 2026-07-11 | ownership | low | Borrow-return source pinning is not applied to borrows nested in generic wrappers / borrowed collections: `-> Vec[ref T]` / `-> Option[ref T]` returns whose element sources are locals are accepted, while `-> ref T` / `-> ref Struct` returns are pinned. design.md § Feature 4 Part 3 says a container with a `ref` in a stored position is a borrowed collection whose scope is bounded by every borrowed source, so the escape should be pinned like the struct-field case. | tests/safety_design.rs::adversarial_escape_via_borrowed_collection_local (#[ignore]d, asserts the desired rejection; auto-enables when fixed); docs/implementation_checklist/phase-9-verification.md |
 | B-2026-07-11-35 | 2026-07-11 | codegen | high | A GENERIC container over a NON-COPY element (`Heap[String]`, `H[T]{xs:Vec[T]}`) is broken across several DIRECT-field-access layers. READ layer FIXED (a663328): a field-rooted index read `h.xs[i]`/`self.xs[i]` mis-resolved the element to the i64 default (garbage). STILL OPEN: (2) the generic method PUSH `self.xs.push(x:T)` — the owned-`T`-param isn't classed for deep-copy; and (3) returning an owned `T` (`fn f[T](x:T)->T{x}`, `get(ref self)->T{self.xs[i]}`) double-frees. Interpreter correct throughout. Sibling of B-2026-07-11-31 (generic METHOD dispatch) for the raw field-access paths. | read layer: tests/codegen.rs::e2e_generic_container_field_index_read_resolves_element (FIXED, a663328). Open layers: repros in detail. Discriminators: examples/heap.kara (i64, works); the non-generic B-2026-07-11-32 probes (String struct field, works); B-2026-07-11-31 (generic method dispatch, works). |
 
-### Fixed (374)
+### Fixed (375)
 
-<details><summary>374 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>375 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -474,7 +474,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **383 surfaced 
 | B-2026-07-11-26 | codegen+interp | medium | A fresh-temp ENUM scrutinee whose type has a user `impl Drop` SILENTLY SKIPPED that Drop in `if let` / `while let` / `let…else` / `match` — the user-… | this commit |
 | B-2026-07-11-27 | codegen | high | A gpu.dispatch result bound/assigned to a SoA `layout` variable SIGSEGVs: compile_gpu_dispatch_soa returns a standard AoS Vec {ptr,len,cap}, but a la… | codegen/exprs.rs + stmts.rs: bind/assign a gpu.dispatch result into a SoA `layout` variable via AoS->SoA scatter (compile_soa_let_from_gpu_dispatch / compile_soa_assign_from_gpu_dispatch, sharing soa_scatter_aos_into + the factored soa_push_value), instead of storing the AoS {ptr,len,cap} header raw into the multi-group SoA slot. |
 | B-2026-07-11-28 | codegen | high | Two monomorph void-return miscompiles: (a) a generic VOID fn whose body TAIL is a statement-position `if`/`while` emitted `ret i64 0` in a void LLVM… | 9d17820 |
-| B-2026-07-11-29 | codegen | high | Vec[Vec[Option[shared]]] deep-clone + consume + grow: force-cloned inner Vec's scope-exit drop LEAKS retained element handles, and at larger sizes sp… | edfd3f0 |
+| B-2026-07-11-29 | codegen | high | Vec[Vec[Option[shared]]] deep-clone + consume + grow: force-cloned inner Vec's scope-exit drop LEAKS retained element handles, and at larger sizes sp… | 106efc1 |
 | B-2026-07-11-31 | codegen | high | A generic struct instance method mis-inferred its type param `T` (mangled `$i64`, defaulted) when `T` appeared ONLY nested inside a container field (… | 93b095b |
 | B-2026-07-11-32 | codegen | high | DOUBLE-FREE: an index-based element swap of a NON-COPY `Vec` element (`let t = v[i]; v[i] = v[j]; v[j] = t;` over `Vec[String]`) aliases the heap buf… | 1e81849 |
 | B-2026-07-11-33 | codegen | med | Vec[Option[shared]] element drop leaked the shared payloads (buffer-only cleanup) — kata-23 merge-k-lists | 6eb7df42 |
