@@ -957,6 +957,10 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         &["std", "wasi"],
         include_str!("../runtime/stdlib/wasi.kara"),
     ),
+    (
+        &["std", "secret"],
+        include_str!("../runtime/stdlib/secret.kara"),
+    ),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first
@@ -1090,6 +1094,18 @@ pub static GATED_STDLIB_PROGRAMS: LazyLock<Vec<(Vec<String>, Program)>> = LazyLo
 /// `import std.web.{Display, ...};` resolves — and nothing else does:
 /// these names have no scope-0 registration, which is the entire gating
 /// mechanism.
+/// Flag every method of a gated-module `impl` block as stdlib-origin, so a
+/// `#[compiler_builtin]` method survives the resolver's user-code gate once the
+/// block is spliced into a user program. (An `ImplBlock` has no `stdlib_origin`
+/// field; its `Function` methods each do — see `resolver::collect::collect_impl`.)
+fn mark_impl_methods_stdlib(imp: &mut crate::ast::ImplBlock) {
+    for it in &mut imp.items {
+        if let crate::ast::ImplItem::Method(m) = it {
+            m.stdlib_origin = true;
+        }
+    }
+}
+
 pub fn synthetic_gated_modules() -> Vec<(Vec<String>, Vec<Item>)> {
     GATED_STDLIB_PROGRAMS
         .iter()
@@ -1104,6 +1120,13 @@ pub fn synthetic_gated_modules() -> Vec<(Vec<String>, Vec<Item>)> {
                         Item::StructDef(s) => s.stdlib_origin = true,
                         Item::EnumDef(e) => e.stdlib_origin = true,
                         Item::TraitDef(t) => t.stdlib_origin = true,
+                        // An impl block carries no `stdlib_origin` of its own,
+                        // but its methods do (the resolver's `#[compiler_builtin]`
+                        // gate reads `method.stdlib_origin`). A gated module whose
+                        // type has `#[compiler_builtin]` methods (e.g.
+                        // `Secret.expose`) needs each method flagged, or the
+                        // splice into user code trips E0237.
+                        Item::ImplBlock(imp) => mark_impl_methods_stdlib(imp),
                         // `EffectResource` and friends carry no
                         // `stdlib_origin`; nothing to flip.
                         _ => {}
@@ -1225,7 +1248,14 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
                     .as_deref()
                     .is_some_and(|t| spliced_type_names.contains(t))
                 {
-                    out.push(item.clone());
+                    // Flag the impl's methods stdlib-origin so a
+                    // `#[compiler_builtin]` method (e.g. `Secret.expose`) is
+                    // exempt from the resolver's user-code gate after splicing.
+                    let mut cloned = item.clone();
+                    if let Item::ImplBlock(imp) = &mut cloned {
+                        mark_impl_methods_stdlib(imp);
+                    }
+                    out.push(cloned);
                 }
             }
         }
