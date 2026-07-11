@@ -26,7 +26,7 @@ Module names are Value-class identifiers — always snake_case. This falls out o
 | *(default)* | All files in your project |
 | `private` | Files in the same directory only |
 
-```kara
+```kara,ignore
 pub fn validate(input: String) -> bool { ... }     // public API
 fn helper(s: String) -> String { ... }              // project-internal
 private fn secret_impl() { ... }                    // same directory only
@@ -61,7 +61,7 @@ Import paths are absolute from the crate root. Every file writes the same path f
 
 Libraries can present a clean public surface:
 
-```kara
+```kara,ignore
 // lib.kara
 pub import db.connection.Connection;
 pub import db.pool.Pool;

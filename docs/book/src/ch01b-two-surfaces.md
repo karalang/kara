@@ -8,10 +8,10 @@ This chapter walks one example — a binary search over a sorted vector — thro
 
 Save this to `search.kara`:
 
-```kara
-fn binary_search(haystack: ref Vec[i32], needle: i32) -> Option[usize] {
-    let mut lo: usize = 0;
-    let mut hi: usize = haystack.len();
+```kara,run
+fn binary_search(haystack: ref Vec[i32], needle: i32) -> Option[i64] {
+    let mut lo: i64 = 0;
+    let mut hi: i64 = haystack.len();
     while lo < hi {
         let mid = (lo + hi) / 2;
         let value = haystack[mid];
@@ -45,7 +45,7 @@ found at index 3
 A few things worth pointing at:
 
 - **`ref Vec[i32]`** says "I want to read this vector, not take ownership of it." The caller keeps `nums` and can use it again afterward.
-- **`Option[usize]`** is the standard "maybe an index" return. Pattern-match on it; the compiler will warn you if you forget a case.
+- **`Option[i64]`** is the standard "maybe an index" return. Pattern-match on it; the compiler will warn you if you forget a case.
 - **No allocator imports, no module declarations.** A `.kara` file with `fn main()` is a complete program.
 
 ## The same program, in the REPL

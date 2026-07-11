@@ -2,7 +2,7 @@
 
 Every journey starts with a first program. Here's yours:
 
-```kara
+```kara,run
 fn main() {
     println("Hello, world!");
 }
@@ -16,7 +16,7 @@ Let's break it down:
 
 ## A slightly bigger program
 
-```kara
+```kara,run
 fn greet(name: String) {
     println(f"Hello, {name}!");
 }

@@ -41,7 +41,7 @@ The resource verbs say *what* a function touches. Two more verbs say *how it run
 - **`blocks`** — the call may park the OS thread in a kernel wait (a `sleep`, a synchronous file read, a contended lock). While it waits, that thread can do nothing else, so the scheduler routes blocking tasks to a separate pool.
 - **`suspends`** — the call may cooperatively yield: the task steps aside and the thread is freed to run other work, resuming later. This is Kāra's async — there is **no `async`/`await`, no `Future`, no function coloring.** You write a plain call; the compiler inserts the yield point because the callee is declared `suspends`.
 
-```kara
+```kara,ignore
 fn sleep(d: Duration) with blocks { ... }                          // parks the thread
 fn http_get(url: String) -> Response with sends(Net) suspends { ... }   // yields while waiting
 fn compute(x: f64) -> f64 { ... }                                  // neither — runs anywhere
@@ -55,7 +55,7 @@ That's the full set: six resource verbs plus these two execution verbs, eight in
 
 For internal functions, the compiler figures out the effects automatically:
 
-```kara
+```kara,ignore
 fn load_data(path: String) -> String {
     read_file(path)     // compiler infers: reads(FileSystem)
 }
@@ -72,7 +72,7 @@ You write normal code. The compiler tracks what it does. No annotation needed.
 
 At API boundaries, you declare your effects explicitly. This is a contract with your callers:
 
-```kara
+```kara,ignore
 pub fn fetch_user(id: u64) -> Result[User, Error]
     with reads(Database) sends(Net)
 {
@@ -98,7 +98,7 @@ If your function claims `reads(Database)` but you accidentally added a line that
 
 Two function calls with non-conflicting effects can run in parallel:
 
-```kara
+```kara,ignore
 fn generate_report(id: u64) -> Report
     with reads(UserDB) reads(OrderDB) reads(Analytics)
 {
@@ -125,7 +125,7 @@ effect group io = reads(FileSystem) + writes(FileSystem) + reads(Env);
 
 Effect group names are Value-class (snake_case) — the same naming class as effect verbs and `let` bindings. Then use the group in declarations:
 
-```kara
+```kara,ignore
 pub fn process(path: String) -> Result[Data, Error] with io {
     // can read and write files, read environment variables
 }

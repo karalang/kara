@@ -38,7 +38,7 @@ Three rules, one per mode. The body must match: consuming an owned parameter is 
 
 Methods follow the same rule. Bare `self` is the owned/consuming receiver, `ref self` is a shared borrow, `mut ref self` is an exclusive borrow:
 
-```kara
+```kara,ignore
 impl Builder {
     fn build(self) -> Widget { ... }              // consumes self
     fn peek(ref self) -> i64 { self.count }       // reads self
@@ -56,14 +56,14 @@ If you write `fn greet(name: String)` and only read `name` in the body, the comp
 
 At call sites, mutation gets a marker when the argument is a fresh binding passed to a `mut ref T` or `mut Slice[T]` parameter:
 
-```kara
+```kara,ignore
 let mut v = [3, 1, 4, 1, 5];
 sort_in_place(mut v);          // fresh binding → marker required
 ```
 
 Inside a function that already holds the binding as a `mut ref`, you don't repeat the marker — the mutation was announced at the callee's signature:
 
-```kara
+```kara,ignore
 fn helper(s: mut ref State) {
     update(s.cache);           // field through a mut-ref root → no marker
     reset(s.counter);          // same — forwarded
@@ -97,7 +97,7 @@ This prevents use-after-move bugs at compile time. No dangling pointers, no doub
 
 Sometimes the compiler can't prove a single-owner model works — the value is shared across data structures, or its lifetime can't be statically determined. In these cases, the compiler falls back to reference counting:
 
-```kara
+```kara,ignore
 let node = Node { value: 42, children: Vec.new() };
 // If `node` ends up shared across a graph structure,
 // the compiler automatically wraps it in RC.
@@ -114,7 +114,7 @@ A slice is a borrowed view into contiguous memory — a pointer and a length, no
 
 Slices let one function work over many container types:
 
-```kara
+```kara,ignore
 fn sum(xs: Slice[i64]) -> i64 {
     let mut acc = 0;
     for x in xs { acc = acc + x; }
@@ -135,7 +135,7 @@ You don't write `sum(v.as_slice())` — the compiler inserts the coercion when a
 
 For in-place operations, use `mut Slice[T]` — the same `mut` modifier Kāra uses everywhere else:
 
-```kara
+```kara,ignore
 fn sort_in_place[T: Ord](xs: mut Slice[T]) { /* ... */ }
 
 let mut v = [3, 1, 4, 1, 5];

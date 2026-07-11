@@ -4,7 +4,7 @@
 
 A struct groups related data together:
 
-```kara
+```kara,run
 struct Point {
     x: f64,
     y: f64,
@@ -24,7 +24,7 @@ Struct names are Type-class identifiers (PascalCase); field names are Value-clas
 
 Use `impl` blocks to attach behavior:
 
-```kara
+```kara,run
 struct Rectangle {
     width: f64,
     height: f64,
@@ -125,7 +125,7 @@ enum Result[T, E] {
 
 `Option` represents a value that might not exist. `Result` represents an operation that might fail. You'll use them constantly:
 
-```kara
+```kara,ignore
 fn find_user(id: u64) -> Option[User] {
     // returns Some(user) or None
 }
@@ -197,7 +197,7 @@ Walk it by unwrapping each node. `if let` peels off one `Some` and recurses on
 `.next`; `while let` does the same thing iteratively, rebinding the cursor until
 it hits `None`:
 
-```kara
+```kara,ignore
 fn sum(node: Option[ListNode]) -> i64 {
     if let Some(n) = node {
         n.val + sum(n.next)

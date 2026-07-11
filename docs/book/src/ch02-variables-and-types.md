@@ -66,7 +66,7 @@ A bare integer literal defaults to `i64` and a bare float to `f64`, but a
 literal **coerces to fit its context** — the annotated type of a binding, a
 function parameter, or a struct field — as long as the value fits:
 
-```kara
+```kara,ignore
 let n = 0;                 // i64 by default
 let b: u8 = 200;           // literal coerces to u8
 fn takes_byte(x: u8) { ... }
@@ -126,7 +126,7 @@ let y: i32 = x as i32;     // widening — always safe
 
 `as` covers every numeric pair, with semantics worth knowing:
 
-```kara
+```kara,ignore
 let small: u8 = 7;
 let wide = small as i64;   // widening — value preserved (7)
 
@@ -165,7 +165,7 @@ Kāra enforces identifier naming at the compiler level — it's a grammar rule, 
 - **Value class** — snake_case, or a leading `_` for intentionally-unused bindings. Functions, parameters, fields, modules, and `let` bindings inside function bodies: `read_to_string`, `user_count`, `_tmp`.
 - **Const class** — ALL_UPPER with underscores. Module-level `let` and `let mut` bindings: `MAX_RETRIES`, `TIMEOUT_MS`.
 
-```kara
+```kara,ignore
 struct UserAccount { ... }                // Type class
 fn read_to_string(path: String) { ... }   // Value class
 let count = 0;                            // Value class (function body)

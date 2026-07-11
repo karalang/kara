@@ -72,7 +72,7 @@ Each target binds its provider with `with_provider`, then calls the same
 component. The entry points are the one genuinely per-target part of the
 program, so they — and only they — carry `#[target(...)]`:
 
-```kara
+```kara,ignore
 // Server: render to HTML on stdout.
 #[target(native)]
 fn main() {

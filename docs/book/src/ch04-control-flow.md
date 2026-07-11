@@ -4,7 +4,7 @@
 
 `if` is an expression — it produces a value:
 
-```kara
+```kara,ignore
 let status = if score >= 90 { "excellent" } else { "keep going" };
 ```
 
@@ -63,7 +63,7 @@ for i in 0..=5 {
 
 An infinite loop. Use `break` to exit:
 
-```kara
+```kara,ignore
 let mut attempt = 0;
 let result = loop {
     attempt = attempt + 1;
@@ -115,7 +115,7 @@ But `match` goes far beyond this — it works with enums, structs, nested data, 
 
 Kāra has a pipe operator `|>` for chaining function calls left-to-right:
 
-```kara
+```kara,ignore
 let result = data
     |> transform
     |> validate

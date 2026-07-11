@@ -63,7 +63,7 @@ fn describe(p: Point) -> String {
 
 Patterns compose. Match on the shape of nested data:
 
-```kara
+```kara,ignore
 fn get_name(user: Option[User]) -> String {
     match user {
         Some(User { name, .. }) => name,
@@ -117,7 +117,7 @@ This is especially powerful with enums: if you add a new variant, the compiler t
 
 You can destructure in `let` bindings too:
 
-```kara
+```kara,ignore
 let Point { x, y } = get_point();
 let (first, second) = get_pair();
 ```

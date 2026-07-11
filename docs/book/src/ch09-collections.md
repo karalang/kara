@@ -51,7 +51,7 @@ When you already know how many elements you'll add, reserve the space up front
 with `Vec.with_capacity(n)`. It allocates once; the first `n` pushes land in the
 reserved slots without a single reallocation:
 
-```kara
+```kara,ignore
 let mut out = Vec.with_capacity(n + 1);   // one allocation, no grow chain
 let mut i = 0;
 while i < n {
@@ -126,7 +126,7 @@ match ages.get("Alice") {
 
 Unique values:
 
-```kara
+```kara,ignore
 let mut seen = Set.new();
 seen.insert("hello");
 seen.insert("world");
@@ -142,7 +142,7 @@ println(seen.len());     // 2
 
 Fixed-size, mixed-type groups:
 
-```kara
+```kara,ignore
 let pair = (42, "hello");
 let (number, text) = pair;
 
@@ -177,7 +177,7 @@ For a grid sized at runtime — the usual starting point for a dynamic-programmi
 table — fill it with zeros up front. `Vec.filled(n, value)` builds an `n`-element
 vector, and nesting it gives an `r × c` grid:
 
-```kara
+```kara,ignore
 let mut dp: Vec[Vec[i64]] = Vec.filled(rows, Vec.filled(cols, 0i64));
 ```
 

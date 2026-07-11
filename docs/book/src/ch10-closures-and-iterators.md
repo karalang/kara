@@ -19,7 +19,7 @@ Closure parameters take type annotations just like `fn` parameters. When a closu
 
 Functions can accept closures:
 
-```kara
+```kara,ignore
 fn apply_twice(f: Fn(i64) -> i64, x: i64) -> i64 {
     f(f(x))
 }
@@ -95,7 +95,7 @@ items.skip(n)                      // skip first n elements
 
 The pipe operator `|>` chains transformations naturally:
 
-```kara
+```kara,ignore
 let result = data
     |> parse
     |> validate

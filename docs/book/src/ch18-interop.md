@@ -168,7 +168,7 @@ That last rule is the important one. The compiler will not emit a header that pr
 
 The simplest way to hand C a buffer it will own is to allocate it the way C expects — through `malloc`, imported as an `unsafe extern "C"` block — fill it with raw-pointer writes, and return the pointer. The caller frees it with `free` (or a Kāra export that calls `free`), and no Kāra destructor is ever involved:
 
-```kara
+```kara,ignore
 unsafe extern "C" { fn malloc(n: usize) -> *mut i64; }
 
 pub extern "C" fn make_squares(n: i64) -> *mut i64 with blocks {

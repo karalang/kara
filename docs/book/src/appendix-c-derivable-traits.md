@@ -84,7 +84,7 @@ No dependencies.
 
 Generates a `T.default()` method that returns a "zero-like" value for the type. The derived implementation calls `.default()` on each field in declaration order and constructs the struct. For enums, the first declared variant is used, with each of its fields defaulted.
 
-```kara
+```kara,ignore
 #[derive(Default)]
 struct Config {
     timeout_ms: i64,   // defaults to 0

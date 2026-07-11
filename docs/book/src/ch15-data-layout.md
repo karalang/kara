@@ -28,7 +28,7 @@ together in the `hot` group's backing array instead of being interleaved with
 each `name`. The logical API is unchanged — you still write `swarm[i].x` — and a
 loop that reads only `x` and `y` streams through dense memory:
 
-```kara
+```kara,ignore
 fn drift(swarm: ref Vec[Particle]) -> f64 {
     let mut sum = 0.0;
     let mut i = 0i64;
@@ -56,7 +56,7 @@ one contiguous region *is* a whole `Particle` — so you can't borrow a whole
 element out of an SoA collection. Reading a field (`swarm[i].x`) works, and you
 can always materialize a plain array-of-structs *copy* of one element:
 
-```kara
+```kara,ignore
 let e = swarm[1];       // an array-of-structs copy of one element
 println(e.name);
 ```

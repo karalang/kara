@@ -58,7 +58,7 @@ This means you rarely need temporary variables — you can use control flow inli
 Here's a function that reads a string but doesn't consume it:
 
 ```kara
-fn char_count(text: String) -> usize {
+fn char_count(text: String) -> i64 {
     text.len()
 }
 ```
@@ -68,7 +68,7 @@ You wrote `text: String`, but the compiler notices that `text` is only read, nev
 You can also be explicit:
 
 ```kara
-fn char_count(text: ref String) -> usize {
+fn char_count(text: ref String) -> i64 {
     text.len()
 }
 ```
@@ -80,7 +80,7 @@ one container type — declare the parameter as `Slice[T]`. A `Vec[T]` or an
 `Array[T, N]` both coerce to a slice at the call, so one signature serves every
 caller:
 
-```kara
+```kara,ignore
 fn sum(xs: Slice[i64]) -> i64 {
     let mut acc = 0i64;
     for x in xs { acc = acc + x; }
@@ -127,7 +127,7 @@ impl Circle {
 
 Methods use **Universal Function Call Syntax (UFCS)**. These two calls are the same:
 
-```kara
+```kara,ignore
 let c = Circle.new(5.0);
 c.area()           // method syntax
 Circle.area(c)    // function syntax — same thing

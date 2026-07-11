@@ -2,7 +2,7 @@
 
 Attributes are metadata attached to declarations. Two syntactic forms are supported:
 
-```kara
+```kara,ignore
 #[attribute_name]               // marker
 #[attribute_name(arg, ...)]     // with arguments
 @attribute_name                 // shorthand marker (selected attributes only)
@@ -60,7 +60,7 @@ Promote a lint to a hard error within the annotated item.
 
 On an `extern "C"` or `extern "C-unwind"` function: removes `blocks` from the default effect set. Use this for pure-CPU foreign functions (math routines, `strlen`, etc.) that are known not to block.
 
-```kara
+```kara,ignore
 @noblock
 extern "C" fn sqrt(x: f64) -> f64;
 ```
@@ -75,7 +75,7 @@ Use the Kāra identifier as the exported symbol name without any name mangling. 
 
 The `#[unsafe(...)]` wrap is mandatory: disabling name mangling can collide with foreign symbols, an obligation the compiler cannot verify. Bare `#[no_mangle]` is rejected at parse time.
 
-```kara
+```kara,ignore
 #[unsafe(no_mangle)]
 pub fn kara_entry() { ... }
 ```
@@ -84,7 +84,7 @@ pub fn kara_entry() { ... }
 
 Prevent dead-code elimination for the annotated symbol even if no Kāra code references it. Use for linker-section entries, interrupt vectors, or other symbols that are referenced only from outside the compiler's visibility (linker scripts, hardware, debuggers). Stays plain (no `#[unsafe(...)]` wrap) — `#[used]` only suppresses DCE, no soundness obligation.
 
-```kara
+```kara,ignore
 #[unsafe(link_section(".vectors"))]
 #[used]
 let interrupt_table: [fn(); 16] = [...];
@@ -96,7 +96,7 @@ Place the annotated symbol in a named linker section. Required for embedded targ
 
 The `#[unsafe(...)]` wrap is mandatory: section placement carries layout and aliasing obligations the compiler cannot verify. Bare `#[link_section(...)]` is rejected at parse time.
 
-```kara
+```kara,ignore
 #[unsafe(link_section(".dtcmram"))]
 let fast_buffer: [u8; 1024] = [0; 1024];
 ```
@@ -109,7 +109,7 @@ let fast_buffer: [u8; 1024] = [0; 1024];
 
 On an `extern` item: rebinds a non-conforming foreign name to a valid Kāra identifier. The Kāra-visible name must follow the identifier case-class rules; the foreign name may be arbitrary ASCII.
 
-```kara
+```kara,ignore
 #[kara_name = "GlxFbConfig"]
 extern type GLXFBConfig;
 ```
@@ -122,7 +122,7 @@ extern type GLXFBConfig;
 
 On a module-level `let mut` binding: gives each OS thread (and each task under the runtime) its own independent copy. The binding's initializer must still be a compile-time constant.
 
-```kara
+```kara,ignore
 #[thread_local]
 let mut request_count: i64 = 0;
 ```
@@ -164,7 +164,7 @@ On a **type**: every binding site where a value of this type would be silently d
 
 On a **function**: the return value must not be silently discarded. `Result` return values are implicitly `#[must_use]`.
 
-```kara
+```kara,ignore
 #[must_use = "connections must be explicitly disconnected"]
 struct Connection { ... }
 ```
@@ -191,7 +191,7 @@ Supply an in-memory provider for a test. The provider scope wraps the entire tes
 
 Multi-segment attribute paths of the form `#[TOOL::NAME(...)]` are reserved for external tools — formatters, linters, doc generators, IDE plugins, custom analyzers. The compiler accepts them syntactically, stores them on the AST, and otherwise ignores them; semantic interpretation is each tool's responsibility. The full design lives at *design.md § Tool-Namespaced Attributes*; this appendix entry catalogs the v1-reserved names and the read surface.
 
-```kara
+```kara,ignore
 #[karafmt::skip]
 fn manually_aligned_table() { 0 }
 

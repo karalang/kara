@@ -6,7 +6,7 @@ Kāra's concurrency story is built on a simple idea: **if the compiler can prove
 
 Consider a function that fetches data from three independent sources:
 
-```kara
+```kara,ignore
 fn build_dashboard(user_id: u64) -> Dashboard
     with reads(UserDB) reads(OrderDB) reads(Analytics)
 {
@@ -27,7 +27,7 @@ When you want to be explicit about parallelism:
 
 A `par` block runs each of its branches concurrently and waits for all of them before control falls through. It's structured concurrency — no dangling tasks, no fire-and-forget. Each branch is an independent statement; they share data through a concurrency-safe type rather than by writing the same plain variable:
 
-```kara
+```kara,run
 par struct Counter { count: Atomic[i64] }
 
 fn bump(counter: ref Counter) {
@@ -51,7 +51,7 @@ fn main() {
 
 `par` is for a fixed set of branches written out in the source. When the number of tasks is decided at runtime — split an image into `workers` bands, process N rows — use a `TaskGroup`: spawn each task, collect its `TaskHandle[T]`, then `join` each to gather the results.
 
-```kara
+```kara,run
 fn square(n: i64) -> i64 { n * n }
 
 fn main() {

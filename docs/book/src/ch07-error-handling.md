@@ -8,7 +8,7 @@ This sounds strict, but in practice it makes error handling *easier* — the com
 
 An operation that can fail returns `Result[T, E]`:
 
-```kara
+```kara,ignore
 fn parse_port(s: String) -> Result[u16, ParseError] {
     // returns Ok(port) or Err(error)
 }
@@ -16,7 +16,7 @@ fn parse_port(s: String) -> Result[u16, ParseError] {
 
 The `?` operator propagates errors to the caller:
 
-```kara
+```kara,ignore
 fn load_config(path: String) -> Result[Config, Error] {
     let text = read_file(path)?;       // if Err, return it immediately
     let config = parse_toml(text)?;     // same here
@@ -42,7 +42,7 @@ fn first_letter(text: Option[String]) -> Option[String] {
 
 For navigating nested optional values:
 
-```kara
+```kara,ignore
 let city = user.address?.city?.name;
 ```
 
@@ -50,7 +50,7 @@ If any step is `None`, the whole expression short-circuits to `None`.
 
 ### Default values with ??
 
-```kara
+```kara,ignore
 let name = user.nickname ?? "anonymous";
 let port = parse_port(input) ?? 8080;
 ```
@@ -61,7 +61,7 @@ let port = parse_port(input) ?? 8080;
 
 `unwrap()` extracts the value from `Option` or `Result`, crashing if it's `None` or `Err`:
 
-```kara
+```kara,ignore
 let value = some_option.unwrap();   // panics if None
 ```
 
@@ -73,7 +73,7 @@ This produces the `panics` effect — the compiler tracks it through your call c
 
 `defer` runs cleanup when a scope exits, regardless of how:
 
-```kara
+```kara,ignore
 fn process_file(path: String) -> Result[Data, Error] {
     let file = open(path)?;
     defer file.close();          // always runs when scope exits
@@ -85,7 +85,7 @@ fn process_file(path: String) -> Result[Data, Error] {
 
 `errdefer` runs cleanup only on the error path:
 
-```kara
+```kara,ignore
 fn open_connection(addr: String) -> Result[Connection, Error] {
     let conn = Connection.open(addr)?;
     errdefer conn.close();       // only if we return Err below
