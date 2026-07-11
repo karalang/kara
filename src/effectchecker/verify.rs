@@ -343,6 +343,14 @@ impl<'a> super::EffectChecker<'a> {
     /// carry no such requirement — case 1 auto-aborts a body panic at
     /// the boundary, so the panic never escapes into C.)
     pub(crate) fn verify_extern_export_panics(&mut self) {
+        // Under `Abort`, a `"C-unwind"` export is rejected outright by
+        // `verify_extern_cunwind_requires_unwind_profile` (E0415) — the ABI
+        // itself is unhonorable without an unwinder — so the "must declare
+        // `panics`" refinement (which only matters when C-unwind is actually
+        // permitted, i.e. under `Unwind`) would just double-report. Skip it.
+        if self.profile_config.panic_strategy() == crate::manifest::PanicStrategy::Abort {
+            return;
+        }
         // Collect offenders first so the immutable borrows of
         // `function_bodies` / `inferred_effects` / group tables are
         // released before we mutate `self.errors`.
@@ -395,6 +403,73 @@ impl<'a> super::EffectChecker<'a> {
                 ),
                 span,
                 kind: EffectErrorKind::ExternCUnwindRequiresPanics,
+                subtype_trace: None,
+                replacement: None,
+            });
+        }
+    }
+
+    /// Reject every `extern "C-unwind"` site under a build whose panic strategy
+    /// is `Abort` (design.md § FFI / Panic Semantics at the FFI Boundary;
+    /// phase-8 `panic = "unwind" | "abort"` slice 5). The `"C-unwind"` ABI's
+    /// whole point is to let an unwinding panic cross the FFI boundary, which
+    /// needs a stack unwinder; under `Abort` there is none, so the ABI cannot
+    /// be honored. v1 is abort-only (the unwind codegen is the v1.x-gated
+    /// slice 9), so at v1 this fires for every `"C-unwind"` site.
+    ///
+    /// Covers **foreign-import declarations** — `unsafe extern "C-unwind" { fn
+    /// … }` (bare standalone imports are rejected at parse, so blocks are the
+    /// only import shape) — and Kāra **exports** (`pub extern "C-unwind" fn …`).
+    /// Calls need no separate rule: rejecting the declaration leaves the callee
+    /// unresolved, and an export is rejected at its own definition. Being
+    /// strategy-driven, it lifts automatically once a build can select
+    /// `panic = "unwind"` (slice 9). It supersedes the "must declare `panics`"
+    /// refinement under `Abort` ([`Self::verify_extern_export_panics`] returns
+    /// early there), so a C-unwind export reports E0415, not E0413.
+    pub(crate) fn verify_extern_cunwind_requires_unwind_profile(&mut self) {
+        if self.profile_config.panic_strategy() != crate::manifest::PanicStrategy::Abort {
+            return;
+        }
+        // `(what, name, span)` — `what` distinguishes an imported declaration
+        // from a Kāra export in the diagnostic, since the fix differs.
+        let mut offenders: Vec<(&'static str, String, Span)> = Vec::new();
+        for item in &self.program.items {
+            match item {
+                Item::ExternBlock(block) if block.abi == "C-unwind" => {
+                    for extern_item in &block.items {
+                        if let ExternItem::Function(f) = extern_item {
+                            offenders.push(("import", f.name.clone(), f.span.clone()));
+                        }
+                    }
+                }
+                Item::ExternFunction(f) if f.abi == "C-unwind" => {
+                    offenders.push(("import", f.name.clone(), f.span.clone()));
+                }
+                Item::Function(f) if f.abi.as_deref() == Some("C-unwind") => {
+                    offenders.push(("export", f.name.clone(), f.span.clone()));
+                }
+                _ => {}
+            }
+        }
+
+        for (what, name, span) in offenders {
+            let subject = if what == "import" {
+                format!("`extern \"C-unwind\"` declaration of `{name}`")
+            } else {
+                format!("exported `extern \"C-unwind\" fn '{name}'`")
+            };
+            self.errors.push(EffectError {
+                message: format!(
+                    "{subject} requires a build with `panic = \"unwind\"`, but this build is \
+                     abort-only. The \"C-unwind\" ABI propagates an unwinding panic across the \
+                     FFI boundary, which needs a stack unwinder the abort strategy does not \
+                     provide (v1 is abort-only; the unwind backend is a v1.x feature). Use \
+                     `extern \"C\"` instead — a body panic auto-aborts at the boundary — or, for \
+                     a C-shaped error, return a status/`Result`. See design.md § Panic Semantics \
+                     at the FFI Boundary."
+                ),
+                span,
+                kind: EffectErrorKind::ExternCUnwindRequiresUnwindProfile,
                 subtype_trace: None,
                 replacement: None,
             });

@@ -289,6 +289,19 @@ pub fn effectcheck(program: &Program) -> EffectCheckResult {
     checker.check()
 }
 
+/// Check effects with an explicit [`crate::manifest::ProfileConfig`] — the
+/// carrier of the active profile plus its `[profile]`-table knobs (e.g.
+/// `panic = "unwind" | "abort"`). Needed by the C-unwind gate
+/// (`E_EXTERN_C_UNWIND_REQUIRES_UNWIND_PROFILE`), which is only lifted under an
+/// explicit `panic = "unwind"`.
+pub fn effectcheck_with_profile_config(
+    program: &Program,
+    profile_config: impl Into<crate::manifest::ProfileConfig>,
+) -> EffectCheckResult {
+    let checker = EffectChecker::new(program).with_profile_config(profile_config.into());
+    checker.check()
+}
+
 /// Check effects in a parsed program with an explicit public-effects policy.
 /// See `effectchecker::PublicEffectsPolicy`.
 pub fn effectcheck_with_policy(

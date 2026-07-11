@@ -3268,6 +3268,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::effectchecker::EffectErrorKind::ExternExportSuspendsUnsupported => {
                     ("E0414", "error")
                 }
+                crate::effectchecker::EffectErrorKind::ExternCUnwindRequiresUnwindProfile => {
+                    ("E0415", "error")
+                }
                 crate::effectchecker::EffectErrorKind::GpuEffectViolation => ("E0802", "error"),
             };
             let subtype_json = err.subtype_trace.as_ref().map(|t| {

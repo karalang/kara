@@ -266,6 +266,17 @@ pub enum EffectErrorKind {
     /// design.md § Panic Semantics at the FFI Boundary, case 2
     /// (`E_EXTERN_C_UNWIND_REQUIRES_PANICS`).
     ExternCUnwindRequiresPanics,
+    /// An `extern "C-unwind"` site (a foreign-import declaration in an
+    /// `unsafe extern "C-unwind" { ... }` block, or a `pub extern "C-unwind"
+    /// fn` export) under a build whose panic strategy is `Abort`. The
+    /// `"C-unwind"` ABI's entire purpose is to let an unwinding panic cross the
+    /// FFI boundary, which needs a stack unwinder; under `Abort` there is none,
+    /// so the ABI cannot be honored. v1 is abort-only (the unwind codegen is
+    /// the v1.x-gated slice 9), so this fires for every `"C-unwind"` site at
+    /// v1. Strategy-driven — it lifts automatically once a build can select
+    /// `panic = "unwind"`. design.md § FFI / Panic Semantics at the FFI
+    /// Boundary (`E_EXTERN_C_UNWIND_REQUIRES_UNWIND_PROFILE`, E0415).
+    ExternCUnwindRequiresUnwindProfile,
     /// Producer-mode export boundary (additive-interop Slice 3½;
     /// design.md § Exported C ABI): a `pub extern "C"` / `"C-unwind"`
     /// function definition — a body callable from C — whose effect set
@@ -1006,6 +1017,7 @@ impl<'a> EffectChecker<'a> {
         self.check_contract_purity();
         self.verify_declarations();
         self.verify_extern_export_panics();
+        self.verify_extern_cunwind_requires_unwind_profile();
         self.verify_extern_export_no_suspends();
         self.verify_pub_fn_no_synthetic_resource();
         self.verify_impl_trait_ceilings();
