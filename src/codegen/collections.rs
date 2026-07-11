@@ -2247,32 +2247,86 @@ impl<'ctx> super::Codegen<'ctx> {
                     .struct_field_type_exprs(struct_name.as_str())?
                     .into_iter()
                     .nth(idx)?;
-                let field_te = if self.type_subst_names.is_empty() {
-                    field_te
-                } else {
-                    let subst: std::collections::HashMap<String, TypeExpr> = self
-                        .type_subst_names
-                        .iter()
-                        .map(|(param, concrete)| {
-                            (
-                                param.clone(),
-                                TypeExpr {
-                                    kind: TypeKind::Path(PathExpr {
-                                        segments: vec![concrete.clone()],
-                                        generic_args: None,
-                                        span: field_te.span.clone(),
-                                    }),
-                                    span: field_te.span.clone(),
-                                },
-                            )
-                        })
-                        .collect();
-                    super::helpers::subst_type_params_in_type_expr(&field_te, &subst)
-                };
+                let field_te = self.resolve_generic_field_te(recv, struct_name.as_str(), &field_te);
                 vec_inner_type_expr(&field_te)
             }
             _ => None,
         }
+    }
+
+    /// Resolve a generic struct field's TypeExpr (`xs: Vec[T]`) to the
+    /// container's concrete instantiation. Primary source: the container
+    /// variable's recorded instantiation (`h: H[String]` in `main`, or a
+    /// generic-struct method's `self`, both via `enum_inst_var_types`) — its
+    /// args are full TypeExprs, so nested generics (`H[Vec[i64]]`) resolve
+    /// faithfully. Fallback: the active monomorph `type_subst_names`. Returns
+    /// `field_te` unchanged when the struct is non-generic or no instantiation
+    /// is known. Without this, `H[String]`'s `self.xs[i]` / `h.xs[i]` resolved
+    /// the element to the i64 unknown-name default and read an 8-byte scalar off
+    /// a 24-byte {ptr,len,cap} → garbage (B-2026-07-11-35).
+    pub(super) fn resolve_generic_field_te(
+        &self,
+        container: &Expr,
+        struct_name: &str,
+        field_te: &TypeExpr,
+    ) -> TypeExpr {
+        if let Some(inst) = self.enum_inst_type_of_expr(container) {
+            if let TypeKind::Path(p) = &inst.kind {
+                if p.segments.last().map(String::as_str) == Some(struct_name) {
+                    if let (Some(params), Some(args)) = (
+                        self.struct_generic_params.get(struct_name),
+                        p.generic_args.as_ref(),
+                    ) {
+                        let subst: std::collections::HashMap<String, TypeExpr> = params
+                            .iter()
+                            .zip(args.iter())
+                            .filter_map(|(param, arg)| match arg {
+                                GenericArg::Type(te) => Some((param.clone(), te.clone())),
+                                _ => None,
+                            })
+                            .collect();
+                        if !subst.is_empty() {
+                            return super::helpers::subst_type_params_in_type_expr(
+                                field_te, &subst,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        self.subst_monomorph_type_params(field_te)
+    }
+
+    /// Rewrite `te`'s bare type-param names through the active monomorph
+    /// substitution (`type_subst_names`), so a generic field / element TypeExpr
+    /// like `Vec[T]` becomes its concrete `Vec[String]` inside a `H[String]`
+    /// method body. A no-op outside a monomorph (empty `type_subst_names`).
+    /// `type_subst_names` is name→name, so a nested-generic concrete
+    /// (`T = Vec[i64]`) resolves to its head name only — faithful for the scalar
+    /// / String / plain-struct concretes that drive element stride and the
+    /// non-Copy clone decision, which is all the callers need.
+    pub(super) fn subst_monomorph_type_params(&self, te: &TypeExpr) -> TypeExpr {
+        if self.type_subst_names.is_empty() {
+            return te.clone();
+        }
+        let subst: std::collections::HashMap<String, TypeExpr> = self
+            .type_subst_names
+            .iter()
+            .map(|(param, concrete)| {
+                (
+                    param.clone(),
+                    TypeExpr {
+                        kind: TypeKind::Path(PathExpr {
+                            segments: vec![concrete.clone()],
+                            generic_args: None,
+                            span: te.span.clone(),
+                        }),
+                        span: te.span.clone(),
+                    },
+                )
+            })
+            .collect();
+        super::helpers::subst_type_params_in_type_expr(te, &subst)
     }
 
     pub(super) fn clone_owned_vec_index_element(

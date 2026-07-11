@@ -4634,6 +4634,37 @@ fn main() {
         }
     }
 
+    /// B-2026-07-11-35 (read-resolution layer): a field-rooted index READ of a
+    /// GENERIC container's non-Copy element (`h.xs[i]` where `h: H[String]`,
+    /// `xs: Vec[T]`) used to mis-resolve the element to the i64 unknown-name
+    /// DEFAULT — `lower_field_access_ptr` took the field's declared `Vec[T]`
+    /// verbatim, so codegen read an 8-byte scalar off a 24-byte {ptr,len,cap}
+    /// and printed garbage. It now resolves the element to the container's
+    /// concrete instantiation (via `resolve_generic_field_te`, sourced from the
+    /// variable's recorded `H[String]` instantiation with the active monomorph
+    /// subst as fallback), so the read has the correct `String` stride. Covers a
+    /// String and an f64 element through a direct field read; `H[i64]` is the
+    /// unchanged (i64-is-the-default) baseline. NOTE: this is only the READ leg —
+    /// the generic PUSH / owned-`T`-param ownership layers of B-2026-07-11-35
+    /// remain open (see the ledger), so this test builds the container by struct
+    /// LITERAL, not by generic `push`.
+    #[test]
+    fn e2e_generic_container_field_index_read_resolves_element() {
+        if let Some(out) = run_program(
+            "struct H[T] { xs: Vec[T] }\n\
+             fn main() {\n\
+             \x20   let hs: H[String] = H { xs: [f\"hello\", f\"world\"] };\n\
+             \x20   println(hs.xs[0]); println(hs.xs[1]);\n\
+             \x20   let hf: H[f64] = H { xs: [1.5, 2.5] };\n\
+             \x20   println(f\"{hf.xs[1]}\");\n\
+             \x20   let hi: H[i64] = H { xs: [7, 8] };\n\
+             \x20   println(f\"{hi.xs[0]}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "hello\nworld\n2.5\n7\n");
+        }
+    }
+
     /// B-2026-07-03-11: dispatch a trait method called through a GENERIC
     /// TYPE-PARAMETER BOUND under `karac build`. `fn use_it[X: Tagged](x: X)`
     /// calling `x.tag()` used to die with "no handler for method tag on

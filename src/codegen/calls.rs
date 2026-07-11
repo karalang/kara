@@ -519,6 +519,16 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(te) => te,
             None => return Ok(None),
         };
+        // B-2026-07-11-35: a GENERIC struct's field carries the bare type param
+        // (`xs: Vec[T]`); resolve it to the container's concrete instantiation so
+        // a `Heap[String]` `self.xs[i]` / `h.xs[i]` (and the field-receiver
+        // method path — `self.xs.push(x)`) registers the synth element as
+        // `String`, not the i64 unknown-name default (which read an 8-byte scalar
+        // off a 24-byte {ptr,len,cap} → garbage). Sources the concrete arg from
+        // the receiver's recorded instantiation (`h: H[String]`, or `self` in a
+        // monomorph) with the active monomorph subst as fallback; a no-op for a
+        // non-generic struct.
+        let field_te = self.resolve_generic_field_te(inner, &type_name, &field_te);
 
         // GEP the field pointer. Shared: GEP at (idx + 1) past the
         // refcount slot using the heap_type. Plain: GEP directly into
