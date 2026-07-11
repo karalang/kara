@@ -4313,6 +4313,29 @@ fn run_ir_via_jit_subprocess(ir: &str) -> i32 {
     }
 }
 
+/// True when the program declares a `#[gpu]` kernel — a `#[gpu] fn`, top-level
+/// or an impl method. Such a program's codegen emits `karac_runtime_gpu_*`
+/// calls (via `gpu.dispatch`) that the JIT runner's runtime rlib — built
+/// without the opt-in `gpu` feature — cannot resolve, so `karac run` routes it
+/// to the tree-walk interpreter instead of the JIT (B-2026-07-10-6). Detecting
+/// the kernel is a sound superset of detecting an actual `gpu.dispatch` call:
+/// a `#[gpu]` fn is only reachable through dispatch, and a declared-but-never-
+/// dispatched kernel routes to the interpreter harmlessly (it runs every
+/// program). The AOT `karac build` path, which auto-selects the gpu archive,
+/// is unaffected.
+#[cfg(feature = "llvm")]
+fn program_declares_gpu_kernel(program: &crate::ast::Program) -> bool {
+    use crate::ast::{ImplItem, Item};
+    program.items.iter().any(|item| match item {
+        Item::Function(f) => f.is_gpu,
+        Item::ImplBlock(b) => b
+            .items
+            .iter()
+            .any(|ii| matches!(ii, ImplItem::Method(m) if m.is_gpu)),
+        _ => false,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cmd_run(
     filename: &str,
@@ -4868,10 +4891,23 @@ fn cmd_run(
     // run envelopes and the cooperative `--timeout` deadline are interpreter-only
     // affordances the JIT one-shot doesn't provide, so those keep the
     // interpreter regardless. Compiled out on a non-`llvm` build (no JIT engine).
+    // B-2026-07-10-6 — route a `#[gpu]` / `gpu.dispatch` program to the
+    // tree-walk interpreter (element-wise CPU) regardless of the JIT-default.
+    // Its codegen emits `karac_runtime_gpu_*` calls, but the JIT runner's
+    // runtime rlib is built WITHOUT the opt-in `gpu` feature (the heavy
+    // wgpu/Metal backend), so the LLJIT dlsym generator can't resolve the
+    // symbol and `main` fails to materialize (`Symbols not found:
+    // [ karac_runtime_gpu_map ]`). The interpreter runs the same program
+    // correctly with no GPU dependency, so this closes the run-vs-build
+    // divergence. The AOT `karac build` path (which auto-selects
+    // libkarac_runtime_gpu.a and links the real backend) is unaffected.
+    #[cfg(feature = "llvm")]
+    let program_uses_gpu = program_declares_gpu_kernel(&pipeline.parsed.program);
     #[cfg(feature = "llvm")]
     if output == OutputMode::Text
         && timeout.is_none()
         && !interp
+        && !program_uses_gpu
         && std::env::var("KARAC_RUN_JIT").as_deref() != Ok("0")
     {
         // Codegen consumes ownership + concurrency (the interpreter path skips

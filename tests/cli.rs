@@ -3443,6 +3443,57 @@ fn test_run_derive_generated_body_typechecked_under_codegen() {
 }
 
 #[test]
+fn test_run_gpu_dispatch_routes_to_interpreter() {
+    // B-2026-07-10-6: a `#[gpu]` / `gpu.dispatch` program under the JIT-default
+    // `karac run` previously failed with `Symbols not found:
+    // [ karac_runtime_gpu_map ]` — the JIT runner's runtime rlib is built
+    // without the opt-in `gpu` feature, so the dispatch symbol is unresolved and
+    // `main` can't materialize. `cmd_run` now detects a `#[gpu]` kernel and
+    // routes such a program to the tree-walk interpreter (element-wise CPU),
+    // which needs no GPU backend. All three run forms must agree byte-for-byte:
+    // the default (was broken), the explicit `--interp`, and `KARAC_RUN_JIT=0`.
+    let src = "#[gpu] fn double(x: f32) -> f32 { x * 2.0 }\n\
+               fn main() {\n\
+               \x20   let buf: Vec[f32] = [1.0, 2.0, 3.0, 4.0];\n\
+               \x20   let out = gpu.dispatch(double, buf);\n\
+               \x20   for v in out { println(f\"{v}\") }\n\
+               }\n";
+    let path = write_run_temp("gpu", src);
+    let p = path.to_str().unwrap();
+
+    // Each run form must produce `2 4 6 8` and never hit the JIT symbol failure.
+    let assert_ok = |label: &str, cmd: KaracBin| {
+        let out = cmd.output().unwrap();
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !combined.contains("Symbols not found"),
+            "gpu.dispatch under {label} hit the JIT symbol-resolution failure it was \
+             supposed to route around:\n{combined}"
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let nums: Vec<&str> = stdout.split_whitespace().collect();
+        assert!(
+            out.status.success() && nums == ["2", "4", "6", "8"],
+            "gpu.dispatch under {label} should print 2 4 6 8; got:\n{combined}"
+        );
+    };
+
+    // JIT-default (the previously-broken form), explicit `--interp`, and the
+    // `KARAC_RUN_JIT=0` escape hatch must all agree.
+    assert_ok("`run` (JIT-default)", karac_bin().args(["run", p]));
+    assert_ok("`run --interp`", karac_bin().args(["run", "--interp", p]));
+    assert_ok(
+        "`run` KARAC_RUN_JIT=0",
+        karac_bin().args(["run", p]).env("KARAC_RUN_JIT", "0"),
+    );
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
 fn test_run_comptime_derive_fn_skipped_by_codegen() {
     // B-2026-07-08-15 Layer 3: a `#[derive(X)]`'s `comptime fn derive_x` runs
     // only at compile time (the comptime fold evaluates it via the interpreter
