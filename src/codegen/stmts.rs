@@ -2289,6 +2289,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(elems) = Self::soa_literal_elems(value) {
                             return self.compile_soa_let_from_literal(var_name, &soa, elems);
                         }
+                        // B-2026-07-11-27: `let <soa> = gpu.dispatch(...)`. The
+                        // dispatch returns an AoS `Vec[S]`; scatter it into the
+                        // SoA groups (not a raw store of the AoS header into the
+                        // multi-group slot, which SIGSEGVs on read / re-dispatch).
+                        // This is what lets a GPU substep chain `collide → stream`
+                        // through a `layout` intermediate.
+                        if self.is_gpu_dispatch_call(value) {
+                            return self.compile_soa_let_from_gpu_dispatch(var_name, &soa, value);
+                        }
                     }
                 }
                 // Map.new(): emit karac_map_new with sizes and (stub) fn pointers.
@@ -4412,6 +4421,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         if self.let_rhs_calls_layout_returning_fn(value) {
                             let name = name.clone();
                             return self.compile_soa_assign_from_call(&name, &soa, value);
+                        }
+                        // B-2026-07-11-27: `grid = gpu.dispatch(...)` — the SoA
+                        // double-buffer move. Scatter the AoS result into the SoA
+                        // groups (freeing the old ones first), same as the let
+                        // site; a raw store of the AoS header SIGSEGVs.
+                        if self.is_gpu_dispatch_call(value) {
+                            let name = name.clone();
+                            return self.compile_soa_assign_from_gpu_dispatch(&name, &soa, value);
                         }
                     }
                 }

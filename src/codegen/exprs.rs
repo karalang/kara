@@ -2419,6 +2419,214 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// True iff `value` is a `gpu.dispatch(...)` call (the `gpu` ambient, not a
+    /// user binding named `gpu`) — the RHS shape that needs AoS→SoA scattering
+    /// when bound to a `layout` variable (B-2026-07-11-27).
+    pub(super) fn is_gpu_dispatch_call(&self, value: &Expr) -> bool {
+        if let ExprKind::MethodCall { object, method, .. } = &value.kind {
+            if method == "dispatch" {
+                if let ExprKind::Identifier(name) = &object.kind {
+                    return name == "gpu" && !self.variables.contains_key("gpu");
+                }
+            }
+        }
+        false
+    }
+
+    /// B-2026-07-11-27: bind `let <var>: Vec[S] = gpu.dispatch(...)` where `<var>`
+    /// is SoA-laid-out. `gpu.dispatch` returns an **AoS** `Vec[S]` (the runtime
+    /// interleaves the per-group outputs back to AoS) — so, unlike
+    /// [`compile_soa_let_from_call`] which monomorphizes a *user* callee to RETURN
+    /// SoA, the AoS result must be scattered into the SoA groups. Build an empty
+    /// SoA header, loop over the AoS buffer pushing each element through
+    /// [`soa_push_value`] (the same decomposition `.push` uses), then free the
+    /// runtime-owned AoS buffer. Without this the AoS `{ptr,len,cap}` header was
+    /// stored raw into the multi-group SoA slot: field reads decoded it with SoA
+    /// striding (garbage) and a re-dispatch read `len`/`cap` as group pointers →
+    /// SIGSEGV — exactly what blocked chaining `collide → stream` on the GPU
+    /// (GPU-SLIP-3, the double-buffered substep).
+    pub(super) fn compile_soa_let_from_gpu_dispatch(
+        &mut self,
+        var_name: &str,
+        soa: &SoaLayout,
+        value: &Expr,
+    ) -> Result<(), String> {
+        let (aos_ptr, aos_len) = self.compile_gpu_dispatch_aos(value)?;
+        self.compile_soa_new(var_name, soa)?;
+        let slot = *self
+            .variables
+            .get(var_name)
+            .ok_or_else(|| format!("SoA variable '{var_name}' missing after new"))?;
+        self.soa_scatter_aos_into(slot.ptr, soa, aos_ptr, aos_len)
+    }
+
+    /// Assignment sibling of [`compile_soa_let_from_gpu_dispatch`]: `grid =
+    /// gpu.dispatch(...)` where `grid` is a live SoA binding (the double-buffered
+    /// substep move `grid = gpu.dispatch(stream, coll, …)`). Free the displaced
+    /// (old) group buffers, reset the slot to an empty header, then scatter the
+    /// AoS result in — the gpu.dispatch analog of [`compile_soa_assign_from_call`].
+    pub(super) fn compile_soa_assign_from_gpu_dispatch(
+        &mut self,
+        var_name: &str,
+        soa: &SoaLayout,
+        value: &Expr,
+    ) -> Result<(), String> {
+        let Some(slot) = self.variables.get(var_name).copied() else {
+            return self.compile_soa_let_from_gpu_dispatch(var_name, soa, value);
+        };
+        let (aos_ptr, aos_len) = self.compile_gpu_dispatch_aos(value)?;
+        let has_cold = soa.cold_group.is_some();
+        let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
+        // Free the OLD group buffers (per-element heap drop + free each buffer),
+        // then reset the header to empty so the scatter grows fresh groups.
+        let soa_drop_fn = self.emit_soa_drop_fn(soa);
+        self.emit_free_soa_groups_inline(
+            slot.ptr,
+            soa_ty,
+            soa.num_groups as u32,
+            has_cold,
+            soa_drop_fn,
+        );
+        self.store_empty_soa_header(slot.ptr, soa, soa_ty);
+        self.soa_scatter_aos_into(slot.ptr, soa, aos_ptr, aos_len)
+    }
+
+    /// Compile a `gpu.dispatch(...)` expression and return its AoS result buffer
+    /// as `(ptr, len)`. The runtime interleaves the per-group GPU outputs into a
+    /// fresh AoS `Vec[S]` `{ptr, len, cap}`; the caller scatters it into SoA.
+    fn compile_gpu_dispatch_aos(
+        &mut self,
+        value: &Expr,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        let aos = self.compile_expr(value)?.into_struct_value();
+        let aos_ptr = self
+            .builder
+            .build_extract_value(aos, 0, "aos.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let aos_len = self
+            .builder
+            .build_extract_value(aos, 1, "aos.len")
+            .unwrap()
+            .into_int_value();
+        Ok((aos_ptr, aos_len))
+    }
+
+    /// Store a fresh zeroed SoA header (null group pointers, len = cap = 0) into
+    /// an EXISTING slot — the reassignment reset before a scatter. Unlike
+    /// [`compile_soa_new`], allocates no slot and registers no cleanup (the
+    /// binding's queued `FreeSoaGroups` already owns the slot).
+    fn store_empty_soa_header(
+        &mut self,
+        slot_ptr: PointerValue<'ctx>,
+        soa: &SoaLayout,
+        soa_ty: inkwell::types::StructType<'ctx>,
+    ) {
+        let has_cold = soa.cold_group.is_some();
+        let null_ptr = self.context.ptr_type(AddressSpace::default()).const_null();
+        let zero = self.context.i64_type().const_int(0, false);
+        let len_idx = Self::soa_len_index(soa.num_groups, has_cold);
+        let cap_idx = Self::soa_cap_index(soa.num_groups, has_cold);
+        let mut agg = soa_ty.get_undef();
+        for i in 0..soa.num_groups {
+            agg = self
+                .builder
+                .build_insert_value(agg, null_ptr, i as u32, "soa.g")
+                .unwrap()
+                .into_struct_value();
+        }
+        if has_cold {
+            let cold_idx = Self::soa_cold_ptr_index(soa.num_groups);
+            agg = self
+                .builder
+                .build_insert_value(agg, null_ptr, cold_idx, "soa.cold")
+                .unwrap()
+                .into_struct_value();
+        }
+        agg = self
+            .builder
+            .build_insert_value(agg, zero, len_idx, "soa.len")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, zero, cap_idx, "soa.cap")
+            .unwrap()
+            .into_struct_value();
+        self.builder.build_store(slot_ptr, agg).unwrap();
+    }
+
+    /// Scatter a runtime AoS `Vec[S]` buffer (`aos_ptr`, `aos_len`) into an
+    /// already-empty SoA slot: `for i in 0..len { soa_push_value(aos_ptr[i]) }`,
+    /// then free the AoS carrier (the group buffers now own the data). Shared by
+    /// the let/assign gpu.dispatch → SoA paths (B-2026-07-11-27).
+    fn soa_scatter_aos_into(
+        &mut self,
+        slot_ptr: PointerValue<'ctx>,
+        soa: &SoaLayout,
+        aos_ptr: PointerValue<'ctx>,
+        aos_len: inkwell::values::IntValue<'ctx>,
+    ) -> Result<(), String> {
+        let i64_t = self.context.i64_type();
+        let has_cold = soa.cold_group.is_some();
+        let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
+        let elem_struct_ty = *self
+            .struct_types
+            .get(&soa.struct_name)
+            .ok_or_else(|| format!("SoA element struct '{}' missing", soa.struct_name))?;
+        let fn_val = self.current_fn.unwrap();
+        let head_bb = self.context.append_basic_block(fn_val, "gpu.soa.copy.head");
+        let body_bb = self.context.append_basic_block(fn_val, "gpu.soa.copy.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "gpu.soa.copy.exit");
+        let iv = self.create_entry_alloca(fn_val, "gpu.soa.copy.i", i64_t.into());
+        self.builder.build_store(iv, i64_t.const_zero()).unwrap();
+        self.builder.build_unconditional_branch(head_bb).unwrap();
+
+        self.builder.position_at_end(head_bb);
+        let i_hd = self
+            .builder
+            .build_load(i64_t, iv, "i")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, i_hd, aos_len, "i.lt.n")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let i = self
+            .builder
+            .build_load(i64_t, iv, "i")
+            .unwrap()
+            .into_int_value();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_struct_ty, aos_ptr, &[i], "aos.elem.ptr")
+                .unwrap()
+        };
+        let elem_sv = self
+            .builder
+            .build_load(elem_struct_ty, elem_ptr, "aos.elem")
+            .unwrap()
+            .into_struct_value();
+        self.soa_push_value(soa, soa_ty, slot_ptr, elem_sv)?;
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "i.next")
+            .unwrap();
+        self.builder.build_store(iv, next).unwrap();
+        self.builder.build_unconditional_branch(head_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder
+            .build_call(self.free_fn, &[aos_ptr.into()], "")
+            .unwrap();
+        Ok(())
+    }
+
     pub(super) fn compile_soa_new(
         &mut self,
         var_name: &str,
@@ -2649,6 +2857,219 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(cont_bb);
     }
 
+    /// Grow (if full) and append one already-compiled AoS element struct to a
+    /// SoA Vec: decompose `elem_sv` into per-group sub-structs and store each at
+    /// the current length, then bump `len`. The write half of a SoA `push`,
+    /// factored so both `compile_soa_method`'s "push" arm (which compiles the
+    /// argument expression first) and the AoS→SoA scatter that binds a
+    /// `gpu.dispatch` result into a `layout` variable (`compile_soa_let_from_gpu_dispatch`,
+    /// B-2026-07-11-27, which loads each element from a runtime buffer) share it.
+    /// `soa_struct_ptr` must already be the SoA struct (any `ref`-param deref
+    /// resolved by the caller). Does NOT do the named-binding move-cap zeroing —
+    /// that is push-arm-specific (a loaded/temporary element has no source slot).
+    pub(super) fn soa_push_value(
+        &mut self,
+        soa: &SoaLayout,
+        soa_ty: inkwell::types::StructType<'ctx>,
+        soa_struct_ptr: inkwell::values::PointerValue<'ctx>,
+        elem_sv: inkwell::values::StructValue<'ctx>,
+    ) -> Result<(), String> {
+        let has_cold = soa.cold_group.is_some();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let len_idx = Self::soa_len_index(soa.num_groups, has_cold);
+        let cap_idx = Self::soa_cap_index(soa.num_groups, has_cold);
+
+        let len_ptr = self
+            .builder
+            .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.len.ptr")
+            .unwrap();
+        let cap_ptr = self
+            .builder
+            .build_struct_gep(soa_ty, soa_struct_ptr, cap_idx, "soa.cap.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "soa.len")
+            .unwrap()
+            .into_int_value();
+        let cap = self
+            .builder
+            .build_load(i64_t, cap_ptr, "soa.cap")
+            .unwrap()
+            .into_int_value();
+
+        // Growth check.
+        let fn_val = self.current_fn.unwrap();
+        let grow_bb = self.context.append_basic_block(fn_val, "soa.grow");
+        let store_bb = self.context.append_basic_block(fn_val, "soa.store");
+        let needs_grow = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, len, cap, "soa.needs_grow")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(needs_grow, grow_bb, store_bb)
+            .unwrap();
+
+        // Grow each group buffer.
+        self.builder.position_at_end(grow_bb);
+        let two = i64_t.const_int(2, false);
+        let four = i64_t.const_int(4, false);
+        let doubled = self.builder.build_int_mul(cap, two, "doubled").unwrap();
+        let cmp = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "cmp")
+            .unwrap();
+        let new_cap = self
+            .builder
+            .build_select(cmp, doubled, four, "new_cap")
+            .unwrap()
+            .into_int_value();
+
+        let cold_group_vec: Vec<(usize, &SoaGroup)> = if let Some(ref cg) = soa.cold_group {
+            vec![(soa.num_groups, cg)]
+        } else {
+            Vec::new()
+        };
+        let all_groups: Vec<(usize, &SoaGroup)> = soa
+            .groups
+            .iter()
+            .enumerate()
+            .chain(cold_group_vec.iter().copied())
+            .collect();
+
+        for (struct_field_idx, group) in &all_groups {
+            let group_elem_ty = self.soa_group_elem_type(&soa.struct_name, group);
+            let elem_size = group_elem_ty.size_of().unwrap();
+            let alloc_bytes = self
+                .builder
+                .build_int_mul(new_cap, elem_size, "g.alloc")
+                .unwrap();
+            let new_buf = if let Some(align_n) = group.align {
+                let align_val = i64_t.const_int(align_n as u64, false);
+                self.builder
+                    .build_call(
+                        self.aligned_alloc_fn(),
+                        &[align_val.into(), alloc_bytes.into()],
+                        "g.new_aligned",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value()
+            } else {
+                self.builder
+                    .build_call(self.malloc_fn, &[alloc_bytes.into()], "g.new")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value()
+            };
+            let old_ptr_ptr = self
+                .builder
+                .build_struct_gep(
+                    soa_ty,
+                    soa_struct_ptr,
+                    *struct_field_idx as u32,
+                    &format!("g{}.ptr", struct_field_idx),
+                )
+                .unwrap();
+            let old_buf = self
+                .builder
+                .build_load(ptr_ty, old_ptr_ptr, "g.old")
+                .unwrap()
+                .into_pointer_value();
+            let old_bytes = self
+                .builder
+                .build_int_mul(len, elem_size, "g.old_bytes")
+                .unwrap();
+            self.builder
+                .build_memcpy(new_buf, 8, old_buf, 8, old_bytes)
+                .unwrap();
+            self.builder
+                .build_call(self.free_fn, &[old_buf.into()], "")
+                .unwrap();
+            self.builder.build_store(old_ptr_ptr, new_buf).unwrap();
+        }
+        self.builder.build_store(cap_ptr, new_cap).unwrap();
+        self.builder.build_unconditional_branch(store_bb).unwrap();
+
+        // Store: decompose the struct into group fields.
+        self.builder.position_at_end(store_bb);
+        let cur_len = self
+            .builder
+            .build_load(i64_t, len_ptr, "cur_len")
+            .unwrap()
+            .into_int_value();
+
+        for (gi, group) in soa.groups.iter().enumerate() {
+            let group_elem_ty = self.soa_group_elem_type(&soa.struct_name, group);
+            let grp_ptr_ptr = self
+                .builder
+                .build_struct_gep(soa_ty, soa_struct_ptr, gi as u32, &format!("g{}.ptr", gi))
+                .unwrap();
+            let grp_buf = self
+                .builder
+                .build_load(ptr_ty, grp_ptr_ptr, &format!("g{}.buf", gi))
+                .unwrap()
+                .into_pointer_value();
+            let dest = unsafe {
+                self.builder
+                    .build_gep(group_elem_ty, grp_buf, &[cur_len], &format!("g{}.dest", gi))
+                    .unwrap()
+            };
+            let mut grp_val = group_elem_ty.get_undef();
+            for (fi, &src_idx) in group.field_indices.iter().enumerate() {
+                let field_val = self
+                    .builder
+                    .build_extract_value(elem_sv, src_idx as u32, "f")
+                    .unwrap();
+                grp_val = self
+                    .builder
+                    .build_insert_value(grp_val, field_val, fi as u32, "gf")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            self.builder.build_store(dest, grp_val).unwrap();
+        }
+        if let Some(ref cold) = soa.cold_group.clone() {
+            let cold_idx = Self::soa_cold_ptr_index(soa.num_groups);
+            let cold_elem_ty = self.soa_group_elem_type(&soa.struct_name, cold);
+            let cold_ptr_ptr = self
+                .builder
+                .build_struct_gep(soa_ty, soa_struct_ptr, cold_idx, "cold.ptr")
+                .unwrap();
+            let cold_buf = self
+                .builder
+                .build_load(ptr_ty, cold_ptr_ptr, "cold.buf")
+                .unwrap()
+                .into_pointer_value();
+            let dest = unsafe {
+                self.builder
+                    .build_gep(cold_elem_ty, cold_buf, &[cur_len], "cold.dest")
+                    .unwrap()
+            };
+            let mut cold_val = cold_elem_ty.get_undef();
+            for (fi, &src_idx) in cold.field_indices.iter().enumerate() {
+                let field_val = self
+                    .builder
+                    .build_extract_value(elem_sv, src_idx as u32, "f")
+                    .unwrap();
+                cold_val = self
+                    .builder
+                    .build_insert_value(cold_val, field_val, fi as u32, "cf")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            self.builder.build_store(dest, cold_val).unwrap();
+        }
+
+        let one = i64_t.const_int(1, false);
+        let new_len = self.builder.build_int_add(cur_len, one, "new_len").unwrap();
+        self.builder.build_store(len_ptr, new_len).unwrap();
+        Ok(())
+    }
+
     pub(super) fn compile_soa_method(
         &mut self,
         var_name: &str,
@@ -2662,7 +3083,6 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let len_idx = Self::soa_len_index(soa.num_groups, has_cold);
-        let cap_idx = Self::soa_cap_index(soa.num_groups, has_cold);
 
         // A `ref`/`mut ref Vec[E]` SoA param's slot holds a POINTER to the
         // caller's SoA struct; deref once so reads (`len`) and mutations
@@ -2694,206 +3114,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let elem_val = self.compile_expr(&args[0].value)?;
                 let elem_sv = elem_val.into_struct_value();
 
-                // Load len, cap.
-                let len_ptr = self
-                    .builder
-                    .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.len.ptr")
-                    .unwrap();
-                let cap_ptr = self
-                    .builder
-                    .build_struct_gep(soa_ty, soa_struct_ptr, cap_idx, "soa.cap.ptr")
-                    .unwrap();
-                let len = self
-                    .builder
-                    .build_load(i64_t, len_ptr, "soa.len")
-                    .unwrap()
-                    .into_int_value();
-                let cap = self
-                    .builder
-                    .build_load(i64_t, cap_ptr, "soa.cap")
-                    .unwrap()
-                    .into_int_value();
-
-                // Growth check.
-                let fn_val = self.current_fn.unwrap();
-                let grow_bb = self.context.append_basic_block(fn_val, "soa.grow");
-                let store_bb = self.context.append_basic_block(fn_val, "soa.store");
-                let needs_grow = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::EQ, len, cap, "soa.needs_grow")
-                    .unwrap();
-                self.builder
-                    .build_conditional_branch(needs_grow, grow_bb, store_bb)
-                    .unwrap();
-
-                // Grow each group buffer.
-                self.builder.position_at_end(grow_bb);
-                let two = i64_t.const_int(2, false);
-                let four = i64_t.const_int(4, false);
-                let doubled = self.builder.build_int_mul(cap, two, "doubled").unwrap();
-                let cmp = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "cmp")
-                    .unwrap();
-                let new_cap = self
-                    .builder
-                    .build_select(cmp, doubled, four, "new_cap")
-                    .unwrap()
-                    .into_int_value();
-
-                // Collect all groups to grow: hot groups first, then cold (if present).
-                let cold_group_vec: Vec<(usize, &SoaGroup)> = if let Some(ref cg) = soa.cold_group {
-                    let cold_idx = soa.num_groups; // struct field index for cold ptr
-                    vec![(cold_idx, cg)]
-                } else {
-                    Vec::new()
-                };
-                let all_groups: Vec<(usize, &SoaGroup)> = soa
-                    .groups
-                    .iter()
-                    .enumerate()
-                    .chain(cold_group_vec.iter().copied())
-                    .collect();
-
-                for (struct_field_idx, group) in &all_groups {
-                    let group_elem_ty = self.soa_group_elem_type(&soa.struct_name, group);
-                    let elem_size = group_elem_ty.size_of().unwrap();
-                    let alloc_bytes = self
-                        .builder
-                        .build_int_mul(new_cap, elem_size, "g.alloc")
-                        .unwrap();
-                    // Use aligned malloc for groups with align(N).
-                    let new_buf = if let Some(align_n) = group.align {
-                        let align_val = i64_t.const_int(align_n as u64, false);
-                        self.builder
-                            .build_call(
-                                self.aligned_alloc_fn(),
-                                &[align_val.into(), alloc_bytes.into()],
-                                "g.new_aligned",
-                            )
-                            .unwrap()
-                            .try_as_basic_value()
-                            .unwrap_basic()
-                            .into_pointer_value()
-                    } else {
-                        self.builder
-                            .build_call(self.malloc_fn, &[alloc_bytes.into()], "g.new")
-                            .unwrap()
-                            .try_as_basic_value()
-                            .unwrap_basic()
-                            .into_pointer_value()
-                    };
-                    // Copy old data.
-                    let old_ptr_ptr = self
-                        .builder
-                        .build_struct_gep(
-                            soa_ty,
-                            soa_struct_ptr,
-                            *struct_field_idx as u32,
-                            &format!("g{}.ptr", struct_field_idx),
-                        )
-                        .unwrap();
-                    let old_buf = self
-                        .builder
-                        .build_load(ptr_ty, old_ptr_ptr, "g.old")
-                        .unwrap()
-                        .into_pointer_value();
-                    let old_bytes = self
-                        .builder
-                        .build_int_mul(len, elem_size, "g.old_bytes")
-                        .unwrap();
-                    self.builder
-                        .build_memcpy(new_buf, 8, old_buf, 8, old_bytes)
-                        .unwrap();
-                    self.builder
-                        .build_call(self.free_fn, &[old_buf.into()], "")
-                        .unwrap();
-                    self.builder.build_store(old_ptr_ptr, new_buf).unwrap();
-                }
-                self.builder.build_store(cap_ptr, new_cap).unwrap();
-                self.builder.build_unconditional_branch(store_bb).unwrap();
-
-                // Store: decompose the struct into group fields.
-                self.builder.position_at_end(store_bb);
-                let cur_len = self
-                    .builder
-                    .build_load(i64_t, len_ptr, "cur_len")
-                    .unwrap()
-                    .into_int_value();
-
-                // Store hot groups.
-                for (gi, group) in soa.groups.iter().enumerate() {
-                    let group_elem_ty = self.soa_group_elem_type(&soa.struct_name, group);
-                    let grp_ptr_ptr = self
-                        .builder
-                        .build_struct_gep(
-                            soa_ty,
-                            soa_struct_ptr,
-                            gi as u32,
-                            &format!("g{}.ptr", gi),
-                        )
-                        .unwrap();
-                    let grp_buf = self
-                        .builder
-                        .build_load(ptr_ty, grp_ptr_ptr, &format!("g{}.buf", gi))
-                        .unwrap()
-                        .into_pointer_value();
-                    let dest = unsafe {
-                        self.builder
-                            .build_gep(group_elem_ty, grp_buf, &[cur_len], &format!("g{}.dest", gi))
-                            .unwrap()
-                    };
-                    let mut grp_val = group_elem_ty.get_undef();
-                    for (fi, &src_idx) in group.field_indices.iter().enumerate() {
-                        let field_val = self
-                            .builder
-                            .build_extract_value(elem_sv, src_idx as u32, "f")
-                            .unwrap();
-                        grp_val = self
-                            .builder
-                            .build_insert_value(grp_val, field_val, fi as u32, "gf")
-                            .unwrap()
-                            .into_struct_value();
-                    }
-                    self.builder.build_store(dest, grp_val).unwrap();
-                }
-                // Store cold group (separate allocation).
-                if let Some(ref cold) = soa.cold_group.clone() {
-                    let cold_idx = Self::soa_cold_ptr_index(soa.num_groups);
-                    let cold_elem_ty = self.soa_group_elem_type(&soa.struct_name, cold);
-                    let cold_ptr_ptr = self
-                        .builder
-                        .build_struct_gep(soa_ty, soa_struct_ptr, cold_idx, "cold.ptr")
-                        .unwrap();
-                    let cold_buf = self
-                        .builder
-                        .build_load(ptr_ty, cold_ptr_ptr, "cold.buf")
-                        .unwrap()
-                        .into_pointer_value();
-                    let dest = unsafe {
-                        self.builder
-                            .build_gep(cold_elem_ty, cold_buf, &[cur_len], "cold.dest")
-                            .unwrap()
-                    };
-                    let mut cold_val = cold_elem_ty.get_undef();
-                    for (fi, &src_idx) in cold.field_indices.iter().enumerate() {
-                        let field_val = self
-                            .builder
-                            .build_extract_value(elem_sv, src_idx as u32, "f")
-                            .unwrap();
-                        cold_val = self
-                            .builder
-                            .build_insert_value(cold_val, field_val, fi as u32, "cf")
-                            .unwrap()
-                            .into_struct_value();
-                    }
-                    self.builder.build_store(dest, cold_val).unwrap();
-                }
-
-                // Increment len.
-                let one = i64_t.const_int(1, false);
-                let new_len = self.builder.build_int_add(cur_len, one, "new_len").unwrap();
-                self.builder.build_store(len_ptr, new_len).unwrap();
+                self.soa_push_value(soa, soa_ty, soa_struct_ptr, elem_sv)?;
 
                 // Move-in of a NAMED owned struct binding
                 // (`let c = Cell{..}; grid.push(c)`): the scatter above bit-
