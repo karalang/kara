@@ -110,12 +110,111 @@ pub unsafe extern "C" fn karac_runtime_gpu_map(
     out
 }
 
+/// C entry point for `gpu.dispatch(kernel, buffer)` over a **SoA `layout`-block
+/// buffer** — CG-4 (layout groups → coalesced GPU buffers).
+///
+/// Generalizes [`karac_runtime_gpu_map`] from one buffer to `n_buffers` — one
+/// per layout group (Path A: one field per group, so each group's backing array
+/// is a contiguous `array<f32>`). All `n_buffers` inputs share the same element
+/// count `n` and `elem_size`. Bindings follow the emitter's convention: input
+/// buffers occupy `@binding(0..n_buffers)`, outputs `@binding(n_buffers..2*n_buffers)`.
+/// Each output is a freshly `malloc`'d `n * elem_size`-byte buffer; the `k`-th
+/// result pointer is written into `out_ptrs[k]` (a caller-provided array of
+/// `n_buffers` slots), which codegen scatters back into the SoA `Vec`'s per-group
+/// pointers. Empty input (`n == 0`) writes a unique non-null 1-byte allocation to
+/// every slot (never dereferenced), mirroring the single-buffer contract.
+///
+/// # Safety
+///
+/// `wgsl_ptr`/`wgsl_len` a valid UTF-8 shader; `in_ptrs` an array of `n_buffers`
+/// pointers, each to `n * elem_size` valid bytes; `out_ptrs` an array of
+/// `n_buffers` writable pointer slots. Each written pointer transfers ownership
+/// to the caller. Aborts on no available GPU adapter (no CPU fallback), same as
+/// the single-buffer entry point.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_map_multi(
+    wgsl_ptr: *const u8,
+    wgsl_len: usize,
+    n_buffers: usize,
+    in_ptrs: *const *const u8,
+    n: usize,
+    elem_size: usize,
+    out_ptrs: *mut *mut u8,
+) {
+    let byte_len = n.saturating_mul(elem_size);
+    let out_slots = std::slice::from_raw_parts_mut(out_ptrs, n_buffers);
+
+    // Empty dispatch: a unique non-null allocation per group, never read.
+    if byte_len == 0 || n_buffers == 0 {
+        for slot in out_slots.iter_mut() {
+            *slot = crate::alloc::karac_alloc_or_panic(1);
+        }
+        return;
+    }
+
+    let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
+    let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
+        crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
+        std::process::abort();
+    };
+    let in_ptr_slice = std::slice::from_raw_parts(in_ptrs, n_buffers);
+    let inputs: Vec<&[u8]> = in_ptr_slice
+        .iter()
+        .map(|&p| std::slice::from_raw_parts(p, byte_len))
+        .collect();
+
+    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, elem_size))
+    else {
+        crate::fatal::write_stderr(
+            b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
+        );
+        std::process::abort();
+    };
+    debug_assert_eq!(outputs.len(), n_buffers, "one output buffer per group");
+
+    for (slot, obytes) in out_slots.iter_mut().zip(outputs.iter()) {
+        debug_assert_eq!(obytes.len(), byte_len, "element-wise map preserves length");
+        let out = crate::alloc::karac_alloc_or_panic(byte_len);
+        std::ptr::copy_nonoverlapping(obytes.as_ptr(), out, byte_len);
+        *slot = out;
+    }
+}
+
 /// Byte-oriented GPU element-wise map core. `input` is the raw element bytes
 /// (`n * elem_size`); the returned buffer is the same length. The WGSL shader
 /// supplies the element interpretation via its `array<T>` binding declarations,
 /// so this stays type-agnostic. `elem_size` sets the per-element stride used to
 /// derive the invocation count.
 async fn dispatch_bytes_async(wgsl: &str, input: &[u8], elem_size: usize) -> Option<Vec<u8>> {
+    // The single-buffer path is the `n_buffers == 1` case of the multi core:
+    // input at `@binding(0)`, output at `@binding(1)` — byte-identical to the
+    // slice-0 WGSL contract.
+    let mut outs = dispatch_multi_bytes_async(wgsl, &[input], elem_size).await?;
+    outs.pop()
+}
+
+/// Byte-oriented GPU map core over `n = inputs.len()` coalesced buffers — the
+/// CG-4 generalization of the slice-0 single-buffer spine. Each `inputs[k]` is
+/// one layout group's contiguous field-array (raw bytes, `n_elems * elem_size`);
+/// all groups share the same element count. Binds input buffers at
+/// `@binding(0..n)` and output buffers at `@binding(n..2n)`; returns one output
+/// byte-buffer per group (same length as its input). The WGSL supplies the
+/// element interpretation via its `array<T>` declarations, so this stays
+/// type-agnostic.
+async fn dispatch_multi_bytes_async(
+    wgsl: &str,
+    inputs: &[&[u8]],
+    elem_size: usize,
+) -> Option<Vec<Vec<u8>>> {
+    let n_buffers = inputs.len();
+    if n_buffers == 0 {
+        return Some(Vec::new());
+    }
+    // All groups carry the same element count; derive the invocation count from
+    // the first (they are equal by construction — one element per logical row).
+    let byte_len = inputs[0].len() as u64;
+    let elem_count = inputs[0].len() / elem_size;
+
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
@@ -126,34 +225,44 @@ async fn dispatch_bytes_async(wgsl: &str, input: &[u8], elem_size: usize) -> Opt
         .await
         .ok()?;
 
-    let byte_len = input.len() as u64;
-    let elem_count = input.len() / elem_size;
-
-    let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("gpu-slice0a-input"),
-        contents: input,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-    });
-    let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("gpu-slice0a-output"),
-        size: byte_len,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-    let staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("gpu-slice0a-staging"),
-        size: byte_len,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let input_bufs: Vec<wgpu::Buffer> = inputs
+        .iter()
+        .map(|bytes| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("gpu-cg4-input"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            })
+        })
+        .collect();
+    let output_bufs: Vec<wgpu::Buffer> = (0..n_buffers)
+        .map(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("gpu-cg4-output"),
+                size: byte_len,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        })
+        .collect();
+    let staging_bufs: Vec<wgpu::Buffer> = (0..n_buffers)
+        .map(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("gpu-cg4-staging"),
+                size: byte_len,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        })
+        .collect();
 
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("gpu-slice0a-shader"),
+        label: Some("gpu-cg4-shader"),
         source: wgpu::ShaderSource::Wgsl(wgsl.into()),
     });
 
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("gpu-slice0a-pipeline"),
+        label: Some("gpu-cg4-pipeline"),
         layout: None,
         module: &module,
         entry_point: Some("main"),
@@ -162,27 +271,32 @@ async fn dispatch_bytes_async(wgsl: &str, input: &[u8], elem_size: usize) -> Opt
     });
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);
+    // Inputs at binding 0..n, outputs at binding n..2n (the emitter's convention).
+    let mut entries: Vec<wgpu::BindGroupEntry> = Vec::with_capacity(n_buffers * 2);
+    for (i, buf) in input_bufs.iter().enumerate() {
+        entries.push(wgpu::BindGroupEntry {
+            binding: i as u32,
+            resource: buf.as_entire_binding(),
+        });
+    }
+    for (i, buf) in output_bufs.iter().enumerate() {
+        entries.push(wgpu::BindGroupEntry {
+            binding: (n_buffers + i) as u32,
+            resource: buf.as_entire_binding(),
+        });
+    }
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("gpu-slice0a-bind-group"),
+        label: Some("gpu-cg4-bind-group"),
         layout: &bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: input_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: output_buf.as_entire_binding(),
-            },
-        ],
+        entries: &entries,
     });
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("gpu-slice0a-encoder"),
+        label: Some("gpu-cg4-encoder"),
     });
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("gpu-slice0a-pass"),
+            label: Some("gpu-cg4-pass"),
             timestamp_writes: None,
         });
         pass.set_pipeline(&pipeline);
@@ -190,23 +304,36 @@ async fn dispatch_bytes_async(wgsl: &str, input: &[u8], elem_size: usize) -> Opt
         // One invocation per element; @workgroup_size(64) in the shader.
         pass.dispatch_workgroups((elem_count as u32).div_ceil(64), 1, 1);
     }
-    encoder.copy_buffer_to_buffer(&output_buf, 0, &staging_buf, 0, byte_len);
+    for (out_buf, staging) in output_bufs.iter().zip(staging_bufs.iter()) {
+        encoder.copy_buffer_to_buffer(out_buf, 0, staging, 0, byte_len);
+    }
     queue.submit(Some(encoder.finish()));
 
-    // Map the staging buffer and block until the GPU work + copy complete.
-    let slice = staging_buf.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |res| {
-        let _ = tx.send(res);
-    });
+    // Kick off every staging map, then a single poll drains all callbacks.
+    let receivers: Vec<_> = staging_bufs
+        .iter()
+        .map(|staging| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            staging
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |res| {
+                    let _ = tx.send(res);
+                });
+            rx
+        })
+        .collect();
     device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
-    rx.recv().ok()?.ok()?;
 
-    let mapped = slice.get_mapped_range();
-    let out: Vec<u8> = mapped.to_vec();
-    drop(mapped);
-    staging_buf.unmap();
-    Some(out)
+    let mut outs = Vec::with_capacity(n_buffers);
+    for (staging, rx) in staging_bufs.iter().zip(receivers) {
+        rx.recv().ok()?.ok()?;
+        let slice = staging.slice(..);
+        let mapped = slice.get_mapped_range();
+        outs.push(mapped.to_vec());
+        drop(mapped);
+        staging.unmap();
+    }
+    Some(outs)
 }
 
 #[cfg(test)]
@@ -239,6 +366,64 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_eq!(output.len(), input.len(), "output length mismatch");
         for (i, (&inp, &out)) in input.iter().zip(output.iter()).enumerate() {
             assert_eq!(out, inp * 2.0, "element {i}: {inp} * 2.0 != {out}");
+        }
+    }
+
+    // CG-4 multi-buffer kernel: the Path-A Particle step over two coalesced
+    // f32 field-arrays (pos, vel) — one `array<f32>` binding per layout group.
+    // This is the WGSL the emitter will generate from
+    // `#[gpu] fn step(p: Particle) -> Particle { Particle { pos: p.pos + p.vel, vel: p.vel } }`
+    // over `layout world: Vec[Particle] { group gp { pos } group gv { vel } }`.
+    const PARTICLE_STEP_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       gp_in:  array<f32>;
+@group(0) @binding(1) var<storage, read>       gv_in:  array<f32>;
+@group(0) @binding(2) var<storage, read_write> gp_out: array<f32>;
+@group(0) @binding(3) var<storage, read_write> gv_out: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= arrayLength(&gp_in)) { return; }
+    let p_pos = gp_in[i];
+    let p_vel = gv_in[i];
+    gp_out[i] = p_pos + p_vel;
+    gv_out[i] = p_vel;
+}
+"#;
+
+    fn f32s_to_le(xs: &[f32]) -> Vec<u8> {
+        xs.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+    fn le_to_f32s(bytes: &[u8]) -> Vec<f32> {
+        bytes
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect()
+    }
+
+    #[test]
+    fn multi_buffer_particle_step_on_the_gpu() {
+        let pos: Vec<f32> = (0..256).map(|i| i as f32).collect();
+        let vel: Vec<f32> = (0..256).map(|i| (i as f32) * 0.5 + 1.0).collect();
+        let pos_bytes = f32s_to_le(&pos);
+        let vel_bytes = f32s_to_le(&vel);
+
+        let Some(outs) = pollster::block_on(dispatch_multi_bytes_async(
+            PARTICLE_STEP_WGSL,
+            &[&pos_bytes, &vel_bytes],
+            4,
+        )) else {
+            eprintln!("gpu-cg4: no GPU adapter available — skipping");
+            return;
+        };
+        assert_eq!(outs.len(), 2, "expected one output buffer per group");
+        let pos_out = le_to_f32s(&outs[0]);
+        let vel_out = le_to_f32s(&outs[1]);
+        assert_eq!(pos_out.len(), 256);
+        assert_eq!(vel_out.len(), 256);
+        for i in 0..256 {
+            assert_eq!(pos_out[i], pos[i] + vel[i], "pos[{i}]");
+            assert_eq!(vel_out[i], vel[i], "vel[{i}]");
         }
     }
 }
