@@ -9832,6 +9832,46 @@ fn test_stdin_lines_for_loop_binds_result_string() {
 }
 
 #[test]
+fn test_stdin_lines_adaptor_rejected() {
+    // B-2026-07-11-34: line iterators support no adaptors/terminals at v1 — an
+    // adaptor over `stdin.lines()` (which the for-loop machinery can't
+    // materialize) must be rejected LOUDLY, not fall through to a silent
+    // zero-iteration no-op. The message points at the working shape.
+    let errors = typecheck_errors("fn main() { for x in stdin.lines().map(|r| r) { } }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("not available on `StdinLines`")),
+        "expected a loud adaptor rejection on StdinLines; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_bufreader_lines_adaptor_rejected() {
+    // Same guard closes the pre-existing `LinesIter` twin (`br.lines().map()`
+    // used to typecheck then silently iterate zero times).
+    let errors = typecheck_errors(
+        "fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => {
+                     let br = BufReader.new(f);
+                     for x in br.lines().map(|r| r) { }
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("not available on `LinesIter`")),
+        "expected a loud adaptor rejection on LinesIter; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_bufreader_lines_for_loop_binds_result_string() {
     // `for line in br.lines()` binds `line: Result[String, IoError]` via the
     // programmatic `("LinesIter", "Item")` mapping, so destructuring `Ok(s)`

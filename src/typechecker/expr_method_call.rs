@@ -2718,6 +2718,33 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `StdinLines` (`stdin.lines()`) and `LinesIter` (`BufReader.lines()`)
+        // are opaque line-iterator markers with NO surface methods — iteration
+        // is via `for line in <iter>` only (the drain/codegen loop pulls one
+        // line per turn). Reject ANY method call on them LOUDLY: an adaptor
+        // (`.map()`/`.filter()`/…) or terminal is not wired into the for-loop
+        // materialization, so without this it either falls through to a silent
+        // zero-iteration no-op (`LinesIter`) or an unhelpful generic "no method"
+        // (`StdinLines`) — B-2026-07-11-34. Direct for-loop iteration does not
+        // go through method dispatch, so it is unaffected.
+        if let Type::Named { name, .. } = &obj_ty {
+            if name == "StdinLines" || name == "LinesIter" {
+                self.type_error(
+                    format!(
+                        "`.{method}()` is not available on `{name}` — line iterators support no \
+                         adaptors/terminals at v1; iterate directly with `for line in <iter>` and \
+                         filter/map inside the loop body (each item is `Result[String, IoError]`)"
+                    ),
+                    span.clone(),
+                    TypeErrorKind::NoMethodFound,
+                );
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                return Type::Error;
+            }
+        }
+
         // `Atomic[T].compare_exchange(old, new, success, failure) -> Result[T, T]`
         // (deferred.md § Atomic Operations, line 311). Special-cased because its
         // Result-shaped return must be visible to the typechecker so the caller

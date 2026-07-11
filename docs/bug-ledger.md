@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **380 surfaced · 7 open · 370 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **380 surfaced · 6 open · 371 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -100,12 +100,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **380 surfaced 
 | B-2026-07-11-23 | 2026-07-11 | interp+codegen | medium | `mut ref` closure capture (mutation of a captured mutable local) is unimplemented: a closure that writes a captured name mutates a SNAPSHOT, not the outer binding. Stored closures drop the mutation in BOTH interp and codegen; the inlined iterator terminals (fold/any/all) DIVERGE — codegen inlines (mutates outer = design-correct) while the interpreter snapshots. | unfixed; repros below |
 | B-2026-07-11-29 | 2026-07-11 | codegen | high | Vec[Vec[Option[shared]]] deep-clone + consume + grow: force-cloned inner Vec's scope-exit drop LEAKS retained element handles, and at larger sizes specific clone combinations produce MALFORMED trees (extra nodes); interpreter correct | kata #95 second surface |
 | B-2026-07-11-30 | 2026-07-11 | ownership | low | Borrow-return source pinning is not applied to borrows nested in generic wrappers / borrowed collections: `-> Vec[ref T]` / `-> Option[ref T]` returns whose element sources are locals are accepted, while `-> ref T` / `-> ref Struct` returns are pinned. design.md § Feature 4 Part 3 says a container with a `ref` in a stored position is a borrowed collection whose scope is bounded by every borrowed source, so the escape should be pinned like the struct-field case. | tests/safety_design.rs::adversarial_escape_via_borrowed_collection_local (#[ignore]d, asserts the desired rejection; auto-enables when fixed); docs/implementation_checklist/phase-9-verification.md |
-| B-2026-07-11-34 | 2026-07-11 | typecheck+interp+codegen | low | Adaptor chaining over `stdin.lines()` (`for x in stdin.lines().map(|r| r)` / `.filter(p)`) TYPECHECKS but silently iterates ZERO times under both `karac run` and `karac build` — a silent divergence introduced alongside the `stdin.lines()` slice (commit ae9e4f8). ROOT: `stdin.lines()` returns the new `StdinLines` iterator type, which the typechecker's iterator-adaptor machinery accepts as an iterable (it has an `Item` mapping), so `.map()`/`.filter()` typecheck and produce an adaptor iterator over `StdinLines`. But the interpreter's for-loop drain only recognizes a bare `Value::StdinLines` iterable (eval_expr.rs), and codegen's `compile_for` only intercepts a bare `stdin.lines()` receiver (`compile_for_stdin_lines`); an adaptor-wrapped chain falls through to the map/filter fusion, which peels to a base it cannot lower for a `StdinLines` source → the silent `_ =>` no-op (the same class as B-2026-07-11-18 for-over-chain). Directly iterating `for line in stdin.lines()` works correctly in both backends (verified over empty/no-trailing-newline/blank-line inputs); ONLY the adaptor-chained form is affected. IMPACT: low — the common form (direct iteration + match/filter inside the body) is correct; adaptor chaining on stdin is niche. FIX DIRECTION: either (a) support `StdinLines` as a fusion base source in both backends (the pull-loop equivalent of the Vec-storage fusion), or (b) reject an adaptor chain whose peeled base is `stdin.lines()` LOUDLY at typecheck/codegen/interp with a 'chain filters/maps inside the for-body instead' message — fail-closed, no silent wrong answer. Filed per the never-route-around-it rule; the direct-iteration surface (the shipped deliverable) is unaffected. | add a codegen+interp for-loop reject (or adaptor support) + a `for x in stdin.lines().map(..)` regression |
 | B-2026-07-11-35 | 2026-07-11 | codegen | high | A GENERIC struct's field-rooted index READ of a NON-COPY element (`self.xs[i]` / `h.xs[i]` where `xs: Vec[T]`, monomorphized `T = String`) reads GARBAGE — the element is mis-resolved to the i64 default (8-byte load of a 24-byte {ptr,len,cap}), so a `Heap[String]` prints a garbage integer / corrupt bytes instead of the string. Interpreter correct. Sibling of B-2026-07-11-31 (which fixed the generic METHOD dispatch add/get/pop) but for the DIRECT `self.field[i]` read path. | unfixed; repro below |
 
-### Fixed (370)
+### Fixed (371)
 
-<details><summary>370 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>371 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -479,6 +478,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **380 surfaced 
 | B-2026-07-11-31 | codegen | high | A generic struct instance method mis-inferred its type param `T` (mangled `$i64`, defaulted) when `T` appeared ONLY nested inside a container field (… | 93b095b |
 | B-2026-07-11-32 | codegen | high | DOUBLE-FREE: an index-based element swap of a NON-COPY `Vec` element (`let t = v[i]; v[i] = v[j]; v[j] = t;` over `Vec[String]`) aliases the heap buf… | 1e81849 |
 | B-2026-07-11-33 | codegen | med | Vec[Option[shared]] element drop leaked the shared payloads (buffer-only cleanup) — kata-23 merge-k-lists | 6eb7df42 |
+| B-2026-07-11-34 | typecheck+interp+codegen | low | Adaptor chaining over `stdin.lines()` (`for x in stdin.lines().map(\|r\| r)` / `.filter(p)`) TYPECHECKS but silently iterates ZERO times under both `ka… | this commit |
 
 </details>
 
