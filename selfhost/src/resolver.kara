@@ -1,0 +1,652 @@
+// resolver.kara — name resolution / scope analysis for the self-hosted
+// compiler (Phase 12, Resolver port Slice 1). Depends on span + ast
+// (DAG: span <- token <- ast <- resolver). Mirrors the MINIMAL core of
+// `src/resolver.rs` + `src/resolver/{resolve_items,resolve_block,resolve_refs}.rs`:
+//
+//   * `SymbolTable` scope machinery (push/pop, define, define_shadowable,
+//     lookup) — a FLAT `Vec` + linear scan (Kāra has no HashMap, and codegen
+//     can't `.push()` onto a nested receiver), the same idiom
+//     `Parser.label_known` uses.
+//   * Seeds ONLY the 16 `PRELUDE_PRIMITIVES` (i8..String); the full prelude
+//     (Vec/Option/println/...) and magic modules land in a later slice, so
+//     the Slice-1 corpus references no name outside those 16 + user defs.
+//   * Resolves a single top-level `fn`: generics (bare type params), `self`,
+//     params + param-types, return type, and the body block — walking
+//     Let/Assign/Exp statements and the reachable `Expr` forms, pushing a
+//     scope per block / if / loop / match-arm. Emits UndefinedName (0),
+//     UndefinedType (1), DuplicateDefinition (2), ReservedIdentifier (3).
+//
+// AST nodes are consumed BY VALUE and destructured (the `ast_render` idiom):
+// a match-bound `ref` to a nested node reads its `Vec` fields as empty under
+// codegen, so the walk owns each node and moves its fields out. Recursive
+// `Expr` / `TypeExpr` children are `shared` (RC handles), walked by `ref`.
+//
+// The oracle renders ONLY (kind, offset, length) per error — messages,
+// fuzzy "did you mean" suggestions, and the resolution map are deferred.
+
+import span.Span;
+import ast.{
+    Item,
+    FnDefNode,
+    GenericParamsNode,
+    GenericParamNode,
+    SelfMode,
+    FnParamNode,
+    Block,
+    Stmt,
+    LetStmt,
+    AssignStmt,
+    ExprStmt,
+    Expr,
+    IdentExpr,
+    SpanNode,
+    BinaryExpr,
+    UnaryExpr,
+    TupleExpr,
+    CallExpr,
+    CallArg,
+    MethodCallExpr,
+    FieldAccessExpr,
+    TupleIndexExpr,
+    IndexExpr,
+    IfExpr,
+    ReturnExpr,
+    WhileExpr,
+    ForExpr,
+    LoopExpr,
+    BreakExpr,
+    ContinueExpr,
+    MatchExpr,
+    MatchArm,
+    TypeExpr,
+    PathType,
+    TupleType,
+    PointerType,
+    FnTypeNode,
+    WrapType,
+    clone_span,
+};
+
+// ── State ──
+//
+// Scopes are FLAT: every binding lives in one `binds` vec tagged with its
+// owning scope id, and `parents[scope_id]` gives each scope's parent (-1 for
+// the global scope). `line` drives the prelude carve-out — a binding at
+// synthetic line 0 is a seeded prelude entry, silently shadowable by a user
+// definition (mirrors `resolver.rs:373-375`'s `span.line==0 && column==0`).
+struct NameBinding {
+    name: String,
+    line: i64,
+    scope: i64,
+}
+
+// A resolve error: `kind` is 0=UndefinedName, 1=UndefinedType,
+// 2=DuplicateDefinition, 3=ReservedIdentifier; `off`/`len` are the byte span.
+pub struct ResolveError {
+    kind: i64,
+    off: i64,
+    len: i64,
+}
+
+struct Resolver {
+    binds: Vec[NameBinding],
+    parents: Vec[i64],
+    current: i64,
+    errors: Vec[ResolveError],
+}
+
+// ── Entry point ──
+//
+// Resolve a single top-level item and return its resolve errors in traversal
+// order. Mirrors `resolve()` collapsed to one item.
+pub fn resolve_item(item: Item) -> Vec[ResolveError] with panics {
+    let mut r = Resolver {
+        binds: Vec.new(),
+        parents: Vec.new(),
+        current: 0,
+        errors: Vec.new(),
+    };
+    r.seed_global();
+    r.walk_item(item);
+    let Resolver { binds, parents, current, errors } = r;
+    errors
+}
+
+impl Resolver {
+    // Global scope (parent = -1) seeded with the 16 PRELUDE_PRIMITIVES at
+    // synthetic line 0 (shadowable by user definitions).
+    fn seed_global(mut ref self) {
+        self.parents.push(-1);
+        self.current = 0;
+        self.seed_prim("i8".to_string());
+        self.seed_prim("i16".to_string());
+        self.seed_prim("i32".to_string());
+        self.seed_prim("i64".to_string());
+        self.seed_prim("i128".to_string());
+        self.seed_prim("u8".to_string());
+        self.seed_prim("u16".to_string());
+        self.seed_prim("u32".to_string());
+        self.seed_prim("u64".to_string());
+        self.seed_prim("u128".to_string());
+        self.seed_prim("usize".to_string());
+        self.seed_prim("f32".to_string());
+        self.seed_prim("f64".to_string());
+        self.seed_prim("bool".to_string());
+        self.seed_prim("char".to_string());
+        self.seed_prim("String".to_string());
+    }
+
+    fn seed_prim(mut ref self, name: String) {
+        self.binds.push(NameBinding { name: name, line: 0, scope: 0 });
+    }
+
+    // ── Scope machinery (mirrors resolver.rs:317-458) ──
+
+    fn push_scope(mut ref self) {
+        self.parents.push(self.current);
+        self.current = self.parents.len() - 1;
+    }
+
+    fn pop_scope(mut ref self) {
+        let p = self.parents[self.current];
+        if p >= 0 {
+            self.current = p;
+        }
+    }
+
+    fn is_reserved(ref self, name: ref String) -> bool {
+        if name == "Fn".to_string() {
+            return true;
+        }
+        if name == "split_by_variant".to_string() {
+            return true;
+        }
+        false
+    }
+
+    // Scan the current scope for `name`; return its definition line, or -1 if
+    // absent. -1 is a sentinel distinct from a prelude entry (line 0).
+    fn line_in_current(ref self, name: ref String) -> i64 {
+        let mut i = 0;
+        loop {
+            if i >= self.binds.len() {
+                break;
+            }
+            if self.binds[i].scope == self.current {
+                if self.binds[i].name == name {
+                    return self.binds[i].line;
+                }
+            }
+            i = i + 1;
+        }
+        -1
+    }
+
+    fn set_line_in_current(mut ref self, name: ref String, line: i64) {
+        let mut i = 0;
+        loop {
+            if i >= self.binds.len() {
+                break;
+            }
+            if self.binds[i].scope == self.current {
+                if self.binds[i].name == name {
+                    self.binds[i].line = line;
+                    return;
+                }
+            }
+            i = i + 1;
+        }
+    }
+
+    // `define` (resolver.rs:348-400): reserved check first, then duplicate
+    // check in the current scope (a prelude entry at line 0 is shadowable, not
+    // a duplicate). Errors carry the NEW definition's span. Consumes `name`.
+    fn define(mut ref self, name: String, span: Span) {
+        if self.is_reserved(name) {
+            self.push_err(3, span.offset, span.length);
+            return;
+        }
+        let existing = self.line_in_current(name);
+        if existing >= 1 {
+            self.push_err(2, span.offset, span.length);
+            return;
+        }
+        if existing == 0 {
+            // Shadow a prelude entry: overwrite its line so a later real
+            // redefinition is a genuine duplicate.
+            self.set_line_in_current(name, span.line);
+            return;
+        }
+        self.binds.push(NameBinding {
+            name: name,
+            line: span.line,
+            scope: self.current,
+        });
+    }
+
+    // `define_shadowable` (resolver.rs:411-444): reserved check, then bind
+    // unconditionally — a name already in the current scope is overwritten
+    // (shadowing), never a duplicate error. Used for `let` bindings.
+    fn define_shadowable(mut ref self, name: String, span: Span) {
+        if self.is_reserved(name) {
+            self.push_err(3, span.offset, span.length);
+            return;
+        }
+        let existing = self.line_in_current(name);
+        if existing >= 0 {
+            self.set_line_in_current(name, span.line);
+            return;
+        }
+        self.binds.push(NameBinding {
+            name: name,
+            line: span.line,
+            scope: self.current,
+        });
+    }
+
+    // `lookup` (resolver.rs:446-458): walk the current scope up its parent
+    // chain, linear-scanning each scope's bindings.
+    fn lookup(ref self, name: ref String) -> bool {
+        let mut sid = self.current;
+        loop {
+            if sid < 0 {
+                return false;
+            }
+            let mut i = 0;
+            loop {
+                if i >= self.binds.len() {
+                    break;
+                }
+                if self.binds[i].scope == sid {
+                    if self.binds[i].name == name {
+                        return true;
+                    }
+                }
+                i = i + 1;
+            }
+            sid = self.parents[sid];
+        }
+    }
+
+    fn push_err(mut ref self, kind: i64, off: i64, len: i64) {
+        self.errors.push(ResolveError { kind: kind, off: off, len: len });
+    }
+
+    // ── Item resolution (mirrors resolve_items.rs) ──
+    //
+    // Slice 1 handles only functions; the other top-level forms are deferred.
+    fn walk_item(mut ref self, item: Item) {
+        match item {
+            Func(f) => {
+                self.resolve_function(f);
+            }
+            Use(_) => {}
+            Const(_) => {}
+            TypeAlias(_) => {}
+            Struct(_) => {}
+            Enum(_) => {}
+            Trait(_) => {}
+            Impl(_) => {}
+            ErrItem(_) => {}
+        }
+    }
+
+    // `collect_function` + `resolve_function` (resolve_items.rs:60-104) fused:
+    // the function name is defined in the global scope FIRST (so the body may
+    // recurse), then a Function scope is pushed for generics / self / params /
+    // return / body. Consumes the node and moves its fields out.
+    fn resolve_function(mut ref self, f: FnDefNode) {
+        let FnDefNode {
+            is_pub,
+            name,
+            generics,
+            self_mode,
+            params,
+            ret,
+            body,
+            attributes,
+            doc,
+            span,
+        } = f;
+        // Collect: define the function name in the (global) current scope.
+        self.define(name, clone_span(span));
+        self.push_scope();
+        // Generic type params (bare names; bounds are a later slice).
+        match generics {
+            Some(g) => {
+                let GenericParamsNode { params: gparams, span: gspan } = g;
+                for gp in gparams {
+                    let GenericParamNode { name: gn, span: gsp } = gp;
+                    self.define(gn, gsp);
+                }
+            }
+            None => {}
+        }
+        // Receiver: `self` is an ordinary scope entry when present.
+        match self_mode {
+            NoSelf => {}
+            OwnedSelf => {
+                self.define("self".to_string(), clone_span(span));
+            }
+            RefSelf => {
+                self.define("self".to_string(), clone_span(span));
+            }
+            MutRefSelf => {
+                self.define("self".to_string(), clone_span(span));
+            }
+        }
+        // Params: define the binding, then resolve its type (order matters for
+        // error ordering — resolve_items.rs:85-89).
+        for p in params {
+            let FnParamNode { name: pn, ty: pty, span: psp } = p;
+            self.define(pn, psp);
+            self.resolve_type(pty);
+        }
+        match ret {
+            Some(t) => {
+                self.resolve_type(t);
+            }
+            None => {}
+        }
+        self.resolve_block(body);
+        self.pop_scope();
+    }
+
+    // `resolve_block` (resolve_block.rs:44-53): push a Block scope, resolve
+    // each statement in order, then the tail expression. Consumes the block.
+    fn resolve_block(mut ref self, b: Block) {
+        self.push_scope();
+        self.resolve_block_body(b);
+        self.pop_scope();
+    }
+
+    // The loop-body form (`resolve_block_no_scope`, resolve_block.rs:58-65):
+    // no fresh scope — the loop var already lives in the enclosing Loop scope.
+    fn resolve_block_body(mut ref self, b: Block) {
+        let Block { stmts, tail, span } = b;
+        for st in stmts {
+            self.resolve_stmt(st);
+        }
+        match tail {
+            Some(e) => {
+                self.resolve_expr(e);
+            }
+            None => {}
+        }
+    }
+
+    // `resolve_stmt` (resolve_block.rs:153-231). `let`: resolve the value
+    // BEFORE binding (so `let x = x` errors on the RHS); `=`: resolve target
+    // then value; `expr;`: resolve.
+    fn resolve_stmt(mut ref self, st: Stmt) {
+        match st {
+            Let(l) => {
+                let LetStmt { is_mut, name, value, span } = l;
+                self.resolve_expr(value);
+                self.define_shadowable(name, span);
+            }
+            Assign(a) => {
+                let AssignStmt { target, value, span } = a;
+                self.resolve_expr(target);
+                self.resolve_expr(value);
+            }
+            Exp(e) => {
+                let ExprStmt { expr, span } = e;
+                self.resolve_expr(expr);
+            }
+        }
+    }
+
+    // `resolve_expr` (resolve_block.rs:236-808), restricted to the selfhost
+    // `Expr` forms. Literals resolve to nothing; identifiers/`self`/`Self`
+    // look up (UndefinedName on miss); operators/postfix recurse; block / if /
+    // loop / match push scopes. Consumed BY VALUE and destructured — a
+    // match-bound `ref` reads nested `Vec` fields empty under codegen, so the
+    // owned RC-handle children are moved into the recursive calls.
+    fn resolve_expr(mut ref self, e: Expr) {
+        match e {
+            Int(_) => {}
+            Float(_) => {}
+            Bool(_) => {}
+            Char(_) => {}
+            Byte(_) => {}
+            Str(_) => {}
+            MultiStr(_) => {}
+            Error(_) => {}
+            Ident(n) => {
+                let IdentExpr { name, span } = n;
+                if not self.lookup(name) {
+                    self.push_err(0, span.offset, span.length);
+                }
+            }
+            SelfVal(n) => {
+                let SpanNode { span } = n;
+                let s = "self".to_string();
+                if not self.lookup(s) {
+                    self.push_err(0, span.offset, span.length);
+                }
+            }
+            SelfTy(n) => {
+                let SpanNode { span } = n;
+                let s = "Self".to_string();
+                if not self.lookup(s) {
+                    self.push_err(0, span.offset, span.length);
+                }
+            }
+            Binary(n) => {
+                let BinaryExpr { op, left, right, span } = n;
+                self.resolve_expr(left);
+                self.resolve_expr(right);
+            }
+            Unary(n) => {
+                let UnaryExpr { op, operand, span } = n;
+                self.resolve_expr(operand);
+            }
+            Tuple(n) => {
+                let TupleExpr { elems, span } = n;
+                for el in elems {
+                    self.resolve_expr(el);
+                }
+            }
+            Call(n) => {
+                let CallExpr { callee, args, span } = n;
+                self.resolve_expr(callee);
+                for a in args {
+                    let CallArg { label, mut_marker, value, span } = a;
+                    self.resolve_expr(value);
+                }
+            }
+            MethodCall(n) => {
+                let MethodCallExpr { object, method, args, span } = n;
+                self.resolve_expr(object);
+                for a in args {
+                    let CallArg { label, mut_marker, value, span } = a;
+                    self.resolve_expr(value);
+                }
+            }
+            Field(n) => {
+                let FieldAccessExpr { object, field, span } = n;
+                self.resolve_expr(object);
+            }
+            TupleIdx(n) => {
+                let TupleIndexExpr { object, index, span } = n;
+                self.resolve_expr(object);
+            }
+            Index(n) => {
+                let IndexExpr { object, index, span } = n;
+                self.resolve_expr(object);
+                self.resolve_expr(index);
+            }
+            Blk(n) => {
+                self.resolve_block(n);
+            }
+            If(n) => {
+                let IfExpr { cond, then_block, else_branch, span } = n;
+                self.resolve_expr(cond);
+                self.resolve_block(then_block);
+                match else_branch {
+                    Some(eb) => {
+                        self.resolve_expr(eb);
+                    }
+                    None => {}
+                }
+            }
+            Return(n) => {
+                let ReturnExpr { value, span } = n;
+                match value {
+                    Some(v) => {
+                        self.resolve_expr(v);
+                    }
+                    None => {}
+                }
+            }
+            While(n) => {
+                let WhileExpr { label, cond, body, span } = n;
+                self.resolve_expr(cond);
+                self.push_scope();
+                self.resolve_block_body(body);
+                self.pop_scope();
+            }
+            For(n) => {
+                let ForExpr { label, var, iter, body, span } = n;
+                self.resolve_expr(iter);
+                self.push_scope();
+                self.define(var, span);
+                self.resolve_block_body(body);
+                self.pop_scope();
+            }
+            Loop(n) => {
+                let LoopExpr { label, body, span } = n;
+                self.push_scope();
+                self.resolve_block_body(body);
+                self.pop_scope();
+            }
+            Break(n) => {
+                let BreakExpr { label, value, span } = n;
+                match value {
+                    Some(v) => {
+                        self.resolve_expr(v);
+                    }
+                    None => {}
+                }
+            }
+            Continue(_) => {}
+            Match(n) => {
+                let MatchExpr { scrutinee, arms, span } = n;
+                self.resolve_expr(scrutinee);
+                for arm in arms {
+                    let MatchArm { pattern, guard, body, span } = arm;
+                    self.push_scope();
+                    match guard {
+                        Some(g) => {
+                            self.resolve_expr(g);
+                        }
+                        None => {}
+                    }
+                    self.resolve_expr(body);
+                    self.pop_scope();
+                }
+            }
+        }
+    }
+
+    // `resolve_type_expr` (resolve_refs.rs:33-155): a path type looks up its
+    // first segment (UndefinedType on miss, at the path's span), then recurses
+    // into generic args; wrappers/tuples/fn-types recurse into inner types.
+    // Consumed BY VALUE and destructured (same reason as `resolve_expr`).
+    fn resolve_type(mut ref self, ty: TypeExpr) {
+        match ty {
+            PathTy(p) => {
+                let PathType { segments, generics, span } = p;
+                if segments.len() > 0 {
+                    if not self.lookup(segments[0]) {
+                        self.push_err(1, span.offset, span.length);
+                    }
+                }
+                for g in generics {
+                    self.resolve_type(g);
+                }
+            }
+            TupleTy(t) => {
+                let TupleType { elems, span } = t;
+                for el in elems {
+                    self.resolve_type(el);
+                }
+            }
+            PtrTy(p) => {
+                let PointerType { is_mut, inner, span } = p;
+                self.resolve_type(inner);
+            }
+            FnTy(fnt) => {
+                let FnTypeNode { params, ret, is_once, span } = fnt;
+                for pp in params {
+                    self.resolve_type(pp);
+                }
+                match ret {
+                    Some(r) => {
+                        self.resolve_type(r);
+                    }
+                    None => {}
+                }
+            }
+            RefTy(w) => {
+                let WrapType { inner, span } = w;
+                self.resolve_type(inner);
+            }
+            MutRefTy(w) => {
+                let WrapType { inner, span } = w;
+                self.resolve_type(inner);
+            }
+            MutSliceTy(w) => {
+                let WrapType { inner, span } = w;
+                self.resolve_type(inner);
+            }
+            WeakTy(w) => {
+                let WrapType { inner, span } = w;
+                self.resolve_type(inner);
+            }
+            UnitTy(_) => {}
+            ErrTy(_) => {}
+        }
+    }
+}
+
+// ── Oracle render ──
+//
+// Render a resolve-error list as space-joined `(<kindtag> @<off>:<len>)`
+// tokens, `(ok)` when empty. Kind tags: undef-name / undef-type / dup-def /
+// reserved. Mirrors the (offset:length) span convention of the AST oracle.
+pub fn render_errors(errs: Vec[ResolveError]) -> String {
+    if errs.len() == 0 {
+        return "(ok)".to_string();
+    }
+    let mut out = "".to_string();
+    let mut i = 0;
+    for e in errs {
+        if i > 0 {
+            out.push_str(" ");
+        }
+        out.push_str("(");
+        out.push_str(kind_tag(e.kind));
+        out.push_str(" @");
+        out.push_str(e.off.to_string());
+        out.push_str(":");
+        out.push_str(e.len.to_string());
+        out.push_str(")");
+        i = i + 1;
+    }
+    out
+}
+
+fn kind_tag(kind: i64) -> String {
+    if kind == 0 {
+        return "undef-name".to_string();
+    }
+    if kind == 1 {
+        return "undef-type".to_string();
+    }
+    if kind == 2 {
+        return "dup-def".to_string();
+    }
+    "reserved".to_string()
+}
