@@ -918,11 +918,28 @@ impl<'ctx> super::Codegen<'ctx> {
     /// inner handle reached through a field / `Option` / collection element) —
     /// the inner value may still be shared with another task, so a `par` inner
     /// must be incremented atomically.
+    /// True when `heap_type`'s surface type uses the headerless layout in
+    /// the current fn — it has NO rc word, so ANY count op would corrupt
+    /// its first user field (`val` at offset 0). A universal backstop:
+    /// the four `emit_refcount_*` dispatchers no-op on such types, so a
+    /// count op that slipped past the cluster-role skips (e.g. a reshaper
+    /// body that poisons as a cluster but whose member type is
+    /// program-wide headerless) is harmless instead of a silent
+    /// first-field corruption. Sound because a headerless value never has
+    /// a header to inc/dec.
+    pub(super) fn heap_type_is_headerless(&self, heap_type: StructType<'ctx>) -> bool {
+        self.struct_name_for_heap_type(heap_type)
+            .is_some_and(|n| self.headerless_here(&n))
+    }
+
     pub(super) fn emit_refcount_inc_by_type(
         &self,
         heap_type: StructType<'ctx>,
         ptr: PointerValue<'ctx>,
     ) {
+        if self.heap_type_is_headerless(heap_type) {
+            return;
+        }
         if self.heap_type_is_par(heap_type) {
             self.emit_arc_inc(heap_type, ptr);
         } else {
@@ -941,6 +958,9 @@ impl<'ctx> super::Codegen<'ctx> {
         heap_type: StructType<'ctx>,
         ptr: PointerValue<'ctx>,
     ) {
+        if self.heap_type_is_headerless(heap_type) {
+            return;
+        }
         if self.heap_type_is_par(heap_type) {
             self.emit_arc_dec(heap_type, ptr);
         } else {
@@ -958,6 +978,9 @@ impl<'ctx> super::Codegen<'ctx> {
         heap_type: StructType<'ctx>,
         ptr: PointerValue<'ctx>,
     ) {
+        if self.heap_type_is_headerless(heap_type) {
+            return;
+        }
         if self.heap_type_is_par(heap_type) || self.is_arc_binding(name) {
             self.emit_arc_inc(heap_type, ptr);
         } else {
@@ -973,6 +996,9 @@ impl<'ctx> super::Codegen<'ctx> {
         heap_type: StructType<'ctx>,
         ptr: PointerValue<'ctx>,
     ) {
+        if self.heap_type_is_headerless(heap_type) {
+            return;
+        }
         if self.heap_type_is_par(heap_type) || self.is_arc_binding(name) {
             self.emit_arc_dec(heap_type, ptr);
         } else {

@@ -1,6 +1,6 @@
 # Design: Headerless RC-elision for in-place link-permuting reshapers
 
-**Status:** IN PROGRESS on branch `worktree-headerless-reshaper`, gated OFF behind `KARAC_HEADERLESS_RESHAPER`. Analysis path reaches **16 B nodes** on kata #92; flag-on currently SEGFAULTS on a headered RcDec emitted for the moved-out consumed root — codegen moved-out cleanup suppression is the remaining core (see §9 Update 2). NOT on `main`.
+**Status:** IN PROGRESS on branch `worktree-headerless-reshaper`, gated OFF behind `KARAC_HEADERLESS_RESHAPER`. kata #92 flag-on now produces **correct output (147795689) + 16 B nodes, no crash, no double-free** — the core works. One remaining bug: a bounded per-iteration leak when the reversal's `left > 1` (§9 Update 3). NOT on `main`.
 **Home once approved:** `docs/implementation_checklist/phase-7-codegen.md` (the design record for the `src/ownership/elision.rs` phases)
 **Surfaced by:** kata #92 (Reverse Linked List II) M5 rebench + profiling, 2026-07-11
 
@@ -145,3 +145,15 @@ Relaxed the builder-call accounting (EXPERIMENTAL, flag-gated): each reshaper ca
 - The current **loose count-relaxation is a stopgap** and is what leaves `list` cleanup-less-but-not-move-marked → the inconsistency. The tight fix threads consumed-root provenance (which builder result each reshaper call consumes) instead of counting.
 
 **Status:** analysis reaches 16 B; flag-on is KNOWN-BROKEN (segfault) pending the moved-out codegen fix. Flag-OFF is clean (kata #92 headered-correct 24 B, fmt clean, 904 lib tests pass). Next session starts at the moved-out cleanup suppression — likely in `src/codegen/` cleanup emission for headerless roots, plus the `moved_out` marker in `fn_adopted_clusters`.
+
+### Update 3 (2026-07-11, cont.) — CORE WORKS: correct + 16 B + no crash; one bounded leak left
+
+The segfault (Update 2) was a **headered rc-op emitted on a headerless value** — the reshaper body poisons as a cluster, so codegen didn't skip rc ops on `head`/`dummy` even though `headerless_here(ListNode)` is true program-wide. Two rc **retains** on `head` (the `dummy.next = head` field-init + the `return dummy.next`) wrote a refcount (`2`) into `head`'s offset-0 slot — which IS `head.val` when headerless. Reproduced minimally: a pass-through reshaper printed `2,1,2,3,4` instead of `0,1,2,3,4` (constant `2` = two retains).
+
+**Fix (landed): a universal rc-op headerless guard.** `heap_type_is_headerless(heap_type)` (via `struct_name_for_heap_type` + `headerless_here`) added to the four `emit_refcount_{inc,dec}[_by_type]` dispatchers in `src/codegen/runtime.rs` — they no-op when the type is headerless. Sound invariant: a headerless value has no rc word, so NO count op may touch it, anywhere. This is unconditional (not flag-gated) and hardens headerless generally.
+
+**Result:** kata #92 flag-on → **sink 147795689 (correct), exit 0 (no crash), `malloc #0x10` (16 B chain)**. Pass-through prints `0,1,2,3,4`. Guard-malloc: no double-free / heap corruption.
+
+**Regression: CLEAN.** Full `cargo test --features llvm` = 515 passed. 6 failures (`std_wasi`/`std_web` wasm, `test_run_derive_*`, `test_test_failure_emits_contract_fault`) are **pre-existing/environmental** — confirmed by stashing the rc guard and rebuilding: all 6 fail identically on the base. They are JIT "Symbols not found" (`_karac_realloc_or_panic`, `_karac_tracing_*`) — the known JIT-FFI-registration gaps, unrelated to rc ops.
+
+**REMAINING BUG — a bounded leak (`left > 1`):** kata #92 flag-on leaks **1 allocation per iteration** (K=178000 → 178000 leaks, 32 B each = a rounded **24 B headered** node). Precisely isolated: leak iff the reversal's `left > 1` (the `prev` cursor walks off the dummy) AND M is large (M=200 leaks, M=20 clean for the same window); `left = 1` (prev stays at dummy) is 0 leaks. The 200-node chain IS freed (only K leaks, not K·200), so `r`'s free-walk works. Hypothesis: when `prev` walks off the dummy, one node (likely the reshaper `dummy` sentinel, allocated **headered** 24 B on some path, or the detached original head) loses its single-node free. Next step: build kata #92 at `-O0`, dump the reshaper `dummy` alloc size + its cleanup path; determine why a 24 B headered node appears at all under headerless and why its free is skipped when `prev != dummy`. Then wire the reshaper `dummy` single-node free (RootLink) for the reshaper cluster, and replace the loose recognizers/count-relax with the tight versions. Land default-OFF; harness (differential + LSan/ASan across #82/#83/#86/#92) before flipping.
