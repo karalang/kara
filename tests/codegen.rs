@@ -18724,6 +18724,48 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_soa_literal_construction_field_read() {
+        // B-2026-07-10-7: a LITERAL-constructed SoA binding
+        // (`let world: Vec[E] = [E{..}, ..]`) then a field/index read. Before the
+        // fix the literal built an AoS `{ptr,len,cap}` header into the SoA slot,
+        // so `world[i].field` decoded it as the multi-group SoA struct and
+        // dereferenced a garbage group pointer → SIGSEGV (compiled binary only;
+        // the interpreter computed it correctly — a run-vs-build divergence).
+        // The literal is now decomposed through the `push` path (per-group backing
+        // arrays allocated + populated). Covers >4 elements (past the first
+        // realloc), a cold group, and both bare `[..]` and prefix `Vec[..]` forms.
+        let src = r#"
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+layout world: Vec[Entity] {
+    group pos { x, y }
+    group vel { vx }
+    cold { vy }
+}
+fn main() {
+    let world: Vec[Entity] = [
+        Entity { x: 0, y: 1, vx: 2, vy: 3 },
+        Entity { x: 10, y: 11, vx: 12, vy: 13 },
+        Entity { x: 20, y: 21, vx: 22, vy: 23 },
+        Entity { x: 30, y: 31, vx: 32, vy: 33 },
+        Entity { x: 40, y: 41, vx: 42, vy: 43 },
+        Entity { x: 50, y: 51, vx: 52, vy: 53 }
+    ];
+    println(world.len());
+    println(world[0].x);
+    println(world[4].y);
+    println(world[5].vx);
+    println(world[5].vy);
+    let e = world[2];
+    println(e.vy);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["6", "0", "41", "52", "53", "23"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_soa_index_read_with_cold_group() {
         // Exercises the cold-group branch of compile_soa_index_read: `vy`
         // lives in a separate cold allocation, `x`/`y` in one hot group,

@@ -2370,6 +2370,55 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Compile `let <name>: Vec[T] = Vec::new()` for a SoA-laid-out collection.
     /// Produces `{ null, ..., [null_cold,] 0, 0 }` (one null ptr per group plus optional cold, len=0, cap=0).
+    /// B-2026-07-10-7: extract the finite element list of a collection-LITERAL
+    /// initializer for a SoA binding — a bare `[e1, e2, ..]` (`ArrayLiteral`) or a
+    /// `Vec[e1, e2, ..]` prefix form (`PrefixCollectionLiteral`). Returns `None`
+    /// for any non-literal RHS (call, identifier move, `Vec.new()`) and for the
+    /// `RepeatLiteral` (`[v; n]`) form, whose runtime count needs a loop rather
+    /// than a fixed unrolled push sequence (a follow-up if it ever surfaces for a
+    /// SoA binding).
+    pub(super) fn soa_literal_elems(value: &Expr) -> Option<&[Expr]> {
+        match &value.kind {
+            ExprKind::ArrayLiteral(elems) => Some(elems),
+            ExprKind::PrefixCollectionLiteral { type_name, items } if type_name == "Vec" => {
+                Some(items)
+            }
+            _ => None,
+        }
+    }
+
+    /// B-2026-07-10-7: bind `let <var>: Vec[E] = [<elem>, ..]` where `<var>` is
+    /// SoA-laid-out. Builds an empty SoA header (`compile_soa_new` — allocates the
+    /// slot, zeroes the group pointers + len/cap, and registers `FreeSoaGroups`
+    /// scope cleanup), then replays each literal element through the same
+    /// `compile_soa_method` "push" decomposition the `.push()` site uses, so the
+    /// per-group backing arrays are allocated and populated exactly as a
+    /// push-built SoA vec — the shape `compile_soa_index_read` / field access
+    /// expect. Sequential pushes reload len/cap from the slot each time, so the
+    /// grow-and-store is correct across elements.
+    pub(super) fn compile_soa_let_from_literal(
+        &mut self,
+        var_name: &str,
+        soa: &SoaLayout,
+        elems: &[Expr],
+    ) -> Result<(), String> {
+        self.compile_soa_new(var_name, soa)?;
+        let slot = *self
+            .variables
+            .get(var_name)
+            .ok_or_else(|| format!("SoA variable '{}' missing after new", var_name))?;
+        for elem in elems {
+            let arg = crate::ast::CallArg {
+                label: None,
+                mut_marker: false,
+                value: elem.clone(),
+                span: elem.span.clone(),
+            };
+            self.compile_soa_method(var_name, soa, slot, "push", std::slice::from_ref(&arg))?;
+        }
+        Ok(())
+    }
+
     pub(super) fn compile_soa_new(
         &mut self,
         var_name: &str,

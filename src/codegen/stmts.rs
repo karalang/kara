@@ -2276,6 +2276,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         if self.let_rhs_calls_layout_returning_fn(value) {
                             return self.compile_soa_let_from_call(var_name, &soa, value);
                         }
+                        // B-2026-07-10-7: a COLLECTION-LITERAL initializer for a
+                        // SoA binding (`let world: Vec[Particle] = [Particle{..},
+                        // ..]` / `Vec[Particle{..}, ..]`). Without this the literal
+                        // built an AoS `{ptr,len,cap}` header into the SoA slot, so
+                        // any later `world[i].field` read decoded that header as the
+                        // multi-group SoA struct and dereferenced a garbage group
+                        // pointer → SIGSEGV. Decompose it the same way `push` does:
+                        // build an empty SoA header, then push each element through
+                        // the proven `compile_soa_method` "push" path (which
+                        // allocates + populates the per-group backing arrays).
+                        if let Some(elems) = Self::soa_literal_elems(value) {
+                            return self.compile_soa_let_from_literal(var_name, &soa, elems);
+                        }
                     }
                 }
                 // Map.new(): emit karac_map_new with sizes and (stub) fn pointers.
