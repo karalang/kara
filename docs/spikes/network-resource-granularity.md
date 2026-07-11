@@ -327,7 +327,68 @@ Implement § Parameterized Resources for real and parameterize `Network`:
    - **Slice 3 — full parameterized-`Network`:** the principled end-state that
      subsumes Slices 1–2, covers borrow-param connection-bound ops generally, and
      lands the long-specced parameterized-resource feature. The "correct" model;
-     take on deliberately as its own project.
+     take on deliberately as its own project. **Grounded implementation plan (code
+     survey 2026-07-11) — see §10.**
+
+## 10. Slice 3 implementation plan (grounded in the current code, 2026-07-11)
+
+**The single gap.** The design is fully specced (`design.md § Parameterized
+Resources`: partition keys + the three-case *proven-disjoint / proven-identical /
+unproven* classification, "silent under-serialization is never accepted"), the
+parser already builds the key (`src/parser/items_effects.rs:315 parse_resource`
+→ `Resource { path, param: Option<Box<Expr>>, .. }`), and the AST carries it
+(`src/ast/items.rs:902`). The **only** thing missing: `Effect.resource: String`
+(`src/effectchecker.rs:56`) and `StmtEffect.resource: String`
+(`src/concurrency.rs:872`) are flat strings, and the AST→`Effect` conversion
+**drops the param** at `resource.path.join(".")` (effectchecker `:1104`, `:1255`,
+`:1482`, `:2014`). So the partition key never reaches `two_effects_conflict`.
+
+**Marginal value (be honest before committing).** Slices 1–2 already cover the
+idiomatic `Network` shapes *syntactically* (free-fn wrappers, associated openers,
+distinct-receiver methods). Slice 3's added value over them is (a) **generality**
+— any `effect resource Db[id]` / `File[handle]`, not just `Network`; (b)
+**borrow-param connection-bound ops** (which the idiomatic method API does not
+actually use); (c) the **runtime-partition** path for `unproven` pairs; (d)
+retiring the Slices 1–2 special-cases into one principled rule. For `Network`
+specifically the user-facing gain is modest — so Slice 3 is justified by the
+*parameterized-resource feature at large*, not by more `Network` fan-out.
+
+**Sub-slices (each independently landable; the value is in 3b+3c):**
+
+- **3a — carry the partition key through the effect model (mechanical, dead
+  until 3c).** Add a `key: Option<ResourceKey>` to `Effect` and `StmtEffect`;
+  stop dropping `resource.param` at the four join sites. `ResourceKey` normalizes
+  the param `Expr` into a comparable form (int/str literal → `Literal`; a plain
+  binding → `Binding(name)`; anything else → `Unproven`). Touches the `Effect`
+  constructors broadly — a big mechanical diff with no behavior change (it only
+  becomes live when 3c reads it), so land it behind the existing flat-resource
+  conflict logic unchanged.
+- **3b — call-site substitution (the mechanism, where the value is).** A callee
+  declares the key relative to ITS params: `read(mut ref self) with
+  sends(Network[self])`, `update(id) with writes(Db[id])`. At the call site the
+  key must be **substituted** with the actual receiver/argument — `s1.read()` →
+  `Network[s1]`, `update(5)` → `Db[5]` — during effect propagation
+  (`add_function_effects` / the effect-inheritance path). Without this the key is
+  meaningless (it names the callee's local, not the caller's connection). This is
+  the real work and the race-sensitive core.
+- **3c — the three-case tri-state in `two_effects_conflict` (+ `conflict_detail`).**
+  Same resource: `proven-disjoint` keys (distinct literals; distinct
+  scope-stable bindings — reuse Slice 2's non-shared/non-param + no-body-aliasing
+  reasoning) → no conflict; `proven-identical` (same literal / same binding) →
+  conflict; `unproven` → conflict (conservative; the design's runtime-partition
+  lowering is a later refinement — **default MUST be conflict**, per "silent
+  under-serialization never accepted"). Reconcile the two conflict tables (§4)
+  here.
+- **3d — subsume Slices 1–2.** Their syntactic `is_ephemeral_network_fanout` /
+  `method_fanout_receiver_root` special-cases become instances of 3c's
+  proven-disjoint (fresh-per-ephemeral key; per-receiver key). Retire them once
+  3c reproduces their behavior (the existing Slice 1/2 tests become the
+  regression guard for 3c).
+
+**Risk.** Data-race failure mode; the tri-state MUST fail closed to `conflict` on
+`unproven`. Land 3c with the full ASAN suite + the Slice 1/2 pins + new
+proven-identical (same `Db[id]`) and unproven (opaque key) serial pins. This is a
+multi-commit effect-model change, not a session bolt-on — schedule accordingly.
 
 Phase 1 + Phase 2 Slice 1 already deliver the flagship value (free-fn `http_get`
 fan-out + associated `connect` openers); Slices 2–3 extend reach to method /
