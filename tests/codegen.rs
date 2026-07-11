@@ -60120,11 +60120,11 @@ fn main() {
 
     // ── Ownership-derived parameter alias attributes (noalias-ref-params) ──
     //
-    // A `mut ref T` parameter is an exclusive borrow, which is exactly LLVM's
-    // `noalias` contract, so codegen stamps `noalias` on its (ptr-shaped)
-    // parameter. A `ref T` (shared read borrow) does NOT get it yet — that
-    // case needs `readonly` gated on a Freeze predicate and is a follow-on
-    // slice. See `emit_param_alias_attrs` in src/codegen/functions.rs.
+    // A `mut ref T` parameter (exclusive borrow) and an owned value-semantics
+    // `ptr` type both carry `noalias`. A `ref T` (shared read borrow) of a
+    // Freeze type — no transitive `Atomic`/`Mutex`/`shared` interior
+    // mutability — carries `readonly` (NOT `noalias`: shared borrows may
+    // alias). See `emit_param_alias_attrs` in src/codegen/functions.rs.
     fn define_line<'a>(ir: &'a str, sym: &str) -> &'a str {
         ir.lines()
             .find(|l| l.contains("define") && l.contains(sym))
@@ -60147,10 +60147,16 @@ fn main() { let mut n: i64 = 41; bump(mut n); print(n); }
             "mut ref param should carry noalias: {}",
             define_line(&ir, "@bump(")
         );
-        // `ref` (shared read borrow) → NOT noalias yet (deferred follow-on).
+        // `ref i64` (shared read borrow of a Freeze type) → `readonly`, and
+        // never `noalias` (shared borrows may alias).
+        assert!(
+            define_line(&ir, "@read_only(").contains("readonly"),
+            "ref-to-Freeze param should carry readonly: {}",
+            define_line(&ir, "@read_only(")
+        );
         assert!(
             !define_line(&ir, "@read_only(").contains("noalias"),
-            "ref param must not carry noalias yet: {}",
+            "ref param must not carry noalias: {}",
             define_line(&ir, "@read_only(")
         );
         // Every `mut ref` parameter is marked independently.
@@ -60185,10 +60191,91 @@ fn main() {
             "mut ref self receiver should carry noalias: {}",
             define_line(&ir, "@Counter.bump(")
         );
+        // `ref self` on a Freeze struct (`Counter { n: i64 }`) → `readonly`,
+        // never `noalias`.
+        assert!(
+            define_line(&ir, "@Counter.peek(").contains("readonly"),
+            "ref self receiver on a Freeze type should carry readonly: {}",
+            define_line(&ir, "@Counter.peek(")
+        );
         assert!(
             !define_line(&ir, "@Counter.peek(").contains("noalias"),
-            "ref self receiver must not carry noalias yet: {}",
+            "ref self receiver must not carry noalias: {}",
             define_line(&ir, "@Counter.peek(")
+        );
+    }
+
+    #[test]
+    fn readonly_ref_freeze_predicate() {
+        // `ref T` → `readonly` iff `T` is Freeze (no transitive interior
+        // mutability). Primitives, all-Freeze structs, and Freeze-element
+        // containers qualify; a struct with an `Atomic`/`Mutex` field, or a
+        // `shared` type, does not. See `ref_referent_is_freeze`.
+        let ir = ir_for(
+            r#"
+struct Plain { a: i64, b: f64 }
+struct HasAtomic { c: Atomic[i64] }
+struct HasMutex { m: Mutex[i64] }
+shared struct Node { v: i64 }
+struct WrapsShared { node: Node }
+fn r_scalar(x: ref i64) -> i64 { return x; }
+fn r_string(s: ref String) -> i64 { return s.len(); }
+fn r_plain(p: ref Plain) -> i64 { return p.a; }
+fn r_vec(v: ref Vec[i64]) -> i64 { return v.len(); }
+fn r_atomic(h: ref HasAtomic) -> i64 { return 0; }
+fn r_mutex(h: ref HasMutex) -> i64 { return 0; }
+fn r_shared(w: ref WrapsShared) -> i64 { return 0; }
+fn main() { let x: i64 = 7; print(r_scalar(x)); }
+"#,
+        );
+        // Freeze referents → readonly.
+        for sym in ["@r_scalar(", "@r_string(", "@r_plain(", "@r_vec("] {
+            assert!(
+                define_line(&ir, sym).contains("readonly"),
+                "ref-to-Freeze `{}` should carry readonly: {}",
+                sym,
+                define_line(&ir, sym)
+            );
+        }
+        // Interior-mutable / (transitively) shared referents → NOT readonly.
+        for sym in ["@r_atomic(", "@r_mutex(", "@r_shared("] {
+            assert!(
+                !define_line(&ir, sym).contains("readonly"),
+                "ref-to-interior-mutable `{}` must not carry readonly: {}",
+                sym,
+                define_line(&ir, sym)
+            );
+        }
+    }
+
+    #[test]
+    fn readonly_ref_freeze_in_monomorph() {
+        // The `ref T` → `readonly` arm reaches monomorphized specializations:
+        // a bare `ref T` resolved (via `type_subst_names`) to a Freeze type
+        // gets `readonly`; resolved to an interior-mutable type it does not.
+        let ir = ir_for(
+            r#"
+struct Plain { a: i64 }
+struct HasAtomic { c: Atomic[i64] }
+fn rgen[T](x: ref T) -> i64 { return 0; }
+fn main() {
+    let p: Plain = Plain { a: 1 };
+    print(rgen(p));
+    let h: HasAtomic = HasAtomic { c: Atomic.new(2) };
+    print(rgen(h));
+}
+"#,
+        );
+        // The `T = Plain` mono → readonly; the `T = HasAtomic` mono → not.
+        assert!(
+            define_line(&ir, "rgen$Plain").contains("readonly"),
+            "ref T resolved to a Freeze type should carry readonly: {}",
+            define_line(&ir, "rgen$Plain")
+        );
+        assert!(
+            !define_line(&ir, "rgen$HasAtomic").contains("readonly"),
+            "ref T resolved to an interior-mutable type must not: {}",
+            define_line(&ir, "rgen$HasAtomic")
         );
     }
 

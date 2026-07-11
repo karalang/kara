@@ -113,6 +113,63 @@ fn collect_annotated_let_types(
     }
 }
 
+/// Immutable POD scalars / owned primitives that are trivially "Freeze" (no
+/// interior mutability) for the `ref T` → `readonly` predicate
+/// (`ref_referent_is_freeze`). `String` / `str` qualify — mutation needs a
+/// `mut ref`, and neither carries an interior-mutable cell.
+fn is_freeze_primitive_name(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "f16"
+            | "bf16"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+            | "String"
+            | "str"
+            | "Unit"
+    )
+}
+
+/// Value-semantics generic containers whose Freeze-ness is exactly the
+/// Freeze-ness of their element / payload type argument(s) — a shared `ref` to
+/// one exposes no interior mutability the elements don't already have. Checked
+/// *before* the user-struct arm in `ref_referent_is_freeze` so a container
+/// whose baked declaration is a 1-field opaque struct recurses its element
+/// rather than the opaque field.
+fn is_transparent_container_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Vec"
+            | "VecDeque"
+            | "Option"
+            | "Result"
+            | "Box"
+            | "Slice"
+            | "Array"
+            | "Vector"
+            | "Map"
+            | "Set"
+            | "SortedMap"
+            | "SortedSet"
+            | "Tensor"
+            | "Column"
+            | "DataFrame"
+    )
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     /// The per-target classification for `func`'s `#[repr(C)]` struct-by-value
     /// return: `Direct` when it doesn't apply (not an export, not a by-value
@@ -671,14 +728,18 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Emit ownership-derived LLVM pointer-aliasing attributes on parameters
-    /// (noalias-ref-params slice 1 + owned-params slice 2). Emits `noalias` on
-    /// two classes of pointer-shaped parameter, lowering the language's
-    /// declared parameter modes into the aliasing oracle LLVM's alias analysis
-    /// and loop vectorizer want but could never prove on their own:
+    /// (noalias-ref-params slice 1 + owned-params slice 2 + readonly-ref slice
+    /// 3). Lowers the language's declared parameter modes into the aliasing
+    /// oracle LLVM's alias analysis and loop vectorizer want but could never
+    /// prove on their own, across three classes of pointer-shaped parameter:
     ///
-    ///   1. every `mut ref T` parameter (the exclusive borrow), and
+    ///   1. every `mut ref T` parameter → `noalias` (the exclusive borrow),
     ///   2. every OWNED parameter of a value-semantics type that lowers to a
-    ///      single heap `ptr` (`owned_ptr_param_is_noalias_safe`).
+    ///      single heap `ptr` → `noalias` (`owned_ptr_param_is_noalias_safe`),
+    ///   3. every `ref T` parameter of a *Freeze* type → `readonly` (a shared
+    ///      read borrow with no interior mutability; `ref_referent_is_freeze`).
+    ///      NOT `noalias` — two shared borrows of the same object may be live
+    ///      at once, so a `ref T` param can legitimately alias another.
     ///
     /// **Why `mut ref T` → `noalias` is sound.** A `mut ref T` is an
     /// *exclusive* borrow: while it is live, no other reference — shared or
@@ -729,14 +790,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// hole ever lets one through. (The owned arm needs no separate shared
     /// check — shared types are simply absent from the allowlist.)
     ///
-    /// **What is NOT a target.** `ref T` (shared read borrow) is deferred: it
-    /// needs `readonly` gated on a transitive Freeze predicate because
-    /// `Atomic[_]`/`Mutex[_]` fields mutate through a shared `ref self`
-    /// (design.md § Part 5 — Kāra's `UnsafeCell` analogue). `mut Slice[T]`
-    /// (`TypeKind::MutSlice`) is a by-value `{ptr,len}` fat struct — its
-    /// pointer is a field, not the parameter — so slice-kernel disjointness
-    /// needs `!alias.scope`/`!noalias` metadata on the loads/stores
-    /// (design.md:§ proven disjointness lowering), a separate slice.
+    /// **Why a Freeze `ref T` → `readonly` is sound.** A `ref T` is a shared
+    /// read borrow — the language forbids writing through it — so the callee
+    /// performs no stores through the pointer, which is LLVM's `readonly`
+    /// contract. The ONE hole is interior mutability: `Atomic[_]` / `Mutex[_]`
+    /// and a `shared` type's per-field runtime borrow flags CAN be written
+    /// through a shared reference (design.md § Part 5 — Kāra's `UnsafeCell`
+    /// analogue). `ref_referent_is_freeze` gates the attribute on `T` carrying
+    /// none of those transitively, and — like the owned allowlist — fails
+    /// *closed* (an unprovable type just misses the attribute). `readonly` is
+    /// deliberately NOT paired with `noalias`: unlike an exclusive borrow, two
+    /// shared `ref T` to the same object may be simultaneously live.
+    ///
+    /// **What is NOT a target.** `mut Slice[T]` (`TypeKind::MutSlice`) is a
+    /// by-value `{ptr,len}` fat struct — its pointer is a field, not the
+    /// parameter — so slice-kernel disjointness needs `!alias.scope`/`!noalias`
+    /// metadata on the loads/stores (design.md:§ proven disjointness lowering),
+    /// a separate slice; likewise `tbaa` tags on loads/stores.
     ///
     /// **Index correspondence.** Kāra param `i` is LLVM param `i + sret_base`:
     /// an `sret` result pointer (a larger-than-16 B `#[repr(C)]` struct
@@ -750,40 +820,50 @@ impl<'ctx> super::Codegen<'ctx> {
     /// non-generic fns (`declare_function`) and monomorphized specializations
     /// (`declare_mono_function`); on the mono path a bare generic param
     /// (`fn f[T](x: T)`) is resolved to its concrete instantiation name
-    /// through `type_subst_names` before the allowlist / shared-type checks.
+    /// through `type_subst_names` before the allowlist / shared / Freeze checks.
     pub(super) fn emit_param_alias_attrs(&self, fn_val: FunctionValue<'ctx>, func: &Function) {
-        let noalias_kind = inkwell::attributes::Attribute::get_named_enum_kind_id("noalias");
-        debug_assert!(noalias_kind != 0, "noalias attribute kind-id must resolve");
         // An `sret` result pointer takes LLVM `Param(0)`, shifting Kāra param
         // `i` to LLVM `Param(i + 1)`. Populated during `fn_type` construction,
         // so it is already set here; always 0 on the mono path (monos are never
         // `sret` exports).
         let sret_base = u32::from(self.sret_struct_returns.contains_key(&func.name));
         for (i, param) in func.params.iter().enumerate() {
-            let is_noalias = match &param.ty.kind {
-                // Exclusive borrow → `noalias`, minus the shared-type carve-out.
-                TypeKind::MutRef(inner) => !self.referent_is_shared_type(inner),
-                // Owned value-semantics single-`ptr` type → `noalias`.
-                _ => self.owned_ptr_param_is_noalias_safe(&param.ty),
+            // Which single alias attribute (if any) this parameter earns:
+            //   `mut ref T`  → `noalias`  (exclusive borrow; minus shared carve-out)
+            //   `ref T`      → `readonly` (shared read borrow of a Freeze type;
+            //                  NOT `noalias` — shared borrows may alias)
+            //   owned value  → `noalias`  (moved-in, sole live handle)
+            let attr: Option<&str> = match &param.ty.kind {
+                TypeKind::MutRef(inner) => {
+                    (!self.referent_is_shared_type(inner)).then_some("noalias")
+                }
+                TypeKind::Ref(inner) => self
+                    .ref_referent_is_freeze(inner, &mut Vec::new())
+                    .then_some("readonly"),
+                _ => self
+                    .owned_ptr_param_is_noalias_safe(&param.ty)
+                    .then_some("noalias"),
             };
-            if !is_noalias {
+            let Some(attr) = attr else {
                 continue;
-            }
-            // `noalias` is only valid on a pointer param; every type that
-            // reaches here lowers to `ptr` by construction (a `mut ref`, or an
-            // allowlisted single-`ptr` value type). Assert it so a future
-            // lowering change that violates the invariant fails a test rather
-            // than tripping the LLVM verifier at run time.
+            };
+            // `noalias`/`readonly` are only valid on a pointer param; every
+            // type that reaches here lowers to `ptr` by construction (a
+            // `ref`/`mut ref`, or an allowlisted single-`ptr` value type).
+            // Assert it so a future lowering change that violates the invariant
+            // fails a test rather than tripping the LLVM verifier at run time.
             debug_assert!(
                 matches!(
                     self.llvm_param_type(param),
                     BasicMetadataTypeEnum::PointerType(_)
                 ),
-                "noalias emitted on a non-pointer param lowering"
+                "alias attribute '{attr}' emitted on a non-pointer param lowering"
             );
+            let kind = inkwell::attributes::Attribute::get_named_enum_kind_id(attr);
+            debug_assert!(kind != 0, "attribute kind-id must resolve: {attr}");
             fn_val.add_attribute(
                 inkwell::attributes::AttributeLoc::Param(i as u32 + sret_base),
-                self.context.create_enum_attribute(noalias_kind, 0),
+                self.context.create_enum_attribute(kind, 0),
             );
         }
     }
@@ -854,6 +934,115 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(String::as_str)
             .unwrap_or(head.as_str());
         OWNED_VALUE_PTR_TYPES.contains(&name)
+    }
+
+    /// Conservative "Freeze" predicate for the `ref T` → `readonly` arm of
+    /// `emit_param_alias_attrs`: true when a shared read-borrow of `T` can
+    /// observe **no interior mutability**, so the callee provably cannot write
+    /// through the borrow and LLVM's `readonly` parameter attribute is sound.
+    ///
+    /// A `ref T` is a shared read borrow — the language forbids writing through
+    /// it — with ONE exception: interior-mutable cells can still be mutated
+    /// through a shared reference (design.md § Part 5, Kāra's `UnsafeCell`
+    /// analogue): `Atomic[_]` / `Mutex[_]`, and the per-field runtime borrow
+    /// flags of a `shared struct` / `shared enum`. `readonly` promises the
+    /// function performs no writes through the pointer, so it holds only when
+    /// `T` transitively contains none of those.
+    ///
+    /// **Fails closed.** Anything not provably Freeze returns `false` (no
+    /// attribute — a missed optimization, never a miscompile): unknown /
+    /// opaque type names, unresolved generic params, raw pointers, function
+    /// types, `Weak`, `mut ref` / `mut Slice` fields, and of course the
+    /// interior-mutable cells themselves. `visiting` carries the named types on
+    /// the current recursion stack so a self-referential struct/enum (`struct
+    /// Node { next: Option[Box[Node]] }`) terminates — a back-edge re-entry is
+    /// Freeze by assumption (its fields are being verified higher on the
+    /// stack), with a hard depth backstop as belt-and-suspenders.
+    fn ref_referent_is_freeze(&self, ty: &TypeExpr, visiting: &mut Vec<String>) -> bool {
+        if visiting.len() > 64 {
+            return false; // pathological nesting — fail closed
+        }
+        match &ty.kind {
+            TypeKind::Path(path) => {
+                let Some(head) = path.segments.first() else {
+                    return false;
+                };
+                let name = self
+                    .type_subst_names
+                    .get(head)
+                    .map(String::as_str)
+                    .unwrap_or(head.as_str());
+                // Interior-mutable cells + RC reference types → never Freeze.
+                if matches!(name, "Atomic" | "Mutex" | "Weak") {
+                    return false;
+                }
+                if self.shared_type_decl_names.contains(name)
+                    || self.shared_types.contains_key(name)
+                {
+                    return false;
+                }
+                // Immutable POD scalars / owned primitives → Freeze.
+                if is_freeze_primitive_name(name) {
+                    return true;
+                }
+                // Transparent generic containers → Freeze iff every *type*
+                // argument is Freeze (checked before the struct arm so a
+                // container whose baked decl is a 1-field struct — e.g. `Box`
+                // over a raw pointer field — recurses its element, not the
+                // opaque field).
+                if is_transparent_container_name(name) {
+                    return self.all_generic_type_args_freeze(path, visiting);
+                }
+                // Known user struct → all fields Freeze (cycle-guarded).
+                if let Some(fields) = self.struct_field_type_exprs(name) {
+                    if visiting.iter().any(|n| n == name) {
+                        return true;
+                    }
+                    visiting.push(name.to_string());
+                    let ok = fields
+                        .iter()
+                        .all(|f| self.ref_referent_is_freeze(f, visiting));
+                    visiting.pop();
+                    return ok;
+                }
+                // Known user enum → all variant payloads Freeze (cycle-guarded).
+                let variants = self.enum_variant_field_type_exprs(name);
+                if !variants.is_empty() || self.enum_layouts.contains_key(name) {
+                    if visiting.iter().any(|n| n == name) {
+                        return true;
+                    }
+                    visiting.push(name.to_string());
+                    let ok = variants.iter().all(|(_, _, tys)| {
+                        tys.iter().all(|t| self.ref_referent_is_freeze(t, visiting))
+                    });
+                    visiting.pop();
+                    return ok;
+                }
+                // Unknown / opaque name → conservative.
+                false
+            }
+            TypeKind::Tuple(tys) => tys.iter().all(|t| self.ref_referent_is_freeze(t, visiting)),
+            TypeKind::Array { element, .. } => self.ref_referent_is_freeze(element, visiting),
+            // A nested shared read-borrow is still read-only; a mutable borrow
+            // or mutable slice reachable through the outer shared ref IS
+            // interior mutation, so it is not Freeze.
+            TypeKind::Ref(inner) => self.ref_referent_is_freeze(inner, visiting),
+            // Raw pointers, fn types, `impl Trait`, `mut ref`, `mut Slice`,
+            // `Weak`, etc. → conservative.
+            _ => false,
+        }
+    }
+
+    /// Every `GenericArg::Type` of `path` is Freeze (const / shape args carry
+    /// no interior mutability). A container with no args is vacuously Freeze.
+    fn all_generic_type_args_freeze(&self, path: &PathExpr, visiting: &mut Vec<String>) -> bool {
+        match &path.generic_args {
+            None => true,
+            Some(args) => args.iter().all(|a| match a {
+                GenericArg::Type(t) => self.ref_referent_is_freeze(t, visiting),
+                GenericArg::Const(_) | GenericArg::Shape(_) => true,
+            }),
+        }
     }
 
     /// Lower the codegen-hint attributes (`#[inline]`,

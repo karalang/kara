@@ -3700,6 +3700,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// user program and the baked stdlib. Drives `compile_enum_eq`'s per-variant
     /// typed payload comparison (and the #14 enum-param entry deep-copy, which
     /// needs each VecOrString payload's element type to size the buffer copy).
+    /// Surface field `TypeExpr`s of a user struct, in declaration order, from
+    /// the program snapshot (falling back to the baked stdlib programs — the
+    /// same two sources `enum_variant_field_type_exprs` consults). `None` when
+    /// no struct by that name is known (an opaque / builtin type). Used by the
+    /// `ref T` → `readonly` Freeze walk (`ref_referent_is_freeze`).
+    pub(super) fn struct_field_type_exprs(&self, struct_name: &str) -> Option<Vec<TypeExpr>> {
+        fn collect(items: &[Item], name: &str) -> Option<Vec<TypeExpr>> {
+            items.iter().find_map(|item| match item {
+                Item::StructDef(s) if s.name == name => {
+                    Some(s.fields.iter().map(|f| f.ty.clone()).collect())
+                }
+                _ => None,
+            })
+        }
+        self.program_snapshot
+            .as_ref()
+            .and_then(|p| collect(&p.items, struct_name))
+            .or_else(|| {
+                crate::prelude::STDLIB_PROGRAMS
+                    .iter()
+                    .find_map(|(_, p)| collect(&p.items, struct_name))
+            })
+    }
+
     pub(super) fn enum_variant_field_type_exprs(
         &self,
         enum_name: &str,
