@@ -60536,6 +60536,43 @@ fn main() { print(0); }
         );
     }
 
+    // ── Arithmetic flags (`nsw`) on the for-range induction variable ─────
+    //
+    // For an ascending exclusive range with the default step 1 (`for i in a..b`),
+    // the counter increment `i + 1` is reached only when `i < b`, so it provably
+    // never signed-overflows → `add nsw` (unlocks IV canonicalization /
+    // vectorization). An inclusive range or an explicit step cannot be proven
+    // wrap-free here, so those stay on a plain `add`.
+    #[test]
+    fn for_range_induction_variable_nsw() {
+        let ir = ir_for(
+            r#"
+fn excl(n: i64) -> i64 { let mut s = 0; for i in 0..n { s = s + i; } return s; }
+fn incl(n: i64) -> i64 { let mut s = 0; for i in 0..=n { s = s + i; } return s; }
+fn stepped(n: i64) -> i64 { let mut s = 0; for i in (0..n).step_by(2) { s = s + i; } return s; }
+fn main() { print(0); }
+"#,
+        );
+        // Exclusive step-1 range → the counter increment is `add nsw`.
+        assert!(
+            fn_body(&ir, "@excl(").contains("%incr = add nsw i64"),
+            "exclusive step-1 for-range counter should be `add nsw`:\n{}",
+            fn_body(&ir, "@excl(")
+        );
+        // Inclusive range → plain add (the final `+1` can reach `end + 1`).
+        let incl = fn_body(&ir, "@incl(");
+        assert!(
+            incl.contains("%incr = add i64") && !incl.contains("%incr = add nsw"),
+            "inclusive for-range counter must stay a plain add:\n{incl}"
+        );
+        // Explicit step → plain add (cannot prove wrap-free here).
+        let stepped = fn_body(&ir, "@stepped(");
+        assert!(
+            stepped.contains("%incr = add i64") && !stepped.contains("%incr = add nsw"),
+            "stepped for-range counter must stay a plain add:\n{stepped}"
+        );
+    }
+
     #[test]
     fn owned_value_ptr_param_emits_noalias() {
         // An OWNED value-semantics type that lowers to a single heap `ptr`

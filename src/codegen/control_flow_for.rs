@@ -959,7 +959,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
             .unwrap()
             .into_int_value();
-        let next = self.builder.build_int_add(cur, step_val, "incr").unwrap();
+        // Arithmetic-flags (Codegen Optimization § nsw/nuw): for the canonical
+        // ascending exclusive range with the default step of 1 (`for i in a..b`),
+        // the increment `cur + 1` is reached only when `cur < end` (the `for.cond`
+        // guard), so `cur + 1 <= end <= i64::MAX` — it provably never
+        // signed-overflows. Tagging it `nsw` lets ScalarEvolution model the
+        // induction variable as a wrap-free affine recurrence, unlocking
+        // trip-count analysis, IV widening, and loop vectorization (the win this
+        // section targets). This is sound *despite* Kāra's "overflow is always
+        // defined" guarantee — that guarantee governs USER arithmetic, whereas
+        // this is a compiler-generated counter the compiler proves bounded.
+        // NOT tagged `nuw`: a range with a negative start makes the counter
+        // negative, where `+1` would unsigned-wrap. An explicit `step` or an
+        // inclusive range (`..=end`, whose final `+1` can reach `end + 1`) stays
+        // on the plain add — those cannot be proven wrap-free here.
+        let next = if step.is_none() && !inclusive {
+            self.builder
+                .build_int_nsw_add(cur, step_val, "incr")
+                .unwrap()
+        } else {
+            self.builder.build_int_add(cur, step_val, "incr").unwrap()
+        };
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
