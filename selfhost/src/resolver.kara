@@ -7,9 +7,12 @@
 //     lookup) — a FLAT `Vec` + linear scan (Kāra has no HashMap, and codegen
 //     can't `.push()` onto a nested receiver), the same idiom
 //     `Parser.label_known` uses.
-//   * Seeds ONLY the 16 `PRELUDE_PRIMITIVES` (i8..String); the full prelude
-//     (Vec/Option/println/...) and magic modules land in a later slice, so
-//     the Slice-1 corpus references no name outside those 16 + user defs.
+//   * Seeds the FULL prelude (Slice 2c) — the 16 `PRELUDE_PRIMITIVES` plus
+//     every `PRELUDE_{FUNCTIONS,TYPES,TRAITS,VARIANTS,EFFECT_RESOURCES}` name
+//     and the magic modules / comptime pseudotypes / stdlib module aliases the
+//     seed's `register_primitives` registers — so the corpus may reference real
+//     prelude names (`Vec` / `Option` / `println` / `Some` / ...) exactly as
+//     the seed resolves them.
 //   * Resolves a single top-level `fn`: generics (bare type params), `self`,
 //     params + param-types, return type, and the body block — walking
 //     Let/Assign/Exp statements and the reachable `Expr` forms, pushing a
@@ -123,11 +126,17 @@ pub fn resolve_item(item: Item) -> Vec[ResolveError] with panics {
 }
 
 impl Resolver {
-    // Global scope (parent = -1) seeded with the 16 PRELUDE_PRIMITIVES at
-    // synthetic line 0 (shadowable by user definitions).
+    // Global scope (parent = -1) seeded with the FULL prelude — the 16
+    // PRELUDE_PRIMITIVES plus every PRELUDE_{FUNCTIONS,TYPES,TRAITS,VARIANTS,
+    // EFFECT_RESOURCES} name and the magic modules / comptime pseudotypes /
+    // stdlib module aliases the seed's `register_primitives` (resolver.rs:209)
+    // registers — all at synthetic line 0 (shadowable by user definitions). The
+    // Kāra resolver is kind-agnostic (lookup checks name presence only; the use
+    // site picks UndefinedName vs UndefinedType), so seeding names alone suffices.
     fn seed_global(mut ref self) {
         self.parents.push(-1);
         self.current = 0;
+        // prelude primitives (16)
         self.seed_prim("i8".to_string());
         self.seed_prim("i16".to_string());
         self.seed_prim("i32".to_string());
@@ -144,6 +153,225 @@ impl Resolver {
         self.seed_prim("bool".to_string());
         self.seed_prim("char".to_string());
         self.seed_prim("String".to_string());
+        // prelude functions (30)
+        self.seed_prim("todo".to_string());
+        self.seed_prim("unreachable".to_string());
+        self.seed_prim("panic".to_string());
+        self.seed_prim("dbg".to_string());
+        self.seed_prim("print".to_string());
+        self.seed_prim("println".to_string());
+        self.seed_prim("eprintln".to_string());
+        self.seed_prim("assert".to_string());
+        self.seed_prim("assert_eq".to_string());
+        self.seed_prim("assert_ne".to_string());
+        self.seed_prim("with_provider".to_string());
+        self.seed_prim("size_of".to_string());
+        self.seed_prim("align_of".to_string());
+        self.seed_prim("forget".to_string());
+        self.seed_prim("swap".to_string());
+        self.seed_prim("replace".to_string());
+        self.seed_prim("take".to_string());
+        self.seed_prim("sleep_ms".to_string());
+        self.seed_prim("spawn".to_string());
+        self.seed_prim("collect_all_vec".to_string());
+        self.seed_prim("collect_all".to_string());
+        self.seed_prim("with_span".to_string());
+        self.seed_prim("tracing_active_span".to_string());
+        self.seed_prim("tracing_level_enabled".to_string());
+        self.seed_prim("tracing_emit_event".to_string());
+        self.seed_prim("tracing_set_min_level".to_string());
+        self.seed_prim("tracing_reset".to_string());
+        self.seed_prim("min".to_string());
+        self.seed_prim("max".to_string());
+        self.seed_prim("clamp".to_string());
+        // prelude types (110)
+        self.seed_prim("Option".to_string());
+        self.seed_prim("Result".to_string());
+        self.seed_prim("Vec".to_string());
+        self.seed_prim("VecDeque".to_string());
+        self.seed_prim("Array".to_string());
+        self.seed_prim("Vector".to_string());
+        self.seed_prim("Slice".to_string());
+        self.seed_prim("Map".to_string());
+        self.seed_prim("Set".to_string());
+        self.seed_prim("Entry".to_string());
+        self.seed_prim("Never".to_string());
+        self.seed_prim("StringSlice".to_string());
+        self.seed_prim("F32".to_string());
+        self.seed_prim("F64".to_string());
+        self.seed_prim("Atomic".to_string());
+        self.seed_prim("Mutex".to_string());
+        self.seed_prim("Ordering".to_string());
+        self.seed_prim("MemoryOrdering".to_string());
+        self.seed_prim("IoError".to_string());
+        self.seed_prim("VarError".to_string());
+        self.seed_prim("AllocError".to_string());
+        self.seed_prim("Utf8Error".to_string());
+        self.seed_prim("NulError".to_string());
+        self.seed_prim("ExitCode".to_string());
+        self.seed_prim("SortedSet".to_string());
+        self.seed_prim("SortedMap".to_string());
+        self.seed_prim("Channel".to_string());
+        self.seed_prim("Sender".to_string());
+        self.seed_prim("Receiver".to_string());
+        self.seed_prim("Stats".to_string());
+        self.seed_prim("Regex".to_string());
+        self.seed_prim("RegexError".to_string());
+        self.seed_prim("Match".to_string());
+        self.seed_prim("Client".to_string());
+        self.seed_prim("Response".to_string());
+        self.seed_prim("HttpError".to_string());
+        self.seed_prim("RequestBuilder".to_string());
+        self.seed_prim("Server".to_string());
+        self.seed_prim("Request".to_string());
+        self.seed_prim("TcpListener".to_string());
+        self.seed_prim("TcpStream".to_string());
+        self.seed_prim("TcpError".to_string());
+        self.seed_prim("WebSocket".to_string());
+        self.seed_prim("TlsConfig".to_string());
+        self.seed_prim("TlsListener".to_string());
+        self.seed_prim("TlsStream".to_string());
+        self.seed_prim("TlsError".to_string());
+        self.seed_prim("Base64".to_string());
+        self.seed_prim("Hex".to_string());
+        self.seed_prim("Url".to_string());
+        self.seed_prim("DecodeError".to_string());
+        self.seed_prim("File".to_string());
+        self.seed_prim("BufReader".to_string());
+        self.seed_prim("LinesIter".to_string());
+        self.seed_prim("BufWriter".to_string());
+        self.seed_prim("Runtime".to_string());
+        self.seed_prim("ParBlockInfo".to_string());
+        self.seed_prim("TaskInfo".to_string());
+        self.seed_prim("WaitTarget".to_string());
+        self.seed_prim("Json".to_string());
+        self.seed_prim("JsonError".to_string());
+        self.seed_prim("Parser".to_string());
+        self.seed_prim("Arg".to_string());
+        self.seed_prim("Args".to_string());
+        self.seed_prim("CliError".to_string());
+        self.seed_prim("ArgEntry".to_string());
+        self.seed_prim("FlagEntry".to_string());
+        self.seed_prim("ParsedValue".to_string());
+        self.seed_prim("Subcommand".to_string());
+        self.seed_prim("SubcommandResult".to_string());
+        self.seed_prim("Span".to_string());
+        self.seed_prim("LogEvent".to_string());
+        self.seed_prim("SpanField".to_string());
+        self.seed_prim("NoOpExporter".to_string());
+        self.seed_prim("StdoutExporter".to_string());
+        self.seed_prim("Log".to_string());
+        self.seed_prim("Command".to_string());
+        self.seed_prim("Child".to_string());
+        self.seed_prim("ExitStatus".to_string());
+        self.seed_prim("EnvVar".to_string());
+        self.seed_prim("Stdio".to_string());
+        self.seed_prim("ChildStdout".to_string());
+        self.seed_prim("ChildStderr".to_string());
+        self.seed_prim("ChildStdin".to_string());
+        self.seed_prim("Pool".to_string());
+        self.seed_prim("PooledConnection".to_string());
+        self.seed_prim("PoolError".to_string());
+        self.seed_prim("Arena".to_string());
+        self.seed_prim("ArenaRef".to_string());
+        self.seed_prim("ArenaCheckpoint".to_string());
+        self.seed_prim("Symbol".to_string());
+        self.seed_prim("Interner".to_string());
+        self.seed_prim("OnceLock".to_string());
+        self.seed_prim("OnceCell".to_string());
+        self.seed_prim("AlreadySetError".to_string());
+        self.seed_prim("Tensor".to_string());
+        self.seed_prim("Column".to_string());
+        self.seed_prim("DataFrame".to_string());
+        self.seed_prim("Semaphore".to_string());
+        self.seed_prim("SemaphoreError".to_string());
+        self.seed_prim("RateLimiter".to_string());
+        self.seed_prim("BoundedChannel".to_string());
+        self.seed_prim("OnFull".to_string());
+        self.seed_prim("ChannelError".to_string());
+        self.seed_prim("ProtoBuf".to_string());
+        self.seed_prim("ProtoReader".to_string());
+        self.seed_prim("TaskGroup".to_string());
+        self.seed_prim("TaskHandle".to_string());
+        self.seed_prim("CStr".to_string());
+        self.seed_prim("CString".to_string());
+        // prelude traits (35)
+        self.seed_prim("From".to_string());
+        self.seed_prim("Into".to_string());
+        self.seed_prim("TryFrom".to_string());
+        self.seed_prim("TryInto".to_string());
+        self.seed_prim("Add".to_string());
+        self.seed_prim("Sub".to_string());
+        self.seed_prim("Mul".to_string());
+        self.seed_prim("Div".to_string());
+        self.seed_prim("Rem".to_string());
+        self.seed_prim("Neg".to_string());
+        self.seed_prim("Eq".to_string());
+        self.seed_prim("PartialEq".to_string());
+        self.seed_prim("PartialOrd".to_string());
+        self.seed_prim("Exporter".to_string());
+        self.seed_prim("Ord".to_string());
+        self.seed_prim("Hash".to_string());
+        self.seed_prim("BitAnd".to_string());
+        self.seed_prim("BitOr".to_string());
+        self.seed_prim("BitXor".to_string());
+        self.seed_prim("Shl".to_string());
+        self.seed_prim("Shr".to_string());
+        self.seed_prim("Not".to_string());
+        self.seed_prim("Drop".to_string());
+        self.seed_prim("Index".to_string());
+        self.seed_prim("IndexMut".to_string());
+        self.seed_prim("Display".to_string());
+        self.seed_prim("Debug".to_string());
+        self.seed_prim("Iterator".to_string());
+        self.seed_prim("IntoIterator".to_string());
+        self.seed_prim("ToJson".to_string());
+        self.seed_prim("FromJson".to_string());
+        self.seed_prim("ScopeLocal".to_string());
+        self.seed_prim("Reduce".to_string());
+        self.seed_prim("ElementwiseMap".to_string());
+        self.seed_prim("ElementwiseOrd".to_string());
+        // prelude variants (14)
+        self.seed_prim("Some".to_string());
+        self.seed_prim("None".to_string());
+        self.seed_prim("Ok".to_string());
+        self.seed_prim("Err".to_string());
+        self.seed_prim("Less".to_string());
+        self.seed_prim("Equal".to_string());
+        self.seed_prim("Greater".to_string());
+        self.seed_prim("Relaxed".to_string());
+        self.seed_prim("Acquire".to_string());
+        self.seed_prim("Release".to_string());
+        self.seed_prim("AcqRel".to_string());
+        self.seed_prim("SeqCst".to_string());
+        self.seed_prim("Occupied".to_string());
+        self.seed_prim("Vacant".to_string());
+        // prelude effect resources (9)
+        self.seed_prim("Clock".to_string());
+        self.seed_prim("RandomSource".to_string());
+        self.seed_prim("Env".to_string());
+        self.seed_prim("Stdin".to_string());
+        self.seed_prim("Stdout".to_string());
+        self.seed_prim("Stderr".to_string());
+        self.seed_prim("FileSystem".to_string());
+        self.seed_prim("Network".to_string());
+        self.seed_prim("ProcessTable".to_string());
+        // magic modules / comptime pseudotypes / stdlib module aliases (15)
+        self.seed_prim("Type".to_string());
+        self.seed_prim("compiler".to_string());
+        self.seed_prim("ast".to_string());
+        self.seed_prim("Expr".to_string());
+        self.seed_prim("Item".to_string());
+        self.seed_prim("process".to_string());
+        self.seed_prim("gpu".to_string());
+        self.seed_prim("env".to_string());
+        self.seed_prim("clock".to_string());
+        self.seed_prim("rand".to_string());
+        self.seed_prim("stdin".to_string());
+        self.seed_prim("stdout".to_string());
+        self.seed_prim("stderr".to_string());
+        self.seed_prim("fs".to_string());
+        self.seed_prim("ptr".to_string());
     }
 
     fn seed_prim(mut ref self, name: String) {

@@ -1,5 +1,5 @@
 //! Differential oracle for the self-hosted **resolver** (Phase 12, Resolver
-//! port Slices 1–2b). Sibling of `tests/selfhost_parser{,_items,_types}.rs`:
+//! port Slices 1–2c). Sibling of `tests/selfhost_parser{,_items,_types}.rs`:
 //! a shared corpus of bare top-level items is name-resolved by BOTH the Rust
 //! seed (`karac::resolve(karac::parse(src).program)`) and the Kāra resolver
 //! (`selfhost/src/resolver.kara::resolve_item`, built AOT via `karac build`),
@@ -23,18 +23,23 @@
 //!   (siblings dispatch via `self.m()`), mirroring the seed. `use` is a later
 //!   slice. Operator-trait / `Into` impl restrictions produce out-of-slice
 //!   error kinds, so the corpus avoids those trait names as impl targets.
+//! - **Slice 2c** seeds the FULL prelude — the 16 primitives plus every
+//!   `PRELUDE_{FUNCTIONS,TYPES,TRAITS,VARIANTS,EFFECT_RESOURCES}` name and the
+//!   magic modules / comptime pseudotypes / stdlib module aliases the seed's
+//!   `register_primitives` registers — so the corpus may now reference real
+//!   prelude names (`Vec` / `Option` / `println` / `Some` / `process` / ...)
+//!   exactly as the seed resolves them (a typo of one still surfaces as
+//!   undefined; a user definition shadows the line-0 prelude entry).
 //!
 //! Only four error kinds are in scope — UndefinedName, UndefinedType,
-//! DuplicateDefinition, ReservedIdentifier. The corpus must therefore
-//! reference no prelude name outside the 16 seeded primitives (`Vec` /
-//! `Option` / `println` / `Some` / ... are seeded on the Rust side but not yet
-//! on the Kāra side, so they would diverge), carry no attributes (the Rust
-//! `resolve()` runs attribute validation the Kāra side does not), and exercise
-//! duplicate / reserved definitions only through GENERIC params — whose span
-//! is the bare identifier. A `FnParamNode` / `StructFieldNode` has no separate
-//! name span (its span covers `name: TYPE`), so a duplicate / reserved PARAM
-//! or FIELD would diverge on span (a name span is a later slice's work) — the
-//! type/value declarations therefore exercise dup/reserved only via generics.
+//! DuplicateDefinition, ReservedIdentifier. The corpus must therefore carry no
+//! attributes (the Rust `resolve()` runs attribute validation the Kāra side
+//! does not) and exercise duplicate / reserved definitions only through GENERIC
+//! params — whose span is the bare identifier. A `FnParamNode` /
+//! `StructFieldNode` has no separate name span (its span covers `name: TYPE`),
+//! so a duplicate / reserved PARAM or FIELD would diverge on span (a name span
+//! is a later slice's work) — the type/value declarations therefore exercise
+//! dup/reserved only via generics.
 //!
 //! The Rust seed asserts every produced error is one of the four in-scope
 //! kinds, so a corpus entry that drifts out of the slice fails loudly rather
@@ -43,9 +48,10 @@
 use karac::resolver::ResolveErrorKind;
 use std::path::PathBuf;
 
-/// Bare top-level items — the forms Slices 1 + 2a resolve (`fn` / `struct` /
-/// `enum` / `type` / `const`). Types use only the 16 primitives + generics +
-/// self-references; no prelude functions/types/variants, no attributes.
+/// Bare top-level items — the forms Slices 1–2b resolve (`fn` / `struct` /
+/// `enum` / `type` / `const` / `trait` / `impl`). Names come from the 16
+/// primitives + the full seeded prelude (Slice 2c) + generics + self-refs; no
+/// attributes.
 const CORPUS: &[&str] = &[
     // Clean shapes.
     "fn ok() {}",
@@ -124,6 +130,22 @@ const CORPUS: &[&str] = &[
     "impl i64 { fn m(x: Missing) {} }",
     "impl Nope { fn m() {} }",
     "impl Show for i64 { fn show(ref self) -> i64 { 0 } }",
+    // ── Slice 2c: full prelude seeding ──
+    // Prelude functions / types / variants / modules now resolve like the seed.
+    "fn uses_println() { println(\"hi\") }",
+    "fn uses_panic() { panic(\"boom\") }",
+    "fn uses_vec(v: Vec[i64]) {}",
+    "fn uses_map(m: Map[String, i64]) {}",
+    "fn ret_option() -> Option[i64] { None }",
+    "fn uses_some() { let x = Some(5); x }",
+    "fn uses_result() -> Result[i64, bool] { Ok(1) }",
+    "fn uses_module() { process.exit(0) }",
+    "type AliasTrait = Display;",
+    // User definition shadows a prelude type (line-0 carve-out) — no dup.
+    "struct Vec {}",
+    // Typos of prelude names still surface as undefined (seeding is exact).
+    "fn typo_fn() { printlnn(\"x\") }",
+    "fn typo_ty(x: Veec) {}",
 ];
 
 /// Byte offset shift between the Rust and Kāra spans — 0 (both resolve the
