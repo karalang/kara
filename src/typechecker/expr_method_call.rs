@@ -5776,11 +5776,12 @@ impl<'a> super::TypeChecker<'a> {
             args: vec![elem],
         };
 
-        if args.len() != 2 {
+        if args.len() < 2 {
             self.type_error(
                 format!(
                     "error[E_GPU_DISPATCH_ARITY]: `gpu.dispatch` takes a kernel and a buffer \
-                     — `gpu.dispatch(kernel, buffer)` (found {} argument(s))",
+                     (and, for a struct buffer, scalar uniforms) — \
+                     `gpu.dispatch(kernel, buffer, ...)` (found {} argument(s))",
                     args.len()
                 ),
                 span.clone(),
@@ -5810,6 +5811,18 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+        }
+        // The scalar element-wise-map path takes no uniforms (GPU-LBM-2 is
+        // struct-only) — extra arguments require a struct buffer.
+        if args.len() != 2 {
+            self.type_error(
+                "error[E_GPU_DISPATCH_ARITY]: extra `gpu.dispatch` arguments (scalar uniforms) \
+                 require a struct buffer with a `layout` block"
+                    .to_string(),
+                args[2].value.span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            return vec_of(Type::Float(FloatSize::F32));
         }
         let elem = match &buf_ty {
             Type::Named { name, args: ta } if name == "Vec" && ta.len() == 1 => {
@@ -6034,19 +6047,54 @@ impl<'a> super::TypeChecker<'a> {
             );
             return result_vec;
         };
-        let param_ok = kernel.params.len() == 1
-            && kernel.params.first().and_then(|p| te_name(&p.ty)) == Some(struct_name);
+        // First param is the struct `S`; any further params are scalar `f32`
+        // uniforms (GPU-LBM-2).
+        let n_uniform_params = kernel.params.len().saturating_sub(1);
+        let param_ok = !kernel.params.is_empty()
+            && kernel.params.first().and_then(|p| te_name(&p.ty)) == Some(struct_name)
+            && kernel.params[1..]
+                .iter()
+                .all(|p| te_name(&p.ty) == Some("f32"));
         let ret_ok = kernel.return_type.as_ref().and_then(te_name) == Some(struct_name);
         if !param_ok || !ret_ok {
             self.type_error(
                 format!(
                     "error[E_GPU_DISPATCH_KERNEL]: kernel `{kernel_name}` must map \
-                     `{struct_name} -> {struct_name}` for a struct buffer"
+                     `{struct_name} -> {struct_name}` (with any extra params `f32` uniforms) \
+                     for a struct buffer"
                 ),
                 args[0].value.span.clone(),
                 TypeErrorKind::TypeMismatch,
             );
             return result_vec;
+        }
+        // The dispatch's extra args (beyond kernel + buffer) are the uniform
+        // values — count must match the kernel's uniform params, each `f32`.
+        let n_uniform_args = args.len() - 2;
+        if n_uniform_args != n_uniform_params {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_ARITY]: kernel `{kernel_name}` takes \
+                     {n_uniform_params} uniform(s) but {n_uniform_args} were passed"
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            return result_vec;
+        }
+        for ua in &args[2..] {
+            let ut = self.infer_expr(&ua.value);
+            // Any float is accepted — a bare literal (`10.0`) defaults to `f64`;
+            // codegen narrows it to `f32` for the uniform buffer.
+            if !matches!(ut, Type::Float(_)) && ut != Type::Error {
+                self.type_error(
+                    "error[E_GPU_DISPATCH_UNIFORM]: `gpu.dispatch` uniform arguments must be a \
+                     float (`f32`/`f64`)"
+                        .to_string(),
+                    ua.value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
         }
 
         // No WGSL bake: the typechecker is layout-blind. Codegen emits the

@@ -163,7 +163,8 @@ pub unsafe extern "C" fn karac_runtime_gpu_map_multi(
         .map(|&p| std::slice::from_raw_parts(p, byte_len))
         .collect();
 
-    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, n)) else {
+    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, &[], n))
+    else {
         crate::fatal::write_stderr(
             b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
         );
@@ -216,6 +217,9 @@ pub unsafe extern "C" fn karac_runtime_gpu_dispatch_soa(
     field_size: usize,
     aos_stride: usize,
     n: usize,
+    n_uniforms: usize,
+    uniform_ptrs: *const *const u8,
+    uniform_size: usize,
 ) -> *mut u8 {
     let aos_total = n.saturating_mul(aos_stride);
 
@@ -236,8 +240,15 @@ pub unsafe extern "C" fn karac_runtime_gpu_dispatch_soa(
         .zip(strides.iter())
         .map(|(&p, &stride)| std::slice::from_raw_parts(p, n * stride))
         .collect();
+    // Scalar uniforms (GPU-LBM-2): each `uniform_size` bytes (f32 = 4).
+    let uniform_slice = std::slice::from_raw_parts(uniform_ptrs, n_uniforms);
+    let uniforms: Vec<&[u8]> = uniform_slice
+        .iter()
+        .map(|&p| std::slice::from_raw_parts(p, uniform_size))
+        .collect();
 
-    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, n)) else {
+    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, &uniforms, n))
+    else {
         crate::fatal::write_stderr(
             b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
         );
@@ -274,7 +285,7 @@ async fn dispatch_bytes_async(wgsl: &str, input: &[u8], elem_size: usize) -> Opt
     // The single-buffer path is the `n_buffers == 1` case of the multi core:
     // input at `@binding(0)`, output at `@binding(1)` — byte-identical to the
     // slice-0 WGSL contract.
-    let mut outs = dispatch_multi_bytes_async(wgsl, &[input], input.len() / elem_size).await?;
+    let mut outs = dispatch_multi_bytes_async(wgsl, &[input], &[], input.len() / elem_size).await?;
     outs.pop()
 }
 
@@ -289,6 +300,7 @@ async fn dispatch_bytes_async(wgsl: &str, input: &[u8], elem_size: usize) -> Opt
 async fn dispatch_multi_bytes_async(
     wgsl: &str,
     inputs: &[&[u8]],
+    uniforms: &[&[u8]],
     elem_count: usize,
 ) -> Option<Vec<Vec<u8>>> {
     let n_buffers = inputs.len();
@@ -341,6 +353,19 @@ async fn dispatch_multi_bytes_async(
             })
         })
         .collect();
+    // Read-only scalar uniforms (GPU-LBM-2): one storage buffer each, bound after
+    // the group in/out buffers. Storage (not `uniform`) avoids the 16-byte
+    // uniform-alignment constraint; the shader reads `<name>_u[0]`.
+    let uniform_bufs: Vec<wgpu::Buffer> = uniforms
+        .iter()
+        .map(|bytes| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("gpu-cg4-uniform"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            })
+        })
+        .collect();
 
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("gpu-cg4-shader"),
@@ -368,6 +393,13 @@ async fn dispatch_multi_bytes_async(
     for (i, buf) in output_bufs.iter().enumerate() {
         entries.push(wgpu::BindGroupEntry {
             binding: (n_buffers + i) as u32,
+            resource: buf.as_entire_binding(),
+        });
+    }
+    // Uniforms at binding 2n..2n+u (after all group in/out buffers).
+    for (i, buf) in uniform_bufs.iter().enumerate() {
+        entries.push(wgpu::BindGroupEntry {
+            binding: (2 * n_buffers + i) as u32,
             resource: buf.as_entire_binding(),
         });
     }
@@ -501,6 +533,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let Some(outs) = pollster::block_on(dispatch_multi_bytes_async(
             PARTICLE_STEP_WGSL,
             &[&pos_bytes, &vel_bytes],
+            &[],
             256, // elem_count (one GPU thread per logical element)
         )) else {
             eprintln!("gpu-cg4: no GPU adapter available — skipping");
@@ -553,6 +586,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let Some(outs) = pollster::block_on(dispatch_multi_bytes_async(
             MULTI_FIELD_WGSL,
             &[&ab_bytes, &cg_bytes],
+            &[],
             n,
         )) else {
             eprintln!("gpu-cg4: no GPU adapter available — skipping");
@@ -567,6 +601,46 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             assert_eq!(a, i as f32 + 100.0, "a[{i}]"); // a + c
             assert_eq!(b, (i as f32) * 2.0, "b[{i}]"); // unchanged
             assert_eq!(c, 100.0, "c[{i}]"); // unchanged
+        }
+    }
+
+    // GPU-LBM-2: a scalar uniform `k` bound at `@binding(2n)` (after the group
+    // in/out buffers) as a 1-element `array<f32>`, read `k_u[0]`.
+    const UNIFORM_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       gp_in:  array<f32>;
+@group(0) @binding(1) var<storage, read_write> gp_out: array<f32>;
+@group(0) @binding(2) var<storage, read>       k_u:    array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= arrayLength(&gp_in)) { return; }
+    gp_out[i] = gp_in[i] * k_u[0];
+}
+"#;
+
+    #[test]
+    fn single_uniform_dispatch() {
+        let n = 64usize;
+        let input: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let in_bytes: Vec<u8> = input.iter().flat_map(|x| x.to_le_bytes()).collect();
+        let k: f32 = 3.0;
+        let k_bytes = k.to_le_bytes().to_vec();
+        let Some(outs) = pollster::block_on(dispatch_multi_bytes_async(
+            UNIFORM_WGSL,
+            &[&in_bytes],
+            &[&k_bytes],
+            n,
+        )) else {
+            eprintln!("gpu-lbm2: no GPU adapter available — skipping");
+            return;
+        };
+        let out: Vec<f32> = outs[0]
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        for i in 0..n {
+            assert_eq!(out[i], input[i] * k, "elem {i}");
         }
     }
 }

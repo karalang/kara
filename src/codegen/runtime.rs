@@ -6829,6 +6829,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 i64_t.into(), // field_size
                 i64_t.into(), // aos_stride
                 i64_t.into(), // n
+                i64_t.into(), // n_uniforms
+                ptr_t.into(), // uniform_ptrs
+                i64_t.into(), // uniform_size
             ],
             false,
         );

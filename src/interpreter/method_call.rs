@@ -456,7 +456,7 @@ impl<'a> super::Interpreter<'a> {
     /// checks rely on). Runs past typecheck errors, so every malformed shape is
     /// a recorded runtime error rather than a panic.
     fn eval_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Value {
-        if args.len() != 2 {
+        if args.len() < 2 {
             return self.record_runtime_error(
                 format!(
                     "gpu.dispatch expects a kernel and a buffer (found {} argument(s))",
@@ -479,9 +479,19 @@ impl<'a> super::Interpreter<'a> {
         };
         let elems = rc.read().unwrap().clone();
 
+        // Scalar uniforms (GPU-LBM-2): the args beyond kernel + buffer, evaluated
+        // once and passed to every per-element kernel call after the element.
+        let uniforms: Vec<Value> = args[2..]
+            .iter()
+            .map(|a| self.eval_expr_inner(&a.value))
+            .collect();
+
         let mut out = Vec::with_capacity(elems.len());
         for elem in elems {
-            out.push(self.call_function(&kernel_name, &[elem]));
+            let mut call_args = Vec::with_capacity(1 + uniforms.len());
+            call_args.push(elem);
+            call_args.extend(uniforms.iter().cloned());
+            out.push(self.call_function(&kernel_name, &call_args));
         }
         Value::Array(Arc::new(RwLock::new(out)))
     }

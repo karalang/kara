@@ -10530,7 +10530,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// buffer is exactly `n` f32s (element-wise maps preserve length), so
     /// `len == cap == n` and the binding's own scope drop frees it.
     fn compile_gpu_dispatch(&mut self, args: &[CallArg]) -> Result<BasicValueEnum<'ctx>, String> {
-        if args.len() != 2 {
+        if args.len() < 2 {
             return Err(format!(
                 "gpu.dispatch expects a kernel and a buffer, found {} argument(s)",
                 args.len()
@@ -10841,6 +10841,39 @@ impl<'ctx> super::Codegen<'ctx> {
         let n_groups_v = i64_t.const_int(num_groups as u64, false);
         let n_fields_v = i64_t.const_int(n_fields as u64, false);
 
+        // Scalar uniforms (GPU-LBM-2): the dispatch args beyond kernel + buffer.
+        // Compile each to f32, spill to a stack slot, and pass an array of pointers
+        // to those 4-byte values.
+        let f32_t = self.context.f32_type();
+        let n_uniforms = args.len().saturating_sub(2);
+        let u_arr_ty = ptr_ty.array_type(n_uniforms.max(1) as u32);
+        let uniform_ptrs = self.builder.build_alloca(u_arr_ty, "gpu.uniforms").unwrap();
+        for (u, ua) in args.iter().skip(2).enumerate() {
+            let v = self.compile_expr(&ua.value)?.into_float_value();
+            let v = if v.get_type() == f32_t {
+                v
+            } else {
+                self.builder
+                    .build_float_trunc(v, f32_t, "gpu.u.f32")
+                    .unwrap()
+            };
+            let slot = self.builder.build_alloca(f32_t, "gpu.u.slot").unwrap();
+            self.builder.build_store(slot, v).unwrap();
+            let arr_slot = unsafe {
+                self.builder
+                    .build_in_bounds_gep(
+                        u_arr_ty,
+                        uniform_ptrs,
+                        &[i64_t.const_zero(), i64_t.const_int(u as u64, false)],
+                        "gpu.u.k",
+                    )
+                    .unwrap()
+            };
+            self.builder.build_store(arr_slot, slot).unwrap();
+        }
+        let n_uniforms_v = i64_t.const_int(n_uniforms as u64, false);
+        let uniform_size = i64_t.const_int(4, false);
+
         let dispatch_fn = self.gpu_dispatch_soa_fn();
         let aos_ptr = self
             .builder
@@ -10859,6 +10892,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     field_size.into(),
                     aos_stride.into(),
                     n.into(),
+                    n_uniforms_v.into(),
+                    uniform_ptrs.into(),
+                    uniform_size.into(),
                 ],
                 "gpu.soa.out",
             )

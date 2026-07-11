@@ -607,12 +607,33 @@ pub fn emit_kernel_soa(
     groups: &[SoaGpuGroup],
     helpers: &[&Function],
 ) -> Result<String, WgslError> {
-    let param = kernel_param(func)?;
-    let param_name = param.name().ok_or_else(|| {
+    if func.self_param.is_some() {
+        return Err(WgslError::UnsupportedSignature(
+            "a GPU kernel cannot take a self receiver".to_string(),
+        ));
+    }
+    // The first parameter is the struct buffer element; any further parameters are
+    // scalar uniforms (GPU-LBM-2) — each `f32`, bound after the group buffers and
+    // read in the body as `<name>_u[0]`.
+    let (struct_param, uniform_params) = func.params.split_first().ok_or_else(|| {
+        WgslError::UnsupportedSignature("a struct GPU kernel needs a struct parameter".to_string())
+    })?;
+    let param_name = struct_param.name().ok_or_else(|| {
         WgslError::UnsupportedSignature(
             "the GPU kernel parameter must be a plain binding".to_string(),
         )
     })?;
+    let mut uniform_names: Vec<String> = Vec::new();
+    for u in uniform_params {
+        wgsl_scalar(&u.ty, "uniform parameter")?;
+        let un = u.name().ok_or_else(|| {
+            WgslError::UnsupportedSignature(
+                "a GPU uniform parameter must be a plain binding".to_string(),
+            )
+        })?;
+        uniform_names.push(un.to_string());
+    }
+    let uniform_set: HashSet<String> = uniform_names.iter().cloned().collect();
     if groups.is_empty() {
         return Err(WgslError::UnsupportedSignature(
             "a struct GPU kernel needs at least one layout group".to_string(),
@@ -659,6 +680,13 @@ pub fn emit_kernel_soa(
             g.elem_ty()
         ));
     }
+    // Scalar uniforms at binding 2n..2n+u — 1-element storage arrays.
+    for (u, un) in uniform_names.iter().enumerate() {
+        decls.push_str(&format!(
+            "@group(0) @binding({}) var<storage, read> {un}_u: array<f32>;\n",
+            2 * n + u
+        ));
+    }
 
     // Materialize each field once: `let <p>_<field> = <group>_in[i]{.field}?;`.
     let mut materialize = String::new();
@@ -681,7 +709,7 @@ pub fn emit_kernel_soa(
 
     // The body is a struct literal; store each group's fields to its output.
     let body = kernel_return_expr(func)?;
-    let stores = lower_struct_return(body, param_name, groups, &helper_names)?;
+    let stores = lower_struct_return(body, param_name, groups, &helper_names, &uniform_set)?;
 
     // arrayLength guard keys off the first input buffer (all equal length).
     let guard_group = &groups[0].name;
@@ -707,6 +735,7 @@ fn lower_struct_return(
     param_name: &str,
     groups: &[SoaGpuGroup],
     helpers: &HashSet<String>,
+    uniforms: &HashSet<String>,
 ) -> Result<String, WgslError> {
     let mut out = String::new();
     for g in groups {
@@ -714,7 +743,7 @@ fn lower_struct_return(
             let vals = g
                 .fields
                 .iter()
-                .map(|f| struct_field_wgsl(expr, f, param_name, groups, helpers))
+                .map(|f| struct_field_wgsl(expr, f, param_name, groups, helpers, uniforms))
                 .collect::<Result<Vec<_>, _>>()?;
             out.push_str(&format!(
                 "    {}_out[i] = {}({});\n",
@@ -726,7 +755,7 @@ fn lower_struct_return(
             out.push_str(&format!(
                 "    {}_out[i] = {};\n",
                 g.name,
-                struct_field_wgsl(expr, &g.fields[0], param_name, groups, helpers)?
+                struct_field_wgsl(expr, &g.fields[0], param_name, groups, helpers, uniforms)?
             ));
         }
     }
@@ -746,6 +775,7 @@ fn struct_field_wgsl(
     param_name: &str,
     groups: &[SoaGpuGroup],
     helpers: &HashSet<String>,
+    uniforms: &HashSet<String>,
 ) -> Result<String, WgslError> {
     match &expr.kind {
         ExprKind::StructLiteral { fields, spread, .. } => {
@@ -759,7 +789,7 @@ fn struct_field_wgsl(
                     "the returned struct is missing field `{field}`"
                 ))
             })?;
-            lower_soa_expr(&init.value, param_name, groups, helpers)
+            lower_soa_expr(&init.value, param_name, groups, helpers, uniforms)
         }
         ExprKind::Identifier(name) if name == param_name => {
             if groups.iter().any(|g| g.fields.iter().any(|gf| gf == field)) {
@@ -776,9 +806,9 @@ fn struct_field_wgsl(
             else_branch,
         } => {
             let (then_e, else_e) = if_branches(then_block, else_branch)?;
-            let cond = lower_soa_expr(condition, param_name, groups, helpers)?;
-            let t = struct_field_wgsl(then_e, field, param_name, groups, helpers)?;
-            let e = struct_field_wgsl(else_e, field, param_name, groups, helpers)?;
+            let cond = lower_soa_expr(condition, param_name, groups, helpers, uniforms)?;
+            let t = struct_field_wgsl(then_e, field, param_name, groups, helpers, uniforms)?;
+            let e = struct_field_wgsl(else_e, field, param_name, groups, helpers, uniforms)?;
             Ok(format!("select({e}, {t}, {cond})"))
         }
         _ => Err(WgslError::UnsupportedBody(
@@ -798,6 +828,7 @@ fn lower_soa_expr(
     param_name: &str,
     groups: &[SoaGpuGroup],
     helpers: &HashSet<String>,
+    uniforms: &HashSet<String>,
 ) -> Result<String, WgslError> {
     match &expr.kind {
         ExprKind::FieldAccess { object, field } => {
@@ -820,15 +851,15 @@ fn lower_soa_expr(
         ExprKind::Float(f, _) => lower_float(*f),
         ExprKind::Binary { op, left, right } => {
             let op_str = binop_str(op)?;
-            let l = lower_soa_expr(left, param_name, groups, helpers)?;
-            let r = lower_soa_expr(right, param_name, groups, helpers)?;
+            let l = lower_soa_expr(left, param_name, groups, helpers, uniforms)?;
+            let r = lower_soa_expr(right, param_name, groups, helpers, uniforms)?;
             Ok(format!("({l} {op_str} {r})"))
         }
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,
         } => {
-            let inner = lower_soa_expr(operand, param_name, groups, helpers)?;
+            let inner = lower_soa_expr(operand, param_name, groups, helpers, uniforms)?;
             Ok(format!("-({inner})"))
         }
         // Post-lowering operator methods (`a + b` → `<type>.add(a, b)`) and
@@ -836,7 +867,7 @@ fn lower_soa_expr(
         ExprKind::Call { callee, args } => lower_call(
             callee,
             args,
-            &|e| lower_soa_expr(e, param_name, groups, helpers),
+            &|e| lower_soa_expr(e, param_name, groups, helpers, uniforms),
             helpers,
         ),
         // Value `if c { a } else { b }` → WGSL `select(b, a, c)` (GPU-LBM-4).
@@ -846,14 +877,16 @@ fn lower_soa_expr(
             else_branch,
         } => {
             let (then_e, else_e) = if_branches(then_block, else_branch)?;
-            let cond = lower_soa_expr(condition, param_name, groups, helpers)?;
-            let t = lower_soa_expr(then_e, param_name, groups, helpers)?;
-            let e = lower_soa_expr(else_e, param_name, groups, helpers)?;
+            let cond = lower_soa_expr(condition, param_name, groups, helpers, uniforms)?;
+            let t = lower_soa_expr(then_e, param_name, groups, helpers, uniforms)?;
+            let e = lower_soa_expr(else_e, param_name, groups, helpers, uniforms)?;
             Ok(format!("select({e}, {t}, {cond})"))
         }
+        // A bare identifier naming a scalar uniform parameter → `<name>_u[0]`.
+        ExprKind::Identifier(name) if uniforms.contains(name) => Ok(format!("{name}_u[0]")),
         ExprKind::Identifier(name) => Err(WgslError::UnsupportedBody(format!(
-            "identifier `{name}` — a struct GPU kernel body accesses `<param>.<field>`, \
-             not the whole struct value"
+            "identifier `{name}` — a struct GPU kernel body accesses `<param>.<field>` or a \
+             uniform, not the whole struct value"
         ))),
         _ => Err(WgslError::UnsupportedBody(
             "unsupported expression in a struct GPU kernel body (field access, numeric \
@@ -943,6 +976,32 @@ mod tests {
             "{wgsl}"
         );
         assert!(wgsl.contains("ga_out[i] = sq(x_a);"), "{wgsl}");
+    }
+
+    #[test]
+    fn emits_soa_scalar_uniform() {
+        // GPU-LBM-2: a scalar uniform param `k` bound at `@binding(2n)` and read
+        // as `k_u[0]`.
+        let func = parse_kernel(
+            "#[gpu]\nfn scale(x: Cell, k: f32) -> Cell { Cell { a: x.a * k, b: x.b } }\n",
+        );
+        let groups = vec![
+            SoaGpuGroup {
+                name: "ga".into(),
+                fields: vec!["a".into()],
+            },
+            SoaGpuGroup {
+                name: "gb".into(),
+                fields: vec!["b".into()],
+            },
+        ];
+        let wgsl = emit_kernel_soa(&func, &groups, &[]).unwrap();
+        assert!(
+            wgsl.contains("@group(0) @binding(4) var<storage, read> k_u: array<f32>;"),
+            "{wgsl}"
+        );
+        assert!(wgsl.contains("ga_out[i] = (x_a * k_u[0]);"), "{wgsl}");
+        assert!(wgsl.contains("gb_out[i] = x_b;"), "{wgsl}");
     }
 
     #[test]
