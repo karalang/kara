@@ -3136,6 +3136,20 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(recv_ptr.into());
         }
 
+        // `OnceLock`/`OnceCell` `set`/`get`/`is_set`/`get_or_init` on a local
+        // binding. Gated on the receiver identifier's membership in
+        // `once_var_types` (populated by `register_var_from_type_expr` from the
+        // `OnceLock[T]`/`OnceCell[T]` annotation) — the baked stdlib structs
+        // have no user impl, so this must intercept before the user-impl lookup
+        // below. B-8 OnceLock codegen.
+        if let ExprKind::Identifier(recv_name) = &object.kind {
+            if self.once_var_types.contains_key(recv_name.as_str())
+                && matches!(method, "set" | "get" | "is_set" | "get_or_init")
+            {
+                return self.compile_once_method(recv_name, method, args);
+            }
+        }
+
         // User impl-block method on a struct receiver: route `obj.method(args)`
         // through the `Type.method` function emitted by the impl-block pass.
         // Requires knowing the object's declared type; the typechecker stashes

@@ -340,6 +340,36 @@ mod memory_sanitizer_tests {
     // called multiple times.
 
     #[test]
+    fn asan_oncelock_local_binding_freed_no_leak() {
+        // A local `OnceLock[i64]` binding's scope-exit `FreeOnceHandle` must
+        // reclaim the runtime cell (control block + sealed value buffer) — a
+        // missed `karac_runtime_once_free` leaks one cell + buffer per
+        // iteration (LSan on Linux CI catches it). 40 fresh cells, each
+        // set+get, so any per-iteration leak accumulates well past noise. Also
+        // pins the double-set `AlreadySetError` path (a second `set` allocates
+        // nothing, so it cannot leak, but exercising it guards the Err arm).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut sum: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[i64] = OnceLock.new();
+        match cell.set(i) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set(i) { Ok(_) => {}, Err(_) => {}, }
+        match cell.get() { Some(v) => { sum = sum + v; }, None => {}, }
+        i = i + 1i64;
+    }
+    println(sum.to_string());
+}
+"#,
+            // sum 0..39 = 780
+            &["780"],
+            "oncelock_local_binding_freed_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_return_owned_heap_struct_param_no_leak() {
         // B-2026-07-08-6 (non-generic leg, FIXED) — a fn that returns an owned
         // heap-owning STRUCT param used to leak the arg buffer: the caller's

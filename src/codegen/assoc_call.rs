@@ -565,6 +565,29 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(pair.into());
         }
 
+        // `OnceLock.new()` / `OnceCell.new()` — allocate an empty write-once
+        // cell and return its opaque `*mut KaracOnce` handle, stored directly
+        // in the binding's slot. Element type erases here (it travels per
+        // `set`/`get` call via `once_var_types`), so no generic-arg info is
+        // needed. A local binding's scope-exit `FreeOnceHandle` frees it (a
+        // module-level binding lives for the process). B-8 OnceLock codegen.
+        if (type_name == "OnceLock" || type_name == "OnceCell")
+            && method == "new"
+            && _args.is_empty()
+        {
+            let new_fn = self
+                .module
+                .get_function("karac_runtime_once_new")
+                .expect("karac_runtime_once_new declared in Codegen::new");
+            let handle = self
+                .builder
+                .build_call(new_fn, &[], "__once_new")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic();
+            return Ok(handle);
+        }
+
         // Numeric primitive From: `T.from(x)` for integer/float widening.
         // Codegen currently represents all ints as LLVM i64 and floats as
         // f64, so widening is a passthrough at this layer. When narrower

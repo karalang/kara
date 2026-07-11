@@ -658,6 +658,15 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Alloca that holds the opaque `*mut KaracFile` pointer.
         file_alloca: PointerValue<'ctx>,
     },
+    /// Scope-exit free for a local `OnceLock`/`OnceCell` binding. The alloca
+    /// holds the opaque `*mut KaracOnce` handle from `OnceLock.new()`. The
+    /// drain emits `karac_runtime_once_free(load(once_alloca))` — null-handle
+    /// is a runtime no-op, so no guard here. Mirrors `FreeFileHandle`'s shape
+    /// (no per-element drop at the scalar-`T` v1 floor). B-8 OnceLock codegen.
+    FreeOnceHandle {
+        /// Alloca that holds the opaque `*mut KaracOnce` pointer.
+        once_alloca: PointerValue<'ctx>,
+    },
     /// Heap-closure-env epic Slice 1 (B-2026-06-22-2): a binding holding a
     /// heap-env closure value. At scope exit, load the fat pointer, extract its
     /// env slot (the RC box `{ i64 refcount, env }`), decrement the refcount,

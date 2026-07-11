@@ -64,6 +64,7 @@ mod maps;
 mod method_call;
 mod module_bindings;
 mod mono;
+mod once;
 mod par_blocks;
 mod param_own;
 mod pattern_binding;
@@ -3024,6 +3025,16 @@ pub(super) struct Codegen<'ctx> {
     /// LLVM-type-only tracking can't distinguish `Vec[String]` from
     /// `Vec[Vec[T]]` (both store `vec_struct_type` as the element LLVM type).
     pub(crate) var_elem_type_exprs: HashMap<String, TypeExpr>,
+    /// Per-`OnceLock[T]` / `OnceCell[T]` binding: the element `T` `TypeExpr`
+    /// plus whether the receiver is a thread-safe `OnceLock` (`true`) or a
+    /// single-task `OnceCell` (`false`). Populated by
+    /// `register_var_from_type_expr`; membership is also the dispatch gate for
+    /// `compile_once_method` (`OnceLock`/`OnceCell` are baked stdlib structs
+    /// with no user impl, so `set`/`get`/`is_set` must be intercepted before
+    /// the user-impl lookup). `T` sizes the `value_size` FFI arg and the
+    /// `Option[ref T]` / `Result` payload shape. Both primitives share one
+    /// runtime primitive at v1 (the `OnceCell` never contends the lock).
+    pub(crate) once_var_types: HashMap<String, (TypeExpr, bool)>,
     /// B-2026-07-08-9: per-`Option[T]`-variable payload `TypeExpr`, so the
     /// f-string / `println` Display path can synthesize a concrete
     /// `Some(<T>)`/`None` renderer. Option/Result are generic built-ins whose
@@ -5095,6 +5106,54 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // Write-once cell runtime (`runtime/src/once.rs`), backing
+        // `OnceLock[T]` / `OnceCell[T]` (compiled into every archive — a cell
+        // behind a lock has no scheduler dependency). The opaque
+        // `*mut KaracOnce` handle is stored directly in the binding's slot.
+        // `value_size` is threaded per `set` (type-erased, like the channel).
+        //
+        // `karac_runtime_once_new() -> ptr` — fresh empty cell.
+        let once_new_ty = ptr_type.fn_type(&[], false);
+        module.add_function(
+            "karac_runtime_once_new",
+            once_new_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_once_set(cell, src_ptr, value_size) -> u8` — 1 = this
+        // call sealed the cell, 0 = already set (caller keeps its value for the
+        // `AlreadySetError` arm).
+        let once_set_ty = context
+            .i8_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_once_set",
+            once_set_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_once_get(cell) -> ptr` — stable borrow into the sealed
+        // value, or null when unset. Codegen wraps non-null as `Some(ref T)`.
+        let once_get_ty = ptr_type.fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_once_get",
+            once_get_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_once_is_set(cell) -> u8`.
+        let once_is_set_ty = context.i8_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_once_is_set",
+            once_is_set_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_once_free(cell)` — scope-exit free for a local
+        // binding (`FreeOnceHandle`). Null is a no-op.
+        let once_free_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_once_free",
+            once_free_ty,
+            Some(Linkage::External),
+        );
+
         // Bounded-channel runtime (`runtime/src/bounded_channel.rs`), backing
         // `BoundedChannel[T]` (also compiled into every archive — a bounded
         // queue has no scheduler dependency). The opaque
@@ -5952,6 +6011,7 @@ impl<'ctx> Codegen<'ctx> {
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),
             var_elem_type_exprs: HashMap::new(),
+            once_var_types: HashMap::new(),
             var_option_payload_te: HashMap::new(),
             var_result_payload_te: HashMap::new(),
             map_key_type_exprs: HashMap::new(),

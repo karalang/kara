@@ -1221,6 +1221,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 return;
             }
         }
+        // OnceLock[T] / OnceCell[T] — baked stdlib structs (no user impl), so
+        // register the element `T` + the thread-safe flag into `once_var_types`.
+        // Membership gates `compile_once_method` dispatch (intercepts
+        // `set`/`get`/`is_set` before the user-impl lookup) and threads `T` to
+        // the runtime `value_size` FFI arg + the Option/Result payload shape.
+        // Mirrors the `Atomic` arm above (empty baked struct not in
+        // `struct_types`, so it needs an explicit arm). Returns early.
+        if let TypeKind::Path(path) = &te.kind {
+            let head = path.segments.last().map(|s| s.as_str());
+            if head == Some("OnceLock") || head == Some("OnceCell") {
+                self.var_type_names
+                    .insert(var_name.to_string(), head.unwrap().to_string());
+                if let Some(GenericArg::Type(elem)) =
+                    path.generic_args.as_ref().and_then(|gargs| gargs.first())
+                {
+                    self.once_var_types.insert(
+                        var_name.to_string(),
+                        (elem.clone(), head == Some("OnceLock")),
+                    );
+                }
+                return;
+            }
+        }
         // Tensor[T, Shape] — register the element type + static dims so
         // indexing / method dispatch and the cleanup tracker recognise
         // the binding (`src/codegen/tensor.rs`). Splice-bearing shapes

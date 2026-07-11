@@ -4512,6 +4512,7 @@ impl<'ctx> super::Codegen<'ctx> {
             CleanupAction::FreeDataFrame { df_alloca } => Some(name_of(*df_alloca)),
             CleanupAction::FreeSoaGroups { soa_alloca, .. } => Some(name_of(*soa_alloca)),
             CleanupAction::FreeFileHandle { file_alloca } => Some(name_of(*file_alloca)),
+            CleanupAction::FreeOnceHandle { once_alloca } => Some(name_of(*once_alloca)),
             CleanupAction::FreeClosureEnv { fat_alloca } => Some(name_of(*fat_alloca)),
             CleanupAction::DropChannelEnd { chan_alloca, .. } => Some(name_of(*chan_alloca)),
             CleanupAction::FreeInlineOptionPayload { option_slot, .. } => {
@@ -5793,6 +5794,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     .expect("karac_runtime_file_close declared in Codegen::new");
                 self.builder
                     .build_call(close_fn, &[handle.into()], "")
+                    .unwrap();
+            }
+            CleanupAction::FreeOnceHandle { once_alloca } => {
+                let handle = self
+                    .builder
+                    .build_load(ptr_ty, *once_alloca, "cleanup.once.handle")
+                    .unwrap()
+                    .into_pointer_value();
+                let free_fn = self
+                    .module
+                    .get_function("karac_runtime_once_free")
+                    .expect("karac_runtime_once_free declared in Codegen::new");
+                self.builder
+                    .build_call(free_fn, &[handle.into()], "")
                     .unwrap();
             }
             CleanupAction::FreeClosureEnv { fat_alloca } => {

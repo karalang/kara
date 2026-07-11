@@ -2026,6 +2026,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         if crate::codegen::helpers::is_sorted_collection_type(te) {
                             self.sorted_collection_vars.insert(var_name.clone());
                         }
+                        // `let cell: OnceLock[T] = OnceLock.new()` /
+                        // `let c: OnceCell[T] = OnceCell.new()` — register the
+                        // binding's element `T` + thread-safe flag into
+                        // `once_var_types` (drives `compile_once_method`
+                        // dispatch + the `value_size` FFI arg). B-8 OnceLock
+                        // codegen. Routed through the shared registrar so the
+                        // one arm lives in `register_var_from_type_expr`.
+                        if let TypeKind::Path(p) = &te.kind {
+                            if matches!(
+                                p.segments.last().map(|s| s.as_str()),
+                                Some("OnceLock") | Some("OnceCell")
+                            ) {
+                                self.register_var_from_type_expr(var_name, te);
+                                detected = true;
+                            }
+                        }
                     }
                     // Fall back on the typechecker-recorded surface type for
                     // the binding when no explicit annotation was written.
@@ -4266,6 +4282,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                 key_shared_heap,
                                 val_drop_fn,
                             );
+                        }
+                    }
+                }
+                // OnceLock/OnceCell local binding: `let cell: OnceLock[T] =
+                // OnceLock.new()` — queue a scope-exit `FreeOnceHandle` so the
+                // heap cell + its sealed value buffer are reclaimed at frame
+                // exit. Gated on a fresh `*.new()` Call RHS (a rebind
+                // `let c2 = cell` would double-free the shared handle — deferred
+                // with heap-`T`; the scalar floor's tests never rebind).
+                // Mirrors the Map/Set fresh-handle arm above. B-8 OnceLock codegen.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if self.once_var_types.contains_key(var_name.as_str())
+                        && matches!(&value.kind, ExprKind::Call { .. })
+                    {
+                        if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
+                            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                                frame.push(super::state::CleanupAction::FreeOnceHandle {
+                                    once_alloca: slot.ptr,
+                                });
+                            }
                         }
                     }
                 }

@@ -3338,6 +3338,134 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    #[test]
+    fn test_e2e_oncelock_set_get_is_set_lifecycle() {
+        // `OnceLock[i64]` write-once lifecycle under `karac build`/JIT (was
+        // interpreter-only). Empty → `is_set() == false`, `get() == None`;
+        // after `set`, `is_set() == true`, `get() == Some(42)`; a second `set`
+        // fails with `Err(AlreadySetError)` and leaves the stored value intact.
+        // Build==run parity witness for the whole `karac_runtime_once_*` FFI +
+        // the `Result`/`Option` construction. Mirrors the interpreter test
+        // `test_oncelock_set_get_is_set_roundtrip`.
+        let out = run_program(
+            r#"
+fn main() {
+    let cell: OnceLock[i64] = OnceLock.new();
+    println(cell.is_set());
+    match cell.get() { Some(v) => println(v), None => println(-1), }
+    match cell.set(42) { Ok(_) => println(1), Err(_) => println(0), }
+    println(cell.is_set());
+    match cell.get() { Some(v) => println(v), None => println(-1), }
+    match cell.set(99) { Ok(_) => println(1), Err(_) => println(0), }
+    match cell.get() { Some(v) => println(v), None => println(-1), }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "false\n-1\n1\ntrue\n42\n0\n42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_oncecell_parallel_surface() {
+        // `OnceCell[i64]` has the identical method surface + lowering as
+        // `OnceLock` (shares the runtime primitive; single-task rides the lock
+        // uncontended). Same lifecycle witness on the `OnceCell` receiver.
+        let out = run_program(
+            r#"
+fn main() {
+    let c: OnceCell[i64] = OnceCell.new();
+    println(c.is_set());
+    match c.set(7) { Ok(_) => println(1), Err(_) => println(0), }
+    match c.get() { Some(v) => println(v), None => println(-1), }
+    println(c.is_set());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "false\n1\n7\ntrue");
+        }
+    }
+
+    #[test]
+    fn test_e2e_oncelock_loop_no_leak_and_correct() {
+        // A local `OnceLock` per loop iteration: the scope-exit `FreeOnceHandle`
+        // must reclaim each cell (handle + sealed value buffer) — a missed free
+        // leaks one cell per iteration (LSan/valgrind). Summing the sealed
+        // values (0..99) also pins that each iteration's `set`+`get` is correct
+        // and independent (a fresh cell each round, not a leaked shared one).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 100 {
+        let cell: OnceLock[i64] = OnceLock.new();
+        let _ = cell.set(i);
+        match cell.get() { Some(v) => { total = total + v; }, None => {}, }
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // sum 0..99 = 4950
+            assert_eq!(out.trim(), "4950");
+        }
+    }
+
+    #[test]
+    fn test_ir_oncelock_dispatches_to_runtime_ffi() {
+        // `OnceLock.new()`/`set`/`get`/`is_set` lower to the `karac_runtime_once_*`
+        // FFI (not a user-impl call on the baked stdlib struct).
+        let ir = ir_for(
+            r#"
+fn use_cell() -> i64 {
+    let cell: OnceLock[i64] = OnceLock.new();
+    let _ = cell.set(5);
+    match cell.get() { Some(v) => v, None => 0, }
+}
+"#,
+        );
+        for needle in [
+            "declare ptr @karac_runtime_once_new",
+            "declare i8 @karac_runtime_once_set",
+            "declare ptr @karac_runtime_once_get",
+        ] {
+            assert!(
+                ir.contains(needle),
+                "expected once FFI decl '{needle}'; ir:\n{ir}"
+            );
+        }
+        let body = function_body(&ir, "use_cell").expect("use_cell must lower");
+        assert!(
+            body.contains("call ptr @karac_runtime_once_new")
+                && body.contains("call i8 @karac_runtime_once_set")
+                && body.contains("call ptr @karac_runtime_once_get"),
+            "use_cell body should call the once FFI; body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_ir_oncelock_free_on_scope_exit() {
+        // A local `OnceLock` binding queues a `FreeOnceHandle` cleanup, emitting
+        // `karac_runtime_once_free` at scope exit — the leak guard.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let cell: OnceLock[i64] = OnceLock.new();
+    let _ = cell.set(1);
+}
+"#,
+        );
+        let body = function_body(&ir, "main").expect("main must lower");
+        assert!(
+            body.contains("call void @karac_runtime_once_free"),
+            "main should free the once handle at scope exit; body:\n{body}"
+        );
+    }
+
     /// `forget(x)` (FFI ownership-handoff primitive, additive-interop
     /// Slice 4) consumes `x` and suppresses its destructor. A user-`Drop`
     /// counter makes suppression observable at codegen: with `forget(b)`

@@ -47,6 +47,7 @@ mod lifecycle;
 mod gpu;
 mod map;
 mod mutex;
+mod once;
 #[cfg(feature = "net")]
 pub mod scheduler;
 // Small-String Optimization encoding — the executable contract shared with
@@ -157,6 +158,16 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         channel::karac_runtime_channel_send,
         channel::karac_runtime_channel_recv,
         channel::karac_runtime_channel_try_recv,
+    );
+    // Write-once cell runtime (`runtime/src/once.rs`). Backs
+    // `OnceLock`/`OnceCell` `new` / `set` / `get` / `is_set` + the local
+    // binding's scope-exit free.
+    keep!(
+        once::karac_runtime_once_new,
+        once::karac_runtime_once_set,
+        once::karac_runtime_once_get,
+        once::karac_runtime_once_is_set,
+        once::karac_runtime_once_free,
     );
     // Bounded-channel runtime (`runtime/src/bounded_channel.rs`). Backs
     // `BoundedChannel.new` / `.send` / `.recv` + the `BoundedChannel` Drop.
