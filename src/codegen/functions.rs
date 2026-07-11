@@ -40,6 +40,79 @@ fn struct_by_value_param_name(ty: &TypeExpr) -> Option<String> {
     }
 }
 
+/// Collect every annotated `let name: TYPE = ...` binding in a function body
+/// into `out` (name → declared `TypeExpr`), recursing through nested blocks.
+/// Feeds the borrow-elision element-copyability oracle (B-2026-07-11-24); only
+/// annotated bindings are recorded — an unannotated container resolves to the
+/// conservative "unknown" default. First annotation for a name wins (shadowing
+/// a container with the same name is not modelled; the oracle stays conservative).
+fn collect_annotated_let_types(
+    block: &crate::ast::Block,
+    out: &mut std::collections::HashMap<String, TypeExpr>,
+) {
+    use crate::ast::{ExprKind, PatternKind, StmtKind};
+    fn visit_expr(e: &crate::ast::Expr, out: &mut std::collections::HashMap<String, TypeExpr>) {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b)
+            | ExprKind::LabeledBlock { body: b, .. }
+            | ExprKind::Loop { body: b, .. }
+            | ExprKind::Lock { body: b, .. }
+            | ExprKind::Providers { body: b, .. } => collect_annotated_let_types(b, out),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                collect_annotated_let_types(then_block, out);
+                if let Some(eb) = else_branch {
+                    visit_expr(eb, out);
+                }
+            }
+            ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                collect_annotated_let_types(then_block, out);
+                if let Some(eb) = else_branch {
+                    visit_expr(eb, out);
+                }
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. } => collect_annotated_let_types(body, out),
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    visit_expr(&arm.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let {
+                pattern,
+                ty: Some(te),
+                ..
+            } => {
+                if let PatternKind::Binding(n) = &pattern.kind {
+                    out.entry(n.clone()).or_insert_with(|| te.clone());
+                }
+            }
+            StmtKind::Expr(e) => visit_expr(e, out),
+            _ => {}
+        }
+    }
+    if let Some(fe) = &block.final_expr {
+        visit_expr(fe, out);
+    }
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     /// The per-target classification for `func`'s `#[repr(C)]` struct-by-value
     /// return: `Direct` when it doesn't apply (not an export, not a by-value
@@ -1609,8 +1682,44 @@ impl<'ctx> super::Codegen<'ctx> {
         // of a container that is not mutated in scope. Consulted by the Let arm
         // to skip the heap-element deep-clone and the binding's scope-exit free.
         // Recomputed (overwritten) per function so it never leaks across fns.
+        //
+        // The pass needs an element-copyability oracle (B-2026-07-11-24): a
+        // `r[idx]` call argument is a genuine ownership CONSUME only when the
+        // element is heap/RC-owning (`Vec[Vec[Option[shared]]]` → `shapes[i][a]`
+        // passed to `clone_offset` frees a buffer the container still owns —
+        // shallow-alias double-free). For a trivially-copyable element
+        // (`r[i] -> i64`, e.g. the desugared operand of a checked `+`) it is a
+        // pure read and must stay borrow-elidable. Element types come from a
+        // name→declared-TypeExpr map built from the params + annotated `let`s
+        // (the `Vec[Vec[..]]` containers this matters for are near-always
+        // annotated or parameters); an unknown name resolves to
+        // `(false, false)`, preserving the prior borrow-eliding behaviour.
+        let mut decl_types: std::collections::HashMap<String, crate::ast::TypeExpr> =
+            std::collections::HashMap::new();
+        for p in &func.params {
+            if let crate::ast::PatternKind::Binding(n) = &p.pattern.kind {
+                decl_types.insert(n.clone(), p.ty.clone());
+            }
+        }
+        collect_annotated_let_types(&func.body, &mut decl_types);
+        let heap_elem = |v: &str| -> (bool, bool) {
+            let Some(t) = decl_types.get(v) else {
+                return (false, false);
+            };
+            let elem = super::helpers::vec_inner_type_expr(t);
+            let v_elem_heap = elem
+                .as_ref()
+                .map(|e| !super::vec_method::is_trivially_copyable_te(e))
+                .unwrap_or(false);
+            let elem_elem = elem.as_ref().and_then(super::helpers::vec_inner_type_expr);
+            let r_elem_heap = elem_elem
+                .as_ref()
+                .map(|ee| !super::vec_method::is_trivially_copyable_te(ee))
+                .unwrap_or(false);
+            (v_elem_heap, r_elem_heap)
+        };
         self.vec_index_borrow_spans =
-            crate::codegen::borrow_elision::compute_vec_index_borrow_spans(&func.body);
+            crate::codegen::borrow_elision::compute_vec_index_borrow_spans(&func.body, &heap_elem);
 
         // Vec-length pins (bce_length_pin.rs): the rolling-DP bounds-check
         // elision. Recompute per function (both are function-scoped);

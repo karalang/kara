@@ -36,31 +36,50 @@ fn is_read_only_vec_method(method: &str) -> bool {
     matches!(method, "len" | "is_empty")
 }
 
+/// Element-copyability oracle: given a container variable name `v`, returns
+/// `(v_elem_heap, v_elem_elem_heap)` — whether `v[i]` and `v[i][j]` are
+/// non-trivially-copyable (heap/RC-owning) values. Supplied by codegen (which
+/// alone has the element types); `(false, false)` for an unknown name conserves
+/// the prior borrow-eliding behaviour. Used to decide whether a `r[idx]` call
+/// argument is a genuine ownership CONSUME (heap element → disqualify the
+/// borrow) or a trivially-copyable read (`i64` → keep the borrow).
+pub(crate) type HeapElemOracle<'o> = dyn Fn(&str) -> (bool, bool) + 'o;
+
 /// Entry point: walk a function body and return the set of `SpanKey`s (keyed by
 /// the RHS index expression) for every `let r = v[i]` binding that is safe to
 /// bind as a borrow instead of a deep clone.
-pub(crate) fn compute_vec_index_borrow_spans(body: &Block) -> HashSet<SpanKey> {
+pub(crate) fn compute_vec_index_borrow_spans(
+    body: &Block,
+    heap_elem: &HeapElemOracle<'_>,
+) -> HashSet<SpanKey> {
     let mut out = HashSet::new();
-    scan_block(body, &mut out);
+    scan_block(body, &mut out, heap_elem);
     out
 }
 
 /// Walk every block in the body, and at each `let r = v[i]` candidate run the
 /// conservative gate over `r`'s scope (the rest of the enclosing block).
-fn scan_block(block: &Block, out: &mut HashSet<SpanKey>) {
+fn scan_block(block: &Block, out: &mut HashSet<SpanKey>, heap_elem: &HeapElemOracle<'_>) {
     for (idx, stmt) in block.stmts.iter().enumerate() {
         if let Some((r_name, v_name, rhs_span)) = candidate_binding(stmt) {
-            if binding_is_borrow_safe(&r_name, &v_name, &block.stmts[idx + 1..], &block.final_expr)
-            {
+            let (v_elem_heap, r_elem_heap) = heap_elem(&v_name);
+            if binding_is_borrow_safe(
+                &r_name,
+                &v_name,
+                r_elem_heap,
+                v_elem_heap,
+                &block.stmts[idx + 1..],
+                &block.final_expr,
+            ) {
                 out.insert(SpanKey::from_span(&rhs_span));
             }
         }
         // Recurse into nested blocks reachable from this statement so candidates
         // declared inside loops / conditionals / matches are also analysed.
-        stmt_walk_nested_blocks(stmt, out);
+        stmt_walk_nested_blocks(stmt, out, heap_elem);
     }
     if let Some(fe) = &block.final_expr {
-        expr_walk_nested_blocks(fe, out);
+        expr_walk_nested_blocks(fe, out, heap_elem);
     }
 }
 
@@ -99,10 +118,19 @@ fn candidate_binding(stmt: &Stmt) -> Option<(String, String, crate::token::Span)
 
 /// Conservative gate: every occurrence of `r` and `v` in the binding's scope
 /// (the trailing statements + final expr) must be a recognised read.
-fn binding_is_borrow_safe(r: &str, v: &str, rest: &[Stmt], final_expr: &Option<Box<Expr>>) -> bool {
+fn binding_is_borrow_safe(
+    r: &str,
+    v: &str,
+    r_elem_heap: bool,
+    v_elem_heap: bool,
+    rest: &[Stmt],
+    final_expr: &Option<Box<Expr>>,
+) -> bool {
     let mut ctx = ScanCtx {
         r,
         v,
+        r_elem_heap,
+        v_elem_heap,
         disqualified: false,
     };
     for stmt in rest {
@@ -120,12 +148,41 @@ fn binding_is_borrow_safe(r: &str, v: &str, rest: &[Stmt], final_expr: &Option<B
 struct ScanCtx<'a> {
     r: &'a str,
     v: &'a str,
+    /// `r[i]`'s element type is non-trivially-copyable (heap/RC). `r == v[k]`,
+    /// so this is `v`'s element type peeled one more Vec layer.
+    r_elem_heap: bool,
+    /// `v[i]`'s element type is non-trivially-copyable (heap/RC).
+    v_elem_heap: bool,
     disqualified: bool,
 }
 
 impl ScanCtx<'_> {
     fn is_target(&self, name: &str) -> bool {
         name == self.r || name == self.v
+    }
+
+    /// True when `expr` is a call argument `r[idx]` / `v[idx]` (a plain
+    /// element index of a target binding, non-range) whose ELEMENT TYPE is
+    /// non-trivially-copyable — a heap/RC-owning value (`Option[shared]`,
+    /// `shared`, `String`, `Vec[..]`, …). Passing such an element by value
+    /// hands the callee ownership, and the callee's scope-exit drop frees a
+    /// buffer the container still owns — so borrow-eliding the binding into a
+    /// shallow alias double-frees (B-2026-07-11-24). A trivially-Copy element
+    /// (`r[i] -> i64`, e.g. the desugared operand of a checked `+`) is a pure
+    /// read and must NOT disqualify — hence the `heap`-flag gate, resolved by
+    /// codegen (which alone has the element types) and cached per binding.
+    fn arg_is_consumed_heap_element(&self, expr: &Expr) -> bool {
+        let ExprKind::Index { object, index } = &expr.kind else {
+            return false;
+        };
+        if matches!(&index.kind, ExprKind::Range { .. }) {
+            return false;
+        }
+        match &object.kind {
+            ExprKind::Identifier(name) if name == self.r => self.r_elem_heap,
+            ExprKind::Identifier(name) if name == self.v => self.v_elem_heap,
+            _ => false,
+        }
     }
 
     fn scan_stmt(&mut self, stmt: &Stmt) {
@@ -220,9 +277,33 @@ impl ScanCtx<'_> {
                 self.scan_expr(object);
                 self.scan_expr(index);
             }
+            // A call argument `r[idx]` is a CONSUME, not a read: passing an
+            // element by value hands the callee ownership of that element, and
+            // for a heap/RC element type (`Vec[Option[shared]]`, `Vec[shared]`,
+            // `Vec[String]`, …) the callee's scope-exit drop decrements/frees a
+            // buffer the container `v` still owns — so borrow-eliding `r` into a
+            // shallow alias double-frees. (B-2026-07-11-24: `clone_offset(lefts[a], ..)`
+            // over a `let lefts = shapes[i]` inner Vec of `Option[shared]` — the
+            // Index arm below would otherwise treat `lefts[a]` as a safe read and
+            // shallow-alias, corrupting the shared refcounts.) Disqualify so the
+            // binding falls back to the deep clone (`clone_owned_vec_index_element`),
+            // which gives `r` an independent buffer with its elements retained.
+            // A trivially-Copy element (`v[i] -> i64`) would deep-"clone" to a
+            // no-op, so this only ever forces a real clone where one is needed.
+            ExprKind::Call { callee, args } => {
+                self.scan_expr(callee);
+                for a in args {
+                    if self.arg_is_consumed_heap_element(&a.value) {
+                        self.disqualified = true;
+                        return;
+                    }
+                    self.scan_expr(&a.value);
+                }
+            }
             // Safe read: `name.len()` / `name.is_empty()` (no args). Any other
             // method, or any args, falls through to the generic walk where the
-            // bare receiver identifier disqualifies.
+            // bare receiver identifier disqualifies. A `r[idx]` argument to any
+            // method call is a consume, same as a free-fn call arg above.
             ExprKind::MethodCall {
                 object,
                 method,
@@ -238,6 +319,10 @@ impl ScanCtx<'_> {
                 }
                 self.scan_expr(object);
                 for a in args {
+                    if self.arg_is_consumed_heap_element(&a.value) {
+                        self.disqualified = true;
+                        return;
+                    }
                     self.scan_expr(&a.value);
                 }
             }
@@ -496,30 +581,40 @@ fn mentions_rec(expr: &Expr, name: &str, found: &mut bool) {
 
 /// Recurse into nested blocks of a statement so `scan_block`'s candidate search
 /// reaches `let r = v[i]` bindings declared inside loops / conditionals.
-fn stmt_walk_nested_blocks(stmt: &Stmt, out: &mut HashSet<SpanKey>) {
+fn stmt_walk_nested_blocks(
+    stmt: &Stmt,
+    out: &mut HashSet<SpanKey>,
+    heap_elem: &HeapElemOracle<'_>,
+) {
     match &stmt.kind {
         StmtKind::MultiAssign { .. } => unreachable!(
             "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
         ),
-        StmtKind::Let { value, .. } => expr_walk_nested_blocks(value, out),
+        StmtKind::Let { value, .. } => expr_walk_nested_blocks(value, out, heap_elem),
         StmtKind::LetElse {
             value, else_block, ..
         } => {
-            expr_walk_nested_blocks(value, out);
-            scan_block(else_block, out);
+            expr_walk_nested_blocks(value, out, heap_elem);
+            scan_block(else_block, out, heap_elem);
         }
         StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
-            expr_walk_nested_blocks(target, out);
-            expr_walk_nested_blocks(value, out);
+            expr_walk_nested_blocks(target, out, heap_elem);
+            expr_walk_nested_blocks(value, out, heap_elem);
         }
-        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => scan_block(body, out),
-        StmtKind::Expr(e) => expr_walk_nested_blocks(e, out),
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            scan_block(body, out, heap_elem)
+        }
+        StmtKind::Expr(e) => expr_walk_nested_blocks(e, out, heap_elem),
         StmtKind::LetUninit { .. } => {}
     }
 }
 
 /// Recurse into nested blocks of an expression for the candidate search.
-fn expr_walk_nested_blocks(expr: &Expr, out: &mut HashSet<SpanKey>) {
+fn expr_walk_nested_blocks(
+    expr: &Expr,
+    out: &mut HashSet<SpanKey>,
+    heap_elem: &HeapElemOracle<'_>,
+) {
     match &expr.kind {
         ExprKind::Block(b)
         | ExprKind::Unsafe(b)
@@ -529,16 +624,16 @@ fn expr_walk_nested_blocks(expr: &Expr, out: &mut HashSet<SpanKey>) {
         | ExprKind::LabeledBlock { body: b, .. }
         | ExprKind::Loop { body: b, .. }
         | ExprKind::Lock { body: b, .. }
-        | ExprKind::Providers { body: b, .. } => scan_block(b, out),
+        | ExprKind::Providers { body: b, .. } => scan_block(b, out, heap_elem),
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
-            expr_walk_nested_blocks(condition, out);
-            scan_block(then_block, out);
+            expr_walk_nested_blocks(condition, out, heap_elem);
+            scan_block(then_block, out, heap_elem);
             if let Some(eb) = else_branch {
-                expr_walk_nested_blocks(eb, out);
+                expr_walk_nested_blocks(eb, out, heap_elem);
             }
         }
         ExprKind::IfLet {
@@ -547,49 +642,49 @@ fn expr_walk_nested_blocks(expr: &Expr, out: &mut HashSet<SpanKey>) {
             else_branch,
             ..
         } => {
-            expr_walk_nested_blocks(value, out);
-            scan_block(then_block, out);
+            expr_walk_nested_blocks(value, out, heap_elem);
+            scan_block(then_block, out, heap_elem);
             if let Some(eb) = else_branch {
-                expr_walk_nested_blocks(eb, out);
+                expr_walk_nested_blocks(eb, out, heap_elem);
             }
         }
         ExprKind::While {
             condition, body, ..
         } => {
-            expr_walk_nested_blocks(condition, out);
-            scan_block(body, out);
+            expr_walk_nested_blocks(condition, out, heap_elem);
+            scan_block(body, out, heap_elem);
         }
         ExprKind::WhileLet { value, body, .. } => {
-            expr_walk_nested_blocks(value, out);
-            scan_block(body, out);
+            expr_walk_nested_blocks(value, out, heap_elem);
+            scan_block(body, out, heap_elem);
         }
         ExprKind::For { iterable, body, .. } => {
-            expr_walk_nested_blocks(iterable, out);
-            scan_block(body, out);
+            expr_walk_nested_blocks(iterable, out, heap_elem);
+            scan_block(body, out, heap_elem);
         }
         ExprKind::Match { scrutinee, arms } => {
-            expr_walk_nested_blocks(scrutinee, out);
+            expr_walk_nested_blocks(scrutinee, out, heap_elem);
             for arm in arms {
                 if let Some(g) = &arm.guard {
-                    expr_walk_nested_blocks(g, out);
+                    expr_walk_nested_blocks(g, out, heap_elem);
                 }
-                expr_walk_nested_blocks(&arm.body, out);
+                expr_walk_nested_blocks(&arm.body, out, heap_elem);
             }
         }
         ExprKind::Binary { left, right, .. } => {
-            expr_walk_nested_blocks(left, out);
-            expr_walk_nested_blocks(right, out);
+            expr_walk_nested_blocks(left, out, heap_elem);
+            expr_walk_nested_blocks(right, out, heap_elem);
         }
         ExprKind::Call { callee, args, .. } => {
-            expr_walk_nested_blocks(callee, out);
+            expr_walk_nested_blocks(callee, out, heap_elem);
             for a in args {
-                expr_walk_nested_blocks(&a.value, out);
+                expr_walk_nested_blocks(&a.value, out, heap_elem);
             }
         }
         ExprKind::MethodCall { object, args, .. } => {
-            expr_walk_nested_blocks(object, out);
+            expr_walk_nested_blocks(object, out, heap_elem);
             for a in args {
-                expr_walk_nested_blocks(&a.value, out);
+                expr_walk_nested_blocks(&a.value, out, heap_elem);
             }
         }
         _ => {}

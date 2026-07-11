@@ -23056,4 +23056,42 @@ fn main() {
             "fresh_some_shared_reused_across_consuming_calls_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_vecvec_heap_element_consumed_by_value_no_double_free() {
+        // B-2026-07-11-24 (borrow-elision leg): a `let r = grid[i]` inner
+        // `Vec[String]` read out of a `Vec[Vec[String]]`, whose element `r[j]` is
+        // then passed BY VALUE to a consuming callee (`take(r[j])`). The
+        // borrow-elision pre-pass used to treat `r[j]` as a read and borrow-elide
+        // `r` into a shallow alias of the container's buffer; `take`'s owned
+        // `String` param then freed a buffer the container still owned →
+        // double-free. The element-copyability oracle now recognises the
+        // heap-element consume and forces the deep clone, so `r` owns an
+        // independent buffer freed exactly once. A trivially-copyable element
+        // (`Vec[Vec[i64]]`, `acc + m[i][j]`) stays borrow-elided — covered by the
+        // `borrow_elision_elides_read_only_vecvec_index_binding` codegen test.
+        assert_clean_asan_run(
+            r#"
+fn take(s: String) -> i64 { s.len() as i64 }
+fn main() {
+    let mut grid: Vec[Vec[String]] = Vec.new();
+    let mut row: Vec[String] = Vec.new();
+    row.push("hello".to_string());
+    row.push("world".to_string());
+    grid.push(row);
+    let mut total = 0;
+    let mut i = 0;
+    while i < grid.len() {
+        let r = grid[i];
+        let mut j = 0;
+        while j < r.len() { total = total + take(r[j]); j = j + 1; }
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["10"], // len("hello") + len("world") = 5 + 5
+            "vecvec_heap_element_consumed_by_value_no_double_free",
+        );
+    }
 }
