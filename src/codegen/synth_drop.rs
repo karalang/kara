@@ -1759,6 +1759,59 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Copy-side companion to [`Self::type_expr_has_drop_heap`] for its
+    /// deliberate `Option`/`Result` blind spot: true when `te` owns heap
+    /// through an `Option[<heap payload>]` leaf (directly, through a tuple
+    /// element, or through a non-shared struct field, recursively).
+    /// `type_expr_has_drop_heap` hardcodes `Option | Result => false` and is
+    /// load-bearing across drop synthesis, so it must not change — but the
+    /// DEFENSIVE-COPY gates that use it to mean "a flat memcpy of this
+    /// element aliases heap the drop will free" under-fire for an element
+    /// struct like `AttrNode { string_value: Option[String] }`: the struct's
+    /// drop DOES free the `Some` payload (`karac_drop_Option_String`), so a
+    /// shallow element copy double-frees it (B-2026-07-10-4 residual). OR
+    /// this predicate into those copy-side gates. `Result` is NOT counted:
+    /// the value-clone synthesis (`emit_option_value_clone_fn`) only covers
+    /// `Option` today, so counting `Result` would fire the deep-clone leg
+    /// against a clone fn that still shallow-copies the payload — the
+    /// same-shape `Result` residual stays documented on the ledger instead.
+    pub(super) fn te_owns_option_heap_payload(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(elems) => elems.iter().any(|e| self.te_owns_option_heap_payload(e)),
+            TypeKind::Path(p) => {
+                let Some(name) = p.segments.last() else {
+                    return false;
+                };
+                match name.as_str() {
+                    "Option" => p
+                        .generic_args
+                        .as_ref()
+                        .and_then(|a| a.first())
+                        .is_some_and(|a| match a {
+                            crate::ast::GenericArg::Type(t) => {
+                                self.is_string_type_expr(t)
+                                    || self.extract_vec_elem_type(t).is_some()
+                                    || self.type_expr_has_drop_heap(t)
+                                    || self.shared_heap_type_for_type_expr(t).is_some()
+                                    || self.te_owns_option_heap_payload(t)
+                            }
+                            _ => false,
+                        }),
+                    _ => {
+                        if self.shared_types.contains_key(name.as_str()) {
+                            return false;
+                        }
+                        if let Some(fields) = self.struct_field_type_exprs.get(name.as_str()) {
+                            return fields.iter().any(|f| self.te_owns_option_heap_payload(f));
+                        }
+                        false
+                    }
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// #23 — `(drop_key, drop_val)` flags for `karac_map_free_with_drop_vec`,
     /// derived from a `Map[K,V]` / `Set[T]` `TypeExpr`. A side is flagged 1
     /// **only** when its type lowers to the Vec/String 24-byte struct, so the

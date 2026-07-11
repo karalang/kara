@@ -195,11 +195,12 @@ fn rust_render(src: &str) -> String {
 /// Type-expression differential gate (slice 3a). Same harness as
 /// `selfhost_parser.rs`: build the real selfhost modules into a temp project
 /// with a per-input driver, run, and diff against the seed's render.
-// IGNORED — B-2026-07-09-12: the self-hosted parser compiles (after the
-// B-2026-07-09-11 niche fix) but crashes at runtime on basic inputs. See the
-// note in tests/selfhost_parser.rs. Un-ignore once B-2026-07-09-12 is fixed.
+// UN-IGNORED 2026-07-11 (B-2026-07-10-4 FIXED, two-part) — see the fix
+// chronicle on `selfhost_parser_matches_rust_parser_items`
+// (tests/selfhost_parser_items.rs): for-loop-element destructure
+// clone-on-extract + the `Option[String]` shallow-clone /
+// `te_owns_option_heap_payload` copy-gate fix.
 #[test]
-#[ignore = "B-2026-07-10-4: item/type parser crashes at runtime (distinct from B-2026-07-09-12; NOT auto-par — fails with KARAC_AUTO_PAR=0 too)"]
 fn selfhost_parser_matches_rust_parser_types() {
     // 1. Crate-root program: a driver over the Kāra `parse_type_str` +
     //    `render_type`. The six selfhost modules are copied verbatim (step 2).

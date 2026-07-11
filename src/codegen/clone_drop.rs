@@ -93,6 +93,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 if head == Some("String") || head == Some("str") {
                     return self.emit_string_clone_fn();
                 }
+                // `Option[<heap payload>]`: the generic enum path below sees
+                // only the TYPE-ERASED `Option` layout — its `field_drop_kinds`
+                // record no heap for the erased 3-word payload — so
+                // `emit_enum_clone_fn` returns `None` and the dispatcher fell
+                // through to the SHALLOW primitive clone, aliasing the `Some`
+                // payload's buffer/box with the source. The struct/vec clone
+                // fns delegate per-field/per-element here, so every
+                // `karac_clone_struct_<S>` with an `Option[String]` field (the
+                // self-host `AttrNode.string_value` / `AttrArgNode.name`,
+                // B-2026-07-10-4 residual) inherited the alias: the source's
+                // drop AND the copy's drop then freed the same payload. Emit a
+                // tag-guarded deep clone instead. (`Result` has the same shape
+                // but no in-place deep-copy helper yet — it stays on the
+                // shallow path, tracked on the ledger.)
+                if head == Some("Option") {
+                    if let Some(f) = self.emit_option_value_clone_fn(te) {
+                        self.clone_fn_cache.insert(type_name, f);
+                        return f;
+                    }
+                }
                 // User struct / enum: deep-clone the heap payload (the
                 // `#[derive(Clone)]` analog of the synthesized drop). Without
                 // this, a `let w = v[i]` move-out of a `Vec[E]`/`Vec[S]` whose
@@ -160,6 +180,80 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         clone_fn
+    }
+
+    /// Emit `karac_clone_Option_<payload>(*const, *mut)` — a tag-guarded deep
+    /// clone for an `Option[T]` VALUE whose `Some` payload owns heap: shallow-
+    /// copy the whole `{tag, w0, w1, w2}` value, then rewrite the DST's payload
+    /// in place with an independent copy via
+    /// `deep_copy_option_inline_payload_in_place` (which covers the
+    /// `{ptr,len,cap}` String/Vec overlay, the boxed/inline struct-enum
+    /// payload, and the shared rc-inc leg, each already tag-guarded and
+    /// cap-guarded so a `None` / static-buffer source is a no-op). The clone
+    /// then exactly matches what `karac_drop_Option_<payload>` frees
+    /// (copy-depth == drop-depth). Returns `None` when the payload owns no
+    /// heap (the shallow primitive clone is already complete) or the program
+    /// has no `Option` layout registered — the dispatcher falls through.
+    pub(super) fn emit_option_value_clone_fn(
+        &mut self,
+        opt_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let payload_te = Self::option_payload_te(opt_te)?;
+        // Shared payloads ARE admitted: the rc-inc leg of the in-place helper
+        // gives the clone an independent +1, balancing the copy's own
+        // scope-exit dec — required when the clone is a genuinely independent
+        // copy (a caller-retains `Vec[<struct{value: Option[shared Expr]}>]`
+        // element copy, the self-host `AttrArgNode.value`: with a shallow
+        // alias BOTH drains dec the same box and the AST's node dangles,
+        // rendering `(error ...)`). The one caller whose site carries its OWN
+        // +1 on top of the historical shallow clone — the ref-receiver tail
+        // field return in `maybe_defensive_copy_param_arg`, which would
+        // double-inc and leak (`asan_option_shared_method_tail_field_step_
+        // repeat`) — excludes `Option[shared]` at ITS gate instead.
+        let payload_owns_heap = self
+            .option_inner_shared_type_for_type_expr(opt_te)
+            .is_some()
+            || self.option_payload_inline_recursive_drop_ok(&payload_te)
+            || self.option_payload_struct_or_enum_drop_ok(&payload_te);
+        if !payload_owns_heap {
+            return None;
+        }
+        let option_ty = self.enum_layouts.get("Option")?.llvm_type;
+
+        let type_name = Self::display_mangle_te(opt_te);
+        let fn_name = format!("karac_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn = self
+            .module
+            .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let v = self.builder.build_load(option_ty, src, "opt.v").unwrap();
+        self.builder.build_store(dst, v).unwrap();
+        // The in-place helper appends its guard blocks to `self.current_fn`
+        // — swap it to the clone fn for the duration so the blocks land in
+        // THIS function, then restore.
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(clone_fn);
+        self.deep_copy_option_inline_payload_in_place(dst, opt_te);
+        self.current_fn = saved_fn;
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(clone_fn)
     }
 
     /// Emit (or fetch) the cloned-String fn — a thin wrapper that just

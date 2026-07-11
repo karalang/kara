@@ -22542,6 +22542,85 @@ fn main() {
     }
 
     #[test]
+    fn asan_option_string_field_survives_caller_retains_vec_copy() {
+        // B-2026-07-10-4 final residual (the last 2 attr-item crashers):
+        // a `Vec[<struct{Option[String]}>]` local moved into a by-value
+        // callee that WRAPS it into a returned struct. By-value Vec params
+        // are caller-retains, so the consume site deep-copies — but (1)
+        // `emit_vecstr_defensive_copy`'s aggregate-element leg was gated on
+        // `type_expr_has_drop_heap`, which hardcodes Option => false, so an
+        // Option-only-heap element skipped the per-element deep clone
+        // entirely; and (2) even when the leg fired (element also owns a
+        // `Vec[String]` field, the real `AttrNode.path`),
+        // `karac_clone_struct_<S>`'s `Option[String]` field child fell
+        // through to the SHALLOW primitive clone (the type-erased `Option`
+        // layout records no heap kinds). Either way both copies' drops freed
+        // the same `Some` payload. Fixed by `emit_option_value_clone_fn`
+        // (tag-guarded deep clone) + the `te_owns_option_heap_payload`
+        // copy-side gate. Covers both shapes: Option-only element (gate) and
+        // Vec[String]+Option element (clone-fn child), plus a None element
+        // (tag guard no-op) and a method-call chain (the self-host parser's
+        // `parse_item` → `parse_trait_def(attrs)` shape).
+        assert_clean_asan_run(
+            r#"
+struct AttrNode { path: Vec[String], string_value: Option[String] }
+struct Bare { string_value: Option[String] }
+struct Node { attributes: Vec[AttrNode] }
+struct BareNode { attributes: Vec[Bare] }
+struct P { pos: i64 }
+impl P {
+    fn wrap(mut ref self, attrs: Vec[AttrNode]) -> Node {
+        self.pos = self.pos + 1;
+        Node { attributes: attrs }
+    }
+}
+fn wrap_bare(attrs: Vec[Bare]) -> BareNode {
+    BareNode { attributes: attrs }
+}
+fn build() -> Vec[AttrNode] {
+    let mut v: Vec[AttrNode] = Vec.new();
+    let mut p: Vec[String] = Vec.new();
+    p.push("path_segment_payload_alpha_x".to_string());
+    v.push(AttrNode { path: p, string_value: Some("option_string_payload_beta_yy".to_string()) });
+    v.push(AttrNode { path: Vec.new(), string_value: None });
+    v
+}
+fn build_bare() -> Vec[Bare] {
+    let mut v: Vec[Bare] = Vec.new();
+    v.push(Bare { string_value: Some("bare_option_payload_gamma_zzz".to_string()) });
+    v
+}
+fn main() {
+    let mut n: i64 = 0;
+    let mut i = 0;
+    while i < 6 {
+        let mut prs = P { pos: 0 };
+        let attrs = build();
+        let node = prs.wrap(attrs);
+        let Node { attributes } = node;
+        for a in attributes {
+            let AttrNode { path, string_value } = a;
+            for seg in path { n = n + seg.len(); }
+            match string_value { Some(s) => { n = n + s.len(); } None => {} }
+        }
+        let battrs = build_bare();
+        let bnode = wrap_bare(battrs);
+        let BareNode { attributes } = bnode;
+        for b in attributes {
+            let Bare { string_value } = b;
+            match string_value { Some(s) => { n = n + s.len(); } None => {} }
+        }
+        i = i + 1;
+    }
+    println(n);
+}
+"#,
+            &["516"], // 6 * (28 + 29 + 29)
+            "option_string_field_survives_caller_retains_vec_copy",
+        );
+    }
+
+    #[test]
     fn asan_forloop_bare_enum_element_whole_move_no_double_free() {
         // B-2026-07-05-2: the residual B-2026-07-04-17 left open — a BARE
         // `Vec[<user enum>]` element moved WHOLE to a new owner. `x` aliases the

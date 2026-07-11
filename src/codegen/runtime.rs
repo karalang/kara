@@ -2775,7 +2775,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 idx_phi.add_incoming(&[(&next, body_bb)]);
 
                 self.builder.position_at_end(exit_bb);
-            } else if self.type_expr_has_drop_heap(inner_te) {
+            } else if self.type_expr_has_drop_heap(inner_te)
+                || self.te_owns_option_heap_payload(inner_te)
+            {
                 // #35 copy-side peer — a struct / enum / tuple element that
                 // owns heap through a NON-`{ptr,len,cap}` leaf (`Vec[Sp]`,
                 // `Sp { tok: Tk }` with a heap enum `Tk`; the parser's
@@ -2791,7 +2793,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // shared buffer before the new header lands). Stride by
                 // `elem_ty` (the element struct/enum size), not the 24-byte
                 // `vec_ty`. `type_expr_has_drop_heap` is false for shared (RC)
-                // leaves and no-heap aggregates, so neither is touched here.
+                // leaves and no-heap aggregates, so neither is touched here —
+                // but it is ALSO (deliberately, drop-side) false for `Option`,
+                // so an element struct whose only heap is an
+                // `Option[String]`-class field (`AttrNode.string_value`,
+                // B-2026-07-10-4 residual) skipped this leg and aliased the
+                // `Some` payload; `te_owns_option_heap_payload` is the
+                // copy-side companion that admits exactly that shape.
                 let clone_fn = self.emit_clone_fn_for_type_expr(inner_te);
 
                 let loop_bb = self.context.append_basic_block(fn_val, "dcopy.agg.loop");
@@ -2931,8 +2939,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             })
                             .cloned();
                         if let Some(field_te) = field_te {
+                            // `Option[shared T]` fields are excluded: this
+                            // return path ALREADY incs the returned alias
+                            // (the ref-rooted FieldAccess arm in
+                            // `compile_tail_final_expr`), and
+                            // `emit_option_value_clone_fn` now rc-incs too —
+                            // cloning here would double-inc and leak the box
+                            // (`asan_option_shared_method_tail_field_step_
+                            // repeat`). The historical shallow handling +
+                            // tail-arm inc is the balanced pair.
                             if self.te_owns_heap_below_buffer(&field_te)
                                 && self.shared_heap_type_for_type_expr(&field_te).is_none()
+                                && self
+                                    .option_inner_shared_type_for_type_expr(&field_te)
+                                    .is_none()
                             {
                                 if let Some(fn_val) = self.current_fn {
                                     let val_ty = val.get_type();

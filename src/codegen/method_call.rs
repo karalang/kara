@@ -6928,8 +6928,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // both bases to be clone-eligible named Vecs before admitting a heap
         // element — otherwise keep bailing to the loud dispatch-fail (never a
         // miscompile). A fully-POD tuple needs no clone and admits any base.
+        // `te_owns_option_heap_payload` closes `type_expr_has_drop_heap`'s
+        // Option blind spot: an `Option[String]`-bearing element is NOT POD
+        // (its drop frees the `Some` payload), so it must take the
+        // clone-eligible-gated path, not the admit-any-base one.
         let elem_is_pod = match &elem_te {
-            Some(te) => !self.type_expr_has_drop_heap(te),
+            Some(te) => !self.type_expr_has_drop_heap(te) && !self.te_owns_option_heap_payload(te),
             None => return Ok(None),
         };
         let base_is_named_vec = |cg: &Self, base: &Expr| {

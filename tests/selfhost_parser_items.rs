@@ -890,11 +890,23 @@ fn rust_render(src: &str) -> String {
 /// Item differential gate (slice 3c). Same harness as the sibling oracles:
 /// build the real selfhost modules into a temp project with a per-input driver,
 /// run, and diff against the seed's render.
-// IGNORED — B-2026-07-09-12: the self-hosted parser compiles (after the
-// B-2026-07-09-11 niche fix) but crashes at runtime on basic inputs. See the
-// note in tests/selfhost_parser.rs. Un-ignore once B-2026-07-09-12 is fixed.
+// UN-IGNORED 2026-07-11 (B-2026-07-10-4 FIXED, two-part): the runtime crashes
+// on item inputs were the view-move-out / copy-depth family. (1) The for-loop-
+// element destructure view-move-out (clone-on-extract routing +
+// `Option[inline-heap]` leg in stmts.rs) fixed the fn/impl/trait/enum/struct/
+// generic render-consume class. (2) The last 2 crashers (attr items whose
+// `AttrNode`/`AttrArgNode` carry a `Some` `Option[String]`) were a SHALLOW
+// CLONE: `karac_clone_struct_AttrNode`'s `Option[String]` field child fell
+// through to the primitive load/store clone (the type-erased `Option` layout
+// records no heap), and `emit_vecstr_defensive_copy`'s aggregate-element leg
+// skipped Option-only-heap elements (`type_expr_has_drop_heap` hardcodes
+// Option => false) — so the caller-retains copy of `attrs` aliased each
+// `Some` payload, and the caller's scope-exit drain freed the AST's string
+// (valgrind: alloc in `Parser.parse_attribute` via `karac_clone_enum_Token`,
+// premature free in `Parser.parse_item` via `__karac_drop_struct_AttrNode`,
+// UAF read in `render_attr`). Fixed by `emit_option_value_clone_fn` (tag-
+// guarded deep clone) + the `te_owns_option_heap_payload` copy-side gate.
 #[test]
-#[ignore = "B-2026-07-10-4: item/type parser crashes at runtime (distinct from B-2026-07-09-12; NOT auto-par — fails with KARAC_AUTO_PAR=0 too)"]
 fn selfhost_parser_matches_rust_parser_items() {
     // 1. Crate-root program: a driver over the Kāra `parse_item_str` +
     //    `render_item`. The six selfhost modules are copied verbatim (step 2).

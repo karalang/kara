@@ -5613,11 +5613,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // Vec whose element carries NO heap of its own (`Vec[i64]`, `Vec[bool]`) →
         // the outer `{ptr,len,cap}` deep-copy is a complete duplicate. A
         // `Vec[String]` / `Vec[agg]` element still aliases the box's per-element
-        // heap after an outer copy, so bail on those.
+        // heap after an outer copy, so bail on those. `te_owns_option_heap_payload`
+        // closes `type_expr_has_drop_heap`'s Option blind spot here: a
+        // `Vec[<struct{Option[String]}>]` element DOES own heap (its drop frees
+        // the `Some` payload), so treating it as heap-free would outer-copy +
+        // double-track — bail to the status-quo alias instead.
         if let Some(elem_ty) = self.extract_vec_elem_type(field_te) {
             let elem_has_own_heap = crate::codegen::helpers::vec_inner_type_expr(field_te)
                 .map(|e| {
                     self.type_expr_has_drop_heap(&e)
+                        || self.te_owns_option_heap_payload(&e)
                         || self.shared_heap_type_for_type_expr(&e).is_some()
                 })
                 .unwrap_or(true);
