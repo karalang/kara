@@ -2448,6 +2448,160 @@ fn link_value_shape(value: &Expr) -> LinkValue<'_> {
     }
 }
 
+/// A `<ident>.<link> = <value>` store — the only kind of mutation a
+/// headerless reshaper may perform, and ONLY as part of a splice-triple.
+fn reshaper_link_store<'a>(stmt: &'a Stmt, link: &str) -> Option<(&'a str, &'a Expr)> {
+    let StmtKind::Assign { target, value } = &stmt.kind else {
+        return None;
+    };
+    let ExprKind::FieldAccess { object, field } = &target.kind else {
+        return None;
+    };
+    if field != link {
+        return None;
+    }
+    let ExprKind::Identifier(obj) = &object.kind else {
+        return None;
+    };
+    Some((obj.as_str(), value))
+}
+
+/// The head-insertion splice-triple — a bijective 3-edge rotation that
+/// neither creates nor orphans a node:
+///   A.link = B.link;  B.link = C.link;  C.link = Some(B);
+/// (`A` = section head/cursor, `B` = lifted node, `C` = prev). It only
+/// permutes existing links, so the whole cleanup stays a single free-walk
+/// over the returned chain — nothing is stranded. Any OTHER link-store
+/// (e.g. a removal `slow.link = target.link` that skips `target`) orphans
+/// a node, which leaks under headerless (no rc word to reclaim it). This
+/// is the design §3.1 default-deny: a reshaper's link-stores must ALL be
+/// splice-triples.
+fn is_splice_triple(s0: &Stmt, s1: &Stmt, s2: &Stmt, link: &str) -> bool {
+    let (Some((_a, v0)), Some((b, v1)), Some((c, v2))) = (
+        reshaper_link_store(s0, link),
+        reshaper_link_store(s1, link),
+        reshaper_link_store(s2, link),
+    ) else {
+        return false;
+    };
+    // v0 must be `<b0>.link` (s0 lifts B out of A).
+    let ExprKind::FieldAccess {
+        object: o0,
+        field: f0,
+    } = &v0.kind
+    else {
+        return false;
+    };
+    let ExprKind::Identifier(b0) = &o0.kind else {
+        return false;
+    };
+    // v1 must be `<c1>.link` (s1 re-points B at C's successor).
+    let ExprKind::FieldAccess {
+        object: o1,
+        field: f1,
+    } = &v1.kind
+    else {
+        return false;
+    };
+    let ExprKind::Identifier(c1) = &o1.kind else {
+        return false;
+    };
+    // v2 must be `Some(<some_b>)` (s2 re-attaches B at the front, after C).
+    let LinkValue::SomeIdent(some_b) = link_value_shape(v2) else {
+        return false;
+    };
+    f0 == link
+        && f1 == link
+        && b == b0.as_str()      // s1 stores to the node s0 lifted (B)
+        && c == c1.as_str()      // s2 stores to the node s1 read from (C = prev)
+        && some_b == b0.as_str() // s2 re-attaches B
+}
+
+/// Design §3.1 default-deny body walk: every `<ident>.<link>` store in the
+/// reshaper body (recursively) must be part of a splice-triple. Everything
+/// else — cursor-walks (`prev = n`), counter updates, matches, loops, lets
+/// — is fine; boundary regions (closure / par / lock) are rejected (a node
+/// could escape). A lone or non-triple link-store returns `false` (not a
+/// permutation reshaper; e.g. a node-removal transform, which leaks under
+/// headerless).
+fn reshaper_body_is_permutation(block: &Block, link: &str) -> bool {
+    let stmts = &block.stmts;
+    let mut i = 0;
+    while i < stmts.len() {
+        if reshaper_link_store(&stmts[i], link).is_some() {
+            if i + 2 < stmts.len()
+                && is_splice_triple(&stmts[i], &stmts[i + 1], &stmts[i + 2], link)
+            {
+                i += 3;
+                continue;
+            }
+            return false;
+        }
+        if !reshaper_stmt_ok(&stmts[i], link) {
+            return false;
+        }
+        i += 1;
+    }
+    match &block.final_expr {
+        Some(e) => reshaper_expr_ok(e, link),
+        None => true,
+    }
+}
+
+fn reshaper_stmt_ok(stmt: &Stmt, link: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::Let { value, .. } | StmtKind::CompoundAssign { value, .. } => {
+            reshaper_expr_ok(value, link)
+        }
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => reshaper_expr_ok(value, link) && reshaper_body_is_permutation(else_block, link),
+        // A non-link-store `Assign` (cursor re-aim / counter update).
+        StmtKind::Assign { value, .. } => reshaper_expr_ok(value, link),
+        StmtKind::Expr(e) => reshaper_expr_ok(e, link),
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            reshaper_body_is_permutation(body, link)
+        }
+        StmtKind::LetUninit { .. } => true,
+        StmtKind::MultiAssign { .. } => false,
+    }
+}
+
+fn reshaper_expr_ok(expr: &Expr, link: &str) -> bool {
+    match &expr.kind {
+        ExprKind::Block(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Try(b)
+        | ExprKind::Comptime(b)
+        | ExprKind::LabeledBlock { body: b, .. }
+        | ExprKind::Loop { body: b, .. }
+        | ExprKind::While { body: b, .. }
+        | ExprKind::WhileLet { body: b, .. }
+        | ExprKind::For { body: b, .. } => reshaper_body_is_permutation(b, link),
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            reshaper_body_is_permutation(then_block, link)
+                && else_branch
+                    .as_ref()
+                    .is_none_or(|e| reshaper_expr_ok(e, link))
+        }
+        ExprKind::Match { arms, .. } => arms.iter().all(|a| reshaper_expr_ok(&a.body, link)),
+        // Boundary regions: a node could be captured / escape a task.
+        ExprKind::Closure { .. } | ExprKind::Par(_) | ExprKind::Lock { .. } => false,
+        // Leaf / value exprs contain no statements (hence no link-stores).
+        _ => true,
+    }
+}
+
 /// `T { ..., <link>: None }` — the fresh-member literal shape. A
 /// missing link init is NOT accepted (the typechecker requires all
 /// fields, so this is just defensive).
@@ -3021,7 +3175,16 @@ impl<'a> OwnershipChecker<'a> {
                 fld.name == link_field
                     && matches!(&fld.value.kind, ExprKind::Identifier(id) if owned_params.contains(id))
             });
-            return link_is_owned_param.then(|| dummy.clone());
+            if !link_is_owned_param {
+                return None;
+            }
+            // Default-deny body walk (design §3.1): every link-store must
+            // be a permutation (splice-triple), never a removal/orphan —
+            // otherwise the orphaned node leaks under headerless.
+            if !reshaper_body_is_permutation(&f.body, &link_field) {
+                return None;
+            }
+            return Some(dummy.clone());
         }
         None
     }
