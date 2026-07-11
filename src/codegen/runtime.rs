@@ -6782,6 +6782,35 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_map", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_dispatch_soa` — CG-4's struct-SoA
+    /// dispatch entry. Signature `(wgsl_ptr, wgsl_len, n_groups, in_ptrs,
+    /// field_offsets, field_size, aos_stride, n) -> aos_ptr`: dispatches the
+    /// kernel over `n_groups` coalesced field-arrays and returns one interleaved
+    /// AoS buffer the owned `Vec[S]` frees. In the `gpu`-feature archive only,
+    /// auto-selected when referenced (the `karac_runtime_gpu_` symbol prefix).
+    pub(super) fn gpu_dispatch_soa_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_dispatch_soa") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = ptr_t.fn_type(
+            &[
+                ptr_t.into(), // wgsl_ptr
+                i64_t.into(), // wgsl_len
+                i64_t.into(), // n_groups
+                ptr_t.into(), // in_ptrs
+                ptr_t.into(), // field_offsets
+                i64_t.into(), // field_size
+                i64_t.into(), // aos_stride
+                i64_t.into(), // n
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_dispatch_soa", fn_ty, None)
+    }
+
     /// Render `fv` (widened to `f64` first — varargs/ABI parity and the
     /// formatter takes a `double`) into a fresh stack buffer via
     /// `karac_runtime_f64_to_str`; returns `(buf_ptr, len_i64)` for the

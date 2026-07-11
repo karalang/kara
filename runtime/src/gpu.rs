@@ -180,6 +180,80 @@ pub unsafe extern "C" fn karac_runtime_gpu_map_multi(
     }
 }
 
+/// C entry point for a struct-SoA `gpu.dispatch` — CG-4's codegen target.
+///
+/// Dispatches the kernel over `n_groups` coalesced input field-arrays
+/// (`in_ptrs[k]`, each `n * field_size` bytes) and returns a single **AoS**
+/// result buffer: the shader (bindings `0..n_groups` in, `n_groups..2*n_groups`
+/// out) writes `n_groups` output field-arrays, which are interleaved into one
+/// `n * aos_stride`-byte buffer — group `k`'s output element is copied to byte
+/// offset `field_offsets[k]` within each `aos_stride`-byte AoS element. The
+/// returned buffer is freshly `malloc`'d (via [`crate::alloc::karac_alloc_or_panic`])
+/// so the owned `Vec[S]` the compiler builds frees it with the matching `free`;
+/// the intermediate GPU group outputs are internal `Vec`s dropped here. Empty
+/// (`n == 0` / `n_groups == 0`) returns a unique non-null allocation.
+///
+/// # Safety
+///
+/// `wgsl_ptr`/`wgsl_len` a valid UTF-8 shader; `in_ptrs` an array of `n_groups`
+/// pointers each to `n * field_size` valid bytes; `field_offsets` an array of
+/// `n_groups` `usize`s. The returned pointer transfers ownership to the caller.
+/// Aborts on no available GPU adapter (no CPU fallback), like the other entries.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_dispatch_soa(
+    wgsl_ptr: *const u8,
+    wgsl_len: usize,
+    n_groups: usize,
+    in_ptrs: *const *const u8,
+    field_offsets: *const usize,
+    field_size: usize,
+    aos_stride: usize,
+    n: usize,
+) -> *mut u8 {
+    let aos_total = n.saturating_mul(aos_stride);
+
+    // Empty dispatch: a unique non-null allocation the caller never reads.
+    if aos_total == 0 || n_groups == 0 {
+        return crate::alloc::karac_alloc_or_panic(aos_total.max(1));
+    }
+
+    let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
+    let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
+        crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
+        std::process::abort();
+    };
+    let byte_len = n.saturating_mul(field_size);
+    let in_ptr_slice = std::slice::from_raw_parts(in_ptrs, n_groups);
+    let inputs: Vec<&[u8]> = in_ptr_slice
+        .iter()
+        .map(|&p| std::slice::from_raw_parts(p, byte_len))
+        .collect();
+
+    let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, field_size))
+    else {
+        crate::fatal::write_stderr(
+            b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
+        );
+        std::process::abort();
+    };
+    debug_assert_eq!(outputs.len(), n_groups, "one output field-array per group");
+
+    // Interleave the per-group output field-arrays into one AoS buffer.
+    let offsets = std::slice::from_raw_parts(field_offsets, n_groups);
+    let out = crate::alloc::karac_alloc_or_panic(aos_total);
+    for (obytes, &off) in outputs.iter().zip(offsets.iter()) {
+        debug_assert_eq!(obytes.len(), byte_len, "element-wise map preserves length");
+        for i in 0..n {
+            std::ptr::copy_nonoverlapping(
+                obytes.as_ptr().add(i * field_size),
+                out.add(i * aos_stride + off),
+                field_size,
+            );
+        }
+    }
+    out
+}
+
 /// Byte-oriented GPU element-wise map core. `input` is the raw element bytes
 /// (`n * elem_size`); the returned buffer is the same length. The WGSL shader
 /// supplies the element interpretation via its `array<T>` binding declarations,

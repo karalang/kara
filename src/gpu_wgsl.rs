@@ -413,6 +413,40 @@ fn lower_soa_expr(
             let inner = lower_soa_expr(operand, param_name, groups)?;
             Ok(format!("-({inner})"))
         }
+        // Post-desugar arithmetic: the operator-desugar pass rewrites `a + b`
+        // into `<type>.add(a, b)` (this emitter runs at codegen, *after* desugar,
+        // unlike the pre-desugar scalar `emit_kernel`). Map the `<type>.<op>` call
+        // back to the WGSL operator. (`Binary`/`Unary` above are kept for the
+        // pre-desugar emitter unit tests.)
+        ExprKind::Call { callee, args } => {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                if segments.len() == 2 {
+                    let op = segments[1].as_str();
+                    let bin = match op {
+                        "add" => Some("+"),
+                        "sub" => Some("-"),
+                        "mul" => Some("*"),
+                        "div" => Some("/"),
+                        "rem" | "mod" => Some("%"),
+                        _ => None,
+                    };
+                    if let (Some(op_str), 2) = (bin, args.len()) {
+                        let l = lower_soa_expr(&args[0].value, param_name, groups)?;
+                        let r = lower_soa_expr(&args[1].value, param_name, groups)?;
+                        return Ok(format!("({l} {op_str} {r})"));
+                    }
+                    if op == "neg" && args.len() == 1 {
+                        let inner = lower_soa_expr(&args[0].value, param_name, groups)?;
+                        return Ok(format!("-({inner})"));
+                    }
+                }
+            }
+            Err(WgslError::UnsupportedBody(
+                "unsupported call in a struct GPU kernel body — only desugared arithmetic \
+                 (`+ - * / %`, unary `-`) is supported"
+                    .to_string(),
+            ))
+        }
         ExprKind::Identifier(name) => Err(WgslError::UnsupportedBody(format!(
             "identifier `{name}` — a struct GPU kernel body accesses `<param>.<field>`, \
              not the whole struct value"

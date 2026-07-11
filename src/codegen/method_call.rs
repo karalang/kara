@@ -10530,6 +10530,15 @@ impl<'ctx> super::Codegen<'ctx> {
             ));
         }
 
+        // CG-4: a struct buffer bound with a `layout` block dispatches multi-buffer
+        // (one coalesced GPU buffer per group). Detect via the binding's SoA layout
+        // — the typechecker is layout-blind, so codegen owns the per-group shader.
+        if let ExprKind::Identifier(buf_name) = &args[1].value.kind {
+            if let Some(soa) = self.active_soa_layout(buf_name) {
+                return self.compile_gpu_dispatch_soa(args, &soa);
+            }
+        }
+
         // WGSL baked by the typechecker, keyed on the kernel-argument span.
         let key = (args[0].value.span.offset, args[0].value.span.length);
         let wgsl = self.gpu_dispatch_wgsl.get(&key).cloned().ok_or_else(|| {
@@ -10632,6 +10641,201 @@ impl<'ctx> super::Codegen<'ctx> {
         agg = self
             .builder
             .build_insert_value(agg, n, 2, "gpu.res.cap")
+            .unwrap()
+            .into_struct_value();
+        Ok(agg.into())
+    }
+
+    /// CG-4: lower `gpu.dispatch(kernel, buffer)` for a struct buffer bound with
+    /// a `layout` block. The typechecker is layout-blind (it validated and left
+    /// the WGSL to codegen), so here we recover the SoA group structure via
+    /// `active_soa_layout`, emit the per-group multi-buffer shader, read one
+    /// coalesced GPU buffer per group, dispatch, and wrap the interleaved AoS
+    /// result as an owned `Vec[S]` `{ptr, len=n, cap=n}`.
+    fn compile_gpu_dispatch_soa(
+        &mut self,
+        args: &[CallArg],
+        soa: &super::state::SoaLayout,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Path A: one field per hot group, no cold group — each group maps to one
+        // `array<f32>` binding. Reject the shapes CG-4 has not grown to yet.
+        if soa.cold_group.is_some() {
+            return Err(
+                "gpu.dispatch: a `cold` layout group is not supported (CG-4 Path A)".to_string(),
+            );
+        }
+        for g in &soa.groups {
+            if g.fields.len() != 1 {
+                return Err(format!(
+                    "gpu.dispatch: layout group `{}` has {} fields — CG-4 requires one field \
+                     per group (Path A)",
+                    g.name,
+                    g.fields.len()
+                ));
+            }
+        }
+        let num_groups = soa.num_groups;
+        if num_groups == 0 {
+            return Err("gpu.dispatch: the layout has no field groups".to_string());
+        }
+
+        // Kernel `Function` AST (for the SoA emitter) from the program snapshot.
+        let ExprKind::Identifier(kernel_name) = &args[0].value.kind else {
+            return Err("gpu.dispatch kernel must be a bare `#[gpu]` function name".to_string());
+        };
+        let program = self
+            .program_snapshot
+            .clone()
+            .ok_or("internal error: no program snapshot for gpu.dispatch")?;
+        let kernel = program
+            .items
+            .iter()
+            .find_map(|it| match it {
+                crate::ast::Item::Function(f) if &f.name == kernel_name && f.is_gpu => Some(f),
+                _ => None,
+            })
+            .ok_or_else(|| format!("internal error: gpu kernel `{kernel_name}` not found"))?;
+
+        // Group manifest (binding order == group order); emit the multi-buffer
+        // WGSL. All fields are f32 (typechecker-enforced for the struct path).
+        let manifest: Vec<crate::gpu_wgsl::SoaGroupField> = soa
+            .groups
+            .iter()
+            .map(|g| crate::gpu_wgsl::SoaGroupField {
+                field: g.fields[0].clone(),
+                scalar: "f32".to_string(),
+            })
+            .collect();
+        let wgsl = crate::gpu_wgsl::emit_kernel_soa(kernel, &manifest).map_err(|e| {
+            format!(
+                "gpu.dispatch: cannot lower `{kernel_name}` to a GPU shader — {}",
+                e.reason()
+            )
+        })?;
+
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        // Bake the shader constant.
+        let wgsl_len = i64_t.const_int(wgsl.len() as u64, false);
+        let wgsl_ptr = self
+            .builder
+            .build_global_string_ptr(&wgsl, "gpu.wgsl.soa")
+            .map_err(|e| format!("baking gpu.dispatch shader constant failed: {e}"))?
+            .as_pointer_value();
+
+        // Read the SoA buffer's per-group pointers + len via spill + struct_gep.
+        let buf_val = self.compile_expr(&args[1].value)?;
+        let sv = buf_val.into_struct_value();
+        let vec_ty = sv.get_type();
+        let spill = self.builder.build_alloca(vec_ty, "gpu.soa.buf").unwrap();
+        self.builder.build_store(spill, sv).unwrap();
+
+        let mut group_ptrs = Vec::with_capacity(num_groups);
+        for k in 0..num_groups {
+            let gp_field = self
+                .builder
+                .build_struct_gep(vec_ty, spill, k as u32, "gpu.soa.gp")
+                .unwrap();
+            let gp = self
+                .builder
+                .build_load(ptr_ty, gp_field, "gpu.soa.g")
+                .unwrap()
+                .into_pointer_value();
+            group_ptrs.push(gp);
+        }
+        let len_idx = Self::soa_len_index(num_groups, false);
+        let len_field = self
+            .builder
+            .build_struct_gep(vec_ty, spill, len_idx, "gpu.soa.len.p")
+            .unwrap();
+        let n = self
+            .builder
+            .build_load(i64_t, len_field, "gpu.soa.n")
+            .unwrap()
+            .into_int_value();
+
+        // in_ptrs: `[num_groups x ptr]` on the stack, one group pointer each.
+        let arr_ty = ptr_ty.array_type(num_groups as u32);
+        let in_ptrs = self.builder.build_alloca(arr_ty, "gpu.in_ptrs").unwrap();
+        for (k, gp) in group_ptrs.iter().enumerate() {
+            let slot = unsafe {
+                self.builder
+                    .build_in_bounds_gep(
+                        arr_ty,
+                        in_ptrs,
+                        &[i64_t.const_zero(), i64_t.const_int(k as u64, false)],
+                        "gpu.in.k",
+                    )
+                    .unwrap()
+            };
+            self.builder.build_store(slot, *gp).unwrap();
+        }
+
+        // field_offsets: `[num_groups x i64]`, group k's field byte offset in AoS
+        // (struct-field index × 4 — all fields f32).
+        let off_arr_ty = i64_t.array_type(num_groups as u32);
+        let offsets = self.builder.build_alloca(off_arr_ty, "gpu.offs").unwrap();
+        for (k, g) in soa.groups.iter().enumerate() {
+            let off = i64_t.const_int((g.field_indices[0] * 4) as u64, false);
+            let slot = unsafe {
+                self.builder
+                    .build_in_bounds_gep(
+                        off_arr_ty,
+                        offsets,
+                        &[i64_t.const_zero(), i64_t.const_int(k as u64, false)],
+                        "gpu.off.k",
+                    )
+                    .unwrap()
+            };
+            self.builder.build_store(slot, off).unwrap();
+        }
+
+        // aos_stride = (# struct fields) × 4. Path A: one field per group ⇒
+        // `num_groups` fields, all f32 (4-byte, contiguous, no padding).
+        let n_fields: usize = soa.groups.iter().map(|g| g.fields.len()).sum();
+        let field_size = i64_t.const_int(4, false);
+        let aos_stride = i64_t.const_int((n_fields * 4) as u64, false);
+        let n_groups_v = i64_t.const_int(num_groups as u64, false);
+
+        let dispatch_fn = self.gpu_dispatch_soa_fn();
+        let aos_ptr = self
+            .builder
+            .build_call(
+                dispatch_fn,
+                &[
+                    wgsl_ptr.into(),
+                    wgsl_len.into(),
+                    n_groups_v.into(),
+                    in_ptrs.into(),
+                    offsets.into(),
+                    field_size.into(),
+                    aos_stride.into(),
+                    n.into(),
+                ],
+                "gpu.soa.out",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        // Wrap the interleaved AoS buffer as an owned `Vec[S]` {ptr, len=n, cap=n}.
+        let result_ty = self.vec_struct_type();
+        let mut agg = result_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, aos_ptr, 0, "gpu.soa.res.data")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 1, "gpu.soa.res.len")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 2, "gpu.soa.res.cap")
             .unwrap()
             .into_struct_value();
         Ok(agg.into())
