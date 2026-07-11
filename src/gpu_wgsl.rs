@@ -461,37 +461,23 @@ pub fn emit_kernel_soa(func: &Function, groups: &[SoaGpuGroup]) -> Result<String
     ))
 }
 
-/// Lower the returned struct literal into one output store per group: a
+/// Lower the kernel's struct-valued return into one output store per group: a
 /// single-field group stores its field's value; a multi-field group stores a
-/// `G_<name>(...)` constructor over its fields (in sub-struct order).
+/// `G_<name>(...)` constructor over its fields. The return may be a struct
+/// literal, the whole-input parameter, or a struct-valued `if` (GPU-LBM-4b) —
+/// see [`struct_field_wgsl`].
 fn lower_struct_return(
     expr: &Expr,
     param_name: &str,
     groups: &[SoaGpuGroup],
 ) -> Result<String, WgslError> {
-    let ExprKind::StructLiteral { fields, spread, .. } = &expr.kind else {
-        return Err(WgslError::UnsupportedBody(
-            "a struct GPU kernel must return a struct literal `S { field: expr, ... }`".to_string(),
-        ));
-    };
-    if spread.is_some() {
-        return Err(WgslError::UnsupportedBody(
-            "struct-literal spread (`..`) is not supported in a GPU kernel".to_string(),
-        ));
-    }
-    let field_expr = |name: &str| -> Result<String, WgslError> {
-        let init = fields.iter().find(|f| f.name == name).ok_or_else(|| {
-            WgslError::UnsupportedBody(format!("the returned struct is missing field `{name}`"))
-        })?;
-        lower_soa_expr(&init.value, param_name, groups)
-    };
     let mut out = String::new();
     for g in groups {
         if g.is_multi() {
             let vals = g
                 .fields
                 .iter()
-                .map(|f| field_expr(f))
+                .map(|f| struct_field_wgsl(expr, f, param_name, groups))
                 .collect::<Result<Vec<_>, _>>()?;
             out.push_str(&format!(
                 "    {}_out[i] = {}({});\n",
@@ -503,11 +489,66 @@ fn lower_struct_return(
             out.push_str(&format!(
                 "    {}_out[i] = {};\n",
                 g.name,
-                field_expr(&g.fields[0])?
+                struct_field_wgsl(expr, &g.fields[0], param_name, groups)?
             ));
         }
     }
     Ok(out)
+}
+
+/// WGSL for struct field `field` of a struct-VALUED expression:
+/// - a struct literal `S { field: e, … }` → lower field `field`'s init;
+/// - the whole-input parameter (`n`) → the field's materialized input value;
+/// - a struct-valued `if c { S } else { S }` → per-field
+///   `select(else.field, then.field, c)` (the LBM `collide` guard
+///   `if rho <= 0 { n } else { … }`, decomposed to a per-field select with a
+///   shared condition; GPU-LBM-4b).
+fn struct_field_wgsl(
+    expr: &Expr,
+    field: &str,
+    param_name: &str,
+    groups: &[SoaGpuGroup],
+) -> Result<String, WgslError> {
+    match &expr.kind {
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            if spread.is_some() {
+                return Err(WgslError::UnsupportedBody(
+                    "struct-literal spread (`..`) is not supported in a GPU kernel".to_string(),
+                ));
+            }
+            let init = fields.iter().find(|f| f.name == field).ok_or_else(|| {
+                WgslError::UnsupportedBody(format!(
+                    "the returned struct is missing field `{field}`"
+                ))
+            })?;
+            lower_soa_expr(&init.value, param_name, groups)
+        }
+        ExprKind::Identifier(name) if name == param_name => {
+            if groups.iter().any(|g| g.fields.iter().any(|gf| gf == field)) {
+                Ok(format!("{param_name}_{field}"))
+            } else {
+                Err(WgslError::UnsupportedBody(format!(
+                    "field `{field}` is not a layout group of the GPU kernel parameter"
+                )))
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            let (then_e, else_e) = if_branches(then_block, else_branch)?;
+            let cond = lower_soa_expr(condition, param_name, groups)?;
+            let t = struct_field_wgsl(then_e, field, param_name, groups)?;
+            let e = struct_field_wgsl(else_e, field, param_name, groups)?;
+            Ok(format!("select({e}, {t}, {cond})"))
+        }
+        _ => Err(WgslError::UnsupportedBody(
+            "a struct GPU kernel must return a struct literal, the input parameter, or an \
+             `if`/`else` over those"
+                .to_string(),
+        )),
+    }
 }
 
 /// Lower one body expression for the SoA case. Like [`lower_expr`] but the sole
@@ -872,12 +913,14 @@ mod tests {
     }
 
     #[test]
-    fn soa_rejects_non_struct_literal_return() {
-        // The whole-struct value `p` has no scalar WGSL form; the body must be a
-        // struct literal.
+    fn emits_soa_identity_return() {
+        // Returning the whole input parameter is a valid identity kernel — each
+        // field copied through (GPU-LBM-4b's struct-value handling; previously an
+        // unsupported non-struct-literal return).
         let func = parse_kernel("#[gpu]\nfn step(p: Particle) -> Particle { p }\n");
-        let err = emit_kernel_soa(&func, &particle_groups()).unwrap_err();
-        assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
+        let wgsl = emit_kernel_soa(&func, &particle_groups()).unwrap();
+        assert!(wgsl.contains("gp_out[i] = p_pos;"), "{wgsl}");
+        assert!(wgsl.contains("gv_out[i] = p_vel;"), "{wgsl}");
     }
 
     #[test]
@@ -958,5 +1001,34 @@ mod tests {
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { if x > 0.0 { x } }\n");
         let err = emit_kernel(&func).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
+    }
+
+    #[test]
+    fn emits_soa_struct_valued_if_guard() {
+        // The LBM `collide` guard shape: `if cond { S { .. } } else { n }` where the
+        // else branch is the whole input struct → per-field `select` with a shared
+        // condition (GPU-LBM-4b).
+        let func = parse_kernel(
+            "#[gpu]\nfn guard(x: Cell) -> Cell { if x.b > 0.0 { Cell { a: x.a + x.b, b: x.b } } else { x } }\n",
+        );
+        let groups = vec![
+            SoaGpuGroup {
+                name: "ga".into(),
+                fields: vec!["a".into()],
+            },
+            SoaGpuGroup {
+                name: "gb".into(),
+                fields: vec!["b".into()],
+            },
+        ];
+        let wgsl = emit_kernel_soa(&func, &groups).unwrap();
+        assert!(
+            wgsl.contains("ga_out[i] = select(x_a, (x_a + x_b), (x_b > 0.0));"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("gb_out[i] = select(x_b, x_b, (x_b > 0.0));"),
+            "{wgsl}"
+        );
     }
 }
