@@ -486,12 +486,36 @@ impl<'a> super::Interpreter<'a> {
             .map(|a| self.eval_expr_inner(&a.value))
             .collect();
 
+        // A stencil kernel (GPU-LBM-6) takes the whole `Vec[S]` buffer plus an
+        // index, not an element — its first parameter is a `Vec[...]`. Mirror the
+        // GPU thread model: pass the shared read-only buffer and a synthesized
+        // per-element index to each call (run == build parity).
+        let is_stencil = self.program.items.iter().any(|it| {
+            matches!(it, Item::Function(f)
+                if f.name == kernel_name
+                    && f.is_gpu
+                    && f.params.first().map(|p| matches!(&p.ty.kind,
+                        TypeKind::Path(pp) if pp.segments.len() == 1 && pp.segments[0] == "Vec"))
+                        .unwrap_or(false))
+        });
+
         let mut out = Vec::with_capacity(elems.len());
-        for elem in elems {
-            let mut call_args = Vec::with_capacity(1 + uniforms.len());
-            call_args.push(elem);
-            call_args.extend(uniforms.iter().cloned());
-            out.push(self.call_function(&kernel_name, &call_args));
+        if is_stencil {
+            let buffer = Value::Array(Arc::new(RwLock::new(elems.clone())));
+            for i in 0..elems.len() {
+                let mut call_args = Vec::with_capacity(2 + uniforms.len());
+                call_args.push(buffer.clone());
+                call_args.push(Value::Int(i as i64));
+                call_args.extend(uniforms.iter().cloned());
+                out.push(self.call_function(&kernel_name, &call_args));
+            }
+        } else {
+            for elem in elems {
+                let mut call_args = Vec::with_capacity(1 + uniforms.len());
+                call_args.push(elem);
+                call_args.extend(uniforms.iter().cloned());
+                out.push(self.call_function(&kernel_name, &call_args));
+            }
         }
         Value::Array(Arc::new(RwLock::new(out)))
     }

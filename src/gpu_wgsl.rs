@@ -170,6 +170,16 @@ fn scalar_name(ty: &TypeExpr) -> Option<String> {
     }
 }
 
+/// Whether `ty` is a `Vec[...]` — a stencil kernel's whole-buffer parameter
+/// (GPU-LBM-6), as opposed to an element struct `S`. The distinguishing signal
+/// that routes [`emit_kernel_soa`] to the stencil emitter.
+fn is_vec_type(ty: &TypeExpr) -> bool {
+    matches!(
+        &ty.kind,
+        TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Vec"
+    )
+}
+
 /// The expression whose value the kernel returns — the block tail expression,
 /// or a trailing `return <expr>;`. Slice-0 kernels have no locals, so any
 /// preceding statements (other than the trailing return) are rejected.
@@ -612,6 +622,19 @@ pub fn emit_kernel_soa(
             "a GPU kernel cannot take a self receiver".to_string(),
         ));
     }
+    // GPU-LBM-6: a *stencil* kernel reads neighbours. Its first parameter is the
+    // whole `Vec[S]` buffer (not an element `S`) followed by an integer index; the
+    // body indexes `buf[j].field`. Route to the stencil emitter — the bindings are
+    // identical (the whole input is already bound read-only), only the body can now
+    // address arbitrary elements.
+    if func
+        .params
+        .first()
+        .map(|p| is_vec_type(&p.ty))
+        .unwrap_or(false)
+    {
+        return emit_kernel_stencil(func, groups, helpers);
+    }
     // The first parameter is the struct buffer element; any further parameters are
     // scalar uniforms (GPU-LBM-2) — each `f32`, bound after the group buffers and
     // read in the body as `<name>_u[0]`.
@@ -723,6 +746,312 @@ pub fn emit_kernel_soa(
          {materialize}{stores}\
          }}\n"
     ))
+}
+
+/// Emit the WGSL for a **stencil** `#[gpu]` kernel
+/// `fn k(buf: Vec[S], i: i64, ...uniforms) -> S` (GPU-LBM-6). Where the
+/// element-wise SoA kernel materializes the thread's *own* element
+/// (`<param>_<field>`), a stencil reads *neighbours* by indexing the buffer
+/// directly: `buf[j].field` → `<group>_in[<j>]{.field}`, the index parameter →
+/// the thread index `i32(gid.x)`, and `buf.len()` → `i32(arrayLength(&<first>_in))`.
+/// The whole input buffer is already bound read-only (bindings are identical to
+/// the element-wise SoA kernel), so **no runtime change is needed** — the body
+/// can simply address any element. This is what the LBM `stream` kernel needs
+/// (each cell reads its 3×3 neighbourhood).
+fn emit_kernel_stencil(
+    func: &Function,
+    groups: &[SoaGpuGroup],
+    helpers: &[&Function],
+) -> Result<String, WgslError> {
+    // params: [buffer: Vec[S]] [index: integer] [uniforms: f32...].
+    if func.params.len() < 2 {
+        return Err(WgslError::UnsupportedSignature(
+            "a stencil GPU kernel needs a buffer parameter and an index parameter".to_string(),
+        ));
+    }
+    let buf_name = func.params[0].name().ok_or_else(|| {
+        WgslError::UnsupportedSignature(
+            "the GPU stencil buffer parameter must be a plain binding".to_string(),
+        )
+    })?;
+    let idx_name = func.params[1].name().ok_or_else(|| {
+        WgslError::UnsupportedSignature(
+            "the GPU stencil index parameter must be a plain binding".to_string(),
+        )
+    })?;
+    let mut uniform_names: Vec<String> = Vec::new();
+    for u in &func.params[2..] {
+        wgsl_scalar(&u.ty, "uniform parameter")?;
+        let un = u.name().ok_or_else(|| {
+            WgslError::UnsupportedSignature(
+                "a GPU uniform parameter must be a plain binding".to_string(),
+            )
+        })?;
+        uniform_names.push(un.to_string());
+    }
+    let uniform_set: HashSet<String> = uniform_names.iter().cloned().collect();
+    if groups.is_empty() {
+        return Err(WgslError::UnsupportedSignature(
+            "a struct GPU kernel needs at least one layout group".to_string(),
+        ));
+    }
+    for g in groups {
+        if g.fields.is_empty() {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "layout group `{}` has no fields",
+                g.name
+            )));
+        }
+    }
+    let n = groups.len();
+
+    // WGSL sub-struct definitions for multi-field groups.
+    let mut structs = String::new();
+    for g in groups {
+        if g.is_multi() {
+            let members = g
+                .fields
+                .iter()
+                .map(|f| format!("{f}: f32"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            structs.push_str(&format!("struct {} {{ {members} }};\n", g.wgsl_struct()));
+        }
+    }
+
+    // Bindings: inputs 0..n, outputs n..2n, uniforms 2n..2n+u — identical to the
+    // element-wise SoA kernel. Binding the whole input read-only is exactly what
+    // lets the body address arbitrary neighbours.
+    let mut decls = String::new();
+    for (i, g) in groups.iter().enumerate() {
+        decls.push_str(&format!(
+            "@group(0) @binding({i}) var<storage, read> {}_in: array<{}>;\n",
+            g.name,
+            g.elem_ty()
+        ));
+    }
+    for (i, g) in groups.iter().enumerate() {
+        decls.push_str(&format!(
+            "@group(0) @binding({}) var<storage, read_write> {}_out: array<{}>;\n",
+            n + i,
+            g.name,
+            g.elem_ty()
+        ));
+    }
+    for (u, un) in uniform_names.iter().enumerate() {
+        decls.push_str(&format!(
+            "@group(0) @binding({}) var<storage, read> {un}_u: array<f32>;\n",
+            2 * n + u
+        ));
+    }
+
+    // `#[gpu]` helper functions reachable from the kernel (GPU-LBM-5).
+    let (helper_defs, helper_names) = emit_helpers(func, helpers)?;
+
+    let first_group = groups[0].name.clone();
+    let ctx = StencilCtx {
+        buf: buf_name,
+        idx: idx_name,
+        groups,
+        helpers: &helper_names,
+        uniforms: &uniform_set,
+        first_group: &first_group,
+    };
+    let body = kernel_return_expr(func)?;
+    let stores = lower_stencil_return(body, &ctx)?;
+
+    // The thread owns output element `gi`; the kernel's index parameter is the
+    // same index as `i32` (WGSL array subscripts want i32/u32, and neighbour
+    // arithmetic like `i - 1` must be signed to bounds-check cleanly).
+    Ok(format!(
+        "{helper_defs}{structs}{decls}\n\
+         @compute @workgroup_size({WORKGROUP_SIZE})\n\
+         fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let gi = gid.x;\n\
+         \x20   if (gi >= arrayLength(&{first_group}_in)) {{ return; }}\n\
+         \x20   let {idx_name} = i32(gi);\n\
+         {stores}\
+         }}\n"
+    ))
+}
+
+/// Lowering context for a stencil kernel body (GPU-LBM-6). Every field is a
+/// borrow, so the context is `Copy` and threads cheaply through the recursive
+/// lowering (and the shared [`lower_call`] closure).
+#[derive(Clone, Copy)]
+struct StencilCtx<'a> {
+    /// The buffer parameter name (`buf` in `buf[j].field`).
+    buf: &'a str,
+    /// The index parameter name — maps to the thread index `i32(gid.x)`.
+    idx: &'a str,
+    groups: &'a [SoaGpuGroup],
+    helpers: &'a HashSet<String>,
+    uniforms: &'a HashSet<String>,
+    /// `groups[0].name`, for the `arrayLength` behind `buf.len()`.
+    first_group: &'a str,
+}
+
+/// Lower a stencil kernel's struct-valued return into one output store per
+/// group, keyed by the thread's output index `gi`. The return is a struct
+/// literal or an `if`/`else` over struct literals — a stencil has no
+/// whole-buffer identity return (the parameter is the buffer, not an element).
+fn lower_stencil_return(expr: &Expr, ctx: &StencilCtx) -> Result<String, WgslError> {
+    let mut out = String::new();
+    for g in ctx.groups {
+        if g.is_multi() {
+            let vals = g
+                .fields
+                .iter()
+                .map(|f| stencil_field_wgsl(expr, f, ctx))
+                .collect::<Result<Vec<_>, _>>()?;
+            out.push_str(&format!(
+                "    {}_out[gi] = {}({});\n",
+                g.name,
+                g.wgsl_struct(),
+                vals.join(", ")
+            ));
+        } else {
+            out.push_str(&format!(
+                "    {}_out[gi] = {};\n",
+                g.name,
+                stencil_field_wgsl(expr, &g.fields[0], ctx)?
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// WGSL for struct field `field` of a stencil kernel's struct-valued return —
+/// the stencil analogue of [`struct_field_wgsl`]: a struct literal lowers the
+/// field's init; a struct-valued `if` becomes a per-field `select`.
+fn stencil_field_wgsl(expr: &Expr, field: &str, ctx: &StencilCtx) -> Result<String, WgslError> {
+    match &expr.kind {
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            if spread.is_some() {
+                return Err(WgslError::UnsupportedBody(
+                    "struct-literal spread (`..`) is not supported in a GPU kernel".to_string(),
+                ));
+            }
+            let init = fields.iter().find(|f| f.name == field).ok_or_else(|| {
+                WgslError::UnsupportedBody(format!(
+                    "the returned struct is missing field `{field}`"
+                ))
+            })?;
+            lower_stencil_expr(&init.value, ctx)
+        }
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            let (then_e, else_e) = if_branches(then_block, else_branch)?;
+            let cond = lower_stencil_expr(condition, ctx)?;
+            let t = stencil_field_wgsl(then_e, field, ctx)?;
+            let e = stencil_field_wgsl(else_e, field, ctx)?;
+            Ok(format!("select({e}, {t}, {cond})"))
+        }
+        _ => Err(WgslError::UnsupportedBody(
+            "a stencil GPU kernel must return a struct literal or an `if`/`else` over struct \
+             literals"
+                .to_string(),
+        )),
+    }
+}
+
+/// Lower one stencil body expression. The scalar sources are neighbour reads
+/// `buf[j].field` (→ `<group>_in[<j>]{.field}`), the index parameter (→ the
+/// thread index), scalar uniforms (→ `<name>_u[0]`), and `buf.len()`
+/// (→ `i32(arrayLength(&<first>_in))`). Arithmetic / comparison / value `if` /
+/// helper calls reuse the shared lowering ([`lower_call`], [`if_branches`]) — an
+/// index expression like `i - 1` lowers to i32 (the index param is `i32`), while
+/// a value read like `buf[j].a` is `f32`; WGSL types each from the AST context.
+fn lower_stencil_expr(expr: &Expr, ctx: &StencilCtx) -> Result<String, WgslError> {
+    match &expr.kind {
+        // Neighbour read: `buf[j].field` → `<group_of_field>_in[<j>]{.field}`.
+        ExprKind::FieldAccess { object, field } => {
+            if let ExprKind::Index {
+                object: base,
+                index,
+            } = &object.kind
+            {
+                if matches!(&base.kind, ExprKind::Identifier(b) if b == ctx.buf) {
+                    let g = ctx
+                        .groups
+                        .iter()
+                        .find(|g| g.fields.iter().any(|gf| gf == field))
+                        .ok_or_else(|| {
+                            WgslError::UnsupportedBody(format!(
+                                "field `{field}` is not a layout group of the GPU stencil buffer"
+                            ))
+                        })?;
+                    let j = lower_stencil_expr(index, ctx)?;
+                    return Ok(if g.is_multi() {
+                        format!("{}_in[{j}].{field}", g.name)
+                    } else {
+                        format!("{}_in[{j}]", g.name)
+                    });
+                }
+            }
+            Err(WgslError::UnsupportedBody(
+                "only neighbour reads `buf[index].field` are supported in a stencil GPU kernel body"
+                    .to_string(),
+            ))
+        }
+        // `buf.len()` → element count as i32.
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } if method == "len"
+            && args.is_empty()
+            && matches!(&object.kind, ExprKind::Identifier(b) if b == ctx.buf) =>
+        {
+            Ok(format!("i32(arrayLength(&{}_in))", ctx.first_group))
+        }
+        // The index parameter → the thread index (the `i32(gid.x)` local).
+        ExprKind::Identifier(name) if name == ctx.idx => Ok(ctx.idx.to_string()),
+        // A scalar uniform parameter → its 1-element storage buffer.
+        ExprKind::Identifier(name) if ctx.uniforms.contains(name) => Ok(format!("{name}_u[0]")),
+        ExprKind::Integer(n, _) => Ok(n.to_string()),
+        ExprKind::Float(f, _) => lower_float(*f),
+        ExprKind::Binary { op, left, right } => {
+            let op_str = binop_str(op)?;
+            let l = lower_stencil_expr(left, ctx)?;
+            let r = lower_stencil_expr(right, ctx)?;
+            Ok(format!("({l} {op_str} {r})"))
+        }
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => Ok(format!("-({})", lower_stencil_expr(operand, ctx)?)),
+        // Post-lowering operator methods (`i - 1` → `i64.sub(i, 1)`) and helper calls.
+        ExprKind::Call { callee, args } => {
+            lower_call(callee, args, &|e| lower_stencil_expr(e, ctx), ctx.helpers)
+        }
+        // Value `if c { a } else { b }` → WGSL `select(b, a, c)`.
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            let (then_e, else_e) = if_branches(then_block, else_branch)?;
+            let cond = lower_stencil_expr(condition, ctx)?;
+            let t = lower_stencil_expr(then_e, ctx)?;
+            let e = lower_stencil_expr(else_e, ctx)?;
+            Ok(format!("select({e}, {t}, {cond})"))
+        }
+        ExprKind::Identifier(name) => Err(WgslError::UnsupportedBody(format!(
+            "identifier `{name}` — a stencil GPU kernel body reads `buf[index].field`, the index, \
+             a uniform, or `buf.len()`"
+        ))),
+        _ => Err(WgslError::UnsupportedBody(
+            "unsupported expression in a stencil GPU kernel body (neighbour reads, the index, \
+             numeric literals, `+ - * / %`, unary `-`, comparisons, value `if`/`else`, \
+             `buf.len()`, helper calls)"
+                .to_string(),
+        )),
+    }
 }
 
 /// Lower the kernel's struct-valued return into one output store per group: a
@@ -1376,5 +1705,53 @@ mod tests {
             wgsl.contains("gb_out[i] = select(x_b, x_b, (x_b > 0.0));"),
             "{wgsl}"
         );
+    }
+
+    #[test]
+    fn emits_stencil_neighbour_read() {
+        // GPU-LBM-6: a stencil kernel's first parameter is the whole `Vec[S]`
+        // buffer plus an index — the body reads a neighbour `g[i + 1].a`, bounded
+        // by `g.len()`. No per-element materialize; the index maps to `i32(gid.x)`,
+        // and neighbour reads index the input buffer directly.
+        let func = parse_kernel(
+            "#[gpu]\nfn shift_up(g: Vec[Cell], i: i64) -> Cell { Cell { a: if i < g.len() - 1 { g[i + 1].a } else { g[i].a } } }\n",
+        );
+        let groups = vec![SoaGpuGroup {
+            name: "ga".into(),
+            fields: vec!["a".into()],
+        }];
+        let wgsl = emit_kernel_soa(&func, &groups, &[]).expect("stencil kernel should lower");
+        // Bindings unchanged — the whole input is bound read-only.
+        assert!(
+            wgsl.contains("@group(0) @binding(0) var<storage, read> ga_in: array<f32>;"),
+            "{wgsl}"
+        );
+        // The index parameter becomes the signed thread index; the guard/output
+        // key off the unsigned `gi`.
+        assert!(wgsl.contains("let gi = gid.x;"), "{wgsl}");
+        assert!(wgsl.contains("let i = i32(gi);"), "{wgsl}");
+        // No per-element materialize (a stencil indexes the buffer directly).
+        assert!(!wgsl.contains("let g_a ="), "{wgsl}");
+        // Neighbour read + bounds via `.len()` → `arrayLength`, stored at `gi`.
+        assert!(
+            wgsl.contains(
+                "ga_out[gi] = select(ga_in[i], ga_in[(i + 1)], (i < (i32(arrayLength(&ga_in)) - 1)));"
+            ),
+            "{wgsl}"
+        );
+    }
+
+    #[test]
+    fn stencil_rejects_whole_buffer_value() {
+        // Reading the buffer as a value (not `buf[index].field`) is rejected —
+        // a stencil body addresses individual neighbours, never the whole buffer.
+        let func =
+            parse_kernel("#[gpu]\nfn bad(g: Vec[Cell], i: i64) -> Cell { Cell { a: g.a } }\n");
+        let groups = vec![SoaGpuGroup {
+            name: "ga".into(),
+            fields: vec!["a".into()],
+        }];
+        let err = emit_kernel_soa(&func, &groups, &[]).unwrap_err();
+        assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
     }
 }

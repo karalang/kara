@@ -113,8 +113,25 @@ impl<'a> super::TypeChecker<'a> {
     /// the let-statement walk.
     pub(super) fn check_gpu_safe_signature(&mut self, f: &Function, generic_scope: &[String]) {
         // Parameters.
-        for param in &f.params {
+        for (idx, param) in f.params.iter().enumerate() {
             let ty = self.lower_type_expr(&param.ty, generic_scope);
+            // GPU-LBM-6 stencil form: the *first* parameter may be a whole
+            // `Vec[S]` buffer — the kernel reads neighbours `buf[j].field`. On
+            // the GPU this maps to the bound storage buffers, not the host heap,
+            // so a `Vec[S]` here is GPU-safe iff its element `S` is. Check the
+            // element (an ordinary struct-of-primitives), not the `Vec` wrapper.
+            // (An element-wise kernel's first parameter is the struct `S` itself,
+            // never a `Vec`, so this never masks a real violation there.)
+            if idx == 0 {
+                if let Type::Named { name, args } = &ty {
+                    if name == "Vec" && args.len() == 1 {
+                        if let Some(bad) = self.gpu_unsafe_reason(&args[0]) {
+                            self.emit_gpu_not_safe(&bad, param.ty.span.clone(), "parameter");
+                        }
+                        continue;
+                    }
+                }
+            }
             if let Some(bad) = self.gpu_unsafe_reason(&ty) {
                 self.emit_gpu_not_safe(&bad, param.ty.span.clone(), "parameter");
             }

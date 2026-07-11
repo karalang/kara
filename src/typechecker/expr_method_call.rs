@@ -5956,6 +5956,20 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             }
         }
+        // The element type name of a `Vec[S]` — a stencil kernel's whole-buffer
+        // parameter (GPU-LBM-6). `None` for any non-`Vec` / non-plain-element type.
+        fn te_vec_elem(ty: &TypeExpr) -> Option<&str> {
+            let TypeKind::Path(p) = &ty.kind else {
+                return None;
+            };
+            if p.segments.len() != 1 || p.segments[0] != "Vec" {
+                return None;
+            }
+            match p.generic_args.as_deref() {
+                Some([GenericArg::Type(elem)]) => te_name(elem),
+                _ => None,
+            }
+        }
         let result_vec = Type::Named {
             name: "Vec".to_string(),
             args: vec![struct_ty.clone()],
@@ -6047,21 +6061,38 @@ impl<'a> super::TypeChecker<'a> {
             );
             return result_vec;
         };
-        // First param is the struct `S`; any further params are scalar `f32`
-        // uniforms (GPU-LBM-2).
-        let n_uniform_params = kernel.params.len().saturating_sub(1);
-        let param_ok = !kernel.params.is_empty()
-            && kernel.params.first().and_then(|p| te_name(&p.ty)) == Some(struct_name)
-            && kernel.params[1..]
-                .iter()
-                .all(|p| te_name(&p.ty) == Some("f32"));
+        // Two kernel shapes over a struct buffer:
+        //  • element-wise — `fn k(x: S, ...uniforms) -> S`: first param is the
+        //    element `S`; uniforms follow (GPU-LBM-2).
+        //  • stencil (GPU-LBM-6) — `fn k(buf: Vec[S], i: <int>, ...uniforms) -> S`:
+        //    first param is the whole buffer, second an integer index the thread
+        //    fills; the body reads neighbours `buf[j].field`. Uniforms follow.
+        let first_is_elem = kernel.params.first().and_then(|p| te_name(&p.ty)) == Some(struct_name);
+        let is_stencil = !first_is_elem
+            && kernel.params.first().and_then(|p| te_vec_elem(&p.ty)) == Some(struct_name);
+        let uniform_start = if is_stencil { 2 } else { 1 };
+        let n_uniform_params = kernel.params.len().saturating_sub(uniform_start);
+        // A stencil's index parameter must be an integer.
+        let index_ok = !is_stencil
+            || matches!(
+                kernel.params.get(1).and_then(|p| te_name(&p.ty)),
+                Some("i64" | "i32" | "u64" | "u32" | "usize" | "isize")
+            );
+        let shape_ok = first_is_elem || is_stencil;
+        let uniforms_ok = kernel
+            .params
+            .get(uniform_start..)
+            .unwrap_or(&[])
+            .iter()
+            .all(|p| te_name(&p.ty) == Some("f32"));
         let ret_ok = kernel.return_type.as_ref().and_then(te_name) == Some(struct_name);
-        if !param_ok || !ret_ok {
+        if !shape_ok || !index_ok || !uniforms_ok || !ret_ok {
             self.type_error(
                 format!(
-                    "error[E_GPU_DISPATCH_KERNEL]: kernel `{kernel_name}` must map \
-                     `{struct_name} -> {struct_name}` (with any extra params `f32` uniforms) \
-                     for a struct buffer"
+                    "error[E_GPU_DISPATCH_KERNEL]: kernel `{kernel_name}` must be either \
+                     `{struct_name} -> {struct_name}` (element-wise) or \
+                     `Vec[{struct_name}], <int index> -> {struct_name}` (stencil), with any extra \
+                     params `f32` uniforms"
                 ),
                 args[0].value.span.clone(),
                 TypeErrorKind::TypeMismatch,
