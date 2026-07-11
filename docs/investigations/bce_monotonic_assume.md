@@ -108,3 +108,55 @@ issue, plus measurement noise). Regression-guarded by
 `tests/codegen.rs::{test_ir_binsearch_midpoint_emits_assumes,
 test_ir_non_midpoint_binding_no_binsearch_assume,
 test_e2e_binsearch_midpoint_assume_is_sound}`. Bug ledger: `B-2026-06-16-1`.
+
+## Two-pointer idiom — the sliding-window extension (OPEN, kata #76)
+
+**Surfaced by kata #76** (minimum-window-substring), the M5 re-bench. The
+canonical two-pointer sliding window
+
+```kara
+while r < n {
+    let cr = s[r]; have[cr] = have[cr] + 1; …
+    while formed == required {          // shrink
+        let cl = s[l]; have[cl] = have[cl] - 1; …
+        l = l + 1
+    }
+    r = r + 1
+}
+```
+
+is the same *conditionally-updated monotone* class as the surviving `nums[k]` /
+`nums1[i]` checks in the Diagnostic table above — now the whole hot loop rather
+than one tail access. `l` (the window-left pointer) is incremented **only inside**
+the conditional `while formed == required` shrink loop, so its phi is not an
+AddRec and is self-referential: SCEV gives up, LVI widens to overdefined, and
+LLVM cannot derive the **relational** invariant `l ≤ r < n` on any pass ordering.
+So the `s[l]` bounds check survives. (`s[r]`, with `r` unconditionally `++`'d,
+*may* also survive if the `let n = s.len()` capture blocks the `AddRec == len`
+proof — to be confirmed on the IR.) The count-table indexes `have[cr]` / `need[cr]`
+are **value**-indexed (`cr = s[r]` is in the 4-symbol alphabet `{0,1,2,3}` but
+typed as unconstrained `i64`), so they are bounds-checked in **both** kāra and
+Rust and are *not* the differentiator — a value-range narrowing is a separate,
+secondary opportunity.
+
+**Evidence (not yet IR-confirmed).** kāra is the **slowest of five** compiled
+mirrors on the M5 seq lane (go 265 < c 283 < rust 286 < rust_ovf 312 < **kāra
+351 ms**): **1.24× behind C**, **1.12× behind equal-safety `rustc -C
+overflow-checks=on`** (both overflow-checked, so a pure non-overflow codegen
+gap). Instruction counts (`/usr/bin/time -l`, warm): kāra **12.457 B** vs C
+7.576 B (1.64×) vs rust_ovf 11.141 B (1.12×); IPC kāra 8.00 is the *highest* of
+the three, so the gap is instruction **count** (surviving checks), not
+pipelining. Binary/RSS/compile are all at C parity — the gap is purely the hot
+loop.
+
+**Fix direction (unimplemented).** Extend the relational-assume machinery in
+`src/codegen/control_flow_bce.rs` (the `binsearch_guard_pair` /
+`try_emit_binsearch_midpoint_assumes` path that landed the midpoint pair) to the
+two-pointer shrink idiom: for a variable `l` conditionally incremented under a
+guard inside a loop dominated by `l ≤ r` and `r < n`, emit `assume(l < n)`
+(and/or `assume(l ≤ r)`) at the `s[l]` use — gated on emission and soundness-
+checked identically (AOT overflow trapping makes the no-wrap precondition hold on
+every defined execution). **Confirmation first:** `otool`/`opt`-dump `min_window`'s
+post-inline IR (methodology in § Diagnostic), enumerate which of `s[r]` / `s[l]`
+/ `have[]` / `need[]` checks survive `default<O2>`, and verify injected assumes
+fold them (Experiment A/B style) before coding. Bug ledger: `B-2026-07-10-5`.
