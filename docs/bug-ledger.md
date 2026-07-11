@@ -453,7 +453,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **355 surfaced 
 | B-2026-07-11-5 | codegen | high | Matching a `ref`-scrutinee enum and using a non-i64-word payload (String / bool / narrow int / float) miscompiles: the via-ptr fast path binds the le… | this commit |
 | B-2026-07-11-6 | codegen | high | A `Vec[struct]` bound as an enum payload loses its element TypeExpr, so `for e in entries { e.field }` binds the element without a struct type and th… | this commit |
 | B-2026-07-11-7 | codegen | high | `?` on a `Result[<concrete user enum>, E]` truncates the multi-word Ok payload to its first word: `let v = pv()?` where `pv() -> Result[Json, String]… | this commit |
-| B-2026-07-11-9 | ergonomics | low | Two low-severity ergonomics gaps surfaced by the JSON dogfood | 687df6c |
+| B-2026-07-11-9 | ergonomics | low | RC-fallback false-positive on a loop accumulator moved out via an early `return`: an accumulator built in a loop and returned from a branch inside th… | 687df6c |
 | B-2026-07-11-10 | typechecker | low | Pushing an empty `Vec.new()` into a `Vec[Vec[i64]]` does not infer the inner element type from the receiver/method signature — `out.push(Vec.new())`… | this commit |
 
 </details>

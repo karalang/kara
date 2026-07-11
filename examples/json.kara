@@ -20,9 +20,8 @@
 // payload under a `ref` match (B-2026-07-11-5), a Vec[struct] enum-payload
 // element-type loss (B-2026-07-11-6), and — the one that had blocked native
 // build — `?` on `Result[<concrete user enum>]` truncating the multi-word Ok
-// payload (B-2026-07-11-7). It also surfaced an ergonomics gap
-// (B-2026-07-11-9: no `Iterator.collect()`). The kernel round-trips
-// byte-identical via both the interpreter and a native binary.
+// payload (B-2026-07-11-7). The kernel round-trips byte-identical via both the
+// interpreter and a native binary.
 
 // A JSON value. Recursion (Arr/Obj) is carried through Vec, so this is an
 // ordinary owned enum — no reference-counting.
@@ -44,18 +43,10 @@ struct Entry {
 
 // ---- parser -----------------------------------------------------------------
 
-// Materialize a String's chars into an indexable Vec. `String.chars()` yields an
-// `Iterator[char]` (no `.len()`, no `[i]`), so a random-access cursor needs this
-// one-shot snapshot — the ergonomic seam a `collect()` / `to_vec()` would close.
-fn to_chars(s: String) -> Vec[char] {
-    let mut v: Vec[char] = Vec.new();
-    for c in s.chars() {
-        v.push(c);
-    }
-    v
-}
+// A cursor over the input's chars. `pos` is the next index to read. `chars()`
+// yields an `Iterator[char]`; `.collect()` materializes it into the indexable
+// `Vec[char]` the cursor random-accesses.
 
-// A cursor over the input's chars. `pos` is the next index to read.
 struct Parser {
     cs: Vec[char],
     pos: i64,
@@ -94,7 +85,7 @@ impl Parser {
 
     // Match a fixed keyword at the cursor; consume it and return true on a hit.
     fn match_word(mut ref self, w: String) -> bool {
-        let wc = to_chars(w);
+        let wc: Vec[char] = w.chars().collect();
         let mut i = 0;
         while i < wc.len() {
             if self.pos + i >= self.cs.len() {
@@ -265,7 +256,8 @@ impl Parser {
 
 // Parse a whole input; reject trailing junk.
 fn parse(input: String) -> Result[Json, String] {
-    let mut p = Parser { cs: to_chars(input), pos: 0 };
+    let cs: Vec[char] = input.chars().collect();
+    let mut p = Parser { cs: cs, pos: 0 };
     let v = p.parse_value()?;
     p.skip_ws();
     if not p.at_end() {
