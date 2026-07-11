@@ -6305,16 +6305,13 @@ impl<'ctx> super::Codegen<'ctx> {
     fn peel_fused_map_filter_chain(recv: &Expr) -> Option<(&Expr, Vec<(bool, String, Expr)>)> {
         let mut steps: Vec<(bool, String, Expr)> = Vec::new();
         let mut base = recv;
-        loop {
-            let ExprKind::MethodCall {
-                object,
-                method,
-                args,
-                ..
-            } = &base.kind
-            else {
-                break;
-            };
+        while let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &base.kind
+        {
             let is_filter = method == "filter";
             if (method != "map" && !is_filter) || args.len() != 1 {
                 break;
