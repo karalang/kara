@@ -20,6 +20,28 @@ use inkwell::IntPredicate;
 use super::state::VarSlot;
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// Tear down the per-call-site registry entries a hoisted synthetic
+    /// container / element binding installed (`variables` + every collection
+    /// side-table `register_var_from_type_expr` may have populated). The LLVM
+    /// IR is already emitted by the time this runs; this is bookkeeping cleanup
+    /// so later compilations in the same function don't see stale synth names.
+    /// Shared by the MR indexed-receiver path and the `lower_field_access_ptr`
+    /// field-container / indexed-container hoists.
+    pub(super) fn unregister_synth_container(&mut self, name: &str) {
+        self.variables.remove(name);
+        self.vec_elem_types.remove(name);
+        self.slice_elem_types.remove(name);
+        self.var_elem_type_exprs.remove(name);
+        self.var_type_names.remove(name);
+        self.map_key_types.remove(name);
+        self.map_val_types.remove(name);
+        self.map_key_type_names.remove(name);
+        self.map_key_type_exprs.remove(name);
+        self.set_elem_types.remove(name);
+        self.set_elem_type_names.remove(name);
+        self.set_elem_type_exprs.remove(name);
+    }
+
     /// Slice MR helper: lower an indexed-receiver method call
     /// `obj[i].method(args)`. Computes the element pointer through the outer
     /// container's index machinery, synthesizes an identifier name pointing
@@ -350,8 +372,51 @@ impl<'ctx> super::Codegen<'ctx> {
                          bind the intermediate element first ({ctx})"
                     ));
                 }
+                // The indexed container is normally a named Vec/Slice/Array
+                // variable. A FieldAccess container (`o.inners[i].xs.method()` /
+                // `self.rows[i].cols…`) is hoisted to a synth Vec identifier
+                // first — resolve the field to its storage pointer + declared
+                // element registries, register a synth, and index that. This is
+                // the field-of-a-ref-struct nested-receiver shape B-2026-07-11-11
+                // (`o.inners[0].xs.push(v)`); mirrors the sibling B-2026-07-09-1
+                // hoist in `compile_indexed_receiver_method`. `self` normalises
+                // to the "self" binding the per-var registries key on.
+                let mut hoisted_idx_container: Option<String> = None;
                 let outer_name = match &container.kind {
                     ExprKind::Identifier(n) => n.clone(),
+                    ExprKind::FieldAccess {
+                        object: fobj,
+                        field: ffield,
+                    } => {
+                        let self_ident;
+                        let fobj: &Expr = if matches!(fobj.kind, ExprKind::SelfValue) {
+                            self_ident = Expr {
+                                kind: ExprKind::Identifier("self".to_string()),
+                                span: fobj.span.clone(),
+                            };
+                            &self_ident
+                        } else {
+                            fobj
+                        };
+                        match self.lower_field_access_ptr(fobj, ffield, ctx)? {
+                            Some((field_ptr, field_ll_ty, field_te)) => {
+                                let synth =
+                                    format!("__idx_field_container_{}", self.indexed_elem_counter);
+                                self.indexed_elem_counter += 1;
+                                self.variables.insert(
+                                    synth.clone(),
+                                    VarSlot {
+                                        ptr: field_ptr,
+                                        ty: field_ll_ty,
+                                    },
+                                );
+                                self.register_var_from_type_expr(&synth, &field_te);
+                                hoisted_idx_container = Some(synth.clone());
+                                synth
+                            }
+                            None => return Ok(None),
+                        }
+                    }
                     _ => return Ok(None),
                 };
                 // Recover the element TypeExpr to learn the struct type
@@ -359,14 +424,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 // its element-TypeExpr was populated at binding time.
                 let elem_te = match self.var_elem_type_exprs.get(outer_name.as_str()).cloned() {
                     Some(te) => te,
-                    None => return Ok(None),
+                    None => {
+                        if let Some(c) = &hoisted_idx_container {
+                            self.unregister_synth_container(c);
+                        }
+                        return Ok(None);
+                    }
                 };
                 let elem_type_name = match &elem_te.kind {
                     TypeKind::Path(p) => match p.segments.first() {
                         Some(s) => s.clone(),
-                        None => return Ok(None),
+                        None => {
+                            if let Some(c) = &hoisted_idx_container {
+                                self.unregister_synth_container(c);
+                            }
+                            return Ok(None);
+                        }
                     },
-                    _ => return Ok(None),
+                    _ => {
+                        if let Some(c) = &hoisted_idx_container {
+                            self.unregister_synth_container(c);
+                        }
+                        return Ok(None);
+                    }
                 };
                 // Lower the inner `container[index]` to an element pointer
                 // via the same per-container helper the MR-slice
@@ -391,6 +471,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let BasicTypeEnum::ArrayType(_) = slot.ty {
                             self.lower_indexed_elem_ptr_array(slot, index)?
                         } else {
+                            if let Some(c) = &hoisted_idx_container {
+                                self.unregister_synth_container(c);
+                            }
                             return Ok(None);
                         }
                     };
@@ -408,6 +491,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     elem_ptr
                 };
+                // The synth container is no longer referenced past the
+                // element-pointer computation; tear it down before the field
+                // GEP so no stale registry entry survives (the GEP'd pointers
+                // are already-emitted IR and stay valid).
+                if let Some(c) = &hoisted_idx_container {
+                    self.unregister_synth_container(c);
+                }
                 (elem_type_name, recv_ptr, is_shared)
             }
             _ => return Ok(None),

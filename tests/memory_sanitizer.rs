@@ -3665,6 +3665,45 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_nested_receiver_push_string_field_no_leak() {
+        // B-2026-07-11-11: `.push()` on a nested place-expression receiver
+        // (`g.rows[i].cells.push(s)` — index-then-field) now resolves the
+        // receiver pointer through the place chain instead of failing codegen.
+        // The pushed String buffers are owned by the innermost Vec, itself
+        // owned by the row, itself owned by the grid — dropped exactly once at
+        // scope exit. ASAN/LSan guards no leak (every buffer reclaimed) and no
+        // double-free (the aliasing field pointer does not mint a second owner).
+        assert_clean_asan_run(
+            r#"
+struct Row { cells: Vec[String] }
+struct Grid { rows: Vec[Row] }
+fn main() {
+    let mut g = Grid { rows: Vec.new() };
+    let mut r = 0i64;
+    while r < 8i64 {
+        g.rows.push(Row { cells: Vec.new() });
+        let mut c = 0i64;
+        while c < 4i64 {
+            g.rows[r].cells.push("cell".to_string());
+            c = c + 1i64;
+        }
+        r = r + 1i64;
+    }
+    let mut total = 0i64;
+    let mut i = 0i64;
+    while i < 8i64 {
+        total = total + g.rows[i].cells.len();
+        i = i + 1i64;
+    }
+    println(total);
+}
+"#,
+            &["32"],
+            "nested_receiver_push_string_field",
+        );
+    }
+
     // ── Direct recursive shared enum (RC tree) ────────────────────
     //
     // `shared enum Expr { Num(i64), Add(Expr, Expr) }` builds an RC tree whose

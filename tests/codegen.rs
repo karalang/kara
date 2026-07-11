@@ -22460,6 +22460,70 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_nested_receiver_push_index_then_field() {
+        // B-2026-07-11-11: a method on a NESTED place-expression receiver
+        // (`o.inners[i].xs.push(v)` — a field of an INDEXED element of a field)
+        // fell through method dispatch with "no handler for method push on
+        // non-identifier receiver". `lower_field_access_ptr`'s Index arm now
+        // hoists a FieldAccess container (`o.inners`) to a synth Vec identifier
+        // before indexing, so the receiver pointer resolves through the whole
+        // place chain (the sibling of the B-2026-07-09-1 hoist). Covers a
+        // `mut ref self` root, multi-push, and read-back through the same chain.
+        let out = run_program(
+            r#"
+struct Inner { xs: Vec[i64] }
+struct Outer { inners: Vec[Inner] }
+impl Outer {
+    fn seed(mut ref self) {
+        self.inners[0].xs.push(10);
+        self.inners[0].xs.push(20);
+        self.inners[1].xs.push(30);
+    }
+}
+fn main() {
+    let mut o = Outer { inners: Vec.new() };
+    o.inners.push(Inner { xs: Vec.new() });
+    o.inners.push(Inner { xs: Vec.new() });
+    o.seed();
+    println(o.inners[0].xs.len());
+    println(o.inners[0].xs[1]);
+    println(o.inners[1].xs[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["2", "20", "30"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_nested_receiver_push_shared_struct_element() {
+        // B-2026-07-11-11 sibling: the indexed element is a `shared struct`, so
+        // the element slot holds an RC handle that must be loaded before the
+        // field GEP. The push must persist through the heap GEP so a later read
+        // sees it.
+        let out = run_program(
+            r#"
+shared struct Node { mut kids: Vec[i64] }
+struct Tree { nodes: Vec[Node] }
+fn main() {
+    let mut t = Tree { nodes: Vec.new() };
+    t.nodes.push(Node { kids: Vec.new() });
+    t.nodes[0].kids.push(7);
+    t.nodes[0].kids.push(8);
+    println(t.nodes[0].kids.len());
+    println(t.nodes[0].kids[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["2", "8"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_for_self_field_vec_iter_in_impl_method() {
         // Silent-miscompile gate: `for s in self.items.iter()` inside an
         // impl method iterated ZERO times in codegen while the interpreter
