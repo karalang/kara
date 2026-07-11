@@ -10666,9 +10666,12 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         for g in &soa.groups {
             if g.fields.len() != 1 {
+                // The emitter handles multi-field groups (GPU-LBM-3), but the
+                // runtime interleave is still single-field-per-group (Path A) —
+                // guard until GPU-LBM-3b adds the multi-field descriptor.
                 return Err(format!(
-                    "gpu.dispatch: layout group `{}` has {} fields — CG-4 requires one field \
-                     per group (Path A)",
+                    "gpu.dispatch: layout group `{}` has {} fields — multi-field groups are \
+                     pending GPU-LBM-3b (runtime interleave); one field per group for now",
                     g.name,
                     g.fields.len()
                 ));
@@ -10698,12 +10701,12 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Group manifest (binding order == group order); emit the multi-buffer
         // WGSL. All fields are f32 (typechecker-enforced for the struct path).
-        let manifest: Vec<crate::gpu_wgsl::SoaGroupField> = soa
+        let manifest: Vec<crate::gpu_wgsl::SoaGpuGroup> = soa
             .groups
             .iter()
-            .map(|g| crate::gpu_wgsl::SoaGroupField {
-                field: g.fields[0].clone(),
-                scalar: "f32".to_string(),
+            .map(|g| crate::gpu_wgsl::SoaGpuGroup {
+                name: g.name.clone(),
+                fields: g.fields.clone(),
             })
             .collect();
         let wgsl = crate::gpu_wgsl::emit_kernel_soa(kernel, &manifest).map_err(|e| {

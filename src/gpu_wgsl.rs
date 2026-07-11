@@ -265,25 +265,46 @@ fn lower_float(f: f64) -> Result<String, WgslError> {
 
 // ── CG-4: struct-SoA multi-buffer emitter ───────────────────────────────────
 
-/// One layout group in GPU-binding order for the SoA emitter (Path A: one field
-/// per group). `field` is the struct field the group carries; `scalar` is its
-/// WGSL scalar spelling (`f32` for the CG-4 gate). Plain data built by codegen
-/// from the `SoaLayout` — keeps this emitter free of any codegen/inkwell type.
+/// One layout group in GPU-binding order for the SoA emitter. `name` is the
+/// group name (→ its WGSL sub-struct name / binding prefix); `fields` are the
+/// struct fields the group carries (all `f32`), in sub-struct order. A
+/// single-field group binds a plain `array<f32>`; a multi-field group binds a
+/// WGSL `struct` `array` over the coalesced sub-struct (GPU-LBM-3). Plain data
+/// built by codegen from the `SoaLayout` — keeps this emitter free of any
+/// codegen/inkwell type.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SoaGroupField {
-    pub field: String,
-    pub scalar: String,
+pub struct SoaGpuGroup {
+    pub name: String,
+    pub fields: Vec<String>,
 }
 
-/// Emit the WGSL compute shader for a CG-4 struct-SoA `#[gpu]` kernel
-/// `fn k(p: S) -> S` dispatched over a `layout`-blocked `Vec[S]`. `groups` lists
-/// the per-group fields in binding order. The shader binds `groups.len()` input
-/// buffers at `@binding(0..n)` and the same number of output buffers at
-/// `@binding(n..2n)` (the runtime `karac_runtime_gpu_map_multi` convention).
-/// Each `<param>.<field>` in the body reads the group's materialized input
-/// element; the returned struct literal `S { field: expr, … }` stores each
-/// field's value into its group's output buffer.
-pub fn emit_kernel_soa(func: &Function, groups: &[SoaGroupField]) -> Result<String, WgslError> {
+impl SoaGpuGroup {
+    fn is_multi(&self) -> bool {
+        self.fields.len() > 1
+    }
+    /// WGSL sub-struct type name for a multi-field group (`G_`-prefixed so it
+    /// cannot collide with a user type).
+    fn wgsl_struct(&self) -> String {
+        format!("G_{}", self.name)
+    }
+    /// The WGSL element type of this group's `array` binding.
+    fn elem_ty(&self) -> String {
+        if self.is_multi() {
+            self.wgsl_struct()
+        } else {
+            "f32".to_string()
+        }
+    }
+}
+
+/// Emit the WGSL compute shader for a struct-SoA `#[gpu]` kernel `fn k(p: S) -> S`
+/// dispatched over a `layout`-blocked `Vec[S]`. `groups` lists the layout groups
+/// in binding order. Each group binds one input buffer at `@binding(0..n)` and one
+/// output at `@binding(n..2n)`: a single-field group is a plain `array<f32>`; a
+/// multi-field group is `array<G_<name>>` over an emitted WGSL sub-struct
+/// (GPU-LBM-3 coalesced group). `<param>.<field>` reads the group's materialized
+/// element; the returned struct literal stores each field into its group's output.
+pub fn emit_kernel_soa(func: &Function, groups: &[SoaGpuGroup]) -> Result<String, WgslError> {
     let param = kernel_param(func)?;
     let param_name = param.name().ok_or_else(|| {
         WgslError::UnsupportedSignature(
@@ -295,58 +316,88 @@ pub fn emit_kernel_soa(func: &Function, groups: &[SoaGroupField]) -> Result<Stri
             "a struct GPU kernel needs at least one layout group".to_string(),
         ));
     }
+    for g in groups {
+        if g.fields.is_empty() {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "layout group `{}` has no fields",
+                g.name
+            )));
+        }
+    }
     let n = groups.len();
 
-    // Bindings: inputs at 0..n, outputs at n..2n.
+    // WGSL sub-struct definitions for multi-field groups (before the bindings).
+    let mut structs = String::new();
+    for g in groups {
+        if g.is_multi() {
+            let members = g
+                .fields
+                .iter()
+                .map(|f| format!("{f}: f32"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            structs.push_str(&format!("struct {} {{ {members} }};\n", g.wgsl_struct()));
+        }
+    }
+
+    // Bindings: inputs at 0..n, outputs at n..2n. `<group>_in` / `<group>_out`.
     let mut decls = String::new();
     for (i, g) in groups.iter().enumerate() {
         decls.push_str(&format!(
             "@group(0) @binding({i}) var<storage, read> {}_in: array<{}>;\n",
-            g.field, g.scalar
+            g.name,
+            g.elem_ty()
         ));
     }
     for (i, g) in groups.iter().enumerate() {
         decls.push_str(&format!(
             "@group(0) @binding({}) var<storage, read_write> {}_out: array<{}>;\n",
             n + i,
-            g.field,
-            g.scalar
+            g.name,
+            g.elem_ty()
         ));
     }
 
-    // Materialize each group's element once: `let p_<field> = <field>_in[i];`.
+    // Materialize each field once: `let <p>_<field> = <group>_in[i]{.field}?;`.
     let mut materialize = String::new();
     for g in groups {
-        materialize.push_str(&format!(
-            "    let {param_name}_{f} = {f}_in[i];\n",
-            f = g.field
-        ));
+        for f in &g.fields {
+            if g.is_multi() {
+                materialize.push_str(&format!(
+                    "    let {param_name}_{f} = {}_in[i].{f};\n",
+                    g.name
+                ));
+            } else {
+                materialize.push_str(&format!("    let {param_name}_{f} = {}_in[i];\n", g.name));
+            }
+        }
     }
 
-    // The body is a struct literal; each field's expr becomes an output store.
+    // The body is a struct literal; store each group's fields to its output.
     let body = kernel_return_expr(func)?;
     let stores = lower_struct_return(body, param_name, groups)?;
 
-    // The arrayLength guard keys off the first input buffer (all equal length).
-    let guard_field = &groups[0].field;
+    // arrayLength guard keys off the first input buffer (all equal length).
+    let guard_group = &groups[0].name;
 
     Ok(format!(
-        "{decls}\n\
+        "{structs}{decls}\n\
          @compute @workgroup_size({WORKGROUP_SIZE})\n\
          fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let i = gid.x;\n\
-         \x20   if (i >= arrayLength(&{guard_field}_in)) {{ return; }}\n\
+         \x20   if (i >= arrayLength(&{guard_group}_in)) {{ return; }}\n\
          {materialize}{stores}\
          }}\n"
     ))
 }
 
-/// Lower the kernel's returned struct literal `S { field: expr, … }` into one
-/// `<field>_out[i] = <expr>;` store per group, in group (binding) order.
+/// Lower the returned struct literal into one output store per group: a
+/// single-field group stores its field's value; a multi-field group stores a
+/// `G_<name>(...)` constructor over its fields (in sub-struct order).
 fn lower_struct_return(
     expr: &Expr,
     param_name: &str,
-    groups: &[SoaGroupField],
+    groups: &[SoaGpuGroup],
 ) -> Result<String, WgslError> {
     let ExprKind::StructLiteral { fields, spread, .. } = &expr.kind else {
         return Err(WgslError::UnsupportedBody(
@@ -358,16 +409,33 @@ fn lower_struct_return(
             "struct-literal spread (`..`) is not supported in a GPU kernel".to_string(),
         ));
     }
+    let field_expr = |name: &str| -> Result<String, WgslError> {
+        let init = fields.iter().find(|f| f.name == name).ok_or_else(|| {
+            WgslError::UnsupportedBody(format!("the returned struct is missing field `{name}`"))
+        })?;
+        lower_soa_expr(&init.value, param_name, groups)
+    };
     let mut out = String::new();
     for g in groups {
-        let init = fields.iter().find(|f| f.name == g.field).ok_or_else(|| {
-            WgslError::UnsupportedBody(format!(
-                "the returned struct is missing field `{}`",
-                g.field
-            ))
-        })?;
-        let val = lower_soa_expr(&init.value, param_name, groups)?;
-        out.push_str(&format!("    {}_out[i] = {val};\n", g.field));
+        if g.is_multi() {
+            let vals = g
+                .fields
+                .iter()
+                .map(|f| field_expr(f))
+                .collect::<Result<Vec<_>, _>>()?;
+            out.push_str(&format!(
+                "    {}_out[i] = {}({});\n",
+                g.name,
+                g.wgsl_struct(),
+                vals.join(", ")
+            ));
+        } else {
+            out.push_str(&format!(
+                "    {}_out[i] = {};\n",
+                g.name,
+                field_expr(&g.fields[0])?
+            ));
+        }
     }
     Ok(out)
 }
@@ -379,13 +447,13 @@ fn lower_struct_return(
 fn lower_soa_expr(
     expr: &Expr,
     param_name: &str,
-    groups: &[SoaGroupField],
+    groups: &[SoaGpuGroup],
 ) -> Result<String, WgslError> {
     match &expr.kind {
         ExprKind::FieldAccess { object, field } => {
             if let ExprKind::Identifier(obj) = &object.kind {
                 if obj == param_name {
-                    if groups.iter().any(|g| &g.field == field) {
+                    if groups.iter().any(|g| g.fields.iter().any(|gf| gf == field)) {
                         return Ok(format!("{param_name}_{field}"));
                     }
                     return Err(WgslError::UnsupportedBody(format!(
@@ -629,15 +697,15 @@ mod tests {
 
     // ── CG-4 struct-SoA emitter ──────────────────────────────────
 
-    fn particle_groups() -> Vec<SoaGroupField> {
+    fn particle_groups() -> Vec<SoaGpuGroup> {
         vec![
-            SoaGroupField {
-                field: "pos".into(),
-                scalar: "f32".into(),
+            SoaGpuGroup {
+                name: "gp".into(),
+                fields: vec!["pos".into()],
             },
-            SoaGroupField {
-                field: "vel".into(),
-                scalar: "f32".into(),
+            SoaGpuGroup {
+                name: "gv".into(),
+                fields: vec!["vel".into()],
             },
         ]
     }
@@ -648,34 +716,70 @@ mod tests {
             "#[gpu]\nfn step(p: Particle) -> Particle { Particle { pos: p.pos + p.vel, vel: p.vel } }\n",
         );
         let wgsl = emit_kernel_soa(&func, &particle_groups()).expect("soa kernel should lower");
-        // One in + one out binding per group, inputs 0..n then outputs n..2n.
+        // Single-field groups bind plain `array<f32>`; inputs 0..n, outputs n..2n.
         assert!(
-            wgsl.contains("@group(0) @binding(0) var<storage, read> pos_in: array<f32>;"),
+            wgsl.contains("@group(0) @binding(0) var<storage, read> gp_in: array<f32>;"),
             "{wgsl}"
         );
         assert!(
-            wgsl.contains("@group(0) @binding(1) var<storage, read> vel_in: array<f32>;"),
+            wgsl.contains("@group(0) @binding(1) var<storage, read> gv_in: array<f32>;"),
             "{wgsl}"
         );
         assert!(
-            wgsl.contains("@group(0) @binding(2) var<storage, read_write> pos_out: array<f32>;"),
+            wgsl.contains("@group(0) @binding(2) var<storage, read_write> gp_out: array<f32>;"),
             "{wgsl}"
         );
         assert!(
-            wgsl.contains("@group(0) @binding(3) var<storage, read_write> vel_out: array<f32>;"),
+            wgsl.contains("@group(0) @binding(3) var<storage, read_write> gv_out: array<f32>;"),
             "{wgsl}"
         );
-        // Each field materialized once; guard keys off the first input.
-        assert!(wgsl.contains("let p_pos = pos_in[i];"), "{wgsl}");
-        assert!(wgsl.contains("let p_vel = vel_in[i];"), "{wgsl}");
+        assert!(wgsl.contains("let p_pos = gp_in[i];"), "{wgsl}");
+        assert!(wgsl.contains("let p_vel = gv_in[i];"), "{wgsl}");
         assert!(
-            wgsl.contains("if (i >= arrayLength(&pos_in)) { return; }"),
+            wgsl.contains("if (i >= arrayLength(&gp_in)) { return; }"),
             "{wgsl}"
         );
-        // Struct-construction return → per-field output stores; `p.field` reads
-        // lower to the materialized local.
-        assert!(wgsl.contains("pos_out[i] = (p_pos + p_vel);"), "{wgsl}");
-        assert!(wgsl.contains("vel_out[i] = p_vel;"), "{wgsl}");
+        assert!(wgsl.contains("gp_out[i] = (p_pos + p_vel);"), "{wgsl}");
+        assert!(wgsl.contains("gv_out[i] = p_vel;"), "{wgsl}");
+    }
+
+    #[test]
+    fn emits_soa_multi_field_group() {
+        // GPU-LBM-3: group `ab { a, b }` is a multi-field group → a WGSL sub-struct
+        // binding; group `cg { c }` stays a plain `array<f32>`.
+        let func = parse_kernel(
+            "#[gpu]\nfn upd(x: Cell) -> Cell { Cell { a: x.a + x.c, b: x.b, c: x.c } }\n",
+        );
+        let groups = vec![
+            SoaGpuGroup {
+                name: "ab".into(),
+                fields: vec!["a".into(), "b".into()],
+            },
+            SoaGpuGroup {
+                name: "cg".into(),
+                fields: vec!["c".into()],
+            },
+        ];
+        let wgsl = emit_kernel_soa(&func, &groups).unwrap();
+        assert!(wgsl.contains("struct G_ab { a: f32, b: f32 };"), "{wgsl}");
+        assert!(
+            wgsl.contains("@group(0) @binding(0) var<storage, read> ab_in: array<G_ab>;"),
+            "{wgsl}"
+        );
+        assert!(
+            wgsl.contains("@group(0) @binding(1) var<storage, read> cg_in: array<f32>;"),
+            "{wgsl}"
+        );
+        // Multi-field group → `.field` access; single-field → scalar.
+        assert!(wgsl.contains("let x_a = ab_in[i].a;"), "{wgsl}");
+        assert!(wgsl.contains("let x_b = ab_in[i].b;"), "{wgsl}");
+        assert!(wgsl.contains("let x_c = cg_in[i];"), "{wgsl}");
+        // Multi-field output → struct constructor; single-field → scalar store.
+        assert!(
+            wgsl.contains("ab_out[i] = G_ab((x_a + x_c), x_b);"),
+            "{wgsl}"
+        );
+        assert!(wgsl.contains("cg_out[i] = x_c;"), "{wgsl}");
     }
 
     #[test]
