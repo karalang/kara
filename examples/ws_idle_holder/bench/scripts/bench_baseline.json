@@ -1,0 +1,24 @@
+{
+  "_comment": "CI regression baseline for the ws_idle_holder flagship demo (Phase 6.3 Slice 7). Consumed by bench_gate.py in the `bench-gate` job of .github/workflows/ci.yml. Numbers are the CI load tier (see `tier`), NOT the canonical 1M-scale rig figures in bench/REPORT.md — CI cannot hold 1M connections, so the gate runs a small steady-state exercise (2000 loopback conns + 3 churn rounds) that still catches density/latency/cliff regressions. `baseline` values were seeded from a real ubuntu-latest-class run (4 vCPU / 16 GB x86-64 Linux, LLVM 18.1.3 — the same class as GitHub's ubuntu-latest). Recalibrate on the actual runner with `bench_gate.py --update-baseline` if the first CI runs sit systematically off (the job is non-required until it builds a green streak, so a latency false-positive can't block anyone). Per-metric `tolerance_pct` is the allowed WORSENING before the gate fails; higher is worse for every tracked metric. The tight, deterministic sentinel is `memory.per_conn_bytes` (idle density is scale- & machine-invariant, ~1% run-to-run here); connect-latency percentiles are noisy on a shared runner so their tolerances are wide and catch only gross regressions. A metric with `baseline: null` is record-only. A regression is overridable via BENCH_GATE_OVERRIDE / a `[bench-override: <reason>]` commit-message token; correctness failures are never overridable.",
+  "tier": {
+    "connections": 2000,
+    "concurrency": 200,
+    "churn_rounds": 3,
+    "churn_fraction": 0.1,
+    "hold_secs": 2
+  },
+  "metrics": {
+    "connect.p50_ms": { "baseline": 58.05, "tolerance_pct": 80.0 },
+    "connect.p95_ms": { "baseline": 75.8, "tolerance_pct": 90.0 },
+    "connect.p99_ms": { "baseline": 81.07, "tolerance_pct": 100.0 },
+    "connect.p999_ms": { "baseline": 89.85, "tolerance_pct": 150.0 },
+    "memory.per_conn_bytes": { "baseline": 13617.0, "tolerance_pct": 12.0 },
+    "churn.cliff_ratio": { "baseline": 0.75, "tolerance_pct": 100.0, "ceiling": 3.0 }
+  },
+  "correctness": {
+    "require_ok": true,
+    "require_zero_failed": true,
+    "require_all_established": true,
+    "require_zero_reconnect_failed": true
+  }
+}

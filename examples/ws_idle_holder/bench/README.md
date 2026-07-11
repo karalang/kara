@@ -222,7 +222,60 @@ and the ramp-phase concurrency to predict `(C/W)×T` mean.
 ```
 
 `ok` is `true` iff every requested connection established. The CI gate
-(slice 7, line 168) parses this object and threshold-checks the numbers.
+(slice 7) parses this object and threshold-checks the numbers.
+
+## CI regression gate (slice 7)
+
+`scripts/bench_gate.py` + `scripts/bench_baseline.json` wire this harness
+into CI as a per-PR regression gate — the `bench-gate` job in
+`.github/workflows/ci.yml`. The job builds the demo with `karac build`,
+runs the harness at a **CI load tier** (2000 loopback connections + 3
+churn rounds — CI cannot hold the canonical 1M+, so it runs a small
+steady-state exercise that still catches regressions), pipes the JSON to
+the gate, and compares against the committed baseline.
+
+Two independent checks, in order:
+
+1. **Correctness (hard, never overridable)** — every requested connection
+   established, zero connect failures, zero churn reconnect failures, and
+   the harness's own `ok` flag true. A build that drops connections is not
+   a "5%-regression" question; an override must not let it merge.
+2. **Regression vs baseline (overridable with justification)** — the
+   tracked steady-state metrics did not get more than the per-metric
+   `tolerance_pct` worse: connect `p50 / p95 / p99 / p99.9` (establishment
+   cost, tracked separately per the roadmap), `per_conn_bytes` (idle
+   density), and `cliff_ratio` (P99 churn cliff, which also has an
+   absolute ceiling). Higher is worse for every metric; improvements pass.
+
+`per_conn_bytes` is the tight, deterministic sentinel — idle density is
+scale- and machine-invariant (~1 % run-to-run), so it carries a 12 %
+gate. Connect latency on a shared runner is noisy, so its tolerances are
+wide and catch only gross regressions. Tolerances live in the baseline
+JSON and are tuned per-metric with **no code change**.
+
+```sh
+# Run the gate locally against a captured report:
+python3 scripts/bench_gate.py --report run.json --baseline scripts/bench_baseline.json
+
+# Recalibrate the baseline from a representative run (preserves tolerances):
+python3 scripts/bench_gate.py --report run.json --baseline scripts/bench_baseline.json --update-baseline
+
+# Verify the gate's own logic (fast, no build — also runs first in CI):
+python3 scripts/bench_gate.py --selftest
+```
+
+**Override.** A >tolerance regression fails the job unless overridden.
+Set `BENCH_GATE_OVERRIDE=<justification>` locally, or in CI add a
+`[bench-override: <reason>]` token to the head commit message — the job
+lifts the reason into the env var, and the regression downgrades to a
+warning. Correctness failures are never downgraded.
+
+The job is **non-required** (not in branch protection) until it builds a
+green streak: a noisy-latency false positive on a shared runner must not
+block the required gates. The baseline was seeded on an
+ubuntu-latest-class box (4 vCPU / 16 GB x86-64 Linux, LLVM 18.1.3); if the
+actual runner sits systematically off, recalibrate with
+`--update-baseline` from a green run.
 
 ## Status — landed; drove the full Phase-3 density campaign (to 2M)
 
