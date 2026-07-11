@@ -598,6 +598,48 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(skip_bb);
                 continue;
             }
+            // B-2026-07-11-39 — an `Option[<inline-heap>]` field whose inner is
+            // NOT shared (`Option[String]`, `Option[Vec[T]]`, an inline
+            // struct/enum payload). The `Option[shared T]` arm above rejects it
+            // (`option_inner_shared_type_for_type_expr` requires a shared inner),
+            // and the plain-`String` arm below rejects it too, so before this the
+            // field fell through the loop and its `Some` payload leaked when the
+            // box dropped (the recursive `shared enum` peer of the standalone
+            // struct drop's `FieldDrop::OptionInline` arm, which already handles
+            // it in the VALUE-drop path). `karac_drop_Option_<payload>`
+            // (`emit_option_drop_fn`) reads the tag and frees the Some payload —
+            // the String/Vec overlay or the boxed wide payload. Free here ONLY in
+            // the RC-box path (`owns_buffer_free`): in the value-drop path the
+            // struct's own `__karac_drop_struct_<S>` already ran it, so freeing
+            // again would double-free. The call is unconditional (the drop fn is
+            // itself tag-guarded, no-op on `None`); `emit_option_drop_fn` may
+            // reposition the builder while synthesizing the payload's drop, so
+            // capture and restore the current block before emitting the call.
+            if owns_buffer_free
+                && self.option_inner_shared_type_for_type_expr(fte).is_none()
+                && self.te_owns_option_heap_payload(fte)
+            {
+                if let Some(payload_te) = Self::option_payload_te(fte) {
+                    let cur_bb = self.builder.get_insert_block();
+                    let opt_drop = self.emit_option_drop_fn(&payload_te);
+                    if let Some(bb) = cur_bb {
+                        self.builder.position_at_end(bb);
+                    }
+                    if let Some(opt_drop) = opt_drop {
+                        if let Ok(field_ptr) = self.builder.build_struct_gep(
+                            st,
+                            struct_ptr,
+                            idx as u32,
+                            "nstr.optheap.p",
+                        ) {
+                            self.builder
+                                .build_call(opt_drop, &[field_ptr.into()], "")
+                                .unwrap();
+                        }
+                        continue;
+                    }
+                }
+            }
             // A direct `String` field (`{ptr,len,cap}`) — the String peer of
             // the `Vec[T]` arm below. A `shared enum` variant whose plain-struct
             // payload owns a String (`Ident(IdentExpr { name: String, span })`,
@@ -2778,7 +2820,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.struct_types.contains_key(&sname)
                     && !self.shared_types.contains_key(&sname)
                     && (self.struct_owns_shared_field(&sname, &mut Vec::new())
-                        || self.type_expr_has_drop_heap(te))
+                        || self.type_expr_has_drop_heap(te)
+                        // B-2026-07-11-39 — mirror `field_is_walkable`'s union
+                        // (they must agree, per the comment above): a payload
+                        // struct owning only an `Option[<inline-heap>]` field is
+                        // heap-owning for drop purposes despite
+                        // `type_expr_has_drop_heap`'s Option blind spot.
+                        || self.te_owns_option_heap_payload(te))
                 {
                     // Inline vs heap-BOXED, recomputed from the SAME predicate
                     // `coerce_to_payload_words` boxes on (`llvm_type_word_count(T)
@@ -3057,7 +3105,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     if slf.struct_types.contains_key(seg.as_str())
                         && !slf.shared_types.contains_key(seg.as_str())
                         && (slf.struct_owns_shared_field(seg.as_str(), &mut Vec::new())
-                            || slf.type_expr_has_drop_heap(te))
+                            || slf.type_expr_has_drop_heap(te)
+                            // B-2026-07-11-39 — `type_expr_has_drop_heap` has a
+                            // DELIBERATE `Option | Result => false` blind spot
+                            // (its copy-side callers rely on it), so a payload
+                            // struct whose only heap is an `Option[String]` /
+                            // `Option[Vec[T]]` field read as heapless here: the
+                            // whole variant was judged non-walkable, got no drop
+                            // block, and its boxed payload + Some payload leaked
+                            // on rc-drop. `te_owns_option_heap_payload` is the
+                            // Option-aware companion; OR it in so the variant is
+                            // walked and the walker's new Option arm frees it.
+                            || slf.te_owns_option_heap_payload(te))
                     {
                         return true;
                     }

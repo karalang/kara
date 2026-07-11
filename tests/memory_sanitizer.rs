@@ -1286,16 +1286,14 @@ fn main() {
         // arm. Loops so the double-free (a `Some`-payload UAF/double-free) is
         // observable on every iteration.
         //
-        // Leak detection is OFF here on purpose: this exact shape ALSO carries a
-        // SEPARATE, pre-existing leak — dropping a recursive `shared enum` whose
-        // payload struct holds an `Option[String]` field never frees that payload
-        // (reproduces with a bare `let e = Expr.Cont(...)` and NO method call at all,
-        // so it is orthogonal to this by-value-arg fix; tracked as its own ledger
-        // entry). Full-leak `assert_clean_asan_run` would fail on that unrelated leak
-        // and mask this double-free regression. A double-free / UAF still aborts
-        // under ASAN with LSan off, so `status.success()` is a faithful gate for the
-        // defect this test pins.
-        assert_no_double_free_leaks_allowed(
+        // Full leak-checking applies: this shape once ALSO carried a separate leak
+        // (dropping a recursive `shared enum` whose payload struct holds an
+        // `Option[String]` field never freed that payload — reproduced with a bare
+        // `let e = Expr.Cont(...)` and no method call at all), which forced this
+        // test to run with LeakSanitizer off. That leak is now fixed
+        // (B-2026-07-11-39), so this shape is fully leak-clean and the strong
+        // `assert_clean_asan_run` gate covers both the double-free and no-leak.
+        assert_clean_asan_run(
             r#"
 shared enum Expr { Cont(ContNode), Wrap(WrapNode) }
 struct ContNode { label: Option[String] }
@@ -1343,33 +1341,47 @@ fn main() {
         );
     }
 
-    /// Like [`assert_clean_asan_run`] but with LeakSanitizer OFF — asserts the
-    /// program runs to completion with the expected stdout and NO double-free /
-    /// use-after-free (both of which ASAN aborts on regardless of leak
-    /// detection). Use ONLY when the program's shape carries a SEPARATE,
-    /// independently-tracked steady-state leak that would otherwise mask the
-    /// use-after-free / double-free the test exists to pin. Every other case
-    /// must use the full-leak [`assert_clean_asan_run`].
-    fn assert_no_double_free_leaks_allowed(src: &str, expected_stdout: &[&str], label: &str) {
-        if !asan_available() {
-            eprintln!("[{label}] ASAN unavailable on this host — skipping");
-            return;
-        }
-        let Some((stdout, status)) = run_under_asan_no_leak_check(src, label) else {
-            eprintln!("[{label}] setup failed — skipping");
-            return;
-        };
-        assert!(
-            status.success(),
-            "[{label}] ASAN reported a memory error (exit code {:?}) with leak \
-             detection OFF — that means a double-free / use-after-free, not a leak. \
-             See stderr above for the ASAN report. stdout was: {stdout:?}",
-            status.code(),
-        );
-        let got: Vec<&str> = stdout.lines().collect();
-        assert_eq!(
-            got, expected_stdout,
-            "[{label}] stdout mismatch under ASAN (no-leak-check)",
+    #[test]
+    fn asan_recursive_shared_enum_option_heap_payload_field_no_leak() {
+        // B-2026-07-11-39: dropping a RECURSIVE `shared enum` whose variant payload
+        // is a struct with an `Option[<inline-heap>]` field (`Option[String]` /
+        // `Option[Vec[T]]`) leaked the whole boxed payload + its `Some` payload. The
+        // recursive `Wrap` variant makes the enum need a generated rc-drop
+        // destructor; inside it the `Cont(ContNode)` variant was judged non-walkable
+        // because `type_expr_has_drop_heap` has a deliberate `Option => false` blind
+        // spot, so the variant got no drop block and its box + String leaked. Native
+        // run was clean (leaks do not crash); the Linux LSan gate is authoritative.
+        // Fixed by teaching the walkability gates (`field_is_walkable` /
+        // `emit_shared_enum_field_drop`) the Option-aware `te_owns_option_heap_payload`
+        // predicate and adding an `Option[<inline-heap>]` arm to the payload-struct
+        // walker (`emit_nested_struct_shared_rc_decs_ex`) that frees the Some payload
+        // via `emit_option_drop_fn`. Exercises the bare create-and-drop trigger
+        // (`a`), the `None`-carrying no-heap arm (`b`, must stay clean), nested
+        // recursion through `Wrap` (`c`), and an `Option[Vec[String]]` inner (`d`).
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Cont(ContNode), Wrap(WrapNode) }
+struct ContNode { label: Option[String], tags: Option[Vec[String]] }
+struct WrapNode { inner: Expr }
+fn main() {
+  let mut round = 0;
+  while round < 50 {
+    let a = Expr.Cont(ContNode { label: Some("label-payload-xxxxxxxxxxxxxxxxxxxx".to_string()), tags: None });
+    let b = Expr.Cont(ContNode { label: None, tags: None });
+    let c = Expr.Wrap(WrapNode { inner: Expr.Cont(ContNode { label: Some("nested-payload-yyyyyyyyyyyyyyyy".to_string()), tags: None }) });
+    let d = Expr.Cont(ContNode { label: None, tags: Some(Vec["tag-aaaaaaaaaaaaaaaaaa".to_string(), "tag-bbbbbbbbbbbbbbbbbb".to_string()]) });
+    println(round.to_string());
+    round = round + 1;
+  }
+}
+"#,
+            &(0..50)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>(),
+            "asan_recursive_shared_enum_option_heap_payload_field_no_leak",
         );
     }
 
