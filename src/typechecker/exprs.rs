@@ -1114,6 +1114,22 @@ impl<'a> super::TypeChecker<'a> {
                     self.borrow_context = borrow_context_for_param(&resolved);
                     let arg_ty = self.check_expr(&arg.value, &resolved);
                     self.borrow_context = saved_borrow_ctx;
+                    // B-2026-07-11-4: a type param that appears ONLY inside a
+                    // closure param's type — e.g. `spawn[T](f: OnceFn() -> T)`,
+                    // where T is fixed solely by the thunk's return — is still
+                    // unsolved here: pass 1 skips closure args, so nothing bound
+                    // the metavar. Unify the closure's now-inferred type back
+                    // into the instantiated slot so the metavar binds from the
+                    // closure body (the `Fn`→`OnceFn` cross arm in `unify_types`
+                    // descends into the return type). Mirrors pass 1's
+                    // non-closure unify; a no-op when the slot was already
+                    // solved from another argument.
+                    unify_types(
+                        sub_param_ty,
+                        &arg_ty,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    );
                     if apply_call_site_marker {
                         self.check_call_site_marker(arg, &resolved, &arg_ty);
                     }

@@ -23631,6 +23631,38 @@ fn free_fn_spawn_returns_task_handle() {
 }
 
 #[test]
+fn free_fn_spawn_closure_thunk_infers_without_annotation() {
+    // B-2026-07-11-4: `spawn(|| work())` — a closure-literal thunk with NO
+    // LHS annotation — must infer `TaskHandle[T]`'s `T` from the closure's
+    // return type. Pre-fix this errored "cannot infer type parameter 'T'":
+    // pass 1 of generic-call inference skips closure args, and pass 2 never
+    // unified the closure's inferred type back into the metavar, so a `T`
+    // appearing ONLY in a closure param's return (`spawn[T](OnceFn() -> T)`)
+    // stayed unsolved. The named-fn form `spawn(make_int)` and any annotated
+    // form already worked (a fn ref is inferred in pass 1; an annotation pins
+    // `T` from the LHS), which is why the closure-thunk gap slipped.
+    typecheck_ok(
+        "fn work() -> i64 { 42 }
+         fn main() {
+             let h = spawn(|| work());
+             let v: i64 = h.join();
+         }",
+    );
+}
+
+#[test]
+fn free_fn_spawn_closure_thunk_heap_return_infers() {
+    // The heap-return variant infers `TaskHandle[String]` with no annotation.
+    typecheck_ok(
+        "fn make() -> String { f\"hi\" }
+         fn main() {
+             let h = spawn(|| make());
+             let v: String = h.join();
+         }",
+    );
+}
+
+#[test]
 fn task_handle_inner_type_mismatch_rejected() {
     // Pin that the typechecker enforces `TaskHandle[T]`'s `T` against
     // the closure's return type. Mismatching the annotation should
