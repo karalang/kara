@@ -245,6 +245,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             // B-2026-06-10-3.
                             "Vec" | "VecDeque" => {
                                 self.vec_elem_types.insert(name.clone(), elem_llvm);
+                                // Also record the ELEMENT TypeExpr, not just its
+                                // LLVM type: iterating the bound collection needs
+                                // only `vec_elem_types` (so a `Vec[i64]` payload
+                                // works), but `for e in entries { e.key }` field
+                                // access GEPs through the element's TypeExpr — the
+                                // same registration a plain `let es: Vec[Ent]` gets
+                                // via `register_var_from_type_expr`. Without it a
+                                // `Vec[struct]` enum payload's elements were bound
+                                // without a struct TypeExpr, so `e.field` read an
+                                // i64 (`i64 0`) instead of the field — the JSON
+                                // dogfood's `Obj(entries) => for e in entries {
+                                // out.push_str(e.key) }` crash (B-2026-07-11-6).
+                                self.var_elem_type_exprs
+                                    .insert(name.clone(), inner_te.clone());
                                 bound_vec_elem = Some(elem_llvm);
                             }
                             "Slice" => {
@@ -1179,7 +1193,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     let ok_single_word = num_words == 1;
                     let ok_padded_primitive =
                         num_words > 1 && sub_is_leaf && first_word_is_primitive;
-                    if !ok_single_word && !ok_padded_primitive {
+                    // The via-ptr fast path binds the leaf as a `ref` directly at the
+                    // payload WORD (a uniform i64 slot). That is only sound when the
+                    // binding's declared type IS that i64 word: a natural i64 / u64 /
+                    // usize load-typed value. For any other declared type the typed
+                    // `*binding` deref reads the wrong shape from the i64 slot —
+                    // - a heap aggregate (`String` / `Vec` / …, first word `ptr:i64`)
+                    //   deref-loads an i64 where a struct is expected → codegen panic
+                    //   "expected the StructValue variant";
+                    // - a narrow scalar (`bool` → i1, `char`/`i32`, `f64`) deref-loads
+                    //   i64 where i1 / i32 / f64 is expected → `br i64` /
+                    //   `insertvalue` module-verification failure.
+                    // `first_word_is_primitive` can't tell `Option[i64]` (a real
+                    // 1-word i64 in an over-wide 3-word slot — the case the padded
+                    // path exists for) from `E::S(String)` / `E::B(bool)` (a real
+                    // aggregate / narrow payload). The binding's recorded surface
+                    // type does: defer to the value-source path (which rebuilds the
+                    // payload at its true type — narrowing scalars, reconstructing
+                    // aggregates) whenever the declared LLVM type isn't the i64 word.
+                    // Type-info-absent bindings keep the legacy heuristic (no
+                    // regression). B-2026-07-11-5, surfaced by the JSON dogfood's
+                    // `match v { Num(n) => .., Bool(b) => .., Arr(items) => .. }` over
+                    // a `ref`-matched recursive enum; mirrors the B-2026-07-09-6
+                    // struct-payload guard, generalized to every non-word payload.
+                    let declared_mismatches_word = if let PatternKind::Binding(_) = &sub_pat.kind {
+                        let key = (sub_pat.span.offset, sub_pat.span.length);
+                        self.pattern_binding_types
+                            .get(&key)
+                            .map(|n| self.llvm_type_for_name(n.as_str()))
+                            .is_some_and(|t| t != field_ty)
+                    } else {
+                        false
+                    };
+                    if (!ok_single_word && !ok_padded_primitive) || declared_mismatches_word {
                         return Ok(None);
                     }
                     let field_ptr = self

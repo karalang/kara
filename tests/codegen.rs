@@ -6305,6 +6305,70 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ref_enum_string_and_bool_payload() {
+        // Regression for B-2026-07-11-5: matching a `ref`-scrutinee enum and
+        // using a String / bool payload. The via-ptr fast path bound the leaf
+        // directly at the i64 payload WORD, so a String payload deref-loaded an
+        // i64 (codegen PANIC "expected the StructValue variant" on the
+        // `out.push_str(s)` dispatch) and a bool payload deref-loaded i64 (module
+        // verify: `br i64` — not `i1`). Fixed by deferring any payload whose
+        // declared LLVM type isn't the i64 word to the value-source path, which
+        // reconstructs it at the true type (narrowing bool → i1, rebuilding the
+        // String aggregate). Surfaced by the `examples/json.kara` dogfood.
+        if let Some(out) = run_program(
+            "enum E { S(String), B(bool), N(i64) }\n\
+             fn render(e: ref E, out: mut ref String) {\n\
+                 match e {\n\
+                     S(s) => { out.push_str(s); }\n\
+                     B(b) => { if *b { out.push_str(\"T\"); } else { out.push_str(\"F\"); } }\n\
+                     N(n) => { out.push_str(f\"{n}\"); }\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut o: String = \"\";\n\
+                 render(E.S(\"hi\"), mut o); o.push(':');\n\
+                 render(E.B(true), mut o); o.push(':');\n\
+                 render(E.N(42), mut o);\n\
+                 println(o);\n\
+             }",
+        ) {
+            assert_eq!(out, "hi:T:42\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_ref_enum_vec_struct_payload_field_access() {
+        // Regression for B-2026-07-11-6: a `Vec[struct]` bound as an enum payload
+        // lost its element TypeExpr, so `for e in entries { e.field }` bound the
+        // element without a struct type and the field read garbage (`i64 0`). The
+        // value-source payload binding registered `vec_elem_types` (the LLVM elem
+        // type — enough for a `Vec[i64]` payload to iterate) but not
+        // `var_elem_type_exprs`, which struct-field GEP needs. Now it records
+        // both, matching a plain `let es: Vec[Ent]` local. Surfaced by the
+        // `examples/json.kara` dogfood's `Obj(entries) => for e in entries {…}`.
+        if let Some(out) = run_program(
+            "enum J { N, Obj(Vec[Ent]) }\n\
+             struct Ent { key: String, n: i64 }\n\
+             fn dump(v: ref J, out: mut ref String) {\n\
+                 match v {\n\
+                     N => { out.push_str(\"n\"); }\n\
+                     Obj(entries) => { for e in entries { out.push_str(e.key); out.push_str(f\"{e.n}\"); } }\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut es: Vec[Ent] = Vec.new();\n\
+                 es.push(Ent { key: \"a\", n: 1 });\n\
+                 es.push(Ent { key: \"b\", n: 2 });\n\
+                 let mut o: String = \"\";\n\
+                 dump(J.Obj(es), mut o);\n\
+                 println(o);\n\
+             }",
+        ) {
+            assert_eq!(out, "a1b2\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_index_vec_field_through_self() {
         // Regression for the self-hosting lexer index blocker: indexing a
         // `Vec` field through the `self` receiver (`self.bytes[self.current]`)

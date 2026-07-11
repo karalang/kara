@@ -1,0 +1,386 @@
+// json.kara — a JSON parser + serializer in Kāra.
+//
+// A real mini-library that dogfoods the compiler's hottest bug surface: a
+// RECURSIVE enum with nested heap payloads (String / Vec[Json] / Vec[Entry]),
+// built and dropped at arbitrary depth, plus a recursive-descent parser that
+// leans on `Result`/`?` error flow, `mut ref self` cursor methods, and char /
+// String handling. The recursion goes through `Vec` (heap indirection), so no
+// `shared`/Rc is needed.
+//
+// The oracle is a ROUND-TRIP: `serialize(parse(x))` renders a canonical form,
+// and re-parsing + re-serializing it is idempotent. Numbers are stored as their
+// literal token (precision-preserving), so the canonical output is exact and the
+// oracle has no float-formatting noise. Expected output: examples/json.expected.
+//
+//   KARAC_RUN_JIT=0 karac run examples/json.kara   # tree-walk interpreter
+//
+// This dogfood found four compiler bugs (its job, cf.
+// feedback_katas_are_bug_finders). THREE are fixed: a codegen panic binding a
+// String/bool enum payload under a `ref` match (B-2026-07-11-5), a Vec[struct]
+// enum-payload element-type loss (B-2026-07-11-6), and a spurious interpreter
+// `?`-error-return trace for handled errors (B-2026-07-11-8). One is still OPEN
+// and blocks the JIT / `karac build` path: `?` on `Result[<concrete user enum>]`
+// truncates the multi-word Ok payload (B-2026-07-11-7) — so run via the tree-walk
+// interpreter (`KARAC_RUN_JIT=0`) until that lands.
+
+// A JSON value. Recursion (Arr/Obj) is carried through Vec, so this is an
+// ordinary owned enum — no reference-counting.
+enum Json {
+    Null,
+    Bool(bool),
+    Num(String),
+    Str(String),
+    Arr(Vec[Json]),
+    Obj(Vec[Entry]),
+}
+
+// One object member. Object order is preserved (a Vec, not a Map), so the
+// canonical serialization is deterministic and input-order-stable.
+struct Entry {
+    key: String,
+    val: Json,
+}
+
+// ---- parser -----------------------------------------------------------------
+
+// Materialize a String's chars into an indexable Vec. `String.chars()` yields an
+// `Iterator[char]` (no `.len()`, no `[i]`), so a random-access cursor needs this
+// one-shot snapshot — the ergonomic seam a `collect()` / `to_vec()` would close.
+fn to_chars(s: String) -> Vec[char] {
+    let mut v: Vec[char] = Vec.new();
+    for c in s.chars() {
+        v.push(c);
+    }
+    v
+}
+
+// A cursor over the input's chars. `pos` is the next index to read.
+struct Parser {
+    cs: Vec[char],
+    pos: i64,
+}
+
+impl Parser {
+    fn at_end(ref self) -> bool {
+        self.pos >= self.cs.len()
+    }
+
+    // The current char without consuming it, or '\0' at end of input.
+    fn peek(ref self) -> char {
+        if self.pos >= self.cs.len() {
+            return '\0';
+        }
+        self.cs[self.pos]
+    }
+
+    // Consume and return the current char (or '\0' at end).
+    fn advance(mut ref self) -> char {
+        let c = self.peek();
+        self.pos = self.pos + 1;
+        c
+    }
+
+    fn skip_ws(mut ref self) {
+        while not self.at_end() {
+            let c = self.peek();
+            if c == ' ' or c == '\n' or c == '\t' or c == '\r' {
+                self.pos = self.pos + 1;
+            } else {
+                return;
+            }
+        }
+    }
+
+    // Match a fixed keyword at the cursor; consume it and return true on a hit.
+    fn match_word(mut ref self, w: String) -> bool {
+        let wc = to_chars(w);
+        let mut i = 0;
+        while i < wc.len() {
+            if self.pos + i >= self.cs.len() {
+                return false;
+            }
+            if self.cs[self.pos + i] != wc[i] {
+                return false;
+            }
+            i = i + 1;
+        }
+        self.pos = self.pos + wc.len();
+        true
+    }
+
+    fn parse_value(mut ref self) -> Result[Json, String] {
+        self.skip_ws();
+        if self.at_end() {
+            return Result.Err("unexpected end of input");
+        }
+        let c = self.peek();
+        if c == '{' {
+            return self.parse_object();
+        }
+        if c == '[' {
+            return self.parse_array();
+        }
+        if c == '"' {
+            let s = self.parse_string()?;
+            return Result.Ok(Json.Str(s));
+        }
+        if c == 't' or c == 'f' {
+            return self.parse_bool();
+        }
+        if c == 'n' {
+            if self.match_word("null") {
+                return Result.Ok(Json.Null);
+            }
+            return Result.Err("bad literal");
+        }
+        if c == '-' or (c >= '0' and c <= '9') {
+            return self.parse_number();
+        }
+        Result.Err("unexpected character")
+    }
+
+    fn parse_bool(mut ref self) -> Result[Json, String] {
+        if self.match_word("true") {
+            return Result.Ok(Json.Bool(true));
+        }
+        if self.match_word("false") {
+            return Result.Ok(Json.Bool(false));
+        }
+        Result.Err("bad literal")
+    }
+
+    // Read a number token and keep it verbatim (precision-preserving). Loose
+    // validation: the shape is checked by which chars are accepted, not a grammar.
+    fn parse_number(mut ref self) -> Result[Json, String] {
+        let mut out: String = "";
+        if self.peek() == '-' {
+            out.push(self.advance());
+        }
+        while not self.at_end() {
+            let c = self.peek();
+            if (c >= '0' and c <= '9') or c == '.' or c == 'e' or c == 'E'
+                or c == '+' or c == '-' {
+                out.push(self.advance());
+            } else {
+                break;
+            }
+        }
+        if out.is_empty() {
+            return Result.Err("bad number");
+        }
+        Result.Ok(Json.Num(out))
+    }
+
+    // Read a "…"-delimited string, decoding the JSON escapes. Assumes the
+    // current char is the opening quote.
+    fn parse_string(mut ref self) -> Result[String, String] {
+        self.pos = self.pos + 1; // opening quote
+        let mut out: String = "";
+        while not self.at_end() {
+            let c = self.advance();
+            if c == '"' {
+                return Result.Ok(out);
+            }
+            if c == '\\' {
+                if self.at_end() {
+                    return Result.Err("unterminated escape");
+                }
+                let e = self.advance();
+                if e == '"' {
+                    out.push('"');
+                } else if e == '\\' {
+                    out.push('\\');
+                } else if e == '/' {
+                    out.push('/');
+                } else if e == 'n' {
+                    out.push('\n');
+                } else if e == 't' {
+                    out.push('\t');
+                } else if e == 'r' {
+                    out.push('\r');
+                } else {
+                    return Result.Err("bad escape");
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        Result.Err("unterminated string")
+    }
+
+    fn parse_array(mut ref self) -> Result[Json, String] {
+        self.pos = self.pos + 1; // '['
+        let mut items: Vec[Json] = Vec.new();
+        self.skip_ws();
+        if self.peek() == ']' {
+            self.pos = self.pos + 1;
+            return Result.Ok(Json.Arr(items));
+        }
+        loop {
+            let v = self.parse_value()?;
+            items.push(v);
+            self.skip_ws();
+            let c = self.advance();
+            if c == ']' {
+                return Result.Ok(Json.Arr(items));
+            }
+            if c != ',' {
+                return Result.Err("expected ',' or ']' in array");
+            }
+        }
+    }
+
+    fn parse_object(mut ref self) -> Result[Json, String] {
+        self.pos = self.pos + 1; // '{'
+        let mut entries: Vec[Entry] = Vec.new();
+        self.skip_ws();
+        if self.peek() == '}' {
+            self.pos = self.pos + 1;
+            return Result.Ok(Json.Obj(entries));
+        }
+        loop {
+            self.skip_ws();
+            if self.peek() != '"' {
+                return Result.Err("expected string key");
+            }
+            let k = self.parse_string()?;
+            self.skip_ws();
+            if self.advance() != ':' {
+                return Result.Err("expected ':' after key");
+            }
+            let v = self.parse_value()?;
+            entries.push(Entry { key: k, val: v });
+            self.skip_ws();
+            let c = self.advance();
+            if c == '}' {
+                return Result.Ok(Json.Obj(entries));
+            }
+            if c != ',' {
+                return Result.Err("expected ',' or '}' in object");
+            }
+        }
+    }
+}
+
+// Parse a whole input; reject trailing junk.
+fn parse(input: String) -> Result[Json, String] {
+    let mut p = Parser { cs: to_chars(input), pos: 0 };
+    let v = p.parse_value()?;
+    p.skip_ws();
+    if not p.at_end() {
+        return Result.Err("trailing characters after value");
+    }
+    Result.Ok(v)
+}
+
+// ---- serializer (canonical, compact) ----------------------------------------
+
+fn escape_into(s: ref String, out: mut ref String) {
+    out.push('"');
+    for c in s.chars() {
+        if c == '"' {
+            out.push('\\');
+            out.push('"');
+        } else if c == '\\' {
+            out.push('\\');
+            out.push('\\');
+        } else if c == '\n' {
+            out.push('\\');
+            out.push('n');
+        } else if c == '\t' {
+            out.push('\\');
+            out.push('t');
+        } else if c == '\r' {
+            out.push('\\');
+            out.push('r');
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+}
+
+fn ser_into(v: ref Json, out: mut ref String) {
+    match v {
+        Null => {
+            out.push_str("null");
+        }
+        Bool(b) => {
+            if *b {
+                out.push_str("true");
+            } else {
+                out.push_str("false");
+            }
+        }
+        Num(n) => {
+            out.push_str(n);
+        }
+        Str(s) => {
+            escape_into(s, out);
+        }
+        Arr(items) => {
+            out.push('[');
+            let mut first = true;
+            for it in items {
+                if not first {
+                    out.push(',');
+                }
+                ser_into(it, out);
+                first = false;
+            }
+            out.push(']');
+        }
+        Obj(entries) => {
+            out.push('{');
+            let mut first = true;
+            for e in entries {
+                if not first {
+                    out.push(',');
+                }
+                escape_into(e.key, out);
+                out.push(':');
+                ser_into(e.val, out);
+                first = false;
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn serialize(v: ref Json) -> String {
+    let mut out: String = "";
+    ser_into(v, mut out);
+    out
+}
+
+// ---- round-trip demo (the oracle) -------------------------------------------
+
+fn roundtrip(input: String) {
+    match parse(input) {
+        Ok(v) => {
+            println(serialize(v));
+        }
+        Err(e) => {
+            println(f"ERROR: {e}");
+        }
+    }
+}
+
+fn main() {
+    roundtrip("null");
+    roundtrip("true");
+    roundtrip("  false ");
+    roundtrip("42");
+    roundtrip("-3.14");
+    roundtrip("1.5e10");
+    roundtrip("\"hello\"");
+    roundtrip("\"a\\\"b\\nc\"");
+    roundtrip("[1, 2, 3]");
+    roundtrip("[]");
+    roundtrip("{}");
+    roundtrip("{ \"name\": \"kara\", \"nums\": [1, 2, 3], \"nested\": { \"ok\": true } }");
+    roundtrip("[null, [1, [2, [3, []]]], { \"deep\": { \"deeper\": [true, false] } }]");
+    roundtrip("{ invalid");
+    roundtrip("[1, 2");
+    roundtrip("\"unterminated");
+}

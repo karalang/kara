@@ -5002,8 +5002,18 @@ fn cmd_run(
         }
     }
 
-    // Emit error return trace if present
-    if !interp.error_trace().is_empty() {
+    // Emit error return trace ONLY when the program actually terminated with an
+    // unhandled error — main returned `Err` (`main_err_exit`) or a runtime fault
+    // occurred (`runtime_errors`). The `?`-propagation ring buffer accumulates a
+    // frame per `?` that re-propagates an `Err`, and is cleared only by a LATER
+    // successful `?` (Ok/Some) — never when the propagated `Err` is CAUGHT by a
+    // `match`/`if let`. So a program that uses `?` internally and handles every
+    // error (e.g. `match parse(x) { Err(e) => … }`) left stale frames that printed
+    // an "Error return trace" to output despite exiting cleanly (B-2026-07-11-8,
+    // surfaced by the `examples/json.kara` dogfood). Gating on the actual error
+    // outcome suppresses the stale trace while preserving it for a real
+    // unhandled-error exit (main `Err` or a fault).
+    if !interp.error_trace().is_empty() && (main_err_exit || !runtime_errors.is_empty()) {
         let trace = format_error_trace_json(interp.error_trace(), interp.error_trace_truncated());
         match output {
             OutputMode::Json => {
