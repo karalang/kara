@@ -8411,6 +8411,28 @@ fn main() {
         );
     }
 
+    /// B-2026-07-11-26: a fresh-temp HEAP-bearing enum scrutinee with a user
+    /// `impl Drop`, matched in an if-let that MOVES the heap payload into a
+    /// binding. The user Drop body runs (side effect `D`) AND the moved-out Vec
+    /// is freed exactly once — the binding owns it, the enum user-drop wrapper
+    /// runs only the body (its field handoff is struct-only), and item-B's
+    /// field cleanup is suppressed for the moved-in field. Asserts no leak
+    /// (LSan) and no use-after-free / double-free (ASAN) — the class the new
+    /// user-drop registration on materialized enum scrutinees could regress.
+    #[test]
+    fn asan_freshtemp_enum_scrutinee_user_drop_no_double_free() {
+        assert_clean_asan_run(
+            "enum Msg { Text(Vec[i64]), Empty }\n\
+             impl Drop for Msg { fn drop(mut ref self) { println(\"D\"); } }\n\
+             fn mk(hit: bool) -> Msg { if hit { Msg.Text([1, 2, 3]) } else { Msg.Empty } }\n\
+             fn main() {\n\
+                 if let Msg.Text(v) = mk(true) { println(f\"{v.len()}\"); } else { println(\"m\"); }\n\
+             }",
+            &["3", "D"],
+            "freshtemp_enum_scrutinee_user_drop_no_double_free",
+        );
+    }
+
     /// Variant of `run_under_asan` that threads `ConcurrencyAnalysis`
     /// into codegen. Slice A (Phase-7 — Par codegen: return values)
     /// turns class-(ii) let-bindings inside an inferred parallel

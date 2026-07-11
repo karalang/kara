@@ -675,7 +675,14 @@ impl<'a> super::Interpreter<'a> {
                 else_branch,
             } => {
                 let val = self.eval_expr_inner(value);
-                if self.try_match_pattern(pattern, &val) {
+                // B-2026-07-11-26: run a fresh-temp enum scrutinee's user `Drop`
+                // (both edges), mirroring codegen. Snapshot the value before it
+                // is bound so the body runs on the scrutinee even on the match
+                // edge; the interpreter is Rust-memory-managed, so the snapshot
+                // clone cannot double-free.
+                let scrut_drop = self.freshtemp_scrutinee_user_drop_type(value);
+                let drop_val = scrut_drop.as_ref().map(|_| val.clone());
+                let result = if self.try_match_pattern(pattern, &val) {
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
                     let result = self.eval_block_inner(then_block);
@@ -688,7 +695,11 @@ impl<'a> super::Interpreter<'a> {
                     self.eval_expr_inner(else_expr)
                 } else {
                     Value::Unit
+                };
+                if let (Some(tn), Some(dv)) = (scrut_drop, drop_val) {
+                    self.run_user_drop_body_on_value(&tn, dv);
                 }
+                result
             }
 
             // Match
@@ -703,7 +714,15 @@ impl<'a> super::Interpreter<'a> {
                 if self.pending_cf.is_some() {
                     return val;
                 }
-                self.eval_match(&val, arms, &expr.span)
+                // B-2026-07-11-26: run a fresh-temp enum scrutinee's user `Drop`
+                // after the match arm (`eval_match` binds payloads from a borrow,
+                // so `val` survives), mirroring codegen.
+                let scrut_drop = self.freshtemp_scrutinee_user_drop_type(scrutinee);
+                let result = self.eval_match(&val, arms, &expr.span);
+                if let Some(tn) = scrut_drop {
+                    self.run_user_drop_body_on_value(&tn, val);
+                }
+                result
             }
 
             // While loop
@@ -765,18 +784,30 @@ impl<'a> super::Interpreter<'a> {
                     if self.check_cf() {
                         break;
                     }
+                    // B-2026-07-11-26: a fresh-temp enum scrutinee's user `Drop`
+                    // runs once per matched iteration (after the body), mirroring
+                    // codegen's per-iteration hit drop. The final MISS scrutinee's
+                    // Drop is a documented residual in BOTH backends (codegen's
+                    // while-let miss path frees heap fields but does not run the
+                    // user body).
+                    let scrut_drop = self.freshtemp_scrutinee_user_drop_type(value);
                     if !self.try_match_pattern(pattern, &val) {
                         break;
                     }
+                    let drop_snapshot = scrut_drop.map(|tn| (tn, val.clone()));
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
-                    match self.eval_block_inner(body) {
+                    let body_result = self.eval_block_inner(body);
+                    self.env.pop_scope();
+                    if let Some((tn, dv)) = drop_snapshot {
+                        self.run_user_drop_body_on_value(&tn, dv);
+                    }
+                    match body_result {
                         Ok(_) => {}
                         Err(ControlFlow::Break {
                             label: ref bl,
                             value: ref v,
                         }) => {
-                            self.env.pop_scope();
                             if bl.is_none() || bl.as_deref() == label.as_deref() {
                                 return v.clone().unwrap_or(Value::Unit);
                             } else {
@@ -787,7 +818,6 @@ impl<'a> super::Interpreter<'a> {
                             }
                         }
                         Err(ControlFlow::Continue { label: ref cl }) => {
-                            self.env.pop_scope();
                             if cl.is_none() || cl.as_deref() == label.as_deref() {
                                 continue;
                             } else {
@@ -795,11 +825,9 @@ impl<'a> super::Interpreter<'a> {
                             }
                         }
                         Err(cf) => {
-                            self.env.pop_scope();
                             return self.set_cf(cf);
                         }
                     }
-                    self.env.pop_scope();
                 }
                 Value::Unit
             }

@@ -843,10 +843,22 @@ impl<'a> super::Interpreter<'a> {
                 ..
             } => {
                 let val = self.eval_expr_inner(value);
+                // B-2026-07-11-26: run a fresh-temp enum scrutinee's user `Drop`
+                // (both edges), mirroring codegen — on the miss edge AFTER the
+                // else block runs (matching codegen's drop-during-return order).
+                let scrut_drop = self.freshtemp_scrutinee_user_drop_type(value);
+                let drop_val = scrut_drop.as_ref().map(|_| val.clone());
                 if self.try_match_pattern(pattern, &val) {
                     self.bind_pattern(pattern, val);
+                    if let (Some(tn), Some(dv)) = (scrut_drop, drop_val) {
+                        self.run_user_drop_body_on_value(&tn, dv);
+                    }
                 } else {
-                    self.eval_block_inner(else_block)?;
+                    let else_result = self.eval_block_inner(else_block);
+                    if let (Some(tn), Some(dv)) = (scrut_drop, drop_val) {
+                        self.run_user_drop_body_on_value(&tn, dv);
+                    }
+                    else_result?;
                 }
             }
             StmtKind::Defer { body } => {

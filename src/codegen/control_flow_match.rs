@@ -4233,21 +4233,47 @@ impl<'ctx> super::Codegen<'ctx> {
         if layout.is_shared {
             return None;
         }
-        // Only materialize when some variant actually has a heap-bearing
-        // payload to drop — otherwise `track_enum_var` is a no-op (and
-        // `emit_enum_drop_switch` returns None), so the alloca would be dead.
+        // Materialize when a variant has a heap-bearing payload to drop
+        // (`track_enum_var` / `emit_enum_drop_switch`) OR the enum type carries
+        // a user `impl Drop` whose body must run.
         let has_droppable = layout
             .field_drop_kinds
             .values()
             .any(|ks| ks.iter().any(|k| *k != super::state::EnumDropKind::None));
-        if !has_droppable {
+        // B-2026-07-11-26: a fresh-temp enum scrutinee whose type has a user
+        // `impl Drop` must RUN that Drop (its side effects — unlock, close,
+        // log) exactly as a bound `let s = <expr>` binding would. Pre-fix,
+        // materialization gated on `has_droppable` alone, so an all-scalar
+        // user-Drop enum returned None here and the user Drop was silently
+        // SKIPPED for `if let`/`while let`/`let…else`/`match` on a fresh-temp
+        // scrutinee (while a plain `let` binding of the same enum ran it).
+        let has_user_drop = self
+            .program_snapshot
+            .as_deref()
+            .map(|p| p.drop_method_keys.contains_key(&enum_name))
+            .unwrap_or(false);
+        if !has_droppable && !has_user_drop {
             return None;
         }
         let llvm_ty = layout.llvm_type;
         let fn_val = self.current_fn?;
         let alloca = self.create_entry_alloca(fn_val, "__freshtemp_enum_scrut", llvm_ty.into());
         let _ = self.builder.build_store(alloca, sv);
-        self.track_enum_var(&enum_name, alloca);
+        // Register heap-field cleanup FIRST so it fires LAST (the cleanup drain
+        // is LIFO), and the user-drop body SECOND so it fires FIRST — the user
+        // `drop()` runs while the enum's fields are still valid, then the
+        // fields are freed, matching Drop ordering. The enum user-drop wrapper
+        // does NOT free enum fields itself (its field-cleanup handoff,
+        // `emit_struct_drop_synthesis`, is struct-only), so the two registrations
+        // don't overlap. The caller's `suppress_destructured_enum_payload_cleanup`
+        // (then-arm only) still zeroes moved-in field caps for the `track_enum_var`
+        // path; the user body reads fields shallowly and frees nothing.
+        if has_droppable {
+            self.track_enum_var(&enum_name, alloca);
+        }
+        if has_user_drop {
+            self.track_user_drop_var(&enum_name, "__freshtemp_enum_scrut", alloca);
+        }
         Some((alloca, enum_name))
     }
 

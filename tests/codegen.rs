@@ -8092,6 +8092,46 @@ fn main() {
     }
 
     #[test]
+    fn e2e_freshtemp_enum_scrutinee_runs_user_drop() {
+        // B-2026-07-11-26: a fresh-temp enum scrutinee whose type has a user
+        // `impl Drop` must RUN that Drop in if-let / while-let / let-else /
+        // match — pre-fix `materialize_freshtemp_enum_scrutinee` gated on a
+        // heap payload, so an all-scalar user-Drop enum was never materialized
+        // and its Drop was silently skipped (a plain `let s = next(0)` binding
+        // ran it). The user Drop fires at enclosing-scope exit here (the slice-3
+        // arm-boundary timing polish stays deferred).
+        if let Some(out) = run_program(
+            "enum Step { Yield(i64), Stop }\n\
+             impl Drop for Step { fn drop(mut ref self) { println(\"DROP\"); } }\n\
+             fn next(i: i64) -> Step { if i < 3 { Step.Yield(i) } else { Step.Stop } }\n\
+             fn main() {\n\
+                 if let Step.Yield(v) = next(0) { println(f\"Y {v}\"); } else { println(\"MISS\"); }\n\
+                 println(\"AFTER\");\n\
+             }",
+        ) {
+            // if-let hit: drop runs (once) at enclosing-scope exit, after AFTER.
+            assert_eq!(out, "Y 0\nAFTER\nDROP\n");
+        }
+    }
+
+    #[test]
+    fn e2e_freshtemp_enum_scrutinee_while_let_runs_user_drop_per_iter() {
+        // The while-let leg: the user Drop fires once per matched iteration.
+        if let Some(out) = run_program(
+            "enum Step { Yield(i64), Stop }\n\
+             impl Drop for Step { fn drop(mut ref self) { println(\"DROP\"); } }\n\
+             fn next(i: i64) -> Step { if i < 3 { Step.Yield(i) } else { Step.Stop } }\n\
+             fn main() {\n\
+                 let mut i: i64 = 0;\n\
+                 while let Step.Yield(v) = next(i) { println(f\"I {v}\"); i = i + 1; }\n\
+                 println(\"DONE\");\n\
+             }",
+        ) {
+            assert_eq!(out, "I 0\nDROP\nI 1\nDROP\nI 2\nDROP\nDONE\n");
+        }
+    }
+
+    #[test]
     fn e2e_chars_count_and_len_codegen() {
         // B-2026-07-11-9 gap 1: `s.chars().count()` (idiomatic) and its alias
         // `s.chars().len()` return the char count. `chars()` compiles to an
@@ -8113,7 +8153,7 @@ fn main() {
 
     #[test]
     fn e2e_user_len_family_method_on_freshtemp_dispatches_to_user() {
-        // B-2026-07-11-14: a USER method named `len` / `count` / `is_empty` on a
+        // B-2026-07-11-26: a USER method named `len` / `count` / `is_empty` on a
         // fresh-temp receiver (`make().count()`) must dispatch to the user impl,
         // not the collection/iterator `len`-family method-chain intercept. When
         // `count` joined that intercept (B-2026-07-11-9 gap 1) it collided with a

@@ -11576,6 +11576,30 @@ fn test_string_char_at_and_count_interpreter() {
 }
 
 #[test]
+fn test_freshtemp_enum_scrutinee_runs_user_drop() {
+    // B-2026-07-11-26: a fresh-temp enum scrutinee whose type has a user
+    // `impl Drop` must RUN that Drop under the interpreter too (run/build
+    // parity) — pre-fix it was silently skipped in if-let/while-let/let-else/
+    // match. The interpreter runs the body at the statement/arm boundary
+    // (codegen defers to enclosing-scope exit — the deferred slice-3 timing
+    // difference); both run it exactly once.
+    let out = run(r#"enum Step { Yield(i64), Stop }
+        impl Drop for Step { fn drop(mut ref self) { println("DROP"); } }
+        fn next(i: i64) -> Step { if i < 3 { Step.Yield(i) } else { Step.Stop } }
+        fn main() {
+            if let Step.Yield(v) = next(0) { println(f"Y {v}"); } else { println("MISS"); }
+            println("AFTER");
+            let mut i: i64 = 0;
+            while let Step.Yield(v) = next(i) { println(f"I {v}"); i = i + 1; }
+            println("DONE");
+        }"#);
+    assert_eq!(
+        out.trim(),
+        "Y 0\nDROP\nAFTER\nI 0\nDROP\nI 1\nDROP\nI 2\nDROP\nDONE"
+    );
+}
+
+#[test]
 fn test_chars_count_and_len_interpreter() {
     // B-2026-07-11-9 gap 1: `s.chars().count()` and its alias `s.chars().len()`
     // drain the char-iterator and return the count. Mirrors the codegen E2E

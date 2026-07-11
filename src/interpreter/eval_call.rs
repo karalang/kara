@@ -1640,6 +1640,32 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-07-11-26 (interp parity with the codegen
+    /// `materialize_freshtemp_enum_scrutinee` user-Drop hook): the type name of
+    /// a FRESH-temp enum scrutinee whose type carries a user `impl Drop`, else
+    /// `None`. A fresh-temp enum scrutinee (`if let V(x) = make()`,
+    /// `while let V(x) = it.next()`, `match make() { … }`, `let V(x) = make()
+    /// else …`) must run its `Drop` body exactly as a bound `let s = make()`
+    /// would — pre-fix it was silently skipped. Only a fresh temp (a
+    /// call / method-call result) qualifies; a place scrutinee (bound var,
+    /// field, index) is owned elsewhere and drops through its owner. Gated on
+    /// `drop_method_keys` (the authoritative user-Drop filter).
+    pub(crate) fn freshtemp_scrutinee_user_drop_type(&self, scrutinee: &Expr) -> Option<String> {
+        match &scrutinee.kind {
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. } => {}
+            _ => return None,
+        }
+        let key = crate::resolver::SpanKey(scrutinee.span.offset, scrutinee.span.length);
+        let name = match self.typecheck_result.expr_types.get(&key)? {
+            crate::typechecker::Type::Named { name, .. } => name.clone(),
+            _ => return None,
+        };
+        if !self.program.drop_method_keys.contains_key(&name) {
+            return None;
+        }
+        Some(name)
+    }
+
     /// Declared return-type HEAD name of a user free function, for the
     /// fn-returned Drop temp classification (B-2026-07-01-7). `None` for
     /// unknown names, methods, and functions without a declared return.
