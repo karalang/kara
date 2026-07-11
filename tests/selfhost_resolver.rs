@@ -183,6 +183,26 @@ const CORPUS: &[&str] = &[
     "fn bad() { Undef.make() }",
     "fn bad() { Nope.Variant }",
     "fn mk(x: i64) { Vec.new().push(x) }",
+    // ── `with EFFECTS` signature clause ── the parser must consume the effect
+    // clause between the signature and the body (or the trailing `;`), or the
+    // body block parse desyncs and swallows every following item. The selfhost
+    // AST does not model effects, and the seed's resolver reports no name error
+    // for the execution verb `panics` (no resource), so both render `(ok)`. With
+    // and without a return type; the resource-verb form skips a `( ... )` list.
+    "fn eff() -> i64 with panics { 0 }",
+    "fn eff2() with panics { }",
+    "fn eff3(x: i64) -> i64 with panics { x }",
+    // ── reserved-name match-arm binding ── a bare uppercase arm (`Fn`) is a
+    // fresh binding whose name collides with a reserved identifier; the seed's
+    // `resolve_pattern` DISCARDS the define error (unlike a `let` binding), so
+    // no ReservedIdentifier surfaces — `(ok)`. (`Fn` is the self-hosted parser's
+    // own `match tok { Fn => ... }` construct.)
+    "fn f(x: i64) -> i64 { match x { Fn => 0, _ => 1 } }",
+    "fn f(x: i64) -> i64 { match x { Fn => 0, Struct => 1, _ => 2 } }",
+    // A `let`-statement binding, by contrast, DOES record the reserved-name
+    // diagnostic (the seed's `define_binding_leaf`) — ReservedIdentifier at the
+    // binding span. This pins the record=true vs record=false split.
+    "fn f(x: i64) { let Fn = x; }",
 ];
 
 /// Multi-item programs for the program-level (two-pass) gate. These exercise

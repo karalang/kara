@@ -3053,6 +3053,103 @@ impl Parser {
         Item.Func(self.parse_fn_def_node(is_pub, attrs, doc))
     }
 
+    // `with` — the leading token of a function-signature effect clause.
+    fn at_with(ref self) -> bool {
+        if self.pos >= self.tokens.len() {
+            return false;
+        }
+        match self.tokens[self.pos].token {
+            With => true,
+            _ => false,
+        }
+    }
+
+    // `with EFFECT_LIST` — a function-signature effect clause (design.md § Effects).
+    // The selfhost AST does not model effects (the item oracle renders none), so
+    // this PARSES AND DISCARDS the clause, leaving `self.pos` at the body `{` (or
+    // `;` for a required trait-method signature). Grammar mirrors the seed's
+    // `parse_effect_list`: `with`, then either `_` (anonymous polymorphic) or a
+    // space-separated run of items — each a resource verb
+    // (`reads`/`writes`/`sends`/`receives`/`allocates`), an execution verb
+    // (`panics`/`blocks`/`suspends`), a user-defined verb, or an effect
+    // variable / group name (a bare identifier). A resource-bearing verb carries
+    // a `( ... )` argument list, balance-consumed. Only consumes when the current
+    // token is `with`, so it is a no-op on an effect-free signature.
+    fn skip_effect_clause(mut ref self) {
+        if not self.at_with() {
+            return;
+        }
+        self.advance(); // `with`
+        // `with _` (anonymous polymorphic).
+        if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Underscore => {
+                    self.advance();
+                    return;
+                }
+                _ => {}
+            }
+        }
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            let is_item = match self.tokens[self.pos].token {
+                Reads => true,
+                Writes => true,
+                Sends => true,
+                Receives => true,
+                Allocates => true,
+                Panics => true,
+                Blocks => true,
+                Suspends => true,
+                Identifier(_) => true,
+                _ => false,
+            };
+            if not is_item {
+                break;
+            }
+            self.advance(); // the verb / effect-var / group name
+            // Optional resource argument list `( ... )`.
+            let has_args = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    LeftParen => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if has_args {
+                self.skip_balanced_parens();
+            }
+        }
+    }
+
+    // `self.pos` is AT `(`. Consume through the matching `)`, tracking nested
+    // parens (bracketed resource params `Foo[expr]` ride along inside).
+    fn skip_balanced_parens(mut ref self) {
+        self.advance(); // `(`
+        let mut depth = 1;
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            match self.tokens[self.pos].token {
+                LeftParen => {
+                    depth = depth + 1;
+                }
+                RightParen => {
+                    depth = depth - 1;
+                }
+                _ => {}
+            }
+            self.advance();
+            if depth == 0 {
+                break;
+            }
+        }
+    }
+
     // The function node itself (no `Item` wrapper), shared by the free-function
     // path (`parse_fn_def`) and impl-method parsing (`parse_impl_block`). `start`
     // is captured at `fn` (after any `pub`), so the span matches the seed's
@@ -3081,6 +3178,7 @@ impl Parser {
             self.advance(); // `->`
             ret = Some(self.parse_type());
         }
+        self.skip_effect_clause();
         let body = self.parse_block();
         FnDefNode {
             is_pub: is_pub,
@@ -3153,6 +3251,7 @@ impl Parser {
             self.advance(); // `->`
             ret = Some(self.parse_type());
         }
+        self.skip_effect_clause();
         let has_body = if self.pos < self.tokens.len() {
             match self.tokens[self.pos].token {
                 LeftBrace => true,

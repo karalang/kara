@@ -999,7 +999,9 @@ impl Resolver {
                 // x` sees the prior `x`), then bind the pattern's variables.
                 let LetStmt { is_mut, pattern, value, span } = l;
                 self.resolve_expr(value);
-                self.bind_pattern(pattern);
+                // `let`-statement binding: reserved names DO raise (the seed's
+                // `define_binding_leaf`).
+                self.bind_pattern(pattern, true);
             }
             Assign(a) => {
                 let AssignStmt { target, value, span } = a;
@@ -1185,7 +1187,9 @@ impl Resolver {
                     self.push_scope();
                     // Bind the arm's pattern variables (and resolve any variant
                     // path) BEFORE the guard/body so they see the bindings.
-                    self.bind_pattern(pattern);
+                    // Match-arm binding: a reserved name is silently a binding
+                    // (the seed's `resolve_pattern` discards the define error).
+                    self.bind_pattern(pattern, false);
                     match guard {
                         Some(g) => {
                             self.resolve_expr(g);
@@ -1199,18 +1203,48 @@ impl Resolver {
         }
     }
 
-    // Bind a match-arm (or other) pattern's variables into the current scope and
-    // resolve any variant path — mirrors `resolve_refs.rs::resolve_pattern`. A
-    // bare `BindingPat` name is always a fresh (shadowable) binding, like the
-    // seed's `SymbolKind::Variable`; a `TupleVariantPat` also looks up its
-    // constructor path (UndefinedName at the pattern span on miss). Consumed BY
-    // VALUE (same codegen discipline as `resolve_expr`).
-    fn bind_pattern(mut ref self, p: Pattern) {
+    // Define a pattern-BINDING leaf variable. Mirrors the seed's split between
+    // two pattern-binding sites: a `let`-statement binding
+    // (`define_binding_leaf`, `record: true`) RECORDS a reserved-identifier
+    // error, whereas a match-arm binding (`resolve_pattern`'s
+    // `let _ = self.table.define(...)`, `record: false`) DISCARDS it — a bare
+    // uppercase arm like `Fn => ...` / `None => ...` is a fresh binding whose
+    // name may collide with a reserved identifier, and the seed deliberately
+    // suppresses that to avoid false positives on variant-shaped arms. In both
+    // cases a reserved name is NOT bound (the seed's `define` returns `Err`
+    // before inserting); a non-reserved name binds shadowably.
+    fn define_binding_pat(mut ref self, name: String, span: Span, record: bool) {
+        if self.is_reserved(name) {
+            if record {
+                self.push_err(3, span.offset, span.length);
+            }
+            return;
+        }
+        let existing = self.line_in_current(name);
+        if existing >= 0 {
+            self.set_line_in_current(name, span.line);
+            return;
+        }
+        self.binds.push(NameBinding {
+            name: name,
+            line: span.line,
+            scope: self.current,
+        });
+    }
+
+    // Bind a pattern's variables into the current scope and resolve any variant
+    // path — mirrors `resolve_refs.rs::resolve_pattern` (match arms) and
+    // `define_pattern_bindings_inner` (`let` statements). `record` selects
+    // whether a reserved-name BINDING leaf raises a diagnostic (true for `let`,
+    // false for a match arm — see `define_binding_pat`); a constructor-path
+    // lookup (`TupleVariantPat` / `StructPat`) reports UndefinedName in BOTH
+    // cases. Consumed BY VALUE (same codegen discipline as `resolve_expr`).
+    fn bind_pattern(mut ref self, p: Pattern, record: bool) {
         match p {
             WildcardPat(_) => {}
             BindingPat(n) => {
                 let BindingPattern { name, span } = n;
-                self.define_shadowable(name, span);
+                self.define_binding_pat(name, span, record);
             }
             IntPat(_) => {}
             FloatPat(_) => {}
@@ -1221,7 +1255,7 @@ impl Resolver {
             TuplePat(n) => {
                 let TuplePattern { elems, span } = n;
                 for e in elems {
-                    self.bind_pattern(e);
+                    self.bind_pattern(e, record);
                 }
             }
             TupleVariantPat(n) => {
@@ -1232,7 +1266,7 @@ impl Resolver {
                     }
                 }
                 for e in elems {
-                    self.bind_pattern(e);
+                    self.bind_pattern(e, record);
                 }
             }
             StructPat(n) => {
@@ -1250,10 +1284,10 @@ impl Resolver {
                     let StructFieldPat { name, pattern, span } = f;
                     match pattern {
                         Some(sub) => {
-                            self.bind_pattern(sub);
+                            self.bind_pattern(sub, record);
                         }
                         None => {
-                            self.define_shadowable(name, span);
+                            self.define_binding_pat(name, span, record);
                         }
                     }
                 }
@@ -1261,7 +1295,7 @@ impl Resolver {
             OrPat(n) => {
                 let OrPattern { alts, span } = n;
                 for a in alts {
-                    self.bind_pattern(a);
+                    self.bind_pattern(a, record);
                 }
             }
             ErrPat(_) => {}
