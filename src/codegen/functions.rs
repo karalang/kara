@@ -598,10 +598,14 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Emit ownership-derived LLVM pointer-aliasing attributes on parameters
-    /// (noalias-ref-params slice 1). Today this emits `noalias` on every
-    /// `mut ref T` parameter, lowering the language's exclusive-borrow
-    /// guarantee into the attribute LLVM's alias analysis and loop vectorizer
-    /// want but could never prove on their own.
+    /// (noalias-ref-params slice 1 + owned-params slice 2). Emits `noalias` on
+    /// two classes of pointer-shaped parameter, lowering the language's
+    /// declared parameter modes into the aliasing oracle LLVM's alias analysis
+    /// and loop vectorizer want but could never prove on their own:
+    ///
+    ///   1. every `mut ref T` parameter (the exclusive borrow), and
+    ///   2. every OWNED parameter of a value-semantics type that lowers to a
+    ///      single heap `ptr` (`owned_ptr_param_is_noalias_safe`).
     ///
     /// **Why `mut ref T` → `noalias` is sound.** A `mut ref T` is an
     /// *exclusive* borrow: while it is live, no other reference — shared or
@@ -618,15 +622,39 @@ impl<'ctx> super::Codegen<'ctx> {
     /// predicate is needed: even if `T` carries `Atomic[_]` / `Mutex[_]`
     /// fields, a `mut ref` to it is still the unique live path.
     ///
-    /// **The one carve-out: shared types.** A `shared struct` / `shared enum`
+    /// **Why an owned value-semantics `ptr` → `noalias` is sound.** An owned
+    /// parameter is *moved* into the callee — Kāra move-checking consumes the
+    /// source, so the parameter is the sole live handle to its value for the
+    /// body's duration. For a *value*-semantics type (a `.clone()`
+    /// deep-copies; there is no implicit sharing) the pointee heap block is
+    /// reachable only through pointers *derived from* this parameter — which
+    /// is exactly what `noalias` promises. Two owned params of the same type
+    /// cannot alias either: passing one value twice is impossible (the first
+    /// move consumes it), and two distinct owned values own two distinct
+    /// allocations. `owned_ptr_param_is_noalias_safe` is a POSITIVE allowlist
+    /// that fails *closed*: an owned `ptr` type not on it merely misses the
+    /// optimization (benign), whereas wrongly listing a reference-semantics
+    /// handle would miscompile. The deliberately EXCLUDED ptr-lowered owned
+    /// types are the ones where a second live handle to the same pointee can
+    /// exist — `Sender`/`Receiver`/`Channel` (refcounted; every clone carries
+    /// the same `KaracChannel` pointer), `shared` types (RC, caught by the
+    /// shared-type check below), `Weak`, and `Request` (a borrowed FFI
+    /// pointer). Owned by-value aggregates (`Vec` / `String` / small structs)
+    /// are NOT pointer params — their buffer pointer is a struct *field* — so
+    /// proving disjointness there needs load/store metadata, the same
+    /// separate slice as `mut Slice[T]` below.
+    ///
+    /// **The shared-type carve-out.** A `shared struct` / `shared enum`
     /// uses RC reference semantics with *per-field runtime borrow flags*
     /// (design.md § Part 5), so its exclusivity is a dynamic check, not a
     /// static one — exactly the assumption `noalias` must not rest on. The
     /// type system already forbids `mut ref self` on a shared type (a `mut
     /// ref` needs exclusive ownership, impossible under multiple RC holders),
-    /// so in principle none reach here; we nonetheless skip any `mut ref`
-    /// whose referent is a known shared type, closing the danger zone even if
-    /// a checker hole ever lets one through.
+    /// so in principle none reach the `mut ref` arm; we nonetheless skip any
+    /// `mut ref` whose referent is a known shared type
+    /// (`referent_is_shared_type`), closing the danger zone even if a checker
+    /// hole ever lets one through. (The owned arm needs no separate shared
+    /// check — shared types are simply absent from the allowlist.)
     ///
     /// **What is NOT a target.** `ref T` (shared read borrow) is deferred: it
     /// needs `readonly` gated on a transitive Freeze predicate because
@@ -636,37 +664,123 @@ impl<'ctx> super::Codegen<'ctx> {
     /// pointer is a field, not the parameter — so slice-kernel disjointness
     /// needs `!alias.scope`/`!noalias` metadata on the loads/stores
     /// (design.md:§ proven disjointness lowering), a separate slice.
-    /// Monomorphized generics are declared in `declare_mono_function`, not
-    /// here, so they are a follow-on for the same treatment.
     ///
-    /// **Index correspondence.** Kāra param `i` is LLVM param `i`: the niche
-    /// ABI rewrites param *types* but never reorders, and the coroutine ramp
-    /// appends its hidden completion slot *after* all Kāra params, so
-    /// `AttributeLoc::Param(i)` is correct on both paths. (`mut ref self`
+    /// **Index correspondence.** Kāra param `i` is LLVM param `i + sret_base`:
+    /// an `sret` result pointer (a larger-than-16 B `#[repr(C)]` struct
+    /// return) occupies `Param(0)` and shifts every Kāra param one slot right
+    /// — the same `sret_base` math the `byval`/`sret` attribute emission uses
+    /// in `declare_function`. The niche ABI rewrites param *types* but never
+    /// reorders, and the coroutine ramp appends its completion slot *after*
+    /// all Kāra params, so no further adjustment is needed. `mut ref self`
     /// receivers are desugared into `params[0]` upstream by
-    /// `make_impl_method_function`, so they are covered.)
-    fn emit_param_alias_attrs(&self, fn_val: FunctionValue<'ctx>, func: &Function) {
+    /// `make_impl_method_function`, so they are covered. Reached for both
+    /// non-generic fns (`declare_function`) and monomorphized specializations
+    /// (`declare_mono_function`); on the mono path a bare generic param
+    /// (`fn f[T](x: T)`) is resolved to its concrete instantiation name
+    /// through `type_subst_names` before the allowlist / shared-type checks.
+    pub(super) fn emit_param_alias_attrs(&self, fn_val: FunctionValue<'ctx>, func: &Function) {
         let noalias_kind = inkwell::attributes::Attribute::get_named_enum_kind_id("noalias");
         debug_assert!(noalias_kind != 0, "noalias attribute kind-id must resolve");
+        // An `sret` result pointer takes LLVM `Param(0)`, shifting Kāra param
+        // `i` to LLVM `Param(i + 1)`. Populated during `fn_type` construction,
+        // so it is already set here; always 0 on the mono path (monos are never
+        // `sret` exports).
+        let sret_base = u32::from(self.sret_struct_returns.contains_key(&func.name));
         for (i, param) in func.params.iter().enumerate() {
-            let TypeKind::MutRef(inner) = &param.ty.kind else {
-                continue;
+            let is_noalias = match &param.ty.kind {
+                // Exclusive borrow → `noalias`, minus the shared-type carve-out.
+                TypeKind::MutRef(inner) => !self.referent_is_shared_type(inner),
+                // Owned value-semantics single-`ptr` type → `noalias`.
+                _ => self.owned_ptr_param_is_noalias_safe(&param.ty),
             };
-            // Skip the shared-type carve-out (see doc comment): a `mut ref`
-            // to a `shared struct`/`shared enum` rests on runtime borrow
-            // flags, not static exclusivity.
-            if let TypeKind::Path(p) = &inner.kind {
-                if let Some(name) = p.segments.last() {
-                    if self.shared_types.contains_key(name.as_str()) {
-                        continue;
-                    }
-                }
+            if !is_noalias {
+                continue;
             }
+            // `noalias` is only valid on a pointer param; every type that
+            // reaches here lowers to `ptr` by construction (a `mut ref`, or an
+            // allowlisted single-`ptr` value type). Assert it so a future
+            // lowering change that violates the invariant fails a test rather
+            // than tripping the LLVM verifier at run time.
+            debug_assert!(
+                matches!(
+                    self.llvm_param_type(param),
+                    BasicMetadataTypeEnum::PointerType(_)
+                ),
+                "noalias emitted on a non-pointer param lowering"
+            );
             fn_val.add_attribute(
-                inkwell::attributes::AttributeLoc::Param(i as u32),
+                inkwell::attributes::AttributeLoc::Param(i as u32 + sret_base),
                 self.context.create_enum_attribute(noalias_kind, 0),
             );
         }
+    }
+
+    /// True when `inner` — the referent of a `ref`/`mut ref` — resolves to a
+    /// `shared struct`/`shared enum`. A bare generic param (`mut ref T` in a
+    /// generic body) is resolved through the active monomorphization subst
+    /// (`type_subst_names`) so a specialization with a shared type is still
+    /// recognized even though the AST still reads `T`.
+    fn referent_is_shared_type(&self, inner: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &inner.kind else {
+            return false;
+        };
+        let Some(head) = p.segments.last() else {
+            return false;
+        };
+        let name = self
+            .type_subst_names
+            .get(head)
+            .map(String::as_str)
+            .unwrap_or(head.as_str());
+        self.shared_types.contains_key(name)
+    }
+
+    /// True when `ty` is an OWNED parameter whose LLVM lowering is a single
+    /// `ptr` to a uniquely-owned, *value*-semantics heap block — the owned
+    /// half of the `noalias` aliasing oracle (see `emit_param_alias_attrs`).
+    ///
+    /// This is a **positive allowlist**, on purpose: an owned value that is
+    /// moved in is the sole live handle to its heap for the body's duration,
+    /// and a value-semantics type has no implicit sharing (`.clone()`
+    /// deep-copies), so nothing outside a pointer derived from this parameter
+    /// can reach the block — the `noalias` contract. Every listed name lowers
+    /// to a single `ptr` in `llvm_type_for_type_expr` (`Tensor` / `Column` /
+    /// `DataFrame` control-block pointers; `Map` / `Set` / `SortedMap` /
+    /// `SortedSet` opaque heap pointers). Excluded on purpose are the
+    /// ptr-lowered *reference*-semantics handles where a second live alias can
+    /// exist — `Sender`/`Receiver`/`Channel` (refcounted), `shared` types,
+    /// `Weak`, `Request` (borrowed FFI pointer), `File` (a handle that may
+    /// `dup` to an aliasing fd). Anything not listed simply misses the
+    /// optimization; nothing miscompiles.
+    ///
+    /// A bare generic param (`fn f[T](x: T)`) is resolved to its concrete
+    /// instantiation name through `type_subst_names` first, matching how
+    /// `llvm_type_for_type_expr` selects the lowering by the head segment.
+    /// `ref`/`mut ref`/`mut Slice`/`Weak` params are not a bare `Path` head
+    /// here, so they are excluded by shape before the name check.
+    fn owned_ptr_param_is_noalias_safe(&self, ty: &TypeExpr) -> bool {
+        // Value-semantics types that lower to a single heap `ptr`.
+        const OWNED_VALUE_PTR_TYPES: &[&str] = &[
+            "Tensor",
+            "Column",
+            "DataFrame",
+            "Map",
+            "Set",
+            "SortedMap",
+            "SortedSet",
+        ];
+        let TypeKind::Path(path) = &ty.kind else {
+            return false;
+        };
+        let Some(head) = path.segments.first() else {
+            return false;
+        };
+        let name = self
+            .type_subst_names
+            .get(head)
+            .map(String::as_str)
+            .unwrap_or(head.as_str());
+        OWNED_VALUE_PTR_TYPES.contains(&name)
     }
 
     /// Lower the codegen-hint attributes (`#[inline]`,

@@ -1292,7 +1292,16 @@ impl<'ctx> super::Codegen<'ctx> {
         self.fn_param_slice_elem
             .insert(mangled.to_string(), slice_elems);
 
-        Ok(self.module.add_function(mangled, fn_type, None))
+        let fn_val = self.module.add_function(mangled, fn_type, None);
+        // Ownership-derived `noalias` (owned-params slice 2): same treatment as
+        // the non-generic `declare_function`. On this path a bare generic param
+        // (`fn f[T](x: T)`) is resolved through the active `type_subst_names`
+        // inside the helper, so a specialization with a value-semantics `ptr`
+        // type (or a shared type, for the `mut ref` carve-out) is classified
+        // correctly. Monos are never `sret`/coroutine ramps, so the param-index
+        // math needs no shift.
+        self.emit_param_alias_attrs(fn_val, func);
+        Ok(fn_val)
     }
 
     /// Compile the body of a monomorphized specialization.

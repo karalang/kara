@@ -60116,6 +60116,94 @@ fn main() {
         );
     }
 
+    #[test]
+    fn owned_value_ptr_param_emits_noalias() {
+        // An OWNED value-semantics type that lowers to a single heap `ptr`
+        // (`Tensor` / `Map`) is moved into the callee — the sole live handle to
+        // its block — so it carries `noalias`. A reference-semantics handle
+        // (`Sender`, refcounted — every clone shares one channel pointer) and
+        // non-pointer params (a bare `i64`, an owned by-value struct) do NOT.
+        // See `owned_ptr_param_is_noalias_safe` in src/codegen/functions.rs.
+        let ir = ir_for(
+            r#"
+fn take_tensor(t: Tensor[f64, [2, 2]]) -> i64 { return t.rank(); }
+fn take_map(m: Map[String, i64]) -> i64 { return m.len(); }
+fn take_sender(s: Sender[i64]) -> i64 { return 0; }
+fn take_scalar(n: i64) -> i64 { return n; }
+struct Point { x: i64, y: i64 }
+fn take_struct(p: Point) -> i64 { return p.x; }
+fn main() {
+    let a: Tensor[f64, [2, 2]] = Tensor.zeros([2, 2]);
+    print(take_tensor(a));
+}
+"#,
+        );
+        // Owned value-semantics `ptr` types → noalias.
+        assert!(
+            define_line(&ir, "@take_tensor(").contains("noalias"),
+            "owned Tensor param should carry noalias: {}",
+            define_line(&ir, "@take_tensor(")
+        );
+        assert!(
+            define_line(&ir, "@take_map(").contains("noalias"),
+            "owned Map param should carry noalias: {}",
+            define_line(&ir, "@take_map(")
+        );
+        // Reference-semantics handle (refcounted channel end) → excluded.
+        assert!(
+            !define_line(&ir, "@take_sender(").contains("noalias"),
+            "owned Sender (refcounted) must not carry noalias: {}",
+            define_line(&ir, "@take_sender(")
+        );
+        // Non-pointer params — nothing to annotate.
+        assert!(
+            !define_line(&ir, "@take_scalar(").contains("noalias"),
+            "owned scalar param must not carry noalias: {}",
+            define_line(&ir, "@take_scalar(")
+        );
+        assert!(
+            !define_line(&ir, "@take_struct(").contains("noalias"),
+            "owned by-value struct param must not carry noalias: {}",
+            define_line(&ir, "@take_struct(")
+        );
+    }
+
+    #[test]
+    fn owned_value_ptr_param_noalias_in_monomorph() {
+        // The owned-param `noalias` reaches monomorphized specializations too:
+        // `declare_mono_function` calls `emit_param_alias_attrs`, and a bare
+        // generic param is resolved through `type_subst_names` before the
+        // allowlist check. Here `keep[T]` specialized with `T = Tensor[...]`
+        // (an owned bare-`T` param) and `tsum[T](Tensor[T, ...])` (an owned
+        // `Tensor`-headed param) both emit `noalias` on the moved-in tensor.
+        let ir = ir_for(
+            r#"
+fn tsum[T](t: Tensor[T, [2, 2]]) -> i64 { return t.rank(); }
+fn keep[T](x: T) -> T { return x; }
+fn main() {
+    let a: Tensor[f64, [2, 2]] = Tensor.zeros([2, 2]);
+    print(tsum(a));
+    let b: Tensor[f64, [2, 2]] = Tensor.zeros([2, 2]);
+    let c: Tensor[f64, [2, 2]] = keep(b);
+    print(c.rank());
+}
+"#,
+        );
+        // The mono symbols are mangled + quoted (`@"tsum$f64"`), so match on
+        // the `<name>$` mangling prefix rather than `@<name>`.
+        assert!(
+            define_line(&ir, "tsum$").contains("noalias"),
+            "owned Tensor param in a monomorph should carry noalias: {}",
+            define_line(&ir, "tsum$")
+        );
+        // Bare generic `T` resolved to `Tensor` through the mono subst.
+        assert!(
+            define_line(&ir, "keep$").contains("noalias"),
+            "owned bare-T param resolved to Tensor should carry noalias: {}",
+            define_line(&ir, "keep$")
+        );
+    }
+
     // ── Wrapping integer arithmetic (wrapping_add/sub/mul) ───────────────
     //
     // The non-trapping sibling of `+`/`-`/`*`: lowers to a bare add/sub/mul
