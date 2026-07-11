@@ -409,6 +409,45 @@ fn test_ref_deref_does_not_trigger() {
     assert!(diags.is_empty(), "expected no diagnostics, got: {diags:?}");
 }
 
+// ── Raw-pointer INSTANCE methods require `unsafe` (design.md § raw pointers:
+//    "Construction is safe; dereference is unsafe" — reads/writes/arithmetic
+//    through the pointer all require it). Peer of the `*p` deref rule above.
+
+#[test]
+fn test_raw_pointer_read_method_outside_unsafe_errors() {
+    let diags = lint_op("fn caller(p: *const i64) -> i64 { p.read() }");
+    assert_eq!(diags.len(), 1, "expected one error, got: {diags:?}");
+    assert_unsafe_op_diag(&diags, "raw-pointer `read`");
+}
+
+#[test]
+fn test_raw_pointer_read_method_inside_unsafe_accepted() {
+    let diags = lint_op("fn caller(p: *const i64) -> i64 { unsafe { p.read() } }");
+    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:?}");
+}
+
+#[test]
+fn test_raw_pointer_offset_method_outside_unsafe_errors() {
+    let diags = lint_op("fn caller(p: *const i64) { let _ = p.offset(1i64); }");
+    assert_eq!(diags.len(), 1, "expected one error, got: {diags:?}");
+    assert_unsafe_op_diag(&diags, "raw-pointer `offset`");
+}
+
+#[test]
+fn test_raw_pointer_write_method_outside_unsafe_errors() {
+    let diags = lint_op("fn caller(p: *mut i64) { p.write(9i64); }");
+    assert_eq!(diags.len(), 1, "expected one error, got: {diags:?}");
+    assert_unsafe_op_diag(&diags, "raw-pointer `write`");
+}
+
+#[test]
+fn test_raw_pointer_is_null_method_is_safe() {
+    // `p.is_null()` is the method-form of the safe `ptr.is_null(p)` — a
+    // null-bits check with no UB, so it needs no `unsafe { }`.
+    let diags = lint_op("fn caller(p: *const i64) -> bool { p.is_null() }");
+    assert!(diags.is_empty(), "is_null is safe; got: {diags:?}");
+}
+
 #[test]
 fn test_impl_method_unsafe_fn_call_outside_unsafe_errors() {
     let diags = lint_op(

@@ -3492,6 +3492,72 @@ fn main() {
         }
     }
 
+    /// UN-annotated chained pointer method dispatch: `let p1 = p.offset(1)` with
+    /// NO type annotation. Before the typechecker gained proper return-type
+    /// inference for pointer methods, `p.offset(..)` fell through to `Type::Error`,
+    /// so `p1` lost its `*const u8` type and `p1.read()` failed codegen with "no
+    /// handler for method 'read' on variable 'p1'". The annotated form
+    /// (`raw_pointer_offset_read_write` above) worked because the annotation pinned
+    /// the type; this pins the inference path.
+    #[test]
+    fn raw_pointer_unannotated_offset_chain() {
+        let src = "fn main() {\n\
+                   \x20   let s = c\"ABC\";\n\
+                   \x20   let p = s.as_ptr();\n\
+                   \x20   unsafe {\n\
+                   \x20       let p1 = p.offset(1i64);\n\
+                   \x20       let p2 = p1.offset(1i64);\n\
+                   \x20       println(p1.read());\n\
+                   \x20       println(p2.read());\n\
+                   \x20   }\n\
+                   }\n";
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "66\n67\n", "un-annotated offset chain reads B, C");
+        }
+    }
+
+    /// The self-hosting-relevant `char*` walk: a `mut` pointer reassigned via
+    /// `p = p.offset(1)` each iteration (un-annotated), reading each byte. This is
+    /// the exact shape a strlen-style / buffer-scan loop needs, and it only works
+    /// once `p.offset(..)` returns a proper `*const u8` (else the reassignment
+    /// re-types `p` to `Error` and the next `p.read()` fails).
+    #[test]
+    fn raw_pointer_buffer_walk_loop() {
+        let src = "fn main() {\n\
+                   \x20   let s = c\"ABCD\";\n\
+                   \x20   let mut p = s.as_ptr();\n\
+                   \x20   let mut i = 0i64;\n\
+                   \x20   let mut sum = 0i64;\n\
+                   \x20   unsafe {\n\
+                   \x20       while i < 4i64 {\n\
+                   \x20           sum = sum + (p.read() as i64);\n\
+                   \x20           p = p.offset(1i64);\n\
+                   \x20           i = i + 1i64;\n\
+                   \x20       }\n\
+                   \x20   }\n\
+                   \x20   println(sum);\n\
+                   }\n";
+        if let Some(out) = run_program(src) {
+            assert_eq!(out.trim(), "266", "65+66+67+68 = 266 (ABCD)");
+        }
+    }
+
+    /// `p.is_null()` method-form (design.md § raw pointers) — the safe null-bits
+    /// check. Live pointer → false, `ptr.null()` → true. No `unsafe { }` needed.
+    #[test]
+    fn raw_pointer_is_null_method() {
+        let src = "fn main() {\n\
+                   \x20   let s = c\"AB\";\n\
+                   \x20   let p = s.as_ptr();\n\
+                   \x20   let n: *const u8 = ptr.null();\n\
+                   \x20   if p.is_null() { println(\"p-null\"); } else { println(\"p-live\"); }\n\
+                   \x20   if n.is_null() { println(\"n-null\"); } else { println(\"n-live\"); }\n\
+                   }\n";
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "p-live\nn-null\n");
+        }
+    }
+
     /// Binding a row out of a BORROWED nested collection — `let row = m[i]`
     /// where `m: ref Vec[Vec[i64]]` — must dispatch `row.len()` / `row[j]` as
     /// the inner `Vec[i64]`. The integer-index inference used to peel `ref`

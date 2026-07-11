@@ -3721,6 +3721,49 @@ fn test_opaque_type_through_mut_pointer_accepted() {
     );
 }
 
+// ── Raw-pointer inherent method return types (design.md § "Method dispatch
+//    on raw pointers requires a known pointee"). These are inherent methods on
+//    `*const T` / `*mut T`; before proper return-type inference they fell
+//    through to `Type::Error`, breaking un-annotated `let`-bound chains.
+
+#[test]
+fn raw_pointer_offset_returns_same_pointer_type() {
+    typecheck_ok("fn f(p: *const u8) { let q: *const u8 = unsafe { p.offset(1i64) }; let _ = q; }");
+}
+
+#[test]
+fn raw_pointer_read_returns_pointee() {
+    typecheck_ok("fn f(p: *const u8) { let v: u8 = unsafe { p.read() }; let _ = v; }");
+}
+
+#[test]
+fn raw_pointer_write_returns_unit() {
+    typecheck_ok("fn f(p: *mut i64) { unsafe { p.write(9i64); } }");
+}
+
+#[test]
+fn raw_pointer_is_null_returns_bool() {
+    typecheck_ok("fn f(p: *const u8) -> bool { p.is_null() }");
+}
+
+#[test]
+fn raw_pointer_unannotated_offset_chain_typechecks() {
+    // The core fix: `p.offset(..)` returns `*const u8`, so an un-annotated
+    // `let p1 = p.offset(1)` keeps its pointer type and `p1.read()` resolves.
+    typecheck_ok("fn f(p: *const u8) -> u8 { unsafe { let p1 = p.offset(1i64); p1.read() } }");
+}
+
+#[test]
+fn raw_pointer_write_wrong_type_rejected() {
+    // `p.write(v)` checks `v: T` — a bool into a `*mut i64` is a mismatch.
+    let errors = typecheck_errors("fn f(p: *mut i64) { unsafe { p.write(true); } }");
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected a TypeMismatch on the write value, got: {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn test_opaque_type_by_value_inside_generic_behind_pointer_rejected() {
     // Boundary pin for the pointer exemption: the pointer makes only its

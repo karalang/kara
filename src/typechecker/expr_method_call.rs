@@ -1379,8 +1379,26 @@ impl<'a> super::TypeChecker<'a> {
         // needs the receiver pointee for the GEP/load/store, and `.read` /
         // `.write` results (`T` / unit) are not pointers. Mirrors the
         // `vector_method_receivers` fix for the same span collision.
-        if let Type::Pointer { inner, .. } = &obj_ty {
-            if matches!(
+        // Raw-pointer inherent methods (`*const T` / `*mut T`) — design.md
+        // § "Method dispatch on raw pointers requires a known pointee". These are
+        // inherent methods on the pointer type itself (no auto-deref to `T`), so
+        // they must be resolved here BEFORE the generic dispatch below (which
+        // would return `Type::Error` for a pointer receiver, silently degrading a
+        // `let p1 = p.offset(1)` intermediate to `Error` and breaking every
+        // downstream `p1.read()` — B-fixed here). `unsafe { }` is enforced
+        // separately by `unsafe_lint`; the pointee side-table feeds codegen.
+        if let Type::Pointer { inner, is_mut } = &obj_ty {
+            let is_mut = *is_mut;
+            let inner_ty = (**inner).clone();
+            // Record the pointee for every raw-pointer method so codegen can
+            // (a) identify the receiver as a raw pointer — the method-call span
+            // equals the receiver span, and the call's result type overwrites the
+            // receiver's `*T` entry in `expr_types`, so this side-table is how
+            // `compile_pointer_instance_method` recovers the pointer-ness — and
+            // (b) size its typed load/store/GEP. `is_null` ignores the pointee in
+            // its lowering (a null-bits check) and stays SAFE (no `unsafe { }`,
+            // matching `ptr.is_null(p)`), but still records it for (a).
+            let is_ptr_method = matches!(
                 method,
                 "offset"
                     | "add"
@@ -1390,10 +1408,58 @@ impl<'a> super::TypeChecker<'a> {
                     | "write"
                     | "write_unaligned"
                     | "write_volatile"
-            ) {
-                let pointee = Self::type_to_type_expr(inner);
+                    | "is_null"
+            );
+            if is_ptr_method {
+                let pointee = Self::type_to_type_expr(&inner_ty);
                 self.pointer_method_receiver_pointees
                     .insert(SpanKey::from_span(span), pointee);
+            }
+            let arg_count_ok = |s: &mut Self, want: usize| -> bool {
+                if args.len() != want {
+                    s.type_error(
+                        format!(
+                            "'{method}' on a raw pointer takes {want} argument{}",
+                            if want == 1 { "" } else { "s" }
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    return false;
+                }
+                true
+            };
+            match method {
+                // `p.offset(n) / p.add(n) -> *_ T` — same pointee + mutability.
+                "offset" | "add" => {
+                    if arg_count_ok(self, 1) {
+                        self.check_expr(&args[0].value, &Type::Int(IntSize::I64));
+                    }
+                    return Type::Pointer {
+                        is_mut,
+                        inner: Box::new(inner_ty),
+                    };
+                }
+                // `p.read() / read_unaligned() / read_volatile() -> T`.
+                "read" | "read_unaligned" | "read_volatile" => {
+                    arg_count_ok(self, 0);
+                    return inner_ty;
+                }
+                // `p.write(v) / write_unaligned(v) / write_volatile(v) -> Unit`,
+                // with `v: T`.
+                "write" | "write_unaligned" | "write_volatile" => {
+                    if arg_count_ok(self, 1) {
+                        self.check_expr(&args[0].value, &inner_ty);
+                    }
+                    return Type::Unit;
+                }
+                // `p.is_null() -> bool` — the method-form of `ptr.is_null(p)`
+                // (design.md § raw pointers). SAFE and pointee-agnostic.
+                "is_null" => {
+                    arg_count_ok(self, 0);
+                    return Type::Bool;
+                }
+                _ => {}
             }
         }
 

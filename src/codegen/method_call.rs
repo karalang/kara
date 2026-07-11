@@ -255,16 +255,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "write"
                 | "write_unaligned"
                 | "write_volatile"
+                | "is_null"
         ) {
             return Ok(None);
         }
-        let Some(pointee_te) = self
+        // The receiver's raw-pointer-ness is confirmed by a pointee entry (the
+        // typechecker records one for every pointer method — see
+        // `pointer_method_receiver_pointees`); a same-named user method on a
+        // non-pointer receiver has no entry and falls through to normal dispatch.
+        if !self
+            .raw_pointer_pointee_types
+            .contains_key(&(object.span.offset, object.span.length))
+        {
+            return Ok(None);
+        }
+        // `p.is_null() -> bool` — pointee-agnostic null-bits check, so it needs no
+        // pointee LLVM type and is handled before the sized-op pointee lookup.
+        if method == "is_null" {
+            let ptr_val = self.compile_expr(object)?.into_pointer_value();
+            let is_null = self
+                .builder
+                .build_is_null(ptr_val, "ptr.is_null")
+                .map_err(|e| format!("ptr.is_null: {e:?}"))?;
+            return Ok(Some(is_null.into()));
+        }
+        let pointee_te = self
             .raw_pointer_pointee_types
             .get(&(object.span.offset, object.span.length))
             .cloned()
-        else {
-            return Ok(None);
-        };
+            .expect("pointee entry present (checked above)");
         let pointee_llvm = self.llvm_type_for_type_expr(&pointee_te);
         let ptr_val = self.compile_expr(object)?.into_pointer_value();
         match method {

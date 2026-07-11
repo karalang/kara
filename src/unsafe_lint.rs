@@ -750,6 +750,52 @@ impl OpWalker<'_> {
                 ..
             } => {
                 if !in_unsafe {
+                    // Raw-pointer instance methods that read/write/offset THROUGH
+                    // the pointer require `unsafe { }` (design.md § raw pointers:
+                    // "Construction is safe; dereference is unsafe" — arithmetic,
+                    // reads, writes, unaligned/volatile all require it). The
+                    // receiver is identified via `pointer_method_receiver_pointees`
+                    // (the parser sets the method-call span == receiver span, so
+                    // `expr_types` at that span holds the call's RESULT type, not
+                    // `*T`; the typechecker records the receiver pointee in this
+                    // dedicated side-table). `is_null` is recorded there too (for
+                    // codegen), but is SAFE — a null-bits check has no UB — so it
+                    // is excluded here by method name.
+                    if matches!(
+                        method.as_str(),
+                        "read"
+                            | "read_unaligned"
+                            | "read_volatile"
+                            | "write"
+                            | "write_unaligned"
+                            | "write_volatile"
+                            | "offset"
+                            | "add"
+                    ) {
+                        if let Some(typed) = self.typed {
+                            if typed
+                                .pointer_method_receiver_pointees
+                                .contains_key(&SpanKey::from_span(&expr.span))
+                            {
+                                self.diags.push(LintDiagnostic {
+                                    level: LintLevel::Error,
+                                    span: expr.span.clone(),
+                                    message: format!(
+                                        "raw-pointer `{method}` must be wrapped in an \
+                                         `unsafe {{ ... }}` block"
+                                    ),
+                                    lint_name: "unsafe_op_in_unsafe_fn".to_string(),
+                                    help: Some(format!(
+                                        "wrap the `{method}` in `unsafe {{ ... }}` and add a \
+                                         `// Safety: ...` comment above the block explaining why \
+                                         the pointer is valid (per the `undocumented_unsafe` \
+                                         lint)."
+                                    )),
+                                    note: Some(UNSAFE_TWO_ROLES_NOTE.to_string()),
+                                });
+                            }
+                        }
+                    }
                     // Module-path call shape — the parser produces
                     // `MethodCall { object: Ident("ptr"), method: "from_exposed" }`
                     // for `ptr.from_exposed(addr)` (the leading identifier
