@@ -1,0 +1,351 @@
+// typechecker.kara — type inference / checking for the self-hosted compiler
+// (Phase 12, TypeChecker port Slice 1). Depends on span + ast
+// (DAG: span <- token <- ast <- typechecker). Mirrors the MINIMAL primitive
+// core of `src/typechecker.rs` + `src/typechecker/*`:
+//
+//   * A coarse TYPE CATEGORY per expression — NUM / BOOL / CHAR / STR /
+//     UNKNOWN. All numeric types (every int width + f32/f64) collapse to ONE
+//     category (NUM), reproducing the seed's numeric-literal leniency exactly:
+//     `let x: i64 = 1.5` and `fn f() -> f64 { 1 }` are BOTH accepted, while
+//     `bool` / `char` / `String` must match their category (verified against
+//     `karac::typecheck`). UNKNOWN (structs, generics, calls, comparisons,
+//     Vec, …) is never flagged — Slice 1 only fires when BOTH sides land in the
+//     known primitive set, matching the seed on the curated corpus.
+//   * Two checks, driven by literal inference over a full stmt/expr walk:
+//       - RETURN-TYPE mismatch: a fn whose declared `-> T` category is a known
+//         primitive and whose body-TAIL infers to a DIFFERENT known primitive
+//         is TypeMismatch (kind 0) at the tail span (seed: `ReturnTypeMismatch`
+//         surfaces as `TypeMismatch` on the block result).
+//       - CONDITION-not-bool: an `if <cond>` whose cond infers to a known
+//         NON-bool primitive is ConditionNotBool (kind 1) at the cond span.
+//
+// AST nodes are consumed BY VALUE and destructured (the resolver / ast_render
+// idiom): a match-bound `ref` to a nested node reads its `Vec` fields as empty
+// under codegen, so the walk owns each node and moves its fields out. Recursive
+// `Expr` children are `shared` (RC handles), walked by value.
+//
+// `check_expr` returns an `ExprInfo { category, span }` as it consumes each
+// node — so a caller learns both a sub-expression's category AND its span
+// without a separate by-ref peek. `Option[...]` is matched INLINE at every arm
+// (never passed by value to a helper): passing an `Option` payload moved out of
+// a recursive shared-enum node by value to a method double-frees it under
+// codegen (B-2026-07-11-37).
+//
+// The oracle renders ONLY (kind, offset, length) per type-error — messages,
+// the inferred-type map, and non-primitive checking are deferred to later
+// slices, exactly as the resolver oracle deferred its resolution map.
+
+import span.Span;
+import ast.{
+    Item,
+    FnDefNode,
+    GenericParamsNode,
+    SelfMode,
+    FnParamNode,
+    Block,
+    Stmt,
+    LetStmt,
+    AssignStmt,
+    ExprStmt,
+    Expr,
+    IdentExpr,
+    SpanNode,
+    BinaryExpr,
+    UnaryExpr,
+    TupleExpr,
+    CallExpr,
+    CallArg,
+    MethodCallExpr,
+    FieldAccessExpr,
+    TupleIndexExpr,
+    IndexExpr,
+    PathExpr,
+    IntLit,
+    FloatLit,
+    BoolLit,
+    CharLit,
+    StrLit,
+    StructLitField,
+    StructLitExpr,
+    IfExpr,
+    ReturnExpr,
+    WhileExpr,
+    ForExpr,
+    LoopExpr,
+    BreakExpr,
+    ContinueExpr,
+    MatchExpr,
+    MatchArm,
+    TypeExpr,
+    PathType,
+    AttrNode,
+};
+
+// ── Categories ──
+// 0 NUM   — every int width (i8..i128, u8..u128, usize) + f32/f64, and int /
+//           float literals. A single category: all numerics are mutually
+//           compatible at this layer (the seed's literal-coercion leniency).
+// 1 BOOL  — `bool`, `true`/`false`.
+// 2 CHAR  — `char`, char literals.
+// 3 STR   — `String`, string / multi-string literals.
+// 4 UNKNOWN — anything else; never flagged.
+
+// The inferred category of an expression plus the span to anchor a diagnostic.
+struct ExprInfo {
+    category: i64,
+    span: Span,
+}
+
+// A type error: `kind` is 0=TypeMismatch, 1=ConditionNotBool; `off`/`len` are
+// the byte span. Mirrors the resolver's `ResolveError` shape so the oracle
+// renders both identically.
+pub struct TypeError {
+    kind: i64,
+    off: i64,
+    len: i64,
+}
+
+struct Checker {
+    errors: Vec[TypeError],
+}
+
+// ── Entry point ──
+//
+// Type-check a whole program (a `Vec[Item]`) and return its type errors in
+// traversal order. Slice 1 needs no resolve result: the two checks are driven
+// by local literal inference, so the checker builds nothing from a symbol
+// table (identifier / param inference lands with the binding-env slice). Walks
+// each item; only `fn` bodies carry checkable expressions.
+pub fn typecheck_program(items: Vec[Item]) -> Vec[TypeError] with panics {
+    let mut c = Checker { errors: Vec.new() };
+    for it in items {
+        c.check_item(it);
+    }
+    let Checker { errors } = c;
+    errors
+}
+
+impl Checker {
+    fn push_err(mut ref self, kind: i64, off: i64, len: i64) {
+        self.errors.push(TypeError { kind: kind, off: off, len: len });
+    }
+
+    fn check_item(mut ref self, item: Item) {
+        match item {
+            Func(f) => {
+                self.check_function(f);
+            }
+            Use(_) => {}
+            Const(_) => {}
+            TypeAlias(_) => {}
+            Struct(_) => {}
+            Enum(_) => {}
+            Trait(_) => {}
+            Impl(_) => {}
+            ErrItem(_) => {}
+        }
+    }
+
+    fn check_function(mut ref self, f: FnDefNode) {
+        let FnDefNode {
+            is_pub,
+            name,
+            generics,
+            self_mode,
+            params,
+            ret,
+            body,
+            attributes,
+            doc,
+            span,
+        } = f;
+        // Declared return category. Match the `Option[TypeExpr]` INLINE (never
+        // pass it by value to a helper — B-2026-07-11-37); only the unwrapped
+        // `TypeExpr` reaches `category_of_type`.
+        let mut rc = 4;
+        match ret {
+            Some(t) => {
+                rc = category_of_type(t);
+            }
+            None => {}
+        }
+        // Walk the body (finds nested `if`s for the condition check) and learn
+        // the body-TAIL's category + span for the return-type check.
+        let tinfo = self.check_block(body);
+        // Return-type mismatch only when BOTH the declared return and the tail
+        // land in the known primitive set and their categories are incompatible
+        // (NUM==NUM regardless of width; else exact category equality).
+        if rc <= 3 and tinfo.category <= 3 {
+            if not cats_compatible(rc, tinfo.category) {
+                self.push_err(0, tinfo.span.offset, tinfo.span.length);
+            }
+        }
+    }
+
+    // Walk a block: check every statement (for nested `if`s), then return the
+    // TAIL's `ExprInfo` (UNKNOWN at the block span when there is no tail).
+    fn check_block(mut ref self, b: Block) -> ExprInfo {
+        let Block { stmts, tail, span } = b;
+        for st in stmts {
+            self.check_stmt(st);
+        }
+        match tail {
+            Some(e) => self.check_expr(e),
+            None => ExprInfo { category: 4, span: span },
+        }
+    }
+
+    fn check_stmt(mut ref self, st: Stmt) {
+        match st {
+            Let(n) => {
+                let LetStmt { is_mut, pattern, value, span } = n;
+                let vi = self.check_expr(value);
+            }
+            Assign(n) => {
+                let AssignStmt { target, value, span } = n;
+                let ti = self.check_expr(target);
+                let vi = self.check_expr(value);
+            }
+            Exp(n) => {
+                let ExprStmt { expr, span } = n;
+                let ei = self.check_expr(expr);
+            }
+        }
+    }
+
+    // Consume `e`, returning its category + span. Literals infer their category;
+    // `if` runs the condition check and recurses; `block` returns its tail info;
+    // every other form returns UNKNOWN (the caller ignores the span for UNKNOWN,
+    // so a placeholder span is safe). Slice 1's corpus keeps `if`s at statement /
+    // tail / branch position, so the non-recursing UNKNOWN arms hide no `if`.
+    fn check_expr(mut ref self, e: Expr) -> ExprInfo {
+        match e {
+            Int(n) => {
+                let IntLit { value, suffix, span } = n;
+                ExprInfo { category: 0, span: span }
+            }
+            Float(n) => {
+                let FloatLit { value, suffix, span } = n;
+                ExprInfo { category: 0, span: span }
+            }
+            Bool(n) => {
+                let BoolLit { value, span } = n;
+                ExprInfo { category: 1, span: span }
+            }
+            Char(n) => {
+                let CharLit { value, span } = n;
+                ExprInfo { category: 2, span: span }
+            }
+            Str(n) => {
+                let StrLit { value, span } = n;
+                ExprInfo { category: 3, span: span }
+            }
+            MultiStr(n) => {
+                let StrLit { value, span } = n;
+                ExprInfo { category: 3, span: span }
+            }
+            Blk(b) => self.check_block(b),
+            If(n) => {
+                let IfExpr { cond, then_block, else_branch, span } = n;
+                let ci = self.check_expr(cond);
+                // A known NON-bool primitive condition is ConditionNotBool.
+                if ci.category == 0 or ci.category == 2 or ci.category == 3 {
+                    self.push_err(1, ci.span.offset, ci.span.length);
+                }
+                self.check_block(then_block);
+                match else_branch {
+                    Some(eb) => {
+                        let ebi = self.check_expr(eb);
+                    }
+                    None => {}
+                }
+                ExprInfo { category: 4, span: span }
+            }
+            _ => ExprInfo { category: 4, span: zero_span() },
+        }
+    }
+}
+
+// ── Category helpers ──
+
+// Map a declared type to its category. Only single-rooted `PathTy` primitives
+// are recognised; everything else (generics, tuples, pointers, Vec, user types)
+// is UNKNOWN and therefore never drives a Slice-1 mismatch.
+fn category_of_type(t: TypeExpr) -> i64 {
+    match t {
+        PathTy(p) => {
+            let PathType { segments, generics, span } = p;
+            if segments.len() == 0 {
+                return 4;
+            }
+            cat_of_name(segments[0])
+        }
+        _ => 4,
+    }
+}
+
+fn cat_of_name(name: ref String) -> i64 {
+    if name == "i8" or name == "i16" or name == "i32" or name == "i64" {
+        return 0;
+    }
+    if name == "i128" or name == "u8" or name == "u16" or name == "u32" {
+        return 0;
+    }
+    if name == "u64" or name == "u128" or name == "usize" {
+        return 0;
+    }
+    if name == "f32" or name == "f64" {
+        return 0;
+    }
+    if name == "bool" {
+        return 1;
+    }
+    if name == "char" {
+        return 2;
+    }
+    if name == "String" {
+        return 3;
+    }
+    4
+}
+
+// Two KNOWN categories are compatible iff equal — NUM is a single category, so
+// i64 vs f64 (both NUM) is compatible, reproducing the seed's numeric leniency.
+fn cats_compatible(a: i64, b: i64) -> bool {
+    a == b
+}
+
+fn zero_span() -> Span {
+    Span { offset: 0, length: 0, line: 0, column: 0 }
+}
+
+// ── Render (oracle) ──
+
+fn kind_tag(kind: i64) -> String {
+    if kind == 0 {
+        return "type-mismatch".to_string();
+    }
+    "cond-not-bool".to_string()
+}
+
+pub fn render_errors(errs: Vec[TypeError]) -> String {
+    if errs.len() == 0 {
+        return "(ok)".to_string();
+    }
+    let mut out = "".to_string();
+    let mut i = 0;
+    for e in errs {
+        if i > 0 {
+            out.push_str(" ");
+        }
+        out.push_str("(");
+        out.push_str(kind_tag(e.kind));
+        out.push_str(" @");
+        out.push_str(e.off.to_string());
+        out.push_str(":");
+        out.push_str(e.len.to_string());
+        out.push_str(")");
+        i = i + 1;
+    }
+    out
+}
