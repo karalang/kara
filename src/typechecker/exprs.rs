@@ -3260,11 +3260,26 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Par(block) => {
                 // Phase 6 line 170 slice 3b — cross-task-safe boundary
                 // check: every binding the parallel branches read from the
-                // enclosing scope crosses a task boundary. Run before
-                // `infer_block` pushes the par block's own scope so the
-                // snapshot is the enclosing scope.
+                // enclosing scope crosses a task boundary. Run before the
+                // branch bindings enter the enclosing scope so the snapshot
+                // is the pre-par scope.
                 self.check_cross_task_safe_par_block(block, &expr.span);
-                self.infer_block(block)
+                // The join barrier hoists each branch's top-level `let` into
+                // the ENCLOSING scope (no fresh block scope, unlike
+                // `infer_block`) so the bindings are live after the `par {}`
+                // statement — the shape `par { let a = f(); let b = g(); }
+                // (a, b)` needs. Mirrors the resolver's hoisting and the
+                // auto-parallelizer's enclosing-scope grouped locals
+                // (B-2026-07-11-3). Sibling isolation is already enforced by
+                // the resolver, so branch reads are known-valid here.
+                for stmt in &block.stmts {
+                    self.check_stmt(stmt);
+                }
+                if let Some(ref tail) = block.final_expr {
+                    self.infer_expr(tail)
+                } else {
+                    Type::Unit
+                }
             }
 
             ExprKind::Lock { mutex, alias, body } => {

@@ -5150,3 +5150,24 @@ fn test_par_tail_expression_sees_all_branch_bindings() {
          }",
     );
 }
+
+#[test]
+fn test_par_branch_bindings_escape_to_enclosing_scope() {
+    // B-2026-07-11-3: the join barrier hoists each branch's top-level `let`
+    // into the ENCLOSING scope, so branch results are usable AFTER the
+    // `par { }` block — not only in a tail expression. This is the exact
+    // shape `examples/db_pipeline`'s `execute_pair` and design.md's
+    // structured-concurrency model rely on. Pre-fix this errored with
+    // `undefined name 'a'` after the block.
+    resolve_ok(
+        "fn fa() -> i64 { return 10; }\n\
+         fn fb() -> i64 { return 20; }\n\
+         fn main() {\n\
+             par {\n\
+                 let a = fa();\n\
+                 let b = fb();\n\
+             }\n\
+             println(a + b);\n\
+         }",
+    );
+}

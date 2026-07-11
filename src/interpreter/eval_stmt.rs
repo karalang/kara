@@ -340,8 +340,11 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
-        // 2. Merge defined variables
-        self.env.push_scope();
+        // 2. Merge defined variables into the CURRENT (enclosing) scope so
+        //    they outlive the `par {}` block — the join barrier hoists each
+        //    branch's `let` into the enclosing scope, matching the resolver /
+        //    typechecker and the shape `par { let a = f(); let b = g(); }
+        //    (a, b)` needs (B-2026-07-11-3). No private scope is pushed.
         for (_, vars, _, _, _) in &branch_results {
             for (name, val) in vars {
                 // Skip prelude/function definitions
@@ -361,23 +364,22 @@ impl<'a> super::Interpreter<'a> {
                 if matches!(cf, ControlFlow::Cancelled) {
                     continue;
                 }
-                self.env.pop_scope();
                 return Err(cf);
             }
         }
 
-        // 4. Final expression (par blocks don't have a final_expr in current design)
+        // 4. Final expression (usually absent — the join hoists bindings into
+        //    the enclosing scope for use after the block; the tail form
+        //    `par { …; (a, b) }` still evaluates its value here).
         let result = if let Some(ref expr) = block.final_expr {
             let v = self.eval_expr_inner(expr);
             if let Some(cf) = self.pending_cf.take() {
-                self.env.pop_scope();
                 return Err(cf);
             }
             v
         } else {
             Value::Unit
         };
-        self.env.pop_scope();
         Ok(result)
     }
 

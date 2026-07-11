@@ -97,14 +97,20 @@ impl<'a> super::Resolver<'a> {
     /// child scope, with sibling branches' bindings invisible — reads of
     /// them get the tailored cross-branch diagnostic via
     /// `par_sibling_bindings` (consulted in `error_undefined_name`).
-    /// The block's TAIL expression is the join point: every branch's
-    /// bindings are (re-)defined into the block scope before it resolves,
-    /// so `par { let a = f(); let b = g(); (a, b) }` keeps working.
+    ///
+    /// The join barrier hoists every branch's top-level `let` bindings into
+    /// the ENCLOSING scope, so they stay live both for the block's optional
+    /// tail expression AND for code after the `par {}` statement — e.g.
+    /// `par { let a = f(); let b = g(); } (a, b)` and the tail form
+    /// `par { let a = f(); let b = g(); (a, b) }` both work (B-2026-07-11-3,
+    /// the shape `examples/db_pipeline`'s `execute_pair` and design.md's
+    /// structured-concurrency model rely on). Hoisting rather than a private
+    /// block scope mirrors the auto-parallelizer, whose grouped `let`s are
+    /// ordinary enclosing-scope locals live after the group.
     pub(crate) fn resolve_par_block(&mut self, block: &Block) {
         let branch_bindings: Vec<Vec<(String, Span, bool)>> =
             block.stmts.iter().map(Self::par_branch_bindings).collect();
 
-        self.table.push_scope(ScopeKind::Block);
         for (i, stmt) in block.stmts.iter().enumerate() {
             // Merge the outer frame (nested `par`s: an outer par's sibling
             // set stays active inside an inner branch) with this par's
@@ -124,7 +130,9 @@ impl<'a> super::Resolver<'a> {
             self.table.pop_scope();
             self.par_sibling_bindings = saved;
         }
-        // Join point: all branch bindings become visible for the tail.
+        // Join point: every branch's bindings are (re-)defined into the
+        // ENCLOSING scope so they outlive the block (visible to the tail
+        // expression and to any code after the `par {}` statement).
         for binds in &branch_bindings {
             for (name, span, is_mut) in binds {
                 if let Err(e) = self.table.define_shadowable(
@@ -140,7 +148,6 @@ impl<'a> super::Resolver<'a> {
         if let Some(ref expr) = block.final_expr {
             self.resolve_expr(expr);
         }
-        self.table.pop_scope();
     }
 
     pub(crate) fn resolve_stmt(&mut self, stmt: &Stmt) {

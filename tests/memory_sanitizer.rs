@@ -8115,6 +8115,32 @@ fn main() {
         );
     }
 
+    /// B-2026-07-11-3: branch bindings that OWN HEAP (String) escape the
+    /// `par {}` block into the enclosing scope and are consumed AFTER the
+    /// block (no tail expression) — the join hoist. Each branch buffer now
+    /// transfers into a parent return slot and is dropped at the enclosing
+    /// scope's end like any other `let`, exactly once. Asserts no leak
+    /// (LSan) and no use-after-free / double-free (ASAN) on the escaped
+    /// heap owners — the class that broadening the codegen slot set to
+    /// every branch binding could have regressed.
+    #[test]
+    fn asan_par_block_heap_bindings_escape_no_double_free() {
+        assert_clean_asan_run_with_ownership(
+            r#"
+fn label(n: i64) -> String { f"v{n}" }
+fn main() {
+    par {
+        let sa = label(1);
+        let sb = label(2);
+    }
+    println(sa);
+    println(sb);
+}
+"#,
+            "par_block_heap_bindings_escape_no_double_free",
+        );
+    }
+
     /// Variant of `run_under_asan` that threads `ConcurrencyAnalysis`
     /// into codegen. Slice A (Phase-7 — Par codegen: return values)
     /// turns class-(ii) let-bindings inside an inferred parallel

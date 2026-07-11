@@ -139,8 +139,6 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         block: &Block,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        use std::collections::{HashMap, HashSet};
-
         // Step 1 — Identify branch-local let-introduced bindings and the
         // branch index that defines each. Branches are top-level
         // statements in source order; statement index = branch index for
@@ -158,25 +156,19 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // Step 2 — Collect names referenced by the join expression
-        // (block.final_expr). Names defined inside the join expression
-        // itself (let-introduced via nested blocks) are subtracted from
-        // the read set. Only names actually consumed by the join become
-        // slots; names only used inside their own branch remain
-        // branch-local with no slot.
-        let mut refs: HashSet<String> = HashSet::new();
-        let mut defs: HashSet<String> = HashSet::new();
-        if let Some(e) = &block.final_expr {
-            self.refs_in_expr(e, &mut refs, &mut defs);
-        }
-
-        // Step 3 — For each defined name read by the join, infer the
-        // LLVM type from the let-statement's RHS and build a
-        // ReturnSlot. Sort by binding name for deterministic slot
-        // layout (matches the auto-par dispatch's slot ordering).
+        // Step 2 — The join barrier hoists EVERY top-level branch `let`
+        // binding into the surrounding scope (B-2026-07-11-3), so each one
+        // becomes a return slot — not just names read by an optional tail
+        // expression. This is the shape `par { let a = f(); let b = g(); }
+        // (a, b)` needs: the consuming code sits AFTER the block, invisible
+        // to `block.final_expr`, so a final-expr-only read set missed it and
+        // the binding never got a slot. A binding that turns out unused
+        // after the block is simply an unused local (its value still
+        // transfers out and drops at the enclosing scope's end, like any
+        // other `let`). Slots are sorted by (branch index, name) for a
+        // deterministic layout, matching the auto-par dispatch's ordering.
         let mut names_with_branch: Vec<(usize, String, &Stmt)> = defined
             .into_iter()
-            .filter(|(name, _)| refs.contains(name))
             .map(|(name, (branch_idx, stmt))| (branch_idx, name, stmt))
             .collect();
         names_with_branch.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));

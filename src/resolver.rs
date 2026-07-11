@@ -1124,7 +1124,7 @@ impl<'a> Resolver<'a> {
         if let Some(sibling_span) = self.par_sibling_bindings.get(name) {
             self.errors.push(ResolveError {
                 message: format!(
-                    "cannot read '{}' from a sibling `par` branch: each top-level statement in a `par {{ }}` block is a concurrent branch with its own scope (bound at {}:{}); combine branch results in the block's tail expression instead",
+                    "cannot read '{}' from a sibling `par` branch: each top-level statement in a `par {{ }}` block is a concurrent branch with its own scope (bound at {}:{}); the branch bindings are only combinable after the join — in the block's tail expression or after the `par {{ }}` block",
                     name, sibling_span.line, sibling_span.column,
                 ),
                 span,

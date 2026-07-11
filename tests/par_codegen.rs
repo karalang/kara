@@ -1909,6 +1909,38 @@ fn main() {
         }
     }
 
+    /// B-2026-07-11-3: branch bindings escape the `par {}` block into the
+    /// ENCLOSING scope, so they are usable AFTER the block with no tail
+    /// expression — the `examples/db_pipeline::execute_pair` shape. Pre-fix
+    /// this failed resolution ("undefined name 'ra'") after the block; the
+    /// fix hoists each branch `let` (resolver/typechecker/interpreter) and,
+    /// in codegen, gives EVERY branch binding a return slot bound into the
+    /// surrounding scope (not just names read by an optional tail expr).
+    #[test]
+    fn test_e2e_par_block_bindings_escape_to_enclosing_scope() {
+        let out = run_program(
+            r#"
+fn double(x: i64) -> i64 { x * 2 }
+fn main() {
+    let a: i64 = 10;
+    let b: i64 = 20;
+    par {
+        let ra = double(a);
+        let rb = double(b);
+    }
+    println(ra + rb);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "60\n",
+                "par-block branch bindings must escape into the enclosing scope and be \
+                 usable after the block (the db_pipeline execute_pair shape)"
+            );
+        }
+    }
+
     /// Bug #6 follow-up: richer `par {}` block with four branches
     /// each binding a value, summed at the join. Stress-tests slot
     /// layout determinism, branch-to-parent type propagation for
