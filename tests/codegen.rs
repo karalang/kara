@@ -4474,6 +4474,48 @@ fn main() {
         }
     }
 
+    /// B-2026-07-11-25: a GENERIC struct's ASSOCIATED function (`W.make(7)` for
+    /// `impl[T] W[T]`) returning a struct was miscompiled — the call fell through
+    /// `compile_assoc_call` (which only knows concrete `module.get_function`
+    /// names) to its `Ok(const 0)` tail, silently returning a ZEROED struct
+    /// (native printed 0 / OOM'd on a Vec field; the interpreter was correct).
+    /// The generic impl method lives only in `generic_fns`, so the 2-segment
+    /// `Path` dispatch now routes it through `compile_generic_call` like a generic
+    /// free fn. Covers: arg-inferred `T` (`make(7)`), return-annotation `T`
+    /// (`S.new()` with no args), a `Vec[T]` field driven through push/len (the
+    /// original OOM shape), a `String` instantiation, a method on the returned
+    /// value, a two-type-param generic, and two distinct `i64` monomorphs.
+    #[test]
+    fn e2e_generic_assoc_fn_returns_struct() {
+        if let Some(out) = run_program(
+            "struct W[T] { v: T }\n\
+             impl[T] W[T] { fn make(x: T) -> W[T] { W { v: x } } fn get(ref self) -> T { self.v } }\n\
+             struct S[T] { items: Vec[T] }\n\
+             impl[T] S[T] {\n\
+             \x20   fn new() -> S[T] { S { items: Vec.new() } }\n\
+             \x20   fn push(mut ref self, x: T) { self.items.push(x); }\n\
+             \x20   fn len(ref self) -> i64 { self.items.len() }\n\
+             }\n\
+             struct P[A, B] { a: A, b: B }\n\
+             impl[A, B] P[A, B] { fn of(x: A, y: B) -> P[A, B] { P { a: x, b: y } } }\n\
+             fn main() {\n\
+             \x20   let w: W[i64] = W.make(7);\n\
+             \x20   println(f\"{w.get()}\");\n\
+             \x20   let ws: W[String] = W.make(\"hi\");\n\
+             \x20   println(ws.v);\n\
+             \x20   let mut s: S[i64] = S.new();\n\
+             \x20   s.push(10); s.push(20); s.push(30);\n\
+             \x20   println(f\"{s.len()}\");\n\
+             \x20   let p: P[i64, String] = P.of(5, \"z\");\n\
+             \x20   println(f\"{p.a}\"); println(p.b);\n\
+             \x20   let a: W[i64] = W.make(1); let b: W[i64] = W.make(2);\n\
+             \x20   println(f\"{a.v + b.v}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "7\nhi\n3\n5\nz\n3\n");
+        }
+    }
+
     /// B-2026-07-03-11: dispatch a trait method called through a GENERIC
     /// TYPE-PARAMETER BOUND under `karac build`. `fn use_it[X: Tagged](x: X)`
     /// calling `x.tag()` used to die with "no handler for method tag on

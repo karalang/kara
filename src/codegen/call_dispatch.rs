@@ -422,6 +422,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return self.compile_ambient_resource_method(&segments[0], &segments[1], args);
                 }
+                // A GENERIC user type's ASSOCIATED fn (`W.make(7)` for
+                // `impl[T] W[T]`) lives ONLY in `generic_fns` — the impl-method
+                // declaration pass registers it there rather than as a concrete
+                // module function (a bare `W.make` would get the all-`i64`
+                // default). `compile_assoc_call`'s `module.get_function("W.make")`
+                // lookup therefore misses it and the call fell through to that
+                // method's `Ok(const 0)` tail, SILENTLY returning a ZEROED struct
+                // (B-2026-07-11-25). Route it through the same monomorphization
+                // pipeline a generic free fn / instance method uses
+                // (B-2026-07-03-15/-23) — `infer_type_args` binds the type params
+                // from the call. Keyed by the LITERAL segment name, so a
+                // `T.assoc()` inside a monomorph (the segment is the param name
+                // `T`, never a registered key) is unaffected and keeps its
+                // `compile_assoc_call` type-subst remap.
+                let qualified = format!("{}.{}", segments[0], segments[1]);
+                if self.generic_fns.contains_key(&qualified) {
+                    // Explicit turbofish args (`W[i64].make(..)`) ride in the path
+                    // itself and are rare for an associated ctor; the common
+                    // `W.make(7)` infers its type params from the args
+                    // (`infer_type_args`) and a no-arg `S.new()` from the
+                    // typechecker's recorded per-call type args.
+                    return self.compile_generic_call(&qualified, args, None, call_span);
+                }
                 return self.compile_assoc_call(&segments[0], &segments[1], args);
             }
         }

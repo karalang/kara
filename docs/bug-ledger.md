@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **368 surfaced · 4 open · 362 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **369 surfaced · 4 open · 363 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -100,9 +100,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **368 surfaced 
 | B-2026-07-11-23 | 2026-07-11 | interp+codegen | medium | `mut ref` closure capture (mutation of a captured mutable local) is unimplemented: a closure that writes a captured name mutates a SNAPSHOT, not the outer binding. Stored closures drop the mutation in BOTH interp and codegen; the inlined iterator terminals (fold/any/all) DIVERGE — codegen inlines (mutates outer = design-correct) while the interpreter snapshots. | unfixed; repros below |
 | B-2026-07-11-24 | 2026-07-11 | codegen | high | Passing a `Vec[Vec[Option[shared]]]` ELEMENT by value to a consuming (cloning) callee corrupts the heap when the outer Vec GROWS in a loop — silent wrong answer at small sizes, double-free crash at larger; interpreter correct | kata #95 second surface |
 
-### Fixed (362)
+### Fixed (363)
 
-<details><summary>362 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>363 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -468,6 +468,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **368 surfaced 
 | B-2026-07-11-20 | codegen | low | GPU helper-call gathering (reachable_helpers, GPU-LBM-5) misses #[gpu] helper calls inside Index / let-RHS / MethodCall / Cast positions, so a valid… | gpu_wgsl::reachable_helpers: add Index/MethodCall/Cast arms to calls_in and a StmtKind::Let arm to calls_in_block so #[gpu] helper calls in those AST positions are gathered into the reachable-helper set. |
 | B-2026-07-11-21 | codegen | high | SILENT: reusing an owned `Option[shared struct]` value across two by-value consuming calls whose callee CLONES the matched subtree double-frees under… | 43e1354 |
 | B-2026-07-11-22 | codegen | high | DOUBLE-FREE: `for it in vec { match it { Variant(payload) => .. | 6dbe1fb |
+| B-2026-07-11-25 | codegen | high | SILENT MISCOMPILE: a GENERIC struct's ASSOCIATED function returning a struct (`impl[T] W[T] { fn make(x: T) -> W[T] { W{v:x} } }` called `W.make(7)`)… | this commit |
 
 </details>
 

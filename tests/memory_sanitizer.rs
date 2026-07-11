@@ -442,6 +442,41 @@ fn main() {
     }
 
     #[test]
+    fn asan_generic_assoc_fn_vec_field_no_leak() {
+        // B-2026-07-11-25 — a generic struct `S[T]` whose associated constructor
+        // `S.new()` returns `S { items: Vec.new() }`, then pushes through
+        // `mut ref self`. Before the fix the constructor returned a ZEROED struct
+        // (its `items` a garbage Vec header), so pushes reallocated against
+        // garbage (OOM / corruption). Now that `S.new()` monomorphizes correctly,
+        // this asserts the Vec[T] field it builds is a real `{null,0,0}` that
+        // grows and frees cleanly — no leak, no double-free — across a
+        // String-element instantiation (heap payloads) built and dropped in a loop.
+        assert_clean_asan_run(
+            r#"
+struct S[T] { items: Vec[T] }
+impl[T] S[T] {
+    fn new() -> S[T] { S { items: Vec.new() } }
+    fn push(mut ref self, x: T) { self.items.push(x); }
+    fn len(ref self) -> i64 { self.items.len() }
+}
+fn main() {
+    let mut r: i64 = 0;
+    while r < 3 {
+        let mut s: S[String] = S.new();
+        s.push(f"row-{r}-aaaa");
+        s.push(f"row-{r}-bbbb");
+        s.push(f"row-{r}-cccc");
+        println(f"{s.len()}");
+        r = r + 1;
+    }
+}
+"#,
+            &["3", "3", "3"],
+            "asan_generic_assoc_fn_vec_field_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_pipeline_example_no_leak() {
         // examples/pipeline.kara under ASAN — the log-analytics pipeline runs
         // `iter()` chains of `map`/`filter`/`fold`/`collect` over `Req` records
