@@ -14,7 +14,67 @@
 //! `libkarac_runtime_gpu.a` (built `--features gpu`) only when a program
 //! references this symbol.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 use wgpu::util::DeviceExt;
+
+/// The GPU adapter + device + queue, created once and reused across every
+/// `gpu.dispatch`. Requesting a fresh adapter/device per dispatch (the pre-4a
+/// shape) was ~ms of pure setup on every call — the dominant cost of an
+/// iterative sim's dispatch loop (the round-trip bench spent most of its time
+/// here, not in compute or transfer). wgpu `Device`/`Queue` are `Send + Sync`,
+/// so a process-wide `OnceLock` is sound; on native Metal the adapter/device
+/// requests resolve synchronously, so the one-time `block_on` never suspends.
+struct GpuContext {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+fn gpu_context() -> Option<&'static GpuContext> {
+    static CTX: OnceLock<Option<GpuContext>> = OnceLock::new();
+    CTX.get_or_init(|| {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .ok()?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+        Some(GpuContext { device, queue })
+    })
+    .as_ref()
+}
+
+/// The compiled compute pipeline for `wgsl`, cached by shader source (GPU-SLIP-4a).
+/// An iterative sim dispatches the same handful of shaders thousands of times;
+/// compiling WGSL → the Metal pipeline every call was ~ms of the per-dispatch
+/// cost. Keyed by the exact shader string (the emitter is deterministic, so the
+/// same kernel produces the same WGSL). Returns an `Arc` so the cache lock is
+/// released before the (awaited) dispatch runs.
+fn compute_pipeline(device: &wgpu::Device, wgsl: &str) -> Arc<wgpu::ComputePipeline> {
+    static PIPELINES: OnceLock<Mutex<HashMap<String, Arc<wgpu::ComputePipeline>>>> =
+        OnceLock::new();
+    let cache = PIPELINES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = cache.lock().unwrap();
+    if let Some(p) = map.get(wgsl) {
+        return p.clone();
+    }
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("gpu-cg4-shader"),
+        source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+    });
+    let pipeline = Arc::new(
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("gpu-cg4-pipeline"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        }),
+    );
+    map.insert(wgsl.to_string(), pipeline.clone());
+    pipeline
+}
 
 /// Run `wgsl` over `input` element-wise and return the result buffer.
 ///
@@ -311,15 +371,11 @@ async fn dispatch_multi_bytes_async(
     // can have different per-element strides (a multi-field group is wider).
     // `elem_count` (one logical row per GPU thread) is passed explicitly.
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions::default())
-        .await
-        .ok()?;
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
-        .await
-        .ok()?;
+    // Reuse the process-wide device/queue (GPU-SLIP-4a) instead of requesting a
+    // fresh adapter+device every dispatch.
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
 
     let input_bufs: Vec<wgpu::Buffer> = inputs
         .iter()
@@ -367,19 +423,9 @@ async fn dispatch_multi_bytes_async(
         })
         .collect();
 
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("gpu-cg4-shader"),
-        source: wgpu::ShaderSource::Wgsl(wgsl.into()),
-    });
-
-    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("gpu-cg4-pipeline"),
-        layout: None,
-        module: &module,
-        entry_point: Some("main"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
+    // Cached compiled pipeline (GPU-SLIP-4a) — compiled once per distinct shader,
+    // not once per dispatch.
+    let pipeline = compute_pipeline(device, wgsl);
 
     let bind_group_layout = pipeline.get_bind_group_layout(0);
     // Inputs at binding 0..n, outputs at binding n..2n (the emitter's convention).
