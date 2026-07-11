@@ -6674,6 +6674,24 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_heap_example() {
+        // examples/heap.kara — a generic binary MIN-heap `Heap[T: Ord]` +
+        // heapsort. Validates the GENERIC-MONOMORPHIZATION surface end to end,
+        // composing the fixes this dogfood thread produced: the associated
+        // constructor `Heap.new()` (B-2026-07-11-25), the void sift helpers with
+        // tail/early-return `if`s (B-2026-07-11-28), `T: Ord` `>`/`<` comparison,
+        // `Vec[T]` index read/assign through `self`, and `Option[T]` return/match.
+        // Heapsort of a fixed permutation yields ascending order; a PQ drain does
+        // too; an empty pop yields None.
+        if let Some(out) = run_program(include_str!("../examples/heap.kara")) {
+            assert_eq!(
+                out,
+                "0 1 2 3 4 5 6 7 8 9\nsize=6\n4 17 23 42 58 99\nempty-ok\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_iter_chain_fold_terminal() {
         // B-2026-07-11-17 — `fold(init, |acc, x| body)` on a fused iterator chain.
         // Before the fix it fell through to the loud "no handler for method 'fold'

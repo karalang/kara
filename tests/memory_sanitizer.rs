@@ -442,6 +442,27 @@ fn main() {
     }
 
     #[test]
+    fn asan_heap_example_no_leak() {
+        // examples/heap.kara under ASAN — the generic `Heap[i64]` churns its
+        // backing `Vec[i64]` hard (push sift-up, pop sift-down + `Vec.pop`,
+        // per-swap index read/assign) across heapsort + a PQ drain, plus a fresh
+        // `Heap.new()` per phase and `String`s built for the printed lines. `i64`
+        // is POD, so this is a buffer-lifecycle check: every heap's backing Vec,
+        // the heapsort output Vec, and the print Strings are freed exactly once —
+        // no leak, no double-free — across construct -> churn -> drain -> drop.
+        assert_clean_asan_run(
+            include_str!("../examples/heap.kara"),
+            &[
+                "0 1 2 3 4 5 6 7 8 9",
+                "size=6",
+                "4 17 23 42 58 99",
+                "empty-ok",
+            ],
+            "asan_heap_example_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_generic_assoc_fn_vec_field_no_leak() {
         // B-2026-07-11-25 — a generic struct `S[T]` whose associated constructor
         // `S.new()` returns `S { items: Vec.new() }`, then pushes through

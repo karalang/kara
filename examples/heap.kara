@@ -1,0 +1,164 @@
+// heap.kara — a generic binary MIN-heap `Heap[T: Ord]` and heapsort in Kāra.
+//
+// A real generic container: a `Vec[T]`-backed binary heap with an associated
+// constructor, `mut ref self` mutators that sift up (push) and down (pop), an
+// `Option[T]` pop, and `T: Ord` element comparison. It dogfoods the compiler's
+// GENERIC-MONOMORPHIZATION surface end to end — the associated constructor
+// `Heap.new()` (B-2026-07-11-25), the void sift helpers whose bodies end in / use
+// early-return `if`s (B-2026-07-11-28), `T: Ord` `>`/`<` comparison, `Vec[T]`
+// index read/assign through `self`, and `Option[T]` return/`match`.
+//
+// The oracle is deterministic: heapsort of a fixed permutation yields the sorted
+// sequence, and a priority-queue drain yields ascending order. Both run on the
+// tree-walk interpreter AND a native binary, byte-identical.
+//
+//   karac run examples/heap.kara      # JIT (or tree-walk via KARAC_RUN_JIT=0)
+//   karac build examples/heap.kara    # native binary — output byte-identical
+//
+// Expected output: examples/heap.expected.
+
+struct Heap[T] {
+    xs: Vec[T],
+}
+
+impl[T: Ord] Heap[T] {
+    // Associated constructor — an empty heap (B-2026-07-11-25 made this compile
+    // for a generic type; before, `Heap.new()` returned a zeroed struct).
+    fn new() -> Heap[T] {
+        Heap { xs: Vec.new() }
+    }
+
+    fn len(ref self) -> i64 {
+        self.xs.len()
+    }
+
+    fn is_empty(ref self) -> bool {
+        self.xs.len() == 0
+    }
+
+    // Swap two slots by index. `T: Ord` implies comparable; the heap only ever
+    // holds `Copy`-or-cloned elements at its call sites here (i64), so the
+    // index-read `let t = self.xs[i]` is a value copy.
+    fn swap(mut ref self, i: i64, j: i64) {
+        let t = self.xs[i];
+        self.xs[i] = self.xs[j];
+        self.xs[j] = t;
+    }
+
+    // Insert, then sift the new leaf up until the min-heap property holds. The
+    // `else { return; }` is an early return in a VOID generic monomorph
+    // (B-2026-07-11-28).
+    fn push(mut ref self, x: T) {
+        self.xs.push(x);
+        let mut i = self.xs.len() - 1;
+        while i > 0 {
+            let parent = (i - 1) / 2;
+            if self.xs[parent] > self.xs[i] {
+                self.swap(parent, i);
+                i = parent;
+            } else {
+                return;
+            }
+        }
+    }
+
+    // Remove and return the minimum (the root), or `None` if empty. Swaps the
+    // root to the end, pops it, then sifts the replacement root down.
+    fn pop(mut ref self) -> Option[T] {
+        let n = self.xs.len();
+        if n == 0 {
+            return None;
+        }
+        self.swap(0, n - 1);
+        let min = self.xs.pop();
+        let m = self.xs.len();
+        let mut i = 0;
+        while true {
+            let l = 2 * i + 1;
+            let r = 2 * i + 2;
+            let mut smallest = i;
+            if l < m and self.xs[l] < self.xs[smallest] {
+                smallest = l;
+            }
+            if r < m and self.xs[r] < self.xs[smallest] {
+                smallest = r;
+            }
+            if smallest == i {
+                break;
+            }
+            self.swap(i, smallest);
+            i = smallest;
+        }
+        min
+    }
+}
+
+// Heapsort: push everything, then drain the heap in ascending order.
+fn heapsort(input: ref Vec[i64]) -> Vec[i64] {
+    let mut h: Heap[i64] = Heap.new();
+    for x in input {
+        h.push(x);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    while not h.is_empty() {
+        match h.pop() {
+            Some(v) => {
+                out.push(v);
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+fn print_vec(v: ref Vec[i64]) {
+    let mut s: String = "";
+    let mut first = true;
+    for x in v {
+        if not first {
+            s.push(' ');
+        }
+        s.push_str(x.to_string());
+        first = false;
+    }
+    println(s);
+}
+
+fn main() {
+    // Heapsort a fixed permutation → ascending.
+    let data: Vec[i64] = [5, 3, 8, 1, 9, 2, 7, 4, 6, 0];
+    let sorted = heapsort(data);
+    print_vec(sorted);
+
+    // Priority-queue drain: interleave pushes, then pop all → ascending.
+    let mut pq: Heap[i64] = Heap.new();
+    pq.push(42);
+    pq.push(17);
+    pq.push(99);
+    pq.push(4);
+    pq.push(58);
+    pq.push(23);
+    println(f"size={pq.len()}");
+    let mut line: String = "";
+    let mut first = true;
+    while not pq.is_empty() {
+        match pq.pop() {
+            Some(v) => {
+                if not first {
+                    line.push(' ');
+                }
+                line.push_str(v.to_string());
+                first = false;
+            }
+            None => {}
+        }
+    }
+    println(line);
+
+    // Empty-heap pop → None path.
+    let mut empty: Heap[i64] = Heap.new();
+    match empty.pop() {
+        Some(_) => println("BUG: nonempty"),
+        None => println("empty-ok"),
+    }
+}
