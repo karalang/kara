@@ -865,6 +865,111 @@ fn test_a2b2_method_shared_type_receiver_stays_serial() {
     );
 }
 
+// ── A2b-2 Phase 2 Slice 3: parameterized-resource partition keys ──
+
+#[test]
+fn test_slice3_distinct_literal_partition_keys_parallelize() {
+    // A2b-2 Phase 2 Slice 3 (design.md § Parameterized Resources flagship):
+    // two writes to the SAME resource but DISTINCT compile-time-literal
+    // partition keys — `writes(Db[1])` vs `writes(Db[2])` — touch different
+    // partitions and parallelize. The callee's declared `Db[id]` key is
+    // substituted with the literal call args.
+    let analysis = analyze(
+        r#"
+        effect resource Db;
+        fn update(id: i64) with writes(Db[id]) { }
+        fn main() {
+            update(1);
+            update(2);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "distinct literal partition keys should parallelize (Slice 3), got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_slice3_same_literal_partition_key_serializes() {
+    // Same literal key (`Db[1]` vs `Db[1]`) is proven-identical — the same
+    // partition — so writes conflict and stay serial.
+    let analysis = analyze(
+        r#"
+        effect resource Db;
+        fn update(id: i64) with writes(Db[id]) { }
+        fn main() {
+            update(1);
+            update(1);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "identical partition keys must serialize (proven-identical), got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_slice3_variable_partition_key_serializes_conservatively() {
+    // A variable partition key (`update(x); update(y)`) does not reduce to a
+    // literal, so it is "unproven" — the pair conservatively conflicts (silent
+    // under-serialization is never accepted). Even though x and y are distinct
+    // bindings, the analysis has no literal evidence they denote different
+    // partitions, so it stays serial.
+    let analysis = analyze(
+        r#"
+        effect resource Db;
+        fn update(id: i64) with writes(Db[id]) { }
+        fn main() {
+            let x = 1;
+            let y = 2;
+            update(x);
+            update(y);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    // Statements 2 and 3 (the two update calls) must NOT co-group.
+    let grouped = main_fc
+        .parallel_groups
+        .iter()
+        .any(|g| g.statement_indices.contains(&2) && g.statement_indices.contains(&3));
+    assert!(
+        !grouped,
+        "unproven (variable) partition keys must conservatively serialize, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_slice3_unparameterized_resource_unaffected() {
+    // Additive check: an UNPARAMETERIZED resource (`writes(Db)`, no `[id]`) is
+    // unaffected by Slice 3 — its key stays `None`, so two writes still conflict
+    // via the verb-based rule exactly as before.
+    let analysis = analyze(
+        r#"
+        effect resource Db;
+        fn update() with writes(Db) { }
+        fn main() {
+            update();
+            update();
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "unparameterized same-resource writes must still conflict, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
 // ── A2b-2: independent network calls fan out (arg-safe shape) ─────
 
 #[test]

@@ -9,9 +9,10 @@ distinctness) SHIPPED 2026-07-11:** the receiver-less openers
 out via `classify_method_fanout` (threading the typecheck result through
 `concurrency_analyze_typed`) — both reuse Phase 1's conflict-relaxation
 machinery WITHOUT yet building the full connection-identity resource model.
-**Phase 0 (conflict-table reconciliation, §4) and Slice 3 — full
-parameterized-`Network` (borrow-param / connection-bound ops generally) —
-remain open.** The original
+**Slice 3a (literal-key parameterized resources — the `design.md`
+`Db[1]` vs `Db[2]` flagship) SHIPPED 2026-07-11.** **Phase 0 (conflict-table
+reconciliation, §4) and the rest of Slice 3 (binding/method-receiver keys,
+runtime-partition) remain open.** The original
 proposal scoped the work into phases so it could be picked up incrementally;
 Phase 1 + Phase 2 Slice 1 sidestep Phase 0 and the parameterized-resource model
 by relaxing/extending only the narrow, provably-sound receiver-less cases rather
@@ -324,11 +325,12 @@ Implement § Parameterized Resources for real and parameterize `Network`:
      buildable, but a race-sensitive multi-step slice (plumbing + admission +
      conflict relaxation) that must land with full ASAN + shared-receiver /
      ref-param / same-root serial pins. Schedule as a focused effort; do not rush.
-   - **Slice 3 — full parameterized-`Network`:** the principled end-state that
-     subsumes Slices 1–2, covers borrow-param connection-bound ops generally, and
-     lands the long-specced parameterized-resource feature. The "correct" model;
-     take on deliberately as its own project. **Grounded implementation plan (code
-     survey 2026-07-11) — see §10.**
+   - **Slice 3 — parameterized resources (the long-specced feature).** **Slice 3a
+     (literal keys) SHIPPED 2026-07-11** — `writes(Db[1])` vs `writes(Db[2])`
+     parallelize, `Db[1]` vs `Db[1]` serialize, variable/unparameterized stay
+     conservative; additive + fail-closed. Remaining: binding/method-receiver
+     keys, runtime-partition, table reconciliation. **Grounded plan + status —
+     see §10.**
 
 ## 10. Slice 3 implementation plan (grounded in the current code, 2026-07-11)
 
@@ -353,37 +355,50 @@ retiring the Slices 1–2 special-cases into one principled rule. For `Network`
 specifically the user-facing gain is modest — so Slice 3 is justified by the
 *parameterized-resource feature at large*, not by more `Network` fan-out.
 
-**Sub-slices (each independently landable; the value is in 3b+3c):**
+**✅ Slice 3a — literal-key vertical — SHIPPED 2026-07-11.** The minimal live
+end-to-end slice (the `design.md` flagship: `update(1); update(2)` on
+`writes(Db[id])` parallelize). It avoided the broad `Effect`-struct churn by
+carrying the key only on `StmtEffect` (`key: Option<String>`, a proven
+compile-time-LITERAL partition key, `None` = unparameterized OR non-literal
+"unproven") and deriving it at the concurrency call site — reading the callee's
+DECLARED `Resource.param` from the AST (`function_bodies`/`method_bodies`) and
+substituting the actual arguments (`resolve_param_key` + `apply_parameterized_keys`
+in `src/concurrency.rs`, on the free-fn/associated `Call` arm). `two_effects_conflict`
+skips the pair when both keys are `Some` and distinct (proven-disjoint);
+everything else (equal literal = proven-identical; a `None` key) falls through to
+the verb-based rule → conservative conflict. **Additive** — an unparameterized
+resource keeps `key == None` and behaves exactly as before. Tests:
+`test_slice3_distinct_literal_partition_keys_parallelize` /
+`..._same_literal_partition_key_serializes` /
+`..._variable_partition_key_serializes_conservatively` /
+`..._unparameterized_resource_unaffected` in `concurrency.rs`; verified E2E
+(`query concurrency` groups `[0,1]`, `run` prints `1\n2`). **Still open** below.
 
-- **3a — carry the partition key through the effect model (mechanical, dead
-  until 3c).** Add a `key: Option<ResourceKey>` to `Effect` and `StmtEffect`;
-  stop dropping `resource.param` at the four join sites. `ResourceKey` normalizes
-  the param `Expr` into a comparable form (int/str literal → `Literal`; a plain
-  binding → `Binding(name)`; anything else → `Unproven`). Touches the `Effect`
-  constructors broadly — a big mechanical diff with no behavior change (it only
-  becomes live when 3c reads it), so land it behind the existing flat-resource
-  conflict logic unchanged.
-- **3b — call-site substitution (the mechanism, where the value is).** A callee
-  declares the key relative to ITS params: `read(mut ref self) with
-  sends(Network[self])`, `update(id) with writes(Db[id])`. At the call site the
-  key must be **substituted** with the actual receiver/argument — `s1.read()` →
-  `Network[s1]`, `update(5)` → `Db[5]` — during effect propagation
-  (`add_function_effects` / the effect-inheritance path). Without this the key is
-  meaningless (it names the callee's local, not the caller's connection). This is
-  the real work and the race-sensitive core.
-- **3c — the three-case tri-state in `two_effects_conflict` (+ `conflict_detail`).**
-  Same resource: `proven-disjoint` keys (distinct literals; distinct
-  scope-stable bindings — reuse Slice 2's non-shared/non-param + no-body-aliasing
-  reasoning) → no conflict; `proven-identical` (same literal / same binding) →
-  conflict; `unproven` → conflict (conservative; the design's runtime-partition
-  lowering is a later refinement — **default MUST be conflict**, per "silent
-  under-serialization never accepted"). Reconcile the two conflict tables (§4)
-  here.
+**Remaining sub-slices (the reach; each independently landable):**
+
+- **~~3a — carry the partition key~~ (done, minimal form above).** The full
+  `Effect`-side key (vs the `StmtEffect`-only derivation shipped) is only needed
+  if a parameterized key must propagate through an INFERRED (private-fn) effect
+  chain rather than a directly-declared `with` clause — deferred until a real
+  program needs transitive parameterized effects.
+- **3b — richer keys (literal done; binding + method still open).** The literal
+  substitution shipped (3a). What remains: (i) a **binding** key — `update(a);
+  update(b)` where `a`/`b` are distinct non-shared non-param locals is
+  proven-disjoint (reuse Slice 2's no-body-aliasing reasoning) but currently
+  yields `None` → conservative serial; (ii) a **method-receiver** key —
+  `sends(Network[self])` substituted with the receiver — so parameterized method
+  resources fan out (today only the free-fn/associated `Call` arm is wired, not
+  `MethodCall`); (iii) the design's **runtime-partition** lowering for the
+  `unproven` case that a runtime key-compare could distinguish.
+- **3c — conflict-table reconciliation (§4).** The proven-disjoint check is live;
+  the remaining Phase-0 cleanup — making `effectchecker.rs::effects_conflict`
+  agree with `concurrency.rs` on network verbs — is still open (and, per §4, a
+  rider best done when `find_conflicts` is actually wired to a diagnostic).
 - **3d — subsume Slices 1–2.** Their syntactic `is_ephemeral_network_fanout` /
-  `method_fanout_receiver_root` special-cases become instances of 3c's
-  proven-disjoint (fresh-per-ephemeral key; per-receiver key). Retire them once
-  3c reproduces their behavior (the existing Slice 1/2 tests become the
-  regression guard for 3c).
+  `method_fanout_receiver_root` special-cases could become instances of the
+  partition-key model (fresh-per-ephemeral key; per-receiver key) once 3b (ii)
+  lands — but they are non-parameterized (`Network`, no `[…]`) today, so this is
+  a *consolidation*, not a prerequisite; the Slice 1/2 tests guard it.
 
 **Risk.** Data-race failure mode; the tri-state MUST fail closed to `conflict` on
 `unproven`. Land 3c with the full ASAN suite + the Slice 1/2 pins + new

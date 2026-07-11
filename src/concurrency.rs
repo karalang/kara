@@ -878,6 +878,16 @@ struct StmtEffect {
     /// directly. Used to attribute a serialization point to the specific
     /// callee responsible (`SerializationPoint::blocking_callees`).
     source_callee: Option<String>,
+    /// A2b-2 Phase 2 Slice 3 (parameterized resources): the **partition key**
+    /// for a parameterized resource (`writes(Db[id])`), when it resolves to a
+    /// compile-time LITERAL at this call site — the callee's declared param
+    /// substituted with the actual argument (`update(5)` on `writes(Db[id])` →
+    /// `Some("5")`). `None` for an unparameterized resource OR a param that does
+    /// not reduce to a literal here (a variable arg — fail-closed to "unproven",
+    /// so it conservatively conflicts). Two same-resource effects with distinct
+    /// `Some` keys touch DIFFERENT partitions and never conflict
+    /// (`design.md § Parameterized Resources`, proven-disjoint case).
+    key: Option<String>,
 }
 
 /// True iff a statement's effect set marks it as a **coroutine network-boundary
@@ -1046,6 +1056,37 @@ fn param_is_borrow(params: Option<&[Param]>, i: usize) -> bool {
             TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
         )
     })
+}
+
+/// A2b-2 Phase 2 Slice 3: resolve a parameterized-resource key expression
+/// (`Db[<param>]`) to a compile-time-LITERAL partition key at a call site, or
+/// `None` if it does not reduce to a literal here. The declared key `param` is
+/// relative to the callee's `params`: a bare identifier names a callee
+/// parameter, substituted with the actual `args` at the same position; a
+/// literal in the declaration itself is taken verbatim. A non-literal resolved
+/// argument (a variable) yields `None` — deliberately "unproven", so two such
+/// calls conservatively conflict. Integer keys normalize to their numeric value
+/// (so `5` and `5u64` are the same partition), keeping distinctness sound.
+fn resolve_param_key(param: &Expr, params: &[Param], args: &[CallArg]) -> Option<String> {
+    match &param.kind {
+        ExprKind::Identifier(pname) => {
+            let idx = params
+                .iter()
+                .position(|p| matches!(&p.pattern.kind, PatternKind::Binding(n) if n == pname))?;
+            literal_key(&args.get(idx)?.value)
+        }
+        _ => literal_key(param),
+    }
+}
+
+/// The compile-time-literal partition key of `expr` (its normalized value), or
+/// `None` if `expr` is not an integer/string literal.
+fn literal_key(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Integer(n, _) => Some(n.to_string()),
+        ExprKind::StringLit(s) => Some(s.clone()),
+        _ => None,
+    }
 }
 
 /// A2b-2 Phase 2 (Slice 1): resolve a 2-segment `Type.method` callee to its
@@ -2413,6 +2454,22 @@ impl<'a> ConcurrencyChecker<'a> {
             return false;
         }
 
+        // A2b-2 Phase 2 Slice 3: parameterized-resource PARTITION KEYS. Two
+        // accesses to the same resource with DISTINCT compile-time-literal keys
+        // touch different partitions (`writes(Db[1])` vs `writes(Db[2])`) and
+        // never conflict — the `design.md § Parameterized Resources`
+        // proven-disjoint case. Any other combination (equal keys =
+        // proven-identical; a `None` key = unparameterized or a non-literal
+        // "unproven" arg) falls through to the verb-based check below, so it
+        // conservatively conflicts — "silent under-serialization is never
+        // accepted". `key` is only ever `Some` for a resource declared with a
+        // `[param]`, so unparameterized effects are unaffected (additive).
+        if let (Some(ka), Some(kb)) = (&a.key, &b.key) {
+            if ka != kb {
+                return false;
+            }
+        }
+
         // Same resource: check verb categories
         use EffectVerbKind::*;
 
@@ -3382,7 +3439,12 @@ impl<'a> ConcurrencyChecker<'a> {
             ExprKind::Call { callee, args } => {
                 // Look up callee effects
                 if let Some(name) = self.extract_callee_name(callee) {
+                    let from = info.effects.len();
                     self.add_function_effects(&name, info);
+                    // Slice 3: substitute the callee's parameterized-resource
+                    // keys (`writes(Db[id])`) with these arguments, for the
+                    // effects just added.
+                    self.apply_parameterized_keys(&name, args, from, info);
                 }
                 self.collect_expr_effects(callee, info);
                 for arg in args {
@@ -3638,6 +3700,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     verb: te.effect.verb.clone(),
                     resource: te.effect.resource.clone(),
                     source_callee: Some(name.to_string()),
+                    key: None,
                 });
             }
         }
@@ -3646,6 +3709,52 @@ impl<'a> ConcurrencyChecker<'a> {
             Some(DeclaredEffects::Polymorphic | DeclaredEffects::PolymorphicWithFixed(_))
         ) {
             info.calls_polymorphic = true;
+        }
+    }
+
+    /// A2b-2 Phase 2 Slice 3: fill in `StmtEffect::key` for the effects a call
+    /// contributed (the tail of `info.effects` starting at `from`), from the
+    /// callee's DECLARED parameterized resources (`with writes(Db[id])`)
+    /// substituted with the actual arguments. `callee` names the resolved
+    /// function/method (`fn` name or `Type.method`); `args` are the call args.
+    /// Only compile-time-literal partition keys are recorded (a variable arg
+    /// stays `None` = unproven = conservatively conflicting). Additive: a
+    /// callee with no `[param]` resource leaves every key `None`.
+    fn apply_parameterized_keys(
+        &self,
+        callee: &str,
+        args: &[CallArg],
+        from: usize,
+        info: &mut StmtInfo,
+    ) {
+        let Some(func) = self
+            .function_bodies
+            .get(callee)
+            .or_else(|| self.method_bodies.get(callee))
+        else {
+            return;
+        };
+        let Some(list) = &func.effects else {
+            return;
+        };
+        for item in &list.items {
+            let EffectItem::Verb(ev) = item else {
+                continue;
+            };
+            for res in &ev.resources {
+                let Some(param) = &res.param else {
+                    continue;
+                };
+                let Some(key) = resolve_param_key(param, &func.params, args) else {
+                    continue;
+                };
+                let res_name = res.path.join(".");
+                for e in info.effects[from..].iter_mut() {
+                    if e.verb == ev.kind && e.resource == res_name {
+                        e.key = Some(key.clone());
+                    }
+                }
+            }
         }
     }
 
