@@ -468,7 +468,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **369 surfaced 
 | B-2026-07-11-20 | codegen | low | GPU helper-call gathering (reachable_helpers, GPU-LBM-5) misses #[gpu] helper calls inside Index / let-RHS / MethodCall / Cast positions, so a valid… | gpu_wgsl::reachable_helpers: add Index/MethodCall/Cast arms to calls_in and a StmtKind::Let arm to calls_in_block so #[gpu] helper calls in those AST positions are gathered into the reachable-helper set. |
 | B-2026-07-11-21 | codegen | high | SILENT: reusing an owned `Option[shared struct]` value across two by-value consuming calls whose callee CLONES the matched subtree double-frees under… | 43e1354 |
 | B-2026-07-11-22 | codegen | high | DOUBLE-FREE: `for it in vec { match it { Variant(payload) => .. | 6dbe1fb |
-| B-2026-07-11-25 | codegen | high | SILENT MISCOMPILE: a GENERIC struct's ASSOCIATED function returning a struct (`impl[T] W[T] { fn make(x: T) -> W[T] { W{v:x} } }` called `W.make(7)`)… | this commit |
+| B-2026-07-11-25 | codegen | high | SILENT MISCOMPILE: a GENERIC struct's ASSOCIATED function returning a struct (`impl[T] W[T] { fn make(x: T) -> W[T] { W{v:x} } }` called `W.make(7)`)… | 6b3fcac |
 
 </details>
 
