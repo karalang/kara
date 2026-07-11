@@ -424,6 +424,13 @@ impl super::Formatter {
                     self.write_str("}");
                 }
             }
+            // Explicit discriminant: `= VALUE` after the payload, one space on
+            // either side of `=` (design.md § Explicit Discriminants on Payload
+            // Variants).
+            if let Some(disc) = &variant.discriminant {
+                self.write_str(" = ");
+                self.format_expr(disc);
+            }
             self.write_str(",\n");
         }
         self.pop_indent();

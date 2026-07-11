@@ -64,6 +64,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.validate_all_bounds(&e.generic_params, &e.where_clause, &gp);
                     self.check_enum_variance(e);
                     self.check_repr_transparent_enum(e);
+                    self.check_enum_discriminants(e);
                     if e.is_par {
                         for v in &e.variants {
                             if let VariantKind::Struct(fields) = &v.kind {
@@ -1738,6 +1739,210 @@ impl<'a> super::TypeChecker<'a> {
                 e.span.clone(),
                 TypeErrorKind::ReprTransparentInvalid,
             );
+        }
+    }
+
+    /// The inclusive `[min, max]` value range of a `#[repr(intN)]` head name,
+    /// or `None` when `name` is not an integer repr. `u64`'s true upper bound
+    /// exceeds `i64::MAX`; since discriminants are folded to `i64`, its range is
+    /// capped at `i64::MAX` (a `u64` literal that big cannot survive the `i64`
+    /// literal parse anyway).
+    fn int_repr_range(name: &str) -> Option<(i64, i64)> {
+        Some(match name {
+            "i8" => (i8::MIN as i64, i8::MAX as i64),
+            "i16" => (i16::MIN as i64, i16::MAX as i64),
+            "i32" => (i32::MIN as i64, i32::MAX as i64),
+            "i64" => (i64::MIN, i64::MAX),
+            "u8" => (0, u8::MAX as i64),
+            "u16" => (0, u16::MAX as i64),
+            "u32" => (0, u32::MAX as i64),
+            "u64" => (0, i64::MAX),
+            _ => return None,
+        })
+    }
+
+    /// Fold an explicit-discriminant expression to an `i64` — the v1 const
+    /// surface: integer literals, unary negation, and `+`/`-`/`*`/`/`/`%` +
+    /// bitwise / shift arithmetic over them. Overflow yields `None` (reported as
+    /// non-constant). Module-constant references are NOT folded here — they
+    /// resolve in a later pass — so a `let`-alias discriminant currently reports
+    /// `E_NON_CONSTANT_DISCRIMINANT` (a documented v1 residual, not silent).
+    fn fold_int_const(expr: &Expr) -> Option<i64> {
+        match &expr.kind {
+            ExprKind::Integer(v, _) => Some(*v),
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => Self::fold_int_const(operand)?.checked_neg(),
+            ExprKind::Binary { op, left, right } => {
+                let l = Self::fold_int_const(left)?;
+                let r = Self::fold_int_const(right)?;
+                match op {
+                    BinOp::Add => l.checked_add(r),
+                    BinOp::Sub => l.checked_sub(r),
+                    BinOp::Mul => l.checked_mul(r),
+                    BinOp::Div => l.checked_div(r),
+                    BinOp::Mod => l.checked_rem(r),
+                    BinOp::BitAnd => Some(l & r),
+                    BinOp::BitOr => Some(l | r),
+                    BinOp::BitXor => Some(l ^ r),
+                    BinOp::Shl => u32::try_from(r).ok().and_then(|s| l.checked_shl(s)),
+                    BinOp::Shr => u32::try_from(r).ok().and_then(|s| l.checked_shr(s)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Explicit discriminants on enum variants (design.md § Explicit
+    /// Discriminants on Payload Variants). After folding each `= CONST_EXPR` to
+    /// an `i64`, run four checks at the enum-decl site: (a) all-or-nothing, (b)
+    /// range per `#[repr(intN)]` / `c_int`, (c) duplicate values, (d) `#[repr]`
+    /// requirement on payload variants. The values are pure *declarations* —
+    /// codegen does not treat them as layout commitments at v1. All findings use
+    /// `E0804` (`DiscriminantInvalid`), disambiguated by the symbolic code in
+    /// the message.
+    fn check_enum_discriminants(&mut self, e: &EnumDef) {
+        // Nothing to check unless at least one variant declares `= value`.
+        if e.variants.iter().all(|v| v.discriminant.is_none()) {
+            return;
+        }
+
+        // Fold each variant's discriminant into owned data first, so the error
+        // emission below doesn't hold an immutable borrow of `e` across the
+        // `&mut self` `type_error` calls.
+        struct Folded {
+            name: String,
+            value: Option<i64>,
+            has_payload: bool,
+            explicit: bool,
+            span: Span,
+        }
+        let mut folded: Vec<Folded> = Vec::with_capacity(e.variants.len());
+        let mut nonconst: Vec<Span> = Vec::new();
+        for v in &e.variants {
+            let has_payload = matches!(v.kind, VariantKind::Struct(_) | VariantKind::Tuple(_));
+            match &v.discriminant {
+                None => folded.push(Folded {
+                    name: v.name.clone(),
+                    value: None,
+                    has_payload,
+                    explicit: false,
+                    span: v.span.clone(),
+                }),
+                Some(expr) => {
+                    let value = Self::fold_int_const(expr);
+                    if value.is_none() {
+                        nonconst.push(expr.span.clone());
+                    }
+                    folded.push(Folded {
+                        name: v.name.clone(),
+                        value,
+                        has_payload,
+                        explicit: true,
+                        span: expr.span.clone(),
+                    });
+                }
+            }
+        }
+
+        for span in nonconst {
+            self.type_error(
+                "error[E_NON_CONSTANT_DISCRIMINANT]: an enum discriminant must be a constant \
+                 integer expression (an integer literal or arithmetic over integer literals); a \
+                 reference to another constant is not yet folded at the discriminant position"
+                    .to_string(),
+                span,
+                TypeErrorKind::DiscriminantInvalid,
+            );
+        }
+
+        // (a) All-or-nothing: every variant declares a value, or none does.
+        let first_explicit = folded.iter().find(|f| f.explicit);
+        let first_implicit = folded.iter().find(|f| !f.explicit);
+        if let (Some(fe), Some(fi)) = (first_explicit, first_implicit) {
+            self.type_error(
+                format!(
+                    "error[E_PARTIAL_EXPLICIT_DISCRIMINANTS]: enum '{}' mixes explicit and \
+                     implicit discriminants; declare a value on every variant or remove the \
+                     explicit values and rely on declaration order (variant '{}' has one, '{}' \
+                     does not)",
+                    e.name, fe.name, fi.name
+                ),
+                fe.span.clone(),
+                TypeErrorKind::DiscriminantInvalid,
+            );
+        }
+
+        // (d) `#[repr]` requirement on payload variants.
+        let head_names = super::repr_arg_head_names(&e.attributes);
+        let int_repr = head_names
+            .iter()
+            .find_map(|n| Self::int_repr_range(n).map(|r| (n.clone(), r)));
+        let has_repr_c = head_names.iter().any(|n| n == "C");
+        let commits_discriminant = int_repr.is_some() || has_repr_c;
+        if !commits_discriminant {
+            if let Some(f) = folded.iter().find(|f| f.has_payload && f.explicit) {
+                self.type_error(
+                    format!(
+                        "error[E_PAYLOAD_DISCRIMINANT_REQUIRES_REPR]: explicit discriminants on \
+                         payload variants require '#[repr(intN)]' or '#[repr(C)]'; without one, \
+                         the discriminant location is unspecified and the value commitment is \
+                         unreachable (variant '{}')",
+                        f.name
+                    ),
+                    f.span.clone(),
+                    TypeErrorKind::DiscriminantInvalid,
+                );
+            }
+        }
+
+        // (b) Range check. `#[repr(intN)]` fixes the range; a bare `#[repr(C)]`
+        // (no int companion) uses the platform `c_int` — signed `i32` on every
+        // v1 target. Without any commitment repr there is no range constraint (a
+        // field-less C-like enum's values just need to be constant + distinct).
+        let range = int_repr.as_ref().map(|(n, r)| (n.clone(), *r)).or_else(|| {
+            has_repr_c.then(|| ("c_int".to_string(), (i32::MIN as i64, i32::MAX as i64)))
+        });
+        if let Some((range_name, (lo, hi))) = range {
+            for f in &folded {
+                if let Some(val) = f.value {
+                    if val < lo || val > hi {
+                        self.type_error(
+                            format!(
+                                "error[E_DISCRIMINANT_OUT_OF_RANGE]: discriminant '{val}' on \
+                                 variant '{}' does not fit in '{range_name}' (range '[{lo}, {hi}]')",
+                                f.name
+                            ),
+                            f.span.clone(),
+                            TypeErrorKind::DiscriminantInvalid,
+                        );
+                    }
+                }
+            }
+        }
+
+        // (c) Duplicate-value rejection over the *resolved* integer values (so
+        // two variants folding to the same value collide even if written
+        // differently).
+        let mut seen: HashMap<i64, String> = HashMap::new();
+        for f in &folded {
+            if let Some(val) = f.value {
+                if let Some(prev) = seen.get(&val) {
+                    self.type_error(
+                        format!(
+                            "error[E_DUPLICATE_DISCRIMINANT]: variant '{}' has the same \
+                             discriminant value '{val}' as variant '{}'",
+                            f.name, prev
+                        ),
+                        f.span.clone(),
+                        TypeErrorKind::DiscriminantInvalid,
+                    );
+                } else {
+                    seen.insert(val, f.name.clone());
+                }
+            }
         }
     }
 

@@ -31807,3 +31807,132 @@ fn repr_transparent_bare_type_param_distinct_rejected() {
     let m = repr_transparent_err("#[repr(transparent)] distinct type D[T] = T; fn main() {}");
     assert!(m.contains("E_REPR_TRANSPARENT_REQUIRES_SIZED"), "{m}");
 }
+
+// ── Explicit discriminants on enum variants (design.md § Explicit
+//    Discriminants on Payload Variants; E0804) ──────────────────────────
+
+/// The first `E_*DISCRIMINANT*` (or partial/payload) diagnostic for `src`.
+fn discriminant_err(src: &str) -> String {
+    typecheck_errors(src)
+        .iter()
+        .find_map(|e| {
+            let m = e.to_string();
+            (m.contains("DISCRIMINANT") || m.contains("EXPLICIT_DISCRIMINANTS")).then_some(m)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a discriminant diagnostic, got: {:?}",
+                typecheck_errors(src)
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+            )
+        })
+}
+
+#[test]
+fn discriminant_repr_u8_payload_variants_accepts() {
+    typecheck_ok(
+        "#[repr(u8)] enum Op { Reset = 1, Connect { addr: u32 } = 5, Send(u32) = 6, Disconnect = 255 }\n\
+         fn main() {}",
+    );
+}
+
+#[test]
+fn discriminant_field_less_no_repr_accepts() {
+    // A field-less C-like enum needs no `#[repr]` — no payload variant, so the
+    // discriminant-position requirement does not apply.
+    typecheck_ok("enum Color { Red = 1, Green = 2, Blue = 3 } fn main() {}");
+}
+
+#[test]
+fn discriminant_repr_c_accepts() {
+    typecheck_ok("#[repr(C)] enum E { A = 1, B { x: i32 } = 2 } fn main() {}");
+}
+
+#[test]
+fn discriminant_signed_negative_under_signed_repr_accepts() {
+    typecheck_ok("#[repr(i8)] enum E { A = -1, B(u32) = 5 } fn main() {}");
+}
+
+#[test]
+fn discriminant_literal_arithmetic_folds_and_accepts() {
+    // `2 + 3 * 4` == 14 fits u8; the const-folder handles literal arithmetic.
+    typecheck_ok("#[repr(u8)] enum E { A = 2 + 3 * 4, B = 1 } fn main() {}");
+}
+
+#[test]
+fn discriminant_partial_explicit_rejected() {
+    let m = discriminant_err("enum E { A = 1, B(u32) } fn main() {}");
+    assert!(m.contains("E_PARTIAL_EXPLICIT_DISCRIMINANTS"), "{m}");
+}
+
+#[test]
+fn discriminant_out_of_range_rejected() {
+    let m = discriminant_err("#[repr(u8)] enum E { A = 256 } fn main() {}");
+    assert!(m.contains("E_DISCRIMINANT_OUT_OF_RANGE"), "{m}");
+    assert!(m.contains("u8") && m.contains("[0, 255]"), "{m}");
+}
+
+#[test]
+fn discriminant_c_int_range_under_repr_c_rejected() {
+    // A bare `#[repr(C)]` (no int companion) ranges over the platform `c_int`
+    // (signed i32); a value past i32::MAX is out of range and names `c_int`.
+    let m = discriminant_err("#[repr(C)] enum E { A = 2147483648 } fn main() {}");
+    assert!(
+        m.contains("E_DISCRIMINANT_OUT_OF_RANGE") && m.contains("c_int"),
+        "{m}"
+    );
+}
+
+#[test]
+fn discriminant_duplicate_rejected() {
+    let m = discriminant_err("#[repr(u8)] enum E { A = 1, B(u32) = 1 } fn main() {}");
+    assert!(m.contains("E_DUPLICATE_DISCRIMINANT"), "{m}");
+    // Uses the resolved value; both variant names appear.
+    assert!(m.contains("'A'") && m.contains("'B'"), "{m}");
+}
+
+#[test]
+fn discriminant_duplicate_via_arithmetic_rejected() {
+    // Duplicate detection is over the *resolved* value, so `1` and `4 - 3`
+    // collide even though written differently.
+    let m = discriminant_err("#[repr(u8)] enum E { A = 1, B = 4 - 3 } fn main() {}");
+    assert!(m.contains("E_DUPLICATE_DISCRIMINANT"), "{m}");
+}
+
+#[test]
+fn discriminant_payload_variant_without_repr_rejected() {
+    let m = discriminant_err("enum E { A = 1, B(u32) = 2 } fn main() {}");
+    assert!(m.contains("E_PAYLOAD_DISCRIMINANT_REQUIRES_REPR"), "{m}");
+}
+
+#[test]
+fn discriminant_payload_variant_transparent_repr_rejected() {
+    // `#[repr(transparent)]` commits no discriminant position, so it does not
+    // satisfy the payload-variant requirement.
+    let m = discriminant_err("#[repr(transparent)] enum E { A(u32) = 2 } fn main() {}");
+    assert!(m.contains("E_PAYLOAD_DISCRIMINANT_REQUIRES_REPR"), "{m}");
+}
+
+#[test]
+fn discriminant_non_constant_rejected() {
+    // A reference to another binding is not folded at the discriminant position.
+    let m = discriminant_err("let THREE: i64 = 3; enum E { A = THREE } fn main() {}");
+    assert!(m.contains("E_NON_CONSTANT_DISCRIMINANT"), "{m}");
+}
+
+#[test]
+fn discriminant_manual_tag_method_typechecks() {
+    // The documented consumption pattern: a hand-written `tag` method whose
+    // match arms reference the declared literal values.
+    typecheck_ok(
+        "#[repr(u8)] enum Op { Reset = 1, Connect(u32) = 5 }\n\
+         impl Op {\n\
+             fn tag(ref self) -> u8 {\n\
+                 match self { Op.Reset => 1, Op.Connect(_) => 5 }\n\
+             }\n\
+         }\n\
+         fn main() {}",
+    );
+}

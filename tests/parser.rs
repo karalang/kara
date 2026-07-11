@@ -1300,6 +1300,29 @@ fn test_enum_tuple_variant() {
 }
 
 #[test]
+fn test_enum_explicit_discriminants_all_forms() {
+    // `= CONST_EXPR` after each of the three variant forms — unit, struct,
+    // tuple (design.md § Explicit Discriminants on Payload Variants). The
+    // discriminant field is populated only where a value is declared.
+    let prog = parse_ok(
+        "#[repr(u8)] enum Op { Reset = 1, Connect { addr: u32 } = 5, Send(u32) = 6, Plain }",
+    );
+    if let Item::EnumDef(e) = &prog.items[0] {
+        assert_eq!(e.variants.len(), 4);
+        assert!(matches!(&e.variants[0].kind, VariantKind::Unit));
+        assert!(e.variants[0].discriminant.is_some(), "Reset = 1");
+        assert!(matches!(&e.variants[1].kind, VariantKind::Struct(_)));
+        assert!(e.variants[1].discriminant.is_some(), "Connect {{..}} = 5");
+        assert!(matches!(&e.variants[2].kind, VariantKind::Tuple(_)));
+        assert!(e.variants[2].discriminant.is_some(), "Send(u32) = 6");
+        // No `= N` → the common case round-trips with a `None` discriminant.
+        assert!(e.variants[3].discriminant.is_none(), "Plain");
+    } else {
+        panic!("expected EnumDef");
+    }
+}
+
+#[test]
 fn test_trait_definition() {
     let prog = parse_ok(
         r#"

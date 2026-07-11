@@ -362,6 +362,26 @@ mod tests {
     }
 
     #[test]
+    fn enum_explicit_discriminants_roundtrip() {
+        // `= VALUE` is emitted after each payload with a single space on either
+        // side of `=` (design.md § Explicit Discriminants on Payload Variants);
+        // a variant with no explicit value emits none. Idempotent under a second
+        // format pass.
+        let out = fmt_ok(
+            "#[repr(u8)] enum Op { Reset = 1, Connect { addr: u32 } = 5, Send(u32) = 6, Plain }",
+        );
+        assert!(out.contains("Reset = 1,"), "unit `= N`:\n{out}");
+        assert!(out.contains("} = 5,"), "struct `= N`:\n{out}");
+        assert!(out.contains("Send(u32) = 6,"), "tuple `= N`:\n{out}");
+        assert!(out.contains("Plain,"), "no-discriminant variant:\n{out}");
+        assert!(
+            !out.contains("Plain ="),
+            "Plain must carry no `= N`:\n{out}"
+        );
+        assert_eq!(out, fmt_ok(&out), "format must be idempotent:\n{out}");
+    }
+
+    #[test]
     fn closure_ref_capture_mode_prefix_roundtrips() {
         let out = fmt_ok("fn main() { let f = ref |x| x + 1; }");
         assert!(

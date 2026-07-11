@@ -482,6 +482,14 @@ pub enum TypeErrorKind {
     /// `_EXCLUSIVE` / `_REQUIRES_SIZED`), matching the `E_PTR_*` /
     /// `E_RAW_POINTER_*` code-in-message convention.
     ReprTransparentInvalid,
+    /// An explicit enum discriminant declaration is invalid (design.md §
+    /// Explicit Discriminants on Payload Variants). One kind for the whole
+    /// family; the specific rule is named by the symbolic code embedded in the
+    /// message (`E_NON_CONSTANT_DISCRIMINANT` / `E_PARTIAL_EXPLICIT_DISCRIMINANTS`
+    /// / `E_DISCRIMINANT_OUT_OF_RANGE` / `E_DUPLICATE_DISCRIMINANT` /
+    /// `E_PAYLOAD_DISCRIMINANT_REQUIRES_REPR`), matching the `E_REPR_TRANSPARENT_*`
+    /// code-in-message convention.
+    DiscriminantInvalid,
     /// A return-position `impl Trait` whose body yields two or more distinct
     /// concrete witness types (design.md § `impl Trait`: "one concrete return
     /// per monomorphization"). Codegen rejects it (no single type to
@@ -960,7 +968,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::MainErrNotDisplay
         | TypeErrorKind::CrossTaskUnsafeCapture
         | TypeErrorKind::GpuNotSafe
-        | TypeErrorKind::ReprTransparentInvalid => None,
+        | TypeErrorKind::ReprTransparentInvalid
+        | TypeErrorKind::DiscriminantInvalid => None,
     }
 }
 

@@ -565,6 +565,15 @@ pub struct Variant {
     pub doc_comment: Option<String>,
     pub name: String,
     pub kind: VariantKind,
+    /// Explicit discriminant: `Variant = CONST_EXPR` (design.md § Explicit
+    /// Discriminants on Payload Variants). `None` when the variant declares no
+    /// value (`Audio,` — declaration-order-implicit), so the common case
+    /// round-trips unchanged. Held as the parsed [`Expr`] (an integer literal,
+    /// optionally negated); the typechecker folds it to an `i64` at the
+    /// enum-decl site to run the all-or-nothing / range / duplicate / repr
+    /// checks. A pure declaration — codegen does not treat it as a layout
+    /// commitment at v1.
+    pub discriminant: Option<Expr>,
 }
 
 #[derive(Debug, Clone)]

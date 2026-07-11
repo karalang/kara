@@ -1834,6 +1834,18 @@ impl super::Parser {
             VariantKind::Unit
         };
 
+        // Explicit discriminant: `= CONST_EXPR` after the payload (design.md §
+        // Explicit Discriminants on Payload Variants). Accepted on all three
+        // variant forms; the const-folding + all-or-nothing / range / duplicate
+        // / repr checks run in the typechecker at the enum-decl site. The value
+        // is a general expression here — the typechecker rejects non-constant
+        // shapes — mirroring how module bindings parse their RHS.
+        let discriminant = if self.eat(&Token::Equal) {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
         let deprecation = self.scan_deprecated_attr(&attributes);
         let unstable = self.scan_unstable_attr(&attributes);
         Some(Variant {
@@ -1844,6 +1856,7 @@ impl super::Parser {
             doc_comment,
             name,
             kind,
+            discriminant,
         })
     }
 

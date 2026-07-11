@@ -33128,6 +33128,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_enum_explicit_discriminants_payload() {
+        // Explicit discriminants are declarations, not layout commitments
+        // (design.md § Explicit Discriminants on Payload Variants): codegen
+        // lowers the payload enum exactly as it does without them, so construct
+        // + match on a `#[repr(u8)]` enum carrying explicit values runs the same
+        // as the interpreter (the `run_program` harness pins build == run).
+        let out = run_program(
+            r#"
+#[repr(u8)] enum Op { Reset = 1, Ping(u32) = 5, Stop = 255 }
+
+fn code(o: Op) -> i64 {
+    match o {
+        Op.Reset => 1_i64,
+        Op.Ping(n) => n as i64,
+        Op.Stop => 255_i64,
+    }
+}
+
+fn main() {
+    println(code(Op.Reset));
+    println(code(Op.Ping(42_u32)));
+    println(code(Op.Stop));
+}
+"#,
+        );
+        let out = out.expect("payload enum with explicit discriminants should codegen + run");
+        assert_eq!(out.trim(), "1\n42\n255");
+    }
+
+    #[test]
     fn test_e2e_enum_variant_match_codegen_sanity() {
         // Sanity: distinct unit-enum variants codegen to distinct values
         // (different tags). Pre-requisite for `Map[Color, V]` to work.
