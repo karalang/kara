@@ -9493,7 +9493,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// raw-pointer-typed LLVM slots end-to-end — that uplift is
     /// tracked as a follow-up. Tests in `tests/codegen.rs` pin the
     /// runtime round-trip; the IR-shape pins live alongside.
-    fn compile_ptr_module_call(
+    pub(super) fn compile_ptr_module_call(
         &mut self,
         method: &str,
         args: &[CallArg],

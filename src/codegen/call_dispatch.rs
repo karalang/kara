@@ -319,6 +319,33 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // B-2026-07-11-1: `ptr.null[u8]()` / `ptr.dangling[T]()` — a dotted
+        // pointer-module builtin with a SINGLE type-arg turbofish parses as
+        // `Call { callee: Index { object: FieldAccess{Identifier("ptr"), fn},
+        // index: <type> } }` (the same indexing-vs-turbofish ambiguity
+        // `size_of[T]()` hits). The plain method form `ptr.null()` is lowered by
+        // `compile_ptr_module_call` via the method-call path, but the turbofish
+        // Index-callee shape never reached it and fell through to the i64 default
+        // — so the binding registered as `i64` and a later `p.read()` panicked
+        // (`expected PointerValue`). Route it to the same pointer intrinsic (the
+        // constructors ignore the type arg — a `null`/`dangling` value is
+        // pointee-agnostic), producing a real `ptr` so the binding is a pointer.
+        if let ExprKind::Index { object, .. } = &callee.kind {
+            if let ExprKind::FieldAccess {
+                object: inner,
+                field,
+            } = &object.kind
+            {
+                if let ExprKind::Identifier(module) = &inner.kind {
+                    if module == "ptr" && !self.variables.contains_key("ptr") {
+                        if let Some(value) = self.compile_ptr_module_call(field, args)? {
+                            return Ok(value);
+                        }
+                    }
+                }
+            }
+        }
+
         // Three-segment Json method call: `Json.Variant.stringify()`
         // parses as `Call { callee: Path { segments: [Json, Variant,
         // stringify] }, args: [] }` when the variant is a bare-name

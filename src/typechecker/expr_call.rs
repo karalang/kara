@@ -644,11 +644,65 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // B-2026-07-11-1: a dotted builtin-module call with a SINGLE type-arg
+        // turbofish — `ptr.null[u8]()`, `ptr.dangling[T]()` — parses as
+        // `Call { callee: Index { object: FieldAccess{Identifier(module), fn},
+        // index: <type> } }`, because a one-element `[T]` is indistinguishable
+        // from indexing at parse time (the same shape `size_of[T]()` takes).
+        // The dotted name lives in `env.functions` and declares a type param that,
+        // for the zero-value-arg constructors, can ONLY bind from this turbofish;
+        // without routing it to the explicit-generic-args solver the call fell
+        // through with `T` unresolved and its `*const T` return collapsed to
+        // `Type::Error`, so the binding recorded no raw-pointer pointee and a
+        // later `p.read()` failed codegen with "no handler for method 'read'".
+        // Gated on the dotted name being a known baked function so a user
+        // `receiver.field[i]()` index-call is unaffected.
+        if let ExprKind::Index { object, index } = &callee.kind {
+            if let ExprKind::FieldAccess {
+                object: inner,
+                field,
+            } = &object.kind
+            {
+                if let ExprKind::Identifier(module) = &inner.kind {
+                    let dotted = format!("{}.{}", module, field);
+                    if self.env.functions.contains_key(&dotted) {
+                        if let Some(te) = expr_as_type_expr(index) {
+                            let synth = vec![GenericArg::Type(te)];
+                            return self
+                                .infer_explicit_generic_args_call(&dotted, &synth, args, span);
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some((name, explicit_args)) = match &callee.kind {
             ExprKind::Path {
                 segments,
                 generic_args: Some(ga),
             } if segments.len() == 1 => Some((segments[0].clone(), ga.clone())),
+            // B-2026-07-11-1: a TWO-segment dotted builtin-module call carrying a
+            // turbofish (`ptr.null[u8]()`, `ptr.dangling[T]()`) — these live in
+            // `env.functions` under a dotted name and declare a type param `T`
+            // that, for the zero-value-arg constructors, can ONLY be bound from
+            // the turbofish. The single-segment route above missed them, so `T`
+            // stayed unresolved and the `*const T` return collapsed to
+            // `Type::Error`; the binding then recorded no raw-pointer pointee and
+            // a later `p.read()` fell through in codegen ("no handler for method
+            // 'read'"). Gated on the dotted name being a known baked function so
+            // user `Type.method[T]()` associated calls (resolved via impls, not
+            // `env.functions`) are unaffected.
+            ExprKind::Path {
+                segments,
+                generic_args: Some(ga),
+            } if segments.len() == 2 => {
+                let dotted = format!("{}.{}", segments[0], segments[1]);
+                if self.env.functions.contains_key(&dotted) {
+                    Some((dotted, ga.clone()))
+                } else {
+                    None
+                }
+            }
             ExprKind::Index { object, index } if is_literal_const_arg_expr(index) => {
                 if let ExprKind::Identifier(name) = &object.kind {
                     if self

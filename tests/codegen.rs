@@ -3558,6 +3558,32 @@ fn main() {
         }
     }
 
+    /// B-2026-07-11-1: a TURBOFISH-inferred raw-pointer binding
+    /// (`let p = ptr.null[u8]()`) — no annotation — must lower to a real `ptr`
+    /// and register the pointee so a later pointer method compiles. Before the
+    /// fix the turbofish `ptr.null[u8]()` parsed as an `Index`-callee call that
+    /// neither the typechecker's explicit-generic-args route nor codegen's
+    /// pointer-intrinsic route recognized: `T` stayed unresolved (binding →
+    /// `Type::Error`, no recorded pointee) and codegen fell through / stored the
+    /// value as `i64`, so `p.read()`/`p.is_null()` failed with "no handler for
+    /// method" or an `expected PointerValue` panic. Uses the SAFE `is_null()`
+    /// (no deref — `read()` on these constructed pointers would be UB); a null
+    /// pointer is null, a dangling one is not.
+    #[test]
+    fn raw_pointer_turbofish_binding_is_null() {
+        let src = "fn main() {\n\
+                   \x20   let p = ptr.null[u8]();\n\
+                   \x20   let d = ptr.dangling[i64]();\n\
+                   \x20   unsafe {\n\
+                   \x20       if p.is_null() { println(\"p-null\"); } else { println(\"p-live\"); }\n\
+                   \x20       if d.is_null() { println(\"d-null\"); } else { println(\"d-live\"); }\n\
+                   \x20   }\n\
+                   }\n";
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "p-null\nd-live\n");
+        }
+    }
+
     /// Binding a row out of a BORROWED nested collection — `let row = m[i]`
     /// where `m: ref Vec[Vec[i64]]` — must dispatch `row.len()` / `row[j]` as
     /// the inner `Vec[i64]`. The integer-index inference used to peel `ref`
