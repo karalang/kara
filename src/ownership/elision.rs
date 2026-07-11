@@ -1473,6 +1473,14 @@ impl<'a> OwnershipChecker<'a> {
             if let Some(e) = &f.body.final_expr {
                 self.cluster_verify_expr(e, ClusterCtx::default(), &mut scan);
             }
+            if reshaper_enabled() && std::env::var("KARAC_RESHAPER_DEBUG").is_ok() {
+                eprintln!(
+                    "[reshaper] adopt-cand fn={} root={name} builder={builder} poisoned={:?} root_found={}",
+                    f.name,
+                    scan.poisoned.as_ref().map(|p| &p.0),
+                    scan.root.is_some()
+                );
+            }
             if scan.poisoned.is_none() && scan.root.is_some() {
                 let root = scan.root.clone().unwrap();
                 let mut bare_cursors = HashSet::new();
@@ -3065,15 +3073,48 @@ impl<'a> OwnershipChecker<'a> {
         // adopted-root let (count match — the candidate walker only
         // records let-position sites, and each adoption consumed one).
         let adopted: Vec<&&ElidedCluster> = of_t.iter().filter(|c| c.adopted).collect();
+        // EXPERIMENTAL (default-OFF): each reshaper call CONSUMES one
+        // builder result (moved in — its cleanup transfers to the
+        // reshaper's returned/adopted result), so it is accounted-for
+        // without a separate adoption. `builder_sites` counts calls to
+        // builders AND reshapers (both registered in `builders`); a
+        // reshaper call's consumed input is one of those builder results,
+        // so the balance is `builder_sites == adopted + reshaper_calls`.
+        // NOTE: loose — assumes each reshaper consumes a builder result;
+        // the tight version threads consumed-root provenance. See spike.
+        let reshaper_calls = if reshaper_enabled() {
+            let reshaper_names: HashSet<String> = self
+                .program
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Item::Function(g) => self.reshaper_member(g).map(|_| g.name.clone()),
+                    _ => None,
+                })
+                .collect();
+            let mut n = 0usize;
+            walk_fn_exprs(&f.body, &mut |e, _| {
+                if let ExprKind::Call { callee, .. } = &e.kind {
+                    if let ExprKind::Identifier(b) = &callee.kind {
+                        if reshaper_names.contains(b.as_str()) {
+                            n += 1;
+                        }
+                    }
+                }
+            });
+            n
+        } else {
+            0
+        };
         if reshaper_enabled() && std::env::var("KARAC_RESHAPER_DEBUG").is_ok() {
             eprintln!(
-                "[reshaper]   {fn_key}: builder_sites={builder_sites} adopted={} lits={lits_present} ret_t={ret_t} t_params={} of_t={}",
+                "[reshaper]   {fn_key}: builder_sites={builder_sites} adopted={} reshaper_calls={reshaper_calls} lits={lits_present} ret_t={ret_t} t_params={} of_t={}",
                 adopted.len(),
                 t_params.len(),
                 of_t.len()
             );
         }
-        if builder_sites != adopted.len() {
+        if builder_sites != adopted.len() + reshaper_calls {
             return (true, false);
         }
         if adopted.iter().any(|c| !c.fn_pure) {

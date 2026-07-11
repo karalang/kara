@@ -1,6 +1,6 @@
 # Design: Headerless RC-elision for in-place link-permuting reshapers
 
-**Status:** IN PROGRESS on branch `worktree-headerless-reshaper` — analysis half partially wired, gated OFF behind `KARAC_HEADERLESS_RESHAPER`. Coverage arm validated; caller-adoption blocker isolated (see §9). NOT on `main`.
+**Status:** IN PROGRESS on branch `worktree-headerless-reshaper`, gated OFF behind `KARAC_HEADERLESS_RESHAPER`. Analysis path reaches **16 B nodes** on kata #92; flag-on currently SEGFAULTS on a headered RcDec emitted for the moved-out consumed root — codegen moved-out cleanup suppression is the remaining core (see §9 Update 2). NOT on `main`.
 **Home once approved:** `docs/implementation_checklist/phase-7-codegen.md` (the design record for the `src/ownership/elision.rs` phases)
 **Surfaced by:** kata #92 (Reverse Linked List II) M5 rebench + profiling, 2026-07-11
 
@@ -133,3 +133,15 @@ All changes are in `src/ownership/elision.rs`, **gated OFF** behind `KARAC_HEADE
 4. **Differential + LSan/ASan harness** across #82/#83/#86/#92 + a discriminating oracle that rejects a non-permutation shape. Land default-OFF only when green; then flip.
 
 **Debug aids left in (gated, inert):** `KARAC_RESHAPER_DEBUG=1` (with the flag on) prints per-fn `touches/covered` and the `builder_sites/adopted/lits/ret_t/t_params/of_t` counts in `compute_headerless_types` / the builder-call rule — the tool used to isolate the blocker above.
+
+### Update 2 (2026-07-11, cont.) — 16 B ACHIEVED on the analysis side; codegen bug isolated
+
+Relaxed the builder-call accounting (EXPERIMENTAL, flag-gated): each reshaper call **consumes** one builder result (moved in, cleanup transfers to the reshaper's result), so the balance is `builder_sites == adopted + reshaper_calls`. With that, **`main` is covered and kata #92 nodes drop to 16 B (`malloc #0x10`)** — the target size, proving the whole *analysis* path end-to-end.
+
+**But flag-on now SEGFAULTS (exit 139).** Faulting instruction (lldb): `ldr x8, [x21]; subs x8,x8,#1; str x8,[x21]` with `x21 = 0x3` — a **headered refcount-decrement emitted on `list`**. Root cause: `list` fails adoption (poisons: "cluster binding escapes ... arg" because it's passed as an owned arg to `reverse_between`), so codegen falls back to the **default headered `RcDec` cleanup** — inconsistent with the headerless allocation (16 B, no rc word) AND wrong because `list` was **moved** into the reshaper (should have no cleanup at all). The headered path (flag off) suppresses this same `RcDec` via move analysis; the headerless path does not.
+
+**This is the real remaining core — a codegen sub-problem:**
+- **The reshaper-consumed root must be a moved-out value with NO cleanup** (no `RcDec`, no free-walk) — its ownership transfers into the reshaper and out via the adopted result `r`, which owns the single free. Either (a) recognize the reshaper-consume as a move in `cluster_verify` so `list` becomes an adopted-but-moved-out cluster with a new `moved_out` flag codegen honors (skip cleanup), or (b) make codegen's existing move-suppression cover the headerless cleanup path for `list`. (a) is more explicit/safer.
+- The current **loose count-relaxation is a stopgap** and is what leaves `list` cleanup-less-but-not-move-marked → the inconsistency. The tight fix threads consumed-root provenance (which builder result each reshaper call consumes) instead of counting.
+
+**Status:** analysis reaches 16 B; flag-on is KNOWN-BROKEN (segfault) pending the moved-out codegen fix. Flag-OFF is clean (kata #92 headered-correct 24 B, fmt clean, 904 lib tests pass). Next session starts at the moved-out cleanup suppression — likely in `src/codegen/` cleanup emission for headerless roots, plus the `moved_out` marker in `fn_adopted_clusters`.
