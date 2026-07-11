@@ -4106,9 +4106,9 @@ max-memory-pages = 4096
         let src = "[package]\nname = \"hello\"\n\n[profile]\noverflow_checks = true\n";
         let m = parse_manifest(&p(), src).unwrap();
         assert!(
-            m.warnings
-                .iter()
-                .any(|w| w.message.contains("unknown key `[profile].overflow_checks`")),
+            m.warnings.iter().any(|w| w
+                .message
+                .contains("unknown key `[profile].overflow_checks`")),
             "expected a soft warning, got: {:?}",
             m.warnings,
         );
