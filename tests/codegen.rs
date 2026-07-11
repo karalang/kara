@@ -7886,6 +7886,39 @@ fn main() {
     }
 
     #[test]
+    fn e2e_user_len_family_method_on_freshtemp_dispatches_to_user() {
+        // B-2026-07-11-14: a USER method named `len` / `count` / `is_empty` on a
+        // fresh-temp receiver (`make().count()`) must dispatch to the user impl,
+        // not the collection/iterator `len`-family method-chain intercept. When
+        // `count` joined that intercept (B-2026-07-11-9 gap 1) it collided with a
+        // user `fn count(self)`: the intercept speculatively compiled the
+        // receiver, found it wasn't a Vec/String struct, and fell through —
+        // leaking the discarded temp (the ASAN sibling
+        // `asan_freshtemp_shared_struct_method_no_double_free` guards the leak).
+        // This gate locks the VALUE: the user method must run and return its
+        // result, for a shared-struct and a plain-struct receiver, across all
+        // three colliding names.
+        if let Some(out) = run_program(
+            "shared struct Bag { items: Vec[i64] }\n\
+             impl Bag {\n\
+                 fn count(self) -> i64 { self.items.len() * 10 }\n\
+                 fn is_empty(self) -> bool { false }\n\
+             }\n\
+             struct Plain { n: i64 }\n\
+             impl Plain { fn len(self) -> i64 { self.n + 7 } }\n\
+             fn bag() -> Bag { let mut v: Vec[i64] = Vec.new(); v.push(1); v.push(2); Bag { items: v } }\n\
+             fn plain() -> Plain { Plain { n: 5 } }\n\
+             fn main() {\n\
+                 println(bag().count());\n\
+                 println(bag().is_empty());\n\
+                 println(plain().len());\n\
+             }",
+        ) {
+            assert_eq!(out, "20\nfalse\n12\n");
+        }
+    }
+
+    #[test]
     fn e2e_iter_adaptor_map_filter_collect_to_vec_codegen() {
         // B-2026-07-03-25: `<iter>.map(f)/.filter(p)....collect()` into a `Vec`
         // failed codegen ("no handler for method 'collect' on non-identifier

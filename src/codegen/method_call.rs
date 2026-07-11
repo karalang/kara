@@ -3385,7 +3385,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // non-`{ptr,len,cap}` borrow (`ref i64`) fall through safely.
         let borrow_local_recv =
             matches!(&object.kind, ExprKind::Identifier(n) if self.ref_params.contains_key(n));
-        if (!matches!(&object.kind, ExprKind::Identifier(_)) || borrow_local_recv)
+        // Defer to user-method dispatch when the receiver's type declares its
+        // own `len`/`is_empty`/`count` method (`dispatch_key` names an emitted
+        // `<Type>.<method>` fn). Otherwise this collection/iterator intercept
+        // speculatively `compile_expr(object)`s the receiver — allocating a
+        // fresh temp for a `make().count()`-style call — then, finding the
+        // value isn't a Vec/String/slice struct, falls through WITHOUT freeing
+        // it while the real user-method dispatch re-evaluates `object`, leaking
+        // the discarded box (B-2026-07-11-14 — surfaced when `count` joined
+        // this arm and collided with a user `fn count(self)`; the latent leak
+        // applied to a user `len`/`is_empty` too). Iterator/collection chains
+        // (`s.chars().count()`, `make_vec().len()`) declare no such user fn, so
+        // they still take the intercept.
+        let user_method_for_len_family = dispatch_key.as_deref().is_some_and(|k| {
+            self.module.get_function(k).is_some() || self.generic_fns.contains_key(k)
+        });
+        if !user_method_for_len_family
+            && (!matches!(&object.kind, ExprKind::Identifier(_)) || borrow_local_recv)
             && matches!(method, "len" | "is_empty" | "count")
         {
             let recv_val = self.compile_expr(object)?;
