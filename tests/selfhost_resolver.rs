@@ -152,6 +152,17 @@ const CORPUS: &[&str] = &[
     // the path in isolation, so a bare `use` is clean).
     "use foo.bar;",
     "use a.b.c;",
+    // ── match-arm pattern BINDINGS ── the arm pattern binds its variables into
+    // the arm scope (and resolves any variant path) before the guard/body. A
+    // prelude variant path (`Some`) resolves; a bare uppercase pattern (`None`)
+    // is a fresh binding; a tuple pattern binds each element; an undefined
+    // variant-constructor path is UndefinedName at the pattern span.
+    "fn f(o: Option[i64]) -> i64 { match o { Some(v) => v, None => 0 } }",
+    "fn f(o: Option[i64]) -> i64 { match o { Some(v) if v > 0 => v, _ => 0 } }",
+    "fn f(p: (i64, i64)) -> i64 { match p { (a, b) => a } }",
+    "fn f(p: (i64, i64)) -> i64 { match p { (a, b) => a + b } }",
+    "fn f(e: i64) -> i64 { match e { Undef(x) => x, _ => 0 } }",
+    "fn f(o: Option[i64]) -> i64 { match o { Some(Some(v)) => v, _ => 0 } }",
     // ── Struct literals ── A single-item body can only reference an UNDEFINED
     // struct name (no cross-item def), so the type name surfaces as
     // UndefinedName at the WHOLE struct-literal span (the seed's
@@ -227,6 +238,12 @@ const PROGRAM_CORPUS: &[&str] = &[
     // `use` binds the imported name — a call to it resolves, forward or back.
     "use foo.bar;\nfn f() { bar() }",
     "fn f() { bar() }\nuse foo.bar;",
+    // Enum variant names are registered globally (the seed's `collect_enum`), so
+    // a variant resolves as a value, as a pattern constructor path, and forward.
+    "enum E { A(i64), B }\nfn f(e: E) -> i64 { match e { A(x) => x, B => 0 } }",
+    "enum E { A, B }\nfn f() -> E { A }",
+    "enum E { A(i64), B(i64) }\nfn f(e: E) -> i64 { match e { A(x) => x, B(x) => x } }",
+    "fn f(e: E) -> i64 { match e { A(x) => x, _ => 0 } }\nenum E { A(i64), B }",
     // A `use` import colliding with a declaration of the same name — dup.
     "use foo.thing;\nfn thing() {}",
     // Two imports of the same last segment — dup.

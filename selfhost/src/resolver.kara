@@ -74,6 +74,11 @@ import ast.{
     ContinueExpr,
     MatchExpr,
     MatchArm,
+    Pattern,
+    BindingPattern,
+    TuplePattern,
+    TupleVariantPattern,
+    OrPattern,
     TypeExpr,
     PathType,
     TupleType,
@@ -516,6 +521,22 @@ impl Resolver {
         });
     }
 
+    // Register an enum VARIANT name in the current (global) scope, silently
+    // ignoring any collision — the seed's `if let Ok(_) = self.table.define(…)`
+    // in `collect_enum`, which discards the dup/reserved error ("user must use
+    // qualified path"). No error is ever pushed. Consumes `name`.
+    fn define_variant(mut ref self, name: String, span: Span) {
+        let existing = self.line_in_current(name);
+        if existing >= 0 {
+            return;
+        }
+        self.binds.push(NameBinding {
+            name: name,
+            line: span.line,
+            scope: self.current,
+        });
+    }
+
     // `lookup` (resolver.rs:446-458): walk the current scope up its parent
     // chain, linear-scanning each scope's bindings.
     fn lookup(ref self, name: ref String) -> bool {
@@ -572,6 +593,17 @@ impl Resolver {
             }
             Enum(e) => {
                 self.define(e.name, e.span);
+                // Register each variant name globally (the seed's `collect_enum`),
+                // so a variant used as a value or as a pattern constructor path
+                // resolves. Collisions are silently ignored by `define_variant`.
+                let mut vi = 0;
+                loop {
+                    if vi >= e.variants.len() {
+                        break;
+                    }
+                    self.define_variant(e.variants[vi].name, e.variants[vi].span);
+                    vi = vi + 1;
+                }
             }
             TypeAlias(t) => {
                 self.define(t.name, t.span);
@@ -1147,6 +1179,9 @@ impl Resolver {
                 for arm in arms {
                     let MatchArm { pattern, guard, body, span } = arm;
                     self.push_scope();
+                    // Bind the arm's pattern variables (and resolve any variant
+                    // path) BEFORE the guard/body so they see the bindings.
+                    self.bind_pattern(pattern);
                     match guard {
                         Some(g) => {
                             self.resolve_expr(g);
@@ -1157,6 +1192,52 @@ impl Resolver {
                     self.pop_scope();
                 }
             }
+        }
+    }
+
+    // Bind a match-arm (or other) pattern's variables into the current scope and
+    // resolve any variant path — mirrors `resolve_refs.rs::resolve_pattern`. A
+    // bare `BindingPat` name is always a fresh (shadowable) binding, like the
+    // seed's `SymbolKind::Variable`; a `TupleVariantPat` also looks up its
+    // constructor path (UndefinedName at the pattern span on miss). Consumed BY
+    // VALUE (same codegen discipline as `resolve_expr`).
+    fn bind_pattern(mut ref self, p: Pattern) {
+        match p {
+            WildcardPat(_) => {}
+            BindingPat(n) => {
+                let BindingPattern { name, span } = n;
+                self.define_shadowable(name, span);
+            }
+            IntPat(_) => {}
+            FloatPat(_) => {}
+            CharPat(_) => {}
+            StrPat(_) => {}
+            BoolPat(_) => {}
+            BytePat(_) => {}
+            TuplePat(n) => {
+                let TuplePattern { elems, span } = n;
+                for e in elems {
+                    self.bind_pattern(e);
+                }
+            }
+            TupleVariantPat(n) => {
+                let TupleVariantPattern { segments, elems, span } = n;
+                if segments.len() > 0 {
+                    if not self.lookup(segments[0]) {
+                        self.push_err(0, span.offset, span.length);
+                    }
+                }
+                for e in elems {
+                    self.bind_pattern(e);
+                }
+            }
+            OrPat(n) => {
+                let OrPattern { alts, span } = n;
+                for a in alts {
+                    self.bind_pattern(a);
+                }
+            }
+            ErrPat(_) => {}
         }
     }
 
