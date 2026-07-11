@@ -96,16 +96,26 @@ impl<'a> super::TypeChecker<'a> {
             // every downstream consumer (match scrutinee inference,
             // method dispatch, pattern-binding type recording).
             Type::Shared(name) => name.clone(),
-            // FFI union receivers reached through a `ref U` / `mut ref U`
-            // borrow (line 549 slice 2a) — `r.field` where `r: ref Foo`
-            // is identical to `u.field` where `u: Foo` from the
-            // typechecker's perspective. Peeled here so the union arm
-            // below sees the underlying name. Non-union targets behind
-            // `ref` keep falling through to `Type::Error` so the
-            // struct-field-access-through-ref path (which doesn't exist
-            // yet for arbitrary structs) doesn't accidentally light up.
+            // Field access through a `ref T` / `mut ref T` borrow — `r.field`
+            // where `r: ref Foo` resolves identically to `u.field` where `u:
+            // Foo`, peeling one borrow layer so the union / struct arms below
+            // see the underlying name. The returned type is the field's own
+            // (by-value) declared type — matching how codegen lowers the field
+            // load and how the owned receiver resolves it. This must light up
+            // structs (not just unions): without it a struct-field-access-
+            // through-ref (`h.w` on `h: ref Holder`) returned `Type::Error`,
+            // which silently poisoned the whole expression — most visibly a
+            // `match ref_struct.field { Some(g) => ... }` whose payload binding
+            // then never got its surface type recorded, so codegen mis-sized it
+            // to a single word and truncated a multi-word payload (Vec/struct)
+            // to its first word (B-2026-07-11-12). `Shared` inner (a
+            // `shared struct` handle behind a borrow) routes through its name
+            // the same way the bare `Type::Shared` arm above does. Generic
+            // args are recovered from the inner `Named` by
+            // `field_type_with_receiver_args`, which is already borrow-aware.
             Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
-                Type::Named { name, .. } if self.env.unions.contains_key(name) => name.clone(),
+                Type::Named { name, .. } => name.clone(),
+                Type::Shared(name) => name.clone(),
                 _ => return Type::Error,
             },
             _ => return Type::Error,

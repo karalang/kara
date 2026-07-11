@@ -159,7 +159,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // path at function exit.
         let saved_borrow_flag = self.pattern_binding_is_borrow;
         self.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee)
-            || self.scrutinee_is_borrowed_binding(scrutinee);
+            || self.scrutinee_is_borrowed_binding(scrutinee)
+            || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms);
         // B-2026-06-13-13 residual A: when the scrutinee is the type-erased
         // `Option`/`Result`, its payload is owned by the dedicated inline/boxed
         // cleanup, not a per-field `EnumDrop` — so the pattern-binding struct
@@ -866,6 +867,71 @@ impl<'ctx> super::Codegen<'ctx> {
         self.ref_params.contains_key(name)
             || self.for_loop_borrow_vars.contains(name)
             || self.borrow_accessor_let_payload.contains_key(name)
+    }
+
+    /// True when the scrutinee is a **field/element read through a borrow**
+    /// (`h.w` / `h.a.b` / `h.xs[i]` where the root binding `h` is a `ref` /
+    /// `mut ref` / for-loop-borrow / borrow-accessor-let) AND no arm ever
+    /// moves a payload binding out of its body/guard.
+    ///
+    /// Such a read aliases the owner's storage and performs no deep copy (an
+    /// OWNED root's field access deep-copies instead — that path owns its
+    /// payload and drops it safely). So a payload binding here is a read-only
+    /// VIEW of storage the caller still owns: registering its own scope-exit
+    /// drop double-frees against the owner (B-2026-07-11-12 — `match
+    /// h.w { Some(g) => for x in g.items { … } }`, `h: ref Holder`). Classing
+    /// the scrutinee as a borrow suppresses that drop.
+    ///
+    /// The escape guard is the safety boundary: when an arm MOVES a payload out
+    /// (`match self.toks[i].tok { Id(s) => s }` — `s` is returned), the borrow
+    /// path's clone-on-escape net only covers `Option`/`Map.get` scrutinees, so
+    /// a moved user-enum payload would alias freed storage. Those cases stay on
+    /// the existing owned move-out path (source-payload cleanup suppression),
+    /// which already handles the escape — so this returns false for them.
+    fn scrutinee_is_readonly_borrowed_place(&self, scrutinee: &Expr, arms: &[MatchArm]) -> bool {
+        // Only place expressions — bare identifiers / `self` are handled by
+        // `scrutinee_is_borrowed_binding` (and route through the pointer-source
+        // `bind_pattern_values_via_ptr` path, not this value path).
+        if !matches!(
+            scrutinee.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::Index { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            return false;
+        }
+        let Some(root) = self.place_expr_root_ident(scrutinee) else {
+            return false;
+        };
+        if !self.scrutinee_is_borrowed_binding(root) {
+            return false;
+        }
+        for arm in arms {
+            let mut names: Vec<String> = Vec::new();
+            collect_pattern_bindings(&arm.pattern, &mut names);
+            for name in &names {
+                if self.borrow_binding_escapes(&arm.body, name) {
+                    return false;
+                }
+                if let Some(guard) = &arm.guard {
+                    if self.borrow_binding_escapes(guard, name) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Walk a place expression (`a.b.c`, `a[i].b`, `a.0`) down to its root
+    /// `Identifier` / `self` sub-expression, returning it — or `None` if the
+    /// chain bottoms out at a non-place root (a call, a literal, etc.).
+    fn place_expr_root_ident<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
+        match &expr.kind {
+            ExprKind::Identifier(_) | ExprKind::SelfValue => Some(expr),
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::Index { object, .. }
+            | ExprKind::TupleIndex { object, .. } => self.place_expr_root_ident(object),
+            _ => None,
+        }
     }
 
     pub(super) fn scrutinee_is_borrow_call(&self, scrutinee: &Expr) -> bool {

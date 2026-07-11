@@ -3442,6 +3442,73 @@ fn main() {
         }
     }
 
+    #[test]
+    fn match_scrutinee_field_of_ref_struct_payload_binding() {
+        // B-2026-07-11-12: `match h.w { Some(g) => ... }` where the scrutinee is a
+        // FIELD read through a `ref` struct (`h: ref Holder`, `Holder.w:
+        // Option[Wrap]`). Two independent halves were broken:
+        //
+        //   (1) Typechecker: field access through a `ref` struct returned
+        //       `Type::Error` (a deliberate gap — only unions were peeled), so the
+        //       match scrutinee had no type and the `Some(g)` payload binding never
+        //       got its surface type recorded. Codegen then sized `g` to a single
+        //       word and truncated the 3-word `Wrap` (a `Vec`) to just its data
+        //       pointer → the loop over `g.items` read an empty collection (0).
+        //
+        //   (2) Ownership: once (1) sized `g` correctly, the payload aliases the
+        //       borrowed buffer but got an owned scope-exit drop → double-free
+        //       against the caller's `h`. A read-through-a-borrow scrutinee whose
+        //       payloads never escape is a read-only VIEW, so its drop is
+        //       suppressed (the escaping counterpart below stays owned).
+        let non_escaping = "struct Wrap { items: Vec[i64] }\n\
+            struct Holder { w: Option[Wrap] }\n\
+            fn count(h: ref Holder) -> i64 {\n\
+                let mut c = 0;\n\
+                match h.w { Some(g) => { for x in g.items { c = c + 1; } } None => {} }\n\
+                c\n\
+            }\n\
+            fn main() {\n\
+                let mut items: Vec[i64] = Vec.new();\n\
+                items.push(1); items.push(2); items.push(3);\n\
+                let h = Holder { w: Some(Wrap { items: items }) };\n\
+                println(count(h));\n\
+            }\n";
+        if let Some(out) = run_program(non_escaping) {
+            assert_eq!(
+                out.trim(),
+                "3",
+                "non-escaping struct payload through ref-field match; got:\n{out}"
+            );
+        }
+        // Escaping counterpart: the bound String is RETURNED, so it must be owned
+        // (move-out path), not aliased. Guards against the read-only-borrow
+        // classification over-firing on an escaping payload.
+        let escaping = "enum Tk { A, Id(String) }\n\
+            struct Sp { tok: Tk }\n\
+            struct P { toks: Vec[Sp], pos: i64 }\n\
+            impl P {\n\
+                fn take(mut ref self) -> String {\n\
+                    match self.toks[self.pos].tok {\n\
+                        Id(s) => { self.pos = self.pos + 1; s }\n\
+                        A => { self.pos = self.pos + 1; \"a\".to_string() }\n\
+                    }\n\
+                }\n\
+            }\n\
+            fn main() {\n\
+                let mut w: Vec[Sp] = Vec.new();\n\
+                w.push(Sp { tok: Tk.Id(\"hello\".to_string()) });\n\
+                let mut p = P { toks: w, pos: 0 };\n\
+                println(p.take());\n\
+            }\n";
+        if let Some(out) = run_program(escaping) {
+            assert_eq!(
+                out.trim(),
+                "hello",
+                "escaping String payload through ref-field match; got:\n{out}"
+            );
+        }
+    }
+
     /// B-2026-07-08-10: `Vec.filled` / `Vec[v; n]` must size the buffer and stride
     /// the fill by the ELEMENT type, not the compiled value width. A bare integer
     /// literal compiles to i64; for a narrow element (`Vec[i32]`/`Vec[u8]`/…) the
