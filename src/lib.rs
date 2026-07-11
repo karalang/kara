@@ -922,6 +922,79 @@ pub fn goto_definition(source: &str, byte_offset: usize) -> Option<DefLocation> 
     })
 }
 
+/// Find-references query: every use-site that resolves to the same symbol as
+/// the reference (or definition) under `byte_offset`. `include_declaration`
+/// adds the symbol's own definition span. Returns the spans (reusing
+/// [`DefLocation`] as a plain span pair) in source order. Empty when the offset
+/// is not on a symbol, or when the source doesn't parse. Single-document today.
+///
+/// The target symbol is found by preferring the innermost *use-site*
+/// (`resolutions`) under the cursor, falling back to the innermost *definition*
+/// span — so find-references works whether you click a reference or the
+/// definition.
+pub fn find_references(
+    source: &str,
+    byte_offset: usize,
+    include_declaration: bool,
+) -> Vec<DefLocation> {
+    let Some((_program, resolved)) = resolve_source(source) else {
+        return Vec::new();
+    };
+
+    // 1. Resolve the cursor to a target `SymbolId`: innermost use-site first.
+    let mut target: Option<crate::resolver::SymbolId> = None;
+    let mut best_len = usize::MAX;
+    for (key, sym_id) in &resolved.resolutions {
+        let (start, len) = (key.0, key.1);
+        if byte_offset >= start && byte_offset < start.saturating_add(len) && len < best_len {
+            best_len = len;
+            target = Some(*sym_id);
+        }
+    }
+    // 2. Fall back to the innermost *definition* span (clicking the def name /
+    //    inside the item), ignoring synthetic prelude spans.
+    if target.is_none() {
+        for sym in resolved.symbol_table.all_symbols() {
+            let (start, len) = (sym.span.offset, sym.span.length);
+            if len > 0 && byte_offset >= start && byte_offset < start + len && len < best_len {
+                best_len = len;
+                target = Some(sym.id);
+            }
+        }
+    }
+    let Some(target) = target else {
+        return Vec::new();
+    };
+
+    // 3. Collect every use-site resolving to the target.
+    let mut out: Vec<DefLocation> = resolved
+        .resolutions
+        .iter()
+        .filter(|(_, sid)| **sid == target)
+        .map(|(key, _)| DefLocation {
+            span_offset: key.0,
+            span_length: key.1,
+        })
+        .collect();
+    // 4. Optionally the declaration itself (a real source span).
+    if include_declaration {
+        let sym = resolved.symbol_table.get_symbol(target);
+        if sym.span.length > 0 {
+            out.push(DefLocation {
+                span_offset: sym.span.offset,
+                span_length: sym.span.length,
+            });
+        }
+    }
+    out.sort_by(|a, b| {
+        a.span_offset
+            .cmp(&b.span_offset)
+            .then(a.span_length.cmp(&b.span_length))
+    });
+    out.dedup();
+    out
+}
+
 /// One entry in a document outline.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolOutline {
@@ -1212,6 +1285,44 @@ mod playground_tests {
     #[test]
     fn goto_definition_none_off_any_reference() {
         assert!(goto_definition("fn main() {}", 1).is_none()); // the `n` in `fn`
+    }
+
+    #[test]
+    fn find_references_from_a_use_site_finds_all_uses() {
+        // `g` is called twice; clicking one call must return both call sites.
+        let src = "fn g() -> i64 { 1 }\nfn main() -> i64 { g() + g() }";
+        let first_call = src.find("g()").unwrap();
+        let refs = find_references(src, first_call, false);
+        assert_eq!(refs.len(), 2, "two call sites: {refs:?}");
+        // Both spans are the identifier `g` (length 1).
+        for r in &refs {
+            assert_eq!(&src[r.span_offset..r.span_offset + r.span_length], "g");
+        }
+        // Sorted by offset.
+        assert!(refs[0].span_offset < refs[1].span_offset);
+    }
+
+    #[test]
+    fn find_references_include_declaration_adds_the_definition() {
+        let src = "fn g() -> i64 { 1 }\nfn main() -> i64 { g() }";
+        let call = src.rfind("g(").unwrap();
+        let without = find_references(src, call, false);
+        let with = find_references(src, call, true);
+        assert_eq!(without.len(), 1);
+        assert_eq!(with.len(), 2, "declaration included: {with:?}");
+        // The extra entry is the definition item span (contains `fn g`).
+        assert!(with
+            .iter()
+            .any(|r| src[r.span_offset..r.span_offset + r.span_length].contains("fn g")));
+    }
+
+    #[test]
+    fn find_references_empty_off_any_symbol() {
+        // Leading whitespace before any item — offset 0 is inside no
+        // definition span and no reference. (Clicking *inside* an item's span,
+        // e.g. the `fn` keyword, legitimately resolves to that item, so this
+        // uses an offset genuinely outside every span.)
+        assert!(find_references("   fn main() {}", 0, true).is_empty());
     }
 
     #[test]

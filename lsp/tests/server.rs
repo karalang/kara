@@ -237,6 +237,24 @@ fn server_answers_definition_and_document_symbols() {
     assert_eq!(loc["uri"], json!(uri));
     assert_eq!(loc["range"]["start"], json!({"line":0,"character":0}));
 
+    // find-references on the `helper` call → all use-sites (one call here).
+    req(
+        &client,
+        5,
+        "textDocument/references",
+        json!({"textDocument":{"uri":uri},"position":{"line":1,"character":19},"context":{"includeDeclaration":false}}),
+    );
+    let rf = recv(&client);
+    let Message::Response(Response {
+        result: Some(refs), ..
+    }) = rf
+    else {
+        panic!("expected references response, got {rf:?}");
+    };
+    let refs = refs.as_array().expect("references returns an array");
+    assert_eq!(refs.len(), 1, "one call site: {refs:?}");
+    assert_eq!(refs[0]["range"]["start"], json!({"line":1,"character":19}));
+
     // document outline → both top-level functions, in order, kind FUNCTION (12).
     req(
         &client,

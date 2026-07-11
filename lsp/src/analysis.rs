@@ -134,6 +134,27 @@ pub fn definition(text: &str, position: Position) -> Option<Range> {
     Some(index.range(def.span_offset, def.span_length))
 }
 
+/// Find every reference to the symbol under `position` (all use-sites that
+/// resolve to the same symbol), in the same document. `include_declaration`
+/// adds the definition span. Returns the ranges; empty when nothing sits there.
+/// `catch_unwind`-guarded like [`diagnostics`].
+pub fn references(text: &str, position: Position, include_declaration: bool) -> Vec<Range> {
+    let index = LineIndex::new(text);
+    let offset = index.offset(position);
+    let refs = match std::panic::catch_unwind(AssertUnwindSafe(|| {
+        karac::find_references(text, offset, include_declaration)
+    })) {
+        Ok(refs) => refs,
+        Err(_) => {
+            eprintln!("kara-lsp: references analysis panicked; returning none");
+            return Vec::new();
+        }
+    };
+    refs.into_iter()
+        .map(|r| index.range(r.span_offset, r.span_length))
+        .collect()
+}
+
 /// Document outline: one flat [`DocumentSymbol`] per top-level item, in source
 /// order. `catch_unwind`-guarded like [`diagnostics`].
 pub fn document_symbols(text: &str) -> Vec<DocumentSymbol> {
@@ -406,6 +427,24 @@ mod tests {
     #[test]
     fn formatting_none_on_parse_error() {
         assert!(formatting("fn main( {").is_none());
+    }
+
+    #[test]
+    fn references_finds_all_use_sites() {
+        let src = "fn g() -> i64 { 1 }\nfn main() -> i64 { g() + g() }";
+        let idx = LineIndex::new(src);
+        let call = src.find("g()").unwrap();
+        let refs = references(src, idx.position(call), false);
+        assert_eq!(refs.len(), 2, "two call sites: {refs:?}");
+        // Both on line 1 (the `main` body).
+        assert!(refs.iter().all(|r| r.start.line == 1));
+    }
+
+    #[test]
+    fn references_none_off_any_symbol() {
+        let src = "   fn main() {}";
+        let idx = LineIndex::new(src);
+        assert!(references(src, idx.position(0), true).is_empty());
     }
 
     #[test]

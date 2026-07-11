@@ -7,9 +7,10 @@
 //! live diagnostics (`textDocument/publishDiagnostics`, slice 1), type-of-
 //! expression hover (`textDocument/hover`, slice 2), go-to-definition +
 //! document outline (`textDocument/definition` + `textDocument/documentSymbol`,
-//! slice 3), and whole-document formatting (`textDocument/formatting`, slice 4)
-//! — each a thin [`analysis`] call over a `karac` library query. No user code
-//! is ever executed — feedback is purely static.
+//! slice 3), whole-document formatting (`textDocument/formatting`, slice 4), and
+//! find-references (`textDocument/references`, slice 5) — each a thin
+//! [`analysis`] call over a `karac` library query. No user code is ever
+//! executed — feedback is purely static.
 
 pub mod analysis;
 
@@ -22,7 +23,7 @@ use lsp_types::notification::{
     Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
-    DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest, Request as _,
+    DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest, References, Request as _,
 };
 use lsp_types::{
     DocumentSymbolResponse, GotoDefinitionResponse, HoverProviderCapability, InitializeParams,
@@ -44,6 +45,7 @@ pub fn serve(connection: Connection) -> LspResult {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         ..Default::default()
@@ -180,6 +182,27 @@ fn handle_request(
                 Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
             }
         }
+        References::METHOD => match serde_json::from_value::<lsp_types::ReferenceParams>(params) {
+            Ok(p) => {
+                let pos = p.text_document_position.position;
+                let uri = p.text_document_position.text_document.uri;
+                let include_decl = p.context.include_declaration;
+                let locs: Vec<Location> = docs
+                    .get(&uri.to_string())
+                    .map(|text| {
+                        analysis::references(text, pos, include_decl)
+                            .into_iter()
+                            .map(|range| Location {
+                                uri: uri.clone(),
+                                range,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                lsp_server::Response::new_ok(id, locs)
+            }
+            Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
+        },
         DocumentSymbolRequest::METHOD => {
             match serde_json::from_value::<lsp_types::DocumentSymbolParams>(params) {
                 Ok(p) => {
