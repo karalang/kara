@@ -2107,17 +2107,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_int_mul(n, elem_size, "with_cap.alloc_bytes")
                 .unwrap();
-            let buf = self
-                .builder
-                .build_call(
-                    self.alloc_or_panic_fn,
-                    &[alloc_bytes.into()],
-                    "with_cap.buf",
-                )
-                .unwrap()
-                .try_as_basic_value()
-                .unwrap_basic()
-                .into_pointer_value();
+            // A null buffer when `alloc_bytes == 0` — otherwise the zero-cap Vec
+            // (`cap = 0`) would own a non-null 1-byte allocation the drop path
+            // skips freeing (B-2026-07-11-15).
+            let buf = self.with_capacity_buffer_or_null(alloc_bytes, "with_cap.buf");
 
             // Build {data=buf, len=0, cap=n} aggregate. `len = 0` is the
             // key difference from `Vec.filled`: capacity is reserved but
@@ -2163,14 +2156,10 @@ impl<'ctx> super::Codegen<'ctx> {
             let n_val = self.compile_expr(&args[0].value)?;
             let n = self.coerce_to_i64(n_val)?;
             // Byte element → cap bytes == n; reserve via the panicking
-            // allocator (matches the panicking `Vec.with_capacity` policy).
-            let buf = self
-                .builder
-                .build_call(self.alloc_or_panic_fn, &[n.into()], "str_with_cap.buf")
-                .unwrap()
-                .try_as_basic_value()
-                .unwrap_basic()
-                .into_pointer_value();
+            // allocator (matches the panicking `Vec.with_capacity` policy). A
+            // null buffer when `n == 0` — a zero-cap String (`cap = 0`) must not
+            // own a non-null buffer the drop path skips freeing (B-2026-07-11-15).
+            let buf = self.with_capacity_buffer_or_null(n, "str_with_cap.buf");
             let vec_ty = self.vec_struct_type();
             let zero = self.context.i64_type().const_int(0, false);
             let mut agg = vec_ty.get_undef();
@@ -2226,25 +2215,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_int_mul(n, elem_size, "try_with_cap.alloc_bytes")
                 .unwrap();
-            let buf = self
-                .builder
-                .build_call(
-                    self.alloc_fallible_fn,
-                    &[alloc_bytes.into()],
-                    "try_with_cap.buf",
-                )
-                .unwrap()
-                .try_as_basic_value()
-                .unwrap_basic()
-                .into_pointer_value();
+            // Null buffer + non-OOM for a zero-byte reservation (B-2026-07-11-15).
+            let (buf, is_oom) = self.fallible_with_capacity_buffer(alloc_bytes, "try_with_cap.buf");
 
             let fn_val = self.current_fn.unwrap();
             let ok_bb = self.context.append_basic_block(fn_val, "twc.ok");
             let oom_bb = self.context.append_basic_block(fn_val, "twc.oom");
             let merge_bb = self.context.append_basic_block(fn_val, "twc.merge");
-            let is_null = self.builder.build_is_null(buf, "twc.is_null").unwrap();
             self.builder
-                .build_conditional_branch(is_null, oom_bb, ok_bb)
+                .build_conditional_branch(is_oom, oom_bb, ok_bb)
                 .unwrap();
 
             // Alloc succeeded: build the empty {data=buf, len=0, cap=n} Vec,
@@ -2302,21 +2281,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 ));
             }
             let n = self.compile_expr(&args[0].value)?.into_int_value();
-            let buf = self
-                .builder
-                .build_call(self.alloc_fallible_fn, &[n.into()], "str_try_with_cap.buf")
-                .unwrap()
-                .try_as_basic_value()
-                .unwrap_basic()
-                .into_pointer_value();
+            // Byte element → `n` bytes. Null buffer + non-OOM for a zero-byte
+            // reservation (B-2026-07-11-15).
+            let (buf, is_oom) = self.fallible_with_capacity_buffer(n, "str_try_with_cap.buf");
 
             let fn_val = self.current_fn.unwrap();
             let ok_bb = self.context.append_basic_block(fn_val, "stwc.ok");
             let oom_bb = self.context.append_basic_block(fn_val, "stwc.oom");
             let merge_bb = self.context.append_basic_block(fn_val, "stwc.merge");
-            let is_null = self.builder.build_is_null(buf, "stwc.is_null").unwrap();
             self.builder
-                .build_conditional_branch(is_null, oom_bb, ok_bb)
+                .build_conditional_branch(is_oom, oom_bb, ok_bb)
                 .unwrap();
 
             self.builder.position_at_end(ok_bb);
@@ -2639,5 +2613,136 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(agg.into());
         }
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Allocate a `with_capacity` data buffer of `alloc_bytes`, returning a
+    /// **null** pointer when the byte count is zero rather than the allocator's
+    /// zero-normalized 1-byte buffer.
+    ///
+    /// `karac_alloc_or_panic(0)` normalizes `0 → 1` and hands back a real,
+    /// non-null heap pointer (`alloc.rs`, deliberate: a non-null result is the
+    /// success signal). But a zero-capacity collection stores `cap = 0`, and the
+    /// `cap > 0 ⇔ owned heap` drop convention (`clone_drop.rs`) *skips* freeing a
+    /// `cap == 0` buffer — treating it as a static-literal / borrowed view — so
+    /// that 1-byte allocation would leak. This bites `with_capacity(n)` whenever
+    /// `n` evaluates to 0 at runtime, which the `presize.rs` pass makes common by
+    /// rewriting `let mut v = Vec.new(); while i < k { v.push(..) }` to
+    /// `Vec.with_capacity(k)` — a `k == 0` counted loop then leaks one byte per
+    /// call (B-2026-07-11-15).
+    ///
+    /// Producing a null data pointer for the zero-byte case makes
+    /// `with_capacity(0)` bit-identical to `Vec.new()` (`{null, 0, 0}`): the drop
+    /// no-ops and the first push grows from null (`realloc(null, _) == malloc`).
+    /// For a compile-time-constant nonzero `alloc_bytes` LLVM folds the `== 0`
+    /// test and drops the empty arm, so the common `with_capacity(<literal>)`
+    /// keeps its single unconditional allocation.
+    fn with_capacity_buffer_or_null(
+        &mut self,
+        alloc_bytes: IntValue<'ctx>,
+        label: &str,
+    ) -> PointerValue<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let is_zero = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                alloc_bytes,
+                self.context.i64_type().const_zero(),
+                "with_cap.empty",
+            )
+            .unwrap();
+        let alloc_bb = self.context.append_basic_block(fn_val, "with_cap.alloc");
+        let empty_bb = self.context.append_basic_block(fn_val, "with_cap.zero");
+        let cont_bb = self.context.append_basic_block(fn_val, "with_cap.cont");
+        self.builder
+            .build_conditional_branch(is_zero, empty_bb, alloc_bb)
+            .unwrap();
+
+        // Nonzero: a real heap allocation, freed by the owning binding's drop.
+        self.builder.position_at_end(alloc_bb);
+        let buf = self
+            .builder
+            .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], label)
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+        let alloc_end = self.builder.get_insert_block().unwrap();
+
+        // Zero: no allocation — a null buffer, matching `Vec.new()`.
+        self.builder.position_at_end(empty_bb);
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        self.builder.position_at_end(cont_bb);
+        let phi = self.builder.build_phi(ptr_ty, "with_cap.buf").unwrap();
+        phi.add_incoming(&[(&buf, alloc_end), (&ptr_ty.const_null(), empty_bb)]);
+        phi.as_basic_value().into_pointer_value()
+    }
+
+    /// Fallible `with_capacity` buffer: reserve `alloc_bytes` via
+    /// `karac_alloc_fallible`, returning `(buffer, is_oom)`.
+    ///
+    /// A zero-byte request is a valid EMPTY reservation, not an allocation
+    /// failure — it yields a NULL buffer with `is_oom = false` and emits no
+    /// `malloc` at all, so the caller wraps `{null, 0, 0}` in `Result.Ok`
+    /// (matching `Vec.new()`, and dodging the same `cap == 0`-skips-free leak the
+    /// panicking path guards, B-2026-07-11-15) rather than
+    /// `Result.Err(OutOfMemory)`. Only a genuine allocation attempt that returns
+    /// null sets `is_oom`.
+    fn fallible_with_capacity_buffer(
+        &mut self,
+        alloc_bytes: IntValue<'ctx>,
+        label: &str,
+    ) -> (PointerValue<'ctx>, IntValue<'ctx>) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let bool_ty = self.context.bool_type();
+        let fn_val = self.current_fn.unwrap();
+        let is_zero = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                alloc_bytes,
+                self.context.i64_type().const_zero(),
+                "twc.empty",
+            )
+            .unwrap();
+        let alloc_bb = self.context.append_basic_block(fn_val, "twc.alloc");
+        let empty_bb = self.context.append_basic_block(fn_val, "twc.zero");
+        let cont_bb = self.context.append_basic_block(fn_val, "twc.have_buf");
+        self.builder
+            .build_conditional_branch(is_zero, empty_bb, alloc_bb)
+            .unwrap();
+
+        // Nonzero: attempt the allocation; a null result is a real OOM.
+        self.builder.position_at_end(alloc_bb);
+        let alloc_buf = self
+            .builder
+            .build_call(self.alloc_fallible_fn, &[alloc_bytes.into()], label)
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let alloc_null = self
+            .builder
+            .build_is_null(alloc_buf, "twc.alloc_null")
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+        let alloc_end = self.builder.get_insert_block().unwrap();
+
+        // Zero: no allocation, a null buffer — success, never OOM.
+        self.builder.position_at_end(empty_bb);
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        self.builder.position_at_end(cont_bb);
+        let buf_phi = self.builder.build_phi(ptr_ty, "twc.buf").unwrap();
+        buf_phi.add_incoming(&[(&alloc_buf, alloc_end), (&ptr_ty.const_null(), empty_bb)]);
+        let oom_phi = self.builder.build_phi(bool_ty, "twc.is_oom").unwrap();
+        oom_phi.add_incoming(&[(&alloc_null, alloc_end), (&bool_ty.const_zero(), empty_bb)]);
+        (
+            buf_phi.as_basic_value().into_pointer_value(),
+            oom_phi.as_basic_value().into_int_value(),
+        )
     }
 }

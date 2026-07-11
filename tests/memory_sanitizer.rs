@@ -427,6 +427,79 @@ fn main() {
     }
 
     #[test]
+    fn asan_bytecode_vm_example_no_leak_or_double_free() {
+        // examples/vm.kara under ASAN — the bytecode VM churns three Vecs
+        // (Vec[Op] program, Vec[i64] data stack, Vec[i64] locals + call stack)
+        // hard across the enum-dispatch loop, with per-program construction and
+        // drop. `Op` is POD (i64 payloads only), so this is a buffer-lifecycle
+        // check: every Vec allocated by the four `prog_*` builders and by `run`
+        // is freed exactly once, no leak, across construct -> execute -> drop.
+        assert_clean_asan_run(
+            include_str!("../examples/vm.kara"),
+            &["20", "15", "120", "42"],
+            "asan_bytecode_vm_example_no_leak_or_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_with_capacity_zero_no_leak() {
+        // B-2026-07-11-15 — a `with_capacity(n)` whose `n` evaluates to 0 at
+        // runtime leaked one byte per call. `karac_alloc_or_panic(0)` normalizes
+        // `0 → 1` and returns a real non-null buffer, but the zero-cap collection
+        // stores `cap = 0`, and the `cap > 0 ⇔ owned heap` drop convention skips
+        // freeing a `cap == 0` buffer — orphaning that 1-byte allocation. The
+        // `presize.rs` pass makes this common by rewriting
+        // `let mut v = Vec.new(); while i < k { v.push(..) }` to
+        // `Vec.with_capacity(k)`, so a `k == 0` counted-fill loop (here the VM's
+        // `run(prog, 0)` with no locals) leaked once per call.
+        //
+        // Exercises all three affected constructors at a zero runtime capacity:
+        // the presize-driven `Vec.with_capacity` (via the counted push loop), a
+        // direct `Vec[i64].with_capacity(0)`, a `String.with_capacity(0)`, and
+        // the fallible `Vec.try_with_capacity(0)` / `String.try_with_capacity(0)`
+        // (whose zero case must be `Ok`, not a spurious OOM `Err`). Every one must
+        // drop to `{null, 0, 0}` (bit-identical to `.new()`) — nothing to free.
+        assert_clean_asan_run(
+            r#"
+fn fill(n: i64) -> i64 {
+    // presize rewrites `Vec.new()` -> `Vec.with_capacity(n)`; n == 0 here.
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < n {
+        v.push(i);
+        i = i + 1i64;
+    }
+    v.len()
+}
+fn main() {
+    let mut total: i64 = 0i64;
+    let mut r: i64 = 0i64;
+    while r < 3i64 {
+        total = total + fill(0i64);          // zero-cap presized Vec
+        let a: Vec[i64] = Vec.with_capacity(0i64);
+        total = total + a.len();             // direct zero-cap Vec
+        let s: String = String.with_capacity(0i64);
+        total = total + s.len();             // direct zero-cap String
+        let tv: Vec[i64] = Vec.try_with_capacity(0i64).unwrap();
+        total = total + tv.len();            // fallible zero-cap Vec -> Ok
+        let ts: String = String.try_with_capacity(0i64).unwrap();
+        total = total + ts.len();            // fallible zero-cap String -> Ok
+        r = r + 1i64;
+    }
+    println(f"{total}");
+    // A nonzero cap on the SAME path still grows and frees correctly.
+    let mut w: Vec[i64] = Vec.with_capacity(0i64);
+    w.push(7i64);
+    w.push(8i64);
+    println(f"{w.len()}");
+}
+"#,
+            &["0", "2"],
+            "asan_with_capacity_zero_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_cstr_to_string_slice_view_not_freed_and_copy_clean() {
         // `CStr.to_string_slice()` returns a BORROWED `{ptr, len, cap=0}` view
         // over the literal's rodata bytes. The `cap == 0` drop-skip must keep

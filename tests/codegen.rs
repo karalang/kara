@@ -6527,6 +6527,19 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_bytecode_vm_example() {
+        // examples/vm.kara — a stack-based bytecode VM. Validates the enum +
+        // `match` dispatch HOT PATH (every instruction is an `Op` variant decoded
+        // in the fetch-execute loop), `Vec[Op]` indexing (`program[pc]`),
+        // `Vec[i64]` stack push/pop via `Option`, indexed-local store, and
+        // Call/Ret control flow, all through codegen. Programs compute
+        // (2+3)*4=20, sum(1..=5)=15, 5!=120, and a ×2 subroutine on 21=42.
+        if let Some(out) = run_program(include_str!("../examples/vm.kara")) {
+            assert_eq!(out, "20\n15\n120\n42\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_index_vec_field_through_self() {
         // Regression for the self-hosting lexer index blocker: indexing a
         // `Vec` field through the `self` receiver (`self.bytes[self.current]`)
