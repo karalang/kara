@@ -98,7 +98,14 @@ impl<'ctx> super::Codegen<'ctx> {
             if !self.aggregate_param_copy_supported_struct(type_name, &mut Vec::new()) {
                 return false;
             }
+            // B-2026-07-10-4: rc-inc buried bare-shared during entry-copy so it stays
+            // symmetric with the combined drop's per-element rc-dec (a copy-supported
+            // struct can carry a shared handle buried in a `Vec[struct]` element /
+            // nested struct — `FnDefNode.params[].ty`, `FnDefNode.body`).
+            let saved = self.deep_copy_rc_inc_bare_shared;
+            self.deep_copy_rc_inc_bare_shared = true;
             self.deep_copy_struct_heap_fields_in_place(slot, type_name);
+            self.deep_copy_rc_inc_bare_shared = saved;
             self.track_struct_var(type_name, slot);
             return true;
         }
@@ -607,6 +614,22 @@ impl<'ctx> super::Codegen<'ctx> {
         fte: &TypeExpr,
     ) {
         let vec_ty = self.vec_struct_type();
+        // B-2026-07-10-4 — clone-on-extract mode only (`deep_copy_rc_inc_bare_shared`):
+        // a bare `shared` field is a shallow pointer in the copy; rc-INC it so the
+        // clone independently co-owns the box, symmetric with the leaf's combined
+        // struct-drop rc-DEC. The ENTRY-COPY path leaves the flag false and skips
+        // this (its shared handling is unchanged — a bump there leaked).
+        if self.deep_copy_rc_inc_bare_shared {
+            if let Some(heap_ty) = self.shared_heap_type_for_type_expr(fte) {
+                if let Ok(field_ptr) =
+                    self.builder
+                        .build_struct_gep(agg_ty, base_ptr, idx, "p14.shclone")
+                {
+                    self.rc_inc_shared_handle_at_slot(field_ptr, heap_ty);
+                }
+                return;
+            }
+        }
         // String / Vec field → copy the OUTER buffer in place (`elem_te = None`),
         // mirroring the struct drop's outer-only free (nested Vec elements are a
         // bounded leak on both sides, never corruption).
@@ -759,6 +782,24 @@ impl<'ctx> super::Codegen<'ctx> {
         idx: u32,
         elem_te: &TypeExpr,
     ) {
+        // B-2026-07-10-4 — clone-on-extract / symmetric-entry-copy mode only: a bare
+        // `shared` element (`Vec[TypeExpr]` variant-field list, `Vec[Expr]` arg list)
+        // is an 8-byte RC pointer the outer buffer copy aliased without a refcount
+        // bump; rc-INC each so the duplicate co-owns the element boxes, symmetric
+        // with the struct drop's per-element rc-dec (`vec_elem_agg_drop_for_type_expr`
+        // → `__karac_vec_elem_rc_dec_<T>`). Flag off (plain entry-copy) skips this —
+        // its Vec[shared] element handling is unchanged.
+        if self.deep_copy_rc_inc_bare_shared {
+            if let Some(heap_ty) = self.shared_heap_type_for_type_expr(elem_te) {
+                if let Ok(field_ptr) =
+                    self.builder
+                        .build_struct_gep(agg_ty, base_ptr, idx, "p14a.shvec")
+                {
+                    self.rc_inc_vec_shared_elements(field_ptr, heap_ty);
+                }
+                return;
+            }
+        }
         // Classify the element; bail unless it is a value-deep-copyable
         // aggregate whose per-element drop frees inner heap.
         enum ElemCopy {

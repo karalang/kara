@@ -2152,6 +2152,21 @@ pub(super) struct Codegen<'ctx> {
     /// aliases the container's storage and the container's own cleanup
     /// already covers the buffer.
     pub(crate) pattern_binding_is_borrow: bool,
+    /// B-2026-07-10-4 — when set, the deep-copy field walker
+    /// (`deep_copy_one_aggregate_field` / `deep_copy_vec_aggregate_elements_in_place`)
+    /// additionally rc-INCs a bare `shared` handle it would otherwise leave shallow:
+    /// a directly-nested `shared` field, and each element of a `Vec[shared]`. A
+    /// copy-supported struct can carry such a handle BURIED inside a `Vec[struct]`
+    /// element or nested struct (`FnDefNode.params[].ty`, `FnDefNode.body`,
+    /// `EnumDefNode.variants[].fields`) — the entry-copy duplicated the buffers but
+    /// shared the boxes without a refcount bump, while the combined struct-drop
+    /// rc-DECs them per element, so the caller's retained original and the callee's
+    /// copy both dec → double-free (the self-hosted item parser's `render_*` nodes).
+    /// Set only around `make_aggregate_param_callee_owned`'s deep-copy so the copy
+    /// stays symmetric with that drop; false elsewhere. (An earlier global attempt
+    /// leaked because the drop side hadn't yet been reconciled — it since was, so
+    /// the entry-copy inc is now balanced.)
+    pub(crate) deep_copy_rc_inc_bare_shared: bool,
     /// Set by `compile_match` when the scrutinee enum is the type-erased
     /// `Option` / `Result` (B-2026-06-13-13 residual A). Their inline / boxed
     /// payloads are owned by the dedicated `FreeInlineOptionPayload` /
@@ -5762,6 +5777,7 @@ impl<'ctx> Codegen<'ctx> {
             compiling_ref_return_let_rhs: false,
             suppress_shadow_metadata_purge: false,
             pattern_binding_is_borrow: false,
+            deep_copy_rc_inc_bare_shared: false,
             pattern_binding_scrutinee_is_option_result: false,
             pattern_binding_scrutinee_optres_area: 0,
             pattern_binding_scrutinee_is_shared_enum: false,
