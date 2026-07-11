@@ -81,7 +81,7 @@ pub fn rc_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<String, RcWitnes
 
     let mut witnesses = HashMap::new();
     for (binding, uses) in &sites {
-        if let Some(w) = first_witness(binding, uses, dom) {
+        if let Some(w) = first_witness(binding, uses, cfg, dom) {
             witnesses.insert(binding.clone(), w);
         }
     }
@@ -131,12 +131,99 @@ fn reassign_kills(
     })
 }
 
+/// True iff EVERY CFG path from the consume at `(cb, ci)` to the use at
+/// `(ub, ui)` threads a Reassign of the binding that rebinds it after the
+/// consume — so the consumed value is provably dead before U reads it.
+///
+/// This is the reachability-precise companion to [`reassign_kills`]. That
+/// dominance-based check is (per its own doc) *vacuous* for the RC shape,
+/// where (C, U) are dominance-incomparable: no reassign R can `precedes(C,
+/// R) ∧ precedes(R, U)` because precedence is transitive. But a loop makes
+/// (C, U) incomparable while still routing every real C→U path through an
+/// in-loop reassign: the back-edge gives the loop header (hence the exit)
+/// an *entry* predecessor, so the reassign block does not *dominate* the
+/// exit even though control can only leave the loop after threading it
+/// (`let mut buf; loop { let x = match buf {..}; buf = ..; }; buf`). Pure
+/// dominance misses that and the formal predicate spuriously RC-boxes
+/// `buf`; boxing a *reassigned* Option/enum local then miscompiles (the
+/// value-typed store smashes the box-pointer slot — B-2026-07-10-4).
+///
+/// CFG reachability catches it: a block that reassigns the binding kills
+/// the consumed value on every path threading it, so removing those
+/// blocks and asking "is U still reachable from C?" is exactly "can the
+/// consumed value reach U?". Reachable ⇒ a live path exists ⇒ NOT killed
+/// (the genuine RC / UAM shapes, which carry no reassign, always stay
+/// reachable and keep firing). `cb != ub` is guaranteed by the caller's
+/// dominance-comparability filter (a block dominates itself).
+fn reassign_kills_by_reachability(
+    uses: &[(BlockId, usize, UseSite)],
+    cfg: &Cfg,
+    cb: BlockId,
+    ci: usize,
+    ub: BlockId,
+    ui: usize,
+) -> bool {
+    // A reassign in C's own block, after C, kills the value on exit.
+    let cb_kills = uses
+        .iter()
+        .any(|(rb, ri, r)| r.kind == UseKind::Reassign && *rb == cb && *ri > ci);
+    if cb_kills {
+        return true;
+    }
+    // A reassign in U's own block, before U, kills the value before the read.
+    let ub_kills = uses
+        .iter()
+        .any(|(rb, ri, r)| r.kind == UseKind::Reassign && *rb == ub && *ri < ui);
+    if ub_kills {
+        return true;
+    }
+    // Any OTHER block that rebinds the binding kills every path threading it.
+    let forbidden: HashSet<BlockId> = uses
+        .iter()
+        .filter(|(rb, _, r)| r.kind == UseKind::Reassign && *rb != cb && *rb != ub)
+        .map(|(rb, _, _)| *rb)
+        .collect();
+    // Nothing rebinds the value between C and U → the pure-dominance
+    // predicate already had the final say; never kill here. (Guards the
+    // ClosureCapture / ContainerStore RC shapes, whose C and U are not in
+    // a forward C→U CFG relation at all — a reachability answer there is
+    // meaningless, not a kill.)
+    if forbidden.is_empty() {
+        return false;
+    }
+    // The kill is only meaningful when reassigns are what disconnect an
+    // otherwise-connected path: U must be forward-reachable from C in the
+    // FULL CFG, yet unreachable once the reassigning blocks are removed.
+    // If U is not forward-reachable from C even with every block present
+    // (mutually-exclusive branches — the genuine two-arm RC shape), the
+    // reassigns are irrelevant and we must not suppress.
+    let reach = |blocked: &HashSet<BlockId>| -> bool {
+        let mut seen: HashSet<BlockId> = HashSet::new();
+        let mut stack: Vec<BlockId> = cfg.block(cb).successors.clone();
+        while let Some(n) = stack.pop() {
+            if n == ub {
+                return true;
+            }
+            if blocked.contains(&n) || !seen.insert(n) {
+                continue;
+            }
+            stack.extend(cfg.block(n).successors.iter().copied());
+        }
+        false
+    };
+    let empty = HashSet::new();
+    // reachable-in-full ∧ ¬reachable-without-reassigns ⇒ every C→U path
+    // threads a reassign ⇒ the consumed value is dead before U.
+    reach(&empty) && !reach(&forbidden)
+}
+
 /// Find the first (C, U) pair for `binding` that satisfies the RC
 /// predicate, scanning consume sites in source order and the partner U
 /// in source order too. Returns `None` if no such pair exists.
 fn first_witness(
     binding: &str,
     uses: &[(BlockId, usize, UseSite)],
+    cfg: &Cfg,
     dom: &DominatorTree,
 ) -> Option<RcWitness> {
     for (i, (cb, ci, c)) in uses.iter().enumerate() {
@@ -163,6 +250,12 @@ fn first_witness(
                 continue;
             }
             if reassign_kills(uses, *cb, *ci, *ub, *ui, dom) {
+                continue;
+            }
+            // Reachability-precise kill: suppress when every C→U path
+            // threads a reassign (the loop-carried `buf` shape pure
+            // dominance misses — B-2026-07-10-4).
+            if reassign_kills_by_reachability(uses, cfg, *cb, *ci, *ub, *ui) {
                 continue;
             }
             return Some(RcWitness {
@@ -1200,14 +1293,19 @@ mod tests {
     }
 
     #[test]
-    fn rc_predicate_unaffected_by_reassign_kill() {
-        // The kill check is sound but vacuous for `rc_candidates` —
-        // when (C, U) are dominance-incomparable, no R can satisfy
-        // `precedes(C, R) ∧ precedes(R, U)` by transitivity. This test
-        // pins that property: branch-divergent shape with a same-branch
-        // reassign still produces an RC witness, because the outer use
-        // U is dominance-incomparable with the consume C in the
-        // then-branch (R's precedence doesn't reach U).
+    fn same_branch_reassign_after_consume_kills_rc_witness() {
+        // Branch-divergent shape whose then-branch reassigns `x` AFTER
+        // consuming it: `if c { let _a = x; x = 2; } let _b = x;`. The
+        // pure-dominance `reassign_kills` is vacuous here (C in the then-
+        // branch and U after the merge are dominance-incomparable, so no
+        // R can `precedes(C, R) ∧ precedes(R, U)`), which used to leave a
+        // spurious RC witness. But on EVERY execution `_b` reads a
+        // reassigned-or-untouched `x`, never the consumed value: on the
+        // taken path the `x = 2` between C and U rebinds it, on the
+        // skipped path C never ran. The reachability-precise kill
+        // (`reassign_kills_by_reachability`) removes the reassigning block
+        // and finds U no longer reachable from C, so no RC is required —
+        // the consumed value is dead before U. (B-2026-07-10-4.)
         let src = "fn main() {\n\
                        let mut c = true;\n\
                        let mut x = 1;\n\
@@ -1223,8 +1321,36 @@ mod tests {
         let dom = compute_dominators(&cfg);
         let cands = rc_candidates(&cfg, &dom);
         assert!(
+            !cands.contains_key("x"),
+            "a reassign after the consume that every C→U path threads must \
+             kill the RC witness; got {:?}",
+            cands.get("x")
+        );
+    }
+
+    #[test]
+    fn branch_divergent_consume_without_reassign_still_fires_rc() {
+        // The companion to the kill test: the SAME branch-divergent shape
+        // WITHOUT the post-consume reassign keeps its RC witness. With no
+        // reassigning block to remove, U stays reachable from C, so the
+        // reachability kill never bites and the genuine RC condition (the
+        // consumed value can reach the outer use) still holds.
+        let src = "fn main() {\n\
+                       let mut c = true;\n\
+                       let x = 1;\n\
+                       if c {\n\
+                           let _a = x;\n\
+                       }\n\
+                       let _b = x;\n\
+                   }";
+        let mut cfg = cfg_of(src);
+        mark_consume_at_line(&mut cfg, "x", 5);
+        let dom = compute_dominators(&cfg);
+        let cands = rc_candidates(&cfg, &dom);
+        assert!(
             cands.contains_key("x"),
-            "branch-divergent RC shape stays an RC witness even with a same-branch reassign; got {:?}",
+            "branch-divergent consume with no intervening reassign stays an \
+             RC witness; got {:?}",
             cands.keys().collect::<Vec<_>>()
         );
     }
