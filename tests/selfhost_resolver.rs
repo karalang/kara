@@ -20,9 +20,11 @@
 //!   trait's generics over each method's signature / optional default body; an
 //!   impl scope resolving the target type, then the (optional) trait path, then
 //!   `Self`, then each method body. Impl-method names are NOT scope bindings
-//!   (siblings dispatch via `self.m()`), mirroring the seed. `use` is a later
-//!   slice. Operator-trait / `Into` impl restrictions produce out-of-slice
-//!   error kinds, so the corpus avoids those trait names as impl targets.
+//!   (siblings dispatch via `self.m()`), mirroring the seed. Operator-trait /
+//!   `Into` impl restrictions produce out-of-slice error kinds, so the corpus
+//!   avoids those trait names as impl targets. `use a.b.c;` binds the last path
+//!   segment `c` (`collect_use`), so a reference to it resolves and a repeated
+//!   import is a duplicate — the standalone `resolve()` validates no path.
 //! - **Slice 2c** seeds the FULL prelude — the 16 primitives plus every
 //!   `PRELUDE_{FUNCTIONS,TYPES,TRAITS,VARIANTS,EFFECT_RESOURCES}` name and the
 //!   magic modules / comptime pseudotypes / stdlib module aliases the seed's
@@ -146,6 +148,10 @@ const CORPUS: &[&str] = &[
     // Typos of prelude names still surface as undefined (seeding is exact).
     "fn typo_fn() { printlnn(\"x\") }",
     "fn typo_ty(x: Veec) {}",
+    // ── use imports — bind the last path segment (no module graph to validate
+    // the path in isolation, so a bare `use` is clean).
+    "use foo.bar;",
+    "use a.b.c;",
 ];
 
 /// Multi-item programs for the program-level (two-pass) gate. These exercise
@@ -180,6 +186,13 @@ const PROGRAM_CORPUS: &[&str] = &[
     "fn ok_one() {}\nfn bad() { missing() }",
     // Undefined type referenced across items where NO declaration supplies it.
     "fn f(x: Undeclared) {}\nfn g() {}",
+    // `use` binds the imported name — a call to it resolves, forward or back.
+    "use foo.bar;\nfn f() { bar() }",
+    "fn f() { bar() }\nuse foo.bar;",
+    // A `use` import colliding with a declaration of the same name — dup.
+    "use foo.thing;\nfn thing() {}",
+    // Two imports of the same last segment — dup.
+    "use a.dup;\nuse b.dup;",
 ];
 
 /// Byte offset shift between the Rust and Kāra spans — 0 (both resolve the

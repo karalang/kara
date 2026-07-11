@@ -579,8 +579,21 @@ impl Resolver {
             Trait(t) => {
                 self.define(t.name, t.span);
             }
+            // `use a.b.c;` imports the LAST path segment (`c`) into the current
+            // scope, so a reference to it resolves — including a FORWARD one, as
+            // this runs in pass 1 (`collect_use`, collect.rs). A repeated import
+            // name (or one colliding with a declaration) is a DuplicateDefinition
+            // at the `use`'s span; a reserved last segment, ReservedIdentifier.
+            // No module graph is attached in the oracle, so the PATH itself is
+            // not validated — only the imported name is bound (matching the seed,
+            // whose standalone `resolve()` reports no path errors either).
+            Use(u) => {
+                let n = u.segments.len();
+                if n > 0 {
+                    self.define(u.segments[n - 1], u.span);
+                }
+            }
             Impl(_) => {}
-            Use(_) => {}
             ErrItem(_) => {}
         }
     }
