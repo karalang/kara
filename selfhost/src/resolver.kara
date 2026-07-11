@@ -104,7 +104,8 @@ struct NameBinding {
 }
 
 // A resolve error: `kind` is 0=UndefinedName, 1=UndefinedType,
-// 2=DuplicateDefinition, 3=ReservedIdentifier; `off`/`len` are the byte span.
+// 2=DuplicateDefinition, 3=ReservedIdentifier, 4=UndefinedLabel; `off`/`len`
+// are the byte span.
 pub struct ResolveError {
     kind: i64,
     off: i64,
@@ -116,6 +117,13 @@ struct Resolver {
     parents: Vec[i64],
     current: i64,
     errors: Vec[ResolveError],
+    // In-scope loop labels (innermost last), pushed on entry to a labeled
+    // `while`/`for`/`loop` and popped on exit. Mirrors the seed's `loop_labels`
+    // stack (`resolve_block.rs`): a `continue <label>` referring to a name NOT
+    // on the stack is an UndefinedLabel. The selfhost AST has no labeled-BLOCK
+    // form, so every entry is a loop label — `continue` to any in-scope label is
+    // valid (the seed's `ContinueOnBlockLabel` case is unreachable here).
+    labels: Vec[String],
 }
 
 // ── Entry points ──
@@ -130,11 +138,12 @@ pub fn resolve_item(item: Item) -> Vec[ResolveError] with panics {
         parents: Vec.new(),
         current: 0,
         errors: Vec.new(),
+        labels: Vec.new(),
     };
     r.seed_global();
     r.collect_item(item);
     r.walk_item(item);
-    let Resolver { binds, parents, current, errors } = r;
+    let Resolver { binds, parents, current, errors, labels } = r;
     errors
 }
 
@@ -154,6 +163,7 @@ pub fn resolve_program(items: Vec[Item]) -> Vec[ResolveError] with panics {
         parents: Vec.new(),
         current: 0,
         errors: Vec.new(),
+        labels: Vec.new(),
     };
     r.seed_global();
     // Pass 1 borrows `items` (a `ref Vec` param inside `collect_all`, the only
@@ -162,7 +172,7 @@ pub fn resolve_program(items: Vec[Item]) -> Vec[ResolveError] with panics {
     for it in items {
         r.walk_item(it);
     }
-    let Resolver { binds, parents, current, errors } = r;
+    let Resolver { binds, parents, current, errors, labels } = r;
     errors
 }
 
@@ -566,6 +576,38 @@ impl Resolver {
     fn push_err(mut ref self, kind: i64, off: i64, len: i64) {
         self.errors.push(ResolveError { kind: kind, off: off, len: len });
     }
+
+    // ── Loop labels (mirrors resolve_block.rs `loop_labels`) ──
+    //
+    // Push a labeled loop's name on entry / pop on exit; `label_in_scope`
+    // linearly scans (innermost-last, like `Parser.label_known`). A `break` /
+    // `continue` to a name NOT in scope is UndefinedLabel (kind 4).
+    fn push_label(mut ref self, name: String) {
+        self.labels.push(name);
+    }
+
+    fn pop_label(mut ref self) {
+        self.labels.pop();
+    }
+
+    fn label_in_scope(ref self, name: ref String) -> bool {
+        let mut i = 0;
+        loop {
+            if i >= self.labels.len() {
+                return false;
+            }
+            if self.labels[i] == name {
+                return true;
+            }
+            i = i + 1;
+        }
+    }
+
+    // NOTE — the `Option[String]` label is matched INLINE at each loop /
+    // break / continue arm (never passed by value to a helper): passing an
+    // `Option[String]` as a by-value method parameter double-frees its payload
+    // under codegen (surfaced here; the by-value-arg-transfer class). Only the
+    // UNWRAPPED `String` is threaded to `push_label` (safe, like `define`).
 
     // ── Pass 1: collect (mirrors collect.rs) ──
     //
@@ -1132,26 +1174,67 @@ impl Resolver {
             While(n) => {
                 let WhileExpr { label, cond, body, span } = n;
                 self.resolve_expr(cond);
+                let mut pushed = false;
+                match label {
+                    Some(l) => {
+                        self.push_label(l);
+                        pushed = true;
+                    }
+                    None => {}
+                }
                 self.push_scope();
                 self.resolve_block_body(body);
                 self.pop_scope();
+                if pushed {
+                    self.pop_label();
+                }
             }
             For(n) => {
                 let ForExpr { label, var, iter, body, span } = n;
                 self.resolve_expr(iter);
+                let mut pushed = false;
+                match label {
+                    Some(l) => {
+                        self.push_label(l);
+                        pushed = true;
+                    }
+                    None => {}
+                }
                 self.push_scope();
                 self.define(var, span);
                 self.resolve_block_body(body);
                 self.pop_scope();
+                if pushed {
+                    self.pop_label();
+                }
             }
             Loop(n) => {
                 let LoopExpr { label, body, span } = n;
+                let mut pushed = false;
+                match label {
+                    Some(l) => {
+                        self.push_label(l);
+                        pushed = true;
+                    }
+                    None => {}
+                }
                 self.push_scope();
                 self.resolve_block_body(body);
                 self.pop_scope();
+                if pushed {
+                    self.pop_label();
+                }
             }
             Break(n) => {
                 let BreakExpr { label, value, span } = n;
+                match label {
+                    Some(l) => {
+                        if not self.label_in_scope(l) {
+                            self.push_err(4, span.offset, span.length);
+                        }
+                    }
+                    None => {}
+                }
                 match value {
                     Some(v) => {
                         self.resolve_expr(v);
@@ -1159,7 +1242,17 @@ impl Resolver {
                     None => {}
                 }
             }
-            Continue(_) => {}
+            Continue(n) => {
+                let ContinueExpr { label, span } = n;
+                match label {
+                    Some(l) => {
+                        if not self.label_in_scope(l) {
+                            self.push_err(4, span.offset, span.length);
+                        }
+                    }
+                    None => {}
+                }
+            }
             StructLit(n) => {
                 // Resolve the struct type NAME (UndefinedName on miss — the seed
                 // emits `error_undefined_name` here, kind 0, at the WHOLE
@@ -1400,5 +1493,8 @@ fn kind_tag(kind: i64) -> String {
     if kind == 2 {
         return "dup-def".to_string();
     }
-    "reserved".to_string()
+    if kind == 3 {
+        return "reserved".to_string();
+    }
+    "undef-label".to_string()
 }

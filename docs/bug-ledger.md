@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **380 surfaced · 6 open · 371 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **381 surfaced · 7 open · 371 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -101,6 +101,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **380 surfaced 
 | B-2026-07-11-29 | 2026-07-11 | codegen | high | Vec[Vec[Option[shared]]] deep-clone + consume + grow: force-cloned inner Vec's scope-exit drop LEAKS retained element handles, and at larger sizes specific clone combinations produce MALFORMED trees (extra nodes); interpreter correct | kata #95 second surface |
 | B-2026-07-11-30 | 2026-07-11 | ownership | low | Borrow-return source pinning is not applied to borrows nested in generic wrappers / borrowed collections: `-> Vec[ref T]` / `-> Option[ref T]` returns whose element sources are locals are accepted, while `-> ref T` / `-> ref Struct` returns are pinned. design.md § Feature 4 Part 3 says a container with a `ref` in a stored position is a borrowed collection whose scope is bounded by every borrowed source, so the escape should be pinned like the struct-field case. | tests/safety_design.rs::adversarial_escape_via_borrowed_collection_local (#[ignore]d, asserts the desired rejection; auto-enables when fixed); docs/implementation_checklist/phase-9-verification.md |
 | B-2026-07-11-35 | 2026-07-11 | codegen | high | A GENERIC struct's field-rooted index READ of a NON-COPY element (`self.xs[i]` / `h.xs[i]` where `xs: Vec[T]`, monomorphized `T = String`) reads GARBAGE — the element is mis-resolved to the i64 default (8-byte load of a 24-byte {ptr,len,cap}), so a `Heap[String]` prints a garbage integer / corrupt bytes instead of the string. Interpreter correct. Sibling of B-2026-07-11-31 (which fixed the generic METHOD dispatch add/get/pop) but for the DIRECT `self.field[i]` read path. | unfixed; repro below |
+| B-2026-07-11-37 | 2026-07-11 | codegen | high | Passing an `Option[String]` moved out of a RECURSIVE shared-enum node BY VALUE to a `mut ref self` method double-frees the payload under codegen (JIT+AOT `free(): double free detected in tcache 2`); interpreter correct. Passing the same Option by REF, or inlining the `match` at the call site, is clean. | worked around in selfhost by inlining the Option match (never passing Option[String] by value to the helper); repro below |
 
 ### Fixed (371)
 

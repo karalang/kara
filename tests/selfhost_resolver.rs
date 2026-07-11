@@ -33,17 +33,17 @@
 //!   exactly as the seed resolves them (a typo of one still surfaces as
 //!   undefined; a user definition shadows the line-0 prelude entry).
 //!
-//! Only four error kinds are in scope — UndefinedName, UndefinedType,
-//! DuplicateDefinition, ReservedIdentifier. The corpus must therefore carry no
-//! attributes (the Rust `resolve()` runs attribute validation the Kāra side
-//! does not) and exercise duplicate / reserved definitions only through GENERIC
-//! params — whose span is the bare identifier. A `FnParamNode` /
-//! `StructFieldNode` has no separate name span (its span covers `name: TYPE`),
-//! so a duplicate / reserved PARAM or FIELD would diverge on span (a name span
-//! is a later slice's work) — the type/value declarations therefore exercise
-//! dup/reserved only via generics.
+//! Only five error kinds are in scope — UndefinedName, UndefinedType,
+//! DuplicateDefinition, ReservedIdentifier, UndefinedLabel. The corpus must
+//! therefore carry no attributes (the Rust `resolve()` runs attribute
+//! validation the Kāra side does not) and exercise duplicate / reserved
+//! definitions only through GENERIC params — whose span is the bare identifier.
+//! A `FnParamNode` / `StructFieldNode` has no separate name span (its span
+//! covers `name: TYPE`), so a duplicate / reserved PARAM or FIELD would diverge
+//! on span (a name span is a later slice's work) — the type/value declarations
+//! therefore exercise dup/reserved only via generics.
 //!
-//! The Rust seed asserts every produced error is one of the four in-scope
+//! The Rust seed asserts every produced error is one of the five in-scope
 //! kinds, so a corpus entry that drifts out of the slice fails loudly rather
 //! than silently diffing clean.
 
@@ -203,6 +203,20 @@ const CORPUS: &[&str] = &[
     // diagnostic (the seed's `define_binding_leaf`) — ReservedIdentifier at the
     // binding span. This pins the record=true vs record=false split.
     "fn f(x: i64) { let Fn = x; }",
+    // ── loop labels ── a labeled `loop`/`while`/`for` pushes its label; a
+    // `continue <label>` / `break <label>` referring to a name NOT in scope is
+    // UndefinedLabel at the whole break/continue span (the seed's
+    // `resolve_block.rs` `loop_labels` check). A valid in-scope label resolves
+    // clean; `continue <unknown>` is the reachable path (the parser routes an
+    // unknown identifier after `break` to a VALUE → UndefinedName instead).
+    "fn f() { outer: loop { continue outer } }",
+    "fn f() { outer: loop { break outer } }",
+    "fn f() { loop { continue nope } }",
+    "fn f() { outer: loop { inner: loop { continue outer } } }",
+    "fn f() { outer: while true { continue outer } }",
+    "fn f(v: Vec[i64]) { outer: for x in v { continue outer } }",
+    // An out-of-scope label after the labeled loop closes — UndefinedLabel.
+    "fn f() { outer: loop { break outer } loop { continue outer } }",
 ];
 
 /// Multi-item programs for the program-level (two-pass) gate. These exercise
@@ -306,6 +320,7 @@ fn rust_render(src: &str) -> String {
             ResolveErrorKind::UndefinedType => "undef-type",
             ResolveErrorKind::DuplicateDefinition => "dup-def",
             ResolveErrorKind::ReservedIdentifier => "reserved",
+            ResolveErrorKind::UndefinedLabel => "undef-label",
             other => panic!(
                 "corpus entry {src:?} produced an out-of-Slice-1 resolve error kind {other:?} \
                  (message: {}); trim the corpus or extend the slice",
