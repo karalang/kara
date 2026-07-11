@@ -22963,4 +22963,40 @@ fn main() {
             "forloop_enum_element_nested_struct_payload_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_fresh_some_shared_reused_across_consuming_calls_no_double_free() {
+        // B-2026-07-11-21: a fresh `let orig = Some(Node { .. })` (an untyped
+        // `Some(<shared struct literal>)` binding) passed BY VALUE to a
+        // recursive consumer that clones the matched subtree, TWICE. Before the
+        // fix the binding was never registered as `Option[shared]` (no call-site
+        // retain, no scope-exit dec), so each consuming call's param drop
+        // decremented `orig`'s refcount — the first call freed the tree, the
+        // second double-freed it (glibc "malloc(): unaligned tcache chunk").
+        // The interpreter was correct throughout; codegen (JIT+AOT) corrupted
+        // the heap. Registering the fresh-Some binding into the caller-retains
+        // model (one arg-site inc per pass, one scope-exit dec) balances it.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn clone_offset(node: Option[Node], delta: i64) -> Option[Node] {
+    match node {
+        None => None,
+        Some(n) => Some(Node { val: n.val + delta, left: clone_offset(n.left, delta), right: clone_offset(n.right, delta) }),
+    }
+}
+fn count_nodes(node: Option[Node]) -> i64 {
+    match node { None => 0, Some(n) => 1 + count_nodes(n.left) + count_nodes(n.right) }
+}
+fn main() {
+    let orig = Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None });
+    let c1 = clone_offset(orig, 10);
+    let c2 = clone_offset(orig, 20);
+    println(count_nodes(c1) + count_nodes(c2));
+}
+"#,
+            &["4"], // two 2-node clones
+            "fresh_some_shared_reused_across_consuming_calls_no_double_free",
+        );
+    }
 }

@@ -2817,6 +2817,52 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                        // (e) Untyped let with a fresh `Some(<shared struct>)`
+                        //     RHS: `let orig = Some(Node { .. })`. `Some(x)`
+                        //     parses as `Call { callee: Some, args: [x] }`, so
+                        //     case (b) misses it (`Some` is not a declared fn in
+                        //     `fn_return_option_inner_shared`) and — with no
+                        //     annotation, no field/alias RHS — the binding was
+                        //     left UNREGISTERED: no `var_option_shared_heap`
+                        //     entry, so no call-site `share_option_shared_ref_for_arg`
+                        //     retain fired when it was passed by value, and no
+                        //     scope-exit `RcDecOption` cleanup was queued. The
+                        //     callee's `Option[shared]` param ALWAYS decs at its
+                        //     exit (`track_rc_option_var` in `compile_function`),
+                        //     so a single by-value pass "moved" the chain (the
+                        //     callee freed it) and worked by luck, but passing
+                        //     the SAME fresh binding by value MORE THAN ONCE
+                        //     over-decremented → premature free → double-free /
+                        //     heap corruption on the second pass
+                        //     (B-2026-07-11-21, surfaced by the #95 bottom-up
+                        //     shape-DP `clone_offset(orig, ..)` reuse). Register
+                        //     it like any other `Option[shared]` local so it
+                        //     joins the caller-retains model: one arg-site inc
+                        //     per pass balanced by the callee's exit dec, and one
+                        //     scope-exit dec balancing the literal's rc==1. The
+                        //     fresh `Some(...)` literal owns its +1 (the struct
+                        //     literal allocates at rc==1; the `Some` constructor
+                        //     does not double-inc a fresh payload), so — like the
+                        //     Call move-out of case (b) — NO extra inner inc is
+                        //     flagged.
+                        if shared_option_info.is_none() {
+                            if let ExprKind::Call { callee, args } = &value.kind {
+                                if let ExprKind::Identifier(c) = &callee.kind {
+                                    if c == "Some" && args.len() == 1 {
+                                        if let Some(inner_name) =
+                                            self.type_name_of_expr(&args[0].value)
+                                        {
+                                            if let Some(info) =
+                                                self.shared_types.get(inner_name.as_str()).cloned()
+                                            {
+                                                shared_option_info =
+                                                    Some((var_name.clone(), info));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         // Aliasing acquire: when the RHS is an Identifier naming
                         // an existing `Option[shared T]` binding, the new
                         // binding is a SECOND owner of that chain and must inc
