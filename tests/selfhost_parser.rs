@@ -241,6 +241,24 @@ const CORPUS: &[&str] = &[
     "IdentExpr { name: name, span: span }",
     "CallExpr { callee: callee, args: args, span: sp }",
     "SpanNode { span: self.span_from(start) }",
+    // Uppercase-rooted dotted paths (path-expression slice) — bare unit-variant
+    // values, associated-function calls, and enum-variant construction. Rooted
+    // as `Path` (bare) / `Call` with a `Path` callee, NOT `MethodCall`.
+    "Vec.new()",
+    "Token.Error",
+    "SelfMode.NoSelf",
+    "Parser.new(tokens)",
+    "Map.new()",
+    "Expr.Unary(u)",
+    "Expr.Ident(IdentExpr { name: name, span: span })",
+    "Color.Red.next",
+    "Vec.new().push(x)",
+    "f(Token.Error)",
+    "Point { tag: Tag.A }",
+    // Lowercase-rooted `.` stays a field/method access (postfix loop), NOT a path.
+    "obj.method()",
+    "module.func(a)",
+    "v.field",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara::render_expr`) ──
@@ -532,6 +550,10 @@ fn render_rust_expr(e: &Expr) -> String {
         ExprKind::StringLit(s) => format!("(str {}{sp})", escape_for_render(s)),
         ExprKind::MultiStringLit(s) => format!("(mstr {}{sp})", escape_for_render(s)),
         ExprKind::Identifier(name) => format!("(ident {name}{sp})"),
+        ExprKind::Path {
+            segments,
+            generic_args: None,
+        } => format!("(path {}{sp})", segments.join(".")),
         ExprKind::SelfValue => format!("(self{sp})"),
         ExprKind::SelfType => format!("(Self{sp})"),
         ExprKind::Binary { op, left, right } => format!(

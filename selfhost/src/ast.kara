@@ -178,6 +178,16 @@ pub struct IndexExpr {
     pub span: Span,
 }
 
+// `Seg0.Seg1.…` — a Type/Const-class dotted path rooted at an uppercase
+// identifier (`Vec.new`, `Token.Error`, `Expr.Unary`). Mirrors `ExprKind::Path`
+// (generic path args are a later slice). Span covers the whole dotted chain —
+// and, for the call form `Path(args)`, the parenthesized args too (seed parity:
+// both the `Call` and its `Path` callee take `span_from(start)` after the `)`).
+pub struct PathExpr {
+    pub segments: Vec[String],
+    pub span: Span,
+}
+
 // One field initializer in a struct literal: `name: value`, or the shorthand
 // `name` (where `shorthand` is true and `value` is a synthesized identifier
 // expression equal to `name`). Mirrors `ast::FieldInit`. A plain struct holding
@@ -219,6 +229,11 @@ pub shared enum Expr {
     Ident(IdentExpr),
     SelfVal(SpanNode),
     SelfTy(SpanNode),
+
+    // `Vec.new` / `Token.Error` / `Expr.Unary` — uppercase-rooted dotted path
+    // (path-expression slice). A bare path is a value; `Path(args)` is a `Call`
+    // with a `Path` callee.
+    Path(PathExpr),
 
     // Operators.
     Binary(BinaryExpr),
@@ -291,6 +306,7 @@ pub fn expr_span(e: ref Expr) -> Span {
         Ident(n) => clone_span(n.span),
         SelfVal(n) => clone_span(n.span),
         SelfTy(n) => clone_span(n.span),
+        Path(n) => clone_span(n.span),
         Binary(n) => clone_span(n.span),
         Unary(n) => clone_span(n.span),
         Tuple(n) => clone_span(n.span),

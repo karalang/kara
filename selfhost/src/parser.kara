@@ -36,6 +36,7 @@ import ast.{
     FieldAccessExpr,
     TupleIndexExpr,
     IndexExpr,
+    PathExpr,
     StructLitField,
     StructLitExpr,
     Stmt,
@@ -1438,6 +1439,8 @@ impl Parser {
                 self.advance();
                 if self.at_loop_label() {
                     self.parse_labeled_loop(name, start)
+                } else if starts_upper(name) and self.at_dot() {
+                    self.parse_path_expr(name, start)
                 } else if self.at_struct_literal_open(name) {
                     self.parse_struct_literal_body(name, start)
                 } else {
@@ -1454,6 +1457,83 @@ impl Parser {
                 self.advance();
                 Expr.Error(SpanNode { span: self.span_from(start) })
             }
+        }
+    }
+
+    // True iff the current token is `.` (a path separator / postfix dot).
+    fn at_dot(ref self) -> bool {
+        if self.pos >= self.tokens.len() {
+            return false;
+        }
+        match self.tokens[self.pos].token {
+            Dot => true,
+            _ => false,
+        }
+    }
+
+    // `Seg0.Seg1.…` rooted at an uppercase identifier already consumed into
+    // `first` (`self.pos` is AT the first `.`). Mirrors the seed's uppercase-path
+    // branch (src/parser/exprs.rs): collect `.Ident` segments greedily, then —
+    // `Path(args)` → a `Call` with a `Path` callee (both spanning the whole
+    // `Vec.new()` incl. args, seed parity), otherwise a bare `Path` value.
+    fn parse_path_expr(mut ref self, first: String, start: Span) -> Expr {
+        let mut segments: Vec[String] = Vec.new();
+        segments.push(first);
+        loop {
+            if not self.at_dot() {
+                break;
+            }
+            self.advance(); // eat .
+            let is_ident = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Identifier(_) => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if is_ident {
+                let seg = self.take_member_name();
+                segments.push(seg);
+            } else {
+                break;
+            }
+        }
+        let is_call = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                LeftParen => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if is_call {
+            self.advance(); // consume (
+            let args = self.parse_arg_list();
+            self.expect_rparen();
+            // Both the Call and its Path callee span the whole `Vec.new()`
+            // (`span_from(start)` with the cursor after `)`).
+            let sp = self.span_from(start);
+            let callee_span = Span {
+                line: sp.line,
+                column: sp.column,
+                offset: sp.offset,
+                length: sp.length,
+            };
+            let callee = Expr.Path(PathExpr {
+                segments: segments,
+                span: callee_span,
+            });
+            Expr.Call(CallExpr {
+                callee: callee,
+                args: args,
+                span: sp,
+            })
+        } else {
+            Expr.Path(PathExpr {
+                segments: segments,
+                span: self.span_from(start),
+            })
         }
     }
 

@@ -62,6 +62,7 @@ import ast.{
     FieldAccessExpr,
     TupleIndexExpr,
     IndexExpr,
+    PathExpr,
     StructLitField,
     StructLitExpr,
     IfExpr,
@@ -989,6 +990,17 @@ impl Resolver {
                 let IdentExpr { name, span } = n;
                 if not self.lookup(name) {
                     self.push_err(0, span.offset, span.length);
+                }
+            }
+            Path(n) => {
+                // Resolve the FIRST segment (the seed's `error_undefined_name`
+                // on miss — UndefinedName, kind 0, at the WHOLE path span);
+                // qualified segments are not separately resolved here.
+                let PathExpr { segments, span } = n;
+                if segments.len() > 0 {
+                    if not self.lookup(segments[0]) {
+                        self.push_err(0, span.offset, span.length);
+                    }
                 }
             }
             SelfVal(n) => {

@@ -20,6 +20,7 @@ import ast.{
     FieldAccessExpr,
     TupleIndexExpr,
     IndexExpr,
+    PathExpr,
     StructLitField,
     StructLitExpr,
     Stmt,
@@ -328,6 +329,20 @@ pub fn render_expr(e: Expr) -> String {
             out.push_str("(ident ");
             out.push_str(n.name);
             out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        Path(p) => {
+            let PathExpr { segments, span } = p;
+            out.push_str("(path ");
+            let mut first = true;
+            for seg in segments {
+                if not first {
+                    out.push_str(".");
+                }
+                out.push_str(seg);
+                first = false;
+            }
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(")");
         }
         SelfVal(n) => {

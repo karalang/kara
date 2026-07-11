@@ -164,6 +164,14 @@ const CORPUS: &[&str] = &[
     "fn mk(x: i64) { Undef { x } }",
     "fn mk(b: i64) { Undef { x: 1, ..b } }",
     "fn mk() { Undef { x: 1, ..missing } }",
+    // ── Path expressions ── The first segment is resolved (UndefinedName at the
+    // whole path span on miss); prelude-seeded roots (`Vec`, `Map`) are clean,
+    // undefined roots error. Both the bare-path and `Path(args)` call forms.
+    "fn mk() { Vec.new() }",
+    "fn mk() { Map.new() }",
+    "fn bad() { Undef.make() }",
+    "fn bad() { Nope.Variant }",
+    "fn mk(x: i64) { Vec.new().push(x) }",
 ];
 
 /// Multi-item programs for the program-level (two-pass) gate. These exercise
@@ -201,6 +209,11 @@ const PROGRAM_CORPUS: &[&str] = &[
     // Field value referencing an undefined name — the type resolves, the value
     // does not (error AFTER the clean name lookup).
     "struct Point { x: i64 }\nfn mk() -> Point { Point { x: missing } }",
+    // Path expression resolving a user type/variant declared in the same
+    // program — clean, forward and backward; and an associated-fn call form.
+    "enum Token { Error, Ident }\nfn f() { Token.Error }",
+    "fn f() { E.V }\nenum E { V }",
+    "struct S { x: i64 }\nfn mk() -> S { S.new() }",
     // Top-level DuplicateDefinition — two functions with the same name.
     "fn dup() {}\nfn dup() {}",
     // Duplicate across item KINDS — a fn and a struct sharing a name.
