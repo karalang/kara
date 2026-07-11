@@ -519,6 +519,24 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+
+    // Inferred type of each module-level `let` binding's value expression, keyed
+    // by binding name (B-2026-07-11-16). Codegen sizes the global for a COMPUTED,
+    // un-annotated binding from this — the typechecker is the source of truth, so
+    // codegen never re-infers the type. Collect into a temp first to avoid
+    // borrowing `program.items` while assigning `program.module_binding_types`.
+    let modbind_types: std::collections::HashMap<String, TypeExpr> = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ModuleBinding(b) => tc
+                .expr_types
+                .get(&SpanKey::from_span(&b.value.span))
+                .map(|ty| (b.name.clone(), TypeChecker::type_to_type_expr(ty))),
+            _ => None,
+        })
+        .collect();
+    program.module_binding_types = modbind_types;
 }
 
 struct Lowerer<'a> {

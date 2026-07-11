@@ -46353,6 +46353,31 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_modbind_computed_unannotated_initializer() {
+        // B-2026-07-11-16 residual: a COMPUTED binding with NO `: TYPE`
+        // annotation (`let DOUBLED = COUNT * 2;`). There is no declared type to
+        // size the placeholder global, so codegen sizes it from the
+        // typechecker's inferred type (`program.module_binding_types`, threaded
+        // through lowering). Both an i64 chain and an i32 binding are exercised
+        // to confirm the inferred width is honored (not defaulted to i64).
+        // Matches the interpreter output exactly (run==build parity).
+        let output = run_program(
+            "let COUNT: i64 = 42;\n\
+             let DOUBLED = COUNT * 2;\n\
+             let TRIPLED = DOUBLED + COUNT;\n\
+             let SMALL: i32 = 7i32;\n\
+             let SMALL2 = SMALL + 3i32;\n\
+             fn main() {\n\
+                 println(DOUBLED);\n\
+                 println(TRIPLED);\n\
+                 println(SMALL2);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "84\n126\n10\n");
+    }
+
+    #[test]
     fn test_e2e_modbind_struct_field_read_annotated() {
         // Uppercase-receiver field access — `CFG.max` / nested
         // `OUTER.inner.field` on a value binding. The parser consumes the

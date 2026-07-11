@@ -20649,3 +20649,25 @@ fn test_module_binding_computed_cross_referencing() {
     );
     assert_eq!(out, "42\n84\n126\n");
 }
+
+#[test]
+fn test_module_binding_computed_unannotated() {
+    // Parity with tests/codegen.rs::test_e2e_modbind_computed_unannotated_initializer
+    // (B-2026-07-11-16 residual). Computed bindings with NO `: TYPE`
+    // annotation — the interpreter evaluates the value expr regardless of
+    // annotation, so this always worked on the run side; the codegen side now
+    // matches by sizing the global from the inferred type.
+    let out = run_no_errors(
+        "let COUNT: i64 = 42i64;\n\
+         let DOUBLED = COUNT * 2i64;\n\
+         let TRIPLED = DOUBLED + COUNT;\n\
+         let SMALL: i32 = 7i32;\n\
+         let SMALL2 = SMALL + 3i32;\n\
+         fn main() {\n\
+             println(DOUBLED);\n\
+             println(TRIPLED);\n\
+             println(SMALL2);\n\
+         }",
+    );
+    assert_eq!(out, "84\n126\n10\n");
+}

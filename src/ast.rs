@@ -713,6 +713,13 @@ pub struct Program {
     /// truncated the 4-word `Json` Ok payload to its first word (B-2026-07-11-7).
     /// Consumed ONLY by that reconstruction, so the extra non-`?` entries are inert.
     pub concrete_named_type_exprs: EnumInstTypeExprsTable,
+    /// Inferred type of each module-level `let` binding's value expression, keyed
+    /// by binding NAME. Populated by lowering from the typechecker's `expr_types`.
+    /// Codegen uses it to size the global for a COMPUTED, un-annotated binding
+    /// (`let DOUBLED = COUNT * 2;`) — the typechecker is the source of truth for
+    /// the type, so codegen never re-infers it (which could diverge). An
+    /// annotated binding uses its `: TYPE` directly and never consults this.
+    pub module_binding_types: std::collections::HashMap<String, TypeExpr>,
     /// Set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_borrow_modes`. Consumed by codegen
     /// to apply the ref-binding shim at match-arm leaf bindings under a

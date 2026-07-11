@@ -137,8 +137,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // type to size the global; an un-annotated computed binding still
                 // falls through to a skip (the read then errors — a loud
                 // build-time signal, never a silent miscompile).
-                if let Some(ty_expr) = &b.ty {
-                    let placeholder_ty = self.llvm_type_for_type_expr(ty_expr);
+                // Size the placeholder global from the binding's declared type,
+                // or — when un-annotated — the typechecker's inferred type for the
+                // value expr (`module_binding_types`, never re-inferred in codegen).
+                let ty_expr =
+                    b.ty.clone()
+                        .or_else(|| self.module_binding_types.get(&b.name).cloned());
+                if let Some(ty_expr) = ty_expr {
+                    let placeholder_ty = self.llvm_type_for_type_expr(&ty_expr);
                     if let Some(zero) = basic_zero_const(placeholder_ty) {
                         let global = self.module.add_global(placeholder_ty, None, &b.name);
                         global.set_initializer(&zero);

@@ -2592,6 +2592,11 @@ pub(super) struct Codegen<'ctx> {
     /// referenced global and `Binary`→arithmetic. Declaration order is preserved
     /// so a binding can reference an earlier one (B-2026-07-11-16).
     pub(crate) computed_module_inits: Vec<(String, crate::ast::Expr)>,
+    /// Inferred type of each module-binding value expr, keyed by binding name
+    /// (from `program.module_binding_types`, the typechecker's `expr_types`).
+    /// Sizes the placeholder global for a COMPUTED, un-annotated binding
+    /// (`let DOUBLED = COUNT * 2;`) when there is no `: TYPE` to use.
+    pub(crate) module_binding_types: std::collections::HashMap<String, crate::ast::TypeExpr>,
     /// The synthesized `void __karac_static_init()` function, declared
     /// in `declare_module_bindings` when `map_set_module_inits` is
     /// non-empty so `main`'s entry can emit a forward `call` to it, and
@@ -5842,6 +5847,7 @@ impl<'ctx> Codegen<'ctx> {
             module_bindings: HashMap::new(),
             map_set_module_inits: Vec::new(),
             computed_module_inits: Vec::new(),
+            module_binding_types: std::collections::HashMap::new(),
             static_init_fn: None,
             source_filename: None,
             source_filename_global: None,
@@ -6837,6 +6843,7 @@ impl<'ctx> Codegen<'ctx> {
         // argument a generic heap-payload enum's variant was instantiated
         // with, so `Some(String)` compares by content not pointer word.
         self.enum_inst_type_exprs = program.enum_inst_type_exprs.clone();
+        self.module_binding_types = program.module_binding_types.clone();
         self.concrete_named_type_exprs = program.concrete_named_type_exprs.clone();
 
         // Phase 6 line 26 slice 8ab: snapshot the per-call effect-
