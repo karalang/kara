@@ -746,6 +746,13 @@ pub struct OwnershipCheckResult {
     /// there deactivates coherently (every consumer keys on the
     /// reconciled set).
     pub headerless_types: HashMap<String, (usize, Vec<String>)>,
+    /// Headerless reshaper (in-place link-permuting transform) fns →
+    /// their `dummy` sentinel binding name. EXPERIMENTAL, populated only
+    /// under `KARAC_HEADERLESS_RESHAPER`. Codegen emits a single-node
+    /// headerless free of `dummy` at the fn's scope exit — the sentinel is
+    /// uniquely owned and NOT part of the returned chain (`dummy.<link>`),
+    /// so it has no other cleanup. See `elision::reshaper_dummy_binding`.
+    pub headerless_reshaper_dummies: HashMap<String, String>,
     /// Multi-edit `fix_diff` envelope keyed by the diagnostic's primary
     /// span — phase-7 line 197 follow-up. `ConcurrentSharedStruct` and
     /// `ConcurrentPlainStruct` populate this with the per-`mut`-field
@@ -929,6 +936,9 @@ pub struct OwnershipChecker<'a> {
     pub(crate) elision_blocked: HashMap<String, Vec<ElisionBlocked>>,
     pub(crate) elided_clusters: HashMap<String, Vec<ElidedCluster>>,
     pub(crate) headerless_types: HashMap<String, (usize, Vec<String>)>,
+    /// Reshaper fns → `dummy` sentinel binding (see the result-struct
+    /// field of the same name). Populated by `compute_elision`.
+    pub(crate) headerless_reshaper_dummies: HashMap<String, String>,
     /// `fix_diff` envelope sidecar — phase-7 line 197 follow-up. Keyed
     /// by the diagnostic's primary `SpanKey`, value is the list of
     /// machine-applicable `TextEdit`s. Populated only by the
@@ -1078,6 +1088,7 @@ impl<'a> OwnershipChecker<'a> {
             elision_blocked: HashMap::new(),
             elided_clusters: HashMap::new(),
             headerless_types: HashMap::new(),
+            headerless_reshaper_dummies: HashMap::new(),
             error_fix_diffs: HashMap::new(),
             binding_type_names: HashMap::new(),
             binding_types: HashMap::new(),
@@ -1195,6 +1206,7 @@ impl<'a> OwnershipChecker<'a> {
             elision_blocked: self.elision_blocked,
             elided_clusters: self.elided_clusters,
             headerless_types: self.headerless_types,
+            headerless_reshaper_dummies: self.headerless_reshaper_dummies,
             error_fix_diffs: self.error_fix_diffs,
         }
     }

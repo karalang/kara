@@ -4114,6 +4114,58 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_scope_cleanup_from(0);
     }
 
+    /// Free the reshaper's `dummy` sentinel as a single headerless node at
+    /// the fn's scope exit — reload the ptr from its slot, null-guard,
+    /// `free`, then null the slot (so any reload-based cleanup that also
+    /// targets it no-ops instead of double-freeing). No-op unless `fn_key`
+    /// is a recognized headerless reshaper (`headerless_reshaper_dummies`).
+    /// Sound: the dummy is uniquely owned and NOT part of the returned
+    /// chain (`dummy.<link>` was already loaded into the return value
+    /// before this runs), so the free is disjoint from the caller's
+    /// free-walk. Called AFTER `emit_scope_cleanup`, so the null-out also
+    /// neutralizes a stale reload the ordinary cleanup may have left.
+    pub(super) fn emit_headerless_reshaper_dummy_free(&mut self, fn_key: &str) {
+        let Some(dummy) = self.headerless_reshaper_dummies.get(fn_key).cloned() else {
+            return;
+        };
+        let Some(slot) = self.variables.get(&dummy).map(|s| s.ptr) else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let cur = self
+            .builder
+            .build_load(ptr_ty, slot, &format!("{dummy}_reshaper_dummy"))
+            .unwrap()
+            .into_pointer_value();
+        let null = ptr_ty.const_null();
+        let is_null = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, cur, null, "reshaper_dummy_is_null")
+            .unwrap();
+        let skip_bb = self
+            .context
+            .append_basic_block(fn_val, "reshaper_dummy_free_skip");
+        let do_bb = self
+            .context
+            .append_basic_block(fn_val, "reshaper_dummy_free_do");
+        let join_bb = self
+            .context
+            .append_basic_block(fn_val, "reshaper_dummy_free_join");
+        self.builder
+            .build_conditional_branch(is_null, skip_bb, do_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        self.builder
+            .build_call(self.free_fn, &[cur.into()], "")
+            .unwrap();
+        self.builder.build_store(slot, null).unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(skip_bb);
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
+    }
+
     /// Emit-only drain of cleanup frames `[start_frame..]`, innermost
     /// first — the compile-time stack is left untouched (no pop), so the
     /// textual fall-through path still drains its frames at their own

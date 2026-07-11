@@ -2053,6 +2053,12 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 self.emit_scope_cleanup();
             }
+            // Headerless reshaper: free the `dummy` sentinel as a single
+            // node (the ordinary cleanup no-ops its rc-dec under
+            // headerless, and the reshaper isn't a cluster with a
+            // free-walk). Runs after the scope cleanup and after the
+            // return value (`dummy.<link>`) is already in `result`.
+            self.emit_headerless_reshaper_dummy_free(&func.name);
             if let Some(ctx) = self.coro_ctx {
                 // A2 slice 2b.3: a coroutine body's normal completion routes to
                 // the signal + final-suspend block, not a `ret` (the ramp's

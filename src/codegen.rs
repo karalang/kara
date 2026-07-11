@@ -2713,6 +2713,14 @@ pub(super) struct Codegen<'ctx> {
     /// the type; every consumer keys on the reconciled set, so a drop
     /// deactivates the whole composition coherently).
     pub(crate) headerless_type_candidates: HashMap<String, (usize, Vec<String>)>,
+    /// Headerless reshaper fns (bare name / `Type.method`) → the `dummy`
+    /// sentinel binding name. At such a fn's scope exit codegen frees
+    /// `dummy` as a single headerless node (`emit_headerless_reshaper_dummy_free`)
+    /// — it is uniquely owned and NOT part of the returned chain
+    /// (`dummy.<link>`), so it has no other cleanup and cannot double-free
+    /// with the caller's free-walk. EXPERIMENTAL, populated only under
+    /// `KARAC_HEADERLESS_RESHAPER`. See `elision::reshaper_dummy_binding`.
+    pub(crate) headerless_reshaper_dummies: HashMap<String, String>,
     /// Phase C2b: the FINAL program-wide headerless set. A member type
     /// in here has no rc word anywhere — `headerless_here` answers true
     /// in every fn, builders allocate via `emit_headerless_alloc`, the
@@ -5863,6 +5871,7 @@ impl<'ctx> Codegen<'ctx> {
             headerless_fns: HashMap::new(),
             adopted_cluster_roots: HashMap::new(),
             headerless_type_candidates: HashMap::new(),
+            headerless_reshaper_dummies: HashMap::new(),
             headerless_types: HashSet::new(),
             conditional_adopted_roots: HashMap::new(),
             borrowed_param_skips: HashMap::new(),
@@ -6133,6 +6142,12 @@ impl<'ctx> Codegen<'ctx> {
         // `compile_program` once coro keys + struct layouts exist).
         for (t, v) in &ow.headerless_types {
             self.headerless_type_candidates.insert(t.clone(), v.clone());
+        }
+        // Headerless reshaper fns → dummy sentinel binding (single-node
+        // free at scope exit).
+        for (fn_key, dummy) in &ow.headerless_reshaper_dummies {
+            self.headerless_reshaper_dummies
+                .insert(fn_key.clone(), dummy.clone());
         }
     }
 

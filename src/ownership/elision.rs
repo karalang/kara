@@ -297,6 +297,25 @@ impl<'a> OwnershipChecker<'a> {
         for cs in clusters.values_mut() {
             cs.retain(|c| !c.arg_sanctioned || headerless_types.contains_key(&c.member_type));
         }
+        // EXPERIMENTAL (default-OFF): record each recognized reshaper fn →
+        // its `dummy` sentinel binding, but ONLY for reshapers whose member
+        // type survived the headerless gate (otherwise the fn compiles
+        // headered and the dummy takes its ordinary cleanup). Codegen frees
+        // the dummy as a single headerless node at the fn's scope exit.
+        if reshaper_enabled() {
+            for item in &self.program.items {
+                if let Item::Function(f) = item {
+                    if let Some((t, _)) = self.reshaper_member(f) {
+                        if headerless_types.contains_key(&t) {
+                            if let Some(dummy) = self.reshaper_dummy_binding(f, &t) {
+                                self.headerless_reshaper_dummies
+                                    .insert(f.name.clone(), dummy);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         self.headerless_types = headerless_types;
         self.elided_clusters = clusters;
     }
@@ -2932,30 +2951,87 @@ impl<'a> OwnershipChecker<'a> {
     /// lands; it must NOT be trusted (flag stays OFF) until the
     /// differential + sanitizer harness is green.
     fn recognize_reshaper(&self, f: &Function, t: &str) -> bool {
-        // Owned (bare, not ref) `Option[t]` param — the consumed input.
-        let has_owned_input = f.params.iter().any(|p| is_exactly_option_of(&p.ty, t));
-        if !has_owned_input {
-            return false;
+        self.reshaper_dummy_binding(f, t).is_some()
+    }
+
+    /// Tight reshaper recognition: returns the reshaper's `dummy` sentinel
+    /// binding name — the fresh `t`-literal whose link field is the
+    /// consumed `Option[t]` param and which is returned via
+    /// `<dummy>.<link>`. That node is uniquely owned and is NOT part of
+    /// the returned chain (`<dummy>.<link>`), so codegen must give it a
+    /// single-node headerless free at scope exit (`headerless_reshaper_*`).
+    /// Requirements (default-deny — any deviation returns `None`):
+    /// - an owned (bare) `Option[t]` param exists (the consumed input);
+    /// - the fn returns `Option[t]`;
+    /// - the final expr is `<dummy>.<link>`;
+    /// - the fn contains EXACTLY ONE `t` struct-literal anywhere, it is a
+    ///   top-level `let <dummy> = t { ..., <link>: <that owned param> }`.
+    ///   Exactly-one guarantees the dummy is the only fresh `t` node the
+    ///   reshaper allocates, so freeing it is the whole cleanup.
+    fn reshaper_dummy_binding(&self, f: &Function, t: &str) -> Option<String> {
+        // Owned (bare) `Option[t]` param(s) — the consumed input.
+        let owned_params: HashSet<String> = f
+            .params
+            .iter()
+            .filter(|p| is_exactly_option_of(&p.ty, t))
+            .flat_map(|p| p.pattern.binding_names())
+            .collect();
+        if owned_params.is_empty() {
+            return None;
         }
-        // Returns `Option[t]`.
-        let returns_t = f
+        if !f
             .return_type
             .as_ref()
-            .is_some_and(|r| is_exactly_option_of(r, t));
-        if !returns_t {
-            return false;
+            .is_some_and(|r| is_exactly_option_of(r, t))
+        {
+            return None;
         }
-        // Final expr is `<ident>.<link>` (the dummy-detach RootLink
-        // return). Requires the type's link field name.
-        let Some((link_field, _)) = self.cluster_link_struct(t) else {
-            return false;
+        let (link_field, _) = self.cluster_link_struct(t)?;
+        // Final expr is `<dummy>.<link>`.
+        let ExprKind::FieldAccess { object, field } = &f.body.final_expr.as_ref()?.kind else {
+            return None;
         };
-        matches!(
-            f.body.final_expr.as_ref().map(|e| &e.kind),
-            Some(ExprKind::FieldAccess { object, field })
-                if field == &link_field
-                    && matches!(&object.kind, ExprKind::Identifier(_))
-        )
+        if field != &link_field {
+            return None;
+        }
+        let ExprKind::Identifier(dummy) = &object.kind else {
+            return None;
+        };
+        // Exactly one `t`-literal in the whole fn body.
+        let mut t_lit_total = 0usize;
+        collect_struct_literal_types(&f.body, &mut |n| {
+            if n == t {
+                t_lit_total += 1;
+            }
+        });
+        if t_lit_total != 1 {
+            return None;
+        }
+        // That single literal is a top-level `let <dummy> = t { ...,
+        // <link>: <owned param> }`.
+        for stmt in &f.body.stmts {
+            let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+                continue;
+            };
+            let ExprKind::StructLiteral { path, fields, .. } = &value.kind else {
+                continue;
+            };
+            if path.last().map(String::as_str) != Some(t) {
+                continue;
+            }
+            let PatternKind::Binding(n) = &pattern.kind else {
+                return None;
+            };
+            if n != dummy {
+                return None;
+            }
+            let link_is_owned_param = fields.iter().any(|fld| {
+                fld.name == link_field
+                    && matches!(&fld.value.kind, ExprKind::Identifier(id) if owned_params.contains(id))
+            });
+            return link_is_owned_param.then(|| dummy.clone());
+        }
+        None
     }
 
     /// EXPERIMENTAL: if `f` is a recognized reshaper, return its

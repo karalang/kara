@@ -1,6 +1,6 @@
 # Design: Headerless RC-elision for in-place link-permuting reshapers
 
-**Status:** IN PROGRESS on branch `worktree-headerless-reshaper`, gated OFF behind `KARAC_HEADERLESS_RESHAPER`. kata #92 flag-on now produces **correct output (147795689) + 16 B nodes, no crash, no double-free** — the core works. One remaining bug: a bounded per-iteration leak when the reversal's `left > 1` (§9 Update 3). NOT on `main`.
+**Status:** on branch `worktree-headerless-reshaper` (core commits already on `main`, gated OFF behind `KARAC_HEADERLESS_RESHAPER`). kata #92 flag-on is now **correct (147795689) + 16 B nodes + 0 leaks + no double-free** (§9 Update 5 — the leak is FIXED). Remaining before flipping the flag: tighten the loose builder-count relaxation (provenance-threaded), remove the gated debug, and a deterministic Linux-LSan sweep across #82/#83/#86/#92.
 **Home once approved:** `docs/implementation_checklist/phase-7-codegen.md` (the design record for the `src/ownership/elision.rs` phases)
 **Surfaced by:** kata #92 (Reverse Linked List II) M5 rebench + profiling, 2026-07-11
 
@@ -169,3 +169,17 @@ Fully diagnosed via `MallocStackLogging` + a splice-count/`left` sweep. The leak
 Note this is the flip side of the Update-3 fix: pre-guard, that rc-dec *corrupted* the dummy's `val` slot (writing a refcount to offset 0); post-guard it's skipped, which is correct for the value but leaves the dummy unfreed because the reshaper has no headerless free.
 
 **FIX (next):** the reshaper's `dummy` sentinel needs a **single-node headerless free** at scope exit (it is uniquely owned and is NOT part of the returned chain — `r = dummy.next`). This requires plumbing the reshaper recognition into codegen: identify the dummy binding (the T-literal whose link = the consumed `Option[T]` param) in `recognize_reshaper`, carry it to codegen (a `headerless_reshaper_fns: fn → dummy-binding` map beside `headerless_fns`), and emit an unconditional single-node `free(dummy)` at scope exit — NOT recursing into `dummy.next` (that chain is returned). Soundness: the dummy is provably unique (fresh literal, only aliased by the count-free cursor `prev`), so an unconditional free is sound and can't double-free with `r`'s walk (disjoint node sets). This is essentially giving the reshaper a minimal `ReturnedChain::RootLink`-style cleanup. After it: replace the loose recognizers/count-relax with the tight/provenance-threaded versions, then the differential + LSan/ASan harness (macOS `leaks` under-reports — use `scripts/lsan-local.sh` for deterministic Linux LSan) across #82/#83/#86/#92 before flipping the flag.
+
+### Update 5 (2026-07-11, cont.) — leak FIXED: reshaper dummy single-node free
+
+Implemented the Update-4 fix. kata #92 flag-on is now **correct + 16 B + 0 leaks + no double-free**.
+
+**Analysis (`src/ownership/elision.rs`):** tightened `recognize_reshaper` → `reshaper_dummy_binding(f, t)`, which returns the `dummy` binding only when the fn has an owned `Option[t]` param, returns `Option[t]`, its final expr is `<dummy>.<link>`, and it contains **exactly one** `t` struct-literal — a top-level `let <dummy> = t { …, <link>: <that owned param> }`. Exactly-one guarantees the dummy is the only fresh `t` node, so freeing it is the whole cleanup. `compute_elision` records `fn → dummy` in a new `headerless_reshaper_dummies` map (only for reshapers whose member type passed the headerless gate).
+
+**Threading:** new `headerless_reshaper_dummies: HashMap<String,String>` on the ownership result + checker (`src/ownership.rs`) and on the codegen state (`src/codegen.rs`), populated from the ownership result.
+
+**Codegen (`src/codegen/runtime.rs` + `functions.rs`):** `emit_headerless_reshaper_dummy_free(fn_key)` — reload the dummy ptr from its slot, null-guard, `free`, then **null the slot** (so any reload-based ordinary cleanup that also targets it no-ops instead of double-freeing). Called in `compile_function` right AFTER `emit_scope_cleanup` and after the return value (`dummy.<link>`) is already in `result`, so the free is disjoint from both the returned chain and the caller's free-walk.
+
+**Verification:** kata #92 flag-on full K → sink 147795689, `malloc #0x10`, `leaks` 0, guard-malloc (MallocScribble) exit 0. A 7-point window sweep (`left`=1..199 × various `right`) → all 0 leaks + no double-free + correct. Pass-through → 19900, 0 leaks. Family #82/#83/#86 → **byte-identical** output flag-on/off, 0 leaks (#82 stays headered — its shape isn't a recognized reshaper; #83/#86 partially headerless). Flag-off unchanged (24 B, 147795689). Full `cargo test --features llvm` = 515 passed / same 6 pre-existing JIT-env failures. fmt + clippy (both feature configs) clean.
+
+**Still before flipping the flag:** (1) replace the loose builder-call relaxation (`builder_sites == adopted + reshaper_calls`) with provenance-threaded consumed-root accounting; (2) remove the gated `KARAC_RESHAPER_DEBUG` scaffolding; (3) deterministic **Linux LSan** sweep (`scripts/lsan-local.sh` — macOS `leaks` under-reports) across the family + a discriminating oracle that rejects a non-permutation shape.
