@@ -903,6 +903,30 @@ impl<'a> super::TypeChecker<'a> {
             },
         );
 
+        // `StdinLines` (phase-8 `Stdin.lines()` slice) — the stdin sibling of
+        // `LinesIter`, same `Result[String, IoError]` Item so
+        // `for line in stdin.lines()` binds `line: Result[String, IoError]`. A
+        // distinct type (not `LinesIter`) because the interpreter's `LinesIter`
+        // value is welded to a `std::fs::File` reader; stdin is ambient.
+        self.env.impl_assoc_types.insert(
+            ("StdinLines".to_string(), "Item".to_string()),
+            ImplAssocTypeEntry {
+                ty: Type::Named {
+                    name: "Result".to_string(),
+                    args: vec![
+                        Type::Str,
+                        Type::Named {
+                            name: "IoError".to_string(),
+                            args: vec![],
+                        },
+                    ],
+                },
+                gat_params: vec![],
+                param_bound_traits: Vec::new(),
+                where_clause: None,
+            },
+        );
+
         // Range family — typechecker-internal types constructed from
         // `a..b` syntax. Both struct shape and assoc-type mapping
         // registered here.

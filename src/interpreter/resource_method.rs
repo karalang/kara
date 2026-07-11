@@ -279,6 +279,16 @@ impl<'a> super::Interpreter<'a> {
                     Err(e) => io_err_value(io_error_from_std(&e)),
                 }
             }
+            // `Stdin.lines()` — the lazy stdin line iterator (phase-8 slice). No
+            // I/O here: it returns a stateless marker the for-loop drains (the
+            // `reads(Stdin), blocks` effect is attributed at the `lines()` call
+            // by the static effect seed; per-line reads happen during
+            // iteration). `blocks` mirrors that static seed at runtime.
+            ("Stdin", "lines") => {
+                self.track_effect("reads(Stdin)");
+                self.track_effect("blocks");
+                Value::StdinLines
+            }
 
             // ── Stdout / Stderr ────────────────────────────────────
             ("Stdout", "print") => {

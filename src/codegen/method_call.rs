@@ -11588,7 +11588,7 @@ impl<'ctx> super::Codegen<'ctx> {
 /// `compile_ambient_resource_method`); the rest still resolve here so
 /// they get a precise "not yet lowered" error rather than the generic
 /// dispatch fall-through.
-fn ambient_resource_for_alias(alias: &str) -> Option<&'static str> {
+pub(super) fn ambient_resource_for_alias(alias: &str) -> Option<&'static str> {
     match alias {
         "clock" => Some("Clock"),
         "env" => Some("Env"),

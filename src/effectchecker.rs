@@ -954,6 +954,32 @@ impl<'a> EffectChecker<'a> {
                 );
                 self.inferred_effects.insert(fn_name.to_string(), set);
             }
+            // Phase 8 `Stdin.lines()` slice: the stdin line iterator carries
+            // `reads(Stdin), blocks` (design.md § "Source effects flow through
+            // adaptors"). Like `BufReader.lines`, the per-line reads happen
+            // during for-loop iteration (no call site of their own), so the
+            // effect must be attributed statically at the `lines()` call rather
+            // than left to runtime tracking — otherwise a function iterating
+            // `stdin.lines()` would not infer `reads(Stdin)`. `blocks` because a
+            // stdin read parks the OS thread until input (or EOF) arrives.
+            {
+                let mut set = EffectSet::new();
+                set.add(
+                    Effect {
+                        verb: EffectVerbKind::Reads,
+                        resource: "Stdin".to_string(),
+                    },
+                    EffectOrigin::Direct(builtin_span.clone()),
+                );
+                set.add(
+                    Effect {
+                        verb: EffectVerbKind::Blocks,
+                        resource: String::new(),
+                    },
+                    EffectOrigin::Direct(builtin_span.clone()),
+                );
+                self.inferred_effects.insert("Stdin.lines".to_string(), set);
+            }
         }
 
         // Stdlib conversion traits (`From`, `Into`, `TryFrom`, `TryInto`) are

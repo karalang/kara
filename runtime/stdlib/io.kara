@@ -26,12 +26,26 @@
 
 struct Stdin { }
 
+// Lazy line iterator over standard input (design.md § "Source effects flow
+// through adaptors" — `io.lines()` binds `reads(Stdin), blocks`). Empty marker;
+// stdin is ambient, so — unlike the File-backed `LinesIter` — it carries no
+// reader handle. Iteration is driven by the compiler (interpreter for-loop
+// drain / codegen per-iteration `karac_runtime_stdin_read_line` loop), yielding
+// `Result[String, IoError]` per line (trailing newline stripped) until EOF, the
+// same Item shape as `BufReader.lines()`. Reached as `stdin.lines()` /
+// `Stdin.lines()` (the surface `Stdin.read_line` uses; the design's `io.`
+// prefix is not a wired module alias for any stdin method).
+struct StdinLines { }
+
 impl Stdin {
     #[compiler_builtin]
     fn read_line() -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
     fn read_to_string() -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn lines() -> StdinLines with reads(Stdin) blocks { StdinLines { } }
 }
 
 struct Stdout { }

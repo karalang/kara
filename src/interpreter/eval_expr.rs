@@ -919,6 +919,38 @@ impl<'a> super::Interpreter<'a> {
                         }
                         drained
                     }
+                    // `for line in stdin.lines()` — drain standard input a line
+                    // at a time until EOF, yielding `Result[String, IoError]`
+                    // per line (the same Item shape as `LinesIter`, trailing
+                    // `\n`/`\r\n` stripped). `std::io::stdin().read_line`
+                    // returns `Ok(0)` at EOF. Eager-materialized like
+                    // `LinesIter`; over a finite stdin the output is identical
+                    // to the codegen path's per-iteration read.
+                    Value::StdinLines => {
+                        let mut drained = Vec::new();
+                        loop {
+                            let mut line = String::new();
+                            match std::io::stdin().read_line(&mut line) {
+                                Ok(0) => break,
+                                Ok(_) => {
+                                    if line.ends_with('\n') {
+                                        line.pop();
+                                        if line.ends_with('\r') {
+                                            line.pop();
+                                        }
+                                    }
+                                    drained.push(super::helpers::io_ok(Value::String(line)));
+                                }
+                                Err(e) => {
+                                    drained.push(super::helpers::io_err_value(
+                                        super::helpers::io_error_from_std(&e),
+                                    ));
+                                    break;
+                                }
+                            }
+                        }
+                        drained
+                    }
                     _ => vec![iter_val],
                 };
                 for item in items {

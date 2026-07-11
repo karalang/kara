@@ -806,6 +806,17 @@ impl<'a> super::EffectChecker<'a> {
                 if let ExprKind::Identifier(mod_name) = &object.kind {
                     if mod_name == "env" {
                         calls.push((format!("Env.{}", method), expr.span.clone()));
+                    } else if mod_name == "stdin" {
+                        // `stdin.<method>()` → the capitalized `Stdin.<method>`
+                        // seed key (phase-8 `Stdin.lines()` slice). Receiver-keyed,
+                        // NOT method-name-keyed, because `lines` collides with
+                        // `BufReader.lines` (`reads(FileSystem)`) — routing by the
+                        // `stdin` receiver keeps `stdin.lines`'s `reads(Stdin),
+                        // blocks` seed from leaking onto File-backed readers. The
+                        // capitalized `Stdin.lines()` form already routes via
+                        // `extract_callee_name`. (`stdin.read_line`/`read_to_string`
+                        // carry no static seed, so this is inert for them.)
+                        calls.push((format!("Stdin.{}", method), expr.span.clone()));
                     }
                 }
                 // Stdlib methods whose effects are pre-seeded in inferred_effects.

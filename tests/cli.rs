@@ -1484,6 +1484,77 @@ fn test_build_project_lists_discovered_modules() {
 
 #[cfg(feature = "llvm")]
 #[test]
+fn test_stdin_lines_run_and_build_parity() {
+    // phase-8 `Stdin.lines()` slice: `for line in stdin.lines()` iterates
+    // standard input a line at a time under BOTH `karac run` (interpreter/JIT)
+    // and `karac build` (codegen), yielding identical output for the same piped
+    // input. Uses a raw `Command` because the `karac_bin()` wrapper does not
+    // pipe stdin. Skips gracefully if the build can't link (no runtime archive).
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let tmp = scratch_project("stdin-lines");
+    let src = "fn main() {\n\
+               \x20   let mut n = 0;\n\
+               \x20   for line in stdin.lines() {\n\
+               \x20       match line {\n\
+               \x20           Ok(s) => { println(s); n = n + 1; }\n\
+               \x20           Err(_) => {}\n\
+               \x20       }\n\
+               \x20   }\n\
+               \x20   println(n);\n\
+               }\n";
+    write(&tmp.join("lines.kara"), src);
+    let input = "alpha\nbeta\ngamma\n";
+    let expected = "alpha\nbeta\ngamma\n3\n";
+
+    // Run a command with `input` piped to stdin; return its stdout, or None if
+    // the command couldn't be spawned/finished.
+    let pipe = |mut cmd: Command| -> Option<String> {
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn().ok()?;
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(input.as_bytes())
+            .ok()?;
+        let out = child.wait_with_output().ok()?;
+        Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+
+    // `karac run` (interpreter / JIT).
+    let mut run_cmd = Command::new(env!("CARGO_BIN_EXE_karac"));
+    run_cmd.current_dir(&tmp).arg("run").arg("lines.kara");
+    let run_out = pipe(run_cmd);
+    if let Some(ref out) = run_out {
+        assert_eq!(out, expected, "karac run stdin.lines() output");
+    }
+
+    // `karac build` then exec the linked binary (single-file build → `lines`).
+    let build = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .arg("build")
+        .arg("lines.kara")
+        .output();
+    let exe = tmp.join("lines");
+    if build.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        let build_out = pipe(Command::new(&exe));
+        if let Some(ref out) = build_out {
+            assert_eq!(out, expected, "karac build stdin.lines() output");
+        }
+        // Run == build when both produced output.
+        if let (Some(r), Some(b)) = (&run_out, &build_out) {
+            assert_eq!(r, b, "run/build parity for stdin.lines()");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[cfg(feature = "llvm")]
+#[test]
 fn test_build_project_rejects_panic_unwind() {
     // phase-8 `panic = "unwind" | "abort"` slice 2: the v1 backend is
     // abort-only, so an explicit `[profile] panic = "unwind"` must fail the

@@ -8018,6 +8018,57 @@ fn test_pub_fn_with_reads_filesystem_declared_accepts_bufreader_lines() {
 }
 
 #[test]
+fn test_pub_fn_calling_stdin_lines_must_declare_reads_stdin() {
+    // phase-8 `Stdin.lines()` slice: like `BufReader.lines`, the per-line reads
+    // happen during iteration, so `reads(Stdin), blocks` is attributed at the
+    // `lines()` call by the static seed. A pub fn iterating `stdin.lines()`
+    // without declaring the effect must fail.
+    let result = effectcheck_full_pipeline(
+        "pub fn dump() {
+             for line in stdin.lines() {
+                 match line {
+                     Ok(_) => {}
+                     Err(_) => {}
+                 }
+             }
+         }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && (e.message.contains("reads(Stdin)") || e.message.contains("blocks"))),
+        "expected MissingEffectDeclaration for reads(Stdin)/blocks; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_pub_fn_with_reads_stdin_blocks_declared_accepts_stdin_lines() {
+    let result = effectcheck_full_pipeline(
+        "pub fn dump() with reads(Stdin) blocks {
+             for line in stdin.lines() {
+                 match line {
+                     Ok(_) => {}
+                     Err(_) => {}
+                 }
+             }
+         }",
+    );
+    let real_errors: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .collect();
+    assert!(
+        real_errors.is_empty(),
+        "expected clean effectcheck with reads(Stdin) blocks declared; got: {:?}",
+        real_errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
 fn test_pub_fn_calling_bufreader_fill_buf_must_declare_reads_filesystem() {
     // fill_buf refills the buffer from the underlying reader, so it carries
     // reads(FileSystem); a pub fn calling it without declaring the effect must

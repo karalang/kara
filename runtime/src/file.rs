@@ -599,6 +599,48 @@ pub unsafe extern "C" fn karac_runtime_stdin_read_line(out: *mut KaracIoResult) 
     };
 }
 
+/// `stdin.lines()` per-line pull (phase-8 `Stdin.lines()` slice). Reads one
+/// line from stdin, strips the trailing `\n` / `\r\n`, and writes
+/// `Result.Ok(stripped)` into `out`. Return code drives the codegen for-loop
+/// (mirrors the interpreter's `Value::StdinLines` drain):
+///
+/// - `0` — EOF: nothing written, stop the loop (no body run).
+/// - `1` — got a line: `Ok(stripped)` in `out`, run the body and continue.
+/// - `2` — read error (e.g. invalid UTF-8): `Err(IoError)` in `out`, run the
+///   body once, then stop.
+///
+/// EOF is unambiguous: `read_line` returns `Ok(0)` only at end of input, while
+/// even an empty line yields at least `"\n"` (`Ok(1)`), so the empty-vs-EOF
+/// collision the raw `read_line` extern would have never arises here.
+///
+/// # Safety
+///
+/// `out` must point to a writable `KaracIoResult` slot (codegen-allocated).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_stdin_next_line(out: *mut KaracIoResult) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    let mut buf = String::new();
+    match std::io::stdin().read_line(&mut buf) {
+        Ok(0) => 0,
+        Ok(_) => {
+            if buf.ends_with('\n') {
+                buf.pop();
+                if buf.ends_with('\r') {
+                    buf.pop();
+                }
+            }
+            *out = ok_string(&buf);
+            1
+        }
+        Err(e) => {
+            *out = err(&e);
+            2
+        }
+    }
+}
+
 /// `stdin.read_to_string() -> Result[String, IoError]` — slurp all of
 /// stdin to EOF. Companion to `read_line`; same `KaracIoResult`
 /// String-payload ABI and the same `("Stdin", "read_to_string")`

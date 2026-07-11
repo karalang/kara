@@ -100,6 +100,23 @@ impl<'ctx> super::Codegen<'ctx> {
             ..
         } = &iterable.kind
         {
+            // `for line in stdin.lines()` — the stdin line iterator (phase-8
+            // `Stdin.lines()` slice). Caught before the `.iter()`/`.map()`
+            // peeling and the silent `_ =>` fall-through; routes to a dedicated
+            // loop that pulls one line per iteration via
+            // `karac_runtime_stdin_next_line`. The receiver is the ambient
+            // `stdin` alias (or the capitalized `Stdin`), guarded against a
+            // local shadow — the same rule the resource-method dispatch uses.
+            if method == "lines" && args.is_empty() {
+                if let ExprKind::Identifier(recv) = &object.kind {
+                    let is_stdin = recv == "Stdin"
+                        || (super::method_call::ambient_resource_for_alias(recv) == Some("Stdin")
+                            && !self.variables.contains_key(recv));
+                    if is_stdin {
+                        return self.compile_for_stdin_lines(label, pattern, body);
+                    }
+                }
+            }
             // `for x in <src>.iter().{map|filter}+ { … }` — a fused-adaptor
             // iterable. Without this it falls through to the silent `_ =>` arm
             // below and the body runs ZERO times (B-2026-07-11-18). Routed
@@ -1058,6 +1075,111 @@ impl<'ctx> super::Codegen<'ctx> {
         let next = self.builder.build_int_add(cur, one, "incr").unwrap();
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// `for line in stdin.lines()` (phase-8 `Stdin.lines()` slice). Pulls one
+    /// line per iteration from `karac_runtime_stdin_next_line`, which strips the
+    /// trailing newline, writes `Result[String, IoError]` into a stack slot, and
+    /// returns a 3-state code: `0` EOF (stop, no body), `1` Ok line (body then
+    /// continue), `2` Err (body then stop) — matching the interpreter's
+    /// `Value::StdinLines` drain exactly. `lower_kara_io_result` rebuilds the
+    /// `Result` value each iteration; the body binds it as the loop variable and
+    /// the loop's scope cleanup drops the owned payload per iteration.
+    pub(super) fn compile_for_stdin_lines(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "codegen: stdin.lines() iterated outside a function".to_string())?;
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let i32_t = self.context.i32_type();
+        let io_ty = self.kara_io_result_type();
+
+        // Entry-block scratch: the KaracIoResult slot the extern writes each
+        // line into, and the return code (reloaded in the latch to break after
+        // an Err item).
+        let slot = self.create_entry_alloca(fn_val, "stdin.lines.slot", io_ty.into());
+        let rc_slot = self.create_entry_alloca(fn_val, "stdin.lines.rc", i32_t.into());
+
+        let symbol = "karac_runtime_stdin_next_line";
+        let next_fn = match self.module.get_function(symbol) {
+            Some(f) => f,
+            None => {
+                let fn_ty = i32_t.fn_type(&[ptr_t.into()], false);
+                self.module.add_function(symbol, fn_ty, None)
+            }
+        };
+
+        let cond_bb = self.context.append_basic_block(fn_val, "stdin.lines.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "stdin.lines.body");
+        let latch_bb = self.context.append_basic_block(fn_val, "stdin.lines.latch");
+        let exit_bb = self.context.append_basic_block(fn_val, "stdin.lines.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            label: label.map(str::to_string),
+            continue_bb: latch_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
+        });
+
+        // cond: pull the next line. `rc == 0` (EOF) → exit; else → body.
+        self.builder.position_at_end(cond_bb);
+        let rc = self
+            .builder
+            .build_call(next_fn, &[slot.into()], "stdin.lines.rc.call")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        self.builder.build_store(rc_slot, rc).unwrap();
+        let is_eof = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                rc,
+                i32_t.const_int(0, false),
+                "stdin.lines.eof",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_eof, exit_bb, body_bb)
+            .unwrap();
+
+        // body: rebuild the `Result[String, IoError]`, bind it, run the body.
+        self.builder.position_at_end(body_bb);
+        let item = self.lower_kara_io_result(slot, super::file::FileOkKind::StringPayload)?;
+        self.bind_pattern(pattern, item)?;
+        self.compile_loop_body_with_cleanup(body, latch_bb)?;
+
+        // latch: after the body, break on an Err item (`rc == 2`), else loop.
+        self.builder.position_at_end(latch_bb);
+        let rc2 = self
+            .builder
+            .build_load(i32_t, rc_slot, "stdin.lines.rc2")
+            .unwrap()
+            .into_int_value();
+        let is_err = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                rc2,
+                i32_t.const_int(2, false),
+                "stdin.lines.err",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_err, exit_bb, cond_bb)
+            .unwrap();
 
         self.loop_stack.pop();
         self.builder.position_at_end(exit_bb);

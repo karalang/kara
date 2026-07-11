@@ -9814,6 +9814,24 @@ fn test_bufreader_lines_returns_lines_iter() {
 }
 
 #[test]
+fn test_stdin_lines_for_loop_binds_result_string() {
+    // phase-8 `Stdin.lines()` slice: `for line in stdin.lines()` binds
+    // `line: Result[String, IoError]` via the `("StdinLines","Item")` mapping,
+    // exactly like `BufReader.lines()`. The `reads(Stdin), blocks` effect is
+    // inferred from the static `Stdin.lines` seed, so the `with` clause verifies.
+    typecheck_ok(
+        "fn driver() with reads(Stdin) blocks {
+             for line in stdin.lines() {
+                 match line {
+                     Ok(s) => { println(s); }
+                     Err(_) => {}
+                 }
+             }
+         }",
+    );
+}
+
+#[test]
 fn test_bufreader_lines_for_loop_binds_result_string() {
     // `for line in br.lines()` binds `line: Result[String, IoError]` via the
     // programmatic `("LinesIter", "Item")` mapping, so destructuring `Ok(s)`

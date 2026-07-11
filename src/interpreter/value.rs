@@ -319,6 +319,13 @@ pub enum Value {
     /// drains it one line at a time, yielding `Result[String, IoError]` per
     /// line. Phase 8 `BufReader[R]` `lines()` slice.
     LinesIter(Arc<Mutex<std::io::BufReader<std::fs::File>>>),
+    /// `StdinLines` — the lazy line iterator returned by `Stdin.lines()`
+    /// (phase-8 `Stdin.lines()` slice). Carries no reader handle: stdin is
+    /// ambient (`std::io::stdin()`), so — unlike `LinesIter`, which Arc-shares a
+    /// File-backed `BufReader` — this is a stateless marker. The for-loop drains
+    /// it by reading `std::io::stdin().read_line` until EOF, yielding
+    /// `Result[String, IoError]` per line (same Item shape as `LinesIter`).
+    StdinLines,
     /// `BufWriter[W]` buffered writer wrapping a `File` — the Write-side
     /// peer of `BufReader`. Holds an owned
     /// `std::io::BufWriter<std::fs::File>` (constructed over a `dup(2)`
@@ -1060,6 +1067,7 @@ impl std::fmt::Display for Value {
             Value::BufReader(_) => write!(f, "<BufReader>"),
             Value::BufWriter(_) => write!(f, "<BufWriter>"),
             Value::LinesIter(_) => write!(f, "<LinesIter>"),
+            Value::StdinLines => write!(f, "<StdinLines>"),
         }
     }
 }
@@ -1218,6 +1226,7 @@ impl Value {
             Value::BufReader(_) => "BufReader",
             Value::BufWriter(_) => "BufWriter",
             Value::LinesIter(_) => "LinesIter",
+            Value::StdinLines => "StdinLines",
         }
     }
 

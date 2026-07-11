@@ -259,6 +259,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         file::karac_runtime_file_close,
         file::karac_runtime_file_seek,
         file::karac_runtime_stdin_read_line,
+        file::karac_runtime_stdin_next_line,
         file::karac_runtime_stdin_read_to_string,
         file::karac_runtime_fs_write,
     );
