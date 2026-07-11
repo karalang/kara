@@ -3231,6 +3231,26 @@ All functions carry `writes(Stdout)` so they participate in conflict analysis an
 
 ---
 
+### Type-Based Alias Analysis (TBAA)
+
+**Decision:** Do **not** emit general C-style type-based alias metadata (`!tbaa`). Retired from the Phase 11 "Alias metadata" row (`implementation_checklist/phase-11-stdlib-longtail.md`) as **not-applicable** to Kāra's memory model; a narrow *sound-subset* investigation is **P3**. Recorded 2026-07-11 when the alias-metadata row's four sound facts (`noalias` on `mut ref` / owned params, `readonly` on Freeze `ref T`, scoped-alias on slice params) shipped.
+
+**Why not shipped.** C's strict-aliasing rule — "an access of type A never aliases an access of type B unless the types are related" — is what makes `!tbaa` sound in C/C++. Kāra has **no such rule**, so blanket TBAA is a *silent miscompilation* risk, not a slowdown. Three independent reasons:
+
+1. **The design never specified it.** design.md § 8878 "Tier 0 — backend alias facts" enumerates exactly `noalias` and scoped-alias (`!alias.scope` / `!noalias`) — never TBAA. All of that is shipped. The tracker's "`tbaa`" line was an addition beyond the design.
+2. **Kāra permits type punning in `unsafe`.** It adopts **strict-provenance** (design.md § Pointer Provenance) and allows one address to be accessed under two types: C `union`s "reinterpret the bytes on every access" (design.md § Unions), `transmute` (design.md § Discriminant conversions), and raw-pointer `as` casts (`*const T as *const U` in `unsafe`). A `!tbaa` no-alias claim between the two types would be false for such a program — this is the same reason rustc emits essentially no type-based TBAA (its model is uniqueness-based, expressed via `noalias`, exactly the axis Kāra already lowers).
+3. **Even a safe-only scalar subset is unsound.** A tagged `enum`'s payload is read at one offset as type A in one match arm and written as type B in another — a genuine same-address / different-type pair reachable entirely in *safe* code. Sound scalar TBAA would have to exclude enum payloads (and audit padding, `MaybeUninit`, allocator reuse, `#[repr]` overlays, …), and the failure mode of any missed case is a silent miscompile.
+
+**The soundness bar.** design.md § 8878's "Soundness boundary (Tier 0)" requires that *any* backend alias fact ship "only behind a differential-equivalence [fuzzed] guarantee" (citing Rust's multi-year `-Zmutable-noalias` saga). No such fuzzed differential corpus for TBAA exists, so TBAA could not ship even if a sound subset were identified.
+
+**What a future sound-subset investigation would cover (P3).** `!invariant.load` tagging of genuinely-immutable metadata (const data, vtable pointers) — an orthogonal, always-sound mechanism that is not type-based; and a punning-aware struct-path TBAA restricted to accesses the ownership model already proves distinct, gated behind the § 8878 differential-fuzz corpus. Promote only if a measured kernel shows the scoped-alias facts already shipped leave TBAA-shaped headroom on the table.
+
+**Why non-breaking:** Purely a backend-metadata decision; no source-visible surface. The shipped `noalias` / scoped-alias facts already deliver the Tier-0 autovectorization/LICM win the row targets.
+
+**Cross-reference:** `design.md § 8878` (Tier-0 alias-fact spec + soundness boundary); `design.md § Unions`, `§ Pointer Provenance` (the type-punning surface that defeats blanket TBAA); `implementation_checklist/phase-11-stdlib-longtail.md § Codegen Optimization > Alias metadata` (the row this closes); `src/codegen/slice_alias.rs` + `src/codegen/functions.rs::emit_param_alias_attrs` (the sound facts that shipped instead).
+
+---
+
 ### Profile-Guided Optimization Loop
 
 **Decision:** Defer instrumented + sample-based (AutoFDO) PGO from v1, ship as **P2**. The compiler queries channel ([design.md § Compiler Queries](design.md#compiler-queries)) ships at v1 covering *intent-shaped* optimization decisions; PGO answers *distribution-shaped* questions and is the complementary signal, not a substitute. Graduated from brainstorm v65 (2026-05-09).

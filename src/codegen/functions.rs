@@ -802,11 +802,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// deliberately NOT paired with `noalias`: unlike an exclusive borrow, two
     /// shared `ref T` to the same object may be simultaneously live.
     ///
-    /// **What is NOT a target.** `mut Slice[T]` (`TypeKind::MutSlice`) is a
-    /// by-value `{ptr,len}` fat struct — its pointer is a field, not the
-    /// parameter — so slice-kernel disjointness needs `!alias.scope`/`!noalias`
-    /// metadata on the loads/stores (design.md:§ proven disjointness lowering),
-    /// a separate slice; likewise `tbaa` tags on loads/stores.
+    /// **Handled elsewhere / not a target.** `mut Slice[T]` / `Slice[T]`
+    /// (`TypeKind::MutSlice` / `Path("Slice")`) is a by-value `{ptr,len}` fat
+    /// struct — its pointer is a field, not the parameter — so its disjointness
+    /// is lowered onto the element loads/stores as `!alias.scope`/`!noalias`
+    /// metadata in `src/codegen/slice_alias.rs`, not here. Type-based alias
+    /// analysis (`!tbaa`) is deliberately NOT emitted: it is unsound under
+    /// Kāra's type-punning-permitting `unsafe` model (unions / `transmute` /
+    /// raw-pointer casts) — retired with rationale in
+    /// `docs/deferred.md § Type-Based Alias Analysis (TBAA)`.
     ///
     /// **Index correspondence.** Kāra param `i` is LLVM param `i + sret_base`:
     /// an `sret` result pointer (a larger-than-16 B `#[repr(C)]` struct
