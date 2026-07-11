@@ -136,12 +136,20 @@ test_e2e_binsearch_midpoint_assume_is_sound}`. Bug ledger: `B-2026-06-16-1`.
 >    hoists it and the pre-opt gap vanishes post-`O2`.
 >
 > The real ~1.12× gap (kāra 12.46 B vs `rust_ovf` 11.14 B instructions) is **real
-> but diffuse** (~4-5 instrs/outer-iteration), not one eliminable check. The only
-> un-ruled-out *sound* lead is whether `emit_monotone_assumes`' lower-bound
-> assumes need the midpoint fix's gated extra-pass to fold their neg-checks
-> (`binsearch_assume_emitted` is currently binsearch-only) — needs LLVM `opt` to
-> confirm, and would fold `s[r]`'s neg-check only, not close the whole gap. The
-> original (wrong) sketch is kept below for the record.
+> but diffuse** (~4-5 instrs/outer-iteration), not one eliminable check.
+>
+> **Phase-ordering lead ruled out (LLVM 18.1.8 `opt`, 2026-07-10).** Ran
+> `opt -passes='default<O2>'` on the raw codegen IR with `scan` forced `noinline`
+> (so its `ref Vec` param stays opaque — the un-annotated repro const-folds away
+> because `main` passes a literal vector). Stable across one **and** two O2 runs:
+> `s[r]` has **zero** surviving checks (upper elided via the guard, neg-check
+> folded by the existing `r ≥ 0` monotone assume under a *single* O2), and exactly
+> **one** check survives — the `vidx.oob` on `s[l]` (the soundly-required one). So
+> the monotone assumes already fold everything foldable; no extra-pass trigger is
+> needed. **Every lead is exhausted; there is no localized sound fix.** The
+> residual is diffuse codegen quality (overflow-check placement / instruction
+> selection), tracked at low severity in `B-2026-07-10-5`, not pursued further.
+> The original (wrong) sketch is kept below for the record.
 
 **Surfaced by kata #76** (minimum-window-substring), the M5 re-bench. The
 canonical two-pointer sliding window
