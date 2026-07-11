@@ -67,6 +67,17 @@ use crate::typechecker::Type;
 
 use super::{OwnershipChecker, OwnershipMode};
 
+/// EXPERIMENTAL, default-OFF gate for the headerless in-place
+/// link-permuting "reshaper" coverage category (design:
+/// phase-7-codegen.md, headerless-reshaper slice). While this is a
+/// loose/experimental recognizer it MUST stay behind this flag — a
+/// mis-recognized non-permutation body would double-free/leak under
+/// headerless. Never flip the default until the differential + LSan/ASan
+/// harness is green across the linked-list family.
+fn reshaper_enabled() -> bool {
+    std::env::var("KARAC_HEADERLESS_RESHAPER").is_ok_and(|v| v != "0")
+}
+
 /// Why a phase-A candidate was rejected. Recorded once per binding
 /// (first reason wins) in `OwnershipCheckResult::elision_blocked`.
 #[derive(Debug, Clone)]
@@ -207,6 +218,21 @@ impl<'a> OwnershipChecker<'a> {
                 if c.returned != ReturnedChain::No {
                     builder_summaries
                         .insert(fn_key.clone(), (c.member_type.clone(), c.link_field_index));
+                }
+            }
+        }
+        // EXPERIMENTAL (default-OFF): a recognized reshaper returns a
+        // headerless chain just like a fresh-return builder, so register
+        // it as a builder-summary equivalent — lets a caller's
+        // `let r = reshaper(...)` adopt the result as a headerless root.
+        if reshaper_enabled() {
+            for item in &self.program.items {
+                if let Item::Function(f) = item {
+                    if let Some((t, link_idx)) = self.reshaper_member(f) {
+                        builder_summaries
+                            .entry(f.name.clone())
+                            .or_insert((t, link_idx));
+                    }
                 }
             }
         }
@@ -2887,6 +2913,70 @@ impl<'a> OwnershipChecker<'a> {
     /// free-fn-only in v1 — but a method T-param already failed the
     /// signature scan, so this is belt-and-suspenders).
     #[allow(clippy::too_many_arguments)]
+    /// EXPERIMENTAL reshaper recognizer (default-OFF via
+    /// `reshaper_enabled`). A reshaper for `t` owns an `Option[t]` input
+    /// list, permutes its link fields via recognized moves, and returns a
+    /// node of the same chain (the `dummy.link` RootLink shape). This is
+    /// the LOOSE de-risking version — it verifies the boundary shape
+    /// (owned `Option[t]` param consumed, `Option[t]` return, final expr
+    /// `<ident>.<link>`) but does NOT yet fully default-deny the body.
+    /// It exists to validate the codegen path before the tight body walk
+    /// lands; it must NOT be trusted (flag stays OFF) until the
+    /// differential + sanitizer harness is green.
+    fn recognize_reshaper(&self, f: &Function, t: &str) -> bool {
+        // Owned (bare, not ref) `Option[t]` param — the consumed input.
+        let has_owned_input = f.params.iter().any(|p| is_exactly_option_of(&p.ty, t));
+        if !has_owned_input {
+            return false;
+        }
+        // Returns `Option[t]`.
+        let returns_t = f
+            .return_type
+            .as_ref()
+            .is_some_and(|r| is_exactly_option_of(r, t));
+        if !returns_t {
+            return false;
+        }
+        // Final expr is `<ident>.<link>` (the dummy-detach RootLink
+        // return). Requires the type's link field name.
+        let Some((link_field, _)) = self.cluster_link_struct(t) else {
+            return false;
+        };
+        matches!(
+            f.body.final_expr.as_ref().map(|e| &e.kind),
+            Some(ExprKind::FieldAccess { object, field })
+                if field == &link_field
+                    && matches!(&object.kind, ExprKind::Identifier(_))
+        )
+    }
+
+    /// EXPERIMENTAL: if `f` is a recognized reshaper, return its
+    /// `(member_type, link_field_index)` — the return-chain summary a
+    /// caller adopts (like a fresh-return builder's). The reshaped type
+    /// is the `T` in the fn's `Option[T]` return.
+    fn reshaper_member(&self, f: &Function) -> Option<(String, usize)> {
+        let ret = f.return_type.as_ref()?;
+        // Pull `T` out of `Option[T]`.
+        let TypeKind::Path(p) = &ret.kind else {
+            return None;
+        };
+        if p.segments.last().map(String::as_str) != Some("Option") {
+            return None;
+        }
+        let GenericArg::Type(inner) = p.generic_args.as_ref()?.first()? else {
+            return None;
+        };
+        let TypeKind::Path(ip) = &inner.kind else {
+            return None;
+        };
+        let t = ip.segments.last()?.clone();
+        if !self.recognize_reshaper(f, &t) {
+            return None;
+        }
+        let (_, link_idx) = self.cluster_link_struct(&t)?;
+        Some((t, link_idx))
+    }
+
     fn fn_covers_member(
         &self,
         f: &Function,
@@ -2930,6 +3020,14 @@ impl<'a> OwnershipChecker<'a> {
         if !touches {
             return (false, true);
         }
+        // Reshaper coverage (headerless in-place link-permuting
+        // transform) — EXPERIMENTAL, default-OFF. A recognized reshaper
+        // owns an `Option[T]` list, permutes links via recognized moves,
+        // and returns a node of the same chain (RootLink). See
+        // `recognize_reshaper`. Gated by `reshaper_enabled()`.
+        if reshaper_enabled() && self.recognize_reshaper(f, t) {
+            return (true, true);
+        }
         // Literal rule: every T literal sits in a b2 literal cluster
         // whose fn-purity flags are clean (no free literals, no
         // boundary regions).
@@ -2967,6 +3065,14 @@ impl<'a> OwnershipChecker<'a> {
         // adopted-root let (count match — the candidate walker only
         // records let-position sites, and each adoption consumed one).
         let adopted: Vec<&&ElidedCluster> = of_t.iter().filter(|c| c.adopted).collect();
+        if reshaper_enabled() && std::env::var("KARAC_RESHAPER_DEBUG").is_ok() {
+            eprintln!(
+                "[reshaper]   {fn_key}: builder_sites={builder_sites} adopted={} lits={lits_present} ret_t={ret_t} t_params={} of_t={}",
+                adopted.len(),
+                t_params.len(),
+                of_t.len()
+            );
+        }
         if builder_sites != adopted.len() {
             return (true, false);
         }
@@ -2997,6 +3103,9 @@ impl<'a> OwnershipChecker<'a> {
             };
             // Surface scan with the free-fn Option[T] leniency.
             if self.program_member_scan(&t, true) {
+                if reshaper_enabled() && std::env::var("KARAC_RESHAPER_DEBUG").is_ok() {
+                    eprintln!("[reshaper] type={t} DISQUALIFIED by program_member_scan");
+                }
                 continue;
             }
             // The summarized fns whose two-sided contracts the gate
@@ -3030,6 +3139,12 @@ impl<'a> OwnershipChecker<'a> {
                         }
                         let (touches, covered) =
                             self.fn_covers_member(f, &f.name, &t, clusters, builders, true);
+                        if reshaper_enabled() && std::env::var("KARAC_RESHAPER_DEBUG").is_ok() {
+                            eprintln!(
+                                "[reshaper] type={t} fn={} touches={touches} covered={covered}",
+                                f.name
+                            );
+                        }
                         if touches {
                             if !covered {
                                 continue 'types;
