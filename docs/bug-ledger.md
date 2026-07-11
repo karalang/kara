@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **377 surfaced · 7 open · 368 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **378 surfaced · 8 open · 368 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -102,6 +102,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **377 surfaced 
 | B-2026-07-11-30 | 2026-07-11 | ownership | low | Borrow-return source pinning is not applied to borrows nested in generic wrappers / borrowed collections: `-> Vec[ref T]` / `-> Option[ref T]` returns whose element sources are locals are accepted, while `-> ref T` / `-> ref Struct` returns are pinned. design.md § Feature 4 Part 3 says a container with a `ref` in a stored position is a borrowed collection whose scope is bounded by every borrowed source, so the escape should be pinned like the struct-field case. | tests/safety_design.rs::adversarial_escape_via_borrowed_collection_local (#[ignore]d, asserts the desired rejection; auto-enables when fixed); docs/implementation_checklist/phase-9-verification.md |
 | B-2026-07-11-32 | 2026-07-11 | codegen | high | DOUBLE-FREE: an index-based element swap of a NON-COPY `Vec` element (`let t = v[i]; v[i] = v[j]; v[j] = t;` over `Vec[String]`) aliases the heap buffers and double-frees at scope exit. Output is correct (values read before the free), but ASAN / a native run aborts (`free(): double free detected`). NON-generic — a plain `Vec[String]` triggers it; not specific to the generic heap. | unfixed; repro below |
 | B-2026-07-11-33 | 2026-07-11 | codegen | med | Vec[shared] / Vec[Option[shared]] element drop leaks the elements (buffer-only cleanup, no element rc-dec) | — |
+| B-2026-07-11-34 | 2026-07-11 | typecheck+interp+codegen | low | Adaptor chaining over `stdin.lines()` (`for x in stdin.lines().map(|r| r)` / `.filter(p)`) TYPECHECKS but silently iterates ZERO times under both `karac run` and `karac build` — a silent divergence introduced alongside the `stdin.lines()` slice (commit ae9e4f8). ROOT: `stdin.lines()` returns the new `StdinLines` iterator type, which the typechecker's iterator-adaptor machinery accepts as an iterable (it has an `Item` mapping), so `.map()`/`.filter()` typecheck and produce an adaptor iterator over `StdinLines`. But the interpreter's for-loop drain only recognizes a bare `Value::StdinLines` iterable (eval_expr.rs), and codegen's `compile_for` only intercepts a bare `stdin.lines()` receiver (`compile_for_stdin_lines`); an adaptor-wrapped chain falls through to the map/filter fusion, which peels to a base it cannot lower for a `StdinLines` source → the silent `_ =>` no-op (the same class as B-2026-07-11-18 for-over-chain). Directly iterating `for line in stdin.lines()` works correctly in both backends (verified over empty/no-trailing-newline/blank-line inputs); ONLY the adaptor-chained form is affected. IMPACT: low — the common form (direct iteration + match/filter inside the body) is correct; adaptor chaining on stdin is niche. FIX DIRECTION: either (a) support `StdinLines` as a fusion base source in both backends (the pull-loop equivalent of the Vec-storage fusion), or (b) reject an adaptor chain whose peeled base is `stdin.lines()` LOUDLY at typecheck/codegen/interp with a 'chain filters/maps inside the for-body instead' message — fail-closed, no silent wrong answer. Filed per the never-route-around-it rule; the direct-iteration surface (the shipped deliverable) is unaffected. | add a codegen+interp for-loop reject (or adaptor support) + a `for x in stdin.lines().map(..)` regression |
 
 ### Fixed (368)
 
