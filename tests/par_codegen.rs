@@ -2761,8 +2761,9 @@ fn main() {
     /// build while the seq lane was fine. An array's length is a compile-time
     /// constant N, so its per-iter `[N x T]` bounds check is already correct;
     /// the recognizer must simply skip array captures. Pin: the worker holds
-    /// the correct per-iter array check (`getelementptr [4 x i64]`) and NO
-    /// Vec-header read of the array pointer / `vec index out of bounds` panic.
+    /// the correct per-iter array check (`getelementptr inbounds [4 x i64]`)
+    /// and NO Vec-header read of the array pointer / `vec index out of bounds`
+    /// panic.
     #[test]
     fn test_reduce_captured_array_modulo_index_no_vec_bce_preflight() {
         let src = r#"
@@ -2819,8 +2820,10 @@ fn main() {
              the per-iter check is the static-N array check. Worker IR:\n{worker}"
         );
         assert!(
-            worker.contains("getelementptr [4 x i64]"),
-            "expected the correct per-iter [4 x i64] array GEP. Worker IR:\n{worker}"
+            worker.contains("getelementptr inbounds [4 x i64]"),
+            "expected the correct per-iter [4 x i64] array GEP (now inbounds — \
+             the element access is dominated by the static-N bounds check). \
+             Worker IR:\n{worker}"
         );
     }
 

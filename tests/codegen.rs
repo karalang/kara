@@ -60604,6 +60604,47 @@ fn main() { print(0); }
         );
     }
 
+    // ── `getelementptr inbounds` on bounds-checked element accesses ──────
+    //
+    // Element GEPs (Vec / Slice / Array indexing) are reached only with a valid
+    // in-range index (bounds-check-dominated, BCE-proven, or the get_unchecked
+    // unsafe contract), so `data + i` provably stays within the allocation →
+    // `getelementptr inbounds`. Unlocks the aliasing/stride facts the vectorizer
+    // needs; composes with the `nsw` IV and slice `noalias`.
+    #[test]
+    fn element_access_uses_inbounds_gep() {
+        let ir = ir_for(
+            r#"
+fn vsum(v: Vec[i64]) -> i64 {
+    let mut s = 0; let n = v.len(); let mut i = 0;
+    while i < n { s = s + v[i]; i = i + 1; }
+    return s;
+}
+fn sset(xs: mut Slice[i64]) {
+    let n = xs.len(); let mut i = 0;
+    while i < n { xs[i] = i; i = i + 1; }
+}
+fn aget(a: Array[i64, 4], i: i64) -> i64 { return a[i]; }
+fn main() { print(0); }
+"#,
+        );
+        assert!(
+            fn_body(&ir, "@vsum(").contains("%v.elem.ptr = getelementptr inbounds"),
+            "Vec element read GEP should be inbounds:\n{}",
+            fn_body(&ir, "@vsum(")
+        );
+        assert!(
+            fn_body(&ir, "@sset(").contains("%s.st.elem.ptr = getelementptr inbounds"),
+            "Slice element store GEP should be inbounds:\n{}",
+            fn_body(&ir, "@sset(")
+        );
+        assert!(
+            fn_body(&ir, "@aget(").contains("%arr.elem.ptr = getelementptr inbounds"),
+            "Array element read GEP should be inbounds:\n{}",
+            fn_body(&ir, "@aget(")
+        );
+    }
+
     #[test]
     fn owned_value_ptr_param_emits_noalias() {
         // An OWNED value-semantics type that lowers to a single heap `ptr`

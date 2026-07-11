@@ -1926,12 +1926,14 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_panic("array index out of bounds");
             self.builder.build_unreachable().unwrap();
 
-            // OK path: GEP + load.
+            // OK path: GEP + load. `inbounds` — this block is dominated by the
+            // `idx < len` check above, so `arr[0][idx]` is a valid in-range
+            // element of the fixed-size `[N x T]` (see `vec_index_elem_ptr`).
             self.builder.position_at_end(ok_bb);
             let zero = i64_t.const_int(0, false);
             let elem_ptr = unsafe {
                 self.builder
-                    .build_gep(arr_ty, arr_ptr, &[zero, idx_val], "arr.elem.ptr")
+                    .build_in_bounds_gep(arr_ty, arr_ptr, &[zero, idx_val], "arr.elem.ptr")
                     .unwrap()
             };
             let elem_ty = at.get_element_type();
@@ -3290,9 +3292,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // check at all (status quo for `unsafe { v.get_unchecked(i) }`).
         self.emit_split_bounds_check("vidx", idx_val, vec_ty, vec_ptr, lower_proven, upper_proven);
 
+        // `inbounds` (Codegen Optimization § no-wrap facts): this element GEP is
+        // reached only with a valid in-range index — either the bounds check
+        // above ran, or it was BCE-proven-elided, or this is `get_unchecked`
+        // whose unsafe contract IS the in-bounds guarantee. `0 <= i < len <= cap`
+        // means `data + i` stays within the heap buffer, so `getelementptr
+        // inbounds` is sound and lets LLVM assume the index arithmetic does not
+        // wrap or leave the allocation — the aliasing/stride fact the vectorizer
+        // needs (composes with the `nsw` induction variable + slice `noalias`).
+        // This mirrors how Rust lowers both checked indexing and `get_unchecked`.
         let elem_ptr = unsafe {
             self.builder
-                .build_gep(elem_ty, data, &[idx_val], "v.elem.ptr")
+                .build_in_bounds_gep(elem_ty, data, &[idx_val], "v.elem.ptr")
                 .unwrap()
         };
         Ok(elem_ptr)
@@ -3616,9 +3627,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
 
         self.emit_split_bounds_check("v.st", idx_val, vec_ty, vec_ptr, lower_proven, upper_proven);
+        // `inbounds`: bounds-check-dominated (or BCE-proven) element store — see
+        // the `vec_index_elem_ptr` read path for the full rationale.
         let elem_ptr = unsafe {
             self.builder
-                .build_gep(elem_ty, data, &[idx_val], "v.st.elem.ptr")
+                .build_in_bounds_gep(elem_ty, data, &[idx_val], "v.st.elem.ptr")
                 .unwrap()
         };
         // Drop the OLD heap-owning element before overwriting it. A
@@ -3776,9 +3789,11 @@ impl<'ctx> super::Codegen<'ctx> {
             lower_proven,
             upper_proven,
         );
+        // `inbounds`: bounds-check-dominated (or BCE-proven) slice element store
+        // — see the `vec_index_elem_ptr` read path for the full rationale.
         let elem_ptr = unsafe {
             self.builder
-                .build_gep(elem_ty, data, &[idx_val], "s.st.elem.ptr")
+                .build_in_bounds_gep(elem_ty, data, &[idx_val], "s.st.elem.ptr")
                 .unwrap()
         };
         // Narrow to element width before storing into a sub-word slice element
@@ -3829,9 +3844,11 @@ impl<'ctx> super::Codegen<'ctx> {
             lower_proven,
             upper_proven,
         );
+        // `inbounds`: bounds-check-dominated (or BCE-proven) slice element read
+        // — see the `vec_index_elem_ptr` read path for the full rationale.
         let elem_ptr = unsafe {
             self.builder
-                .build_gep(elem_ty, data, &[idx_val], "s.elem.ptr")
+                .build_in_bounds_gep(elem_ty, data, &[idx_val], "s.elem.ptr")
                 .unwrap()
         };
         let val = self
