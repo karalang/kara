@@ -11,7 +11,13 @@
 //     `karac::typecheck`). UNKNOWN (structs, generics, calls, comparisons,
 //     Vec, …) is never flagged — Slice 1 only fires when BOTH sides land in the
 //     known primitive set, matching the seed on the curated corpus.
-//   * Two checks, driven by literal inference over a full stmt/expr walk:
+//   * A binding / parameter type ENVIRONMENT (Slice 2): a flat `Vec` of
+//     (name, category, scope) with the resolver's parent-chain scope machinery.
+//     Parameters bind to their declared-type category; an un-annotated
+//     `let x = <expr>` binds `x` to the RHS's inferred category; an identifier
+//     expression infers by scanning the innermost scope MOST-RECENT-FIRST (so
+//     shadowing and block-locals behave — verified byte-identical vs the seed).
+//   * Two checks, driven by inference over a full stmt/expr walk:
 //       - RETURN-TYPE mismatch: a fn whose declared `-> T` category is a known
 //         primitive and whose body-TAIL infers to a DIFFERENT known primitive
 //         is TypeMismatch (kind 0) at the tail span (seed: `ReturnTypeMismatch`
@@ -67,6 +73,8 @@ import ast.{
     StrLit,
     StructLitField,
     StructLitExpr,
+    Pattern,
+    BindingPattern,
     IfExpr,
     ReturnExpr,
     WhileExpr,
@@ -105,29 +113,99 @@ pub struct TypeError {
     len: i64,
 }
 
+// A bound name's inferred category tagged with its owning scope (Slice 2). A
+// flat `Vec` + parent-chain scan, mirroring the resolver's `NameBinding` scope
+// machinery — Kāra has no HashMap. Shadowing falls out of scanning the innermost
+// scope MOST-RECENT-FIRST, so a later `let x` in the same scope wins.
+struct TypeBind {
+    name: String,
+    category: i64,
+    scope: i64,
+}
+
 struct Checker {
     errors: Vec[TypeError],
+    // Binding→category environment (Slice 2): every binding lives in `binds`
+    // tagged with its scope; `parents[scope]` is each scope's parent (-1 for the
+    // root). `current` is the active scope.
+    binds: Vec[TypeBind],
+    parents: Vec[i64],
+    current: i64,
 }
 
 // ── Entry point ──
 //
 // Type-check a whole program (a `Vec[Item]`) and return its type errors in
-// traversal order. Slice 1 needs no resolve result: the two checks are driven
-// by local literal inference, so the checker builds nothing from a symbol
-// table (identifier / param inference lands with the binding-env slice). Walks
-// each item; only `fn` bodies carry checkable expressions.
+// traversal order. Needs no resolve result: the checks are driven by local
+// inference over a binding/parameter type ENVIRONMENT the checker builds itself
+// as it walks (Slice 2). Walks each item; only `fn` bodies carry checkable
+// expressions.
 pub fn typecheck_program(items: Vec[Item]) -> Vec[TypeError] with panics {
-    let mut c = Checker { errors: Vec.new() };
+    let mut c = Checker {
+        errors: Vec.new(),
+        binds: Vec.new(),
+        parents: Vec.new(),
+        current: 0,
+    };
+    // Root scope (parent = -1); each function pushes its own child scope.
+    c.parents.push(-1);
     for it in items {
         c.check_item(it);
     }
-    let Checker { errors } = c;
+    let Checker { errors, binds, parents, current } = c;
     errors
 }
 
 impl Checker {
     fn push_err(mut ref self, kind: i64, off: i64, len: i64) {
         self.errors.push(TypeError { kind: kind, off: off, len: len });
+    }
+
+    // ── Scope / binding environment (Slice 2) ──
+
+    fn push_scope(mut ref self) {
+        let id = self.parents.len();
+        self.parents.push(self.current);
+        self.current = id;
+    }
+
+    fn pop_scope(mut ref self) {
+        self.current = self.parents[self.current];
+    }
+
+    // Bind `name` to `category` in the current scope. A later bind of the same
+    // name (shadowing) is just another entry — `lookup_cat` scans newest-first.
+    fn define(mut ref self, name: String, category: i64) {
+        self.binds.push(TypeBind {
+            name: name,
+            category: category,
+            scope: self.current,
+        });
+    }
+
+    // The category of the in-scope binding `name`, or UNKNOWN (4) if unbound.
+    // Walks scopes innermost→outward; within a scope scans MOST-RECENT-FIRST so
+    // the newest (shadowing) binding wins.
+    fn lookup_cat(ref self, name: ref String) -> i64 {
+        let mut sid = self.current;
+        loop {
+            if sid < 0 {
+                return 4;
+            }
+            let mut i = self.binds.len();
+            loop {
+                if i == 0 {
+                    break;
+                }
+                i = i - 1;
+                if self.binds[i].scope == sid {
+                    if self.binds[i].name == name {
+                        return self.binds[i].category;
+                    }
+                }
+            }
+            sid = self.parents[sid];
+        }
     }
 
     fn check_item(mut ref self, item: Item) {
@@ -169,9 +247,20 @@ impl Checker {
             }
             None => {}
         }
+        // Function scope: bind each parameter to its declared-type category so
+        // identifier references in the body infer their type. `self` and
+        // non-primitive / borrow-wrapped param types stay UNKNOWN (never bound
+        // to a checkable category), so they never drive a Slice-2 mismatch.
+        self.push_scope();
+        for p in params {
+            let FnParamNode { name: pn, ty: pty, span: psp } = p;
+            let pc = category_of_type(pty);
+            self.define(pn, pc);
+        }
         // Walk the body (finds nested `if`s for the condition check) and learn
         // the body-TAIL's category + span for the return-type check.
         let tinfo = self.check_block(body);
+        self.pop_scope();
         // Return-type mismatch only when BOTH the declared return and the tail
         // land in the known primitive set and their categories are incompatible
         // (NUM==NUM regardless of width; else exact category equality).
@@ -186,20 +275,39 @@ impl Checker {
     // TAIL's `ExprInfo` (UNKNOWN at the block span when there is no tail).
     fn check_block(mut ref self, b: Block) -> ExprInfo {
         let Block { stmts, tail, span } = b;
+        self.push_scope();
         for st in stmts {
             self.check_stmt(st);
         }
+        // Evaluate the tail INSIDE the block scope (it may reference a local),
+        // capture its info, THEN pop — the info is plain data (category + span).
+        let mut info = ExprInfo { category: 4, span: span };
         match tail {
-            Some(e) => self.check_expr(e),
-            None => ExprInfo { category: 4, span: span },
+            Some(e) => {
+                info = self.check_expr(e);
+            }
+            None => {}
         }
+        self.pop_scope();
+        info
     }
 
     fn check_stmt(mut ref self, st: Stmt) {
         match st {
             Let(n) => {
                 let LetStmt { is_mut, pattern, value, span } = n;
+                // Infer the RHS category FIRST (so `let x = x` sees the outer
+                // `x`, not this binding), THEN bind the pattern name to it. Only
+                // a plain `let x = …` binding is tracked; other patterns bind
+                // nothing (their locals stay UNKNOWN) — Slice-2 corpus scope.
                 let vi = self.check_expr(value);
+                match pattern {
+                    BindingPat(bp) => {
+                        let BindingPattern { name, span } = bp;
+                        self.define(name, vi.category);
+                    }
+                    _ => {}
+                }
             }
             Assign(n) => {
                 let AssignStmt { target, value, span } = n;
@@ -243,6 +351,11 @@ impl Checker {
             MultiStr(n) => {
                 let StrLit { value, span } = n;
                 ExprInfo { category: 3, span: span }
+            }
+            Ident(n) => {
+                let IdentExpr { name, span } = n;
+                let c = self.lookup_cat(name);
+                ExprInfo { category: c, span: span }
             }
             Blk(b) => self.check_block(b),
             If(n) => {

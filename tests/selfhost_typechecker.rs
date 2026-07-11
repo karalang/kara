@@ -58,9 +58,34 @@ const CORPUS: &[&str] = &[
     "fn nested_if_ok() { if true { if false { } } }",
     "fn nested_if_bad() { if true { if 1 { } } }",
     "fn else_if_bad() { if true { } else { if 'x' { } } }",
+    // ── Slice 2: binding / parameter type environment → identifier inference ──
+    // Params infer from their declared type; a return / condition referencing a
+    // param of a mismatched primitive category is flagged at the identifier span.
+    "fn param_ret_bad(b: bool) -> i64 { b }",
+    "fn param_ret_ok(n: i64) -> i64 { n }",
+    "fn param_cond_bad(n: i64) { if n { } }",
+    "fn param_cond_ok(b: bool) { if b { } }",
+    "fn param_str_ret(s: String) -> i64 { s }",
+    "fn param_char_cond(c: char) { if c { } }",
+    // Un-annotated `let x = <expr>` infers x from the RHS category; references
+    // then infer through the binding (return / condition / RHS-of-another-let).
+    "fn let_ret_bad() -> bool { let x = 1; x }",
+    "fn let_ret_ok() -> i64 { let x = 1; x }",
+    "fn let_cond_bad() { let x = 1; if x { } }",
+    "fn let_cond_ok() { let b = true; if b { } }",
+    "fn let_numeric_ret() -> i64 { let x = 1.5; x }",
+    // Transitive: `let y = x` carries x's category; shadowing: a later `let x`
+    // in the same scope wins (newest-first lookup).
+    "fn transitive() -> i64 { let x = true; let y = x; if y { } 1 }",
+    "fn chained_bad(n: i64) -> bool { let m = n; m }",
+    "fn shadow_ok() -> bool { let x = 1; let x = true; x }",
+    // A block-local does NOT leak past its block (scoped env).
+    "fn scope_leak() -> i64 { if true { let z = true; } let z = 1; z }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
-    // A non-literal (identifier) tail is UNKNOWN — no return check.
-    "fn unknown_tail(n: i64) -> i64 { n }",
+    // A binary/comparison tail is UNKNOWN to Slice 2 (operator result typing is
+    // a later slice); the seed types `n > 0` as bool, and since ret IS bool
+    // both are clean — the carve-out must not false-positive.
+    "fn cmp_tail_ok(n: i64) -> bool { n > 0 }",
     // ── multi-item programs — per-fn errors in traversal order ──
     "fn a() -> bool { 1 }\nfn b() -> i64 { 2 }\nfn c() -> String { 'x' }",
     "fn ok_a() -> i64 { 1 }\nfn bad_b() -> bool { 2 }",
