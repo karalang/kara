@@ -4552,6 +4552,50 @@ fn main() {
         }
     }
 
+    /// B-2026-07-11-31: a generic struct instance method mis-inferred its type
+    /// param `T` (mangled `$i64`, defaulting) when `T` appeared ONLY nested inside
+    /// a container field (`xs: Vec[T]`) — the typechecker can't solve `T` from
+    /// `Vec.new()`, so the literal froze as the bare `H[T]`, and codegen's method
+    /// dispatch synthesized a bare-`T` explicit binding that lowered to `i64` and
+    /// OVERRODE the correct `T` from the arg. `add(x: T)` mangled `add$i64` (loud
+    /// verifier error, String arg to i64 param); `get()->T` / `pop()->Option[T]`
+    /// (no `T` arg) returned i64-shaped garbage (silent). Fixed two ways:
+    /// (1) drop bare/unsolved impl params from the receiver `explicit` prefix so
+    /// arg inference wins (method_call.rs); (2) seed the receiver var's
+    /// instantiation from the concrete `let` ANNOTATION (`H[String]`) rather than
+    /// the frozen RHS (stmts.rs), which also fixes the no-`T`-arg return/index
+    /// methods. Covers a String and an f64 heap-like struct through
+    /// add / get(->T) / pop(->Option[T]); i64 baseline unchanged.
+    #[test]
+    fn e2e_generic_method_container_nested_type_param() {
+        if let Some(out) = run_program(
+            "struct H[T] { xs: Vec[T] }\n\
+             impl[T] H[T] {\n\
+             \x20   fn new() -> H[T] { H { xs: Vec.new() } }\n\
+             \x20   fn add(mut ref self, x: T) { self.xs.push(x); }\n\
+             \x20   fn get(ref self, i: i64) -> T { self.xs[i] }\n\
+             \x20   fn take(mut ref self) -> Option[T] { self.xs.pop() }\n\
+             \x20   fn n(ref self) -> i64 { self.xs.len() }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut hs: H[String] = H.new();\n\
+             \x20   hs.add(\"a\"); hs.add(\"b\");\n\
+             \x20   println(hs.get(0));\n\
+             \x20   println(f\"{hs.n()}\");\n\
+             \x20   match hs.take() { Some(v) => println(v), None => println(\"none\") }\n\
+             \x20   let mut hf: H[f64] = H.new();\n\
+             \x20   hf.add(1.5); hf.add(2.5);\n\
+             \x20   println(f\"{hf.get(1)}\");\n\
+             \x20   let mut hi: H[i64] = H.new();\n\
+             \x20   hi.add(7);\n\
+             \x20   println(f\"{hi.get(0)}\");\n\
+             }",
+        ) {
+            // hs.get(0)=a, n=2, take=b (last pushed); hf.get(1)=2.5; hi.get(0)=7.
+            assert_eq!(out, "a\n2\nb\n2.5\n7\n");
+        }
+    }
+
     /// B-2026-07-03-11: dispatch a trait method called through a GENERIC
     /// TYPE-PARAMETER BOUND under `karac build`. `fn use_it[X: Tagged](x: X)`
     /// calling `x.tag()` used to die with "no handler for method tag on

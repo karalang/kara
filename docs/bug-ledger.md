@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **374 surfaced · 5 open · 367 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **376 surfaced · 6 open · 368 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -100,10 +100,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **374 surfaced 
 | B-2026-07-11-23 | 2026-07-11 | interp+codegen | medium | `mut ref` closure capture (mutation of a captured mutable local) is unimplemented: a closure that writes a captured name mutates a SNAPSHOT, not the outer binding. Stored closures drop the mutation in BOTH interp and codegen; the inlined iterator terminals (fold/any/all) DIVERGE — codegen inlines (mutates outer = design-correct) while the interpreter snapshots. | unfixed; repros below |
 | B-2026-07-11-29 | 2026-07-11 | codegen | high | Vec[Vec[Option[shared]]] deep-clone + consume + grow: force-cloned inner Vec's scope-exit drop LEAKS retained element handles, and at larger sizes specific clone combinations produce MALFORMED trees (extra nodes); interpreter correct | kata #95 second surface |
 | B-2026-07-11-30 | 2026-07-11 | ownership | low | Borrow-return source pinning is not applied to borrows nested in generic wrappers / borrowed collections: `-> Vec[ref T]` / `-> Option[ref T]` returns whose element sources are locals are accepted, while `-> ref T` / `-> ref Struct` returns are pinned. design.md § Feature 4 Part 3 says a container with a `ref` in a stored position is a borrowed collection whose scope is bounded by every borrowed source, so the escape should be pinned like the struct-field case. | tests/safety_design.rs::adversarial_escape_via_borrowed_collection_local (#[ignore]d, asserts the desired rejection; auto-enables when fixed); docs/implementation_checklist/phase-9-verification.md |
+| B-2026-07-11-32 | 2026-07-11 | codegen | high | DOUBLE-FREE: an index-based element swap of a NON-COPY `Vec` element (`let t = v[i]; v[i] = v[j]; v[j] = t;` over `Vec[String]`) aliases the heap buffers and double-frees at scope exit. Output is correct (values read before the free), but ASAN / a native run aborts (`free(): double free detected`). NON-generic — a plain `Vec[String]` triggers it; not specific to the generic heap. | unfixed; repro below |
 
-### Fixed (367)
+### Fixed (368)
 
-<details><summary>367 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>368 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -474,6 +475,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **374 surfaced 
 | B-2026-07-11-26 | codegen+interp | medium | A fresh-temp ENUM scrutinee whose type has a user `impl Drop` SILENTLY SKIPPED that Drop in `if let` / `while let` / `let…else` / `match` — the user-… | this commit |
 | B-2026-07-11-27 | codegen | high | A gpu.dispatch result bound/assigned to a SoA `layout` variable SIGSEGVs: compile_gpu_dispatch_soa returns a standard AoS Vec {ptr,len,cap}, but a la… | codegen/exprs.rs + stmts.rs: bind/assign a gpu.dispatch result into a SoA `layout` variable via AoS->SoA scatter (compile_soa_let_from_gpu_dispatch / compile_soa_assign_from_gpu_dispatch, sharing soa_scatter_aos_into + the factored soa_push_value), instead of storing the AoS {ptr,len,cap} header raw into the multi-group SoA slot. |
 | B-2026-07-11-28 | codegen | high | Two monomorph void-return miscompiles: (a) a generic VOID fn whose body TAIL is a statement-position `if`/`while` emitted `ret i64 0` in a void LLVM… | 9d17820 |
+| B-2026-07-11-31 | codegen | high | A generic struct instance method mis-inferred its type param `T` (mangled `$i64`, defaulted) when `T` appeared ONLY nested inside a container field (… | this commit |
 
 </details>
 

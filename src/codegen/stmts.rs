@@ -1878,9 +1878,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // different f-strings share a span). Prefer the annotation;
                 // else the RHS's own (absolute, reliable) span entry.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
+                    // Prefer a concrete generic ENUM or STRUCT annotation. The
+                    // struct case (B-2026-07-11-31) records `Heap[String]` so an
+                    // instance-method call recovers the impl's `T` — the RHS
+                    // (`Heap.new()`) freezes as the bare `Heap[T]` when `T` appears
+                    // only inside a `Vec[T]` field (the typechecker can't solve it
+                    // from `Vec.new()`), so the annotation is the reliable source.
                     let inst = ty
                         .as_ref()
-                        .filter(|te| self.is_generic_named_enum_type_expr(te))
+                        .filter(|te| {
+                            self.is_generic_named_enum_type_expr(te)
+                                || self.is_generic_named_struct_type_expr(te)
+                        })
                         .cloned()
                         .or_else(|| self.enum_inst_type_from_span(value));
                     if let Some(inst) = inst {

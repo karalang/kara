@@ -3814,6 +3814,27 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// The struct sibling of [`Self::is_generic_named_enum_type_expr`]: a
+    /// concretely-instantiated GENERIC user struct (`Heap[String]`,
+    /// `Pair[i64, String]`). Used to record a `let`-binding's struct
+    /// instantiation from its ANNOTATION so an instance-method call on it
+    /// recovers the impl's type args — for a struct whose type param appears
+    /// ONLY nested inside a container field (`xs: Vec[T]`), the typechecker
+    /// cannot solve `T` from `Vec.new()` and freezes the literal as the bare
+    /// `Heap[T]`; the annotation `Heap[String]` carries the concrete args
+    /// (B-2026-07-11-31).
+    pub(super) fn is_generic_named_struct_type_expr(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Path(p) => {
+                p.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+                    && p.segments
+                        .last()
+                        .is_some_and(|s| self.struct_generic_params.contains_key(s.as_str()))
+            }
+            _ => false,
+        }
+    }
+
     /// Generic-parameter names of `enum_name`'s declaration (e.g. `["T"]` for
     /// `Option[+T]`, `["T", "E"]` for `Result[+T, +E]`), scanning the user
     /// program then the baked stdlib. Empty for a non-generic enum.

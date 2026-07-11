@@ -3937,9 +3937,43 @@ impl<'ctx> super::Codegen<'ctx> {
                         // param. (Reached only for a fresh-temp container receiver
                         // — an identifier / `self` container receiver already
                         // returned above via the registered element.)
+                        //
+                        // Drop a receiver type arg that is itself a BARE, still-
+                        // unsolved impl type param (`H[T]` recorded for a
+                        // `Vec[T]`-only struct whose `T` the typechecker could not
+                        // solve from field values — `Vec.new()` leaves the element
+                        // unconstrained, so the literal freezes as `H[TypeParam(T)]`,
+                        // not `H[String]`). Such an arg lowers to the `i64`
+                        // unknown-name default and, worse, UNCONDITIONALLY OVERRIDES
+                        // (in `compile_generic_call`'s explicit-args loop) the
+                        // correct `T` that `infer_type_args` binds from a concrete
+                        // method argument — `add(x: T)` with a `String` arg → the
+                        // mono mangled `add$i64` and passed a String to an i64 param
+                        // (B-2026-07-11-31). Truncate at the first bare param so the
+                        // remaining concrete prefix still zips positionally and the
+                        // unsolved axis falls to arg inference. A concrete receiver
+                        // instantiation (`Box[f64]`, direct-`T` field) has no bare
+                        // arg, so it is unaffected.
+                        let impl_param_names: Vec<&str> = generic_fn
+                            .generic_params
+                            .as_ref()
+                            .map(|gp| gp.params.iter().map(|p| p.name.as_str()).collect())
+                            .unwrap_or_default();
+                        let is_bare_param = |a: &GenericArg| -> bool {
+                            let GenericArg::Type(te) = a else {
+                                return false;
+                            };
+                            let TypeKind::Path(p) = &te.kind else {
+                                return false;
+                            };
+                            p.generic_args.as_ref().is_none_or(|g| g.is_empty())
+                                && p.segments.len() == 1
+                                && impl_param_names.iter().any(|&n| n == p.segments[0])
+                        };
                         let binding_args: Vec<GenericArg> = args
                             .iter()
                             .filter(|a| !matches!(a, GenericArg::Shape(_)))
+                            .take_while(|a| !is_bare_param(a))
                             .cloned()
                             .collect();
                         (binding_args.len() <= n_params && !binding_args.is_empty())
