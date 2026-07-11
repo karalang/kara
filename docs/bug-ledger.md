@@ -478,7 +478,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **379 surfaced 
 | B-2026-07-11-27 | codegen | high | A gpu.dispatch result bound/assigned to a SoA `layout` variable SIGSEGVs: compile_gpu_dispatch_soa returns a standard AoS Vec {ptr,len,cap}, but a la… | codegen/exprs.rs + stmts.rs: bind/assign a gpu.dispatch result into a SoA `layout` variable via AoS->SoA scatter (compile_soa_let_from_gpu_dispatch / compile_soa_assign_from_gpu_dispatch, sharing soa_scatter_aos_into + the factored soa_push_value), instead of storing the AoS {ptr,len,cap} header raw into the multi-group SoA slot. |
 | B-2026-07-11-28 | codegen | high | Two monomorph void-return miscompiles: (a) a generic VOID fn whose body TAIL is a statement-position `if`/`while` emitted `ret i64 0` in a void LLVM… | 9d17820 |
 | B-2026-07-11-31 | codegen | high | A generic struct instance method mis-inferred its type param `T` (mangled `$i64`, defaulted) when `T` appeared ONLY nested inside a container field (… | 93b095b |
-| B-2026-07-11-32 | codegen | high | DOUBLE-FREE: an index-based element swap of a NON-COPY `Vec` element (`let t = v[i]; v[i] = v[j]; v[j] = t;` over `Vec[String]`) aliases the heap buf… | this commit |
+| B-2026-07-11-32 | codegen | high | DOUBLE-FREE: an index-based element swap of a NON-COPY `Vec` element (`let t = v[i]; v[i] = v[j]; v[j] = t;` over `Vec[String]`) aliases the heap buf… | 1e81849 |
 
 </details>
 
