@@ -261,7 +261,9 @@ mod par_codegen_tests {
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_ownership_clean(&ownership, src);
-        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        // Thread type info so method-call network fan-out (A2b-2 Phase 2 Slice 2)
+        // is enabled end-to-end, as the real CLI pipeline does.
+        let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_par_e2e_{}_{}.o", std::process::id(), id);
@@ -344,7 +346,9 @@ fn main() {
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_ownership_clean(&ownership, src);
-        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        // Thread type info so method-call network fan-out (A2b-2 Phase 2 Slice 2)
+        // is enabled end-to-end, as the real CLI pipeline does.
+        let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
         let obj_path = format!("/tmp/karac_atomic_reject_{}.o", std::process::id());
         let err = compile_to_object(
             &parsed.program,
@@ -6468,6 +6472,37 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "33\n33", "got {out:?}");
+        }
+    }
+
+    #[test]
+    fn test_e2e_a2b2_method_distinct_receivers_fanout_runs() {
+        // A2b-2 Phase 2 Slice 2: two `mut ref self` network method calls on
+        // DISTINCT non-shared local receivers fan out and run correctly. The
+        // receivers aren't observed after the calls (so the group survives the
+        // captured-mutation gate), and each call's return value flows back
+        // through its own return slot — output byte-identical to sequential.
+        let out = run_program(
+            r#"
+struct Stream { n: i64 }
+impl Stream {
+    fn fetch(mut ref self) -> i64 with sends(Network) receives(Network) {
+        self.n = self.n + 5;
+        return self.n;
+    }
+}
+fn main() {
+    let mut s1 = Stream { n: 10 };
+    let mut s2 = Stream { n: 20 };
+    let a = s1.fetch();
+    let b = s2.fetch();
+    println(a);
+    println(b);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "15\n25", "got {out:?}");
         }
     }
 }

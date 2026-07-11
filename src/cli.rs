@@ -1211,9 +1211,10 @@ impl Pipeline {
         if self.effects.is_none() {
             return;
         }
-        self.concurrency = Some(crate::concurrency_analyze(
+        self.concurrency = Some(crate::concurrency_analyze_typed(
             &self.parsed.program,
             self.effects.as_ref().unwrap(),
+            self.typed.as_ref(),
         ));
     }
 

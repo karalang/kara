@@ -257,7 +257,7 @@ mod memory_sanitizer_tests {
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_ownership_clean(&ownership, src);
-        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_asan_cc_{}_{}.o", std::process::id(), id);
@@ -8148,7 +8148,7 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
-        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_asan_par_{}_{}.o", std::process::id(), id);
@@ -15442,6 +15442,40 @@ fn main() {
 "#,
             &["aaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbb"],
             "asan_a2b2_associated_network_opener_owned_param_fanout_clean",
+        );
+    }
+
+    #[test]
+    fn asan_a2b2_method_distinct_receivers_fanout_clean() {
+        // A2b-2 Phase 2 Slice 2: two `mut ref self` network method calls on
+        // DISTINCT non-shared local receivers (`s1.fetch(); s2.fetch()`) fan out.
+        // Memory-safety proof for the method-receiver path: each receiver is
+        // BORROWED (mut ref self — not moved into the coroutine, so no
+        // receiver double-drop), the mutation is written back through the
+        // captured-mutation machinery, and each returned owned `String` flows
+        // through its own return slot with the parent as sole drop owner. The
+        // `Stream` locals drop exactly once at `main` scope exit. A double-free
+        // or leak surfaces under LSan/ASan.
+        assert_clean_asan_run(
+            r#"
+struct Stream { n: i64 }
+impl Stream {
+    fn fetch(mut ref self) -> String with sends(Network) receives(Network) {
+        self.n = self.n + 1;
+        return "aaaaaaaaaaaaaaaaaaaa";
+    }
+}
+fn main() {
+    let mut s1 = Stream { n: 0 };
+    let mut s2 = Stream { n: 0 };
+    let a = s1.fetch();
+    let b = s2.fetch();
+    println(a);
+    println(b);
+}
+"#,
+            &["aaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaa"],
+            "asan_a2b2_method_distinct_receivers_fanout_clean",
         );
     }
 

@@ -351,8 +351,25 @@ pub fn effectcheck_with_typecheck_data(
 }
 
 /// Analyze concurrency opportunities in a parsed program.
+///
+/// Convenience wrapper over [`concurrency_analyze_typed`] with no type info —
+/// method-call network fan-out (A2b-2 Phase 2 Slice 2) is disabled (fail-closed,
+/// since it needs receiver types). The full CLI pipeline calls the `_typed`
+/// form; most tests use this one.
 pub fn concurrency_analyze(program: &Program, effects: &EffectCheckResult) -> ConcurrencyAnalysis {
-    let checker = ConcurrencyChecker::new(program, effects);
+    concurrency_analyze_typed(program, effects, None)
+}
+
+/// Like [`concurrency_analyze`] but with the typecheck result, whose
+/// `method_callee_types` (receiver type name per method-call span) drives the
+/// method-receiver classification for A2b-2 Phase 2 Slice 2. Pass `Some(&tc)`
+/// from the full pipeline; `None` disables method-call fan-out.
+pub fn concurrency_analyze_typed(
+    program: &Program,
+    effects: &EffectCheckResult,
+    types: Option<&TypeCheckResult>,
+) -> ConcurrencyAnalysis {
+    let checker = ConcurrencyChecker::new(program, effects, types);
     checker.analyze()
 }
 

@@ -1,7 +1,9 @@
 // tests/concurrency.rs
 
 use karac::concurrency::*;
-use karac::{concurrency_analyze, effectcheck, lower, parse, resolve, typecheck};
+use karac::{
+    concurrency_analyze, concurrency_analyze_typed, effectcheck, lower, parse, resolve, typecheck,
+};
 
 // ── Test Helpers ────────────────────────────────────────────────
 
@@ -46,6 +48,28 @@ fn analyze_lowered(source: &str) -> ConcurrencyAnalysis {
     lower(&mut parsed.program, &tc);
     let effects = effectcheck(&parsed.program);
     concurrency_analyze(&parsed.program, &effects)
+}
+
+/// Mirror of `analyze_lowered` that threads the typecheck result into
+/// concurrency (as the real CLI pipeline does), so method-call network fan-out
+/// (A2b-2 Phase 2 Slice 2, which needs `method_callee_types`) is enabled.
+fn analyze_typed(source: &str) -> ConcurrencyAnalysis {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let resolved = resolve(&parsed.program);
+    let tc = typecheck(&parsed.program, &resolved);
+    lower(&mut parsed.program, &tc);
+    let effects = effectcheck(&parsed.program);
+    concurrency_analyze_typed(&parsed.program, &effects, Some(&tc))
 }
 
 fn get_function<'a>(analysis: &'a ConcurrencyAnalysis, name: &str) -> &'a FunctionConcurrency {
@@ -721,6 +745,122 @@ fn test_a2b2_method_network_call_stays_serial() {
     assert!(
         !grouped,
         "method network calls (shared `self` receiver) must stay serial, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+// ── A2b-2 Phase 2 Slice 2: method calls on distinct receivers fan out ──
+
+#[test]
+fn test_a2b2_method_distinct_receivers_fanout() {
+    // A2b-2 Phase 2 Slice 2: two method network calls on DISTINCT, non-shared,
+    // non-ref-param local receivers (`s1.read(); s2.read()`) touch distinct
+    // connections and fan out. Needs type info (`method_callee_types` proves the
+    // receiver type isn't shared) — routed through `analyze_typed`.
+    let analysis = analyze_typed(
+        r#"
+        struct Stream { fd: i64 }
+        impl Stream {
+            fn read(mut ref self) -> i64 with sends(Network) receives(Network) {
+                self.fd = self.fd + 1;
+                return self.fd;
+            }
+        }
+        fn main() {
+            let mut s1 = Stream { fd: 0 };
+            let mut s2 = Stream { fd: 10 };
+            let a = s1.read();
+            let b = s2.read();
+            println(a);
+            println(b);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    // Statements 2 and 3 are the two reads (after the two `Stream` lets).
+    let grouped = main_fc
+        .parallel_groups
+        .iter()
+        .any(|g| g.statement_indices.contains(&2) && g.statement_indices.contains(&3));
+    assert!(
+        grouped,
+        "distinct-receiver method network calls should fan out (Slice 2), got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_a2b2_method_same_receiver_stays_serial() {
+    // Two calls on the SAME receiver (`s.read(); s.read()`) must stay serial:
+    // a `mut ref self` method defines its receiver, so the two statements
+    // write-write conflict on `s`. (And the distinct-root relaxation requires
+    // different roots.) Same connection ⇒ no fan-out.
+    let analysis = analyze_typed(
+        r#"
+        struct Stream { fd: i64 }
+        impl Stream {
+            fn read(mut ref self) -> i64 with sends(Network) receives(Network) {
+                self.fd = self.fd + 1;
+                return self.fd;
+            }
+        }
+        fn main() {
+            let mut s = Stream { fd: 0 };
+            let a = s.read();
+            let b = s.read();
+            println(a);
+            println(b);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    let grouped = main_fc
+        .parallel_groups
+        .iter()
+        .any(|g| g.statement_indices.contains(&1) && g.statement_indices.contains(&2));
+    assert!(
+        !grouped,
+        "same-receiver method network calls must stay serial (shared connection), got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_a2b2_method_shared_type_receiver_stays_serial() {
+    // THE critical race-soundness pin. A `shared` (RC) receiver aliases via
+    // `let b = a` (both handles point to one object), so two method calls on
+    // DISTINCT-named shared receivers can still hit the SAME connection —
+    // fanning them out would race. `classify_method_fanout` excludes any
+    // shared-type receiver, so they stay serial even with distinct roots.
+    let analysis = analyze_typed(
+        r#"
+        shared struct Conn { mut fd: i64 }
+        impl Conn {
+            fn ping(mut ref self) -> i64 with sends(Network) receives(Network) {
+                self.fd = self.fd + 1;
+                return self.fd;
+            }
+        }
+        fn main() {
+            let a = Conn { fd: 0 };
+            let b = a;
+            let x = a.ping();
+            let y = b.ping();
+            println(x);
+            println(y);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    // Statements 2 and 3 (`a.ping()` / `b.ping()`) must NOT co-group: a and b
+    // alias the same RC object.
+    let grouped = main_fc
+        .parallel_groups
+        .iter()
+        .any(|g| g.statement_indices.contains(&2) && g.statement_indices.contains(&3));
+    assert!(
+        !grouped,
+        "shared-type receivers can alias — method calls on them must stay serial, got {:?}",
         main_fc.parallel_groups
     );
 }

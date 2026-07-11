@@ -12,6 +12,8 @@
 
 use crate::ast::*;
 use crate::effectchecker::{DeclaredEffects, EffectCheckResult, EffectSet};
+use crate::resolver::SpanKey;
+use crate::typechecker::TypeCheckResult;
 use std::collections::{HashMap, HashSet};
 
 /// True when an `EffectSet` contains any verb that implies side effects
@@ -823,6 +825,19 @@ struct StmtInfo {
     /// Set in `analyze_stmt` as `is_safe_network_fanout` AND
     /// `stmt_callee_has_no_borrow_params`.
     is_ephemeral_network_fanout: bool,
+    /// A2b-2 Phase 2 Slice 2: for a method-call network fan-out CANDIDATE
+    /// (`obj.method(args)` touching `Network`, borrowed `ref`/`mut ref self`,
+    /// plain-identifier receiver that is neither a `ref` param nor a `shared`
+    /// (RC) type, args fan-out-safe), the receiver ROOT identifier; `None`
+    /// otherwise. Two such statements with DIFFERENT roots have provably
+    /// distinct, non-aliasing receivers — distinct connections — so
+    /// `statements_conflict` relaxes their `Network`↔`Network` conflict. Same
+    /// root is already serialized by the write-write data dependency (a
+    /// `mut ref self` method defines its receiver), and a shared-type / ref-param
+    /// receiver (which could alias under a different name) is excluded here.
+    /// Requires type info (`method_callee_types`); `None` without it
+    /// (fail-closed). Computed in `analyze_stmt` via `classify_method_fanout`.
+    method_fanout_receiver_root: Option<String>,
     /// Whether this statement is a constant-cost initializer — a
     /// `let`/`assign` of a literal or bare identifier, or a `let
     /// uninit`. These are O(1) and run in ~zero time. Used by the
@@ -1172,15 +1187,40 @@ pub struct ConcurrencyChecker<'a> {
     function_bodies: HashMap<String, &'a Function>,
     /// Impl method bodies: "TypeName.method" -> &Function.
     method_bodies: HashMap<String, &'a Function>,
+    /// Type info (when available). Its `method_callee_types` map (receiver type
+    /// name per method-call span) drives method-receiver classification for
+    /// A2b-2 Phase 2 Slice 2 (method-call network fan-out). `None` disables it.
+    types: Option<&'a TypeCheckResult>,
+    /// Names of `shared struct` / `shared enum` (RC) types declared in this
+    /// program. A2b-2 Phase 2 Slice 2: a method receiver of a shared type can
+    /// ALIAS another binding (`let b = a` clones the RC handle), so two method
+    /// calls on distinct-named shared receivers may still hit the same object —
+    /// they are excluded from method-call fan-out.
+    shared_type_names: HashSet<String>,
 }
 
 impl<'a> ConcurrencyChecker<'a> {
-    pub fn new(program: &'a Program, effects: &'a EffectCheckResult) -> Self {
+    pub fn new(
+        program: &'a Program,
+        effects: &'a EffectCheckResult,
+        types: Option<&'a TypeCheckResult>,
+    ) -> Self {
+        let shared_type_names = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::StructDef(s) if s.is_shared => Some(s.name.clone()),
+                Item::EnumDef(e) if e.is_shared => Some(e.name.clone()),
+                _ => None,
+            })
+            .collect();
         let mut checker = ConcurrencyChecker {
             program,
             effects,
             function_bodies: HashMap::new(),
             method_bodies: HashMap::new(),
+            types,
+            shared_type_names,
         };
         checker.collect_functions();
         checker
@@ -1263,8 +1303,26 @@ impl<'a> ConcurrencyChecker<'a> {
             };
         }
 
+        // The enclosing fn's `ref`/`mut ref` parameter names — a method-call
+        // receiver rooted at one may be caller-aliased, so it is excluded from
+        // method-call network fan-out (Slice 2). `mut Slice` params are borrows
+        // too but never name a method receiver of interest; included for parity
+        // with `param_is_borrow`.
+        let mut ref_params: HashSet<String> = HashSet::new();
+        for p in &func.params {
+            if matches!(
+                p.ty.kind,
+                TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
+            ) {
+                self.collect_pattern_bindings(&p.pattern, &mut ref_params);
+            }
+        }
+
         // Step 1: Extract metadata for each statement
-        let stmt_infos: Vec<StmtInfo> = stmts.iter().map(|s| self.analyze_stmt(s, false)).collect();
+        let stmt_infos: Vec<StmtInfo> = stmts
+            .iter()
+            .map(|s| self.analyze_stmt(s, false, &ref_params))
+            .collect();
 
         // Step 2: Build the conflict graph + the serialization-point list
         // (the inverse of the parallel groups: for every conflicting pair,
@@ -1531,13 +1589,21 @@ impl<'a> ConcurrencyChecker<'a> {
         // Effect conflict: find the conflicting effect pairs and attribute
         // them to the callees that contributed them.
         //
-        // A2b-2 Phase 1: mirror `statements_conflict`'s ephemeral-network
-        // relaxation so a reported cause is never a `Network`↔`Network` pair
-        // that the grouper actually treated as non-conflicting. For two
-        // ephemeral network fan-outs the edge that reached here must be a
-        // *non-Network* conflict, so skip `Network`↔`Network` pairs and
-        // attribute the true cause.
-        let skip_network = a.is_ephemeral_network_fanout && b.is_ephemeral_network_fanout;
+        // A2b-2 Phase 1/2: mirror `statements_conflict`'s network relaxations so
+        // a reported cause is never a `Network`↔`Network` pair the grouper
+        // actually treated as non-conflicting. For two ephemeral network
+        // fan-outs, OR two method-call fan-outs on distinct receivers, the edge
+        // that reached here must be a *non-Network* conflict, so skip
+        // `Network`↔`Network` pairs and attribute the true cause.
+        let distinct_method_fanout = match (
+            &a.method_fanout_receiver_root,
+            &b.method_fanout_receiver_root,
+        ) {
+            (Some(ra), Some(rb)) => ra != rb,
+            _ => false,
+        };
+        let skip_network = (a.is_ephemeral_network_fanout && b.is_ephemeral_network_fanout)
+            || distinct_method_fanout;
         let mut resource = String::new();
         let mut verbs: Option<(EffectVerbKind, EffectVerbKind)> = None;
         let mut callees: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -2028,7 +2094,10 @@ impl<'a> ConcurrencyChecker<'a> {
     }
 
     /// Analyze a single statement to extract defines, reads, and effects.
-    fn analyze_stmt(&self, stmt: &Stmt, is_seq: bool) -> StmtInfo {
+    /// `ref_params` is the set of `ref`/`mut ref` parameter names of the
+    /// enclosing function (a receiver rooted at one may be caller-aliased, so
+    /// it is excluded from method-call network fan-out — Slice 2).
+    fn analyze_stmt(&self, stmt: &Stmt, is_seq: bool, ref_params: &HashSet<String>) -> StmtInfo {
         let mut info = StmtInfo {
             defines: HashSet::new(),
             let_introduced: HashSet::new(),
@@ -2044,6 +2113,7 @@ impl<'a> ConcurrencyChecker<'a> {
             // to confirm the call touches the `Network` resource.
             is_safe_network_fanout: false,
             is_ephemeral_network_fanout: false,
+            method_fanout_receiver_root: None,
             is_constant_init: stmt_is_constant_init(stmt),
         };
 
@@ -2144,7 +2214,82 @@ impl<'a> ConcurrencyChecker<'a> {
         info.is_ephemeral_network_fanout = info.is_safe_network_fanout
             && stmt_callee_has_no_borrow_params(stmt, &self.function_bodies, &self.method_bodies);
 
+        // A2b-2 Phase 2 Slice 2: method-call network fan-out. A method call
+        // `obj.method(args)` touching `Network` with a borrowed receiver of a
+        // distinct-provable (non-shared, non-ref-param) local is a candidate;
+        // record its receiver root for the distinct-receiver conflict relaxation.
+        if info.effects.iter().any(|e| e.resource == "Network") {
+            info.method_fanout_receiver_root = self.classify_method_fanout(stmt, ref_params);
+        }
+
         info
+    }
+
+    /// A2b-2 Phase 2 Slice 2: classify a statement as a method-call network
+    /// fan-out CANDIDATE, returning its receiver ROOT identifier if admissible.
+    /// Requires (all fail-closed to `None`): the statement is `obj.method(args)`
+    /// whose (1) receiver `obj` is a plain identifier that is NOT a `ref`/`mut ref`
+    /// parameter of the enclosing fn (a ref param may be caller-aliased); (2)
+    /// receiver type — from `method_callee_types` — is NOT a `shared` (RC) type
+    /// (which can alias via `let b = a`); (3) resolved method BORROWS its receiver
+    /// (`ref self`/`mut ref self`, never a consuming `own self` that would move it
+    /// into the coroutine and double-drop); and (4) args are fan-out-safe (same
+    /// rule as `stmt_fanout_args_safe`). The Network-resource check is applied by
+    /// the caller. Needs type info; `None` without it.
+    fn classify_method_fanout(&self, stmt: &Stmt, ref_params: &HashSet<String>) -> Option<String> {
+        let value = match &stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::Expr(value) => value,
+            _ => return None,
+        };
+        let ExprKind::MethodCall {
+            object,
+            args,
+            method,
+            ..
+        } = &value.kind
+        else {
+            return None;
+        };
+        // (1) Receiver is a plain local identifier, not a ref/mut-ref param.
+        let ExprKind::Identifier(root) = &object.kind else {
+            return None;
+        };
+        if ref_params.contains(root) {
+            return None;
+        }
+        // (2) Receiver type is known (from `method_callee_types`, keyed by the
+        // method-call span — which equals the receiver span) and NOT shared.
+        // The stored value is the full `"TypeName.method"` key.
+        let key = self
+            .types?
+            .method_callee_types
+            .get(&SpanKey::from_span(&value.span))?;
+        let recv_ty = key.rsplit_once('.').map(|(t, _)| t)?;
+        if self.shared_type_names.contains(recv_ty) {
+            return None;
+        }
+        let _ = method; // method identity is carried by `key`; kept for clarity
+                        // (3) Resolved method borrows its receiver (not consuming).
+        let func = self.method_bodies.get(key)?;
+        if !matches!(
+            func.self_param,
+            Some(SelfParam::Ref) | Some(SelfParam::MutRef)
+        ) {
+            return None;
+        }
+        // (4) Args fan-out-safe: literal / const, or an identifier at a borrow
+        // parameter position (mirrors `stmt_fanout_args_safe`).
+        let callee_params = Some(func.params.as_slice());
+        let args_safe = args.iter().enumerate().all(|(i, a)| {
+            expr_is_call_free(&a.value)
+                && (expr_is_binding_free(&a.value)
+                    || (matches!(a.value.kind, ExprKind::Identifier(_))
+                        && param_is_borrow(callee_params, i)))
+        });
+        if !args_safe {
+            return None;
+        }
+        Some(root.clone())
     }
 
     /// Check if two statements conflict (have a dependency requiring serialization).
@@ -2183,6 +2328,23 @@ impl<'a> ConcurrencyChecker<'a> {
         // docs/spikes/network-resource-granularity.md.
         if a.is_ephemeral_network_fanout && b.is_ephemeral_network_fanout {
             return self.effects_conflict_excluding_network(&a.effects, &b.effects);
+        }
+
+        // A2b-2 Phase 2 Slice 2: two method-call network fan-outs on DISTINCT,
+        // provably-non-aliasing receivers (`s1.read(); s2.read()`) touch distinct
+        // connections, so their `Network` effects do not conflict. Same-root
+        // calls never reach this relaxation: a `mut ref self` method defines its
+        // receiver, so the write-write check above already serialized them, and a
+        // `ref self` same-root pair is excluded by the `ra != rb` guard here.
+        // Shared-type / `ref`-param receivers (which could alias under a distinct
+        // name) are excluded from candidacy in `classify_method_fanout`.
+        if let (Some(ra), Some(rb)) = (
+            &a.method_fanout_receiver_root,
+            &b.method_fanout_receiver_root,
+        ) {
+            if ra != rb {
+                return self.effects_conflict_excluding_network(&a.effects, &b.effects);
+            }
         }
 
         // Effect conflict
@@ -2384,6 +2546,7 @@ impl<'a> ConcurrencyChecker<'a> {
             if effects_mark_coroutine_boundary(&infos[start].effects)
                 && !infos[start].is_timer_suspend
                 && !infos[start].is_safe_network_fanout
+                && infos[start].method_fanout_receiver_root.is_none()
             {
                 assigned[start] = true;
                 continue;
@@ -2449,6 +2612,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 if effects_mark_coroutine_boundary(&infos[candidate].effects)
                     && !infos[candidate].is_timer_suspend
                     && !infos[candidate].is_safe_network_fanout
+                    && infos[candidate].method_fanout_receiver_root.is_none()
                 {
                     break;
                 }

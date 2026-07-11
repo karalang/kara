@@ -1,15 +1,17 @@
 # Design spike — finer `Network` effect-resource granularity (A2b-2 Blocker A)
 
 **Status:** design spike, 2026-07-09. **Phase 1 SHIPPED 2026-07-10** (the
-scoped ephemeral-call conflict relaxation — see §8). **Phase 2 STARTED
-2026-07-11 — Slice 1 (associated-fn admission) shipped:** the receiver-less
-openers (`TcpStream.connect` / `TlsStream.connect`, 2-segment `Type.method(...)`
-paths with no `self`) now fan out, via `resolve_assoc_callee` in
-`src/concurrency.rs` — a pragmatic reach-extension that reuses Phase 1's gates
-(an associated fn has no receiver, so it is structurally a free function) WITHOUT
-yet building the full connection-identity model. **Phase 0 (conflict-table
-reconciliation, §4) and the rest of Phase 2 — METHOD-call admission via
-receiver-identity + full parameterized-`Network` — remain open.** The original
+scoped ephemeral-call conflict relaxation — see §8). **Phase 2 Slice 1
+(associated-fn admission) + Slice 2 (method-call admission via receiver
+distinctness) SHIPPED 2026-07-11:** the receiver-less openers
+(`TcpStream.connect`) fan out via `resolve_assoc_callee`, and method calls
+(`stream.read()`) on provably-distinct non-shared non-ref-param receivers fan
+out via `classify_method_fanout` (threading the typecheck result through
+`concurrency_analyze_typed`) — both reuse Phase 1's conflict-relaxation
+machinery WITHOUT yet building the full connection-identity resource model.
+**Phase 0 (conflict-table reconciliation, §4) and Slice 3 — full
+parameterized-`Network` (borrow-param / connection-bound ops generally) —
+remain open.** The original
 proposal scoped the work into phases so it could be picked up incrementally;
 Phase 1 + Phase 2 Slice 1 sidestep Phase 0 and the parameterized-resource model
 by relaxing/extending only the narrow, provably-sound receiver-less cases rather
@@ -270,8 +272,21 @@ Implement § Parameterized Resources for real and parameterize `Network`:
      `Type.method(...)` with `self_param.is_none()`) fan out via
      `resolve_assoc_callee`, reusing Phase 1's gates. No new type info needed —
      an associated fn has no receiver, so it is structurally a free function.
-   - **Slice 2 — METHOD-call admission — SCOPED (empirically) 2026-07-11, NOT
-     yet built; blocked on receiver-type info.** A method's receiver *is* the
+   - **Slice 2 — METHOD-call admission — ✅ SHIPPED 2026-07-11.** Method calls
+     with a `self` receiver (`stream.read()`, `client.get()`) fan out when the
+     two receivers are provably distinct. `concurrency_analyze_typed` threads
+     the typecheck result in; `classify_method_fanout` records the receiver root
+     when the receiver is a plain non-`ref`-param local of a non-`shared` type
+     and the method borrows `self` (not consuming); `statements_conflict` relaxes
+     `Network`↔`Network` for two candidates with distinct roots. Same-root is
+     serialized by the write-write dep (a `mut ref self` method defines its
+     receiver), shared/ref-param receivers are excluded, and codegen already
+     falls back to sequential when a mutated receiver is observed after the group
+     (`stmts.rs:914`, so no silent-wrong-value). Verified end-to-end + LSan/ASan-
+     clean; see the `[~]` A2b-2 sub-entry in `phase-5-diagnostics.md` for the
+     full test list. The scoping below is retained as the design record.
+
+     A method's receiver *is* the
      shared connection, so `a.read(); a.read()` on one stream must serialize
      while `a.read(); b.read()` on distinct streams may fan out — soundness
      hinges on proving the two receivers don't alias. Empirical probes settled
