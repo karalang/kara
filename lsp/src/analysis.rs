@@ -6,7 +6,7 @@
 
 use lsp_types::{
     Diagnostic, DiagnosticSeverity, DocumentSymbol, Hover, HoverContents, MarkupContent,
-    MarkupKind, NumberOrString, Position, Range, SymbolKind,
+    MarkupKind, NumberOrString, Position, Range, SymbolKind, TextEdit,
 };
 use std::panic::AssertUnwindSafe;
 
@@ -163,6 +163,36 @@ pub fn document_symbols(text: &str) -> Vec<DocumentSymbol> {
             }
         })
         .collect()
+}
+
+/// Format the whole document. Returns the edits to apply:
+/// - `Some(vec![one full-document replace])` when formatting changes the text;
+/// - `Some(vec![])` when it is already formatted (no edits — avoids a needless
+///   whole-buffer churn / cursor jump);
+/// - `None` when the source doesn't parse (nothing to format) or analysis
+///   panics — both map to a null formatting response.
+pub fn formatting(text: &str) -> Option<Vec<TextEdit>> {
+    let formatted = match std::panic::catch_unwind(AssertUnwindSafe(|| karac::format_source(text)))
+    {
+        Ok(f) => f?,
+        Err(_) => {
+            eprintln!("kara-lsp: format analysis panicked; returning no edits");
+            return None;
+        }
+    };
+    if formatted == text {
+        return Some(Vec::new());
+    }
+    let index = LineIndex::new(text);
+    // A single edit replacing the whole document, from the start to the mapped
+    // end position of the original text.
+    Some(vec![TextEdit {
+        range: Range {
+            start: Position::new(0, 0),
+            end: index.position(text.len()),
+        },
+        new_text: formatted,
+    }])
 }
 
 /// Map `karac`'s coarse kind slug to the LSP symbol kind.
@@ -348,6 +378,34 @@ mod tests {
         let idx = LineIndex::new(src);
         let call = src.find("println").unwrap();
         assert!(definition(src, idx.position(call)).is_none());
+    }
+
+    #[test]
+    fn formatting_replaces_whole_document() {
+        let messy = "fn   main( ){let x=1+2;}";
+        let edits = formatting(messy).expect("expected format edits");
+        assert_eq!(edits.len(), 1, "one full-document replace edit");
+        let e = &edits[0];
+        assert_eq!(e.range.start, Position::new(0, 0));
+        // The replacement is the (changed) formatted text.
+        assert_ne!(e.new_text, messy);
+        assert!(e.new_text.contains("fn main"));
+    }
+
+    #[test]
+    fn formatting_already_formatted_yields_no_edits() {
+        // Format once, then formatting the result must produce zero edits.
+        let formatted = karac::format_source("fn   main(){ }").unwrap();
+        assert_eq!(
+            formatting(&formatted),
+            Some(Vec::new()),
+            "already-formatted source needs no edits"
+        );
+    }
+
+    #[test]
+    fn formatting_none_on_parse_error() {
+        assert!(formatting("fn main( {").is_none());
     }
 
     #[test]

@@ -721,7 +721,7 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 3`](../
 - [ ] Find references (resolver symbol table).
 - [x] Document symbols / outline (parser AST). **✓ (slice 3, 2026-07-11)** — `textDocument/documentSymbol` returns a flat outline of every top-level item (function/struct/enum/union/trait/const/type-alias/…) in source order, via the new `karac::document_symbols` query (root-scope symbols with a real span; prelude names and enum variants filtered out; `SymbolKind` mapped to the LSP kind).
 - [ ] **Type-aware completion** — `.`-completion of methods/fields on the receiver type. Requires partial-parse + typecheck-of-incomplete-source (~4-6 weeks engineering). The line below which the LSP feels half-broken.
-- [ ] Formatting via LSP (wraps `karac fmt`).
+- [x] Formatting via LSP (wraps `karac fmt`). **✓ (slice 4, 2026-07-11)** — `textDocument/formatting` returns a single whole-document `TextEdit` from the new `karac::format_source` query (parse + `formatter::format_program`, no desugar so surface syntax round-trips); already-formatted source returns zero edits, parse errors return null.
 - [ ] Signature help (parameter-info popup).
 - [ ] VS Code extension wrapping `kara-lsp` — language identifier, file-watch, marketplace listing.
 

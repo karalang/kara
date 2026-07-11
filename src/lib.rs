@@ -981,6 +981,19 @@ pub fn document_symbols(source: &str) -> Vec<SymbolOutline> {
     out
 }
 
+/// Format `source` with the standard Kāra formatter (the `karac fmt` engine),
+/// returning the formatted text — or `None` when `source` has parse errors,
+/// since unparseable source cannot be reformatted. Deliberately does NOT
+/// desugar: the formatter round-trips surface syntax verbatim (e.g. argument-
+/// position `impl Trait` is preserved), mirroring `cli.rs::cmd_fmt`.
+pub fn format_source(source: &str) -> Option<String> {
+    let parsed = parse(source);
+    if !parsed.errors.is_empty() {
+        return None;
+    }
+    Some(crate::formatter::format_program(&parsed.program))
+}
+
 #[cfg(test)]
 mod playground_tests {
     use super::*;
@@ -1225,6 +1238,21 @@ mod playground_tests {
     #[test]
     fn document_symbols_empty_when_parse_fails() {
         assert!(document_symbols("fn main( { ").is_empty());
+    }
+
+    #[test]
+    fn format_source_reformats_and_is_idempotent() {
+        // Messy input reformats; formatting the result again is a fixpoint.
+        let messy = "fn   main( ){let x=1+2;}";
+        let once = format_source(messy).expect("expected formatted output");
+        assert_ne!(once, messy, "formatter should have changed the messy input");
+        let twice = format_source(&once).expect("re-format should still parse");
+        assert_eq!(once, twice, "formatting must be idempotent");
+    }
+
+    #[test]
+    fn format_source_none_on_parse_error() {
+        assert!(format_source("fn main( {").is_none());
     }
 
     #[test]

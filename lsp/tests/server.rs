@@ -265,3 +265,54 @@ fn server_answers_definition_and_document_symbols() {
     drop(client);
     assert!(server_thread.join().unwrap().is_ok());
 }
+
+#[test]
+fn server_formats_a_document() {
+    let (server, client) = Connection::memory();
+    let server_thread = thread::spawn(move || kara_lsp::serve(server));
+
+    req(&client, 1, "initialize", json!({"capabilities":{}}));
+    let init = recv(&client);
+    let Message::Response(Response {
+        result: Some(caps), ..
+    }) = init
+    else {
+        panic!("expected initialize response, got {init:?}");
+    };
+    assert_eq!(
+        caps["capabilities"]["documentFormattingProvider"],
+        json!(true)
+    );
+    notify(&client, "initialized", json!({}));
+
+    let uri = "file:///f.kara";
+    did_open(&client, uri, "fn   main( ){let x=1+2;}");
+    next_diagnostics(&client);
+
+    req(
+        &client,
+        2,
+        "textDocument/formatting",
+        json!({"textDocument":{"uri":uri},"options":{"tabSize":4,"insertSpaces":true}}),
+    );
+    let fmt = recv(&client);
+    let Message::Response(Response {
+        result: Some(edits),
+        ..
+    }) = fmt
+    else {
+        panic!("expected formatting response, got {fmt:?}");
+    };
+    let arr = edits.as_array().expect("formatting returns an edit array");
+    assert_eq!(arr.len(), 1, "one full-document replace: {arr:?}");
+    assert_eq!(arr[0]["range"]["start"], json!({"line":0,"character":0}));
+    let new_text = arr[0]["newText"].as_str().unwrap();
+    assert!(new_text.contains("fn main"), "reformatted: {new_text:?}");
+    assert_ne!(new_text, "fn   main( ){let x=1+2;}");
+
+    req(&client, 3, "shutdown", serde_json::Value::Null);
+    recv(&client);
+    notify(&client, "exit", serde_json::Value::Null);
+    drop(client);
+    assert!(server_thread.join().unwrap().is_ok());
+}

@@ -5,10 +5,11 @@
 //! over an in-memory connection ([`lsp_server::Connection::memory`]) by the
 //! integration tests. Features so far: the `initialize`/`shutdown` handshake,
 //! live diagnostics (`textDocument/publishDiagnostics`, slice 1), type-of-
-//! expression hover (`textDocument/hover`, slice 2), and go-to-definition +
+//! expression hover (`textDocument/hover`, slice 2), go-to-definition +
 //! document outline (`textDocument/definition` + `textDocument/documentSymbol`,
-//! slice 3) — each a thin [`analysis`] call over a `karac` library query. No
-//! user code is ever executed — feedback is purely static.
+//! slice 3), and whole-document formatting (`textDocument/formatting`, slice 4)
+//! — each a thin [`analysis`] call over a `karac` library query. No user code
+//! is ever executed — feedback is purely static.
 
 pub mod analysis;
 
@@ -20,7 +21,9 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
     Notification as _, PublishDiagnostics,
 };
-use lsp_types::request::{DocumentSymbolRequest, GotoDefinition, HoverRequest, Request as _};
+use lsp_types::request::{
+    DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest, Request as _,
+};
 use lsp_types::{
     DocumentSymbolResponse, GotoDefinitionResponse, HoverProviderCapability, InitializeParams,
     Location, OneOf, PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability,
@@ -42,6 +45,7 @@ pub fn serve(connection: Connection) -> LspResult {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
+        document_formatting_provider: Some(OneOf::Left(true)),
         ..Default::default()
     };
     let init_params = connection.initialize(serde_json::to_value(capabilities)?)?;
@@ -184,6 +188,18 @@ fn handle_request(
                         DocumentSymbolResponse::Nested(analysis::document_symbols(text))
                     });
                     lsp_server::Response::new_ok(id, resp)
+                }
+                Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
+            }
+        }
+        Formatting::METHOD => {
+            match serde_json::from_value::<lsp_types::DocumentFormattingParams>(params) {
+                Ok(p) => {
+                    let uri = p.text_document.uri.to_string();
+                    // `None` (parse error / unknown doc) → null response, which
+                    // the client reads as "no formatting available".
+                    let edits = docs.get(&uri).and_then(|text| analysis::formatting(text));
+                    lsp_server::Response::new_ok(id, edits)
                 }
                 Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
             }
