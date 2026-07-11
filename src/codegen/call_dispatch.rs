@@ -1468,6 +1468,23 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.track_inline_owned_aggregate_arg(val, &a.value);
             }
+            // B-2026-07-10-4 residual — an inline-heap `Option[String]`/
+            // `Option[Vec]` binding MOVED by value into a user function that
+            // OWNS + frees it (`consume(sv)` where `sv: Option[String]` is a
+            // tracked `inline_option_payload_vars` local). The callee's param
+            // consumption frees the `Some` payload, but the caller's scope-exit
+            // `FreeInlineOptionPayload` also fires → double-free (surfaced by the
+            // self-hosted `render_attr(a)` attribute path over an `Option[String]`
+            // whose payload was matched out of a token). Zero the source slot so
+            // the caller's guard skips — the same whole-move suppression the
+            // enum-variant / struct-literal field-init paths already apply, now
+            // for a by-value call argument. Gated OUT of a borrowed position
+            // (`borrow_skip` — the callee doesn't consume) and a return-passthrough
+            // (`fn id(o) -> Option { o }` — the callee hands `o` back and the
+            // caller's RESULT binding owns it, so the source must stay live).
+            if !borrow_skip && !self.call_arg_flows_into_return(&name, i) {
+                self.suppress_inline_option_result_binding_move(&a.value);
+            }
         }
         // Restore the pending-let hint cleared above for the arg loop.
         self.pending_let_elem_type = saved_pending_elem;
