@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **365 surfaced · 3 open · 360 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **366 surfaced · 3 open · 361 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -99,9 +99,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **365 surfaced 
 | B-2026-07-11-19 | 2026-07-11 | typecheck+codegen | low | Iterator terminal/adaptor surface is incomplete beyond `collect`/`fold`/`any`/`all`: `sum`/`reduce`/`for_each` are rejected at TYPECHECK; `|_|` wildcard closure params and `let it = v.iter()` (iter bound to a variable) break codegen. [UPDATE: the `any`/`all` codegen-terminal sub-gap is FIXED — see PROGRESS.] | unfixed; per-gap repros below |
 | B-2026-07-11-21 | 2026-07-11 | codegen | high | SILENT: reusing an owned `Option[shared struct]` value across two by-value consuming calls whose callee CLONES the matched subtree double-frees under codegen (JIT+AOT) — heap corruption, no diagnostic; interpreter correct | kata #95 second surface |
 
-### Fixed (360)
+### Fixed (361)
 
-<details><summary>360 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>361 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -465,6 +465,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **365 surfaced 
 | B-2026-07-11-17 | codegen | medium | `fold(init, \|acc, x\| body)` on a fused iterator chain had no codegen terminal | f0dcd3d |
 | B-2026-07-11-18 | codegen | high | SILENT MISCOMPILE: `for x in <iter-chain-with-map/filter>` iterates ZERO times in codegen (interpreter iterates correctly) — wrong answer, no error. | fb41490 |
 | B-2026-07-11-20 | codegen | low | GPU helper-call gathering (reachable_helpers, GPU-LBM-5) misses #[gpu] helper calls inside Index / let-RHS / MethodCall / Cast positions, so a valid… | gpu_wgsl::reachable_helpers: add Index/MethodCall/Cast arms to calls_in and a StmtKind::Let arm to calls_in_block so #[gpu] helper calls in those AST positions are gathered into the reachable-helper set. |
+| B-2026-07-11-22 | codegen | high | DOUBLE-FREE: `for it in vec { match it { Variant(payload) => .. | 6dbe1fb |
 
 </details>
 
