@@ -1583,6 +1583,11 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Slice-parameter scoped-alias metadata (alias-metadata slice 4). After
+        // the mono param registration above, before the body — same ordering as
+        // the non-generic `compile_function` path.
+        self.build_slice_alias_scopes(func);
+
         let result = self.compile_block(&func.body)?;
 
         if self

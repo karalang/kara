@@ -13,7 +13,7 @@ use crate::ast::*;
 use crate::token::Span;
 
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
-use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
+use inkwell::values::{BasicValue, BasicValueEnum, IntValue, PointerValue};
 use inkwell::AddressSpace;
 
 use super::helpers::vec_inner_type_expr;
@@ -3659,7 +3659,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // Narrow to element width before storing into a sub-word slice element
         // — same fix as the Vec push / index-store paths.
         let val = self.coerce_scalar_to_type(val, elem_ty);
-        self.builder.build_store(elem_ptr, val).unwrap();
+        let store = self.builder.build_store(elem_ptr, val).unwrap();
+        // Scoped-alias metadata for an exclusive/shared slice PARAM (no-op for
+        // any local slice — alias-metadata slice 4).
+        self.attach_slice_alias_md(store, var_name);
         Ok(())
     }
 
@@ -3710,6 +3713,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem_ty, elem_ptr, "s.elem")
             .unwrap();
+        // Scoped-alias metadata for an exclusive/shared slice PARAM (no-op for
+        // any local slice — alias-metadata slice 4).
+        if let Some(inst) = val.as_instruction_value() {
+            self.attach_slice_alias_md(inst, var_name);
+        }
         Ok(val)
     }
 

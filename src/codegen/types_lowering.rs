@@ -1176,6 +1176,14 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn register_var_from_type_expr(&mut self, var_name: &str, te: &TypeExpr) {
+        // Slice-alias shadow guard (alias-metadata slice 4): any (re-)binding of
+        // this name drops it from the scoped-alias map, so a local slice that
+        // shadows a slice PARAM of the same name never inherits the param's
+        // `!noalias` metadata. Fail closed — a shadowed name loses the
+        // optimization, never mis-tags. A no-op for the common case (the name
+        // isn't a scoped slice param); harmless during param setup (the map is
+        // still empty, as `build_slice_alias_scopes` runs after registration).
+        self.slice_alias_md.remove(var_name);
         // Refinement alias: register against the instantiated base type so the
         // binding dispatches as its real `Vec`/`String`/struct everywhere. The
         // recursion peels nested aliases (`type A = B`, `type B = Vec[T]`).

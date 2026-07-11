@@ -72,6 +72,7 @@ mod reduce;
 mod refinement;
 mod runtime;
 mod shadow;
+mod slice_alias;
 mod sso;
 mod state;
 mod stats;
@@ -1812,6 +1813,14 @@ pub(super) struct Codegen<'ctx> {
     /// 2-field slice struct `{ptr, i64}`; used to dispatch indexing and
     /// iteration lowering.
     pub(crate) slice_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// Per-function scoped-alias metadata for slice parameters (alias-metadata
+    /// slice 4). Keyed by param binding name → the `!alias.scope` / `!noalias`
+    /// nodes attached to the element load/store in `compile_slice_index` /
+    /// `_store`. Rebuilt at each function/mono entry by `build_slice_alias_scopes`
+    /// (empty unless the function has ≥1 exclusive `mut Slice` param and ≥2 slice
+    /// params); a name is dropped on any re-registration
+    /// (`register_var_from_type_expr`) so a shadowing local loses the metadata.
+    pub(crate) slice_alias_md: HashMap<String, slice_alias::SliceAliasMd>,
     /// Variables that are ref parameters (name → inner LLVM type for dereferencing).
     pub(crate) ref_params: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Locals bound to a `mut ref V` slot pointer returned by
@@ -5771,6 +5780,7 @@ impl<'ctx> Codegen<'ctx> {
             pending_let_elem_type: None,
             pending_let_elem_type_expr: None,
             slice_elem_types: HashMap::new(),
+            slice_alias_md: HashMap::new(),
             fn_param_slice_elem: HashMap::new(),
             ref_params: HashMap::new(),
             entry_slot_ref_vars: HashMap::new(),

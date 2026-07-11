@@ -60341,6 +60341,133 @@ fn main() {
         );
     }
 
+    // ── Scoped-alias metadata for slice params (alias-metadata slice 4) ──
+    //
+    // A `mut Slice[T]` is an exclusive borrow → disjoint from every other slice
+    // param; a shared `Slice[T]` is disjoint from every exclusive one. That
+    // restrict-like fact is lowered onto the element loads/stores as
+    // `!alias.scope` / `!noalias`. See src/codegen/slice_alias.rs.
+
+    /// The text of a single `define … @sym(…) { … }` block, for asserting
+    /// metadata on the accesses inside one function.
+    fn fn_body(ir: &str, sym: &str) -> String {
+        let mut out = String::new();
+        let mut in_fn = false;
+        for l in ir.lines() {
+            if !in_fn && l.starts_with("define") && l.contains(sym) {
+                in_fn = true;
+            }
+            if in_fn {
+                out.push_str(l);
+                out.push('\n');
+                if l == "}" {
+                    break;
+                }
+            }
+        }
+        assert!(!out.is_empty(), "no define block for {sym}");
+        out
+    }
+
+    #[test]
+    fn slice_alias_mut_and_shared_params() {
+        // axpy: `y` is exclusive (`mut Slice`) → its accesses carry
+        // `!alias.scope`; `x` is a shared `Slice` → its access carries
+        // `!noalias` against `y`'s scope (no scope of its own).
+        let ir = ir_for(
+            r#"
+fn axpy(y: mut Slice[f64], x: Slice[f64], a: f64) {
+    let n = y.len();
+    let mut i = 0;
+    while i < n { y[i] = y[i] + x[i] * a; i = i + 1; }
+}
+fn main() { print(0); }
+"#,
+        );
+        let body = fn_body(&ir, "@axpy(");
+        assert!(
+            body.contains("!alias.scope"),
+            "exclusive `y` accesses should carry !alias.scope:\n{body}"
+        );
+        assert!(
+            body.contains("!noalias"),
+            "shared `x` access should carry !noalias:\n{body}"
+        );
+        // Distinct domain + scope nodes were emitted.
+        assert!(
+            ir.contains("distinct !{"),
+            "expected distinct scoped-alias metadata nodes"
+        );
+    }
+
+    #[test]
+    fn slice_alias_two_mut_params_mutual() {
+        // Two exclusive slices → each access carries BOTH alias.scope (own
+        // scope) and noalias (the other's scope) — mutual disambiguation.
+        let ir = ir_for(
+            r#"
+fn copy2(dst: mut Slice[i64], src: mut Slice[i64]) {
+    let n = dst.len();
+    let mut i = 0;
+    while i < n { dst[i] = src[i]; i = i + 1; }
+}
+fn main() { print(0); }
+"#,
+        );
+        let body = fn_body(&ir, "@copy2(");
+        assert!(
+            body.lines()
+                .any(|l| l.contains("!alias.scope") && l.contains("!noalias")),
+            "a copy2 element access should carry both alias.scope and noalias:\n{body}"
+        );
+    }
+
+    #[test]
+    fn slice_alias_single_param_gets_none() {
+        // One slice param → nothing to disambiguate → no scoped-alias metadata.
+        let ir = ir_for(
+            r#"
+fn scale(xs: mut Slice[f64], f: f64) {
+    let n = xs.len();
+    let mut i = 0;
+    while i < n { xs[i] = xs[i] * f; i = i + 1; }
+}
+fn main() { print(0); }
+"#,
+        );
+        let body = fn_body(&ir, "@scale(");
+        assert!(
+            !body.contains("!alias.scope") && !body.contains("!noalias"),
+            "single-slice fn must carry no scoped-alias metadata:\n{body}"
+        );
+    }
+
+    #[test]
+    fn slice_alias_in_monomorph() {
+        // The scoped-alias metadata reaches monomorphized slice kernels too
+        // (`build_slice_alias_scopes` runs from `compile_mono_function`).
+        let ir = ir_for(
+            r#"
+fn saxpy[T](y: mut Slice[T], x: Slice[T]) {
+    let n = y.len();
+    let mut i = 0;
+    while i < n { y[i] = x[i]; i = i + 1; }
+}
+fn main() {
+    let mut a = [1, 2, 3];
+    let b = [4, 5, 6];
+    saxpy(a.as_slice_mut(), b.as_slice());
+    print(0);
+}
+"#,
+        );
+        let body = fn_body(&ir, "saxpy");
+        assert!(
+            body.contains("!alias.scope") && body.contains("!noalias"),
+            "monomorphized slice kernel should carry scoped-alias metadata:\n{body}"
+        );
+    }
+
     #[test]
     fn owned_value_ptr_param_emits_noalias() {
         // An OWNED value-semantics type that lowers to a single heap `ptr`

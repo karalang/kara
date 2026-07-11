@@ -1919,6 +1919,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pending_vec_len_pins =
             crate::codegen::bce_length_pin::compute_vec_length_pins(&func.body);
 
+        // Slice-parameter scoped-alias metadata (alias-metadata slice 4). Runs
+        // after the param-registration loop above, so its map entries survive
+        // the `register_var_from_type_expr` shadow-guard drop.
+        self.build_slice_alias_scopes(func);
+
         // Slice 2 (auto-par codegen MVP): route the function body through
         // `compile_function_body`, which dispatches inferred parallel
         // groups to `karac_par_run` when a `ConcurrencyAnalysis` was
