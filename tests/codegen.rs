@@ -3612,6 +3612,30 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("288\n"));
     }
 
+    /// B-2026-07-11-2: indexing a `Vec[T]` (read AND write) with a NARROWER-than-i64
+    /// integer — here a `u8` from `String.bytes()` used directly as a count-table
+    /// index, the natural sliding-window / counting idiom — must lower correctly.
+    /// Before the fix, codegen emitted the bounds-check `icmp uge i8 %idx, i64 %len`
+    /// without widening the index, so LLVM module verification failed ("Both operands
+    /// to ICmp instruction are not of the same type!") and `karac build`/JIT aborted
+    /// while the tree-walk interpreter handled it — a run/build divergence. The fix
+    /// routes the index through `coerce_to_i64` (zext) at every collection index site.
+    #[test]
+    fn u8_byte_index_into_vec_widens_to_i64() {
+        let src = "fn main() {\n\
+                   \x20   let b = \"AB\".bytes();\n\
+                   \x20   let c0 = b[0i64];\n\
+                   \x20   let c1 = b[1i64];\n\
+                   \x20   let mut v: Vec[i64] = Vec.new();\n\
+                   \x20   let mut i = 0i64;\n\
+                   \x20   while i < 128i64 { v.push(0i64); i = i + 1i64; }\n\
+                   \x20   v[c0] = 10i64;\n\
+                   \x20   v[c1] = v[c0] + 5i64;\n\
+                   \x20   println(f\"{v[c1]}\");\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("15\n"));
+    }
+
     /// B-2026-07-05-2, NestedStruct-payload variant: the deep-copy recurses into
     /// the inline struct's own heap fields (copy-depth == drop-depth), matching
     /// `karac run` (240).

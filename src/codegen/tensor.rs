@@ -557,7 +557,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 ExprKind::Integer(v, _) => Some(*v),
                 _ => None,
             };
-            let idx_val = self.compile_expr(comp)?.into_int_value();
+            let idx_raw = self.compile_expr(comp)?;
+            let idx_val = self.coerce_to_i64(idx_raw)?;
             // Bounds check — elided when both index and dim are
             // compile-time constants (typechecker-proven). Unsigned
             // `uge` rejects negatives in the same compare.

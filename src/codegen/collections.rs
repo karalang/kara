@@ -1878,7 +1878,8 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_inline_temp_vec_index(object, index, &vec_te);
         }
 
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
         let i64_t = self.context.i64_type();
 
         // Get a pointer to the array storage.
@@ -2679,7 +2680,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .ok_or_else(|| format!("Unknown SoA element struct '{}'", soa.struct_name))?;
 
         // Bounds check against len: panic if idx >= len.
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
         let len_ptr = self
             .builder
             .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.len.ptr")
@@ -2843,7 +2845,8 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Bounds check against len (mirror compile_soa_index_read): panic if
         // idx >= len — without it a stray index silently corrupts the heap.
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
         let len_ptr = self
             .builder
             .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.fstore.len.ptr")
@@ -2992,7 +2995,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Bounds check against len (mirror compile_soa_field_store): panic if
         // idx >= len before any group write, so a stray index can't corrupt the
         // group buffers half-way through the scatter.
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
         let len_ptr = self
             .builder
             .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.istore.len.ptr")
@@ -3142,7 +3146,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // method-call indices, etc. immediately default to no elision).
         let (lower_proven, upper_proven) = self.index_bounds_already_proven(index, name);
 
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
 
         let data_pp = self
             .builder
@@ -3472,7 +3477,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_data_ptr(var_name)
             .ok_or_else(|| format!("Undefined Vec variable '{}' in index store", var_name))?;
         let (lower_proven, upper_proven) = self.index_bounds_already_proven(index, var_name);
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
 
         let data_pp = self
             .builder
@@ -3618,7 +3624,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_ty = *self.slice_elem_types.get(var_name).unwrap();
         let slice_ptr = self.get_data_ptr(var_name).unwrap();
         let (lower_proven, upper_proven) = self.index_bounds_already_proven(index, var_name);
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
 
         let data_pp = self
             .builder
@@ -3673,7 +3680,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // index-name match in `index_bounds_already_proven` requires a
         // bare `Identifier` source-level node.
         let (lower_proven, upper_proven) = self.index_bounds_already_proven(index, var_name);
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
 
         let data_pp = self
             .builder
@@ -3863,7 +3871,8 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
         let i64_t = self.context.i64_type();
 
         let (arr_ptr, arr_ty) = if let ExprKind::Identifier(name) = &object.kind {

@@ -1019,7 +1019,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 outer_name
             )
         })?;
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
 
         let len_ptr = self
             .builder
@@ -1084,7 +1085,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 outer_name
             )
         })?;
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
 
         let data_pp = self
             .builder
@@ -1140,7 +1142,8 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return Err("Array shape required for Array indexed-receiver lowering".to_string()),
         };
         let elem_ty = arr_ty.get_element_type();
-        let idx_val = self.compile_expr(index)?.into_int_value();
+        let idx_raw = self.compile_expr(index)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
         let len = i64_t.const_int(arr_ty.len() as u64, false);
 
         let fn_val = self.current_fn.unwrap();
