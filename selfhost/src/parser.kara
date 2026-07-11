@@ -2866,3 +2866,24 @@ pub fn parse_item_str(src: String) -> Item with panics {
     let mut p = Parser.new(toks);
     p.parse_item()
 }
+
+// Parse `src` as a whole program — a sequence of top-level items until EOF —
+// and return them in source order. Mirrors the seed's `parse` (a `Program` is a
+// `Vec<Item>`); the resolver's program-level differential oracle
+// (`tests/selfhost_resolver.rs`) parses the SAME source as a program on the
+// Rust seed side and diffs the resolver output. `parse_item` already recovers
+// from an unrecognized leading token (it emits an `ErrItem` after consuming one
+// token), so the loop always makes progress and terminates at `Eof`.
+pub fn parse_program(src: String) -> Vec[Item] with panics {
+    let toks = lex_all(src);
+    let mut p = Parser.new(toks);
+    let mut items: Vec[Item] = Vec.new();
+    loop {
+        if p.is_at_end() {
+            break;
+        }
+        let item = p.parse_item();
+        items.push(item);
+    }
+    items
+}

@@ -108,10 +108,12 @@ struct Resolver {
     errors: Vec[ResolveError],
 }
 
-// ── Entry point ──
+// ── Entry points ──
 //
 // Resolve a single top-level item and return its resolve errors in traversal
-// order. Mirrors `resolve()` collapsed to one item.
+// order. The two-pass shape collapsed to one item: COLLECT the item's name into
+// the global scope, then RESOLVE its body — so a self-referential field /
+// variant / const value / recursive call still resolves.
 pub fn resolve_item(item: Item) -> Vec[ResolveError] with panics {
     let mut r = Resolver {
         binds: Vec.new(),
@@ -120,7 +122,36 @@ pub fn resolve_item(item: Item) -> Vec[ResolveError] with panics {
         errors: Vec.new(),
     };
     r.seed_global();
+    r.collect_item(item);
     r.walk_item(item);
+    let Resolver { binds, parents, current, errors } = r;
+    errors
+}
+
+// Resolve a whole program (a `Vec[Item]`) and return its resolve errors in
+// traversal order. Mirrors the seed's `resolve()`: PASS 1 (`collect`) registers
+// every top-level declaration's name in the global scope, then PASS 2
+// (`resolve_items`) resolves each item's body against that fully-populated
+// scope — so FORWARD references across items (`fn a() { b() }` before `fn b`, a
+// field typed by a struct declared later, mutually-recursive types) resolve,
+// and a repeated top-level name is a DuplicateDefinition. Collect errors
+// (pass 1) precede resolve errors (pass 2), matching the seed's two-phase
+// ordering. Pass 1 walks the items BY REF (borrowing) so pass 2 can still
+// consume them.
+pub fn resolve_program(items: Vec[Item]) -> Vec[ResolveError] with panics {
+    let mut r = Resolver {
+        binds: Vec.new(),
+        parents: Vec.new(),
+        current: 0,
+        errors: Vec.new(),
+    };
+    r.seed_global();
+    // Pass 1 borrows `items` (a `ref Vec` param inside `collect_all`, the only
+    // by-ref iteration form) so pass 2 can still consume them.
+    r.collect_all(items);
+    for it in items {
+        r.walk_item(it);
+    }
     let Resolver { binds, parents, current, errors } = r;
     errors
 }
@@ -510,15 +541,57 @@ impl Resolver {
         self.errors.push(ResolveError { kind: kind, off: off, len: len });
     }
 
-    // ── Item resolution (mirrors resolve_items.rs) ──
+    // ── Pass 1: collect (mirrors collect.rs) ──
     //
-    // Slice 2a adds the type/value DECLARATION forms (struct / enum /
-    // type-alias / const) alongside Slice 1's function. Trait / impl / use land
-    // in a later slice. Each item is resolved in "fused collect + resolve" form
-    // — the declaration's own name is defined in the (global) current scope
-    // FIRST, so a self-referential field / variant / const value resolves the
-    // same way the seed's two-pass `collect` + `resolve_items` does for a
-    // single item (`struct Node { next: Node }`, `const X: i64 = X`).
+    // Register a top-level item's own NAME in the global scope, WITHOUT
+    // resolving its body. A repeated name is a DuplicateDefinition (`define`),
+    // a reserved name a ReservedIdentifier. Impls introduce no name; `use` is a
+    // later slice. Walked BY REF so the same items can be resolved (consumed) in
+    // pass 2 — reading a String/Span field of a borrowed match payload returns
+    // an owned copy (field-access-through-`ref`), leaving the item intact.
+    // Pass 1 over a whole program: register every top-level name. Takes the
+    // items as a `ref Vec` param — the only form that iterates by borrow (a
+    // `for x in ref local` spelling does not exist), so `resolve_program` can
+    // still consume the same vector in pass 2.
+    fn collect_all(mut ref self, items: ref Vec[Item]) {
+        for it in items {
+            self.collect_item(it);
+        }
+    }
+
+    fn collect_item(mut ref self, it: ref Item) {
+        match it {
+            Func(f) => {
+                self.define(f.name, f.span);
+            }
+            Struct(s) => {
+                self.define(s.name, s.span);
+            }
+            Enum(e) => {
+                self.define(e.name, e.span);
+            }
+            TypeAlias(t) => {
+                self.define(t.name, t.span);
+            }
+            Const(c) => {
+                self.define(c.name, c.span);
+            }
+            Trait(t) => {
+                self.define(t.name, t.span);
+            }
+            Impl(_) => {}
+            Use(_) => {}
+            ErrItem(_) => {}
+        }
+    }
+
+    // ── Pass 2: resolve item bodies (mirrors resolve_items.rs) ──
+    //
+    // Resolve an item's references — generics / self / params + types / return /
+    // body for a function; field / variant / target types; const type + value;
+    // trait & impl methods. The item's own NAME was registered by `collect_item`
+    // (pass 1), so a self-reference and every cross-item forward reference
+    // resolves. Trait / impl are Slice 2b; `use` is a later slice.
     fn walk_item(mut ref self, item: Item) {
         match item {
             Func(f) => {
@@ -584,7 +657,8 @@ impl Resolver {
             doc,
             span,
         } = s;
-        self.define(name, clone_span(span));
+        // Name defined in the collect pass (resolve_item / resolve_program);
+        // `name` is left bound-but-unused so the destructure stays exhaustive.
         self.push_scope();
         self.define_generics(generics);
         for field in fields {
@@ -612,7 +686,8 @@ impl Resolver {
             doc,
             span,
         } = e;
-        self.define(name, clone_span(span));
+        // Name defined in the collect pass (resolve_item / resolve_program);
+        // `name` is left bound-but-unused so the destructure stays exhaustive.
         self.push_scope();
         self.define_generics(generics);
         for v in variants {
@@ -632,7 +707,8 @@ impl Resolver {
     // then resolve the target type in the (generic) param scope.
     fn resolve_type_alias(mut ref self, t: TypeAliasNode) {
         let TypeAliasNode { is_pub, name, generics, ty, attributes, doc, span } = t;
-        self.define(name, clone_span(span));
+        // Name defined in the collect pass (resolve_item / resolve_program);
+        // `name` is left bound-but-unused so the destructure stays exhaustive.
         self.push_scope();
         self.define_generics(generics);
         self.resolve_type(ty);
@@ -645,7 +721,8 @@ impl Resolver {
     // resolves clean (name in scope) while `const X: i64 = Y` is UndefinedName.
     fn resolve_const(mut ref self, c: ConstDeclNode) {
         let ConstDeclNode { is_pub, name, ty, value, attributes, doc, span } = c;
-        self.define(name, clone_span(span));
+        // Name defined in the collect pass (resolve_item / resolve_program);
+        // `name` is left bound-but-unused so the destructure stays exhaustive.
         self.resolve_type(ty);
         self.resolve_expr(value);
     }
@@ -668,7 +745,8 @@ impl Resolver {
             span,
         } = f;
         // Collect: define the function name in the (global) current scope.
-        self.define(name, clone_span(span));
+        // Name defined in the collect pass (resolve_item / resolve_program);
+        // `name` is left bound-but-unused so the destructure stays exhaustive.
         self.push_scope();
         // Generic type params (bare names; bounds are a later slice).
         self.define_generics(generics);
@@ -719,7 +797,8 @@ impl Resolver {
     // `TraitDefNode` omits them). Consumes the node.
     fn resolve_trait(mut ref self, t: TraitDefNode) {
         let TraitDefNode { is_pub, name, generics, methods, attributes, doc, span } = t;
-        self.define(name, clone_span(span));
+        // Name defined in the collect pass (resolve_item / resolve_program);
+        // `name` is left bound-but-unused so the destructure stays exhaustive.
         self.push_scope();
         // `Self` names the implementing type inside method signatures / bodies.
         self.define("Self".to_string(), clone_span(span));

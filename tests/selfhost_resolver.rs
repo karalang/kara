@@ -148,6 +148,40 @@ const CORPUS: &[&str] = &[
     "fn typo_ty(x: Veec) {}",
 ];
 
+/// Multi-item programs for the program-level (two-pass) gate. These exercise
+/// what a single item cannot: cross-item FORWARD references (a name used before
+/// its declaration, resolved because pass-1 collect registered it) and
+/// top-level DuplicateDefinition. Same discipline as `CORPUS` — only seeded
+/// prelude names + generics + cross-item user names, no attributes.
+const PROGRAM_CORPUS: &[&str] = &[
+    // Empty program.
+    "",
+    // Forward call: `a` calls `b` declared later.
+    "fn a() { b() }\nfn b() {}",
+    // Forward TYPE reference: `f`'s param is a struct declared later.
+    "fn f(x: Point) {}\nstruct Point { x: i64 }",
+    // Mutually-referential type declarations.
+    "struct A { b: B }\nstruct B { a: i64 }",
+    // Forward const / type-alias / enum references from a function.
+    "fn f() -> i64 { N }\nconst N: i64 = 5;",
+    "fn f(x: Id) {}\ntype Id = i64;",
+    "fn f(e: E) {}\nenum E { X, Y }",
+    // Inherent impl on a struct declared in the same program.
+    "struct P { x: i64 }\nimpl P { fn get(ref self) -> i64 { self.x } }",
+    // Several clean items together (no struct literals — outside the subset).
+    "struct Point { x: i64, y: i64 }\nfn dist(p: Point) -> i64 { 0 }\nconst ZERO: i64 = 0;",
+    // Top-level DuplicateDefinition — two functions with the same name.
+    "fn dup() {}\nfn dup() {}",
+    // Duplicate across item KINDS — a fn and a struct sharing a name.
+    "fn thing() {}\nstruct thing {}",
+    // Duplicate struct.
+    "struct S { a: i64 }\nstruct S { b: bool }",
+    // Undefined reference in one item; the other is clean (traversal order).
+    "fn ok_one() {}\nfn bad() { missing() }",
+    // Undefined type referenced across items where NO declaration supplies it.
+    "fn f(x: Undeclared) {}\nfn g() {}",
+];
+
 /// Byte offset shift between the Rust and Kāra spans — 0 (both resolve the
 /// identical bare item; no wrapper).
 const OFFSET_SHIFT: i64 = 0;
@@ -180,34 +214,25 @@ fn rust_render(src: &str) -> String {
     parts.join(" ")
 }
 
-/// Resolver differential gate (Slice 1). Same harness as the parser oracles:
-/// build the real selfhost modules + resolver into a temp project with a
-/// per-input driver, run, and diff each line against the Rust seed's render.
-#[test]
-fn selfhost_resolver_matches_rust_resolver() {
-    // 1. Crate-root driver over the Kāra `parse_item_str` + `resolve_item`.
-    let mut prog = String::from(
-        "import parser.parse_item_str;\n\
-         import resolver.{resolve_item, render_errors};\n\
-         \n\
-         fn check(src: String) with panics {\n\
-         \x20   println(render_errors(resolve_item(parse_item_str(src))));\n\
-         }\n\
-         fn main() {\n",
-    );
-    for input in CORPUS {
-        let escaped = input
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
-            .replace('\t', "\\t");
-        prog.push_str(&format!("    check(\"{escaped}\");\n"));
-    }
-    prog.push_str("}\n");
+/// A Kāra string literal escaping of `input` (for embedding in the driver).
+fn kara_str_lit(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
 
-    // 2. Assemble a temp PROJECT reusing the real selfhost modules.
-    let tmp = std::env::temp_dir().join(format!("karac-selfhost-resolver-{}", std::process::id()));
+/// Build the real selfhost modules + a crate-root `driver` into a temp project,
+/// run the resulting binary, and return its stdout lines — or `None` on a
+/// benign skip (no llvm feature / missing runtime archive). A compiler
+/// PANIC / error is a hard failure (a port regression), never a skip.
+fn build_and_run_driver(tag: &str, driver: &str) -> Option<Vec<String>> {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-selfhost-resolver-{tag}-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join("src")).unwrap();
     std::fs::write(
@@ -227,7 +252,7 @@ fn selfhost_resolver_matches_rust_resolver() {
         std::fs::copy(selfhost_src.join(f), tmp.join("src").join(f))
             .unwrap_or_else(|e| panic!("copy selfhost module {f}: {e}"));
     }
-    std::fs::write(tmp.join("src").join("main.kara"), &prog).unwrap();
+    std::fs::write(tmp.join("src").join("main.kara"), driver).unwrap();
 
     let build = std::process::Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
@@ -239,8 +264,6 @@ fn selfhost_resolver_matches_rust_resolver() {
     let bin = tmp.join("resolve");
 
     if !bin.exists() {
-        // A compiler PANIC / signal-kill / error is a real bug, never a benign
-        // skip (mirrors the item oracle's hard-failure guard).
         let compiler_crashed = berr.contains("panicked at") || build.status.code().is_none();
         let compile_err = compiler_crashed
             || berr.contains("error[")
@@ -250,17 +273,16 @@ fn selfhost_resolver_matches_rust_resolver() {
         assert!(
             !compile_err,
             "self-hosted resolver FAILED TO COMPILE (port regression):\n{berr}\n\
-             --- generated source ---\n{prog}"
+             --- generated driver ---\n{driver}"
         );
         eprintln!(
-            "skip: selfhost_resolver_matches_rust_resolver — did not link \
+            "skip: selfhost resolver oracle [{tag}] — did not link \
              (no llvm feature / missing runtime archive); stderr:\n{berr}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
-        return;
+        return None;
     }
 
-    // 3. Run the Kāra resolver binary.
     let run = std::process::Command::new(&bin)
         .output()
         .expect("run kara resolver binary");
@@ -270,15 +292,77 @@ fn selfhost_resolver_matches_rust_resolver() {
         String::from_utf8_lossy(&run.stderr)
     );
     let kout = String::from_utf8_lossy(&run.stdout);
-    let kara_lines: Vec<String> = kout
+    let lines: Vec<String> = kout
         .lines()
         .map(|l| l.trim_end().to_string())
         .filter(|l| !l.is_empty())
         .collect();
+    let _ = std::fs::remove_dir_all(&tmp);
+    Some(lines)
+}
 
-    // 4. Expected = the Rust seed's render of every input, in corpus order.
+/// Resolver differential gate (Slices 1–2c). Same harness as the parser
+/// oracles: build the real selfhost modules + resolver into a temp project with
+/// a per-input driver over `parse_item_str` + `resolve_item`, run, and diff each
+/// line against the Rust seed's render.
+#[test]
+fn selfhost_resolver_matches_rust_resolver() {
+    let mut driver = String::from(
+        "import parser.parse_item_str;\n\
+         import resolver.{resolve_item, render_errors};\n\
+         \n\
+         fn check(src: String) with panics {\n\
+         \x20   println(render_errors(resolve_item(parse_item_str(src))));\n\
+         }\n\
+         fn main() {\n",
+    );
+    for input in CORPUS {
+        driver.push_str(&format!("    check(\"{}\");\n", kara_str_lit(input)));
+    }
+    driver.push_str("}\n");
+
+    let Some(kara_lines) = build_and_run_driver("item", &driver) else {
+        return;
+    };
     let rust_lines: Vec<String> = CORPUS.iter().map(|input| rust_render(input)).collect();
+    diff_or_panic(CORPUS, &kara_lines, &rust_lines);
+}
 
+/// Program-level resolver differential gate (multi-item programs). Exercises the
+/// TWO-PASS resolver (`parse_program` + `resolve_program`): PASS-1 collection
+/// registers every top-level name, so cross-item FORWARD references resolve and
+/// a repeated top-level name is a DuplicateDefinition — none of which the
+/// single-item gate above can reach. The Rust seed's `karac::resolve` is already
+/// program-level, so the same source diffs directly.
+#[test]
+fn selfhost_resolver_program_matches_rust_resolver() {
+    let mut driver = String::from(
+        "import parser.parse_program;\n\
+         import resolver.{resolve_program, render_errors};\n\
+         \n\
+         fn check(src: String) with panics {\n\
+         \x20   println(render_errors(resolve_program(parse_program(src))));\n\
+         }\n\
+         fn main() {\n",
+    );
+    for input in PROGRAM_CORPUS {
+        driver.push_str(&format!("    check(\"{}\");\n", kara_str_lit(input)));
+    }
+    driver.push_str("}\n");
+
+    let Some(kara_lines) = build_and_run_driver("program", &driver) else {
+        return;
+    };
+    let rust_lines: Vec<String> = PROGRAM_CORPUS
+        .iter()
+        .map(|input| rust_render(input))
+        .collect();
+    diff_or_panic(PROGRAM_CORPUS, &kara_lines, &rust_lines);
+}
+
+/// Diff the Kāra resolver's per-input output against the Rust seed's, panicking
+/// with context on the first divergence or a line-count mismatch.
+fn diff_or_panic(corpus: &[&str], kara_lines: &[String], rust_lines: &[String]) {
     if let Some((i, (k, r))) = kara_lines
         .iter()
         .zip(rust_lines.iter())
@@ -287,17 +371,15 @@ fn selfhost_resolver_matches_rust_resolver() {
     {
         panic!(
             "self-hosted resolver diverged from the Rust resolver at input {i} ({:?}):\n  \
-             Kāra: {k}\n  Rust: {r}\n--- full Kāra output ---\n{kout}",
-            CORPUS[i]
+             Kāra: {k}\n  Rust: {r}",
+            corpus[i]
         );
     }
     assert_eq!(
         kara_lines.len(),
         rust_lines.len(),
-        "line-count mismatch (Kāra {} vs Rust {})\n--- full Kāra output ---\n{kout}",
+        "line-count mismatch (Kāra {} vs Rust {})",
         kara_lines.len(),
         rust_lines.len()
     );
-
-    let _ = std::fs::remove_dir_all(&tmp);
 }
