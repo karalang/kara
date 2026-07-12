@@ -3409,6 +3409,130 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_fence_seqcst_emits_cross_thread_fence() {
+        // `fence(MemoryOrdering.SeqCst)` (`runtime/stdlib/intrinsics.kara`)
+        // lowers to a cross-thread LLVM `fence seq_cst` (no syncscope
+        // qualifier ⇒ the default cross-thread scope). Witnesses the
+        // `compile_atomic_fence` intercept in `compile_call`.
+        let ir = ir_for(
+            r#"
+fn barrier() with reads(Hardware) {
+    // Safety: a full barrier ordering the surrounding accesses.
+    unsafe { fence(MemoryOrdering.SeqCst); }
+}
+fn main() { barrier(); }
+"#,
+        );
+        assert!(
+            ir.contains("fence seq_cst"),
+            "expected a cross-thread `fence seq_cst`; IR:\n{ir}"
+        );
+        assert!(
+            !ir.contains("fence syncscope(\"singlethread\") seq_cst"),
+            "cross-thread `fence` must NOT carry the singlethread syncscope; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_fence_acquire_release_orderings() {
+        // Each non-Relaxed ordering maps to its LLVM spelling. Acquire and
+        // Release cover the load/store-half barriers; AcqRel the combined form.
+        let ir = ir_for(
+            r#"
+fn barriers() {
+    // Safety: paired with matching accesses on other threads.
+    unsafe {
+        fence(MemoryOrdering.Acquire);
+        fence(MemoryOrdering.Release);
+        fence(MemoryOrdering.AcqRel);
+    }
+}
+fn main() { barriers(); }
+"#,
+        );
+        assert!(
+            ir.contains("fence acquire"),
+            "missing `fence acquire`; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("fence release"),
+            "missing `fence release`; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("fence acq_rel"),
+            "missing `fence acq_rel`; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_compiler_fence_uses_singlethread_syncscope() {
+        // `compiler_fence(order)` is a compiler-only reordering barrier: LLVM
+        // `fence syncscope("singlethread") <order>` restrains the optimizer
+        // without emitting a CPU barrier. It is *safe* (no `unsafe` block).
+        let ir = ir_for(
+            r#"
+fn barrier() {
+    compiler_fence(MemoryOrdering.SeqCst);
+}
+fn main() { barrier(); }
+"#,
+        );
+        assert!(
+            ir.contains("fence syncscope(\"singlethread\") seq_cst"),
+            "expected a singlethread-syncscope `compiler_fence`; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_fence_relaxed_rejected() {
+        // A `Relaxed` fence orders nothing and LLVM forbids `fence monotonic`;
+        // `compile_atomic_fence` rejects it with an actionable diagnostic.
+        let mut parsed = karac::parse(
+            r#"
+fn barrier() {
+    // Safety: rejected before this matters.
+    unsafe { fence(MemoryOrdering.Relaxed); }
+}
+fn main() { barrier(); }
+"#,
+        );
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("a Relaxed fence must be rejected at codegen");
+        assert!(
+            err.contains("fence ordering must be") && err.contains("Relaxed"),
+            "expected a Relaxed-fence rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_fence_and_compiler_fence_run() {
+        // Both fences are valid barriers around ordinary code; a
+        // single-threaded program observes no reordering, so the program
+        // simply runs and prints. Witnesses end-to-end lowering + link.
+        let out = run_program(
+            r#"
+fn main() {
+    // Safety: no paired cross-thread accesses in this single-threaded demo.
+    unsafe { fence(MemoryOrdering.SeqCst); }
+    compiler_fence(MemoryOrdering.Acquire);
+    println(1);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1");
+        }
+    }
+
+    #[test]
     fn test_e2e_ptr_const_mut_place_shapes_roundtrip() {
         // `ptr.const(place)` / `ptr.mut(place)` over the full place grammar the
         // typechecker's place-validator accepts — field access, a nested field

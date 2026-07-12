@@ -1482,6 +1482,14 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // identifiers resolve.
     "volatile_read",
     "volatile_write",
+    // `fence(order)` / `compiler_fence(order)` — standalone atomic memory
+    // barriers taking a `MemoryOrdering` literal (`unsafe` / safe respectively),
+    // declared `#[compiler_builtin]` in `runtime/stdlib/intrinsics.kara`.
+    // Codegen intercepts the call and emits an LLVM `fence` (cross-thread /
+    // singlethread syncscope); the interpreter runs the empty bodies as a
+    // single-threaded no-op. Registered here so the bare identifiers resolve.
+    "fence",
+    "compiler_fence",
     // `std.mem` § `swap` / `replace` (roadmap Phase 8) — move-without-drop
     // primitives over `mut ref` places. Declared `#[compiler_builtin]` in
     // `runtime/stdlib/mem.kara`; intercepted at the call site in the

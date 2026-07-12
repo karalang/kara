@@ -639,6 +639,21 @@ fn test_mmio_intrinsics_clean_error_not_panic() {
 }
 
 #[test]
+fn test_fences_are_interpreter_noops() {
+    // `fence` / `compiler_fence` (`runtime/stdlib/intrinsics.kara`) have empty
+    // `#[compiler_builtin]` bodies. A single-threaded tree-walk interpreter
+    // observes no memory reordering, so a fence is semantically inert there —
+    // the empty body runs as a natural no-op (like `forget`), and the program
+    // continues normally. (Codegen lowers them to real LLVM `fence`s; the
+    // interpreter simply does nothing, which is the correct sequential
+    // semantics.)
+    assert_eq!(
+        run("fn main() { unsafe { fence(MemoryOrdering.SeqCst) } compiler_fence(MemoryOrdering.Acquire); println(7); }"),
+        "7\n"
+    );
+}
+
+#[test]
 fn test_to_string_on_primitives() {
     assert_eq!(run("fn main() { println((-42i64).to_string()); }"), "-42\n");
     assert_eq!(run("fn main() { println((3.5f64).to_string()); }"), "3.5\n");

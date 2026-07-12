@@ -11072,7 +11072,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `src/interpreter/eval_call.rs:474+`. The Kāra surface spelling
     /// for `Relaxed` maps to LLVM's `Monotonic`; all others map by
     /// name.
-    fn parse_memory_ordering(&self, expr: &Expr) -> Result<AtomicOrdering, String> {
+    pub(super) fn parse_memory_ordering(&self, expr: &Expr) -> Result<AtomicOrdering, String> {
         if let ExprKind::Path { segments, .. } = &expr.kind {
             if segments.len() == 2 && segments[0] == "MemoryOrdering" {
                 return match segments[1].as_str() {

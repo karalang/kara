@@ -8891,3 +8891,21 @@ fn test_volatile_write_undeclared_hardware_effect_errors() {
         "expected an undeclared writes(Hardware) effect error, got: {errs:?}"
     );
 }
+
+// ── fence / compiler_fence → zero effects ─────────────────────────
+//
+// A memory barrier orders accesses but performs no resource operation of
+// its own, so — like every `Atomic[T]` operation — the fence intrinsics
+// carry no `with` clause and contribute nothing to the enclosing
+// function's inferred effect set. A public function that only fences needs
+// no effect declaration.
+
+#[test]
+fn test_fence_zero_effects_ok() {
+    effectcheck_ok("pub fn b() { unsafe { fence(MemoryOrdering.SeqCst) } }");
+}
+
+#[test]
+fn test_compiler_fence_zero_effects_ok() {
+    effectcheck_ok("pub fn b() { compiler_fence(MemoryOrdering.SeqCst) }");
+}

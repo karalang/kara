@@ -610,6 +610,15 @@ fn build_unsafe_fn_registry(program: &Program) -> UnsafeFnRegistry {
     //     `ptr.*` module-path entries above.
     top_level_unsafe.insert("volatile_read".to_string());
     top_level_unsafe.insert("volatile_write".to_string());
+    //   - `fence(order)`: the cross-thread memory-barrier intrinsic
+    //     (`runtime/stdlib/intrinsics.kara`), declared `unsafe fn`. It
+    //     establishes a synchronizes-with edge the type system cannot verify
+    //     (the caller asserts the paired accesses on other threads exist and
+    //     are correctly ordered), so an unbraced call is an error. Its sibling
+    //     `compiler_fence` is a single-thread compiler-only barrier — sound
+    //     within one thread, declared *safe*, and deliberately absent here.
+    //     Bare-identifier free-fn callee, seeded like the volatile pair above.
+    top_level_unsafe.insert("fence".to_string());
     //   - `CStr.from_ptr(p)`: wrap a raw `*const u8` (asserted non-null
     //     and NUL-terminated) as a borrowed `CStr`, walking to the NUL to
     //     compute `len`. UB if `p` is null, not NUL-terminated, or does not

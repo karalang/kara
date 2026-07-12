@@ -1214,6 +1214,18 @@ impl<'a> super::Interpreter<'a> {
                     }
                     return Value::Unit;
                 }
+                "fence" | "compiler_fence" => {
+                    // Standalone memory barriers (`runtime/stdlib/intrinsics.kara`).
+                    // A single-threaded tree-walk interpreter observes no memory
+                    // reordering, so a fence is semantically inert here — a
+                    // no-op, matching codegen's `fence` which only constrains
+                    // *inter-thread* visibility. The `#[compiler_builtin]` stub
+                    // body is skipped by this intercept (it would otherwise fail
+                    // to resolve the `fence` callee as a binding). No need to
+                    // evaluate the ordering argument (a pure `MemoryOrdering`
+                    // literal with no side effects).
+                    return Value::Unit;
+                }
                 "volatile_read" | "volatile_write" => {
                     // MMIO intrinsics (`runtime/stdlib/intrinsics.kara`). The
                     // tree-walk interpreter has no raw-pointer representation

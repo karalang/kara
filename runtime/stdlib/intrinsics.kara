@@ -101,3 +101,49 @@ pub unsafe fn volatile_read[T](src: *const T) -> T with reads(Hardware) {
 pub unsafe fn volatile_write[T](dst: *mut T, value: T) with writes(Hardware) {
     volatile_write(dst, value)
 }
+
+// ── Atomic fences ─────────────────────────────────────────────────
+//
+// `fence(order)` / `compiler_fence(order)` — standalone memory barriers that
+// order atomic and non-atomic memory accesses WITHOUT an associated `Atomic`
+// value (design.md § Effect Model > Atomic Operations; roadmap Phase 11 §
+// Embedded). `order` is a `MemoryOrdering` that MUST be a compile-time literal
+// (`MemoryOrdering.Acquire` / `.Release` / `.AcqRel` / `.SeqCst`) — an LLVM
+// `fence` carries its ordering as a static instruction attribute, so a runtime
+// ordering value cannot be lowered. `Relaxed` is rejected: a relaxed fence is
+// not a meaningful barrier (LLVM forbids `fence monotonic`).
+//
+//   - `fence(order)` — a full hardware+compiler barrier (LLVM `fence <order>`,
+//     cross-thread syncscope). `unsafe`: it establishes a synchronizes-with
+//     edge the type system cannot verify (the caller asserts the paired
+//     accesses on other threads exist and are correctly ordered).
+//   - `compiler_fence(order)` — a compiler-only reordering barrier (LLVM
+//     `fence syncscope("singlethread") <order>`): it restrains the optimizer's
+//     reordering but emits NO CPU barrier, so it is sound within a single
+//     thread of execution (ISR-to-main on the same core) and is therefore
+//     SAFE.
+//
+// Zero effects: like every atomic operation, a fence contributes nothing to
+// the enclosing function's inferred effect set (no `with` clause). Codegen
+// intercepts both calls in `compile_call` and emits the `fence`; the tree-walk
+// interpreter runs the empty bodies as a no-op (a single-threaded interpreter
+// observes no reordering, so a fence is semantically inert there).
+
+/// Full memory fence — a cross-thread barrier ordering the surrounding atomic
+/// and non-atomic accesses per `order`.
+///
+/// # Safety
+///
+/// Establishes a synchronizes-with relationship the compiler cannot verify;
+/// the caller asserts the paired accesses on other threads exist and are
+/// correctly ordered. `order` must be `Acquire` / `Release` / `AcqRel` /
+/// `SeqCst` (not `Relaxed`).
+#[compiler_builtin]
+pub unsafe fn fence(order: MemoryOrdering) {}
+
+/// Compiler-only fence — restrains compile-time reordering per `order` without
+/// emitting a CPU barrier. Sound within a single thread (e.g. ISR-to-main on
+/// one core), hence safe. `order` must be `Acquire` / `Release` / `AcqRel` /
+/// `SeqCst` (not `Relaxed`).
+#[compiler_builtin]
+pub fn compiler_fence(order: MemoryOrdering) {}

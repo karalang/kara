@@ -538,6 +538,18 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_volatile_write(&args[0].value, &args[1].value);
         }
 
+        // Standalone atomic barriers `fence(order)` / `compiler_fence(order)`
+        // (`runtime/stdlib/intrinsics.kara`). Lower to an LLVM `fence`: `fence`
+        // is cross-thread; `compiler_fence` uses the singlethread syncscope (a
+        // compiler-only reordering barrier). `order` must be a compile-time
+        // `MemoryOrdering` literal — an LLVM fence carries a static ordering.
+        if name == "fence" && args.len() == 1 {
+            return self.compile_atomic_fence(&args[0].value, false);
+        }
+        if name == "compiler_fence" && args.len() == 1 {
+            return self.compile_atomic_fence(&args[0].value, true);
+        }
+
         // Phase-5 auto-par divergence (A2a-2.2): `sleep_ms(ms: i64)` — the
         // leaf `suspends` async-sleep primitive. Intercepted before the
         // generic-fn path so the `#[compiler_builtin]` empty stub body in
@@ -2348,6 +2360,41 @@ impl<'ctx> super::Codegen<'ctx> {
         store
             .set_volatile(true)
             .map_err(|e| format!("volatile_write set_volatile: {e:?}"))?;
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// `fence(order)` / `compiler_fence(order)` — standalone memory barriers
+    /// (`runtime/stdlib/intrinsics.kara`). Lower to an LLVM `fence`: `fence`
+    /// is a cross-thread barrier (`single_thread == false`), `compiler_fence`
+    /// uses the singlethread syncscope (`single_thread == true`), which
+    /// restrains the optimizer without emitting a CPU barrier. `order` must be
+    /// a compile-time `MemoryOrdering` literal — an LLVM `fence` carries its
+    /// ordering as a static instruction attribute, so a runtime value cannot
+    /// be lowered — and must not be `Relaxed`: LLVM forbids `fence monotonic`
+    /// (a relaxed fence orders nothing). Returns unit (the shared `i64 0`
+    /// void-builtin placeholder).
+    fn compile_atomic_fence(
+        &mut self,
+        order: &Expr,
+        single_thread: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ordering = self.parse_memory_ordering(order)?;
+        if matches!(
+            ordering,
+            inkwell::AtomicOrdering::Monotonic | inkwell::AtomicOrdering::Unordered
+        ) {
+            return Err(
+                "codegen: fence ordering must be Acquire / Release / AcqRel / SeqCst \
+                 (a Relaxed fence orders nothing and is rejected by LLVM)"
+                    .into(),
+            );
+        }
+        // A `fence` is a void-typed instruction, so it must NOT carry a name
+        // (LLVM: "Instruction has a name, but provides a void value"). Pass an
+        // empty name — the `single_thread` flag selects the syncscope.
+        self.builder
+            .build_fence(ordering, single_thread, "")
+            .map_err(|e| format!("codegen: build_fence failed: {e:?}"))?;
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 

@@ -1041,6 +1041,46 @@ fn test_volatile_read_inside_unsafe_block_silent() {
     );
 }
 
+// ── fence / compiler_fence — standalone memory barriers ───────────
+//
+// `fence(order)` is declared `unsafe fn` (`runtime/stdlib/intrinsics.kara`)
+// and seeded into `top_level_unsafe`, so an unbraced call is an
+// `unsafe_op_in_unsafe_fn` error — it establishes a synchronizes-with edge
+// the type system cannot verify. Its sibling `compiler_fence` is a
+// single-thread compiler-only barrier, declared *safe*, so it must NOT
+// require an unsafe block.
+
+#[test]
+fn test_fence_outside_unsafe_block_errors() {
+    let diags = lint_op("fn b() { fence(MemoryOrdering.SeqCst) } fn main() {}");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("fence") && d.lint_name == "unsafe_op_in_unsafe_fn"),
+        "expected unsafe-op diagnostic naming `fence`, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_fence_inside_unsafe_block_silent() {
+    let diags = lint_op("fn b() { unsafe { fence(MemoryOrdering.SeqCst) } } fn main() {}");
+    assert!(
+        diags.iter().all(|d| !d.message.contains("fence")),
+        "did not expect a fence diagnostic inside an unsafe block, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_compiler_fence_safe_silent() {
+    // `compiler_fence` is the safe single-thread counterpart — no unsafe { }
+    // needed. Regression pin: the registry must NOT have seeded it.
+    let diags = lint_op("fn b() { compiler_fence(MemoryOrdering.SeqCst) } fn main() {}");
+    assert!(
+        diags.iter().all(|d| !d.message.contains("compiler_fence")),
+        "compiler_fence is safe; should not produce an unsafe-op diagnostic. got: {diags:?}"
+    );
+}
+
 #[test]
 fn test_ptr_addr_safe_silent() {
     // `ptr.addr` is the safe counterpart — does not require unsafe { }.
