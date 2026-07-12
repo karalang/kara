@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **405 surfaced · 4 open · 398 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **406 surfaced · 4 open · 399 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -100,9 +100,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **405 surfaced 
 | B-2026-07-12-2 | 2026-07-12 | codegen | low | `OnceLock[T]`/`OnceCell[T]` `set`/`get` codegen supports only a HEAP-FREE element `T` (scalar or small all-scalar struct, <=3 words) at v1; a heap-owning `T` (`String`, `Vec[_]`, a struct/enum with a heap field) or a WIDE `T` (>3 words) is LOUD-GATED under `karac build` (and default JIT `karac run`) with a `--interp` hint. The interpreter handles all `T` correctly. Three distinct gaps make heap/wide `T` unsafe under codegen today, each needing its own fix: (1) SUCCESS-PATH element leak — `set(v)` moves `v`'s bytes (e.g. a String's {ptr,len,cap} header) into the cell sharing the buffer; the type-erased `karac_runtime_once_free` reclaims only the header+control-block, so the element's inner heap (the char buffer) leaks. A prototype fix (carry `karac_drop_<T>` in `FreeOnceHandle`, run it on `karac_runtime_once_get`'s value ptr before free) made a single-`set` `OnceLock[String]` loop LSan-clean (0 lost, was 490 B/200 iters) — but it does NOT cover gaps 2-3, so it was reverted in favor of the loud gate. (2) REJECTED-VALUE leak — a second `set` on a filled cell returns `Err(AlreadySetError { rejected: v2 })` carrying `v2`'s words; a `match ... { Err(_) => {} }` that discards it leaks `v2`'s heap (190 B/100 iters for `OnceLock[String]` double-set) — the discarded `AlreadySetError[String]` payload isn't dropped (a move-suppression / Result-Err-drop gap; needs confirmation whether it's once-specific or a general `Result[_, <struct-with-heap>]` discard-drop gap). (3) WIDE-PAYLOAD panic — `get() -> Option[ref T]` builds the Option via `build_option_some_via_phis` + `coerce_to_payload_words(v, word_count(T))`; a `T` wider than the seeded 3-word inline payload (a struct with a String field = 4 words, or a 4+-scalar struct) overflows the Option payload area and PANICS at `build_insert_value(...).into_struct_value()` (call_dispatch.rs ~4668). Needs the enum payload-boxing path (box a wide payload behind a pointer, as `try_compile_enum_variant` does) in the once `get` construction. FIX DIRECTION (one dedicated slice): (a) wire `FreeOnceHandle` element-drop for the success path (prototype exists); (b) suppress the source temp's own drop on `set` + drop the discarded `AlreadySetError` heap payload on the Err path; (c) box wide/heap payloads in `get`'s `Option[ref T]` (and the `set` Err's `AlreadySetError` payload) instead of inline words. Then remove the `reject_unsupported_once_elem` gate (src/codegen/once.rs) and add heap-`T` build==run + LSan tests. Scalar + small all-scalar-struct `T` (the config-of-scalars and single-value cases) already work leak-free under build; module-global `OnceLock` of a scalar works too. Not urgent — the interpreter is correct and the gate is loud, not a silent miscompile. | heap-T OnceLock/OnceCell set/get codegen: move-suppression + rejected-value drop + Option/Result payload boxing |
 | B-2026-07-12-6 | 2026-07-12 | codegen | medium | A match ARM inside a very large recursive match-method that declares ~4+ heap-typed (Vec) locals corrupts memory (segfault / double-free / spurious vec-index-out-of-bounds); moving the arm body into its own method is clean | phase-12 self-hosting |
 
-### Fixed (398)
+### Fixed (399)
 
-<details><summary>398 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>399 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -504,6 +504,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **405 surfaced 
 | B-2026-07-12-19 | typecheck | medium | A bounded generic method (`impl[T: Copy] Cell[T] { fn read(...) }`) was WRONGLY REJECTED on a PRIMITIVE instantiation (`Cell[i32]`) — "`i32` does not… | a9220b0 |
 | B-2026-07-12-20 | typecheck | low | FIXED (86fd7c5) | 86fd7c5 |
 | B-2026-07-12-21 | codegen | medium | Extracting an `Option[shared]` element from a `Vec[Option[shared]]` via `v[i]` and re-storing it (e.g | ee17020 |
+| B-2026-07-12-22 | runtime | high | `karac run` (JIT / LLJIT) fails with 'Symbols not found: [karac_realloc_or_panic]' on ANY program that GROWS a `Vec` or `String` past its initial cap… | 73bc02a3 |
 
 </details>
 
