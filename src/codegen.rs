@@ -1586,6 +1586,16 @@ pub(super) struct Codegen<'ctx> {
     /// silently missing a move-out). Escaping user bindings stay leaking (the
     /// documented residual) rather than risk a double-free.
     pub(crate) result_shared_nonescaping_let_spans: std::collections::HashSet<(usize, usize)>,
+    /// B-2026-07-12-24 (residual, consuming-call leg): names of the CURRENTLY-
+    /// compiled function's PARAMETERS that never escape (used only as a `match`
+    /// scrutinee, or unused). An OWNED `Result[shared]` such param owns the
+    /// caller's transferred `+1` and takes a scope-exit `RcDecOption` — closing
+    /// the `eat(d)` by-value-consuming-call leak. A forwarded param (passed on
+    /// to another consuming call) escapes → left out → the terminal consumer's
+    /// dec stays the only one, so the chain self-balances with no call-site
+    /// suppression. Recomputed per function in `compile_function` by
+    /// `crate::result_escape::nonescaping_param_names`.
+    pub(crate) result_shared_nonescaping_param_names: std::collections::HashSet<String>,
     /// Names of functions whose return value is a heap-env closure (their direct
     /// tail / `return` is an escaping capturing closure literal). A
     /// `let f = <call to such a fn>` binding therefore owns a heap env and gets
@@ -5910,6 +5920,7 @@ impl<'ctx> Codegen<'ctx> {
             closure_fn_types: HashMap::new(),
             current_fn_heap_closure_spans: std::collections::HashSet::new(),
             result_shared_nonescaping_let_spans: std::collections::HashSet::new(),
+            result_shared_nonescaping_param_names: std::collections::HashSet::new(),
             fns_returning_heap_env: std::collections::HashSet::new(),
             heap_env_closure_vars: std::collections::HashSet::new(),
             curry_closure_vars: std::collections::HashSet::new(),

@@ -69,6 +69,28 @@ pub fn nonescaping_let_value_spans(func: &Function) -> HashSet<(usize, usize)> {
     out
 }
 
+/// Names of `func`'s PARAMETERS that never escape the body — used only as a
+/// direct `match` scrutinee, or unused (same rule as [`nonescaping_let_value_spans`]).
+/// An OWNED `Result[shared]` param that is consumed in place owns the caller's
+/// transferred `+1` and can safely release it at scope exit; a forwarded param
+/// (passed on to another consuming call / returned) escapes → left out → the
+/// terminal consumer's dec stays the only one. Borrowed (`ref`) params are the
+/// caller's to drop; the codegen param site excludes them by type separately.
+pub fn nonescaping_param_names(func: &Function) -> HashSet<String> {
+    let mut acc = Acc::default();
+    walk_block(&func.body, &mut acc);
+    func.params
+        .iter()
+        .filter_map(|p| {
+            let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+                return None;
+            };
+            let (total, scrut) = acc.counts.get(name.as_str()).copied().unwrap_or((0, 0));
+            (total == scrut).then(|| name.clone())
+        })
+        .collect()
+}
+
 fn record_use<'a>(acc: &mut Acc<'a>, name: &'a str, scrutinee: bool) {
     let e = acc.counts.entry(name).or_insert((0, 0));
     e.0 += 1;
@@ -427,6 +449,51 @@ mod tests {
             !names.contains("d"),
             "reassigned `d` must escape (conservative)"
         );
+    }
+
+    /// Non-escaping PARAM names of the first function in `src`.
+    fn nonescaping_params(src: &str) -> HashSet<String> {
+        let parsed = crate::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let func = parsed
+            .program
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("no function");
+        nonescaping_param_names(func)
+    }
+
+    #[test]
+    fn param_consumed_in_place_is_nonescaping() {
+        // A param used only as a `match` scrutinee owns the caller's transferred
+        // +1 and can be released.
+        let names = nonescaping_params("fn eat(r: R) -> i64 { match r { A(n) => n, B => 0 } }");
+        assert!(
+            names.contains("r"),
+            "in-place-consumed param `r` should be non-escaping"
+        );
+    }
+
+    #[test]
+    fn forwarded_param_escapes() {
+        // A param passed on to another consuming call escapes → the intermediate
+        // must not release it (the terminal consumer does).
+        let names = nonescaping_params("fn eat(r: R) -> i64 { eat2(r) }");
+        assert!(!names.contains("r"), "forwarded param `r` must escape");
+    }
+
+    #[test]
+    fn returned_param_escapes() {
+        let names = nonescaping_params("fn id(r: R) -> R { r }");
+        assert!(!names.contains("r"), "returned param `r` must escape");
     }
 
     #[test]

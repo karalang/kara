@@ -1100,6 +1100,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`track_rc_result_var`) — see the field doc + `crate::result_escape`.
         self.result_shared_nonescaping_let_spans =
             crate::result_escape::nonescaping_let_value_spans(func);
+        // Consuming-call leg: params consumed in place own the caller's
+        // transferred +1 (see the field doc + `track_rc_result_var`).
+        self.result_shared_nonescaping_param_names =
+            crate::result_escape::nonescaping_param_names(func);
         self.heap_env_closure_vars.clear();
         self.heap_env_owner_fields.clear();
         self.heap_env_tuple_owners.clear();
@@ -1681,6 +1685,27 @@ impl<'ctx> super::Codegen<'ctx> {
                         let option_ty = self.enum_layouts["Option"].llvm_type;
                         self.track_rc_option_var(&param_name, alloca, option_ty, info.heap_type);
                     }
+                }
+                // B-2026-07-12-24 (residual, consuming-call leg): an OWNED
+                // `Result[shared T, E]` param CONSUMED IN PLACE (name used only
+                // as a `match` scrutinee in this body) owns the caller's
+                // transferred `+1` — release it at scope exit via a tag-guarded
+                // RcDecOption. Closes the `eat(d)` by-value leak (an owned
+                // Result[shared] passed to a consuming fn). `track_rc_result_var`
+                // self-gates on `Result[shared]` and on `param.ty` being an
+                // OWNED `Result[..]` Path (a `ref Result` borrow is `Ref(..)`,
+                // not a Path → no-op, so a borrow is never double-dropped); the
+                // `borrowed_param_dec_skip` guard mirrors the Option arm. A
+                // FORWARDED param (passed on to another consuming call, returned)
+                // is NOT in `result_shared_nonescaping_param_names`, so it stays
+                // unregistered and the terminal consumer's dec remains the only
+                // one — no call-site suppression needed.
+                if self
+                    .result_shared_nonescaping_param_names
+                    .contains(&param_name)
+                    && !self.borrowed_param_dec_skip(&param_name)
+                {
+                    self.track_rc_result_var(&param_name, alloca, &param.ty);
                 }
                 // RC-fallback boxing for non-shared, non-Vec parameters flagged by the
                 // ownership checker. The param value is boxed in {i64 rc, T} on the heap

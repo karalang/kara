@@ -731,6 +731,98 @@ fn main() {
     }
 
     #[test]
+    fn asan_consuming_call_result_shared_no_leak() {
+        // B-2026-07-12-24 (residual, consuming-call leg): an owned `Result[shared]`
+        // passed BY VALUE to a consuming fn (`eat(d)`) used to leak — neither the
+        // caller (d escapes as an arg → unregistered) nor the callee (params were
+        // not RC-tracked) released it. Result parameter RC-tracking, gated by the
+        // same escape analysis, now makes the callee's in-place-consumed param own
+        // the caller's transferred +1 and release it. A forwarded param would stay
+        // unregistered (terminal consumer decs); here `eat` matches in place.
+        // Looped 200x; prints 1400.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[Node, i64] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => Err(1),
+        Some(n) => Ok(n),
+    }
+}
+fn eat(r: Result[Node, i64]) -> i64 {
+    match r {
+        Err(e) => e,
+        Ok(n) => n.val,
+    }
+}
+fn caller() -> i64 {
+    let d = take();
+    eat(d)
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + caller();
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["1400"],
+            "consuming_call_result_shared_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_forwarded_result_shared_param_no_double_free() {
+        // B-2026-07-12-24 (residual, consuming-call leg) chain guard: a param
+        // FORWARDED to another consuming call (`eat(r) { eat2(r) }`) must NOT be
+        // released by the intermediate — it escapes → unregistered → only the
+        // TERMINAL consumer (`eat2`, which matches in place) decs. Exactly one
+        // release across the chain: no leak, no double-free. Prints 1400.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[Node, i64] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => Err(1),
+        Some(n) => Ok(n),
+    }
+}
+fn eat2(r: Result[Node, i64]) -> i64 {
+    match r {
+        Err(e) => e,
+        Ok(n) => n.val,
+    }
+}
+fn eat(r: Result[Node, i64]) -> i64 {
+    eat2(r)
+}
+fn caller() -> i64 {
+    let d = take();
+    eat(d)
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + caller();
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["1400"],
+            "forwarded_result_shared_param_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_escaping_result_shared_binding_no_double_free() {
         // B-2026-07-12-24 (residual) safety guard: a USER `Result[shared]` binding
         // that ESCAPES must NOT be given a producer-side dec (that would
