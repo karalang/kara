@@ -695,6 +695,30 @@ impl Checker {
                 }
                 ExprInfo { category: 4, span: span }
             }
+            MethodCall(n) => {
+                // `recv.m(args)`: infer the receiver, walk the args, then map the
+                // method name to a result category (Slice 8). Well-known methods
+                // (`len`/`is_empty`/`to_string`/`trim*`) have a fixed category;
+                // `clone` returns the receiver's own category (Self); everything
+                // else stays UNKNOWN so no false mismatch fires. The MethodCall
+                // span is the receiver span, matching the seed's mismatch anchor.
+                let MethodCallExpr { object, method, args, span } = n;
+                let oi = self.check_expr(object);
+                for a in args {
+                    let CallArg { label, mut_marker, value, span: asp } = a;
+                    let ai = self.check_expr(value);
+                }
+                let mut cat = 4;
+                if method == "clone" {
+                    cat = oi.category;
+                } else {
+                    let mc = method_ret_cat(method);
+                    if mc >= 0 {
+                        cat = mc;
+                    }
+                }
+                ExprInfo { category: cat, span: span }
+            }
             _ => ExprInfo { category: 4, span: zero_span() },
         }
     }
@@ -702,6 +726,27 @@ impl Checker {
 
 // ── Category helpers ──
 
+
+// Result category for a small, well-known set of stdlib methods whose return
+// type is unambiguous regardless of receiver (Slice 8). `-1` means "not in the
+// table" (caller falls back to UNKNOWN, or to receiver-identity for `clone`).
+// The seed types these the same way in single-file mode (probed): `len` → i64,
+// `is_empty` → bool, `to_string`/`trim`/`trim_start`/`trim_end` → String.
+fn method_ret_cat(name: ref String) -> i64 {
+    if name == "len" {
+        return 0;
+    }
+    if name == "is_empty" {
+        return 1;
+    }
+    if name == "to_string" or name == "trim" or name == "trim_start" {
+        return 3;
+    }
+    if name == "trim_end" {
+        return 3;
+    }
+    -1
+}
 
 fn cat_of_name(name: ref String) -> i64 {
     if name == "i8" or name == "i16" or name == "i32" or name == "i64" {

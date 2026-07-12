@@ -170,6 +170,27 @@ const CORPUS: &[&str] = &[
     "struct P { x: i64, y: i64 }\nfn f() -> P { P { x: 1, y: 2 } }",
     "struct Q { y: bool }\nfn f(q: Q) -> bool { q.y }",
     "struct P { x: i64 }\nstruct Q { y: bool }\nfn f(q: Q) { if q.y { } }",
+    // ── Slice 8: method-call typing ──
+    // A small, well-known method set has a fixed result category: `len` → i64,
+    // `is_empty` → bool, `to_string`/`trim*` → String; `clone` returns the
+    // receiver's own category (Self). Everything else stays UNKNOWN. The result
+    // flows into return / condition / let checks; the mismatch anchors on the
+    // receiver span (the seed sets `MethodCall.span == receiver.span`).
+    "fn f(s: String) -> bool { s.len() }",
+    "fn f(s: String) -> i64 { s.len() }",
+    "fn f(s: String) { if s.len() { } }",
+    "fn f(s: String) -> i64 { s.is_empty() }",
+    "fn f(s: String) { if s.is_empty() { } }",
+    "fn f(s: String) -> i64 { s.to_string() }",
+    "fn f(s: String) -> String { s.trim() }",
+    "fn f(s: String) -> bool { s.trim() }",
+    // `clone` is receiver-identity: a NUM receiver clones to NUM, a STR to STR.
+    "fn f(n: i64) -> bool { n.clone() }",
+    "fn f(s: String) -> i64 { s.clone() }",
+    // Method result flows through a `let` binding into a downstream check.
+    "fn f(s: String) -> bool { let n = s.len(); n }",
+    // A method call as a bare statement is walked; its result is discarded.
+    "fn f(s: String) { s.len(); }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
