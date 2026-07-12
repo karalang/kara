@@ -2215,6 +2215,79 @@ fn test_link_directive_injects_lib_flag_e2e() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// `KARAC_NO_AUTOPAR=1` escape hatch (B-2026-07-10-5 density effort): skipping
+/// the concurrency analysis (so no auto-parallel groups reach codegen and every
+/// loop lowers sequentially) must preserve program behavior — a reduction loop
+/// that auto-pars by default and one built sequentially produce identical
+/// output. Purpose of the hatch: isolate sequential codegen density from
+/// auto-par dispatch overhead when measuring, and a workaround if an auto-par
+/// decision ever regresses a throughput-bound loop.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_no_autopar_env_preserves_output() {
+    let tmp = scratch_project("no-autopar");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"reduceprog\"\n");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    // A sum reduction (`acc = acc + i`) — recognized as an auto-par reduction by
+    // default; the env var forces the sequential lowering of the same loop.
+    write(
+        &tmp.join("src/main.kara"),
+        "fn main() {\n\
+         \x20   let mut acc = 0;\n\
+         \x20   let mut i = 0;\n\
+         \x20   while i < 1000 { acc = acc + i; i = i + 1; }\n\
+         \x20   println(acc);\n\
+         }\n",
+    );
+    let exe = tmp.join("reduceprog");
+
+    let build_default = karac_bin()
+        .current_dir(&tmp)
+        .args(["build"])
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let berr = String::from_utf8_lossy(&build_default.stderr);
+    if berr.contains("requires the llvm feature") || !exe.exists() {
+        eprintln!(
+            "skip: test_no_autopar_env_preserves_output — did not link (no llvm / missing runtime \
+             archive); stderr:\n{berr}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    let out_default = std::process::Command::new(&exe).output().unwrap();
+    let default_stdout = String::from_utf8_lossy(&out_default.stdout)
+        .trim()
+        .to_string();
+
+    let _ = std::fs::remove_file(&exe);
+    let build_seq = karac_bin()
+        .current_dir(&tmp)
+        .args(["build"])
+        .env("KARAC_NO_AUTOPAR", "1")
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    assert!(
+        exe.exists(),
+        "sequential (KARAC_NO_AUTOPAR=1) build produced no binary:\n{}",
+        String::from_utf8_lossy(&build_seq.stderr)
+    );
+    let out_seq = std::process::Command::new(&exe).output().unwrap();
+    let seq_stdout = String::from_utf8_lossy(&out_seq.stdout).trim().to_string();
+
+    assert_eq!(
+        default_stdout, "499500",
+        "default (auto-par) build produced the wrong sum"
+    );
+    assert_eq!(
+        seq_stdout, default_stdout,
+        "KARAC_NO_AUTOPAR=1 changed program output (default {default_stdout:?} vs seq {seq_stdout:?})"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Positive proof through a real library: a program that calls
 /// `zlibVersion` (from the ubiquitous system zlib). That symbol resolves
 /// *only* when `-lz` is on the link line. The contrast is the proof — the

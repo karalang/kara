@@ -1211,6 +1211,16 @@ impl Pipeline {
         if self.effects.is_none() {
             return;
         }
+        // `KARAC_NO_AUTOPAR=1` escape hatch: skip the concurrency analysis so
+        // codegen never receives auto-parallel groups and every loop lowers
+        // sequentially. Leaves `concurrency = None`, the same state
+        // `compile_to_ir(_, None, _)` uses. Purpose: isolate SEQUENTIAL codegen
+        // density from auto-par dispatch overhead when measuring (B-2026-07-10-5
+        // density effort), and a workaround if an auto-par decision ever
+        // regresses a throughput-bound loop.
+        if std::env::var("KARAC_NO_AUTOPAR").as_deref() == Ok("1") {
+            return;
+        }
         self.concurrency = Some(crate::concurrency_analyze_typed(
             &self.parsed.program,
             self.effects.as_ref().unwrap(),
