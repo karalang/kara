@@ -7425,6 +7425,38 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_mut_ref_option_shared_writeback() {
+        // B-2026-07-12-3 — a reassignment through a `mut ref Option[shared]`
+        // parameter (`slot = Some(n)`) did not propagate back to the caller
+        // under codegen: the store landed in the param's local pointer-slot
+        // alloca instead of through the borrow pointer, so the caller kept the
+        // pre-call value (a silent stale `None`, SIGSEGV downstream when it was
+        // later unwrapped). Now the Assign arm routes the ARC retain/release
+        // store through `get_data_ptr` for `mut ref Option[shared]` params.
+        // Covers: a single-level write into a `None` slot, and a second write
+        // OVER an existing `Some` (exercising the old-inner release). Both
+        // must equal the interpreter and be leak-clean (verified separately
+        // under valgrind: all heap blocks freed).
+        if let Some(out) = run_program(
+            "shared struct Node { mut val: i64, mut next: Option[Node] }\n\
+             fn setit(prev: mut ref Option[Node], n: Node) { prev = Some(n); }\n\
+             fn main() {\n\
+                 let mut cur: Option[Node] = Some(Node { val: 1, next: None });\n\
+                 let a = Node { val: 2, next: None };\n\
+                 setit(mut cur, a);\n\
+                 let b = Node { val: 3, next: None };\n\
+                 setit(mut cur, b);\n\
+                 match cur {\n\
+                     None => { println(\"none\"); }\n\
+                     Some(p) => { println(f\"val: {p.val}\"); }\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "val: 3\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_match_tuple_pattern_discriminated() {
         // B-2026-07-12-13 — a `match` on a TUPLE scrutinee was not DISCRIMINATED
         // under codegen: the tuple pattern fell through to the catch-all

@@ -13453,6 +13453,32 @@ fn main() {
 }
 
 #[test]
+fn test_mut_ref_option_shared_writeback() {
+    // B-2026-07-12-3 — reassigning through a `mut ref Option[shared]` param
+    // propagates to the caller. The interpreter has always been correct; this
+    // is the oracle the codegen fix (writeback through the borrow pointer) is
+    // verified against.
+    let output = run_no_errors(
+        r#"
+shared struct Node { mut val: i64, mut next: Option[Node] }
+fn setit(prev: mut ref Option[Node], n: Node) { prev = Some(n); }
+fn main() {
+    let mut cur: Option[Node] = Some(Node { val: 1i64, next: None });
+    let a = Node { val: 2i64, next: None };
+    setit(mut cur, a);
+    let b = Node { val: 3i64, next: None };
+    setit(mut cur, b);
+    match cur {
+        None => { println("none"); }
+        Some(p) => { println(f"val: {p.val}"); }
+    }
+}
+"#,
+    );
+    assert_eq!(output, "val: 3\n");
+}
+
+#[test]
 fn test_match_tuple_pattern() {
     // B-2026-07-12-13 — a `match` on a tuple scrutinee discriminates on each
     // element. The interpreter has always been correct; this is the oracle for

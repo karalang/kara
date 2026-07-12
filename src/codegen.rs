@@ -2049,6 +2049,14 @@ pub(super) struct Codegen<'ctx> {
     /// stranded the old inner ref and over-decremented at scope
     /// exit, freeing a still-aliased chain.
     pub(crate) var_option_shared_heap: HashMap<String, StructType<'ctx>>,
+    /// `mut ref Option[shared T]` parameters, keyed by name → inner shared heap
+    /// layout. The sibling of `var_option_shared_heap` for the by-ref case: the
+    /// param's local alloca holds the BORROW pointer (the caller's Option slot
+    /// address), not the Option struct, so a reassignment (`prev = Some(n)`)
+    /// must run the ARC retain/release store THROUGH `get_data_ptr(name)` rather
+    /// than into the local slot — otherwise the write lands in a callee-local
+    /// copy and never propagates back to the caller (B-2026-07-12-3).
+    pub(crate) ref_option_shared_heap: HashMap<String, StructType<'ctx>>,
     /// Flow-sensitive tail-return context for `Option[shared T]` returns.
     /// `Some(inner_heap)` means "the expression about to be compiled at a
     /// block's final-expr position is in function-tail-return position, and
@@ -5933,6 +5941,7 @@ impl<'ctx> Codegen<'ctx> {
             fn_return_option_inner_shared: HashMap::new(),
             fn_niche_abi: HashMap::new(),
             var_option_shared_heap: HashMap::new(),
+            ref_option_shared_heap: HashMap::new(),
             tail_ret_inner: None,
             soa_layouts: HashMap::new(),
             binding_layouts: HashMap::new(),

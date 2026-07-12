@@ -1164,6 +1164,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.inline_option_map_payload_vars.clear();
         self.inline_option_agg_payload_vars.clear();
         self.var_option_shared_heap.clear();
+        self.ref_option_shared_heap.clear();
         self.ref_params.clear();
         self.entry_slot_ref_vars.clear();
         self.owned_vecstr_params.clear();
@@ -1444,6 +1445,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Track ref params: alloca holds a pointer-to-data.
                 if let Some(inner_ty) = self.inner_type_of_ref(&param.ty) {
                     self.ref_params.insert(param_name.clone(), inner_ty);
+                }
+                // `mut ref Option[shared T]` param: record the inner shared heap
+                // layout so an in-callee reassignment (`prev = Some(n)`) routes
+                // its ARC store THROUGH the borrow pointer instead of the local
+                // pointer-slot (B-2026-07-12-3). `option_inner_shared_type_for_
+                // type_expr` matches only a bare `Option[..]`, so unwrap the
+                // `MutRef` first. Only `mut ref` is reassignable; a plain `ref`
+                // can't be a store target (rejected upstream), so skip it.
+                if let TypeKind::MutRef(inner) = &param.ty.kind {
+                    if let Some((_, info)) = self.option_inner_shared_type_for_type_expr(inner) {
+                        self.ref_option_shared_heap
+                            .insert(param_name.clone(), info.heap_type);
+                    }
                 }
                 // B-2026-06-20-1: a `Fn(...)`-typed parameter is a closure fat
                 // pointer (lowered by `llvm_type_for_type_expr`'s `FnType`

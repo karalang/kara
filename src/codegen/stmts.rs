@@ -1605,6 +1605,170 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Emit the ARC setter store for an `Option[shared T]` lvalue: save the
+    /// old inner pointer, store the new Option value at `dest_ptr`, retain the
+    /// new inner (unless the RHS already carries a +1 transfer), then release
+    /// the saved old inner — the retain-new → store → release-last ordering
+    /// that keeps a self-referential reassignment (`cur = node.next` where
+    /// `node` aliases `cur`'s head) from freeing the new node before its inc.
+    /// `dest_ptr` is the caller's Option slot: a local alloca for a plain
+    /// binding, or the borrow pointer for a `mut ref Option[shared]` param
+    /// (B-2026-07-12-3). Shared by both Assign-arm dispatch sites.
+    fn emit_option_shared_arc_store(
+        &mut self,
+        dest_ptr: PointerValue<'ctx>,
+        val: BasicValueEnum<'ctx>,
+        heap_type: StructType<'ctx>,
+        rhs_is_fresh: bool,
+        name: &str,
+    ) -> Result<(), String> {
+        let option_ty = self.enum_layouts["Option"].llvm_type;
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let some_tag = self
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("Some").copied())
+            .unwrap_or(1);
+        let some_tag_const = i64_t.const_int(some_tag, false);
+        let fn_val = self.current_fn.unwrap();
+        // ── Step 1: save the old inner pointer. The
+        //    tag/w0 loads are unconditional (loads of
+        //    our own slot are always safe); a select
+        //    collapses "old is None" and "old inner
+        //    is null" into one null sentinel so the
+        //    deferred release below needs a single
+        //    null-check branch. A None slot's w0 may
+        //    be undef — the select keeps that garbage
+        //    from ever being dereferenced.
+        let old_tag_ptr = self
+            .builder
+            .build_struct_gep(option_ty, dest_ptr, 0, "opt.assign.old.tag.p")
+            .unwrap();
+        let old_tag = self
+            .builder
+            .build_load(i64_t, old_tag_ptr, "opt.assign.old.tag")
+            .unwrap()
+            .into_int_value();
+        let old_is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                old_tag,
+                some_tag_const,
+                "opt.assign.old.is_some",
+            )
+            .unwrap();
+        let old_w0_ptr = self
+            .builder
+            .build_struct_gep(option_ty, dest_ptr, 1, "opt.assign.old.w0.p")
+            .unwrap();
+        let old_w0 = self
+            .builder
+            .build_load(i64_t, old_w0_ptr, "opt.assign.old.w0")
+            .unwrap()
+            .into_int_value();
+        let old_inner = self
+            .builder
+            .build_int_to_ptr(old_w0, ptr_ty, "opt.assign.old.inner")
+            .unwrap();
+        let old_eff = self
+            .builder
+            .build_select(
+                old_is_some,
+                old_inner,
+                ptr_ty.const_null(),
+                "opt.assign.old.eff",
+            )
+            .unwrap()
+            .into_pointer_value();
+        // ── Step 2: store the new Option value. ──
+        self.builder.build_store(dest_ptr, val).unwrap();
+        // ── Step 3: inc new inner if RHS is an
+        //           aliasing source (not a fresh
+        //           Some/None/Call/MethodCall).
+        //           Read the just-stored Option
+        //           back rather than re-extracting
+        //           from `val` so the IR stays
+        //           uniform across struct-vs-ptr
+        //           BasicValueEnum shapes.
+        if !rhs_is_fresh {
+            let new_tag_ptr = self
+                .builder
+                .build_struct_gep(option_ty, dest_ptr, 0, "opt.assign.new.tag.p")
+                .unwrap();
+            let new_tag = self
+                .builder
+                .build_load(i64_t, new_tag_ptr, "opt.assign.new.tag")
+                .unwrap()
+                .into_int_value();
+            let new_is_some = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    new_tag,
+                    some_tag_const,
+                    "opt.assign.new.is_some",
+                )
+                .unwrap();
+            let new_do_bb = self.context.append_basic_block(fn_val, "opt.assign.new.do");
+            let new_skip_bb = self
+                .context
+                .append_basic_block(fn_val, "opt.assign.new.skip");
+            self.builder
+                .build_conditional_branch(new_is_some, new_do_bb, new_skip_bb)
+                .unwrap();
+            self.builder.position_at_end(new_do_bb);
+            let new_w0_ptr = self
+                .builder
+                .build_struct_gep(option_ty, dest_ptr, 1, "opt.assign.new.w0.p")
+                .unwrap();
+            let new_w0 = self
+                .builder
+                .build_load(i64_t, new_w0_ptr, "opt.assign.new.w0")
+                .unwrap()
+                .into_int_value();
+            let new_inner = self
+                .builder
+                .build_int_to_ptr(new_w0, ptr_ty, "opt.assign.new.inner")
+                .unwrap();
+            let new_is_null = self
+                .builder
+                .build_is_null(new_inner, "opt.assign.new.is_null")
+                .unwrap();
+            let new_real_do_bb = self
+                .context
+                .append_basic_block(fn_val, "opt.assign.new.real_do");
+            self.builder
+                .build_conditional_branch(new_is_null, new_skip_bb, new_real_do_bb)
+                .unwrap();
+            self.builder.position_at_end(new_real_do_bb);
+            self.emit_refcount_inc(name, heap_type, new_inner);
+            self.builder
+                .build_unconditional_branch(new_skip_bb)
+                .unwrap();
+            self.builder.position_at_end(new_skip_bb);
+        }
+        // ── Step 4: release the saved old inner, now
+        //    that the new ref is counted and stored.
+        let old_is_null = self
+            .builder
+            .build_is_null(old_eff, "opt.assign.old.is_null")
+            .unwrap();
+        let old_dec_bb = self
+            .context
+            .append_basic_block(fn_val, "opt.assign.old.dec");
+        let done_bb = self.context.append_basic_block(fn_val, "opt.assign.done");
+        self.builder
+            .build_conditional_branch(old_is_null, done_bb, old_dec_bb)
+            .unwrap();
+        self.builder.position_at_end(old_dec_bb);
+        self.emit_refcount_dec(name, heap_type, old_eff);
+        self.builder.build_unconditional_branch(done_bb).unwrap();
+        self.builder.position_at_end(done_bb);
+        Ok(())
+    }
+
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         // Slice c-repl.B.5.1: REPL value-snapshot replay short-circuit.
         // When this stmt is a top-level `let <name> = <expr>` whose
@@ -4761,161 +4925,37 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.builder.build_store(slot.ptr, val).unwrap();
                                 return Ok(());
                             }
-                            let option_ty = self.enum_layouts["Option"].llvm_type;
-                            let i64_t = self.context.i64_type();
-                            let ptr_ty = self.context.ptr_type(AddressSpace::default());
-                            let some_tag = self
-                                .enum_layouts
-                                .get("Option")
-                                .and_then(|l| l.tags.get("Some").copied())
-                                .unwrap_or(1);
-                            let some_tag_const = i64_t.const_int(some_tag, false);
-                            let fn_val = self.current_fn.unwrap();
-                            // ── Step 1: save the old inner pointer. The
-                            //    tag/w0 loads are unconditional (loads of
-                            //    our own slot are always safe); a select
-                            //    collapses "old is None" and "old inner
-                            //    is null" into one null sentinel so the
-                            //    deferred release below needs a single
-                            //    null-check branch. A None slot's w0 may
-                            //    be undef — the select keeps that garbage
-                            //    from ever being dereferenced.
-                            let old_tag_ptr = self
-                                .builder
-                                .build_struct_gep(option_ty, slot.ptr, 0, "opt.assign.old.tag.p")
-                                .unwrap();
-                            let old_tag = self
-                                .builder
-                                .build_load(i64_t, old_tag_ptr, "opt.assign.old.tag")
-                                .unwrap()
-                                .into_int_value();
-                            let old_is_some = self
-                                .builder
-                                .build_int_compare(
-                                    IntPredicate::EQ,
-                                    old_tag,
-                                    some_tag_const,
-                                    "opt.assign.old.is_some",
-                                )
-                                .unwrap();
-                            let old_w0_ptr = self
-                                .builder
-                                .build_struct_gep(option_ty, slot.ptr, 1, "opt.assign.old.w0.p")
-                                .unwrap();
-                            let old_w0 = self
-                                .builder
-                                .build_load(i64_t, old_w0_ptr, "opt.assign.old.w0")
-                                .unwrap()
-                                .into_int_value();
-                            let old_inner = self
-                                .builder
-                                .build_int_to_ptr(old_w0, ptr_ty, "opt.assign.old.inner")
-                                .unwrap();
-                            let old_eff = self
-                                .builder
-                                .build_select(
-                                    old_is_some,
-                                    old_inner,
-                                    ptr_ty.const_null(),
-                                    "opt.assign.old.eff",
-                                )
-                                .unwrap()
-                                .into_pointer_value();
-                            // ── Step 2: store the new Option value. ──
-                            self.builder.build_store(slot.ptr, val).unwrap();
-                            // ── Step 3: inc new inner if RHS is an
-                            //           aliasing source (not a fresh
-                            //           Some/None/Call/MethodCall).
-                            //           Read the just-stored Option
-                            //           back rather than re-extracting
-                            //           from `val` so the IR stays
-                            //           uniform across struct-vs-ptr
-                            //           BasicValueEnum shapes.
-                            if !rhs_is_fresh {
-                                let new_tag_ptr = self
-                                    .builder
-                                    .build_struct_gep(
-                                        option_ty,
-                                        slot.ptr,
-                                        0,
-                                        "opt.assign.new.tag.p",
-                                    )
-                                    .unwrap();
-                                let new_tag = self
-                                    .builder
-                                    .build_load(i64_t, new_tag_ptr, "opt.assign.new.tag")
-                                    .unwrap()
-                                    .into_int_value();
-                                let new_is_some = self
-                                    .builder
-                                    .build_int_compare(
-                                        IntPredicate::EQ,
-                                        new_tag,
-                                        some_tag_const,
-                                        "opt.assign.new.is_some",
-                                    )
-                                    .unwrap();
-                                let new_do_bb =
-                                    self.context.append_basic_block(fn_val, "opt.assign.new.do");
-                                let new_skip_bb = self
-                                    .context
-                                    .append_basic_block(fn_val, "opt.assign.new.skip");
-                                self.builder
-                                    .build_conditional_branch(new_is_some, new_do_bb, new_skip_bb)
-                                    .unwrap();
-                                self.builder.position_at_end(new_do_bb);
-                                let new_w0_ptr = self
-                                    .builder
-                                    .build_struct_gep(option_ty, slot.ptr, 1, "opt.assign.new.w0.p")
-                                    .unwrap();
-                                let new_w0 = self
-                                    .builder
-                                    .build_load(i64_t, new_w0_ptr, "opt.assign.new.w0")
-                                    .unwrap()
-                                    .into_int_value();
-                                let new_inner = self
-                                    .builder
-                                    .build_int_to_ptr(new_w0, ptr_ty, "opt.assign.new.inner")
-                                    .unwrap();
-                                let new_is_null = self
-                                    .builder
-                                    .build_is_null(new_inner, "opt.assign.new.is_null")
-                                    .unwrap();
-                                let new_real_do_bb = self
-                                    .context
-                                    .append_basic_block(fn_val, "opt.assign.new.real_do");
-                                self.builder
-                                    .build_conditional_branch(
-                                        new_is_null,
-                                        new_skip_bb,
-                                        new_real_do_bb,
-                                    )
-                                    .unwrap();
-                                self.builder.position_at_end(new_real_do_bb);
-                                self.emit_refcount_inc(name, heap_type, new_inner);
-                                self.builder
-                                    .build_unconditional_branch(new_skip_bb)
-                                    .unwrap();
-                                self.builder.position_at_end(new_skip_bb);
-                            }
-                            // ── Step 4: release the saved old inner, now
-                            //    that the new ref is counted and stored.
-                            let old_is_null = self
-                                .builder
-                                .build_is_null(old_eff, "opt.assign.old.is_null")
-                                .unwrap();
-                            let old_dec_bb = self
-                                .context
-                                .append_basic_block(fn_val, "opt.assign.old.dec");
-                            let done_bb =
-                                self.context.append_basic_block(fn_val, "opt.assign.done");
-                            self.builder
-                                .build_conditional_branch(old_is_null, done_bb, old_dec_bb)
-                                .unwrap();
-                            self.builder.position_at_end(old_dec_bb);
-                            self.emit_refcount_dec(name, heap_type, old_eff);
-                            self.builder.build_unconditional_branch(done_bb).unwrap();
-                            self.builder.position_at_end(done_bb);
+                            self.emit_option_shared_arc_store(
+                                slot.ptr,
+                                val,
+                                heap_type,
+                                rhs_is_fresh,
+                                name,
+                            )?;
+                            return Ok(());
+                        }
+                    }
+                    // `mut ref Option[shared T]` param reassignment
+                    // (`prev = Some(n)`): the destination is the BORROW pointer
+                    // (the caller's Option slot), NOT the param's local
+                    // pointer-slot alloca. Without this the assign fell through
+                    // to the generic store below, which wrote the 4-word Option
+                    // into the 8-byte pointer alloca — a callee-local clobber
+                    // that never propagated back to the caller (silent stale
+                    // `None`, SIGSEGV downstream when the stale tag is later
+                    // unwrapped as a pointer). `get_data_ptr` loads the borrow
+                    // pointer; the shared setter then runs the same ARC
+                    // retain/release store THROUGH it (B-2026-07-12-3).
+                    if let Some(heap_type) = self.ref_option_shared_heap.get(name.as_str()).copied()
+                    {
+                        if let Some(dest_ptr) = self.get_data_ptr(name) {
+                            self.emit_option_shared_arc_store(
+                                dest_ptr,
+                                val,
+                                heap_type,
+                                rhs_is_fresh,
+                                name,
+                            )?;
                             return Ok(());
                         }
                     }
