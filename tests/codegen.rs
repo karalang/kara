@@ -22254,6 +22254,39 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_enum_self_to_string() {
+        // `self.to_string()` inside an impl method (a `ref self` receiver)
+        // renders a `#[derive(Display)]` enum under codegen — both all-unit and
+        // payload variants — the `impl Error { message() { self.to_string() } }`
+        // pattern. Codegen recognizes the `SelfValue` receiver in the Display
+        // name helpers (B-2026-07-12-15), so build == run (interp sibling
+        // `test_enum_self_to_string_in_impl_method`). Consumed directly
+        // (`.len()` / `println`), not through a generic f-string, so it is
+        // leak-clean — a 200-iteration loop is valgrind-clean (verified by hand;
+        // the generic-f-string-interp leak B-2026-07-12-18 is a separate,
+        // pre-existing path). Struct `self.to_string()` is still open
+        // (B-2026-07-12-17), so this covers enums only.
+        if let Some(out) = run_program(
+            r#"
+#[derive(Display)]
+enum IoErr { NotFound, Other(String) }
+trait Error { fn message(ref self) -> String; }
+impl Error for IoErr { fn message(ref self) -> String { self.to_string() } }
+fn report[E: Error](e: ref E) -> String { e.message() }
+fn main() {
+    let a: IoErr = IoErr.NotFound;
+    let b: IoErr = IoErr.Other(String.from("disk full"));
+    println(a.message());
+    println(b.message());
+    println(report(a));
+}
+"#,
+        ) {
+            assert_eq!(out, "NotFound\nOther(disk full)\nNotFound\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_struct_display_print_and_to_string() {
         if let Some(out) = run_program(
             r#"

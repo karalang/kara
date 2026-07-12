@@ -168,6 +168,30 @@ fn test_enum_display_payload_variants_to_string() {
 }
 
 #[test]
+fn test_enum_self_to_string_in_impl_method() {
+    // `self.to_string()` inside an impl method (a `ref self` receiver) renders
+    // a `#[derive(Display)]` enum — both all-unit and payload variants — the
+    // `impl Error { fn message(ref self) -> String { self.to_string() } }`
+    // pattern. Guards the codegen sibling (`test_e2e_enum_self_to_string`):
+    // codegen recognizes the `SelfValue` receiver in the Display helpers so
+    // build == run. (The struct receiver is a separate, still-open case —
+    // B-2026-07-12-17 — so this covers enums only.)
+    let src = "#[derive(Display)]
+        enum IoErr { NotFound, Other(String) }
+        trait Error { fn message(ref self) -> String; }
+        impl Error for IoErr { fn message(ref self) -> String { self.to_string() } }
+        fn report[E: Error](e: ref E) -> String { e.message() }
+        fn main() {
+            let a: IoErr = IoErr.NotFound;
+            let b: IoErr = IoErr.Other(String.from(\"disk full\"));
+            println(a.message());
+            println(b.message());
+            println(report(a));
+        }";
+    assert_eq!(run_no_errors(src), "NotFound\nOther(disk full)\nNotFound\n");
+}
+
+#[test]
 fn test_user_impl_display_dispatches_through_to_string() {
     // A user `impl Display { fn to_string(ref self) -> String }` must win over
     // the built-in renderer across all three Display positions — `.to_string()`,

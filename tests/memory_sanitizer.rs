@@ -23926,4 +23926,36 @@ fn main() {
             "numeric_try_from_err_string_no_leak",
         );
     }
+
+    #[test]
+    fn asan_enum_self_to_string_no_leak() {
+        // `self.to_string()` inside an impl method renders a payload
+        // `#[derive(Display)]` enum into a fresh heap String each call
+        // (B-2026-07-12-15). Loops both variants so any per-iteration leak or
+        // bad free accumulates for ASAN + LSan; the rendered String is consumed
+        // (`.len()`) directly — not through a generic f-string, whose
+        // interpolation leak (B-2026-07-12-18) is a separate pre-existing path.
+        assert_clean_asan_run(
+            r#"
+#[derive(Display)]
+enum IoErr { NotFound, Other(String) }
+trait Error { fn message(ref self) -> String; }
+impl Error for IoErr { fn message(ref self) -> String { self.to_string() } }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 200 {
+        let a: IoErr = IoErr.NotFound;
+        let b: IoErr = IoErr.Other(String.from("disk full"));
+        total = total + a.message().len();
+        total = total + b.message().len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            &["4800"],
+            "enum_self_to_string_no_leak",
+        );
+    }
 }

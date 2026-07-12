@@ -1363,6 +1363,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(n.as_str())
                 .filter(|tn| self.struct_field_names.contains_key(tn.as_str()))
                 .cloned(),
+            // NOTE: `self` (SelfValue) is deliberately NOT matched for the
+            // STRUCT case — unlike the enum helpers below. A struct
+            // `self.to_string()` routes through `compile_struct_display_string`'s
+            // synthetic f-string, whose owned-String result double-frees when
+            // returned from a fn (the acc-cleanup transfer only fires at `let`
+            // bindings, not return positions — a PRE-EXISTING bug that also hits
+            // a plain `ref Point` param, tracked as B-2026-07-12-17). Recognising
+            // SelfValue here would turn struct `self.to_string()`'s clean
+            // "no handler" error into that double-free. The enum receivers have
+            // no such return-path hazard, so they ARE handled (B-2026-07-12-15).
             ExprKind::FieldAccess { object, field } => {
                 let outer = self.expr_user_struct_name(object)?;
                 let tes = self.struct_field_type_exprs.get(&outer)?;
@@ -1382,6 +1392,12 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(n) => self
                 .var_type_names
                 .get(n.as_str())
+                .filter(|tn| self.enum_unit_variants.contains_key(tn.as_str()))
+                .cloned(),
+            // `self` receiver — see the note in `expr_user_struct_name`.
+            ExprKind::SelfValue => self
+                .var_type_names
+                .get("self")
                 .filter(|tn| self.enum_unit_variants.contains_key(tn.as_str()))
                 .cloned(),
             ExprKind::FieldAccess { object, field } => {
@@ -1992,6 +2008,8 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn expr_user_enum_name_any(&self, expr: &Expr) -> Option<String> {
         let tn = match &expr.kind {
             ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()).cloned(),
+            // `self` receiver — see the note in `expr_user_struct_name`.
+            ExprKind::SelfValue => self.var_type_names.get("self").cloned(),
             ExprKind::FieldAccess { object, field } => {
                 let outer = self.expr_user_struct_name(object)?;
                 let tes = self.struct_field_type_exprs.get(&outer)?;
