@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **402 surfaced · 10 open · 389 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **402 surfaced · 9 open · 390 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -104,11 +104,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **402 surfaced 
 | B-2026-07-12-6 | 2026-07-12 | codegen | medium | A match ARM inside a very large recursive match-method that declares ~4+ heap-typed (Vec) locals corrupts memory (segfault / double-free / spurious vec-index-out-of-bounds); moving the arm body into its own method is clean | phase-12 self-hosting |
 | B-2026-07-12-7 | 2026-07-12 | codegen | medium | A volatile read through `ptr.const(param.field)` does NOT observe a prior volatile write through `ptr.mut(param.field)` to the SAME field, IN THE SAME FUNCTION, when `param` is a `mut ref` struct parameter (reads the stale pre-write value); the write DOES reach real memory (a caller reading the same field back through a raw pointer sees it). The identical shape on an OWNED LOCAL is correct. Root: `ptr.const`/`ptr.mut` emit no address-taken/escape marker on the rooted binding, so mem2reg promotes a `ref`-param's local slot and the two independent pointer derivations read a promoted (stale) SSA value instead of shared memory. | raw-pointer construction (`ptr.const`/`ptr.mut`) does not mark the rooted binding as address-taken → mem2reg promotion → stale read-through-pointer for ref-param roots |
 | B-2026-07-12-10 | 2026-07-12 | typecheck | low | A `let`-bound closure with an UN-ANNOTATED param whose type must be PULLED from the body's arithmetic or from later call sites is not inferred — the param stays an unresolved `?T0`. `let f = |x| x + 1; f(5)` fails with `arithmetic operator requires numeric type, found '?T0'` + `expected '?T0', found 'i64'` at the call. Inference works when the type is PUSHED from context (e.g. `xs.iter().map(|x| x + 100)` — the element type flows in), and an explicit `|x: i64|` annotation works. | minimal repros below. LOUD (typecheck error `?T0`), consistent interp==build, workaround = annotate the param. Common ergonomic pattern. |
-| B-2026-07-12-18 | 2026-07-12 | codegen | medium | Interpolating a render-backed Display value (a payload `#[derive(Display)]` enum, or any value rendered via `render_user_enum_display` / a String-returning method) inside a GENERIC function's f-string LEAKS the rendered String. Repro: `#[derive(Display)] enum IoErr { NotFound, Other(String) } fn wrap[E: Display](e: ref E) -> String { f"error: {e}" } fn main() { let b = IoErr.Other(String.from("disk full")); println(wrap(b)); }` -> valgrind `definitely lost: 15 bytes`. INDEPENDENT of `self`/`.to_string()` (reproduces with a plain identifier receiver and no `to_string` call) and of B-2026-07-12-15 — it is a pre-existing generic + f-string-interpolation + render-backed-String ownership gap. A NON-generic `f"{e}"` and a `String.from(...)`-produced value in the same generic f-string are both clean, so the leak needs the combination of (generic monomorphized receiver) + (a value whose Display renders into a fresh heap buffer). FIX DIRECTION: the f-string part renderer must scope-track (free) the render-backed temporary in the generic-monomorphized path the same way the non-generic collection / payload-enum arms `track_vec_var` their acc. Silent leak (no abort), so worth fixing before the Display surface is leaned on in generic error-handling code. | — |
 
-### Fixed (389)
+### Fixed (390)
 
-<details><summary>389 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>390 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -501,6 +500,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **402 surfaced 
 | B-2026-07-12-15 | codegen | low | A bare `self.to_string()` / `f"{self}"` inside an impl method failed under codegen (`no handler for method 'to_string' on non-identifier receiver`) w… | 71929b2 |
 | B-2026-07-12-16 | codegen | high | Two coupled generic-monomorphization codegen bugs, both blocking `VolatileCell[i32]` | 21b52c4 |
 | B-2026-07-12-17 | codegen | medium | FIXED (7c8d383) | 7c8d383 |
+| B-2026-07-12-18 | codegen | high | FIXED (acbaf96) | acbaf96 |
 
 </details>
 
