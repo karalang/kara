@@ -1026,6 +1026,50 @@ fn main() {
     /// par-block here evaluates to unit and the subsequent `println`
     /// always fires. This test pins the IR's runtime correctness:
     /// the new slot-write + cancel-store ops don't crash, don't
+    /// B-2026-07-12-5 (fresh-dogfood find): a `mut ref self` mutating method
+    /// call nested in an f-string interpolation (`println(f"{b.push_len(x)}")`)
+    /// or a match scrutinee (`match b.take()`) was NOT recorded as a write on its receiver
+    /// by the auto-par data-dependency scan (`collect_expr_inner_writes` had no
+    /// arm for `InterpolatedStringLit` and skipped the `Match` scrutinee, so the
+    /// nested `MethodCall` never reached the receiver-write logic). The
+    /// analyzer then classed the consecutive statements as independent and
+    /// parallelized them, capturing the receiver BY VALUE into the par env — so
+    /// each mutation landed in a discarded copy and was lost (a SILENT wrong
+    /// answer: the pushes/pops never persisted; `KARAC_AUTO_PAR=0` was correct).
+    /// The scan now recurses into f-strings, the match/if scrutinee, and the
+    /// other value-expression forms. Runs through the auto-par-ENABLED harness
+    /// (the plain codegen E2E harness passes `None` for the analysis, so it
+    /// never exercised auto-par — which is why this escaped). Interp==build
+    /// correct output is `1 2 / 3 / 5 4` here.
+    #[test]
+    fn test_e2e_mut_ref_self_method_in_fstring_and_match_persists() {
+        let out = run_program(
+            r#"
+struct Box { items: Vec[i64] }
+impl Box {
+    fn push_len(mut ref self, x: i64) -> i64 { self.items.push(x); self.items.len() }
+    fn take(mut ref self) -> Option[i64] { self.items.pop() }
+    fn size(ref self) -> i64 { self.items.len() }
+}
+fn main() {
+    let mut b = Box { items: Vec.new() };
+    // Mutating method calls nested in f-string interpolations — must persist.
+    println(f"{b.push_len(10)}");
+    println(f"{b.push_len(20)}");
+    println(f"size {b.size()}");
+    // Mutating method call as a match scrutinee — pop must persist.
+    match b.take() {
+        Some(v) => println(f"{v} {b.size()}"),
+        None => println("none"),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n2\nsize 2\n20 1");
+        }
+    }
+
     /// corrupt the cancel-flag pointer, and don't block the join.
     #[test]
     fn test_e2e_par_result_typed_branches_run_to_completion() {

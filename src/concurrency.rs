@@ -3216,31 +3216,51 @@ impl<'a> ConcurrencyChecker<'a> {
                 self.collect_block_inner_writes(block, writes);
             }
             ExprKind::If {
+                condition,
                 then_block,
                 else_branch,
-                ..
             } => {
+                self.collect_expr_inner_writes(condition, writes);
                 self.collect_block_inner_writes(then_block, writes);
                 if let Some(e) = else_branch {
                     self.collect_expr_inner_writes(e, writes);
                 }
             }
             ExprKind::IfLet {
+                value,
                 then_block,
                 else_branch,
                 ..
             } => {
+                self.collect_expr_inner_writes(value, writes);
                 self.collect_block_inner_writes(then_block, writes);
                 if let Some(e) = else_branch {
                     self.collect_expr_inner_writes(e, writes);
                 }
             }
-            ExprKind::Match { arms, .. } => {
+            ExprKind::Match { scrutinee, arms } => {
+                // B-2026-07-12-5: the SCRUTINEE (and arm guards) can mutate —
+                // `match b.take() { .. }` where `take(mut ref self)` pops the
+                // receiver. Without walking them the auto-par data-dependency
+                // check missed the receiver write, so it raced the statements.
+                self.collect_expr_inner_writes(scrutinee, writes);
                 for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        self.collect_expr_inner_writes(g, writes);
+                    }
                     self.collect_expr_inner_writes(&arm.body, writes);
                 }
             }
-            ExprKind::While { body, .. } => self.collect_block_inner_writes(body, writes),
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.collect_expr_inner_writes(condition, writes);
+                self.collect_block_inner_writes(body, writes);
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                self.collect_expr_inner_writes(value, writes);
+                self.collect_block_inner_writes(body, writes);
+            }
             ExprKind::Loop { body, .. } => self.collect_block_inner_writes(body, writes),
             ExprKind::For { body, .. } => self.collect_block_inner_writes(body, writes),
             ExprKind::Unsafe(block) | ExprKind::Par(block) => {
@@ -3318,6 +3338,97 @@ impl<'a> ConcurrencyChecker<'a> {
                     }
                     self.collect_expr_inner_writes(&arg.value, writes);
                 }
+            }
+            // B-2026-07-12-5: a mutating method call (`b.push(x)`, `b.take()`)
+            // can hide in ANY value-expression position, not just a bare
+            // statement or a block. The auto-parallelizer's data-dependency
+            // check reached the `MethodCall` / `Call` arms above only through
+            // the block/branch arms, so a mutation nested in an f-string
+            // interpolation, a `Some(..)` / tuple / index / binary / … missed
+            // the receiver write and the statements were classed independent
+            // and RACED — with the receiver captured BY VALUE into the par env,
+            // so the mutation landed in a discarded copy (silent wrong answer:
+            // `println(f"{b.push_len(x)}")` in a loop; `match b.take()`;
+            // `Some(b.pop())`). Recurse into every sub-expression so those arms
+            // see the write. Safe: a write is recorded ONLY for a genuinely
+            // mutating call (the receiver-mode / mut-arg gates), so this only
+            // ever ADDS serialization — it can never introduce a race.
+            ExprKind::InterpolatedStringLit(parts) => {
+                for part in parts {
+                    if let crate::ast::ParsedInterpolationPart::Expr(e) = part {
+                        self.collect_expr_inner_writes(e, writes);
+                    }
+                }
+            }
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::NilCoalesce { left, right }
+            | ExprKind::Pipe { left, right } => {
+                self.collect_expr_inner_writes(left, writes);
+                self.collect_expr_inner_writes(right, writes);
+            }
+            ExprKind::Unary { operand, .. } => self.collect_expr_inner_writes(operand, writes),
+            ExprKind::Question(inner) | ExprKind::Cast { expr: inner, .. } => {
+                self.collect_expr_inner_writes(inner, writes);
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.collect_expr_inner_writes(object, writes);
+            }
+            ExprKind::Index { object, index } => {
+                self.collect_expr_inner_writes(object, writes);
+                self.collect_expr_inner_writes(index, writes);
+            }
+            ExprKind::OptionalChain { object, args, .. } => {
+                self.collect_expr_inner_writes(object, writes);
+                if let Some(args) = args {
+                    for a in args {
+                        self.collect_expr_inner_writes(&a.value, writes);
+                    }
+                }
+            }
+            ExprKind::Range { start, end, .. } => {
+                if let Some(s) = start {
+                    self.collect_expr_inner_writes(s, writes);
+                }
+                if let Some(e) = end {
+                    self.collect_expr_inner_writes(e, writes);
+                }
+            }
+            ExprKind::Tuple(items)
+            | ExprKind::ArrayLiteral(items)
+            | ExprKind::PrefixCollectionLiteral { items, .. } => {
+                for e in items {
+                    self.collect_expr_inner_writes(e, writes);
+                }
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                self.collect_expr_inner_writes(value, writes);
+                self.collect_expr_inner_writes(count, writes);
+            }
+            ExprKind::MapLiteral(pairs) => {
+                for (k, v) in pairs {
+                    self.collect_expr_inner_writes(k, writes);
+                    self.collect_expr_inner_writes(v, writes);
+                }
+            }
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                for f in fields {
+                    self.collect_expr_inner_writes(&f.value, writes);
+                }
+                if let Some(s) = spread {
+                    self.collect_expr_inner_writes(s, writes);
+                }
+            }
+            ExprKind::Return(Some(e)) => self.collect_expr_inner_writes(e, writes),
+            ExprKind::Break { value: Some(e), .. } => self.collect_expr_inner_writes(e, writes),
+            ExprKind::Try(block) | ExprKind::Comptime(block) => {
+                self.collect_block_inner_writes(block, writes);
+            }
+            ExprKind::LabeledBlock { body, .. } => {
+                self.collect_block_inner_writes(body, writes);
+            }
+            ExprKind::Lock { mutex, body, .. } => {
+                self.collect_expr_inner_writes(mutex, writes);
+                self.collect_block_inner_writes(body, writes);
             }
             _ => {}
         }
