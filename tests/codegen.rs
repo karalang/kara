@@ -22327,6 +22327,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_ref_enum_display() {
+        // B-2026-07-12-18: a generic `fn f[E: Display](e: ref E)` monomorphized
+        // to a payload `#[derive(Display)]` enum MISCOMPILED under codegen —
+        // rendering `e` (println / f-string) read the enum from the ref param's
+        // slot address (a pointer TO the value) instead of the value, printing
+        // `Other()` garbage for every input while the interpreter was correct.
+        // Fixed by resolving the value via `get_data_ptr` (which loads through
+        // the ref). Covers the println shape (the miscompile) and the f-string-
+        // returned shape (which also leaked the render buffer). build == run;
+        // valgrind-clean.
+        if let Some(out) = run_program(
+            r#"
+#[derive(Display)]
+enum IoErr { NotFound, Other(String) }
+fn showln[E: Display](e: ref E) { println(e); }
+fn wrap[E: Display](e: ref E) -> String { f"error: {e}" }
+fn main() {
+    let a: IoErr = IoErr.NotFound;
+    let b: IoErr = IoErr.Other(String.from("boom"));
+    showln(a);
+    showln(b);
+    println(wrap(b));
+}
+"#,
+        ) {
+            assert_eq!(out, "NotFound\nOther(boom)\nerror: Other(boom)\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_struct_to_string_returned_from_fn() {
         // B-2026-07-12-17: a struct `.to_string()` (f-string-backed) DOUBLE-FREED
         // its rendered buffer when returned directly from a function — the

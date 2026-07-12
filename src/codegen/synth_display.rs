@@ -2052,8 +2052,17 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
     ) -> Result<(PointerValue<'ctx>, BasicValueEnum<'ctx>), String> {
         let disp = self.emit_enum_display_fn(enum_name);
+        // Resolve the enum value's DATA pointer via `get_data_ptr`, not the raw
+        // `variables[n].ptr` slot: for a `ref E` param (common when a generic
+        // `fn f[E: Display](e: ref E)` monomorphizes to a payload enum) the slot
+        // holds a pointer TO the value, so reading the enum from the slot address
+        // rendered garbage (`Other()` for every value) under codegen while the
+        // interpreter was correct — a build!=run miscompile (B-2026-07-12-18).
+        // `get_data_ptr` loads through the ref (and unwraps an RC-promoted
+        // binding), and returns the alloca unchanged for an owned binding, so the
+        // common `println(local_enum)` case is unaffected.
         let val_ptr = if let ExprKind::Identifier(n) = &expr.kind {
-            self.variables.get(n.as_str()).map(|s| s.ptr)
+            self.get_data_ptr(n)
         } else {
             None
         };

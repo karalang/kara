@@ -24020,4 +24020,33 @@ fn main() {
             "struct_to_string_returned_from_fn_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_generic_ref_enum_display_no_leak() {
+        // B-2026-07-12-18: rendering a payload `#[derive(Display)]` enum through
+        // a generic `ref E` param (`f"{e}"`) leaked the render buffer under
+        // codegen (a symptom of reading the value from the wrong address; fixed
+        // via `get_data_ptr`). Loops the generic-ref f-string so any per-call
+        // leak accumulates for ASAN + LSan; the rendered String is consumed
+        // (`.len()`).
+        assert_clean_asan_run(
+            r#"
+#[derive(Display)]
+enum IoErr { NotFound, Other(String) }
+fn wrap[E: Display](e: ref E) -> String { f"error: {e}" }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 200 {
+        let b: IoErr = IoErr.Other(String.from("boom"));
+        total = total + wrap(b).len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            &["3600"],
+            "generic_ref_enum_display_no_leak",
+        );
+    }
 }
