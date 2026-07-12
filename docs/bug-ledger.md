@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **409 surfaced · 5 open · 401 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **409 surfaced · 4 open · 402 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -99,11 +99,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **409 surfaced 
 | B-2026-07-11-23 | 2026-07-11 | interp+codegen | medium | `mut ref` closure capture (mutation of a captured mutable local) is unimplemented: a closure that writes a captured name mutates a SNAPSHOT, not the outer binding. Stored closures drop the mutation in BOTH interp and codegen; the inlined iterator terminals (fold/any/all) DIVERGE — codegen inlines (mutates outer = design-correct) while the interpreter snapshots. | unfixed; repros below |
 | B-2026-07-12-2 | 2026-07-12 | codegen | low | `OnceLock[T]`/`OnceCell[T]` `set`/`get` codegen supports only a HEAP-FREE element `T` (scalar or small all-scalar struct, <=3 words) at v1; a heap-owning `T` (`String`, `Vec[_]`, a struct/enum with a heap field) or a WIDE `T` (>3 words) is LOUD-GATED under `karac build` (and default JIT `karac run`) with a `--interp` hint. The interpreter handles all `T` correctly. Three distinct gaps make heap/wide `T` unsafe under codegen today, each needing its own fix: (1) SUCCESS-PATH element leak — `set(v)` moves `v`'s bytes (e.g. a String's {ptr,len,cap} header) into the cell sharing the buffer; the type-erased `karac_runtime_once_free` reclaims only the header+control-block, so the element's inner heap (the char buffer) leaks. A prototype fix (carry `karac_drop_<T>` in `FreeOnceHandle`, run it on `karac_runtime_once_get`'s value ptr before free) made a single-`set` `OnceLock[String]` loop LSan-clean (0 lost, was 490 B/200 iters) — but it does NOT cover gaps 2-3, so it was reverted in favor of the loud gate. (2) REJECTED-VALUE leak — a second `set` on a filled cell returns `Err(AlreadySetError { rejected: v2 })` carrying `v2`'s words; a `match ... { Err(_) => {} }` that discards it leaks `v2`'s heap (190 B/100 iters for `OnceLock[String]` double-set) — the discarded `AlreadySetError[String]` payload isn't dropped (a move-suppression / Result-Err-drop gap; needs confirmation whether it's once-specific or a general `Result[_, <struct-with-heap>]` discard-drop gap). (3) WIDE-PAYLOAD panic — `get() -> Option[ref T]` builds the Option via `build_option_some_via_phis` + `coerce_to_payload_words(v, word_count(T))`; a `T` wider than the seeded 3-word inline payload (a struct with a String field = 4 words, or a 4+-scalar struct) overflows the Option payload area and PANICS at `build_insert_value(...).into_struct_value()` (call_dispatch.rs ~4668). Needs the enum payload-boxing path (box a wide payload behind a pointer, as `try_compile_enum_variant` does) in the once `get` construction. FIX DIRECTION (one dedicated slice): (a) wire `FreeOnceHandle` element-drop for the success path (prototype exists); (b) suppress the source temp's own drop on `set` + drop the discarded `AlreadySetError` heap payload on the Err path; (c) box wide/heap payloads in `get`'s `Option[ref T]` (and the `set` Err's `AlreadySetError` payload) instead of inline words. Then remove the `reject_unsupported_once_elem` gate (src/codegen/once.rs) and add heap-`T` build==run + LSan tests. Scalar + small all-scalar-struct `T` (the config-of-scalars and single-value cases) already work leak-free under build; module-global `OnceLock` of a scalar works too. Not urgent — the interpreter is correct and the gate is loud, not a silent miscompile. | heap-T OnceLock/OnceCell set/get codegen: move-suppression + rejected-value drop + Option/Result payload boxing |
 | B-2026-07-12-24 | 2026-07-12 | codegen | medium | A `let d: Result[shared T, E] = f()` (or `= v[i]`, or `match`) LEAKS the payload node once per binding (32 B/iter over a loop). The Option analog is clean (track_rc_option_var queues an RcDecOption scope-exit release); Result has NO such release — only a fresh-literal `Ok(Node{..})` binding is freed (via general enum drop). The B-2026-07-12-21/23 lowering rewrite routes shared-bearing Result `match v[i]` / `match take()` scrutinees into `{ let e: Result[..] = <expr>; match e }`, so all of those inherit this leak. | a binding of type Result[shared T, E] that holds a +1 (call return, index-clone, returning-arm rebuild) is never rc-released at scope exit; only a fresh-literal Ok(...) is clean (general enum drop). There is no track_rc_result_var / CleanupAction::RcDecResult — the RC scope-exit machinery is Option-only. |
-| B-2026-07-12-25 | 2026-07-12 | codegen | medium | A match arm that binds a `shared enum` payload and passes it BY VALUE into a RECURSIVE self-call leaks the whole RC chain (every node); the same payload passed to a NON-recursive helper, or bound-but-unused, is clean | phase-12 self-hosting / rc-ownership |
 
-### Fixed (401)
+### Fixed (402)
 
-<details><summary>401 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>402 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -508,6 +507,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **409 surfaced 
 | B-2026-07-12-21 | codegen | medium | Extracting an `Option[shared]` element from a `Vec[Option[shared]]` via `v[i]` and re-storing it (e.g | ee17020 |
 | B-2026-07-12-22 | runtime | high | `karac run` (JIT / LLJIT) fails with 'Symbols not found: [karac_realloc_or_panic]' on ANY program that GROWS a `Vec` or `String` past its initial cap… | 73bc02a3 |
 | B-2026-07-12-23 | codegen | medium | A fresh-temp `match <call-returning-Option[shared]> { Some(n) => <use n> }` LEAKS the node once per match in some shapes (32 B/iter over a loop) | d9dd2ee |
+| B-2026-07-12-25 | codegen | medium | A match arm that binds a `shared enum` payload and passes it BY VALUE into a RECURSIVE self-call leaks the whole RC chain (every node); the same payl… | c51f5e8 |
 
 </details>
 
