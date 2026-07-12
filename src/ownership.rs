@@ -595,6 +595,13 @@ impl std::fmt::Display for OwnershipError {
 pub struct OwnershipCheckResult {
     /// Inferred parameter modes: function name → [(param_name, mode)].
     pub param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
+    /// RC-elision safety set (env `KARAC_RC_ELIDE_REF_PARAMS`): function name →
+    /// `(param_name, position)` of every `Ref`-mode parameter that is sound to
+    /// RC-elide — no call site passes it a fresh rvalue and its function never
+    /// escapes as a value. Computed by [`crate::rc_elide::safe_elidable_ref_params`];
+    /// consumed by codegen's `borrowed_arg_skip` / `borrowed_param_dec_skip`.
+    /// Empty unless the env flag is set.
+    pub elidable_ref_params: HashMap<String, Vec<(String, usize)>>,
     /// Inferred per-closure parameter modes (round 12.23 — Closure
     /// ownership Step 1). Keyed by `SpanKey` of the closure
     /// expression. Each entry lists the closure's parameters in
@@ -1193,8 +1200,17 @@ impl<'a> OwnershipChecker<'a> {
             }
         }
 
+        // RC-elision safety set (opt-in). Only walk the program when the flag
+        // is set — otherwise the field stays empty and codegen elides nothing.
+        let elidable_ref_params = if std::env::var_os("KARAC_RC_ELIDE_REF_PARAMS").is_some() {
+            crate::rc_elide::safe_elidable_ref_params(self.program, &self.param_modes)
+        } else {
+            HashMap::new()
+        };
+
         OwnershipCheckResult {
             param_modes: self.param_modes,
+            elidable_ref_params,
             closure_param_modes: self.closure_param_modes,
             closure_captures: self.closure_captures,
             closure_capture_paths: self.closure_capture_paths,

@@ -2839,6 +2839,21 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_function`) and the call-site arg-inc skip (by position,
     /// in the direct-call arg loop) — both gated on `headerless_types`.
     pub(crate) borrowed_param_skips: HashMap<String, Vec<(String, usize, String)>>,
+    /// RC-elide-ref (env `KARAC_RC_ELIDE_REF_PARAMS`, default OFF): per-fn
+    /// `(param name, position)` of every `ref`-mode `shared`/`Option[shared]`
+    /// parameter proven **sound to RC-elide** by
+    /// [`crate::rc_elide::safe_elidable_ref_params`] — a private, directly-called
+    /// function whose every call passes this param a *projection* of a named
+    /// binding (a borrow), used only in place (consumed-in-place per
+    /// `result_escape`), with a scalar return and no `mut ref` params (no
+    /// resource escapes). ORed into the same call-site arg-inc skip (by
+    /// position) and callee-side exit-dec skip (by name) as
+    /// `borrowed_param_skips`, WITHOUT the `headerless_types` guard: the
+    /// LSan-verified C2b borrow path (no arg inc, no source transfer/consume, no
+    /// callee exit dec — a pure balanced borrow). Verified flag-on == flag-off on
+    /// the full Linux LSan suite. Empty unless the env flag is set. See
+    /// `docs/spikes/rc-elide-ref-params.md`.
+    pub(crate) rc_elide_ref_params: HashMap<String, Vec<(String, usize)>>,
     /// Per-function Arc-promoted binding names — the subset of `rc_fallback_fns`
     /// flagged by the ownership pass as crossing a `par {}` thread boundary.
     /// Inc/dec on these bindings emits atomic LLVM operations (`atomicrmw add` /
@@ -6068,6 +6083,7 @@ impl<'ctx> Codegen<'ctx> {
             headerless_types: HashSet::new(),
             conditional_adopted_roots: HashMap::new(),
             borrowed_param_skips: HashMap::new(),
+            rc_elide_ref_params: HashMap::new(),
             arc_fallback_fns: HashMap::new(),
             rc_fallback_heap_types: HashMap::new(),
             rc_fallback_box_drop_fns: Vec::new(),
@@ -6227,6 +6243,17 @@ impl<'ctx> Codegen<'ctx> {
         for (fn_name, arc_set) in &ow.arc_values {
             self.arc_fallback_fns
                 .insert(fn_name.clone(), arc_set.clone());
+        }
+        // RC-elide-ref (env `KARAC_RC_ELIDE_REF_PARAMS`): consume the ownership
+        // pass's *sound* elidability set — `Ref` params that no call site
+        // passes a fresh rvalue and whose function never escapes as a value
+        // (`crate::rc_elide::safe_elidable_ref_params`). `borrowed_arg_skip` /
+        // `borrowed_param_dec_skip` then treat each as a pure balanced borrow
+        // (no caller arg inc, no callee exit dec). Empty unless the flag is set
+        // — the ownership pass gates the walk — so nothing changes by default.
+        for (fn_name, recs) in &ow.elidable_ref_params {
+            self.rc_elide_ref_params
+                .insert(fn_name.clone(), recs.clone());
         }
         // RC elision phase A: per-fn elided-binding sets. Consulted by
         // the let-stmt shared arm via `is_elided_binding`.
@@ -6521,6 +6548,14 @@ impl<'ctx> Codegen<'ctx> {
             recs.iter()
                 .any(|(_, pos, t)| *pos == position && self.headerless_types.contains(t))
         })
+        // PROTOTYPE RC-elide-ref: the callee's param at `position` was
+        // classified `ref`/borrow by the ownership pass → skip the
+        // call-site arg inc (the callee's exit dec is skipped
+        // symmetrically in `borrowed_param_dec_skip`).
+        || self
+            .rc_elide_ref_params
+            .get(callee)
+            .is_some_and(|recs| recs.iter().any(|(_, pos)| *pos == position))
     }
 
     /// Phase C2b: the callee-side half — `param_name` of the CURRENT fn
@@ -6533,6 +6568,13 @@ impl<'ctx> Codegen<'ctx> {
                 recs.iter()
                     .any(|(n, _, t)| n == param_name && self.headerless_types.contains(t))
             })
+        // PROTOTYPE RC-elide-ref: the current fn's `param_name` was
+        // classified `ref`/borrow → skip its exit dec (the caller
+        // skipped the arg inc symmetrically in `borrowed_arg_skip`).
+        || self
+            .rc_elide_ref_params
+            .get(&self.current_fn_name)
+            .is_some_and(|recs| recs.iter().any(|(n, _)| n == param_name))
     }
 
     /// Phase-B2 role lookup for the current function.
