@@ -789,3 +789,223 @@ pub use items::*;
 pub use patterns::*;
 pub use stmts::*;
 pub use types::*;
+
+// ── Closure capture-mutation analysis (design.md Rule 2) ─────────────
+//
+// A bare closure that MUTATES a captured name captures it by `mut ref`
+// (read → ref, mutate → mut ref). Both backends need to know WHICH
+// captured names a closure body mutates: the interpreter aliases those
+// slots (promotes to a shared cell) so writes propagate; codegen refuses a
+// stored closure that mutates a capture (by-value env capture can't
+// propagate) rather than silently drop the write. These are pure AST walks
+// shared by both — B-2026-07-11-23.
+
+/// The root binding name of an assignment target place expression
+/// (`c` → `c`; `c.f` / `c[i]` / `c.0` → `c`). `None` for a non-place root.
+pub fn assign_target_root(target: &Expr) -> Option<String> {
+    match &target.kind {
+        ExprKind::Identifier(n) => Some(n.clone()),
+        ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. } => assign_target_root(object),
+        _ => None,
+    }
+}
+
+/// Collect the root identifier of every assignment target reachable in
+/// `block` (recursing into nested blocks and closures). No scope tracking:
+/// callers intersect the result with a scope-correct free-variable set, so a
+/// recorded name that is actually a local / parameter is filtered out there.
+pub fn collect_assigned_roots_block(block: &Block, out: &mut std::collections::HashSet<String>) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                if let Some(root) = assign_target_root(target) {
+                    out.insert(root);
+                }
+                collect_assigned_roots_expr(target, out);
+                collect_assigned_roots_expr(value, out);
+            }
+            StmtKind::Let { value, .. } => collect_assigned_roots_expr(value, out),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                collect_assigned_roots_expr(value, out);
+                collect_assigned_roots_block(else_block, out);
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                collect_assigned_roots_block(body, out)
+            }
+            StmtKind::Expr(e) => collect_assigned_roots_expr(e, out),
+            StmtKind::LetUninit { .. } => {}
+            StmtKind::MultiAssign { .. } => {}
+        }
+    }
+    if let Some(final_expr) = &block.final_expr {
+        collect_assigned_roots_expr(final_expr, out);
+    }
+}
+
+/// Sibling of [`collect_assigned_roots_block`] for expressions.
+pub fn collect_assigned_roots_expr(expr: &Expr, out: &mut std::collections::HashSet<String>) {
+    match &expr.kind {
+        ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::Bool(_)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::Continue { .. }
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Error => {}
+        ExprKind::InterpolatedStringLit(parts) => {
+            for part in parts {
+                if let ParsedInterpolationPart::Expr(e) = part {
+                    collect_assigned_roots_expr(e, out);
+                }
+            }
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::NilCoalesce { left, right }
+        | ExprKind::Pipe { left, right } => {
+            collect_assigned_roots_expr(left, out);
+            collect_assigned_roots_expr(right, out);
+        }
+        ExprKind::Unary { operand, .. } => collect_assigned_roots_expr(operand, out),
+        ExprKind::Call { callee, args } => {
+            collect_assigned_roots_expr(callee, out);
+            for arg in args {
+                collect_assigned_roots_expr(&arg.value, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_assigned_roots_expr(object, out);
+            for arg in args {
+                collect_assigned_roots_expr(&arg.value, out);
+            }
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            collect_assigned_roots_expr(object, out);
+        }
+        ExprKind::OptionalChain { object, args, .. } => {
+            collect_assigned_roots_expr(object, out);
+            if let Some(args) = args {
+                for arg in args {
+                    collect_assigned_roots_expr(&arg.value, out);
+                }
+            }
+        }
+        ExprKind::Index { object, index } => {
+            collect_assigned_roots_expr(object, out);
+            collect_assigned_roots_expr(index, out);
+        }
+        ExprKind::Block(b) | ExprKind::Comptime(b) => collect_assigned_roots_block(b, out),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_assigned_roots_expr(condition, out);
+            collect_assigned_roots_block(then_block, out);
+            if let Some(eb) = else_branch {
+                collect_assigned_roots_expr(eb, out);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            collect_assigned_roots_expr(value, out);
+            collect_assigned_roots_block(then_block, out);
+            if let Some(eb) = else_branch {
+                collect_assigned_roots_expr(eb, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_assigned_roots_expr(condition, out);
+            collect_assigned_roots_block(body, out);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            collect_assigned_roots_expr(value, out);
+            collect_assigned_roots_block(body, out);
+        }
+        ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
+            collect_assigned_roots_block(body, out)
+        }
+        ExprKind::For { iterable, body, .. } => {
+            collect_assigned_roots_expr(iterable, out);
+            collect_assigned_roots_block(body, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_assigned_roots_expr(scrutinee, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    collect_assigned_roots_expr(g, out);
+                }
+                collect_assigned_roots_expr(&arm.body, out);
+            }
+        }
+        ExprKind::Closure { body, .. } => collect_assigned_roots_expr(body, out),
+        ExprKind::Tuple(items)
+        | ExprKind::ArrayLiteral(items)
+        | ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for it in items {
+                collect_assigned_roots_expr(it, out);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            collect_assigned_roots_expr(value, out);
+            collect_assigned_roots_expr(count, out);
+        }
+        ExprKind::MapLiteral(entries) => {
+            for (k, v) in entries {
+                collect_assigned_roots_expr(k, out);
+                collect_assigned_roots_expr(v, out);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                collect_assigned_roots_expr(&f.value, out);
+            }
+            if let Some(s) = spread {
+                collect_assigned_roots_expr(s, out);
+            }
+        }
+        ExprKind::Return(opt) | ExprKind::Break { value: opt, .. } => {
+            if let Some(e) = opt {
+                collect_assigned_roots_expr(e, out);
+            }
+        }
+        ExprKind::Question(inner) | ExprKind::Cast { expr: inner, .. } => {
+            collect_assigned_roots_expr(inner, out);
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                collect_assigned_roots_expr(s, out);
+            }
+            if let Some(e) = end {
+                collect_assigned_roots_expr(e, out);
+            }
+        }
+        ExprKind::Par(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Try(b)
+        | ExprKind::Providers { body: b, .. } => collect_assigned_roots_block(b, out),
+        ExprKind::Lock { mutex, body, .. } => {
+            collect_assigned_roots_expr(mutex, out);
+            collect_assigned_roots_block(body, out);
+        }
+    }
+}

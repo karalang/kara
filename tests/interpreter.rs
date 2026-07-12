@@ -13155,6 +13155,63 @@ fn main() {
 }
 
 #[test]
+fn test_closure_bare_mutating_capture_propagates() {
+    // B-2026-07-11-23 — a BARE closure that mutates a captured local captures
+    // it by `mut ref` (design.md Rule 2), so writes propagate to the outer
+    // binding across invocations. Previously the interpreter snapshot-copied
+    // the capture and the mutation was lost (printed 0).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let mut c: i64 = 0;
+    let f = |x: i64| { c = c + x; };
+    f(3i64);
+    f(4i64);
+    println(f"{c}");
+}
+"#,
+    );
+    assert_eq!(output, "7\n");
+}
+
+#[test]
+fn test_closure_capture_mutation_in_fold_no_run_build_divergence() {
+    // B-2026-07-11-23 — a capture-mutating closure in a `fold` terminal. Codegen
+    // INLINES the body (mutation propagates = correct); the interpreter used to
+    // invoke it over a snapshot (mutation lost = 0), a run-vs-build divergence.
+    // With Rule 2 capture inference the interpreter now agrees: count == 3.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let mut count = 0i64;
+    let s = v.iter().fold(0i64, |a: i64, x: i64| { count = count + 1i64; a + x });
+    println(f"{s}");
+    println(f"{count}");
+}
+"#,
+    );
+    assert_eq!(output, "6\n3\n");
+}
+
+#[test]
+fn test_closure_readonly_capture_unaffected() {
+    // A bare closure that only READS a capture keeps by-value (snapshot)
+    // semantics — the Rule 2 inference wraps ONLY mutated captures, so a
+    // read-only capture is untouched.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let base: i64 = 10;
+    let add = |x: i64| { base + x };
+    println(add(5i64).to_string());
+}
+"#,
+    );
+    assert_eq!(output, "15\n");
+}
+
+#[test]
 fn test_iter_reduce_terminal() {
     // B-2026-07-11-19 — the `reduce(f) -> Option[A]` terminal. Folds with the
     // first element as the seed; `None` on an empty source. Covers a sum

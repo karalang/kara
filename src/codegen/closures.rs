@@ -2494,6 +2494,33 @@ impl<'ctx> super::Codegen<'ctx> {
         //    via `self.variables` for the root types.
         let free_vars = self.collect_closure_free_vars(params, body);
 
+        // 1a. `mut ref` closure capture (B-2026-07-11-23): a STORED closure
+        //     VALUE whose body MUTATES a captured name needs that name to alias
+        //     the outer binding so writes propagate (design.md Rule 2). Codegen
+        //     captures each free var BY VALUE into the env struct, so the write
+        //     would land on the env copy and be silently lost — the interpreter
+        //     (which promotes the slot to a shared cell) now returns the correct
+        //     value, so emitting a wrong value here would be a silent run-vs-
+        //     build divergence. Refuse loudly instead until by-reference env
+        //     capture lands. This never fires for the inlined `fold`/`any`/`all`/
+        //     `sum` terminals — those inline the closure body into the fused loop
+        //     and never construct a closure value, so their capture-mutation
+        //     (`fold(0, |a, x| { count = count + 1; a + x })`) stays correct.
+        {
+            let mut assigned: HashSet<String> = HashSet::new();
+            collect_assigned_roots_expr(body, &mut assigned);
+            if let Some(name) = free_vars.iter().find(|n| assigned.contains(n.as_str())) {
+                return Err(format!(
+                    "a stored closure that mutates the captured variable `{name}` (`mut ref` \
+                     capture, design.md Rule 2) is not yet supported under `karac build` \
+                     (codegen): captures are taken by value, so the write would be lost. It \
+                     works under `karac run` (the tree-walk interpreter aliases the captured \
+                     slot). Re-run with `--interp` (or `KARAC_RUN_JIT=0`), or thread the \
+                     mutated state through the closure's parameters / return value instead."
+                ));
+            }
+        }
+
         // 1b. Disjoint-capture slice 4: per-path env layout when the
         //     ownership pass supplied modes for this closure and every
         //     captured root resolves cleanly. Falls back to per-name

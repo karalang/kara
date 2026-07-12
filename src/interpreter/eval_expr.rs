@@ -1048,31 +1048,52 @@ impl<'a> super::Interpreter<'a> {
                 prefix_span: _,
                 body,
             } => {
-                // For `mut ref |...|` closures, promote each captured outer
-                // binding's slot to a `Value::SharedCell` so mutations made
-                // inside the body propagate back to the outer binding and
-                // are visible to subsequent invocations of the closure.
-                if matches!(capture_mode, Some(CaptureMode::MutRef)) {
+                // Promote captured outer bindings that the closure MUTATES to a
+                // `Value::SharedCell` so writes propagate back to the outer
+                // binding and are visible to later invocations. Two triggers:
+                //   * an EXPLICIT `mut ref |...|` — every free capture aliases
+                //     (the whole closure captures by mut-ref);
+                //   * a BARE `|...|` that mutates a capture — design.md Rule 2
+                //     infers `mut ref` capture for the mutated names only
+                //     (B-2026-07-11-23). Read-only bare captures stay
+                //     snapshot-copied (by-value), unchanged.
+                // The free-ident set is scope-correct (params / body-locals /
+                // nested-closure params excluded); for the bare case we
+                // additionally intersect it with the assignment-target roots so
+                // only genuinely-mutated captures alias.
+                let wrap_names: Vec<String> = if matches!(capture_mode, Some(CaptureMode::MutRef)) {
                     let mut bound: HashSet<String> = HashSet::new();
                     for p in params {
                         add_pattern_bindings(&p.pattern, &mut bound);
                     }
                     let mut idents: Vec<String> = Vec::new();
                     collect_free_idents_expr(body, &mut bound, &mut idents);
-                    for name in idents {
-                        // Skip globals (functions, enum variants, type ctors,
-                        // etc.) — they live in scope[0] and never need to
-                        // alias back through a cell.
-                        if self
-                            .env
-                            .scopes
-                            .first()
-                            .is_some_and(|s| s.contains_key(&name))
-                        {
-                            continue;
-                        }
-                        let _ = self.env.wrap_capture(&name);
+                    idents
+                } else if capture_mode.is_none() {
+                    let mut bound: HashSet<String> = HashSet::new();
+                    for p in params {
+                        add_pattern_bindings(&p.pattern, &mut bound);
                     }
+                    let mut free: Vec<String> = Vec::new();
+                    collect_free_idents_expr(body, &mut bound, &mut free);
+                    let mut assigned: HashSet<String> = HashSet::new();
+                    collect_assigned_roots_expr(body, &mut assigned);
+                    free.into_iter().filter(|n| assigned.contains(n)).collect()
+                } else {
+                    Vec::new()
+                };
+                for name in wrap_names {
+                    // Skip globals (functions, enum variants, type ctors, etc.)
+                    // — they live in scope[0] and never need to alias back.
+                    if self
+                        .env
+                        .scopes
+                        .first()
+                        .is_some_and(|s| s.contains_key(&name))
+                    {
+                        continue;
+                    }
+                    let _ = self.env.wrap_capture(&name);
                 }
                 let captured = self.env.snapshot();
                 let closure_body = Block {

@@ -7190,6 +7190,49 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_fold_capture_mutation_inlined() {
+        // B-2026-07-11-23 — a capture-MUTATING closure in a `fold` terminal. The
+        // fold codegen INLINES the body into the fused loop, so the mutation of
+        // the captured `count` propagates (design-correct). Guards that the new
+        // "stored closure that mutates a capture" codegen refusal does NOT fire
+        // for the inlined terminals (which never construct a closure value).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4];\n\
+                 let mut count = 0;\n\
+                 let s = v.iter().fold(0, |a, x| { count = count + 1; a + x });\n\
+                 println(f\"{s}\");\n\
+                 println(f\"{count}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "10\n4\n");
+        }
+    }
+
+    #[test]
+    fn test_stored_mutating_closure_rejected_in_codegen() {
+        // B-2026-07-11-23 — a STORED closure that mutates a captured local is a
+        // `mut ref` capture codegen doesn't support (by-value env); it must be
+        // REFUSED loudly rather than silently drop the write (the interpreter
+        // aliases the slot and returns the correct value, so a wrong codegen
+        // value would be a silent run-vs-build divergence).
+        let err = ir_result(
+            "fn main() {\n\
+                 let mut c: i64 = 0;\n\
+                 let f = |x: i64| { c = c + x; };\n\
+                 f(3i64);\n\
+                 f(4i64);\n\
+                 println(f\"{c}\");\n\
+             }",
+        )
+        .expect_err("expected a codegen error for a stored capture-mutating closure");
+        assert!(
+            err.contains("mut ref") && err.contains("captured variable"),
+            "expected a loud mut-ref-capture refusal, got: {err}"
+        );
+    }
+
+    #[test]
     fn test_e2e_for_over_iter_chain() {
         // B-2026-07-11-18 — `for x in <src>.iter().{map|filter}+ { .. }`. Before
         // the fix a map/filter adaptor iterable had no `compile_for` arm and fell
