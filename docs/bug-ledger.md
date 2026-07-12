@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **402 surfaced · 11 open · 388 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **402 surfaced · 10 open · 389 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -104,12 +104,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **402 surfaced 
 | B-2026-07-12-6 | 2026-07-12 | codegen | medium | A match ARM inside a very large recursive match-method that declares ~4+ heap-typed (Vec) locals corrupts memory (segfault / double-free / spurious vec-index-out-of-bounds); moving the arm body into its own method is clean | phase-12 self-hosting |
 | B-2026-07-12-7 | 2026-07-12 | codegen | medium | A volatile read through `ptr.const(param.field)` does NOT observe a prior volatile write through `ptr.mut(param.field)` to the SAME field, IN THE SAME FUNCTION, when `param` is a `mut ref` struct parameter (reads the stale pre-write value); the write DOES reach real memory (a caller reading the same field back through a raw pointer sees it). The identical shape on an OWNED LOCAL is correct. Root: `ptr.const`/`ptr.mut` emit no address-taken/escape marker on the rooted binding, so mem2reg promotes a `ref`-param's local slot and the two independent pointer derivations read a promoted (stale) SSA value instead of shared memory. | raw-pointer construction (`ptr.const`/`ptr.mut`) does not mark the rooted binding as address-taken → mem2reg promotion → stale read-through-pointer for ref-param roots |
 | B-2026-07-12-10 | 2026-07-12 | typecheck | low | A `let`-bound closure with an UN-ANNOTATED param whose type must be PULLED from the body's arithmetic or from later call sites is not inferred — the param stays an unresolved `?T0`. `let f = |x| x + 1; f(5)` fails with `arithmetic operator requires numeric type, found '?T0'` + `expected '?T0', found 'i64'` at the call. Inference works when the type is PUSHED from context (e.g. `xs.iter().map(|x| x + 100)` — the element type flows in), and an explicit `|x: i64|` annotation works. | minimal repros below. LOUD (typecheck error `?T0`), consistent interp==build, workaround = annotate the param. Common ergonomic pattern. |
-| B-2026-07-12-12 | 2026-07-12 | codegen | medium | A CLOSURE whose body is itself a CLOSURE (a closure returning a closure / currying) fails codegen: the OUTER closure's return type is lowered as the default `i64` instead of a closure fat pointer `{ptr, ptr}`, so the mono emits `ret { ptr, ptr } %closure_env` in an `i64`-returning LLVM fn -> `Function return type does not match operand type of return inst!`. interp runs correctly; `karac build`/JIT fails. | minimal repro below. LOUD (module verification failure -> codegen refuses, prints the `--interp` fallback hint). Interp is correct. A top-level fn returning a closure WITH an explicit `-> Fn(..)` annotation compiles fine — the gap is the un-annotated let-bound outer closure. |
 | B-2026-07-12-18 | 2026-07-12 | codegen | medium | Interpolating a render-backed Display value (a payload `#[derive(Display)]` enum, or any value rendered via `render_user_enum_display` / a String-returning method) inside a GENERIC function's f-string LEAKS the rendered String. Repro: `#[derive(Display)] enum IoErr { NotFound, Other(String) } fn wrap[E: Display](e: ref E) -> String { f"error: {e}" } fn main() { let b = IoErr.Other(String.from("disk full")); println(wrap(b)); }` -> valgrind `definitely lost: 15 bytes`. INDEPENDENT of `self`/`.to_string()` (reproduces with a plain identifier receiver and no `to_string` call) and of B-2026-07-12-15 — it is a pre-existing generic + f-string-interpolation + render-backed-String ownership gap. A NON-generic `f"{e}"` and a `String.from(...)`-produced value in the same generic f-string are both clean, so the leak needs the combination of (generic monomorphized receiver) + (a value whose Display renders into a fresh heap buffer). FIX DIRECTION: the f-string part renderer must scope-track (free) the render-backed temporary in the generic-monomorphized path the same way the non-generic collection / payload-enum arms `track_vec_var` their acc. Silent leak (no abort), so worth fixing before the Display surface is leaned on in generic error-handling code. | — |
 
-### Fixed (388)
+### Fixed (389)
 
-<details><summary>388 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>389 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -496,6 +495,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **402 surfaced 
 | B-2026-07-12-8 | codegen | medium | A GENERIC (monomorphized) function `fn f[T](..) -> i64` whose body TAIL is a bare `loop { . | 49c8c64 |
 | B-2026-07-12-9 | codegen | high | A `match` ARM GUARD (`p if cond => ..`) is SILENTLY IGNORED under codegen (`karac build` / JIT): the arm fires whenever its PATTERN matches, regardle… | 92656ed |
 | B-2026-07-12-11 | typecheck+interp+codegen | medium | `Option[T].map(f)` and `Result[T,E].map(f)` TYPECHECK CLEAN (`karac check` -> `All checks passed`) but are UNIMPLEMENTED in BOTH the interpreter AND… | ba52795 |
+| B-2026-07-12-12 | codegen | medium | A CLOSURE whose body is itself a CLOSURE (a closure returning a closure / currying) fails codegen: the OUTER closure's return type is lowered as the… | d29b6b0 |
 | B-2026-07-12-13 | codegen | high | A `match` on a TUPLE scrutinee is not DISCRIMINATED under codegen (`karac build` / JIT): the FIRST tuple-pattern arm always fires regardless of the t… | be39032 |
 | B-2026-07-12-14 | typecheck+codegen | medium | Explicit `e.to_string()` on a `#[derive(Display)]` enum with PAYLOAD variants (e.g | 7521a16 |
 | B-2026-07-12-15 | codegen | low | A bare `self.to_string()` / `f"{self}"` inside an impl method failed under codegen (`no handler for method 'to_string' on non-identifier receiver`) w… | 71929b2 |
