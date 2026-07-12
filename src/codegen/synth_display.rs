@@ -1363,16 +1363,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(n.as_str())
                 .filter(|tn| self.struct_field_names.contains_key(tn.as_str()))
                 .cloned(),
-            // NOTE: `self` (SelfValue) is deliberately NOT matched for the
-            // STRUCT case — unlike the enum helpers below. A struct
-            // `self.to_string()` routes through `compile_struct_display_string`'s
-            // synthetic f-string, whose owned-String result double-frees when
-            // returned from a fn (the acc-cleanup transfer only fires at `let`
-            // bindings, not return positions — a PRE-EXISTING bug that also hits
-            // a plain `ref Point` param, tracked as B-2026-07-12-17). Recognising
-            // SelfValue here would turn struct `self.to_string()`'s clean
-            // "no handler" error into that double-free. The enum receivers have
-            // no such return-path hazard, so they ARE handled (B-2026-07-12-15).
+            // `self` receiver — registered under the name "self" in
+            // `var_type_names`. Recognising it here lets a struct
+            // `self.to_string()` / `f"{self}"` render under codegen, ref-aware
+            // (the render helper builds `self.field` accesses). This was gated
+            // out while the struct-`.to_string()` return-position double-free was
+            // live (B-2026-07-12-17); now that its fstr-acc ownership transfer is
+            // fixed at return positions, the struct self receiver is safe too
+            // (mirrors the enum helpers, B-2026-07-12-15).
+            ExprKind::SelfValue => self
+                .var_type_names
+                .get("self")
+                .filter(|tn| self.struct_field_names.contains_key(tn.as_str()))
+                .cloned(),
             ExprKind::FieldAccess { object, field } => {
                 let outer = self.expr_user_struct_name(object)?;
                 let tes = self.struct_field_type_exprs.get(&outer)?;

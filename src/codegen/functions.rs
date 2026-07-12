@@ -2014,10 +2014,24 @@ impl<'ctx> super::Codegen<'ctx> {
             // `suppress_cleanup_for_tail_return` above; the two paths
             // cover the two move-aware tail shapes that produce a String
             // value.
-            if matches!(
-                func.body.final_expr.as_deref().map(|e| &e.kind),
-                Some(ExprKind::InterpolatedStringLit(_))
-            ) {
+            // Use the same `rhs_stages_fstr_acc` predicate the LET-binding path
+            // uses (call_dispatch.rs / control_flow.rs): it covers BOTH a direct
+            // `f"…"` tail AND a struct `.to_string()` tail — the latter stages
+            // `last_fstr_acc` via the synthetic f-string in
+            // `compile_struct_display_string`. The old narrow `InterpolatedStringLit`
+            // match missed the `.to_string()` shape, so a struct `.to_string()`
+            // returned directly (`fn d(p: ref Point) -> String { p.to_string() }`)
+            // double-freed the rendered buffer — freed once here by the acc's
+            // `FreeVecBuffer` and once by the caller's binding (B-2026-07-12-17).
+            // Zeroing the acc's cap makes its cleanup no-op so the caller is the
+            // unique owner. `take()` returning `None` (e.g. a user `impl Display`
+            // `.to_string()`, which doesn't stage an acc) is a harmless no-op.
+            if func
+                .body
+                .final_expr
+                .as_deref()
+                .is_some_and(|e| self.rhs_stages_fstr_acc(e))
+            {
                 if let Some(acc) = self.last_fstr_acc.take() {
                     self.zero_vec_alloca_cap(acc);
                 }

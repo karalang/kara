@@ -23958,4 +23958,35 @@ fn main() {
             "enum_self_to_string_no_leak",
         );
     }
+
+    #[test]
+    fn asan_struct_to_string_returned_from_fn_no_double_free() {
+        // B-2026-07-12-17: a struct `.to_string()` returned directly from a
+        // function double-freed the rendered buffer (the return-position
+        // fstr-acc ownership transfer missed the `.to_string()` shape). Loops a
+        // `ref`-param return and a `self.to_string()` return so any double-free
+        // / leak accumulates for ASAN + LSan; the rendered String is consumed
+        // (`.len()`) each iteration.
+        assert_clean_asan_run(
+            r#"
+#[derive(Display)]
+struct Point { x: i64, y: i64 }
+impl Point { fn describe(ref self) -> String { self.to_string() } }
+fn render(p: ref Point) -> String { p.to_string() }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 200 {
+        let p: Point = Point { x: 3, y: 4 };
+        total = total + render(p).len();
+        total = total + p.describe().len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            &["8000"],
+            "struct_to_string_returned_from_fn_no_double_free",
+        );
+    }
 }

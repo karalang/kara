@@ -22287,6 +22287,72 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_to_string_returned_from_fn() {
+        // B-2026-07-12-17: a struct `.to_string()` (f-string-backed) DOUBLE-FREED
+        // its rendered buffer when returned directly from a function — the
+        // return-position fstr-acc ownership transfer only fired for a literal
+        // `f"…"` tail, not the `.to_string()` shape. Now the return handler uses
+        // the same `rhs_stages_fstr_acc` predicate the let-binding path uses, so
+        // the acc's cap is zeroed and the caller is the unique owner. Covers a
+        // `ref` param, an owned param, and a nested-struct render — all
+        // valgrind-clean (verified by hand).
+        if let Some(out) = run_program(
+            r#"
+#[derive(Display)]
+struct Point { x: i64, y: i64 }
+#[derive(Display)]
+struct Inner { v: i64 }
+#[derive(Display)]
+struct Outer { a: Inner, b: i64 }
+fn by_ref(p: ref Point) -> String { p.to_string() }
+fn by_val(p: Point) -> String { p.to_string() }
+fn nested(o: ref Outer) -> String { o.to_string() }
+fn main() {
+    let p: Point = Point { x: 3, y: 4 };
+    println(by_ref(p));
+    let q: Point = Point { x: 5, y: 6 };
+    println(by_val(q));
+    let o: Outer = Outer { a: Inner { v: 7 }, b: 9 };
+    println(nested(o));
+}
+"#,
+        ) {
+            assert_eq!(
+                out,
+                "Point { x: 3, y: 4 }\nPoint { x: 5, y: 6 }\nOuter { a: Inner { v: 7 }, b: 9 }\n"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_struct_self_to_string() {
+        // `self.to_string()` / `f"{self}"` on a `#[derive(Display)]` STRUCT
+        // receiver now renders under codegen (inherent + trait impl) — the
+        // struct half of B-2026-07-12-15, unblocked once the return-position
+        // double-free (B-2026-07-12-17) was fixed. build == run; valgrind-clean.
+        if let Some(out) = run_program(
+            r#"
+#[derive(Display)]
+struct Point { x: i64, y: i64 }
+impl Point { fn describe(ref self) -> String { self.to_string() } }
+trait Show { fn show(ref self) -> String; }
+impl Show for Point { fn show(ref self) -> String { self.to_string() } }
+fn main() {
+    let p: Point = Point { x: 3, y: 4 };
+    println(p.describe());
+    println(p.show());
+    println(f"{p}");
+}
+"#,
+        ) {
+            assert_eq!(
+                out,
+                "Point { x: 3, y: 4 }\nPoint { x: 3, y: 4 }\nPoint { x: 3, y: 4 }\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_struct_display_print_and_to_string() {
         if let Some(out) = run_program(
             r#"
