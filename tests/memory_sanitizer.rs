@@ -823,6 +823,95 @@ fn main() {
     }
 
     #[test]
+    fn asan_if_let_result_shared_no_leak() {
+        // B-2026-07-12-24 (residual): `if let Ok(n) = d { … }` is match-sugar —
+        // a consume-in-place use of `d`, exactly like `match d`. The escape
+        // analysis now recognizes if-let (and while-let / let-else) scrutinees
+        // as consume points (not just `match`), so `d` is released. Looped 200x;
+        // prints 1400.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[Node, i64] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => Err(1),
+        Some(n) => Ok(n),
+    }
+}
+fn caller() -> i64 {
+    let d = take();
+    let mut r = 0;
+    if let Ok(n) = d {
+        r = n.val;
+    }
+    r
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + caller();
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["1400"],
+            "if_let_result_shared_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_if_let_result_shared_move_out_body_no_double_free() {
+        // B-2026-07-12-24 (residual) guard: an if-let whose body MOVES the
+        // payload out (`if let Ok(n) = d { Ok(n) }`) must not double-free — the
+        // scrutinee `d`'s scope-exit dec and the rebuilt value's ownership are
+        // independent (same balance as the `match` returning-arm case). The
+        // rebuilt `Ok(n)` flows to a consumer (`match relay()`) that releases
+        // it. Prints 1400.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[Node, i64] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => Err(1),
+        Some(n) => Ok(n),
+    }
+}
+fn relay() -> Result[Node, i64] {
+    let d = take();
+    if let Ok(n) = d {
+        Ok(n)
+    } else {
+        Err(0)
+    }
+}
+fn caller() -> i64 {
+    match relay() {
+        Err(e) => e,
+        Ok(n) => n.val,
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + caller();
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["1400"],
+            "if_let_result_shared_move_out_body_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_escaping_result_shared_binding_no_double_free() {
         // B-2026-07-12-24 (residual) safety guard: a USER `Result[shared]` binding
         // that ESCAPES must NOT be given a producer-side dec (that would

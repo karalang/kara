@@ -99,6 +99,21 @@ fn record_use<'a>(acc: &mut Acc<'a>, name: &'a str, scrutinee: bool) {
     }
 }
 
+/// Walk a pattern-matching CONSTRUCT's scrutinee (`match` / `if let` / `while
+/// let` / `let…else` value). A bare `Identifier(n)` scrutinee is a
+/// consume-in-place use (counted as a scrutinee use — safe), UNLESS inside a
+/// closure where referencing an outer binding is a capture (escape). The bare
+/// identifier is counted directly (NOT recursed into, which would double-count
+/// it as a plain use); any other scrutinee shape recurses normally. All four
+/// pattern-match forms are match-sugar, so they share this consume semantics.
+fn walk_scrutinee<'a>(acc: &mut Acc<'a>, scrutinee: &'a Expr) {
+    if let ExprKind::Identifier(n) = &scrutinee.kind {
+        record_use(acc, n.as_str(), !acc.in_closure);
+    } else {
+        walk_expr(scrutinee, acc);
+    }
+}
+
 fn walk_block<'a>(b: &'a Block, acc: &mut Acc<'a>) {
     for s in &b.stmts {
         walk_stmt(s, acc);
@@ -124,10 +139,16 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
             ..
         } => {
             if let crate::ast::PatternKind::Binding(name) = &pattern.kind {
+                // Irrefutable-binding let-else (`let x = v else`, rare) —
+                // introduces `x`, so record it and treat `v` as its RHS.
                 acc.lets
                     .push((name.as_str(), (value.span.offset, value.span.length)));
+                walk_expr(value, acc);
+            } else {
+                // Refutable `let Pat = <scrutinee> else { … }` — match-sugar
+                // over `value`, so `value` is a consume-in-place scrutinee.
+                walk_scrutinee(acc, value);
             }
-            walk_expr(value, acc);
             walk_block(else_block, acc);
         }
         StmtKind::LetUninit { .. } => {}
@@ -168,15 +189,7 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         // and never recurses here), so it is an escape.
         ExprKind::Identifier(n) => record_use(acc, n.as_str(), false),
         ExprKind::Match { scrutinee, arms } => {
-            if let ExprKind::Identifier(n) = &scrutinee.kind {
-                // Consume-in-place use: count as a scrutinee use (safe) — UNLESS
-                // we are inside a closure, where referencing an outer binding is
-                // a capture (escape), so it counts as a plain total-only use.
-                // Do NOT recurse into the scrutinee (would double-count it).
-                record_use(acc, n.as_str(), !acc.in_closure);
-            } else {
-                walk_expr(scrutinee, acc);
-            }
+            walk_scrutinee(acc, scrutinee);
             for arm in arms {
                 walk_match_arm(arm, acc);
             }
@@ -257,7 +270,8 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
             else_branch,
             ..
         } => {
-            walk_expr(value, acc);
+            // `if let Pat = <scrutinee>` is match-sugar — consume-in-place.
+            walk_scrutinee(acc, value);
             walk_block(then_block, acc);
             if let Some(e) = else_branch {
                 walk_expr(e, acc);
@@ -270,7 +284,8 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
             walk_block(body, acc);
         }
         ExprKind::WhileLet { value, body, .. } => {
-            walk_expr(value, acc);
+            // `while let Pat = <scrutinee>` is match-sugar — consume-in-place.
+            walk_scrutinee(acc, value);
             walk_block(body, acc);
         }
         ExprKind::For { iterable, body, .. } => {
@@ -397,6 +412,29 @@ mod tests {
             "matched-in-place `d` should be non-escaping"
         );
         assert!(names.contains("u"), "unused `u` should be non-escaping");
+    }
+
+    #[test]
+    fn if_let_scrutinee_is_nonescaping() {
+        // `if let Pat = d` is match-sugar → consume-in-place.
+        let names =
+            nonescaping_names("fn f() -> i64 { let d = g(); if let A(n) = d { n } else { 0 } }");
+        assert!(
+            names.contains("d"),
+            "if-let scrutinee `d` should be non-escaping"
+        );
+    }
+
+    #[test]
+    fn if_let_capture_into_closure_escapes() {
+        // if-let inside a closure body is still a capture (escape).
+        let names = nonescaping_names(
+            "fn f() -> i64 { let d = g(); let c = || { if let A(n) = d { n } else { 0 } }; c() }",
+        );
+        assert!(
+            !names.contains("d"),
+            "if-let inside a closure captures `d` → escape"
+        );
     }
 
     #[test]
