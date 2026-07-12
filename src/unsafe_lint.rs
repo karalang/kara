@@ -1,26 +1,36 @@
 // src/unsafe_lint.rs
-//! `undocumented_unsafe` lint with two carriers, one diagnostic name:
+//! `undocumented_unsafe` lint with three carriers, one diagnostic name:
 //!
 //! 1. **Expression form (`unsafe { ... }`).** Every block must be preceded
 //!    by a line comment whose text (after stripping the leading `//`) begins
 //!    with `Safety:` (case-insensitive). The check is source-text-based
 //!    because regular line comments are stripped from the token stream
 //!    during lexing.
-//! 2. **Declaration form (`unsafe extern "ABI" { ... }`).** Every block must
+//! 2. **`unsafe extern "ABI" { ... }` declaration form.** Every block must
 //!    carry a `///` doc-comment containing a `# Safety` markdown section
 //!    (case-insensitive, any header level). The doc-comment is parsed onto
 //!    `ExternBlock.doc_comment` and is also rendered by `karac doc`, so the
 //!    lint and the renderer share one carrier — authors don't write a
 //!    safety justification twice.
+//! 3. **`unsafe fn` declaration form.** Every `unsafe fn` — a free function
+//!    or an impl method — must carry a `///` doc-comment with a `# Safety`
+//!    markdown section (same carrier / matcher as form 2). `unsafe` on a fn
+//!    declares a *precondition the caller must uphold* (it does NOT wrap the
+//!    body — that is the `unsafe_op_in_unsafe_fn` rule's concern), so the
+//!    contract has to be written down where callers can read it. This is the
+//!    peer of Rust's `clippy::missing_safety_doc`. Scoped to user-authored
+//!    fns (`stdlib_origin == false`) so a spliced gated-stdlib `unsafe fn`
+//!    never warns on an end-user compile.
 //!
-//! Suppression (both forms):
-//!   - `#[allow(undocumented_unsafe)]` on the enclosing function (form 1)
-//!     or on the block itself (form 2) silences the warning.
+//! Suppression (all forms):
+//!   - `#[allow(undocumented_unsafe)]` on the enclosing function (form 1),
+//!     the block itself (form 2), or the `unsafe fn` / its impl method
+//!     (form 3) silences the warning.
 //!   - `#[deny(undocumented_unsafe)]` promotes the warning to an error.
 
 use crate::ast::{
-    Attribute, Block, Expr, ExprKind, ExternBlock, FieldInit, ImplItem, Item, MatchArm, Program,
-    Stmt, StmtKind, TraitItem, TypeKind, UnaryOp,
+    Attribute, Block, Expr, ExprKind, ExternBlock, FieldInit, Function, ImplItem, Item, MatchArm,
+    Program, Stmt, StmtKind, TraitItem, TypeKind, UnaryOp,
 };
 use crate::resolver::SpanKey;
 use crate::token::Span;
@@ -146,6 +156,38 @@ fn check_extern_block_safety_doc(
     }
 }
 
+/// Form 3: an `unsafe fn` declaration (free function or impl method) must
+/// carry a `///` doc-comment with a `# Safety` markdown section — the
+/// caller-precondition contract, the same `# Safety` matcher as the extern
+/// block. No-op for a safe fn or a spliced gated-stdlib fn
+/// (`stdlib_origin == true`), so an end-user compile never warns on the
+/// compiler's own stdlib. `level` is the already-resolved severity for this
+/// fn (function / impl-method cascade folded in by the caller).
+fn check_unsafe_fn_safety_doc(f: &Function, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
+    if !f.is_unsafe || f.stdlib_origin {
+        return;
+    }
+    let has_safety = f
+        .doc_comment
+        .as_deref()
+        .map(doc_has_safety_section)
+        .unwrap_or(false);
+    if !has_safety {
+        diags.push(LintDiagnostic {
+            level,
+            span: f.span.clone(),
+            message: format!(
+                "unsafe fn `{}` is missing a `# Safety` doc-comment section \
+                 documenting the precondition callers must uphold before calling it",
+                f.name
+            ),
+            lint_name: "undocumented_unsafe".to_string(),
+            help: None,
+            note: None,
+        });
+    }
+}
+
 /// True if any line of the doc-comment is a markdown header whose visible
 /// text begins with "Safety" (case-insensitive). Accepts any header level
 /// (`# Safety`, `## Safety`, ...) and any trailing text (`# Safety` and
@@ -195,7 +237,12 @@ fn collect_item_unsafe(
     diags: &mut Vec<LintDiagnostic>,
 ) {
     match item {
-        Item::Function(f) => walk_block(&f.body, lines, outer_level, diags),
+        Item::Function(f) => {
+            // Form 3: the `unsafe fn` declaration itself needs a `# Safety`
+            // doc section (no-op for a safe fn). Peer of the body-block walk.
+            check_unsafe_fn_safety_doc(f, outer_level, diags);
+            walk_block(&f.body, lines, outer_level, diags);
+        }
         Item::ImplBlock(imp) => {
             for item in &imp.items {
                 if let crate::ast::ImplItem::Method(method) = item {
@@ -223,6 +270,9 @@ fn collect_item_unsafe(
                             outer_level
                         }
                     };
+                    // Form 3 on an impl method — same doc requirement as a
+                    // free `unsafe fn`, gated on the per-method severity.
+                    check_unsafe_fn_safety_doc(method, method_level, diags);
                     walk_block(&method.body, lines, method_level, diags);
                 }
             }

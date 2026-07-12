@@ -310,6 +310,219 @@ fn test_multiple_unsafe_extern_blocks_each_checked_independently() {
     );
 }
 
+// ── Declaration-form lint: `unsafe fn` (free fn + impl method) ────
+//
+// An `unsafe fn` declares a precondition the *caller* must uphold, so the
+// contract must be written down: every `unsafe fn` needs a `///` doc-comment
+// carrying a `# Safety` markdown section (same carrier / matcher as the
+// `unsafe extern` block form). Peer of Rust's `clippy::missing_safety_doc`.
+// Scoped to user-authored fns; a safe fn is never checked.
+
+#[test]
+fn test_unsafe_fn_with_safety_doc_passes() {
+    let diags = lint(
+        "/// Reads a raw slot.\n\
+         ///\n\
+         /// # Safety\n\
+         ///\n\
+         /// `i` must be in bounds for the backing buffer.\n\
+         unsafe fn raw(i: i64) -> i64 { i }",
+    );
+    assert!(
+        diags.is_empty(),
+        "unsafe fn with a `# Safety` section should pass, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_unsafe_fn_without_doc_warns() {
+    let diags = lint("unsafe fn raw(i: i64) -> i64 { i }");
+    assert_eq!(diags.len(), 1, "expected 1 diagnostic, got: {diags:?}");
+    assert_eq!(diags[0].level, LintLevel::Warning);
+    assert_eq!(diags[0].lint_name, "undocumented_unsafe");
+    assert!(
+        diags[0].message.contains("# Safety"),
+        "diagnostic should mention `# Safety`: {}",
+        diags[0].message
+    );
+    assert!(
+        diags[0].message.contains("raw"),
+        "diagnostic should name the offending fn: {}",
+        diags[0].message
+    );
+}
+
+#[test]
+fn test_unsafe_fn_with_unrelated_doc_warns() {
+    // A doc comment exists but has no `# Safety` markdown section.
+    let diags = lint(
+        "/// Reads a raw slot.\n\
+         unsafe fn raw(i: i64) -> i64 { i }",
+    );
+    assert_eq!(
+        diags.len(),
+        1,
+        "doc without a Safety section should still warn, got: {diags:?}"
+    );
+    assert_eq!(diags[0].level, LintLevel::Warning);
+}
+
+#[test]
+fn test_safe_fn_not_checked_for_safety_doc() {
+    // The declaration-doc rule fires only on `unsafe fn` — a plain fn with
+    // no doc comment is fine.
+    let diags = lint("fn plain(i: i64) -> i64 { i }");
+    assert!(
+        diags.is_empty(),
+        "a safe fn should never require a `# Safety` doc, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_unsafe_fn_safety_doc_higher_header_level_passes() {
+    // `## Safety` is the rustdoc convention when nested under a parent.
+    let diags = lint(
+        "/// Top-level prose.\n\
+         ///\n\
+         /// ## Safety\n\
+         ///\n\
+         /// Justification here.\n\
+         unsafe fn raw() {}",
+    );
+    assert!(diags.is_empty(), "`## Safety` should pass, got: {diags:?}");
+}
+
+#[test]
+fn test_unsafe_fn_allow_attribute_suppresses() {
+    let diags = lint(
+        "#[allow(undocumented_unsafe)]\n\
+         unsafe fn raw() {}",
+    );
+    assert!(
+        diags.is_empty(),
+        "#[allow(undocumented_unsafe)] should suppress, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_unsafe_fn_deny_attribute_promotes_to_error() {
+    let diags = lint(
+        "#[deny(undocumented_unsafe)]\n\
+         unsafe fn raw() {}",
+    );
+    assert_eq!(diags.len(), 1, "expected 1 diagnostic, got: {diags:?}");
+    assert_eq!(diags[0].level, LintLevel::Error);
+}
+
+#[test]
+fn test_impl_unsafe_method_without_doc_warns() {
+    let diags = lint(
+        "struct S { x: i64 }\n\
+         impl S {\n\
+             unsafe fn raw_read(self) -> i64 { self.x }\n\
+         }",
+    );
+    assert_eq!(diags.len(), 1, "expected 1 diagnostic, got: {diags:?}");
+    assert_eq!(diags[0].level, LintLevel::Warning);
+    assert!(
+        diags[0].message.contains("raw_read"),
+        "diagnostic should name the method: {}",
+        diags[0].message
+    );
+}
+
+#[test]
+fn test_impl_unsafe_method_with_doc_passes() {
+    let diags = lint(
+        "struct S { x: i64 }\n\
+         impl S {\n\
+             /// # Safety\n\
+             /// The caller guarantees `self` is initialized.\n\
+             unsafe fn raw_read(self) -> i64 { self.x }\n\
+         }",
+    );
+    assert!(
+        diags.is_empty(),
+        "documented impl method should pass, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_impl_safe_method_not_checked() {
+    let diags = lint(
+        "struct S { x: i64 }\n\
+         impl S {\n\
+             fn read(self) -> i64 { self.x }\n\
+         }",
+    );
+    assert!(
+        diags.is_empty(),
+        "a safe impl method should never require a `# Safety` doc, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_impl_unsafe_method_per_method_allow_suppresses() {
+    // The per-method `#[allow]` is the innermost cascade level and wins.
+    let diags = lint(
+        "struct S { x: i64 }\n\
+         impl S {\n\
+             #[allow(undocumented_unsafe)]\n\
+             unsafe fn raw_read(self) -> i64 { self.x }\n\
+         }",
+    );
+    assert!(
+        diags.is_empty(),
+        "per-method #[allow] should suppress, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_unsafe_fn_declaration_and_inner_block_both_fire() {
+    // The declaration-doc rule (form 3) and the body-block rule (form 1)
+    // are independent — an undocumented `unsafe fn` whose body also has an
+    // undocumented `unsafe { }` block produces both diagnostics.
+    let diags = lint(
+        "unsafe fn raw() {\n\
+             unsafe { }\n\
+         }",
+    );
+    assert_eq!(
+        diags.len(),
+        2,
+        "expected the declaration-doc warning AND the inner-block warning, got: {diags:?}"
+    );
+    assert!(
+        diags.iter().all(|d| d.lint_name == "undocumented_unsafe"),
+        "both should be undocumented_unsafe, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_unsafe_fn_doc_diag_has_no_help_or_note() {
+    // `undocumented_unsafe` emits single-line diagnostics (help/note are
+    // scoped to `unsafe_op_in_unsafe_fn`) — the form-3 emission matches.
+    let diags = lint("unsafe fn raw() {}");
+    assert_eq!(diags.len(), 1, "expected 1 diagnostic, got: {diags:?}");
+    assert!(diags[0].help.is_none(), "got help: {:?}", diags[0].help);
+    assert!(diags[0].note.is_none(), "got note: {:?}", diags[0].note);
+}
+
+#[test]
+fn test_cli_deny_promotes_unsafe_fn_doc() {
+    // The CLI `-D undocumented_unsafe` fall-through reaches the form-3
+    // declaration check too.
+    let source = "unsafe fn raw() {}";
+    let prog = parse_program(source);
+    let cli = karac::lints::CliLintOverrides::with_level(
+        "undocumented_unsafe",
+        karac::lints::LintLevel::Deny,
+    );
+    let diags = check_undocumented_unsafe(&prog, source, &cli);
+    assert_eq!(diags.len(), 1, "expected 1 diagnostic, got: {diags:?}");
+    assert_eq!(diags[0].level, LintLevel::Error);
+}
+
 // ── Slice 3: `unsafe_op_in_unsafe_fn` operation lint ─────────────────
 //
 // The lint walks every fn body, tracking whether the cursor is inside an

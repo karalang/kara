@@ -519,6 +519,14 @@ impl super::Parser {
         self.expect(&Token::LeftBrace)?;
         let mut items = Vec::new();
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
+            // Collect leading `///` doc comments for the impl item before its
+            // attributes — mirrors `parse_item` and the trait-block loop.
+            // `parse_function` drains the pending doc via `take_pending_doc`
+            // onto `Function.doc_comment`; without this, a doc comment before
+            // an impl method was a hard parse error ("Expected Fn, found
+            // DocComment") and impl methods (unlike trait methods) could not
+            // be documented at all.
+            self.collect_leading_doc_comments();
             let attrs = self.parse_attributes();
             if self.check(&Token::Type) {
                 let binding = self.parse_assoc_type_binding()?;

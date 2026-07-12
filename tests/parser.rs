@@ -4696,9 +4696,8 @@ fn test_impl_method_unsafe_fn_parses_and_records_is_unsafe() {
 fn test_impl_method_unsafe_fn_with_pub_and_effects_roundtrips() {
     // Composition: `pub unsafe fn` with attributes / effects / params
     // inside an impl block — same precedence as module-scope `unsafe fn`.
-    // (Per-method `///` doc comments inside impl bodies are a separate
-    // pre-existing limitation: the impl-block body loop does not yet
-    // call `collect_leading_doc_comments` — out of scope for this slice.)
+    // (Per-method `///` doc comments inside impl bodies now attach — see
+    // `test_impl_method_doc_comment_captured` below.)
     let prog = parse_ok(
         r#"
         impl Foo {
@@ -4720,6 +4719,40 @@ fn test_impl_method_unsafe_fn_with_pub_and_effects_roundtrips() {
     assert_eq!(m.name, "read_raw");
     assert_eq!(m.attributes.len(), 1);
     assert!(m.effects.is_some());
+}
+
+#[test]
+fn test_impl_method_doc_comment_captured() {
+    // A `///` doc comment before an impl method now attaches to the
+    // method's `Function.doc_comment` (previously a hard parse error —
+    // the impl-block body loop did not collect leading doc comments,
+    // unlike `parse_item` and the trait-block loop). Doc comments +
+    // attributes compose in canonical `///`-then-`#[attr]` order.
+    let prog = parse_ok(
+        r#"
+        impl Foo {
+            /// Reads a raw slot.
+            ///
+            /// # Safety
+            /// `i` must be in bounds.
+            unsafe fn raw_get(self, i: i64) -> i64 { i }
+
+            fn plain(self) -> i64 { 0 }
+        }
+        "#,
+    );
+    let Item::ImplBlock(imp) = &prog.items[0] else {
+        panic!("expected ImplBlock");
+    };
+    let methods = impl_methods(imp);
+    assert_eq!(methods.len(), 2);
+    assert_eq!(
+        methods[0].doc_comment.as_deref(),
+        Some("Reads a raw slot.\n\n# Safety\n`i` must be in bounds."),
+        "doc comment should attach to the impl method"
+    );
+    // The doc does not leak onto the following (undocumented) method.
+    assert_eq!(methods[1].doc_comment, None);
 }
 
 #[test]
