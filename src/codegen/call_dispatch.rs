@@ -2315,6 +2315,58 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 
+    /// `reg.read()` / `reg.write(v)` on a `VolatileCell[T]` binding — the
+    /// transparent MMIO wrapper (`runtime/stdlib/volatile_cell.kara`). Like
+    /// `Atomic[T]`, `VolatileCell[T]` lowers to the bare inner `T` (see the arm
+    /// in `llvm_type_for_type_expr`), so the binding's alloca IS the register's
+    /// storage: `.read()` is a volatile load of that alloca, `.write(v)` a
+    /// volatile store into it — the same `volatile` flag the `volatile_read` /
+    /// `volatile_write` intrinsics emit, with the field-address plumbing
+    /// collapsed away by the transparent layout. `.write` coerces the value to
+    /// the slot width (an `i64` literal into an `i32` register, etc.). Restricted
+    /// to an identifier receiver (an owned/`ref` `VolatileCell` binding), the
+    /// shape `var_type_names` tags; other receiver shapes fall through.
+    pub(super) fn compile_volatile_cell_method(
+        &mut self,
+        recv_name: &str,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let storage_ptr = self.get_data_ptr(recv_name).ok_or_else(|| {
+            format!("codegen: VolatileCell receiver '{recv_name}' has no storage slot")
+        })?;
+        let ty = self.variables.get(recv_name).map(|s| s.ty).ok_or_else(|| {
+            format!("codegen: VolatileCell receiver '{recv_name}' has no slot type")
+        })?;
+        match method {
+            "read" => {
+                let loaded = self
+                    .builder
+                    .build_load(ty, storage_ptr, "volcell.read")
+                    .map_err(|e| format!("VolatileCell.read: {e:?}"))?;
+                loaded
+                    .as_instruction_value()
+                    .expect("build_load yields an instruction value")
+                    .set_volatile(true)
+                    .map_err(|e| format!("VolatileCell.read set_volatile: {e:?}"))?;
+                Ok(loaded)
+            }
+            "write" => {
+                let v = self.compile_expr(&args[0].value)?;
+                let v = self.coerce_scalar_to_type(v, ty);
+                let store = self
+                    .builder
+                    .build_store(storage_ptr, v)
+                    .map_err(|e| format!("VolatileCell.write: {e:?}"))?;
+                store
+                    .set_volatile(true)
+                    .map_err(|e| format!("VolatileCell.write set_volatile: {e:?}"))?;
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            other => Err(format!("codegen: unknown VolatileCell method '{other}'")),
+        }
+    }
+
     /// Phase-7 line 5 sub-item 1 — lower a call to a hot-swap-slotted
     /// callee as load-from-table + indirect call. `func` carries the
     /// FunctionType the indirect call must use (signatures match the

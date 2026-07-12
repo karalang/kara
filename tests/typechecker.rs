@@ -32405,3 +32405,71 @@ fn secret_non_blocklisted_trait_allowed() {
          fn main() {}",
     );
 }
+
+// ── Copy bound on generic methods (B-2026-07-12 VolatileCell enabler) ──
+
+#[test]
+fn test_copy_bound_generic_method_callable_on_primitive() {
+    // A bounded generic impl method (`impl[T: Copy] Box[T] { fn get(...) }`)
+    // must be callable on a PRIMITIVE instantiation (`Box[i32]`). Before the
+    // env-layer `bound_satisfied` fix, `Copy` — a derive-only builtin never in
+    // the impl table — was reported unsatisfied for `i32`, wrongly rejecting
+    // the call. Primitives satisfy every derive-only builtin structurally.
+    typecheck_ok(
+        "struct Box[T: Copy] { v: T }\n\
+         impl[T: Copy] Box[T] {\n\
+             fn new(v: T) -> Box[T] { Box { v: v } }\n\
+             fn get(ref self) -> T { self.v }\n\
+         }\n\
+         fn main() {\n\
+             let b: Box[i32] = Box.new(5);\n\
+             let _x: i32 = b.get();\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_copy_bound_rejects_non_copy_type() {
+    // The `T: Copy` bound must still REJECT a non-Copy instantiation — the fix
+    // recognizes primitives, not everything. `String` is not `Copy`.
+    let errors = typecheck_errors(
+        "struct Box[T: Copy] { v: T }\n\
+         impl[T: Copy] Box[T] {\n\
+             fn new(v: T) -> Box[T] { Box { v: v } }\n\
+             fn get(ref self) -> T { self.v }\n\
+         }\n\
+         fn main() {\n\
+             let b: Box[String] = Box.new(\"hi\");\n\
+             let _x: String = b.get();\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.to_string().contains("Copy")),
+        "expected a `Copy`-bound diagnostic, got: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_volatile_cell_copy_bound_accepts_primitive_rejects_string() {
+    // The baked prelude `VolatileCell[T: Copy]` — `.read()` is callable on a
+    // primitive element (`i32`) and rejected on a non-Copy element (`String`).
+    typecheck_ok(
+        "fn main() {\n\
+             let mut r: VolatileCell[i32] = VolatileCell.new(1);\n\
+             r.write(2);\n\
+             let _v: i32 = r.read();\n\
+         }\n",
+    );
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let c: VolatileCell[String] = VolatileCell.new(\"hi\");\n\
+             let _v: String = c.read();\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.to_string().contains("Copy")),
+        "expected a `Copy`-bound diagnostic for VolatileCell[String], got: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}

@@ -21219,3 +21219,32 @@ fn main() {
 "#);
     assert_eq!(out, "true\nfalse\nfalse\n");
 }
+
+// ── VolatileCell (MMIO wrapper) ─────────────────────────────────
+
+#[test]
+fn test_volatile_cell_rejected_under_tree_walk_interpreter() {
+    // `VolatileCell[T]` is a compiled-mode primitive: its `.read()` / `.write(v)`
+    // execute the baked method bodies, which call the `volatile_read` /
+    // `volatile_write` intrinsics — and the tree-walk interpreter has no
+    // raw-pointer representation, so it rejects loudly with a "compile with
+    // `karac build`" hint (same posture as the raw volatile intrinsics and the
+    // `ptr.*` surface). AOT `karac build` and the default JIT `karac run` both
+    // lower it correctly (see the codegen E2E
+    // `test_e2e_volatile_cell_read_write_roundtrip`); only the pure tree-walk
+    // path (this `run_program` API / `KARAC_RUN_JIT=0`) rejects.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut reg: VolatileCell[i32] = VolatileCell.new(7);\n\
+             reg.write(42);\n\
+             println(reg.read());\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("volatile") && e.message.contains("karac build")),
+        "expected a volatile compiled-mode rejection, got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}

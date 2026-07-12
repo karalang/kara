@@ -2616,6 +2616,18 @@ impl<'ctx> super::Codegen<'ctx> {
             return Err("Atomic.new requires an initial value argument".to_string());
         }
 
+        // `VolatileCell.new(v)` — transparent constructor for the MMIO wrapper.
+        // Like `Atomic[T]`, `VolatileCell[T]` IS `T` at the LLVM level (see the
+        // arm in `llvm_type_for_type_expr`), so the constructor just forwards
+        // its argument's value; the let-binding stores it into the primitive
+        // alloca that subsequent `.read()` / `.write(v)` volatile-access.
+        if type_name == "VolatileCell" && method == "new" {
+            if let Some(arg) = _args.first() {
+                return self.compile_expr(&arg.value);
+            }
+            return Err("VolatileCell.new requires an initial value argument".to_string());
+        }
+
         // `Mutex.new(v)` — builds the spinlock-guarded cell aggregate
         // `{ i64 lockflag = 0, T value = v }` (layout per `llvm_type_for_type_expr`'s
         // Mutex arm). The unlocked state is lockflag = 0. `lock m { ... }` later

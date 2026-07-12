@@ -3092,6 +3092,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return self.compile_client_http_method(method, args);
                 }
+                // `reg.read()` / `reg.write(v)` on a `VolatileCell[T]` binding —
+                // the transparent MMIO wrapper (`volatile_cell.kara`). The
+                // binding's alloca IS the inner `T` (transparent, like Atomic),
+                // so the access lowers to a volatile load / store directly
+                // against that slot. Intercepted here because codegen does not
+                // compile the baked type's `.kara` method bodies (which call the
+                // `volatile_read` / `ptr.const` surface); the interpreter DOES
+                // execute them and rejects — matching the codegen-only posture
+                // of the raw volatile intrinsics.
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "VolatileCell")
+                    && matches!(method, "read" | "write")
+                {
+                    let name = name.clone();
+                    return self.compile_volatile_cell_method(&name, method, args);
+                }
                 // Phase-8 line 24 — `Client.request(method, url)`
                 // chained-builder entrypoint. Returns a `RequestBuilder
                 // { handle: i64 }` wrapping a runtime-side

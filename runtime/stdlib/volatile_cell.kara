@@ -1,0 +1,64 @@
+// `VolatileCell[T]` — ergonomic typed wrapper over a single memory-mapped
+// I/O (MMIO) register.
+//
+// A `VolatileCell[T]` holds one value of a `Copy` type and exposes `.read()` /
+// `.write(v)` that lower to the `volatile_read` / `volatile_write` prelude
+// intrinsics (`runtime/stdlib/intrinsics.kara`) — so the access is a volatile
+// load / store the optimizer may neither elide, reorder, nor duplicate, which
+// is exactly the contract a hardware register demands. It is the safe,
+// unsafe-free surface over the raw MMIO intrinsics: the `unsafe` block and the
+// raw-pointer construction (`ptr.const` / `ptr.mut` of the inner field) are
+// encapsulated here, so callers write `reg.write(0x1)` rather than an
+// `unsafe { volatile_write(ptr.mut(...), ...) }` incantation at every site.
+//
+// `T: Copy` is load-bearing: `volatile_read` returns `T` by copying its bytes,
+// which is only sound for a `Copy` (heap-free, alias-free) type — a
+// `VolatileCell[String]` would bitwise-duplicate the `{ptr,len,cap}` header and
+// double-free. The bound rejects such a `T` at the call site.
+//
+// Compiled-mode primitive. Under `karac build` (AOT) and the default
+// `karac run` (JIT) codegen lowers `VolatileCell[T]` transparently to its inner
+// `T` — the binding's slot IS the register — and intercepts `.read()` /
+// `.write(v)` as a volatile load / store against that slot. The pure tree-walk
+// interpreter (`karac run --interp` / `KARAC_RUN_JIT=0`) has no raw-pointer
+// representation, so the method bodies below hit the `volatile_read` /
+// `volatile_write` intrinsics' compiled-mode gate and reject with a "compile
+// with `karac build`" hint — the same posture as the raw `ptr.*` / volatile
+// surface this wraps.
+//
+// Effects: `.read()` performs `reads(Hardware)`, `.write(v)` performs
+// `writes(Hardware)` — the always-available `Hardware` conflict resource
+// (`PRELUDE_EFFECT_RESOURCES`) the intrinsics are annotated with, so a public
+// function that touches a register surfaces it in its declared effect set and
+// two writers to the same register conflict under auto-concurrency analysis.
+
+/// The ergonomic typed wrapper over a single MMIO register of `Copy` type `T`.
+///
+/// Invariant in `T` (`[=T]`): a `VolatileCell` is both read and written, so it
+/// is neither co- nor contravariant — matching its `Atomic` / `Mutex` sibling
+/// primitives (a mutable single-value cell).
+pub struct VolatileCell[=T: Copy] {
+    value: T,
+}
+
+impl[T: Copy] VolatileCell[T] {
+    /// Wrap `value` in a `VolatileCell`.
+    pub fn new(value: T) -> VolatileCell[T] {
+        VolatileCell { value: value }
+    }
+
+    /// Volatile-read the cell's current value.
+    pub fn read(ref self) -> T with reads(Hardware) {
+        // Safety: `self.value` is a live, aligned field of the receiver for the
+        // duration of the read, and `T: Copy` makes the byte-copy `volatile_read`
+        // performs sound (no heap/alias to duplicate).
+        unsafe { volatile_read(ptr.const(self.value)) }
+    }
+
+    /// Volatile-write `value` into the cell.
+    pub fn write(mut ref self, value: T) with writes(Hardware) {
+        // Safety: `self.value` is a live, aligned field of the receiver for the
+        // duration of the write; `T: Copy` makes the byte-store sound.
+        unsafe { volatile_write(ptr.mut(self.value), value) }
+    }
+}

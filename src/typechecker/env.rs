@@ -781,6 +781,33 @@ impl TypeEnv {
         let Some(trait_name) = bound.path.last() else {
             return false;
         };
+        // Derive-only builtin traits (`Copy` / `Clone` / `Eq` / `Ord` / …) are
+        // never impl-table entries — a primitive scalar satisfies them
+        // implicitly. The impl-table walk below misses all of them, so a
+        // bounded generic method (`impl[T: Copy] Cell[T] { fn read(...) }`)
+        // called on `Cell[i32]` was wrongly rejected ("`i32` does not implement
+        // `Copy`"). Cover the primitive case that method resolution needs,
+        // splitting by trait to respect FLOAT semantics: `f32`/`f64` are NOT
+        // totally ordered / bit-equatable, so they satisfy `Copy` / `Clone` /
+        // `Debug` / `PartialEq` / `PartialOrd` / `Default` but NOT `Eq` / `Ord`
+        // / `Hash` — matching the TypeChecker-layer `type_supports_*` helpers a
+        // float would fail (and preserving the `f64`-as-`Ord`-key rejection).
+        // A non-primitive (or a float against `Eq`/`Ord`/`Hash`) falls through
+        // to the impl-table walk; named-type `#[derive]` satisfaction stays with
+        // the richer `type_satisfies_bound`, which this env gate cannot reach.
+        let prim_all = matches!(
+            ty,
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+        );
+        let prim_non_float = matches!(ty, Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char);
+        let builtin_satisfied = match trait_name.as_str() {
+            "Copy" | "Clone" | "Debug" | "PartialEq" | "PartialOrd" | "Default" => prim_all,
+            "Eq" | "Ord" | "Hash" => prim_non_float,
+            _ => false,
+        };
+        if builtin_satisfied {
+            return true;
+        }
         let Some((ty_name, ty_args)) = impl_table_key(ty) else {
             // Type variables, function types, etc. don't appear in
             // `env.impls`. Conservative: drop. Generic call-site resolution

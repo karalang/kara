@@ -84,6 +84,11 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "F64",
     "Atomic",
     "Mutex",
+    // `VolatileCell[T: Copy]` — the ergonomic typed wrapper over a single MMIO
+    // register (`runtime/stdlib/volatile_cell.kara`). Prelude-visible like its
+    // sibling hardware/concurrency primitives; its `.read()` / `.write(v)`
+    // lower to the `volatile_read` / `volatile_write` prelude intrinsics.
+    "VolatileCell",
     "Ordering",
     "MemoryOrdering",
     "IoError",
@@ -677,6 +682,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ),
     ("atomic.kara", include_str!("../runtime/stdlib/atomic.kara")),
     ("mutex.kara", include_str!("../runtime/stdlib/mutex.kara")),
+    (
+        "volatile_cell.kara",
+        include_str!("../runtime/stdlib/volatile_cell.kara"),
+    ),
     ("f32.kara", include_str!("../runtime/stdlib/f32.kara")),
     ("f64.kara", include_str!("../runtime/stdlib/f64.kara")),
     ("stats.kara", include_str!("../runtime/stdlib/stats.kara")),

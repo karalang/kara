@@ -2238,6 +2238,16 @@ impl<'ctx> super::Codegen<'ctx> {
                                 detected = true;
                             }
                         }
+                        // `let reg: VolatileCell[T] = VolatileCell.new(v)` — tag
+                        // the binding as a VolatileCell so `reg.read()` /
+                        // `reg.write(v)` dispatch to the transparent-MMIO arm in
+                        // `compile_method_call` (mirrors the OnceLock arm above).
+                        if let TypeKind::Path(p) = &te.kind {
+                            if p.segments.last().map(|s| s.as_str()) == Some("VolatileCell") {
+                                self.register_var_from_type_expr(var_name, te);
+                                detected = true;
+                            }
+                        }
                     }
                     // Fall back on the typechecker-recorded surface type for
                     // the binding when no explicit annotation was written.

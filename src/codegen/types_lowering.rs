@@ -263,6 +263,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // `VolatileCell[T]` — a transparent wrapper over a single MMIO
+                // register, exactly like `Atomic[T]` above: at the LLVM level
+                // the storage IS the inner `T`, and `.read()` / `.write(v)`
+                // lower to a *volatile* load / store against that same alloca
+                // (see the VolatileCell arm in `compile_method_call`). Unlike
+                // `Atomic`, a volatile `i1` load/store is legal in LLVM, so
+                // `bool` needs no i8 widening — the inner type lowers directly.
+                if name == "VolatileCell" {
+                    if let Some(args) = &path.generic_args {
+                        if let Some(GenericArg::Type(inner)) = args.first() {
+                            return self.llvm_type_for_type_expr(inner);
+                        }
+                    }
+                }
                 // `Mutex[T]` — a spinlock-guarded cell laid out as
                 // `{ i64 lockflag, T value }`. Unlike `Atomic[T]` (transparent),
                 // `Mutex` carries an explicit lock word: `lock m { ... }`
@@ -1218,6 +1232,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 if is_atomic_bool_type_expr(te) {
                     self.atomic_var_inner_is_bool.insert(var_name.to_string());
                 }
+                return;
+            }
+            // `VolatileCell[T]` — transparent MMIO wrapper (see the arm in
+            // `llvm_type_for_type_expr`). Tag the binding so `reg.read()` /
+            // `reg.write(v)` dispatch to the VolatileCell arm in
+            // `compile_method_call`. The baked `struct VolatileCell[T]` shape
+            // isn't in `struct_types` (codegen lowers it transparently), so the
+            // user-type fallback below wouldn't catch it either.
+            if path.segments.last().map(|s| s.as_str()) == Some("VolatileCell") {
+                self.var_type_names
+                    .insert(var_name.to_string(), "VolatileCell".to_string());
                 return;
             }
         }

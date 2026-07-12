@@ -3422,6 +3422,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_volatile_cell_read_write_roundtrip() {
+        // Baked `VolatileCell[T]` stdlib type (`runtime/stdlib/volatile_cell.kara`,
+        // prelude-visible — used here WITHOUT a local definition). Codegen lowers
+        // it transparently to its inner `T` and intercepts `.read()` / `.write(v)`
+        // as a volatile load / store against the binding's slot. Exercises two
+        // instantiations at different widths (i32 + u8) in one program — the
+        // generic-mono path fixed in B-2026-07-12-16. `0x1F` == 31.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut reg: VolatileCell[i32] = VolatileCell.new(7);
+    println(reg.read());
+    reg.write(42);
+    println(reg.read());
+    reg.write(0x1F);
+    println(reg.read());
+    let mut flag: VolatileCell[u8] = VolatileCell.new(0);
+    flag.write(1);
+    println(flag.read());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7\n42\n31\n1");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_set_get_is_set_lifecycle() {
         // `OnceLock[i64]` write-once lifecycle under `karac build`/JIT (was
         // interpreter-only). Empty → `is_set() == false`, `get() == None`;
