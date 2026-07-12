@@ -3757,6 +3757,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // non-`{ptr,len,cap}` borrow (`ref i64`) fall through safely.
         let borrow_local_recv =
             matches!(&object.kind, ExprKind::Identifier(n) if self.ref_params.contains_key(n));
+
+        // `<iter-chain>.count()` — the element-count terminal on a fused
+        // iterator chain (B-2026-07-11-19). Placed BEFORE the `len`/`count`
+        // materialized-collection intercept below, which would otherwise try to
+        // `compile_expr` the chain receiver as a Vec value and fail on the
+        // `map`/`filter` adaptor ("no handler for method 'filter'"). Gated on an
+        // iterator-chain receiver (MethodCall/Range) and fails closed for any
+        // shape the shared peel can't lower (`s.chars().count()` — a
+        // materialized `Vec[char]` — falls through to the intercept unchanged).
+        if method == "count"
+            && args.is_empty()
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            if let Some(v) = self.try_compile_iter_chain_count(object, call_span)? {
+                return Ok(v);
+            }
+        }
+
         // Defer to user-method dispatch when the receiver's type declares its
         // own `len`/`is_empty`/`count` method (`dispatch_key` names an emitted
         // `<Type>.<method>` fn). Otherwise this collection/iterator intercept
@@ -7224,6 +7245,45 @@ impl<'ctx> super::Codegen<'ctx> {
                 op: BinOp::Add,
                 left: Box::new(ident(&acc_p)),
                 right: Box::new(ident(&x_p)),
+            },
+            span: sp.clone(),
+        };
+        self.try_compile_iter_chain_fold(recv, &zero, &acc_p, &x_p, &fold_body, call_span)
+    }
+
+    /// `<iter-chain>.count() -> i64` — the element-count terminal on a fused
+    /// iterator chain (B-2026-07-11-19). Desugars to `fold(0, |acc, _x| acc + 1)`
+    /// over the peeled base, so every `filter`/`map` adaptor is applied and the
+    /// count reflects the post-adaptor element count. The element param is bound
+    /// but unused; the accumulator is a plain `i64` (0 → +1), so — unlike `sum`
+    /// — no element `TypeExpr` is needed. Fails closed (`Ok(None)`) when the
+    /// chain shape isn't one `peel_fused_map_filter_chain` understands, leaving
+    /// the materialized-collection `len`/`count` intercept to service it.
+    fn try_compile_iter_chain_count(
+        &mut self,
+        recv: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let sp = call_span.clone();
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let acc_p = format!("__cnt_acc_{}", uid);
+        let x_p = format!("__cnt_x_{}", uid);
+        let zero = Expr {
+            kind: ExprKind::Integer(0, None),
+            span: sp.clone(),
+        };
+        let fold_body = Expr {
+            kind: ExprKind::Binary {
+                op: BinOp::Add,
+                left: Box::new(Expr {
+                    kind: ExprKind::Identifier(acc_p.clone()),
+                    span: sp.clone(),
+                }),
+                right: Box::new(Expr {
+                    kind: ExprKind::Integer(1, None),
+                    span: sp.clone(),
+                }),
             },
             span: sp.clone(),
         };

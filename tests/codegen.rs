@@ -7442,6 +7442,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_count_terminal() {
+        // B-2026-07-11-19 — the `count()` terminal on a fused iterator chain.
+        // Before the fix it was caught by the materialized-collection `len`/
+        // `count` intercept, which tried to compile the chain receiver as a Vec
+        // and failed on the `map`/`filter` adaptor ("no handler for method
+        // 'filter'"). Now an iterator-chain `count` desugars to `fold(0, |a, _|
+        // a + 1)`. Covers a bare `iter().count`, `filter().count`, `map().count`
+        // (map doesn't change the count), a two-stage `filter().map().count`, an
+        // empty source (0), and a `range().count`. A materialized
+        // `s.chars().count()` still falls through to the intercept.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4, 5];\n\
+                 println(f\"{v.iter().count()}\");\n\
+                 println(f\"{v.iter().filter(|x| x > 2).count()}\");\n\
+                 println(f\"{v.iter().map(|x| x * 2).count()}\");\n\
+                 println(f\"{v.iter().filter(|x| x > 1).map(|x| x + 1).count()}\");\n\
+                 let e: Vec[i64] = [];\n\
+                 println(f\"{e.iter().count()}\");\n\
+                 println(f\"{(1..5).count()}\");\n\
+                 let s: String = \"hello\";\n\
+                 println(f\"{s.chars().count()}\");\n\
+             }",
+        ) {
+            // 5, 3 (>2), 5, 4 (>1), 0, 4 (1..5), 5 (chars)
+            assert_eq!(out, "5\n3\n5\n4\n0\n4\n5\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_iter_fold_capture_mutation_inlined() {
         // B-2026-07-11-23 — a capture-MUTATING closure in a `fold` terminal. The
         // fold codegen INLINES the body into the fused loop, so the mutation of
