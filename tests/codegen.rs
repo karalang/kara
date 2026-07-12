@@ -3490,6 +3490,71 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_oncelock_get_or_init_runs_closure_once() {
+        // `get_or_init(|| ...)` for a scalar `T`: the first call runs the
+        // closure and seals the cell; a second call returns the existing value
+        // WITHOUT running the closure (a different closure body would prove a
+        // re-run). The closure captures a local (`base`), exercising the
+        // fat-pointer env path. Build==run parity with the interpreter.
+        let out = run_program(
+            r#"
+fn main() {
+    let base = 100;
+    let c: OnceLock[i64] = OnceLock.new();
+    println(c.get_or_init(|| base + 5));
+    println(c.get_or_init(|| base + 999));
+    println(c.is_set());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "105\n105\ntrue");
+        }
+    }
+
+    #[test]
+    fn test_oncelock_get_or_init_aggregate_rejected_under_build() {
+        // `get_or_init` with a non-scalar `T` is loud-gated: the closure returns
+        // the aggregate via sret (a deferred ABI, B-2026-07-12-2). `set`/`get`
+        // handle small structs, but `get_or_init` invokes a closure, so it needs
+        // the narrower scalar gate. Codegen MUST reject (not panic on the
+        // return-type mismatch).
+        use karac::codegen::compile_to_object_with_options;
+        let src = "struct P { x: i64, y: i64 }\n\
+                   fn main() {\n\
+                   let d: OnceLock[P] = OnceLock.new();\n\
+                   let _p = d.get_or_init(|| P { x: 7, y: 8 });\n\
+                   }";
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "source must parse");
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "OnceLock[P].get_or_init must typecheck clean (interpreter supports it): {:?}",
+            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let obj_path = format!("/tmp/karac_goi_agg_gate_{}.o", std::process::id());
+        let err = compile_to_object_with_options(
+            &parsed.program,
+            &obj_path,
+            Some(&ownership),
+            None,
+            None,
+            None,
+        )
+        .err();
+        let _ = std::fs::remove_file(&obj_path);
+        let msg = err.expect("aggregate get_or_init must be rejected under karac build");
+        assert!(
+            msg.contains("get_or_init") && msg.contains("non-scalar"),
+            "gate error should name the non-scalar get_or_init limitation; got: {msg}"
+        );
+    }
+
+    #[test]
     fn test_oncelock_heap_element_rejected_under_build() {
         // A heap-owning element (`OnceLock[String]`) is loud-gated under
         // `karac build` at v1 (the heap-`T` move-suppression / rejected-value

@@ -16,12 +16,18 @@
 //! - `get()` returns `Option[ref T]` — a stable borrow into the sealed value
 //!   (`Some`) or `None`, built with the `Map.get` phi shape.
 //! - `is_set()` returns `bool`.
+//! - `get_or_init(|| ...)` runs the closure once when unset, seals the cell,
+//!   and returns the borrow — the closure fires only on the `unset` branch.
+//!   Scalar `T` only (an aggregate closure return uses the deferred sret ABI).
 //!
-//! Deferred: `get_or_init` (needs closure-in-codegen), module-level `OnceLock`
-//! globals (static-init prologue), and heap-`T` move-suppression on `set`.
+//! Element-type support: scalar and small all-scalar-struct `T` work for
+//! `set`/`get`/`is_set`; `get_or_init` additionally requires a single-scalar
+//! `T`. Heap-owning / wide `T` (and a non-scalar `get_or_init`) are loud-gated
+//! with a `--interp` hint — tracked as B-2026-07-12-2.
 
 use crate::ast::*;
 
+use inkwell::types::BasicType;
 use inkwell::values::BasicValueEnum;
 use inkwell::IntPredicate;
 
@@ -39,16 +45,10 @@ impl<'ctx> super::Codegen<'ctx> {
             "set" => self.compile_once_set(recv, args),
             "get" => self.compile_once_get(recv),
             "is_set" => self.compile_once_is_set(recv),
-            "get_or_init" => Err(
-                "codegen: `OnceLock`/`OnceCell`.get_or_init(...) is not yet supported under \
-                 `karac build` (the closure-init form is interpreter-only at v1; a tracked \
-                 follow-on). Run it with `karac run --interp`, or use `if not c.is_set() { \
-                 c.set(init()); } c.get()` for a build-compatible shape."
-                    .to_string(),
-            ),
+            "get_or_init" => self.compile_once_get_or_init(recv, args),
             _ => Err(format!(
                 "codegen: unsupported OnceLock/OnceCell method `{method}` (only \
-                 set/get/is_set are lowered)"
+                 set/get/is_set/get_or_init are lowered)"
             )),
         }
     }
@@ -282,5 +282,136 @@ impl<'ctx> super::Codegen<'ctx> {
         let _ = ptr_ty; // ptr_ty reserved for the ref-payload variant (heap-T follow-on).
         let agg = self.build_option_some_via_phis(&some_words, some_end_bb, none_bb, "once.opt");
         Ok(agg)
+    }
+
+    /// `cell.get_or_init(init: || -> T) -> ref T`. If the cell is unset, run the
+    /// `init` closure once, `set` the cell with its result, then return the
+    /// borrow; if already set, return the existing value without invoking the
+    /// closure. The closure fires at most once (only on the `unset` branch).
+    /// The returned `ref T` is represented as the loaded `T` value (the `get`
+    /// precedent — the borrow is a no-op auto-deref for the heap-free `T` this
+    /// lowering supports). Heap/wide `T` is loud-gated like `set`/`get`.
+    fn compile_once_get_or_init(
+        &mut self,
+        recv: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "codegen: OnceLock/OnceCell.get_or_init expects 1 argument (a closure), found {}",
+                args.len()
+            ));
+        }
+        self.reject_unsupported_once_elem(recv, "get_or_init")?;
+        let (elem_ty, size) = self.once_elem_ty_and_size(recv)?;
+        // The closure ABI returns a multi-word AGGREGATE via sret (a hidden
+        // out-pointer), not the direct-return this lowering assumes — so
+        // `get_or_init` supports only a single-scalar `T` (`i64`/`f64`/`bool`/…)
+        // at v1, the common lazy-compute-a-number/handle case. An aggregate `T`
+        // (even a heap-free struct that `set`/`get` handle) is loud-gated here;
+        // the sret closure-return path is part of the deferred heap-/wide-`T`
+        // slice (B-2026-07-12-2). `set`/`get` don't invoke a closure, so they
+        // accept small structs; only `get_or_init` needs this narrower gate.
+        if !elem_ty.is_int_type() && !elem_ty.is_float_type() && !elem_ty.is_pointer_type() {
+            return Err(
+                "codegen: `OnceLock`/`OnceCell`.get_or_init(...) with a non-scalar element type \
+                 is not yet supported under `karac build` (the closure returns the value by \
+                 aggregate/sret, a deferred ABI — B-2026-07-12-2). Use a scalar `T`, or `if not \
+                 c.is_set() { c.set(init()); } c.get()`, or run with `karac run --interp`."
+                    .to_string(),
+            );
+        }
+        let handle = self.load_once_handle(recv)?;
+        let fn_val = self.current_fn.unwrap();
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+
+        // Branch on the current `is_set` state — run the closure only when unset.
+        let is_set_fn = self
+            .module
+            .get_function("karac_runtime_once_is_set")
+            .expect("karac_runtime_once_is_set declared in Codegen::new");
+        let is_set_raw = self
+            .builder
+            .build_call(is_set_fn, &[handle.into()], "goi.is_set")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let zero = is_set_raw.get_type().const_zero();
+        let is_set = self
+            .builder
+            .build_int_compare(IntPredicate::NE, is_set_raw, zero, "goi.is_set.b")
+            .unwrap();
+        let init_bb = self.context.append_basic_block(fn_val, "goi.init");
+        let cont_bb = self.context.append_basic_block(fn_val, "goi.cont");
+        self.builder
+            .build_conditional_branch(is_set, cont_bb, init_bb)
+            .unwrap();
+
+        // ── init: compile + invoke the closure, then seal the cell ──────────
+        self.builder.position_at_end(init_bb);
+        let fat = self.compile_expr(&args[0].value)?;
+        let fat_sv = fat.into_struct_value();
+        let clo_fn_ptr = self
+            .builder
+            .build_extract_value(fat_sv, 0, "goi.clo.fn")
+            .unwrap()
+            .into_pointer_value();
+        let clo_env_ptr = self
+            .builder
+            .build_extract_value(fat_sv, 1, "goi.clo.env")
+            .unwrap()
+            .into_pointer_value();
+        // Closure ABI is `T(ptr env)` (see par_blocks trampoline).
+        let closure_fn_ty = elem_ty.fn_type(&[ptr_ty.into()], false);
+        let init_val = self
+            .builder
+            .build_indirect_call(
+                closure_fn_ty,
+                clo_fn_ptr,
+                &[clo_env_ptr.into()],
+                "goi.invoke",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        let val_slot = self.create_entry_alloca(fn_val, "goi.val", elem_ty);
+        self.builder.build_store(val_slot, init_val).unwrap();
+        let size_const = self.context.i64_type().const_int(size, false);
+        let set_fn = self
+            .module
+            .get_function("karac_runtime_once_set")
+            .expect("karac_runtime_once_set declared in Codegen::new");
+        self.builder
+            .build_call(
+                set_fn,
+                &[handle.into(), val_slot.into(), size_const.into()],
+                "goi.set",
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── cont: the cell is now sealed on both paths — load + return it ───
+        // A concurrent racing `set` between our `is_set` check and our `set`
+        // would win, and `once_get` returns the winner's value (the losing
+        // `init_val` is dropped by the caller's normal temp cleanup) — the
+        // race-safe "one winner" semantics the spec requires.
+        self.builder.position_at_end(cont_bb);
+        let get_fn = self
+            .module
+            .get_function("karac_runtime_once_get")
+            .expect("karac_runtime_once_get declared in Codegen::new");
+        let vptr = self
+            .builder
+            .build_call(get_fn, &[handle.into()], "goi.get")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let result = self
+            .builder
+            .build_load(elem_ty, vptr, "goi.result")
+            .unwrap();
+        Ok(result)
     }
 }
