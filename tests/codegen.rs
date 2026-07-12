@@ -29043,6 +29043,55 @@ fn main() {
         }
     }
 
+    /// B-2026-07-12-1: passing a struct FIELD (`self.names`, a `Vec[String]`)
+    /// BY REF to a FREE function double-freed the field's backing Vec under AOT
+    /// codegen (`free(): double free detected`) while the interpreter was
+    /// correct — a silent run/build divergence. The `ref`-arg path had a
+    /// fast-path for a local Identifier (pass the slot pointer) but NONE for a
+    /// FieldAccess place, so `self.names` fell through to the rvalue path, which
+    /// shallow-copied the field's `{ptr,len,cap}` header into a temp and queued a
+    /// scope-exit FREE of its buffer — double-freeing what the receiver's own
+    /// field-drop still owns. Now a FieldAccess place borrows the field in place
+    /// (a GEP off the receiver), so only the owner frees it. Covers the read
+    /// (`ref`) shape over String elements AND a `mut ref` field whose mutation
+    /// must propagate back through the borrow. Memory safety is pinned in
+    /// `tests/memory_sanitizer.rs::asan_struct_field_by_ref_to_free_fn_no_double_free`.
+    #[test]
+    fn e2e_struct_field_by_ref_to_free_fn() {
+        if let Some(out) = run_program(
+            "fn scan(names: ref Vec[String], name: ref String) -> i64 {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop {\n\
+             \x20       if i >= names.len() { return -1; }\n\
+             \x20       if names[i] == name { return i; }\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             }\n\
+             fn addall(v: mut ref Vec[i64], n: i64) {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop { if i >= v.len() { return; } v[i] = v[i] + n; i = i + 1; }\n\
+             }\n\
+             struct T { names: Vec[String], xs: Vec[i64] }\n\
+             impl T {\n\
+             \x20   fn find(ref self, q: ref String) -> i64 { scan(self.names, q) }\n\
+             \x20   fn bump(mut ref self, n: i64) { addall(mut self.xs, n) }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut t = T { names: Vec.new(), xs: Vec.new() };\n\
+             \x20   t.names.push(\"a\".to_string());\n\
+             \x20   t.names.push(\"b\".to_string());\n\
+             \x20   t.xs.push(10); t.xs.push(20);\n\
+             \x20   let q = \"b\".to_string();\n\
+             \x20   println(t.find(q).to_string());\n\
+             \x20   t.bump(5);\n\
+             \x20   println(t.xs[0].to_string());\n\
+             \x20   println(t.xs[1].to_string());\n\
+             }",
+        ) {
+            assert_eq!(out, "1\n15\n25\n");
+        }
+    }
+
     #[test]
     fn test_e2e_rc_fallback_binding_at_ref_arg_site() {
         // B-2026-06-13-1: an RC-fallback-promoted binding passed at a

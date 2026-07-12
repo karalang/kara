@@ -1291,6 +1291,55 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             if is_ref {
+                // B-2026-07-12-1: a struct FIELD place (`self.names`,
+                // `obj.field`) passed by `ref` / `mut ref` must borrow the field
+                // IN PLACE — pass a pointer to the field within the receiver
+                // struct, exactly as the Identifier fast-path passes a local's
+                // slot pointer. The rvalue path below would instead shallow-copy
+                // the field's `{ptr,len,cap}` header into a temp and queue a
+                // scope-exit FREE of that buffer (`queue_ref_rvalue_arg_cleanup`)
+                // — but the field is still owned by the receiver (its own
+                // field-drop frees it at the owner's scope exit), so the temp's
+                // free double-frees the shared buffer. `scan(self.names, q)` with
+                // `names: ref Vec[String]` aborted with glibc `free(): double
+                // free detected` under AOT (interp was correct — a silent
+                // run/build divergence). A LOCAL `Vec` arg took the Identifier
+                // fast-path and was clean; only the field place fell through here.
+                // `lower_field_access_ptr` GEPs the field off the (deref'd, for a
+                // `ref self`) receiver pointer. Only the cleanly-handled Some case
+                // is intercepted; a chained (`a.b.c`) or otherwise unrecognized
+                // shape returns None/Err and falls through to the rvalue path
+                // unchanged.
+                if let ExprKind::FieldAccess { object, field } = &a.value.kind {
+                    let self_norm;
+                    let obj_ref: &Expr = if matches!(object.kind, ExprKind::SelfValue) {
+                        self_norm = Expr {
+                            kind: ExprKind::Identifier("self".to_string()),
+                            span: object.span.clone(),
+                        };
+                        &self_norm
+                    } else {
+                        object
+                    };
+                    if let Ok(Some((field_ptr, field_ty, _))) =
+                        self.lower_field_access_ptr(obj_ref, field, "ref-arg field borrow")
+                    {
+                        // Restrict the in-place borrow to the confirmed
+                        // double-free class: a `Vec` / `String` field (the
+                        // `{ptr,len,cap}` aggregate the rvalue path copies into a
+                        // temp and then FREEs). Other field types keep the
+                        // existing path — an `Option[shared T]` field arg needs
+                        // the `share_option_shared_field_ref_for_arg` RC-inc below
+                        // (bypassing it broke a recursive `any_negative(n.next)`
+                        // borrow), a niche/enum field isn't a plain owned buffer,
+                        // and a scalar field was never double-freed. This keeps
+                        // the fix scoped to exactly the reported shape.
+                        if field_ty == self.vec_struct_type().into() {
+                            compiled_args.push(field_ptr.into());
+                            continue;
+                        }
+                    }
+                }
                 // Rvalue ref path: the arg is a non-place expression
                 // (string/integer/char/bool literal, function return,
                 // arithmetic, etc.) bound to a `ref T` param. The

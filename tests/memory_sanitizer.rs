@@ -23817,4 +23817,55 @@ fn main() {
             "return_owned_generic_param_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_struct_field_by_ref_to_free_fn_no_double_free() {
+        // B-2026-07-12-1: passing a struct FIELD (`self.names`, a `Vec[String]`)
+        // by ref to a FREE function double-freed the field's backing Vec under
+        // AOT (`free(): double free detected`) — the `ref`-arg rvalue path
+        // shallow-copied the field header into a temp and freed its buffer at
+        // scope exit, double-freeing what the receiver's field-drop still owns.
+        // Now the field is borrowed in place (a GEP off the receiver). Loops so
+        // any double-free / leak accumulates for ASAN+LSan; drives both the read
+        // (`ref Vec[String]`) shape (the reported repro, over heap String
+        // elements) and a `mut ref Vec[i64]` field whose in-place mutation must
+        // survive without freeing the shared buffer.
+        assert_clean_asan_run(
+            r#"
+fn scan(names: ref Vec[String], name: ref String) -> i64 {
+    let mut i = 0;
+    loop {
+        if i >= names.len() { return -1; }
+        if names[i] == name { return i; }
+        i = i + 1;
+    }
+}
+fn addall(v: mut ref Vec[i64], n: i64) {
+    let mut i = 0;
+    loop { if i >= v.len() { return; } v[i] = v[i] + n; i = i + 1; }
+}
+struct T { names: Vec[String], xs: Vec[i64] }
+impl T {
+    fn find(ref self, q: ref String) -> i64 { scan(self.names, q) }
+    fn bump(mut ref self, n: i64) { addall(mut self.xs, n) }
+}
+fn main() {
+    let mut r: i64 = 0;
+    while r < 3 {
+        let mut t = T { names: Vec.new(), xs: Vec.new() };
+        t.names.push(f"row-{r}-alpha");
+        t.names.push(f"row-{r}-bravo");
+        t.xs.push(r); t.xs.push(r + 1);
+        let q = f"row-{r}-bravo";
+        println(f"{t.find(q)}");
+        t.bump(10);
+        println(f"{t.xs[0]}");
+        r = r + 1;
+    }
+}
+"#,
+            &["1", "10", "1", "11", "1", "12"],
+            "struct_field_by_ref_to_free_fn_no_double_free",
+        );
+    }
 }
