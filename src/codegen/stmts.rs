@@ -4311,10 +4311,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // OnceLock/OnceCell local binding: `let cell: OnceLock[T] =
                 // OnceLock.new()` — queue a scope-exit `FreeOnceHandle` so the
                 // heap cell + its sealed value buffer are reclaimed at frame
-                // exit. Gated on a fresh `*.new()` Call RHS (a rebind
-                // `let c2 = cell` would double-free the shared handle — deferred
-                // with heap-`T`; the scalar floor's tests never rebind).
-                // Mirrors the Map/Set fresh-handle arm above. B-8 OnceLock codegen.
+                // exit. `T` is heap-free here (a heap-bearing / wide `T` is
+                // loud-gated in `compile_once_set`/`_get`, so the build fails
+                // before reaching a `set`/`get`), so freeing the cell + header
+                // is complete — no element drop needed. Gated on a fresh
+                // `*.new()` Call RHS (a rebind `let c2 = cell` would double-free
+                // the shared handle — deferred; the tests never rebind). Mirrors
+                // the Map/Set fresh-handle arm above. B-8 OnceLock codegen.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if self.once_var_types.contains_key(var_name.as_str())
                         && matches!(&value.kind, ExprKind::Call { .. })

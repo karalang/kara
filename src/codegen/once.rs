@@ -84,6 +84,43 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok((elem_ty, size))
     }
 
+    /// Loud-gate the element types the v1 `set`/`get` codegen can't handle
+    /// correctly yet: (1) a **heap-owning** `T` (`String`, `Vec[_]`, a struct/
+    /// enum with a heap field) — `set` moves it into the cell but the
+    /// rejected-value (`AlreadySetError`) path leaks it, and only the
+    /// success-path element-drop is wired; (2) a **wide** `T` whose word count
+    /// exceeds the `Option`/`Result` inline payload area (>3 words) — `get`'s
+    /// `Option[ref T]` construction has no boxing path and would overflow the
+    /// payload. Both need the deferred heap-`T` slice (move-suppression +
+    /// rejected-value drop + payload boxing). Scalars and small all-scalar
+    /// structs pass. Fail loudly (with a `--interp` hint) rather than emit a
+    /// leak or a payload-overflow miscompile.
+    fn reject_unsupported_once_elem(&mut self, recv: &str, method: &str) -> Result<(), String> {
+        let te = self
+            .once_var_types
+            .get(recv)
+            .map(|(te, _)| te.clone())
+            .ok_or_else(|| format!("OnceLock/OnceCell binding '{recv}' missing element type"))?;
+        let heap = self.type_expr_has_drop_heap(&te);
+        let elem_ty = self.llvm_type_for_type_expr(&te);
+        let wide = Self::llvm_type_word_count(elem_ty) > 3;
+        if heap || wide {
+            let why = if heap {
+                "a heap-owning element type (`String` / `Vec[_]` / a struct with a heap field)"
+            } else {
+                "an element type wider than the 3-word inline payload"
+            };
+            return Err(format!(
+                "codegen: `OnceLock`/`OnceCell`.{method}` with {why} is not yet supported under \
+                 `karac build` (the heap-`T` move-suppression / rejected-value drop / payload \
+                 boxing slice is a tracked follow-on, B-2026-07-12-2). Scalar and small \
+                 all-scalar-struct element types work; for a heap `T`, run with `karac run \
+                 --interp` (or `KARAC_RUN_JIT=0`)."
+            ));
+        }
+        Ok(())
+    }
+
     /// `cell.is_set() -> bool`. The runtime returns `u8` (0/1); codegen rides
     /// that as the bool value directly, mirroring `Map.contains_key`.
     fn compile_once_is_set(&mut self, recv: &str) -> Result<BasicValueEnum<'ctx>, String> {
@@ -126,6 +163,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 args.len()
             ));
         }
+        self.reject_unsupported_once_elem(recv, "set")?;
         let (elem_ty, size) = self.once_elem_ty_and_size(recv)?;
         let handle = self.load_once_handle(recv)?;
         let fn_val = self.current_fn.unwrap();
@@ -199,6 +237,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// borrow into the sealed value or null. Non-null → `Some(<T loaded>)`,
     /// null → `None` — the `Map.get` alias-into-container phi shape.
     fn compile_once_get(&mut self, recv: &str) -> Result<BasicValueEnum<'ctx>, String> {
+        self.reject_unsupported_once_elem(recv, "get")?;
         let (elem_ty, _size) = self.once_elem_ty_and_size(recv)?;
         let handle = self.load_once_handle(recv)?;
         let fn_val = self.current_fn.unwrap();

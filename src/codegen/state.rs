@@ -661,8 +661,11 @@ pub(crate) enum CleanupAction<'ctx> {
     /// Scope-exit free for a local `OnceLock`/`OnceCell` binding. The alloca
     /// holds the opaque `*mut KaracOnce` handle from `OnceLock.new()`. The
     /// drain emits `karac_runtime_once_free(load(once_alloca))` — null-handle
-    /// is a runtime no-op, so no guard here. Mirrors `FreeFileHandle`'s shape
-    /// (no per-element drop at the scalar-`T` v1 floor). B-8 OnceLock codegen.
+    /// is a runtime no-op, so no guard here. Mirrors `FreeFileHandle`'s shape.
+    /// The element `T` is heap-free (a scalar or plain-value struct) — a
+    /// heap-bearing / wide `T` is loud-gated under `karac build` in
+    /// `compile_once_set`/`_get`, so the cell's `free` reclaiming the header +
+    /// control block is complete. B-8 OnceLock codegen.
     FreeOnceHandle {
         /// Alloca that holds the opaque `*mut KaracOnce` pointer.
         once_alloca: PointerValue<'ctx>,

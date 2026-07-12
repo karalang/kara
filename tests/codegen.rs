@@ -3467,6 +3467,71 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_oncelock_plain_struct_payload() {
+        // A small all-scalar struct `T` (heap-free, ≤3 words) round-trips
+        // through the cell's memcpy path — the value's bytes are copied in on
+        // `set` and loaded back on `get`. No element drop needed (no heap).
+        let out = run_program(
+            r#"
+struct Config { timeout: i64, retries: i64 }
+fn main() {
+    let c: OnceLock[Config] = OnceLock.new();
+    match c.set(Config { timeout: 30, retries: 5 }) { Ok(_) => println(1), Err(_) => println(0), }
+    match c.get() {
+        Some(cfg) => { println(cfg.timeout); println(cfg.retries); },
+        None => println(-1),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n30\n5");
+        }
+    }
+
+    #[test]
+    fn test_oncelock_heap_element_rejected_under_build() {
+        // A heap-owning element (`OnceLock[String]`) is loud-gated under
+        // `karac build` at v1 (the heap-`T` move-suppression / rejected-value
+        // drop / payload boxing slice is deferred, B-2026-07-12-1) — codegen
+        // MUST return an error, not silently leak the element or overflow the
+        // `Option` payload. The interpreter path handles it; this pins the loud
+        // build-time gate so a heap `T` can never regress into a silent leak.
+        use karac::codegen::compile_to_object_with_options;
+        let src = "fn main() {\n\
+                   let c: OnceLock[String] = OnceLock.new();\n\
+                   let _ = c.set(\"hi\");\n\
+                   }";
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "source must parse");
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "OnceLock[String] must typecheck clean (interpreter supports it): {:?}",
+            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let obj_path = format!("/tmp/karac_once_heap_gate_{}.o", std::process::id());
+        let err = compile_to_object_with_options(
+            &parsed.program,
+            &obj_path,
+            Some(&ownership),
+            None,
+            None,
+            None,
+        )
+        .err();
+        let _ = std::fs::remove_file(&obj_path);
+        let msg = err.expect("heap-T OnceLock.set must be rejected under karac build");
+        assert!(
+            msg.contains("not yet supported") && msg.contains("heap-owning"),
+            "gate error should name the heap-owning limitation; got: {msg}"
+        );
+    }
+
+    #[test]
     fn test_e2e_module_global_oncelock_config_pattern() {
         // The canonical late-bound global: `let CONFIG: OnceLock[T] =
         // OnceLock.new()` at module scope, `set` once in `main`, `get` from a
