@@ -2686,6 +2686,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// leaks but never double-frees; see docs/spikes/oversized-enum-payload.md
     /// §3. `None` for any other RHS shape (the caller keeps the annotation).
     pub(super) fn untyped_let_boxed_enum_te(&self, value: &Expr) -> Option<TypeExpr> {
+        // `let x = vec.pop()` over a `Vec[Option[shared T]]` — the untyped
+        // binding's boxed type is `Option[element]` (pop wraps the element in a
+        // found/not-found Option). Recover it so the box-drop registration sees
+        // the nested `Option[Option[shared]]` and runs the inner element drop;
+        // without it the bound-then-matched pop result leaked the node
+        // (B-2026-07-12-4, the untyped-let arm of the pop-consume half). Only
+        // the pop family produces this `Option[element]` shape.
+        if let ExprKind::MethodCall { object, method, .. } = &value.kind {
+            if matches!(method.as_str(), "pop" | "pop_back" | "pop_front") {
+                if let ExprKind::Identifier(vec_name) = &object.kind {
+                    if let Some(elem_te) = self.var_elem_type_exprs.get(vec_name.as_str()) {
+                        return Some(Self::option_wrapping_type_expr(elem_te));
+                    }
+                }
+            }
+            return None;
+        }
         let ExprKind::Call { callee, .. } = &value.kind else {
             return None;
         };
@@ -2693,6 +2710,19 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         self.fn_return_type_exprs.get(name).cloned()
+    }
+
+    /// Build the `Option[inner]` `TypeExpr` wrapping `inner`. Used to reconstruct
+    /// a `pop()` result type (`Option[element]`) from the element type.
+    fn option_wrapping_type_expr(inner: &TypeExpr) -> TypeExpr {
+        TypeExpr {
+            kind: TypeKind::Path(crate::ast::PathExpr {
+                segments: vec!["Option".to_string()],
+                generic_args: Some(vec![GenericArg::Type(inner.clone())]),
+                span: crate::token::Span::default(),
+            }),
+            span: crate::token::Span::default(),
+        }
     }
 }
 

@@ -3605,14 +3605,37 @@ impl<'ctx> super::Codegen<'ctx> {
                                         );
                                     }
                                 }
+                                // The boxed payload's `TypeExpr` — needed to
+                                // detect a nested `Option[shared T]` payload
+                                // (`let x = vec.pop()` over `Vec[Option[shared]]`
+                                // → `x: Option[Option[shared]]`, B-2026-07-12-4).
+                                // Its box-drop must run the inner `Option[T]`
+                                // element drop (rc-dec the boxed node), not the
+                                // shallow box-only free the user-struct-name
+                                // derivation gives; without it a bound-then-
+                                // matched pop result leaked the node.
+                                let payload_te = Self::option_generic_arg_type_expr(te);
                                 for (enum_name, variant, inner) in &boxed {
-                                    self.track_boxed_enum_var(
-                                        var_name,
-                                        slot.ptr,
-                                        enum_name,
-                                        variant,
-                                        inner.as_deref(),
-                                    );
+                                    let nested_opt_drop = payload_te
+                                        .as_ref()
+                                        .and_then(|p| self.option_shared_payload_element_drop(p));
+                                    if let Some(drop_fn) = nested_opt_drop {
+                                        self.track_boxed_enum_var_with_inner_drop(
+                                            var_name,
+                                            slot.ptr,
+                                            enum_name,
+                                            variant,
+                                            Some(drop_fn),
+                                        );
+                                    } else {
+                                        self.track_boxed_enum_var(
+                                            var_name,
+                                            slot.ptr,
+                                            enum_name,
+                                            variant,
+                                            inner.as_deref(),
+                                        );
+                                    }
                                 }
                             }
                         }

@@ -2006,6 +2006,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (`out.push(v[i])`) is deliberately NOT retained here — that
                 // read already yields an independent element (deep-cloned), so an
                 // extra inc would leak; only the aliasing field read needs it.
+                //
+                // This retain is only half the fix (B-2026-07-12-4): it co-owns
+                // the node at rc 2, so the residual Vec drop is balanced, but the
+                // DRAIN path (`match vec.pop() { Some(opt) => match opt { .. } }`)
+                // needs the popped node dec'd exactly once too — that peer dec is
+                // the boxed-scrutinee / let-binding inner drop registered via
+                // `option_shared_payload_element_drop`. Retain-alone leaks the
+                // drain path; the inner-drop-alone double-frees the residual path.
                 self.share_option_shared_field_ref_for_arg(&args[0].value, elem_val);
 
                 // Load current vec fields.

@@ -370,6 +370,125 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_option_shared_field_push_residual_no_uaf() {
+        // B-2026-07-12-4 (UAF half) — pushing a FIELD-READ `Option[shared]`
+        // (`stack.push(n.left)`) onto a `Vec[Option[shared]]` and dropping the
+        // Vec while it still holds that residual element used to double-free the
+        // node: the Vec's per-element `RcDecOption` AND the parent field's drop
+        // both dec an rc-1 node → the first frees, the second reads freed memory
+        // (ASAN: heap-use-after-free). The push-side field retain co-owns the
+        // node (rc 2) so the two decs balance.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn main() {
+    let root = Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None });
+    let mut stack: Vec[Option[Node]] = Vec.new();
+    match root {
+        None => {}
+        Some(n) => { stack.push(n.left); }
+    }
+    println(stack.len().to_string());
+}
+"#,
+            &["1"],
+            "vec_option_shared_field_push_residual_no_uaf",
+        );
+    }
+
+    #[test]
+    fn asan_vec_option_shared_pop_consume_no_leak() {
+        // B-2026-07-12-4 (leak half) — draining a `Vec[Option[shared]]` via
+        // `match vec.pop() { Some(opt) => match opt { Some(n) => .. } }` used to
+        // leak every popped node: the pop result is `Option[Option[shared]]`
+        // whose boxed inner-Option payload was freed WITHOUT rc-deccing the node
+        // (the box drop's inner drop fn was None). The boxed-scrutinee /
+        // let-binding box drop now runs the inner `Option[T]` element drop.
+        // Covers both a fresh `Some(Node)` push and a field-read push, drained to
+        // empty (`total = 2 + 3 = 5`).
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn main() {
+    let root = Some(Node { val: 5, left: Some(Node { val: 3, left: None, right: None }), right: None });
+    let mut stack: Vec[Option[Node]] = Vec.new();
+    stack.push(Some(Node { val: 2, left: None, right: None }));
+    match root {
+        None => {}
+        Some(n) => { stack.push(n.left); }
+    }
+    let mut total = 0;
+    while stack.len() > 0 {
+        let x = stack.pop();
+        match x {
+            Some(opt) => { match opt { Some(node) => { total = total + node.val; } None => {} } }
+            None => {}
+        }
+    }
+    println(total.to_string());
+}
+"#,
+            &["5"],
+            "vec_option_shared_pop_consume_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_paired_stack_same_tree_no_leak_or_uaf() {
+        // B-2026-07-12-4 source (kata #100 iterative paired-stack solver): two
+        // `Vec[Option[shared]]` worklists, `stack.push(node.left/right)` field
+        // pushes, and an early `false` return that leaves node-pairs resident on
+        // the stacks — the exact residual + field-push shape that both UAF'd
+        // (residual drop) and leaked (the drained pairs). Trees differ at the
+        // right child, so it returns early with residuals still on the stacks.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn same(p: Option[Node], q: Option[Node]) -> bool {
+    let mut sp: Vec[Option[Node]] = Vec.new();
+    let mut sq: Vec[Option[Node]] = Vec.new();
+    sp.push(p);
+    sq.push(q);
+    let mut result = true;
+    let mut go = true;
+    while go {
+        if sp.len() == 0 { go = false; }
+        else {
+            match sp.pop() {
+                Some(a) => { match sq.pop() {
+                    Some(b) => { match a {
+                        Some(an) => { match b {
+                            Some(bn) => {
+                                if an.val != bn.val { result = false; go = false; }
+                                else {
+                                    sp.push(an.left); sq.push(bn.left);
+                                    sp.push(an.right); sq.push(bn.right);
+                                }
+                            }
+                            None => { result = false; go = false; }
+                        } }
+                        None => { match b { Some(bn) => { result = false; go = false; } None => {} } }
+                    } }
+                    None => { go = false; }
+                } }
+                None => { go = false; }
+            }
+        }
+    }
+    result
+}
+fn main() {
+    let t1 = Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: Some(Node { val: 3, left: None, right: None }) });
+    let t2 = Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: Some(Node { val: 9, left: None, right: None }) });
+    if same(t1, t2) { println("equal"); } else { println("different"); }
+}
+"#,
+            &["different"],
+            "paired_stack_same_tree_no_leak_or_uaf",
+        );
+    }
+
+    #[test]
     fn asan_return_owned_heap_struct_param_no_leak() {
         // B-2026-07-08-6 (non-generic leg, FIXED) — a fn that returns an owned
         // heap-owning STRUCT param used to leak the arg buffer: the caller's

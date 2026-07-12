@@ -4359,6 +4359,62 @@ impl<'ctx> super::Codegen<'ctx> {
     /// frame for match/if-let/let-else, per-iteration body frame for while-let).
     /// No-op (the prior leak behavior) for non-fresh / non-Option-Result /
     /// fitting-payload scrutinees.
+    /// For a `vec.pop()` / `pop_back()` / `pop_front()` scrutinee over a
+    /// `Vec[Option[shared T]]`, return the boxed-payload inner drop fn — the
+    /// `Option[T]` element drop that null-guards and rc-decs the popped node.
+    /// `None` for any other scrutinee shape (non-pop call, non-Identifier vec
+    /// object, element not `Option[shared]`), so the caller falls back to the
+    /// user-struct-name box-drop derivation. The element `TypeExpr` comes from
+    /// `var_elem_type_exprs`, the same table the pop-result-typing path uses.
+    /// B-2026-07-12-4 pop-consume half.
+    fn nested_option_shared_pop_inner_drop(
+        &mut self,
+        scrutinee: &Expr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let ExprKind::MethodCall { object, method, .. } = &scrutinee.kind else {
+            return None;
+        };
+        if !matches!(method.as_str(), "pop" | "pop_back" | "pop_front") {
+            return None;
+        }
+        let ExprKind::Identifier(vec_name) = &object.kind else {
+            return None;
+        };
+        let elem_te = self.var_elem_type_exprs.get(vec_name.as_str())?.clone();
+        // The popped element (`Option[shared T]`) IS the box's boxed payload;
+        // synthesize its element drop directly.
+        self.option_shared_payload_element_drop(&elem_te)
+    }
+
+    /// Given a boxed-payload `TypeExpr` that is itself `Option[shared T]`,
+    /// return the `Option[T]` element drop fn (`karac_drop_Option_<T>`, a
+    /// null-guarded rc-dec of the node). `None` when `payload_te` is not
+    /// `Option[shared]`. Shared by the fresh-temp pop scrutinee path and the
+    /// let-binding box-drop path (B-2026-07-12-4).
+    pub(super) fn option_shared_payload_element_drop(
+        &mut self,
+        payload_te: &TypeExpr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        self.option_inner_shared_type_for_type_expr(payload_te)?;
+        let inner_te = Self::option_generic_arg_type_expr(payload_te)?;
+        self.emit_option_drop_fn(&inner_te)
+    }
+
+    /// Extract the `T` `TypeExpr` from an `Option[T]` `TypeExpr`, or `None` if
+    /// `te` is not a single-arg `Option[...]`.
+    pub(super) fn option_generic_arg_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Option") {
+            return None;
+        }
+        p.generic_args.as_ref()?.iter().find_map(|a| match a {
+            crate::ast::GenericArg::Type(t) => Some(t.clone()),
+            _ => None,
+        })
+    }
+
     pub(super) fn track_freshtemp_boxed_enum_scrutinee(
         &mut self,
         scrutinee: &Expr,
@@ -4430,6 +4486,33 @@ impl<'ctx> super::Codegen<'ctx> {
             // second double-freed (exit 133). Box-only free for borrow
             // scrutinees; the map's own cleanup owns the interior.
             let scrutinee_is_borrow = self.scrutinee_is_borrow_call(scrutinee);
+            // Nested `Option[shared T]` boxed payload (B-2026-07-12-4): when the
+            // scrutinee is `vec.pop()` over a `Vec[Option[shared T]]`, the result
+            // is `Option[Option[shared T]]` and the boxed payload is itself an
+            // `Option[shared T]`. The box-free must run that inner option's
+            // element drop (null-guarded rc-dec of the node) or the popped node
+            // leaks — the pop-consume half of B-2026-07-12-4 (a fresh
+            // `Some(Node)` push drained the same way leaked too; the field-read
+            // push additionally UAF'd on the residual path, fixed by the paired
+            // push-side `share_option_shared_field_ref_for_arg` retain). Only
+            // fires for an owned (non-borrow) pop-family scrutinee; a borrow
+            // scrutinee's payload aliases the container's storage and must not be
+            // dec'd here.
+            let nested_opt_inner_drop = if scrutinee_is_borrow {
+                None
+            } else {
+                self.nested_option_shared_pop_inner_drop(scrutinee)
+            };
+            if let Some(inner_drop) = nested_opt_inner_drop {
+                self.track_boxed_enum_var_with_inner_drop(
+                    &enum_name,
+                    alloca,
+                    &enum_name,
+                    &variant,
+                    Some(inner_drop),
+                );
+                return;
+            }
             let inner_struct_name: Option<String> = match &payload.kind {
                 PatternKind::Binding(_) if !scrutinee_is_borrow => {
                     let pkey = (payload.span.offset, payload.span.length);

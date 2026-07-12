@@ -1219,6 +1219,32 @@ impl<'ctx> super::Codegen<'ctx> {
         payload_variant: &str,
         inner_struct_name: Option<&str>,
     ) {
+        let inner_drop_fn = inner_struct_name.and_then(|n| self.emit_struct_drop_synthesis(n));
+        self.track_boxed_enum_var_with_inner_drop(
+            name,
+            enum_slot,
+            enum_name,
+            payload_variant,
+            inner_drop_fn,
+        );
+    }
+
+    /// Peer of [`track_boxed_enum_var`] that takes the boxed payload's inner
+    /// drop fn already resolved, rather than deriving it from a user-struct
+    /// name. Needed when the boxed payload is itself a nested `Option[shared T]`
+    /// (`Vec[Option[shared]].pop()` → `Option[Option[shared]]`,
+    /// B-2026-07-12-4): the inner drop is the `Option[T]` element drop
+    /// (`emit_option_drop_fn`), not a `__karac_drop_<Struct>`. Without it the
+    /// box-free was shallow (freed the enum box, never dec'd the boxed node's
+    /// rc) — the pop-consume leak half of B-2026-07-12-4.
+    pub(super) fn track_boxed_enum_var_with_inner_drop(
+        &mut self,
+        name: &str,
+        enum_slot: PointerValue<'ctx>,
+        enum_name: &str,
+        payload_variant: &str,
+        inner_drop_fn: Option<FunctionValue<'ctx>>,
+    ) {
         let (enum_ty, some_tag) = match self.enum_layouts.get(enum_name) {
             Some(l) => (
                 l.llvm_type,
@@ -1226,7 +1252,6 @@ impl<'ctx> super::Codegen<'ctx> {
             ),
             None => return,
         };
-        let inner_drop_fn = inner_struct_name.and_then(|n| self.emit_struct_drop_synthesis(n));
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::BoxedEnumDrop {
                 name: name.to_string(),
