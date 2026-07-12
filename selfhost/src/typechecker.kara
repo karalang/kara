@@ -332,6 +332,22 @@ impl Checker {
         }
     }
 
+    // True iff struct `struct_idx` declares a field named `fname`.
+    fn has_field(ref self, struct_idx: i64, fname: ref String) -> bool {
+        let mut i = 0;
+        loop {
+            if i >= self.fld_owner.len() {
+                return false;
+            }
+            if self.fld_owner[i] == struct_idx {
+                if self.fld_names[i] == fname {
+                    return true;
+                }
+            }
+            i = i + 1;
+        }
+    }
+
     // The category of struct `struct_idx`'s field `fname`, or UNKNOWN (4) if the
     // struct has no such field.
     fn field_cat(ref self, struct_idx: i64, fname: ref String) -> i64 {
@@ -617,10 +633,16 @@ impl Checker {
                     let StructLitField { name: fname, value, shorthand, span: fsp } = f;
                     let vi = self.check_expr(value);
                     if sid >= 0 {
-                        let fc = self.field_cat(sid, fname);
-                        if fc != 4 and vi.category != 4 {
-                            if not cats_compatible(fc, vi.category) {
-                                self.push_err(0, vi.span.offset, vi.span.length);
+                        if not self.has_field(sid, fname) {
+                            // A field name not declared by the struct — ExtraField
+                            // (kind 3) at the whole `name: value` span (Slice 7).
+                            self.push_err(3, fsp.offset, fsp.length);
+                        } else {
+                            let fc = self.field_cat(sid, fname);
+                            if fc != 4 and vi.category != 4 {
+                                if not cats_compatible(fc, vi.category) {
+                                    self.push_err(0, vi.span.offset, vi.span.length);
+                                }
                             }
                         }
                     }
@@ -646,7 +668,13 @@ impl Checker {
                 let mut cat = 4;
                 if oi.category >= 1000 {
                     let sid = oi.category - 1000;
-                    cat = self.field_cat(sid, field);
+                    if not self.has_field(sid, field) {
+                        // Access of a field the struct doesn't declare —
+                        // UndefinedField (kind 2) at the receiver span (Slice 7).
+                        self.push_err(2, span.offset, span.length);
+                    } else {
+                        cat = self.field_cat(sid, field);
+                    }
                 }
                 ExprInfo { category: cat, span: span }
             }
@@ -778,7 +806,13 @@ fn kind_tag(kind: i64) -> String {
     if kind == 0 {
         return "type-mismatch".to_string();
     }
-    "cond-not-bool".to_string()
+    if kind == 1 {
+        return "cond-not-bool".to_string();
+    }
+    if kind == 2 {
+        return "undef-field".to_string();
+    }
+    "extra-field".to_string()
 }
 
 pub fn render_errors(errs: Vec[TypeError]) -> String {

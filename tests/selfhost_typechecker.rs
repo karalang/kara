@@ -160,6 +160,16 @@ const CORPUS: &[&str] = &[
     "struct P { x: i64 }\nstruct Q { x: i64 }\nfn f(p: P) -> Q { p }",
     // Annotated let with a struct type: initializer struct checked vs the annotation.
     "struct P { x: i64 }\nstruct Q { x: i64 }\nfn f(p: P) { let q: Q = p; }",
+    // ── Slice 7: field-name checks (ExtraField / UndefinedField) ──
+    // A struct-literal field not declared by the struct is ExtraField at the
+    // `name: value` span; accessing an undeclared field is UndefinedField at the
+    // receiver span. Both fire only for a KNOWN (same-module) struct.
+    "struct P { x: i64 }\nfn f() -> P { P { x: 1, z: 2 } }",
+    "struct P { x: i64 }\nfn f(p: P) -> i64 { p.z }",
+    "struct P { x: i64 }\nfn f(p: P) -> i64 { p.w }",
+    "struct P { x: i64, y: i64 }\nfn f() -> P { P { x: 1, y: 2 } }",
+    "struct Q { y: bool }\nfn f(q: Q) -> bool { q.y }",
+    "struct P { x: i64 }\nstruct Q { y: bool }\nfn f(q: Q) { if q.y { } }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
@@ -197,6 +207,8 @@ fn rust_render(src: &str) -> String {
         let tag = match k.as_str() {
             "TypeMismatch" | "ReturnTypeMismatch" | "BranchTypeMismatch" => "type-mismatch",
             "ConditionNotBool" => "cond-not-bool",
+            "UndefinedField" => "undef-field",
+            "ExtraField" => "extra-field",
             other => panic!(
                 "corpus entry {src:?} produced an out-of-Slice-1 type-error kind {other} \
                  (message: {}); trim the corpus or extend the slice",
