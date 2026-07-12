@@ -144,6 +144,30 @@ fn test_enum_display_unit_variants() {
 }
 
 #[test]
+fn test_enum_display_payload_variants_to_string() {
+    // Explicit `.to_string()` on a `#[derive(Display)]` enum with PAYLOAD
+    // variants renders identically to `f"{e}"` / `println(e)`, including a
+    // struct-field receiver. Guards the codegen sibling
+    // (`test_e2e_payload_enum_to_string`) — the all-unit restriction on
+    // `.to_string()` was stale, and this keeps interp == build.
+    let src = "#[derive(Display)]
+        enum IoErr { NotFound, Other(String) }
+        struct Wrap { e: IoErr }
+        fn main() {
+            let a: IoErr = IoErr.NotFound;
+            let b: IoErr = IoErr.Other(String.from(\"disk full\"));
+            println(a.to_string());
+            println(b.to_string());
+            let w: Wrap = Wrap { e: IoErr.Other(String.from(\"boom\")) };
+            println(w.e.to_string());
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "NotFound\nOther(disk full)\nOther(boom)\n"
+    );
+}
+
+#[test]
 fn test_user_impl_display_dispatches_through_to_string() {
     // A user `impl Display { fn to_string(ref self) -> String }` must win over
     // the built-in renderer across all three Display positions — `.to_string()`,

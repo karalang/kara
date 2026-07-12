@@ -12942,14 +12942,30 @@ fn test_to_string_on_string_and_display_struct_typecheck() {
 #[test]
 fn test_to_string_on_all_unit_display_enum_typecheck() {
     // `to_string()` on an all-unit `#[derive(Display)]` enum types as `String`
-    // (codegen renders the bare variant name). Payload enums can't derive
-    // Display at all, so the all-unit gate is the full surface.
+    // (codegen renders the bare variant name).
     typecheck_ok(
         "#[derive(Display)]
          enum Color { Red, Green, Blue }
          fn main() {
              let c = Color.Green;
              let s: String = c.to_string();
+             let _ = s;
+         }",
+    );
+}
+
+#[test]
+fn test_to_string_on_payload_display_enum_typecheck() {
+    // `to_string()` on a `#[derive(Display)]` enum with PAYLOAD variants types
+    // as `String`. The old all-unit restriction was stale — payload enums both
+    // derive Display and render under codegen (matching f-string interpolation),
+    // so the explicit call now types (and codegen renders it; interp == build).
+    typecheck_ok(
+        "#[derive(Display)]
+         enum IoErr { NotFound, Other(String) }
+         fn main() {
+             let a: IoErr = IoErr.Other(String.from(\"x\"));
+             let s: String = a.to_string();
              let _ = s;
          }",
     );

@@ -21928,6 +21928,34 @@ fn main() {
     // args (identifier / field access). Codegen matches the interpreter.
 
     #[test]
+    fn test_e2e_payload_enum_to_string() {
+        // Explicit `.to_string()` on a `#[derive(Display)]` enum with PAYLOAD
+        // variants (`Other(String)`) — previously the typechecker rejected it
+        // (all-unit-only) and codegen had no handler, even though f-string
+        // interpolation of the same value already rendered. Now `.to_string()`
+        // renders identically to `f"{e}"` / `println(e)` across all backends
+        // (identifier and struct-field receivers). Build==run parity with the
+        // interpreter sibling; valgrind-clean (owned String freed on scope exit).
+        if let Some(out) = run_program(
+            r#"
+#[derive(Display)]
+enum IoErr { NotFound, Other(String) }
+struct Wrap { e: IoErr }
+fn main() {
+    let a: IoErr = IoErr.NotFound;
+    let b: IoErr = IoErr.Other(String.from("disk full"));
+    println(a.to_string());
+    println(b.to_string());
+    let w: Wrap = Wrap { e: IoErr.Other(String.from("boom")) };
+    println(w.e.to_string());
+}
+"#,
+        ) {
+            assert_eq!(out, "NotFound\nOther(disk full)\nOther(boom)\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_struct_display_print_and_to_string() {
         if let Some(out) = run_program(
             r#"

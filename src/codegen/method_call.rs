@@ -1672,6 +1672,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 let (ptr, len) = self.compile_unit_enum_display(object, &ename)?;
                 return Ok(self.build_owned_string_from_parts(ptr, len));
             }
+            // Payload-carrying `#[derive(Display)]` enum → render via its
+            // value-driven Display fn (the same path f-strings / `println` use,
+            // which handles payload variants — `Other(disk full)`), returning an
+            // owning String. The typechecker now types `.to_string()` for these
+            // (the all-unit restriction was stale once the payload-enum Display
+            // renderer landed); this wires the matching codegen so build == run.
+            // `expr_user_enum_name_any` also matches all-unit enums, but those
+            // returned via the dedicated select-chain above, so only payload
+            // enums reach here. (A bare `self.to_string()` — `self` a
+            // `SelfValue` — is deliberately NOT handled here: `self` is a `ref`
+            // receiver, and naively rendering it as an owned identifier
+            // double-frees / misreads; it is a separate ref-aware follow-on
+            // tracked in the bug ledger.)
+            if let Some(ename) = self.expr_user_enum_name_any(object) {
+                let (_acc, sval) = self.render_user_enum_display(object, &ename)?;
+                return Ok(sval);
+            }
             // Collection (Vec/Map/Set) → owning String via its Display fn. The
             // returned value owns the rendered buffer (the binding frees it);
             // the throwaway acc alloca is not separately tracked.

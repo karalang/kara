@@ -22,7 +22,7 @@ use super::inference::{
 use super::types::{
     clone_self_type_for, is_numeric, iterator_item_type_for, method_callee_type_name,
     receiver_for_method_lookup, type_display, ConstArg, FloatSize, IntSize, SubstValue, Type,
-    UIntSize, VariantTypeInfo,
+    UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -4121,6 +4121,13 @@ impl<'a> super::TypeChecker<'a> {
                             && self.env.impls.iter().any(|i| {
                                 i.target_type == *name && i.trait_name.as_deref() == Some("Display")
                             }));
+                    // Payload-bearing `#[derive(Display)]` enums now render
+                    // under codegen exactly as f-string interpolation does
+                    // (`Other(disk full)` etc.) — the payload-enum Display
+                    // renderer that the old all-unit restriction waited on has
+                    // landed, so explicit `.to_string()` types for them too
+                    // (verified interp == JIT == AOT). `#[display_snake_case]`
+                    // enums stay excluded pending their own renderer follow-on.
                     let enum_display = self
                         .env
                         .enums
@@ -4128,9 +4135,6 @@ impl<'a> super::TypeChecker<'a> {
                         .map(|e| {
                             e.derived_traits.contains("Display")
                                 && !self.display_snake_case_enums.contains(name)
-                                && e.variants
-                                    .iter()
-                                    .all(|(_, vt)| matches!(vt, VariantTypeInfo::Unit))
                         })
                         .unwrap_or(false);
                     struct_display || enum_display
