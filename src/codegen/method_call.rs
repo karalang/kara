@@ -1455,6 +1455,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "unwrap_or"
                 | "unwrap_err"
                 | "expect_err"
+                | "map"
         ) {
             if let Some(value) =
                 self.try_compile_option_result_method(object, method, args, call_span)?

@@ -13428,6 +13428,34 @@ fn main() {
 }
 
 #[test]
+fn test_option_result_map() {
+    // B-2026-07-12-11 — `Option[T].map(f)` / `Result[T, E].map(f)` were
+    // unimplemented in both runtimes despite typechecking. The interpreter now
+    // applies `f` to a present payload (`Some`/`Ok`) and re-wraps, passing an
+    // absent receiver (`None`/`Err`) through. Covers a fn-reference and an
+    // annotated closure, a type-changing map (i64 -> bool), and a chain.
+    let output = run_no_errors(
+        r#"
+fn dbl(n: i64) -> i64 { n * 2i64 }
+fn main() {
+    let a: Option[i64] = Some(5i64);
+    println(f"{a.map(dbl).unwrap_or(0i64 - 1i64)}");
+    let n: Option[i64] = None;
+    println(f"{n.map(dbl).unwrap_or(0i64 - 1i64)}");
+    let ok: Result[i64, String] = Ok(21i64);
+    println(f"{ok.map(dbl).unwrap_or(0i64 - 1i64)}");
+    let er: Result[i64, String] = Err(f"boom");
+    println(f"{er.map(dbl).unwrap_or(0i64 - 99i64)}");
+    println(f"{a.map(dbl).map(|x: i64| x + 1i64).unwrap_or(0i64 - 1i64)}");
+    let m = a.map(|x: i64| x > 3i64);
+    match m { Some(b) => { println(f"{b}"); } None => { println("none"); } }
+}
+"#,
+    );
+    assert_eq!(output, "10\n-1\n42\n-99\n11\ntrue\n");
+}
+
+#[test]
 fn test_match_arm_guard() {
     // B-2026-07-12-9 — a `match` arm guard (`pat if cond => ..`) falls through
     // to the next arm when the condition is false. The interpreter has always

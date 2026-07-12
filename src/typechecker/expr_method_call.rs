@@ -2320,6 +2320,108 @@ impl<'a> super::TypeChecker<'a> {
         // closure's parameter `T` is the receiver's element, which baked
         // generic dispatch can't thread into the closure signature.
         if method == "map" {
+            // `Option[T].map(f)` / `Result[T, E].map(f)`: apply `f: Fn(T) -> R`
+            // to the present payload, yielding `Option[R]` / `Result[R, E]`
+            // (an absent receiver passes through). Push `T` into the closure
+            // param so an un-annotated `|x| ..` infers, read `R` back from the
+            // solved return type, and record the SOURCE inner `T` in
+            // `method_unwrap_inner_types` for codegen payload reconstruction.
+            // design.md documents `.map` on Result as intended; previously this
+            // fell through to a permissive fallback that typechecked but had no
+            // runtime dispatch in either backend (B-2026-07-12-11).
+            let optres_map = |ty: &Type| -> Option<(&'static str, Type, Option<Type>)> {
+                match ty {
+                    Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                        Some(("Option", args[0].clone(), None))
+                    }
+                    Type::Named { name, args } if name == "Result" && args.len() == 2 => {
+                        Some(("Result", args[0].clone(), Some(args[1].clone())))
+                    }
+                    _ => None,
+                }
+            };
+            let optres_recv = match &obj_ty {
+                Type::Ref(inner) | Type::MutRef(inner) => optres_map(inner),
+                other => optres_map(other),
+            };
+            if let Some((enum_name, t_ty, e_ty)) = optres_recv {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "{enum_name}.map expects 1 argument (closure), got {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                // Infer the mapper's type. For a fn-reference or an ANNOTATED
+                // closure this yields a concrete `Fn(T') -> R`; seed the param
+                // from `T` (so an un-annotated typevar param picks it up) and
+                // read `R` as the result payload type. `check_expr` with a
+                // fresh return typevar can't be used here — `check_assignable`
+                // is subtyping, not unification, so it never solves the return
+                // var. (Fully inferring an un-annotated `|x| ..` param from `T`
+                // is the separate closure-param-inference gap B-2026-07-12-10.)
+                let f_actual = self.infer_expr(&args[0].value);
+                let f_resolved = resolve_type_var_top(&f_actual, &self.env.substitutions);
+                let r_resolved = match &f_resolved {
+                    Type::Function {
+                        params,
+                        return_type,
+                    }
+                    | Type::OnceFunction {
+                        params,
+                        return_type,
+                    } => {
+                        if let Some(p0) = params.first() {
+                            unify_types(
+                                p0,
+                                &t_ty,
+                                &mut self.env.substitutions,
+                                &mut self.env.const_substitutions,
+                            );
+                        }
+                        resolve_type_var_top(return_type, &self.env.substitutions)
+                    }
+                    _ => {
+                        self.type_error(
+                            format!(
+                                "{enum_name}.map expects a function argument, got '{}'",
+                                type_display(&f_resolved)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return Type::Error;
+                    }
+                };
+                let t_resolved = resolve_type_var_top(&t_ty, &self.env.substitutions);
+                // Codegen reconstructs the receiver's payload from these words
+                // to feed the mapper; the RESULT `R` is read off the mapper's
+                // compiled SSA value, so only the SOURCE `T` needs recording.
+                self.method_unwrap_inner_types.insert(
+                    SpanKey::from_span(span),
+                    Self::type_to_type_expr(&t_resolved),
+                );
+                let result = if enum_name == "Option" {
+                    Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![r_resolved],
+                    }
+                } else {
+                    Type::Named {
+                        name: "Result".to_string(),
+                        args: vec![r_resolved, e_ty.unwrap_or(Type::Error)],
+                    }
+                };
+                self.record_expr_type(span, &result);
+                return result;
+            }
             // (element `T`, the owned `Self` container type, display name).
             let map_receiver = |ty: &Type| -> Option<(Type, Type, &'static str)> {
                 match ty {

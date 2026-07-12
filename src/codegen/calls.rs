@@ -1376,6 +1376,120 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => {}
         }
 
+        // `Option[T].map(f)` / `Result[T, E].map(f)`: apply `f` to the present
+        // payload and re-wrap in the present variant (`Some`/`Ok`); an absent
+        // receiver (`None`/`Err`) passes through unchanged. The typechecker
+        // recorded the SOURCE `T` in `inner_te`; the RESULT `R` is read off the
+        // mapper's compiled value (the Some/Ok ctor infers its payload words
+        // from that value). We reconstruct the payload, bind it to a synthetic
+        // local, then compile `Some(f(__x))` / `Ok(f(__x))` so the existing
+        // call + enum-ctor codegen (closure/fn-ref dispatch, payload packing)
+        // does the work rather than re-implementing it. Scoped to a trivially-
+        // copyable payload: a heap `T` needs ownership care (the reconstructed
+        // payload aliases the receiver's buffer and the mapper may consume it),
+        // so it defers loudly to the interpreter. B-2026-07-12-11.
+        if method == "map" && args.len() == 1 {
+            if !super::vec_method::is_trivially_copyable_te(&inner_te) {
+                return Err(
+                    "codegen: Option/Result.map over a non-trivially-copyable payload \
+                     (String / Vec / struct) is not yet supported under `karac build`; \
+                     re-run with `--interp` (or `KARAC_RUN_JIT=0`)"
+                        .to_string(),
+                );
+            }
+            let is_result = self.type_name_of_expr(object).as_deref() == Some("Result");
+            let present_variant = if is_result { "Ok" } else { "Some" };
+            let inner_ll = self.llvm_type_for_type_expr(&inner_te);
+            let fn_val = self.current_fn.unwrap();
+            let present_bb = self.context.append_basic_block(fn_val, "map.present");
+            let absent_bb = self.context.append_basic_block(fn_val, "map.absent");
+            let merge_bb = self.context.append_basic_block(fn_val, "map.merge");
+            let one = i64_t.const_int(1, false);
+            let is_present = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, tag, one, "map.is_present")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(is_present, present_bb, absent_bb)
+                .unwrap();
+
+            // Present: reconstruct the payload, bind it to a synthetic local,
+            // and compile `Some(f(__x))` / `Ok(f(__x))`.
+            self.builder.position_at_end(present_bb);
+            let w0 = self
+                .builder
+                .build_extract_value(recv_struct, 1, "map.w0")
+                .map_err(|e| format!("codegen: map payload w0: {:?}", e))?
+                .into_int_value();
+            let w1 = self
+                .builder
+                .build_extract_value(recv_struct, 2, "map.w1")
+                .map_err(|e| format!("codegen: map payload w1: {:?}", e))?
+                .into_int_value();
+            let w2 = self
+                .builder
+                .build_extract_value(recv_struct, 3, "map.w2")
+                .map_err(|e| format!("codegen: map payload w2: {:?}", e))?
+                .into_int_value();
+            let payload = self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?;
+            let x_name = "__karac_map_x";
+            let alloca = self.create_entry_alloca(fn_val, x_name, payload.get_type());
+            // `create_entry_alloca` moves the builder to the entry block; re-anchor.
+            self.builder.position_at_end(present_bb);
+            self.builder.build_store(alloca, payload).unwrap();
+            let saved = self.variables.insert(
+                x_name.to_string(),
+                VarSlot {
+                    ptr: alloca,
+                    ty: payload.get_type(),
+                },
+            );
+            let mk = |kind: ExprKind| Expr {
+                kind,
+                span: call_span.clone(),
+            };
+            let arg = |value: Expr| CallArg {
+                label: None,
+                mut_marker: false,
+                span: value.span.clone(),
+                value,
+            };
+            let x_ident = mk(ExprKind::Identifier(x_name.to_string()));
+            let call_f = mk(ExprKind::Call {
+                callee: Box::new(args[0].value.clone()),
+                args: vec![arg(x_ident)],
+            });
+            let ctor = mk(ExprKind::Call {
+                callee: Box::new(mk(ExprKind::Identifier(present_variant.to_string()))),
+                args: vec![arg(call_f)],
+            });
+            let present_result = self.compile_expr(&ctor)?;
+            match saved {
+                Some(s) => {
+                    self.variables.insert(x_name.to_string(), s);
+                }
+                None => {
+                    self.variables.remove(x_name);
+                }
+            }
+            let present_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // Absent: the receiver (`None`/`Err`) is already the correct
+            // type-erased shape (`Option[R]` / `Result[R, E]` share the layout).
+            self.builder.position_at_end(absent_bb);
+            let absent_result: BasicValueEnum<'ctx> = recv_struct.into();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            self.builder.position_at_end(merge_bb);
+            let phi = self
+                .builder
+                .build_phi(present_result.get_type(), "map.result")
+                .map_err(|e| format!("codegen: map phi: {:?}", e))?;
+            phi.add_incoming(&[(&present_result, present_end), (&absent_result, absent_bb)]);
+            return Ok(Some(phi.as_basic_value()));
+        }
+
         // unwrap_or(default): eager fallback, NO panic. Compile the default
         // once (matching Rust's eager `unwrap_or`, unlike `unwrap_or_else`),
         // then branch on the tag — present (tag == 1) reconstitutes the

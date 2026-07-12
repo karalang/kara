@@ -7386,6 +7386,37 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_option_result_map() {
+        // B-2026-07-12-11 — `Option[T].map(f)` / `Result[T, E].map(f)` were
+        // unimplemented in codegen (no dispatch arm) despite typechecking. Now
+        // the map lowering branches on the tag, reconstructs the payload, binds
+        // it to a synthetic local, and compiles `Some(f(x))` / `Ok(f(x))` —
+        // reusing the call + ctor codegen — with the absent receiver passed
+        // through. Covers a fn-reference and an annotated closure, a Result Ok
+        // (mapped) and Err (passthrough), a type-changing map (i64 -> bool),
+        // and a chain. interp == JIT == AOT; scalar payloads (a heap payload
+        // defers loudly to the interpreter, verified separately).
+        if let Some(out) = run_program(
+            "fn dbl(n: i64) -> i64 { n * 2 }\n\
+             fn main() {\n\
+                 let a: Option[i64] = Some(5);\n\
+                 println(f\"{a.map(dbl).unwrap_or(-1)}\");\n\
+                 let n: Option[i64] = None;\n\
+                 println(f\"{n.map(dbl).unwrap_or(-1)}\");\n\
+                 let ok: Result[i64, String] = Ok(21);\n\
+                 println(f\"{ok.map(dbl).unwrap_or(-1)}\");\n\
+                 let er: Result[i64, String] = Err(f\"boom\");\n\
+                 println(f\"{er.map(dbl).unwrap_or(-99)}\");\n\
+                 println(f\"{a.map(dbl).map(|x: i64| x + 1).unwrap_or(-1)}\");\n\
+                 let m = a.map(|x: i64| x > 3);\n\
+                 match m { Some(b) => { println(f\"{b}\"); } None => { println(\"none\"); } }\n\
+             }",
+        ) {
+            assert_eq!(out, "10\n-1\n42\n-99\n11\ntrue\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_generic_fn_divergent_loop_tail() {
         // B-2026-07-12-8 — a GENERIC (monomorphized) function `fn f[T](..) -> i64`
         // whose body TAIL is a divergent `loop { .. return <value>; .. }` (exits

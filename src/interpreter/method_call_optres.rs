@@ -132,6 +132,34 @@ impl<'a> super::Interpreter<'a> {
                     _ => default,
                 });
             }
+            "map" => {
+                // `Option[T].map(f)` / `Result[T, E].map(f)`: apply `f` to the
+                // present payload (`Some`/`Ok`) and re-wrap in the SAME variant;
+                // an absent receiver (`None`/`Err`) passes through unchanged.
+                // `f` is a fn-reference or closure argument that evaluates to a
+                // `Value::Function`; `invoke_function_value` runs it over the
+                // unwrapped payload. design.md documents `.map` on Result as
+                // intended (`self.fetch_profile(user.id).map(Response.ok)`);
+                // the typechecker already types this call (B-2026-07-12-11).
+                let f = self.eval_expr_inner(&args[0].value);
+                return Some(match obj {
+                    Value::EnumVariant {
+                        enum_name,
+                        variant,
+                        data: EnumData::Tuple(vals),
+                    } if variant == "Some" || variant == "Ok" => {
+                        let payload = vals.first().cloned().unwrap_or(Value::Unit);
+                        let mapped = self.invoke_function_value(f, vec![payload]);
+                        Value::EnumVariant {
+                            enum_name: enum_name.clone(),
+                            variant: variant.clone(),
+                            data: EnumData::Tuple(vec![mapped]),
+                        }
+                    }
+                    // `None` / `Err(e)` — unchanged (the mapper never runs).
+                    other => other.clone(),
+                });
+            }
             "is_some" => {
                 return Some(match obj {
                     Value::EnumVariant { variant, .. } if variant == "Some" => Value::Bool(true),
