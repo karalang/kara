@@ -46158,6 +46158,32 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_char_to_string_from_and_into() {
+        // `From[char] for String` (design.md § Conversion Traits, "from char
+        // literals"). Both `String.from(c)` and `c.into()` build a one-glyph
+        // owned heap String via UTF-8 encoding (the `char.to_string()` path);
+        // multibyte chars encode fully; the result supports `+`. Build==run
+        // parity with `test_char_to_string_from_and_into_interpreter`. The heap
+        // Strings are freed on scope exit — valgrind-clean (verified by hand;
+        // pinned by `asan_char_to_string_no_leak`).
+        let output = run_program(
+            "fn main() {\n\
+                 let a: String = String.from('Z');\n\
+                 println(a);\n\
+                 let ch: char = 'Q';\n\
+                 let b: String = ch.into();\n\
+                 println(b);\n\
+                 let c: String = '😀'.into();\n\
+                 println(c);\n\
+                 let d: String = String.from('A') + \"BC\";\n\
+                 println(d);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "Z\nQ\n😀\nABC\n");
+    }
+
+    #[test]
     fn test_e2e_numeric_try_from() {
         // Built-in numeric narrowing `T.try_from(x) -> Result[T, String]`
         // (design.md § Conversion Traits). Build==run parity with the

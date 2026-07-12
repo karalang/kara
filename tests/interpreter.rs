@@ -11869,6 +11869,27 @@ fn test_numeric_try_from_interpreter() {
 }
 
 #[test]
+fn test_char_to_string_from_and_into_interpreter() {
+    // `From[char] for String` (design.md § Conversion Traits, "from char
+    // literals"). Both `String.from(c)` and `c.into()` produce a one-glyph
+    // owned String; multibyte chars encode to full UTF-8; the result is a real
+    // heap String (supports `+`). Must match the codegen E2E
+    // (`test_e2e_char_to_string_from_and_into`).
+    let output = run(r#"fn main() {
+            let a: String = String.from('Z');
+            println(a);
+            let ch: char = 'Q';
+            let b: String = ch.into();
+            println(b);
+            let c: String = '😀'.into();
+            println(c);
+            let d: String = String.from('A') + "BC";
+            println(d);
+        }"#);
+    assert_eq!(output, "Z\nQ\n😀\nABC\n");
+}
+
+#[test]
 fn test_f64_parse_interpreter() {
     // Float parse: decimal / scientific / negative / reject / integer-form.
     // The self-hosting lexer's float-literal path.

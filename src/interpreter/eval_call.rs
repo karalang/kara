@@ -418,11 +418,19 @@ impl<'a> super::Interpreter<'a> {
                         if self.pending_cf.is_some() {
                             return v;
                         }
-                        if let Value::String(s) = v {
-                            return Value::String(s);
+                        match v {
+                            Value::String(s) => return Value::String(s),
+                            // `From[char] for String` — a single `char` becomes
+                            // a one-glyph owned String. Also the target of the
+                            // `c.into()` desugar (`Call(Path([String, from]))`).
+                            Value::Char(c) => return Value::String(c.to_string()),
+                            _ => {
+                                return self.record_runtime_error(
+                                    "String.from expects a string or char argument",
+                                    span,
+                                );
+                            }
                         }
-                        return self
-                            .record_runtime_error("String.from expects a string argument", span);
                     }
                     return Value::String(String::new());
                 }

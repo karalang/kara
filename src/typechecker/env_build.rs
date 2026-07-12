@@ -1634,6 +1634,24 @@ impl<'a> super::TypeChecker<'a> {
             self.register_builtin_impl("From", tgt_name, vec![("from", from_sig(src_ty, tgt_ty))]);
         }
 
+        // `impl From[char] for String` — a single `char` becomes a one-glyph
+        // owned `String` (the "from char literals" half of the phase-8
+        // conversion-traits follow-up; Rust ships the same `From<char> for
+        // String`). Extends the design table's explicit `From[StringSlice] for
+        // String` row. Enables `c.into()` at a `String`-expected position (the
+        // registration is what `try_apply_into_coercion` consults); the direct
+        // `String.from(c)` call is typed by the loose `String.from` path-arm and
+        // executed by the interpreter / codegen `String.from` char arms. The
+        // string-literal → `String` construction is already covered by
+        // `String.from("…")`, so no `From[StringSlice]`/`From[String]` blanket
+        // is registered here (a reflexive `From[String] for String` would be an
+        // out-of-character identity conversion no other type has).
+        self.register_builtin_impl(
+            "From",
+            "String",
+            vec![("from", from_sig(&Type::Char, &Type::Str))],
+        );
+
         // Numeric narrowing / sign-changing conversions: `impl TryFrom[S] for T`
         // for every ordered integer type pair (design.md § Conversion Traits —
         // "Narrowing numeric conversion — fails if out of range"). The Error

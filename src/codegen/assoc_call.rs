@@ -1970,6 +1970,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // diagnostic that led here.
         if type_name == "String" && method == "from" {
             if let Some(arg) = _args.first() {
+                // `From[char] for String` — a single `char` (lowered to i32)
+                // becomes a one-glyph owned heap String via UTF-8 encoding, the
+                // same path `char.to_string()` uses. Also the target of the
+                // `c.into()` desugar. A string-literal / StringSlice / String
+                // arg passes through `compile_expr` unchanged (its aggregate is
+                // already what the pipeline expects).
+                if self.expr_is_char(&arg.value) {
+                    let v = self.compile_expr(&arg.value)?;
+                    let (ptr, len) = self.emit_codepoint_to_utf8(v.into_int_value());
+                    return Ok(self.build_owned_string_from_parts(ptr, len));
+                }
                 return self.compile_expr(&arg.value);
             }
         }

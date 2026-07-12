@@ -7914,6 +7914,22 @@ fn test_numeric_try_from_non_integer_source_rejected() {
 }
 
 #[test]
+fn test_char_into_string_typechecks() {
+    // `From[char] for String` (design.md § Conversion Traits, "from char
+    // literals"). `c.into()` at a `String`-expected position type-checks via
+    // the registered impl; the direct `String.from(c)` is accepted by the
+    // loose `String.from` path-arm.
+    typecheck_ok(
+        "fn main() {
+             let ch: char = 'Q';
+             let a: String = ch.into();
+             let b: String = 'x'.into();
+             let c: String = String.from('Z');
+         }",
+    );
+}
+
+#[test]
 fn test_into_missing_from_impl_diagnoses() {
     // `.into()` with an expected target that has no `impl From[S] for T`
     // emits a targeted diagnostic.

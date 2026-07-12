@@ -23870,6 +23870,34 @@ fn main() {
     }
 
     #[test]
+    fn asan_char_to_string_no_leak() {
+        // `From[char] for String`: `String.from(c)` / `c.into()` allocate a
+        // fresh heap String per call. Loops both surfaces so any per-iteration
+        // leak or bad free accumulates for ASAN + LSan. The bound String is
+        // consumed (`.len()`) and dropped each iteration; a multibyte char
+        // exercises a >1-byte allocation.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 200 {
+        let a: String = String.from('A');
+        total = total + a.len();
+        let c: char = '😀';
+        let b: String = c.into();
+        total = total + b.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            &["1000"],
+            "char_to_string_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_numeric_try_from_err_string_no_leak() {
         // Numeric narrowing `T.try_from(x) -> Result[T, String]`: the `Err`
         // payload is a static (`cap=0`) String, so the failure path must
