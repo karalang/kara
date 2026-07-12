@@ -7386,6 +7386,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_fn_divergent_loop_tail() {
+        // B-2026-07-12-8 — a GENERIC (monomorphized) function `fn f[T](..) -> i64`
+        // whose body TAIL is a divergent `loop { .. return <value>; .. }` (exits
+        // only via `return`) failed module verification: the mono emitted a
+        // spurious `ret void` at the loop's unreachable fall-through in an
+        // i64-returning fn ("Function return type does not match operand type of
+        // return inst"). The non-generic sibling, and a generic `while`+tail or
+        // `loop{..break;}`+tail, all compiled fine — the bare divergent `loop`
+        // tail was the trigger. Fix: emit `unreachable` (not `ret void`) at the
+        // no-value tail of a non-void mono, mirroring `compile_function`. Covers
+        // a bare `loop{return}`, a conditional-return loop, and confirms a VOID
+        // generic `loop{return;}` still returns cleanly.
+        if let Some(out) = run_program(
+            "fn f[T](x: T) -> i64 { loop { return 5; } }\n\
+             fn g[T](x: T) -> i64 { let mut i = 0; loop { if i >= 3 { return i; } i = i + 1; } }\n\
+             fn h[T](x: T) { loop { return; } }\n\
+             fn main() {\n\
+                 println(f\"{f(99)}\");\n\
+                 println(f\"{g(99)}\");\n\
+                 h(99);\n\
+                 println(\"ok\");\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n3\nok\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_match_arm_guard() {
         // B-2026-07-12-9 — a `match` arm GUARD (`pat if cond => ..`) was SILENTLY
         // IGNORED under codegen: the arm fired whenever its pattern matched,

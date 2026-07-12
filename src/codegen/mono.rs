@@ -1774,6 +1774,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     let val = self.coerce_to_current_ret_type(val);
                     self.builder.build_return(Some(&val)).unwrap();
                 }
+                None if !fn_returns_void => {
+                    // No tail value in a NON-void mono: the body's tail was a
+                    // DIVERGENT expression (`loop { return .. }` / `loop {}`,
+                    // type `Never`), so this fall-through block is unreachable —
+                    // the typechecker already proved every real exit returns a
+                    // value. Emitting `ret void` here (the old `_` arm) fails
+                    // module verification in a non-void fn ("Function return
+                    // type does not match operand type of return inst", B-2026-
+                    // 07-12-8). Emit `unreachable`, mirroring the non-generic
+                    // `compile_function` tail (functions.rs). The non-generic
+                    // sibling and a generic `while`/`loop{..break;}`+tail-return
+                    // already compiled; only the generic divergent-`loop` tail
+                    // hit this arm.
+                    self.builder.build_unreachable().unwrap();
+                }
                 _ => {
                     self.builder.build_return(None).unwrap();
                 }
