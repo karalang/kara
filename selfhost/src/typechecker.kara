@@ -302,16 +302,38 @@ impl Checker {
     fn check_stmt(mut ref self, st: Stmt) {
         match st {
             Let(n) => {
-                let LetStmt { is_mut, pattern, value, span } = n;
+                let LetStmt { is_mut, pattern, ty, value, span } = n;
                 // Infer the RHS category FIRST (so `let x = x` sees the outer
-                // `x`, not this binding), THEN bind the pattern name to it. Only
-                // a plain `let x = …` binding is tracked; other patterns bind
-                // nothing (their locals stay UNKNOWN) — Slice-2 corpus scope.
+                // `x`, not this binding).
                 let vi = self.check_expr(value);
+                // Annotation category (Slice 4). Match the `Option[TypeExpr]`
+                // INLINE — never pass it by value to a helper (B-2026-07-11-37).
+                let mut ann = 4;
+                let mut has_ann = false;
+                match ty {
+                    Some(t) => {
+                        ann = category_of_type(t);
+                        has_ann = true;
+                    }
+                    None => {}
+                }
+                // The binding's category is the DECLARED annotation when present
+                // (so later references use `x: T`), else the RHS's inferred
+                // category. An annotated `let x: T = v` whose initializer is a
+                // DIFFERENT known primitive is TypeMismatch at the value span.
+                let mut bind_cat = vi.category;
+                if has_ann {
+                    bind_cat = ann;
+                    if ann <= 3 and vi.category <= 3 {
+                        if not cats_compatible(ann, vi.category) {
+                            self.push_err(0, vi.span.offset, vi.span.length);
+                        }
+                    }
+                }
                 match pattern {
                     BindingPat(bp) => {
                         let BindingPattern { name, span } = bp;
-                        self.define(name, vi.category);
+                        self.define(name, bind_cat);
                     }
                     _ => {}
                 }

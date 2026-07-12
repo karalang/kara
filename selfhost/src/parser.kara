@@ -652,12 +652,30 @@ impl Parser {
             self.advance();
         }
         let pattern = self.parse_pattern();
+        // Optional `: T` type annotation (mirrors the seed's `parse_let`). A
+        // leading `:` after the pattern introduces the declared type; without
+        // this the `:` desynced the parser (the value became an `error` node and
+        // `T = value` mis-parsed as a stray assignment).
+        let mut ty: Option[TypeExpr] = None;
+        let at_colon = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Colon => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if at_colon {
+            self.advance(); // `:`
+            ty = Some(self.parse_type());
+        }
         self.eat_equal();
         let value = self.parse_expr_bp(0);
         self.eat_semicolon();
         Stmt.Let(LetStmt {
             is_mut: is_mut,
             pattern: pattern,
+            ty: ty,
             value: value,
             span: self.span_from(start),
         })

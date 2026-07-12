@@ -217,6 +217,14 @@ const CORPUS: &[&str] = &[
     "fn f(v: Vec[i64]) { outer: for x in v { continue outer } }",
     // An out-of-scope label after the labeled loop closes — UndefinedLabel.
     "fn f() { outer: loop { break outer } loop { continue outer } }",
+    // ── annotated `let` (`let x: T = v`) ── the parser now captures the `: T`
+    // annotation (previously it desynced into a stray assignment); the resolver
+    // resolves the initializer, THEN the annotation type, THEN binds — so a
+    // clean annotation is `(ok)` and an undefined annotation type is
+    // UndefinedType at the type span (seed order: value → type → binding).
+    "fn annot() { let x: i64 = 1; x }",
+    "fn annot_bad() { let y: Nope = 0; y }",
+    "fn annot_mut() { let mut z: bool = true; z }",
 ];
 
 /// Multi-item programs for the program-level (two-pass) gate. These exercise

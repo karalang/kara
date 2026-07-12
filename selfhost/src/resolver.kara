@@ -1037,10 +1037,17 @@ impl Resolver {
     fn resolve_stmt(mut ref self, st: Stmt) {
         match st {
             Let(l) => {
-                // Resolve the initializer in the OUTER scope first (so `let x =
-                // x` sees the prior `x`), then bind the pattern's variables.
-                let LetStmt { is_mut, pattern, value, span } = l;
+                // Seed order (`resolve_block.rs`): resolve the VALUE first (so
+                // `let x = x` sees the prior `x`), THEN the type annotation, THEN
+                // bind the pattern's variables.
+                let LetStmt { is_mut, pattern, ty, value, span } = l;
                 self.resolve_expr(value);
+                match ty {
+                    Some(t) => {
+                        self.resolve_type(t);
+                    }
+                    None => {}
+                }
                 // `let`-statement binding: reserved names DO raise (the seed's
                 // `define_binding_leaf`).
                 self.bind_pattern(pattern, true);

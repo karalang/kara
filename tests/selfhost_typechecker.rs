@@ -103,10 +103,32 @@ const CORPUS: &[&str] = &[
     "fn cmp_cond_ok(n: i64) { if n > 0 { } }",
     "fn arith_cond_bad(n: i64) { if n + 1 { } }",
     "fn operand_via_let(n: i64) -> bool { let x = n + 1; x > 0 }",
+    // ── Slice 4: annotated-`let` (`let x: T = v`) ──
+    // The initializer is checked against the DECLARED type (mismatch at the
+    // value span), and the binding takes the DECLARED category so later
+    // references use `x: T` (not the initializer's).
+    "fn al_bool_bad() { let x: bool = 1; }",
+    "fn al_i64_ok() { let x: i64 = 1; }",
+    "fn al_num_lenient() { let x: i64 = 1.5; }",
+    "fn al_str_bad() { let x: String = 1; }",
+    "fn al_char_ok() { let x: char = 'a'; }",
+    // Binding takes the DECLARED type: after `let x: bool = 1` (a mismatch), `x`
+    // is bool — so `if x` is a valid condition (only the let error fires).
+    "fn al_bind_decl() { let x: bool = 1; if x { } }",
+    // Declared type drives a downstream check: `x: bool` used where i64 wanted.
+    "fn al_decl_ret_bad() -> i64 { let x: bool = true; x }",
+    "fn al_cond_from_decl() { let n: i64 = 0; if n { } }",
+    "fn al_numeric_ret_ok() -> i64 { let x: i64 = 1.5; x }",
+    "fn al_str_ret_bad() -> bool { let s: String = \"a\"; s }",
+    // Initializer inferred from a param, checked against the annotation.
+    "fn al_from_param(n: i64) { let m: bool = n; if m { } }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call result is UNKNOWN (call typing is a later slice); with a matching
     // declared return the seed is clean, so the carve-out must not false-positive.
     "fn call_ret_ok() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
+    // A non-primitive annotation (`Vec[i64]`) is UNKNOWN — the initializer check
+    // is skipped, and the binding stays UNKNOWN (references to it not checked).
+    "fn al_unknown_ann() -> i64 { let v: Vec[i64] = mk(); 0 }\nfn mk() -> Vec[i64] { Vec.new() }",
     // ── multi-item programs — per-fn errors in traversal order ──
     "fn a() -> bool { 1 }\nfn b() -> i64 { 2 }\nfn c() -> String { 'x' }",
     "fn ok_a() -> i64 { 1 }\nfn bad_b() -> bool { 2 }",

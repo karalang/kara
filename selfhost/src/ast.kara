@@ -371,6 +371,9 @@ pub struct LetStmt {
     // pattern (`let CallArg { a, b } = …`, `let (x, y) = …`). Mirrors the seed's
     // `StmtKind::Let.pattern`.
     pub pattern: Pattern,
+    // Optional type annotation (`let x: T = …`). `None` for an inferred `let`.
+    // Mirrors the seed's `StmtKind::Let.ty`.
+    pub ty: Option[TypeExpr],
     pub value: Expr,
     pub span: Span,
 }

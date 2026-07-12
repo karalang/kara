@@ -127,6 +127,11 @@ const CORPUS: &[&str] = &[
     "{ let x = 1; x }",
     "{ let mut y = a; y = b; y }",
     "{ let z = a + b; z }",
+    // Annotated `let` (`: T` now captured, not desynced) — the annotation is not
+    // rendered (seed uses `..`), so both sides keep the `(let SPAN pat val)` shape.
+    "{ let x: i64 = 1; x }",
+    "{ let mut z: bool = true; z }",
+    "{ let p: (i64, bool) = t; p }",
     "{ f(x); g(y) }",
     "{ a.b = c; a.b }",
     "{ v[0] = x; v[0] }",

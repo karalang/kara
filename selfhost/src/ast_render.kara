@@ -196,9 +196,13 @@ fn render_stmt(s: Stmt) -> String {
             let LetStmt {
                 is_mut,
                 pattern,
+                ty,
                 value,
                 span,
             } = n;
+            // The type annotation is bound but NOT rendered — the seed's parser
+            // oracle renders `StmtKind::Let` with `..` (no `ty`), so both sides
+            // keep the `(let SPAN pattern value)` shape.
             out.push_str("(let");
             if is_mut {
                 out.push_str(" mut");
