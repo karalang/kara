@@ -4859,6 +4859,37 @@ fn main() {
         }
     }
 
+    /// B-2026-07-11-35 (return leg): a method/fn whose tail is a FIELD-rooted
+    /// index element (`fn get(ref self) -> String { self.xs[i] }`,
+    /// `fn getf(h: ref H, i) -> String { h.xs[i] }`) returned an ALIAS of the
+    /// container's element — a `ref self`/`ref Struct` can't move it out, so the
+    /// returned owned `String` and the container's element double-freed at scope
+    /// exit (B-31's tests escaped it by returning static string literals, cap=0).
+    /// The fn-tail now deep-clones a field-rooted index read (the bare-`v[i]`
+    /// return already produced an independent value, so only the field-rooted
+    /// shape needed it). A trivially-copyable element (`i64`) is unchanged (the
+    /// clone self-gates). The memory-safety is pinned in
+    /// `tests/memory_sanitizer.rs::asan_return_field_index_element_no_double_free`.
+    #[test]
+    fn e2e_return_field_index_element_clones() {
+        if let Some(out) = run_program(
+            "struct H { xs: Vec[String] }\n\
+             impl H {\n\
+             \x20   fn get(ref self, i: i64) -> String { self.xs[i] }\n\
+             }\n\
+             fn getf(h: ref H, i: i64) -> String { h.xs[i] }\n\
+             fn main() {\n\
+             \x20   let h = H { xs: [f\"alpha\", f\"bravo\", f\"charlie\"] };\n\
+             \x20   println(h.get(0));\n\
+             \x20   let b: String = getf(h, 1);\n\
+             \x20   println(b);\n\
+             \x20   println(h.xs[2]);\n\
+             }",
+        ) {
+            assert_eq!(out, "alpha\nbravo\ncharlie\n");
+        }
+    }
+
     /// B-2026-07-03-11: dispatch a trait method called through a GENERIC
     /// TYPE-PARAMETER BOUND under `karac build`. `fn use_it[X: Tagged](x: X)`
     /// calling `x.tag()` used to die with "no handler for method tag on

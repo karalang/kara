@@ -23665,4 +23665,50 @@ fn main() {
             "fstring_into_struct_field_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_return_field_index_element_no_double_free() {
+        // B-2026-07-11-35 (return leg): a method/fn that returns a field-rooted
+        // index element (`fn get(ref self) -> String { self.xs[i] }`,
+        // `fn getf(h: ref H, i) -> String { h.xs[i] }`) used to return an ALIAS
+        // of the container's element — a `ref self`/`ref Struct` can't move it
+        // out, so the returned owned `String` and the container's element both
+        // freed the buffer at scope exit (double-free; the bare-`v[i]` return
+        // already produced an independent value). The fn-tail now deep-clones a
+        // field-rooted index read. Covers both the `self.field[i]` and the
+        // `h.field[i]`-via-ref-param shapes, with the returned value bound AND
+        // consumed directly, over heap String elements built and dropped.
+        assert_clean_asan_run(
+            r#"
+struct H { xs: Vec[String] }
+impl H {
+    fn get(ref self, i: i64) -> String { self.xs[i] }
+}
+fn getf(h: ref H, i: i64) -> String { h.xs[i] }
+fn main() {
+    let mut r: i64 = 0;
+    while r < 3 {
+        let h = H { xs: [f"alpha-{r}-pad", f"bravo-{r}-pad", f"charlie-{r}"] };
+        println(h.get(0));
+        let bound: String = getf(h, 1);
+        println(bound);
+        println(h.xs[2]);
+        r = r + 1;
+    }
+}
+"#,
+            &[
+                "alpha-0-pad",
+                "bravo-0-pad",
+                "charlie-0",
+                "alpha-1-pad",
+                "bravo-1-pad",
+                "charlie-1",
+                "alpha-2-pad",
+                "bravo-2-pad",
+                "charlie-2",
+            ],
+            "return_field_index_element_no_double_free",
+        );
+    }
 }

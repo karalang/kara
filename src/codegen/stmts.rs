@@ -106,6 +106,29 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             self.pending_return_layout = Some(self.return_layout.clone());
         }
+        // Field-rooted index read at fn tail (`fn get(ref self) -> T
+        // { self.xs[i] }`, `fn getf(h: ref H, i) -> T { h.xs[i] }`): a
+        // `ref self` / `ref Struct` fn cannot MOVE the element out of the
+        // borrowed container, so the returned owned `T` must be a CLONE — else
+        // it aliases the container's element and both free the buffer at their
+        // scope exits (double-free; B-2026-07-11-35 return leg). The bare-`v[i]`
+        // return is already produced as an independent value by the owned/borrow
+        // return machinery, so ONLY the field-rooted (`self.field[i]` /
+        // `h.field[i]`) index read falls through uncloned. Gated to a
+        // FieldAccess-object element index (not a range slice, which is already
+        // fresh); `clone_owned_vec_index_element` self-gates on a non-trivially-
+        // copyable element and on the read value's LLVM type, so a Copy element
+        // (`Vec[i64]`) or a mis-typed read is a no-op. Runs ahead of the
+        // `tail_inner` (Option[shared]) path — a `Vec`/`String` element index is
+        // disjoint from the shared-enum tail shapes handled below.
+        if let ExprKind::Index { object, index } = &expr.kind {
+            if matches!(&object.kind, ExprKind::FieldAccess { .. })
+                && !matches!(&index.kind, ExprKind::Range { .. })
+            {
+                let v = self.compile_expr(expr)?;
+                return self.clone_owned_vec_index_element(expr, v);
+            }
+        }
         let Some(inner) = tail_inner else {
             return self.compile_expr(expr);
         };
