@@ -3526,6 +3526,44 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_direct_index_match_option_shared_correct() {
+        // B-2026-07-12-21 correctness pin (the ASAN/leak gate lives in
+        // tests/memory_sanitizer.rs::asan_direct_index_match_option_shared_no_leak).
+        // A direct `match vec[i]` on an `Option[shared]` index-read leaked the
+        // extracted node; the lowering fix rewrites it into a let-bound
+        // scrutinee. This pins that the rewrite preserves the value — the bound
+        // arm must still read the right node's field. Non-ASAN so it guards the
+        // value everywhere.
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn xfer() -> i64 {
+    let mut dst: Vec[Option[Node]] = Vec.new();
+    dst.push(Some(Node { val: 10, left: None, right: None }));
+    let mut r: i64 = 0;
+    match dst[0] {
+        None => {}
+        Some(nd) => { r = nd.val; }
+    }
+    r
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + xfer();
+        i = i + 1;
+    }
+    println(t);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2000");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_set_get_is_set_lifecycle() {
         // `OnceLock[i64]` write-once lifecycle under `karac build`/JIT (was
         // interpreter-only). Empty → `is_set() == false`, `get() == None`;

@@ -24189,4 +24189,46 @@ fn main() {
             "field_read_option_shared_push_no_leak_or_uaf",
         );
     }
+
+    #[test]
+    fn asan_direct_index_match_option_shared_no_leak() {
+        // B-2026-07-12-21: a direct `match vec[i]` whose scrutinee is an
+        // `Option[shared]` index-read LEAKED the extracted node once per match.
+        // The index read deep-cloned the element (rc-INC via the concrete
+        // `Option[shared Node]` clone fn), but the fresh-temp match scrutinee's
+        // drop was resolved from the ERASED generic `Option` layout (all-`None`
+        // drop-kinds), so `has_droppable` was false and the retained rc was
+        // never released. Fix (lowering): rewrite `match vec[i] { … }` into the
+        // proven-clean let-bound form `{ let s = vec[i]; match s { … } }`, whose
+        // binding carries the concrete type so its cleanup releases the clone.
+        // Looped in a HELPER fn (not `main`) so the per-iteration leak is real
+        // and not masked by `main`'s final-scope drop elision; reads `nd.val`
+        // back so a wrong-node miscompile would also surface.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn xfer() -> i64 {
+    let mut dst: Vec[Option[Node]] = Vec.new();
+    dst.push(Some(Node { val: 10, left: None, right: None }));
+    let mut r: i64 = 0;
+    match dst[0] {
+        None => {}
+        Some(nd) => { r = nd.val; }
+    }
+    r
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + xfer();
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["2000"],
+            "direct_index_match_option_shared_no_leak",
+        );
+    }
 }

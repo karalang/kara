@@ -926,9 +926,112 @@ impl<'a> Lowerer<'a> {
             | ExprKind::Error => {}
         }
 
+        // B-2026-07-12-21: a direct `match vec[i]` whose scrutinee is an
+        // `Option`/`Result` carrying a *shared* (RC) payload LEAKS the
+        // extracted node once per match — the fresh-temp scrutinee's drop is
+        // resolved from the erased generic `Option`/`Result` layout (all-`None`
+        // drop-kinds), so the payload the index-read deep-cloned (rc-INC) is
+        // never released. A let-bound scrutinee (`let e = vec[i]; match e`) is
+        // clean: the binding carries the CONCRETE type, so its cleanup releases
+        // the clone correctly. Rewrite the direct form into the proven-clean
+        // let-bound form. Gated to shared payloads (String/Vec/box payloads are
+        // already balanced — the concrete drop is reached through their own
+        // layouts), so no working case is perturbed.
+        self.bind_shared_index_match_scrutinee(expr);
+
         // Then rewrite this node if it's an operator we lower.
         if let Some(rewritten) = self.try_rewrite(expr) {
             expr.kind = rewritten;
+        }
+    }
+
+    /// B-2026-07-12-21 rewrite: `match <vec[i]> { arms }` where the scrutinee
+    /// is a bare index-read of an `Option`/`Result` with a shared (RC) payload
+    /// becomes `{ let __karac_msc_… : <ScrutTy> = <vec[i]>; match __karac_msc_…
+    /// { arms } }`. The synthetic binding carries an explicit type annotation
+    /// so codegen resolves the concrete payload drop from the annotation (the
+    /// typechecker never saw this binding, so there is no `expr_types` entry to
+    /// key on). Semantically identical to the direct form — `vec[i]` reads a
+    /// copy either way — so the interpreter and both codegen paths agree.
+    fn bind_shared_index_match_scrutinee(&self, expr: &mut Expr) {
+        let ExprKind::Match { scrutinee, .. } = &expr.kind else {
+            return;
+        };
+        if !matches!(scrutinee.kind, ExprKind::Index { .. }) {
+            return;
+        }
+        let key = SpanKey::from_span(&scrutinee.span);
+        let Some(ty) = self.tc.expr_types.get(&key) else {
+            return;
+        };
+        if !Self::is_shared_bearing_option_result(ty) {
+            return;
+        }
+        let scrut_ty_expr = TypeChecker::type_to_type_expr(ty);
+
+        let outer_span = expr.span.clone();
+        let ExprKind::Match { scrutinee, arms } =
+            std::mem::replace(&mut expr.kind, ExprKind::Error)
+        else {
+            unreachable!("guarded by the match above");
+        };
+        let idx_expr = *scrutinee;
+        let idx_span = idx_expr.span.clone();
+        let binding = format!("__karac_msc_{}_{}", idx_span.offset, idx_span.length);
+
+        let let_stmt = Stmt {
+            kind: StmtKind::Let {
+                is_mut: false,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(binding.clone()),
+                    span: idx_span.clone(),
+                },
+                ty: Some(scrut_ty_expr),
+                value: idx_expr,
+            },
+            span: idx_span.clone(),
+        };
+        let inner_match = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(Expr {
+                    kind: ExprKind::Identifier(binding),
+                    span: idx_span.clone(),
+                }),
+                arms,
+            },
+            span: outer_span.clone(),
+        };
+        expr.kind = ExprKind::Block(Block {
+            stmts: vec![let_stmt],
+            final_expr: Some(Box::new(inner_match)),
+            span: outer_span,
+        });
+    }
+
+    /// True when `ty` is `Option[…]` / `Result[…]` and any type argument is (or
+    /// recursively contains) a `shared` (RC) type — the payload shape whose
+    /// erased-layout fresh-temp match scrutinee leaks (B-2026-07-12-21).
+    fn is_shared_bearing_option_result(ty: &Type) -> bool {
+        let Type::Named { name, args } = ty else {
+            return false;
+        };
+        if name != "Option" && name != "Result" {
+            return false;
+        }
+        args.iter().any(Self::type_contains_shared)
+    }
+
+    /// Whether `ty` is or transitively contains a `shared` (RC) type.
+    fn type_contains_shared(ty: &Type) -> bool {
+        match ty {
+            Type::Shared(_) => true,
+            Type::Named { args, .. } => args.iter().any(Self::type_contains_shared),
+            Type::Tuple(elems) => elems.iter().any(Self::type_contains_shared),
+            Type::Array { element, .. }
+            | Type::Slice { element, .. }
+            | Type::Ref(element)
+            | Type::MutRef(element) => Self::type_contains_shared(element),
+            _ => false,
         }
     }
 
