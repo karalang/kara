@@ -45,3 +45,59 @@ pub fn align_of[T]() -> usize { 0 }
 // `#[compiler_builtin]` skips body emission).
 #[compiler_builtin]
 pub fn forget[T](value: T) {}
+
+// ── Volatile memory access (MMIO) ─────────────────────────────────
+//
+// `volatile_read[T](src)` / `volatile_write[T](dst, value)` — the
+// free-function MMIO intrinsics (design.md § undocumented_unsafe /
+// Embedded Primitives). They perform a volatile load / store through a
+// raw pointer: the access is neither elided, reordered across other
+// volatile accesses, nor duplicated by the optimizer — exactly what a
+// memory-mapped hardware register requires. The free-function form is
+// the canonical MMIO spelling; `ptr.read_volatile()` / `.write_volatile()`
+// are the equivalent method forms on raw pointers.
+//
+// They are `unsafe` (the caller asserts the pointer names a valid, live
+// MMIO region of the right type — a precondition the type system cannot
+// check) and carry `reads(Hardware)` / `writes(Hardware)` so a function
+// touching device registers surfaces that in its effect set and
+// participates in conflict analysis.
+//
+// Bodies are recursive placeholders — never lowered and never executed:
+//   - codegen intercepts the call in `compile_call`, emitting a volatile
+//     load / store sized by the pointee type (`raw_pointer_pointee_types`);
+//   - the tree-walk interpreter has no raw-pointer representation, so it
+//     rejects the call loudly ("compile with `karac build`"), matching
+//     `CStr.from_ptr` / the raw-pointer method family;
+//   - the `unsafe_op_in_unsafe_fn` lint seeds both names into its
+//     registry so a call outside an `unsafe { ... }` block is an error.
+
+// `Hardware` — the effect resource for memory-mapped I/O, referenced by
+// the volatile intrinsics below. It is a prelude resource seeded by the
+// resolver (`PRELUDE_EFFECT_RESOURCES` in `src/prelude.rs`), so device
+// code can declare `reads(Hardware)` / `writes(Hardware)` without an
+// import and the conflict analyzer treats concurrent MMIO the same as any
+// other resource conflict. Not declared here (the resolver seed provides
+// it; a prelude-file `effect resource Hardware;` would double-declare it).
+
+/// Volatile load of `T` through `src` — a memory-mapped register read.
+///
+/// # Safety
+///
+/// `src` must point to a live, correctly-aligned MMIO region readable as
+/// `T`; the read must be sound to perform (no aliasing model violation).
+#[compiler_builtin]
+pub unsafe fn volatile_read[T](src: *const T) -> T with reads(Hardware) {
+    volatile_read(src)
+}
+
+/// Volatile store of `value` through `dst` — a memory-mapped register write.
+///
+/// # Safety
+///
+/// `dst` must point to a live, correctly-aligned MMIO region writable as
+/// `T`; the write must be sound to perform.
+#[compiler_builtin]
+pub unsafe fn volatile_write[T](dst: *mut T, value: T) with writes(Hardware) {
+    volatile_write(dst, value)
+}

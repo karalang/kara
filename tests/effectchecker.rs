@@ -8851,3 +8851,43 @@ fn gpu_fe4b_explicit_panic_in_non_gpu_is_allowed() {
     );
     assert!(errs.is_empty(), "unexpected GpuEffectViolation: {:?}", errs);
 }
+
+// ── volatile_read / volatile_write → reads/writes(Hardware) ────────
+//
+// The MMIO intrinsics (`runtime/stdlib/intrinsics.kara`) carry
+// `reads(Hardware)` / `writes(Hardware)`, seeded into `inferred_effects`
+// so the effect propagates to callers (the baked `with` clause is
+// documentation, mirroring the `sleep_ms` seed). A public function that
+// touches a device register must declare the effect.
+
+#[test]
+fn test_volatile_read_declared_hardware_effect_ok() {
+    // Declares `reads(Hardware)` and calls `volatile_read` — the declared
+    // effect matches the propagated one, so no error.
+    effectcheck_ok("pub fn rd(p: *const i32) -> i32 reads(Hardware) { volatile_read(p) }");
+}
+
+#[test]
+fn test_volatile_write_declared_hardware_effect_ok() {
+    effectcheck_ok("pub fn wr(p: *mut i32) writes(Hardware) { volatile_write(p, 1) }");
+}
+
+#[test]
+fn test_volatile_read_undeclared_hardware_effect_errors() {
+    // A public function that performs `reads(Hardware)` without declaring it
+    // is an effect error — the propagation is what surfaces the requirement.
+    let errs = effectcheck_errors("pub fn rd(p: *const i32) -> i32 { volatile_read(p) }");
+    assert!(
+        errs.iter().any(|e| e.message.contains("reads(Hardware)")),
+        "expected an undeclared reads(Hardware) effect error, got: {errs:?}"
+    );
+}
+
+#[test]
+fn test_volatile_write_undeclared_hardware_effect_errors() {
+    let errs = effectcheck_errors("pub fn wr(p: *mut i32) { volatile_write(p, 1) }");
+    assert!(
+        errs.iter().any(|e| e.message.contains("writes(Hardware)")),
+        "expected an undeclared writes(Hardware) effect error, got: {errs:?}"
+    );
+}

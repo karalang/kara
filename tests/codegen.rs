@@ -3339,6 +3339,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_volatile_read_write_roundtrip() {
+        // MMIO intrinsics `volatile_write` / `volatile_read`
+        // (`runtime/stdlib/intrinsics.kara`) lower to a volatile store / load
+        // through a raw pointer. Exercised over a regular stack slot (volatile
+        // semantics on ordinary memory behave as a normal read/write, so the
+        // value round-trips): write 42 through `*mut i32`, read it back through
+        // `*const i32`, expect 42. Witnesses the codegen intercept in
+        // `compile_call` + the pointee-sized volatile load/store.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut cell: i32 = 7;
+    // Safety: pw / pr point to the live local `cell`.
+    let after = unsafe {
+        let pw: *mut i32 = ptr.mut(cell);
+        volatile_write(pw, 42);
+        let pr: *const i32 = ptr.const(cell);
+        volatile_read(pr)
+    };
+    println(after);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_set_get_is_set_lifecycle() {
         // `OnceLock[i64]` write-once lifecycle under `karac build`/JIT (was
         // interpreter-only). Empty → `is_set() == false`, `get() == None`;

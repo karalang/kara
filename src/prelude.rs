@@ -453,6 +453,13 @@ pub const PRELUDE_EFFECT_RESOURCES: &[&str] = &[
     // visibility so user wrappers can write
     // `with sends(ProcessTable)` without redeclaring it.
     "ProcessTable",
+    // Memory-mapped I/O (`volatile_read` / `volatile_write` in
+    // `runtime/stdlib/intrinsics.kara`). A *conflict-only* resource — it
+    // has no provider methods (unlike `Clock`/`RandomSource`), so the
+    // `BuiltinDefault` provider installed for it is inert; it exists so
+    // device code can declare `reads(Hardware)` / `writes(Hardware)`
+    // without an import and MMIO participates in conflict analysis.
+    "Hardware",
 ];
 
 /// Canonical method order per ambient resource, used by codegen to index
@@ -1456,6 +1463,16 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // nothing — the value is handed off (leaked from Kāra's view), the
     // FFI ownership-handoff primitive.
     "forget",
+    // `volatile_read[T](src: *const T) -> T with reads(Hardware)` /
+    // `volatile_write[T](dst: *mut T, value: T) with writes(Hardware)` —
+    // the MMIO intrinsics (`unsafe`), declared `#[compiler_builtin]` in
+    // `runtime/stdlib/intrinsics.kara`. Codegen intercepts the call
+    // (`compile_call`) and emits a volatile load/store; the interpreter
+    // rejects it (no raw-pointer representation); the `unsafe_op` lint
+    // requires an `unsafe { }` wrap. Registered here so the bare
+    // identifiers resolve.
+    "volatile_read",
+    "volatile_write",
     // `std.mem` § `swap` / `replace` (roadmap Phase 8) — move-without-drop
     // primitives over `mut ref` places. Declared `#[compiler_builtin]` in
     // `runtime/stdlib/mem.kara`; intercepted at the call site in the

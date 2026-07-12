@@ -1174,6 +1174,22 @@ impl<'a> super::Interpreter<'a> {
                     }
                     return Value::Unit;
                 }
+                "volatile_read" | "volatile_write" => {
+                    // MMIO intrinsics (`runtime/stdlib/intrinsics.kara`). The
+                    // tree-walk interpreter has no raw-pointer representation
+                    // (the same reason `CStr.from_ptr` / the `ptr` method
+                    // family reject in `karac run`), so a volatile load/store
+                    // through a pointer is meaningless here. Reject loudly at
+                    // the producer; the compiled backend lowers these.
+                    return self.record_runtime_error(
+                        format!(
+                            "{name}(...) is not supported under `karac run`: the \
+                             tree-walk interpreter has no raw-pointer \
+                             representation. Compile with `karac build` instead."
+                        ),
+                        span,
+                    );
+                }
                 "swap" if args.len() == 2 && self.env.get("swap").is_none() => {
                     // std.mem::swap — exchange the values at two `mut ref`
                     // places without dropping either. Read both current

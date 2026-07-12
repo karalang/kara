@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue, PointerValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, PointerValue,
 };
 use inkwell::{AddressSpace, IntPredicate};
 
@@ -521,6 +521,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // failure). Mirrors the interpreter's `eval_builtin_diverge`.
         if name == "todo" || name == "unreachable" || name == "panic" {
             return self.compile_diverge(&name, args);
+        }
+
+        // Volatile MMIO intrinsics `volatile_read(src)` /
+        // `volatile_write(dst, value)` (`runtime/stdlib/intrinsics.kara`).
+        // Lower to a volatile load / store through the raw-pointer argument,
+        // sized by the pointee type recorded for every pointer-typed
+        // expression in `raw_pointer_pointee_types` (the arg has its own span,
+        // distinct from the call span, so no method-form span collision). The
+        // recursive `#[compiler_builtin]` placeholder bodies never lower;
+        // `unsafe`-context is enforced by the `unsafe_op` lint upstream.
+        if name == "volatile_read" && args.len() == 1 {
+            return self.compile_volatile_read(&args[0].value);
+        }
+        if name == "volatile_write" && args.len() == 2 {
+            return self.compile_volatile_write(&args[0].value, &args[1].value);
         }
 
         // Phase-5 auto-par divergence (A2a-2.2): `sleep_ms(ms: i64)` — the
@@ -2244,6 +2259,59 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unreachable().unwrap();
         // Placeholder value: the block is now terminated, so every value-
         // consuming caller respects the terminator guard and never reads it.
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// `volatile_read(src)` — a volatile load of the pointee through the raw
+    /// pointer `src`. Mirrors the `p.read_volatile()` method form
+    /// (`compile_pointer_instance_method`): the pointee width comes from the
+    /// `raw_pointer_pointee_types` entry recorded for the pointer argument's
+    /// span (lowering surfaces one for every `*const T` / `*mut T`-typed
+    /// expression), and the load carries the LLVM `volatile` flag so the
+    /// optimizer neither elides, reorders, nor duplicates the access.
+    fn compile_volatile_read(&mut self, src: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+        let key = (src.span.offset, src.span.length);
+        let pointee_te = self
+            .raw_pointer_pointee_types
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| {
+                "volatile_read: could not resolve the pointee type of the pointer \
+                 argument at codegen (no raw-pointer pointee recorded for it)"
+                    .to_string()
+            })?;
+        let ptr_val = self.compile_expr(src)?.into_pointer_value();
+        let pointee_ty = self.llvm_type_for_type_expr(&pointee_te);
+        let loaded = self
+            .builder
+            .build_load(pointee_ty, ptr_val, "volatile.read")
+            .map_err(|e| format!("volatile_read: {e:?}"))?;
+        loaded
+            .as_instruction_value()
+            .expect("build_load yields an instruction value")
+            .set_volatile(true)
+            .map_err(|e| format!("volatile_read set_volatile: {e:?}"))?;
+        Ok(loaded)
+    }
+
+    /// `volatile_write(dst, value)` — a volatile store of `value` through the
+    /// raw pointer `dst`. Peer of `compile_volatile_read`; the value's own
+    /// type drives the store width, so no pointee lookup is needed. Returns
+    /// the shared `i64 0` unit placeholder (the call's static type is unit).
+    fn compile_volatile_write(
+        &mut self,
+        dst: &Expr,
+        value: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_val = self.compile_expr(dst)?.into_pointer_value();
+        let v = self.compile_expr(value)?;
+        let store = self
+            .builder
+            .build_store(ptr_val, v)
+            .map_err(|e| format!("volatile_write: {e:?}"))?;
+        store
+            .set_volatile(true)
+            .map_err(|e| format!("volatile_write set_volatile: {e:?}"))?;
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 

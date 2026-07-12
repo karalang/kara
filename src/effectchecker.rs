@@ -788,6 +788,39 @@ impl<'a> EffectChecker<'a> {
             );
             self.inferred_effects.insert("sleep_ms".to_string(), set);
         }
+        // `volatile_read` / `volatile_write` MMIO intrinsics — like the
+        // `sleep_ms` seed above, the baked `with reads(Hardware)` /
+        // `with writes(Hardware)` clauses in `runtime/stdlib/intrinsics.kara`
+        // are documentation; these seeds are the propagation mechanism that
+        // surfaces the `Hardware` effect to callers' inferred sets. So a
+        // function touching a device register must declare it, and the
+        // conflict model serializes concurrent MMIO (`writes(Hardware)`
+        // conflicts with any other read/write of `Hardware`). Free-function
+        // keys — the bare names.
+        {
+            let mut set = EffectSet::new();
+            set.add(
+                Effect {
+                    verb: EffectVerbKind::Reads,
+                    resource: "Hardware".to_string(),
+                },
+                EffectOrigin::Direct(builtin_span.clone()),
+            );
+            self.inferred_effects
+                .insert("volatile_read".to_string(), set);
+        }
+        {
+            let mut set = EffectSet::new();
+            set.add(
+                Effect {
+                    verb: EffectVerbKind::Writes,
+                    resource: "Hardware".to_string(),
+                },
+                EffectOrigin::Direct(builtin_span.clone()),
+            );
+            self.inferred_effects
+                .insert("volatile_write".to_string(), set);
+        }
         // Network surface (`std.http` + `std.tcp` + `std.tls` + WebSocket):
         // every method that performs network I/O carries sends(Network) +
         // receives(Network). Seeding the qualified key is the only path that

@@ -997,6 +997,50 @@ fn test_cstr_from_ptr_inside_unsafe_block_silent() {
     );
 }
 
+// ── volatile_read / volatile_write — MMIO intrinsics ──────────────
+//
+// The free-function MMIO intrinsics (`runtime/stdlib/intrinsics.kara`)
+// are declared `unsafe fn` and seeded into `top_level_unsafe`, so a call
+// outside an `unsafe { ... }` block is an `unsafe_op_in_unsafe_fn` error
+// (matching the `ptr.from_exposed` bare-name seeds). A volatile load/store
+// through a raw pointer is UB if the pointer is not a live MMIO region.
+
+#[test]
+fn test_volatile_read_outside_unsafe_block_errors() {
+    let diags =
+        lint_op("fn rd(p: *const i32) -> i32 reads(Hardware) { volatile_read(p) } fn main() {}");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("volatile_read")
+                && d.lint_name == "unsafe_op_in_unsafe_fn"),
+        "expected unsafe-op diagnostic naming `volatile_read`, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_volatile_write_outside_unsafe_block_errors() {
+    let diags =
+        lint_op("fn wr(p: *mut i32) writes(Hardware) { volatile_write(p, 1) } fn main() {}");
+    assert!(
+        diags.iter().any(
+            |d| d.message.contains("volatile_write") && d.lint_name == "unsafe_op_in_unsafe_fn"
+        ),
+        "expected unsafe-op diagnostic naming `volatile_write`, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_volatile_read_inside_unsafe_block_silent() {
+    let diags = lint_op(
+        "fn rd(p: *const i32) -> i32 reads(Hardware) { unsafe { volatile_read(p) } } fn main() {}",
+    );
+    assert!(
+        diags.iter().all(|d| !d.message.contains("volatile_read")),
+        "did not expect a volatile_read diagnostic inside an unsafe block, got: {diags:?}"
+    );
+}
+
 #[test]
 fn test_ptr_addr_safe_silent() {
     // `ptr.addr` is the safe counterpart — does not require unsafe { }.

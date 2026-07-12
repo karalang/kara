@@ -3764,6 +3764,34 @@ fn raw_pointer_is_null_returns_bool() {
     typecheck_ok("fn f(p: *const u8) -> bool { p.is_null() }");
 }
 
+// ── volatile_read / volatile_write — free-fn MMIO intrinsics ───────
+//
+// The free-function forms (`runtime/stdlib/intrinsics.kara`) infer the
+// pointee `T` from the pointer argument through the declared generic
+// signature: `volatile_read[T](*const T) -> T`, `volatile_write[T](*mut
+// T, T)`. Peers of the `p.read_volatile()` / `p.write_volatile()` method
+// forms above.
+
+#[test]
+fn volatile_read_infers_pointee_type() {
+    typecheck_ok("fn f(p: *const i32) -> i32 reads(Hardware) { unsafe { volatile_read(p) } }");
+}
+
+#[test]
+fn volatile_write_returns_unit() {
+    typecheck_ok("fn f(p: *mut i32) writes(Hardware) { unsafe { volatile_write(p, 5) } }");
+}
+
+#[test]
+fn volatile_read_pointee_type_mismatch_errors() {
+    // Binding the inferred `i32` result to a `String` annotation is a type
+    // error — proof the pointee `T` is bound from the pointer argument.
+    let errs = typecheck_errors(
+        "fn f(p: *const i32) reads(Hardware) { let _x: String = unsafe { volatile_read(p) }; }",
+    );
+    assert!(!errs.is_empty(), "expected a pointee type-mismatch error");
+}
+
 #[test]
 fn raw_pointer_unannotated_offset_chain_typechecks() {
     // The core fix: `p.offset(..)` returns `*const u8`, so an un-annotated

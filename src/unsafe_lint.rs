@@ -601,6 +601,15 @@ fn build_unsafe_fn_registry(program: &Program) -> UnsafeFnRegistry {
     top_level_unsafe.insert("ptr.from_exposed_mut".to_string());
     top_level_unsafe.insert("ptr.container_of".to_string());
     top_level_unsafe.insert("ptr.container_of_mut".to_string());
+    //   - `volatile_read[T](src)` / `volatile_write[T](dst, value)`: the
+    //     MMIO intrinsics (`runtime/stdlib/intrinsics.kara`), declared
+    //     `unsafe fn`. A volatile load/store through a raw pointer is UB if
+    //     the pointer does not name a live, correctly-typed MMIO region.
+    //     Bare-identifier free-fn callees, so they seed `top_level_unsafe`
+    //     (matched against `ExprKind::Identifier` in the walker), like the
+    //     `ptr.*` module-path entries above.
+    top_level_unsafe.insert("volatile_read".to_string());
+    top_level_unsafe.insert("volatile_write".to_string());
     //   - `CStr.from_ptr(p)`: wrap a raw `*const u8` (asserted non-null
     //     and NUL-terminated) as a borrowed `CStr`, walking to the NUL to
     //     compute `len`. UB if `p` is null, not NUL-terminated, or does not
