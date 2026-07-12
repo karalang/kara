@@ -262,6 +262,64 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Append the builtin-collection element-disambiguation axis to a mangled
+    /// mono name (B-2026-07-11-35). For every generic param whose concrete
+    /// binding is a `{ptr,i64,i64}`-shaped builtin collection (`String` / `Vec`
+    /// / `VecDeque`) — the head recorded in `subst_names` — append
+    /// `$<param>_ct_<token>`, where `<token>` is the ELEMENT-AWARE mono-mangle
+    /// token from the typechecker (`call_type_subs_mangle`): `String`,
+    /// `Vec_i64`, `Vec_String`, `Vec_Vec_i64`, … . Without this all three shapes
+    /// mangled to the same `$struct` token in `mangle_mono_name` (which
+    /// disambiguates only USER struct/enum names by concrete name; builtin
+    /// collections deliberately keep the opaque token), so distinct
+    /// instantiations shared one element-erased body. Only the collision class
+    /// (String/Vec/VecDeque) is touched — Map/Set (single-`ptr` handle) and
+    /// scalars mangle distinctly already, and a user struct/enum keeps the
+    /// concrete-name path in `mangle_mono_name`. A no-op when no token is on
+    /// record (non-generic layout monos, or a param whose binding isn't in the
+    /// collision class), so existing symbols are unchanged outside this class.
+    fn append_collection_type_param_mangle(
+        &self,
+        mut mangled: String,
+        func: &Function,
+        subst_names: &HashMap<String, String>,
+        call_span: &crate::token::Span,
+    ) -> String {
+        use std::fmt::Write as _;
+        let Some(gp) = &func.generic_params else {
+            return mangled;
+        };
+        let Some(tokens) = self
+            .call_type_subs_mangle
+            .get(&(call_span.offset, call_span.length))
+        else {
+            return mangled;
+        };
+        for param in &gp.params {
+            if param.is_const {
+                continue;
+            }
+            // Gate on the concrete HEAD name (exact — so a user `struct Vector`
+            // isn't caught by a "Vec" prefix): only the `{ptr,i64,i64}` builtin
+            // collections collide on `$struct`. A user type of the same head is
+            // already disambiguated by `mangle_mono_name`'s concrete-name path.
+            let head = match subst_names.get(&param.name) {
+                Some(h) => h.as_str(),
+                None => continue,
+            };
+            let is_collision_class = matches!(head, "String" | "Vec" | "VecDeque")
+                && !self.struct_types.contains_key(head)
+                && !self.enum_layouts.contains_key(head);
+            if !is_collision_class {
+                continue;
+            }
+            if let Some(token) = tokens.get(&param.name) {
+                let _ = write!(mangled, "${}_ct_{}", param.name, token);
+            }
+        }
+        mangled
+    }
+
     /// Append the handle-arg axis to a mangled mono name:
     /// `$<param>_col_<elem>` / `$<param>_ten_<elem>_<d0>_...` (dynamic
     /// dims mangle as `x`). Without this, `report[C](c: ref C)` called
@@ -557,6 +615,19 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mono_handle_param_infos
                 .insert(mangled.clone(), handle_params);
         }
+        // B-2026-07-11-35 (return-owned-param leg) — disambiguate a generic
+        // param bound to a builtin COLLECTION (String / Vec / VecDeque) by its
+        // element-aware token. Those three all lower to the opaque
+        // `{ptr,i64,i64}` shape, so `mangle_mono_name` emitted the same `$struct`
+        // token for every one and the second instantiation silently reused the
+        // first's element-erased body — benign while the body only MOVED the
+        // value, but a miscompile once the tail-return deep-copies with the
+        // wrong element stride (`echo[String]` then `echo[Vec[i64]]`: the Vec
+        // copy ran String's i8 stride → 3-byte under-copy → UB read). Append the
+        // full mono-mangle token (`Vec_i64` / `Vec_String` / `String`) so each is
+        // a distinct symbol with its own correctly-strided body.
+        let mangled =
+            self.append_collection_type_param_mangle(mangled, &generic_fn, &subst_names, call_span);
         // Bind handle-backed-container type params (`C` bound to a Column/Tensor
         // arg) to `ptr` so a bare-`C` RETURN (`map`/`zip_with` → `Self`) or a
         // `let d: C` local lowers to the pointer shape, not the `i64` default
@@ -1602,7 +1673,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the non-generic `compile_function` path.
         self.build_slice_alias_scopes(func);
 
-        let result = self.compile_block(&func.body)?;
+        let mut result = self.compile_block(&func.body)?;
 
         if self
             .builder
@@ -1611,6 +1682,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_terminator()
             .is_none()
         {
+            // B-2026-07-11-35 (return-owned-`T`-param leg) — deep-copy an owned
+            // String/Vec PARAM returned in tail position, mirroring
+            // `compile_function` (functions.rs). The by-value header ABI leaves the
+            // buffer's free with the CALLER that passed the arg (owned String/Vec
+            // params are caller-retains — they land in `owned_vecstr_params`, never
+            // a callee-side `track_vec_var`), and the caller receiving THIS return
+            // binds-and-frees it too — so handing back the moved-in buffer directly
+            // double-frees (`fn echo[T](x: T) -> T { x }` over a fresh String arg:
+            // main frees it once as `a` and once as the f-string temp). Copy so each
+            // side owns an independent buffer. The non-generic `compile_function`
+            // already does this at its tail; the mono path had only the Identifier-
+            // tail MOVE suppression below (`suppress_cleanup_for_tail_return`), which
+            // zeros the LOCAL param cap but leaves the returned value aliasing the
+            // caller's buffer. MUST run BEFORE that suppression — the defensive copy
+            // reads the param's `cap` to decide whether to duplicate, and the
+            // suppression zeros it. A no-op for a non-owned-vecstr tail (the copy
+            // self-gates on `owned_vecstr_params` membership + a recorded elem type).
+            if let (Some(final_expr), Some(v)) = (func.body.final_expr.as_deref(), result) {
+                result = Some(self.maybe_defensive_copy_param_arg(final_expr, v));
+            }
             // Drain the function-level cleanup frame at the tail return,
             // mirroring `compile_function`. Move-aware suppression first:
             // when the body's tail is a bare Identifier naming an owned

@@ -24,8 +24,9 @@ use super::inference::{
 };
 use super::types::{
     contains_type_param, impl_args_match, impl_table_key, int_coercion_is_widening, is_integer,
-    lub_block_type, type_display, type_is_fully_concrete, type_to_concrete_or_param_name, ConstArg,
-    DimArg, IntSize, ScrutineeMode, SubstValue, Type, UIntSize,
+    lub_block_type, type_display, type_is_fully_concrete, type_to_concrete_or_param_name,
+    type_to_mono_mangle_token, ConstArg, DimArg, IntSize, ScrutineeMode, SubstValue, Type,
+    UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -861,13 +862,24 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         let mut frame: HashMap<String, String> = HashMap::new();
+        let mut mangle_frame: HashMap<String, String> = HashMap::new();
         for (name, ty) in solutions {
             if let Some(resolved) = type_to_concrete_or_param_name(ty) {
                 frame.insert(name.clone(), resolved);
             }
+            // Element-aware mangle token (B-2026-07-11-35): the head-name `frame`
+            // above erases `Vec[i64]` vs `Vec[String]` to `"Vec"`; this keeps the
+            // full spelling so codegen can give each a distinct mono symbol.
+            if let Some(tok) = type_to_mono_mangle_token(ty) {
+                mangle_frame.insert(name.clone(), tok);
+            }
         }
         if !frame.is_empty() {
             self.call_type_subs.insert(SpanKey::from_span(span), frame);
+        }
+        if !mangle_frame.is_empty() {
+            self.call_type_subs_mangle
+                .insert(SpanKey::from_span(span), mangle_frame);
         }
     }
 

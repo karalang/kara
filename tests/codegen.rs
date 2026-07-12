@@ -29102,6 +29102,47 @@ fn main() {
         body
     }
 
+    /// B-2026-07-11-35 (return-owned-`T`-param leg): returning an owned heap
+    /// (String / Vec) PARAM from a GENERIC fn (`fn echo[T](x: T) -> T { x }`)
+    /// double-freed under codegen (JIT + native) while the non-generic
+    /// `fn f(x: String) -> String { x }` and the interpreter oracle were clean.
+    /// Root: `compile_mono_function`'s tail return only did the Identifier-tail
+    /// MOVE suppression, skipping the owned-vecstr retaining-consume DEEP-COPY
+    /// that `compile_function` applies — so it handed back the caller's moved-in
+    /// buffer, which the caller then freed a second time. The mono tail now
+    /// deep-copies, mirroring the non-generic path. Also pins the mono-mangle
+    /// COLLISION the copy exposed: `String`, `Vec[i64]`, and `Vec[String]` all
+    /// lower to `{ptr,i64,i64}` and had collapsed onto one `echo$struct` body,
+    /// so the copy ran the first instantiation's element stride over the others
+    /// (a 3-byte under-copy of a Vec[i64] under String's i8 stride — UB). Each
+    /// builtin-collection whole-param instantiation now gets a distinct symbol
+    /// (`echo$struct$T_ct_String` / `$T_ct_Vec_i64` / `$T_ct_Vec_String`) with
+    /// its own correctly-strided body. `i64` (POD) is unchanged. Memory safety
+    /// is pinned in `tests/memory_sanitizer.rs::asan_return_owned_generic_param_*`.
+    #[test]
+    fn e2e_return_owned_generic_param_no_double_free() {
+        if let Some(out) = run_program(
+            "fn echo[T](x: T) -> T { x }\n\
+             fn main() {\n\
+             \x20   let a: String = echo(f\"aaa-fresh\");\n\
+             \x20   println(a);\n\
+             \x20   let s: String = f\"bbb-local\";\n\
+             \x20   let b: String = echo(s);\n\
+             \x20   println(b);\n\
+             \x20   let c: i64 = echo(777);\n\
+             \x20   println(f\"{c}\");\n\
+             \x20   let vi: Vec[i64] = echo([10, 20, 30]);\n\
+             \x20   println(f\"{vi[1]}\");\n\
+             \x20   let vs: Vec[String] = echo([f\"pp\", f\"qq\"]);\n\
+             \x20   println(vs[0]);\n\
+             \x20   let d: String = echo(echo(f\"ccc-chain\"));\n\
+             \x20   println(d);\n\
+             }",
+        ) {
+            assert_eq!(out, "aaa-fresh\nbbb-local\n777\n20\npp\nccc-chain\n");
+        }
+    }
+
     // ── B follow-up #3: owned struct-destructure dispatch + cleanup ──
     //
     // `let Point { items, count } = make()` used to register neither method
@@ -44221,8 +44262,10 @@ fn main() {
         );
         // The per-mono destructor's mangled key picks up
         // `llvm_type_to_mangle_str`'s `struct` shorthand for the
-        // vec-struct-shaped String arg.
-        let drop_fn_marker = "@\"__kara_state_drop_driver$struct\"";
+        // vec-struct-shaped String arg, PLUS the B-2026-07-11-35
+        // element-aware collision-disambiguation suffix (`$T_ct_String`)
+        // so String / Vec[i64] / Vec[String] monos are distinct symbols.
+        let drop_fn_marker = "@\"__kara_state_drop_driver$struct$T_ct_String\"";
         assert!(
             ir.contains(drop_fn_marker),
             "per-mono destructor must emit for String-typed T captured local:\n{ir}"
@@ -44287,7 +44330,7 @@ fn main() {
             "i64 mono must not emit a destructor:\n{ir}"
         );
         assert!(
-            ir.contains("@\"__kara_state_drop_driver$struct\""),
+            ir.contains("@\"__kara_state_drop_driver$struct$T_ct_String\""),
             "String mono must emit a destructor:\n{ir}"
         );
     }
@@ -44356,7 +44399,7 @@ fn main() {
         // (one for `item`, one for `copy`) alongside the i32 tag.
         let line = ir
             .lines()
-            .find(|l| l.starts_with("%\"kara.state.driver$struct\" = type {"))
+            .find(|l| l.starts_with("%\"kara.state.driver$struct$T_ct_Vec_i64\" = type {"))
             .unwrap_or_else(|| panic!("no per-mono state struct type def in IR:\n{ir}"));
         let vec_shape = "{ ptr, i64, i64 }";
         let occurrences = line.matches(vec_shape).count();
@@ -44384,7 +44427,7 @@ fn main() {
              }",
         );
         assert!(
-            ir.contains("@\"__kara_state_drop_driver$struct\""),
+            ir.contains("@\"__kara_state_drop_driver$struct$T_ct_Vec_i64\""),
             "per-mono destructor must emit for Vec-typed T captured + let:\n{ir}"
         );
         // Both fields emit the `cap > 0 ? free` shape.
@@ -44437,7 +44480,7 @@ fn main() {
              }",
         );
         assert!(
-            ir.contains("@\"__kara_state_drop_driver$struct\""),
+            ir.contains("@\"__kara_state_drop_driver$struct$T_ct_String\""),
             "explicit-annotation let must also produce per-mono destructor:\n{ir}"
         );
         assert!(

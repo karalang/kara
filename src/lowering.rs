@@ -291,6 +291,16 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Sibling of `call_type_subs`: the element-aware mono-mangle tokens
+    // (B-2026-07-11-35). Codegen uses these to give a distinct mono symbol to
+    // each builtin-collection whole-type-param instantiation (String / Vec[i64]
+    // / Vec[String]) that would otherwise collide on the shared `{ptr,i64,i64}`
+    // LLVM shape. The interpreter has no monomorphization, so it ignores this.
+    program.call_type_subs_mangle = tc
+        .call_type_subs_mangle
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Sibling to `string_typed_exprs`: for every `Tensor[T, Shape]`-typed
     // expression whose rank is statically known (concrete `Type::Shape`,
     // no `...` splice), record the element type (as a TypeExpr, lowered

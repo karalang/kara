@@ -1248,6 +1248,18 @@ pub struct TypeCheckResult {
     /// stack at execution time. Consumed by the interpreter to dispatch
     /// `T.method()` calls inside generic function bodies.
     pub call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
+    /// Per-call-site generic-param substitutions as ELEMENT-AWARE mono-mangle
+    /// TOKENS (`T` → `"Vec_i64"` / `"Vec_String"` / `"String"`), the sibling of
+    /// `call_type_subs` (which is head-only: both `Vec[i64]` and `Vec[String]`
+    /// reduce to `"Vec"`). Built from the same solver solutions via
+    /// `type_to_mono_mangle_token`. Codegen consults this to disambiguate a
+    /// generic fn's mono SYMBOL for a whole builtin-collection type param
+    /// (`fn echo[T](x: T)`, T = String vs Vec[i64] vs Vec[String]) — all three
+    /// lower to the same opaque `{ptr,i64,i64}` LLVM shape and collided on one
+    /// `$struct` symbol, sharing one element-erased body (B-2026-07-11-35 return
+    /// leg exposed this via the element-typed return copy). Only consulted for
+    /// the mangle; the interpreter ignores it.
+    pub call_type_subs_mangle: HashMap<SpanKey, HashMap<String, String>>,
     /// For each pattern-binding name introduced by `bind_pattern_types`, the
     /// canonical type name (e.g. `"MyError"`). Keyed by the pattern's span.
     /// Used by codegen to reconstitute struct payloads from the i64 word
@@ -1567,6 +1579,9 @@ pub struct TypeChecker<'a> {
     /// pushes the resolved frame so `T.method()` and bare-method calls inside
     /// the callee's body can look up `T`'s concrete binding.
     pub(super) call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
+    /// Element-aware mono-mangle tokens per call site. See the public copy on
+    /// `TypeCheckResult` for the consumer doc.
+    pub(super) call_type_subs_mangle: HashMap<SpanKey, HashMap<String, String>>,
     /// Pattern-binding name → canonical type name. See the public copy on
     /// `TypeCheckResult` for the consumer doc.
     pub(super) pattern_binding_types: HashMap<SpanKey, String>,
@@ -1752,6 +1767,7 @@ impl<'a> TypeChecker<'a> {
             bare_assoc_fn_targets: HashMap::new(),
             path_call_method_dispatch: HashSet::new(),
             call_type_subs: HashMap::new(),
+            call_type_subs_mangle: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
             pattern_binding_borrow_modes: HashMap::new(),
@@ -1936,6 +1952,7 @@ impl<'a> TypeChecker<'a> {
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             path_call_method_dispatch: self.path_call_method_dispatch,
             call_type_subs: self.call_type_subs,
+            call_type_subs_mangle: self.call_type_subs_mangle,
             pattern_binding_types: self.pattern_binding_types,
             pattern_binding_inner_types: self.pattern_binding_inner_types,
             pattern_binding_borrow_modes: self.pattern_binding_borrow_modes,

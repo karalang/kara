@@ -23769,4 +23769,52 @@ fn main() {
             "generic_container_method_push_no_leak",
         );
     }
+
+    #[test]
+    fn asan_return_owned_generic_param_no_double_free() {
+        // B-2026-07-11-35 (return-owned-`T`-param leg): returning an owned heap
+        // (String / Vec) PARAM from a generic fn (`fn echo[T](x: T) -> T { x }`)
+        // handed back the caller's moved-in buffer, which the caller then freed a
+        // second time (double-free abort). The mono tail now deep-copies the
+        // returned owned-vecstr param, mirroring the non-generic path. Loops so a
+        // leak (the dual failure — an over-suppressed copy) accumulates for LSan,
+        // and exercises String, Vec[i64], and Vec[String] in one program so the
+        // per-instantiation mono symbols (the collision the copy exposed) are all
+        // live — a shared body would run one element stride over the others.
+        assert_clean_asan_run(
+            r#"
+fn echo[T](x: T) -> T { x }
+fn main() {
+    let mut r: i64 = 0;
+    while r < 3 {
+        let a: String = echo(f"fresh-{r}-aaaa");
+        println(a);
+        let s: String = f"local-{r}-bbbb";
+        let b: String = echo(s);
+        println(b);
+        let vi: Vec[i64] = echo([r, r + 1, r + 2]);
+        println(f"{vi[2]}");
+        let vs: Vec[String] = echo([f"e-{r}-x", f"e-{r}-y"]);
+        println(vs[1]);
+        r = r + 1;
+    }
+}
+"#,
+            &[
+                "fresh-0-aaaa",
+                "local-0-bbbb",
+                "2",
+                "e-0-y",
+                "fresh-1-aaaa",
+                "local-1-bbbb",
+                "3",
+                "e-1-y",
+                "fresh-2-aaaa",
+                "local-2-bbbb",
+                "4",
+                "e-2-y",
+            ],
+            "return_owned_generic_param_no_double_free",
+        );
+    }
 }

@@ -672,6 +672,15 @@ pub struct Program {
     /// params the LLVM-type-based inference can't (B-2026-07-02-41). See
     /// [`CallTypeSubsTable`].
     pub call_type_subs: CallTypeSubsTable,
+    /// Set by the lowering pass from `TypeCheckResult.call_type_subs_mangle`:
+    /// the ELEMENT-AWARE mono-mangle token per generic-call type-arg (`T` →
+    /// `"Vec_i64"` / `"Vec_String"` / `"String"`), where `call_type_subs` above
+    /// keeps only the head name (`"Vec"`). Codegen's `compile_generic_call`
+    /// consumes it to give a distinct mono symbol to each builtin-collection
+    /// whole-type-param instantiation that shares the `{ptr,i64,i64}` LLVM shape
+    /// (B-2026-07-11-35 return-owned-param leg). Same `(offset, length)` keying
+    /// as `call_type_subs`.
+    pub call_type_subs_mangle: CallTypeSubsTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: for
     /// every `Tensor[T, Shape]`-typed expression with statically-known
     /// rank, its element type + static dims. See [`TensorTypedExprsTable`].

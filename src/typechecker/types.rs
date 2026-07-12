@@ -447,6 +447,49 @@ pub fn type_to_concrete_or_param_name(ty: &Type) -> Option<String> {
     }
 }
 
+/// A monomorphization-mangle token for a concrete type — the ELEMENT-AWARE
+/// sibling of `type_to_concrete_or_param_name` (which is head-only). Recurses
+/// into generic args and tuple/collection element types so two instantiations
+/// that differ only in an element (`Vec[i64]` vs `Vec[String]`) produce
+/// distinct tokens (`Vec_i64` vs `Vec_String`). `String` maps to `String`,
+/// scalars to their spelling. Codegen uses this to disambiguate a generic
+/// function's mono symbol for a WHOLE builtin-collection type param
+/// (`fn echo[T](x: T) -> T`, T = String vs Vec[i64] vs Vec[String]) — those
+/// all lower to the same opaque `{ptr,i64,i64}` LLVM shape and so collided on
+/// one `$struct` symbol, sharing one (element-erased) body (B-2026-07-11-35
+/// return-owned-param leg exposed this via the element-typed return copy).
+/// Returns `None` for types with no stable collection identity (functions,
+/// type vars, etc.) — codegen leaves those on the existing mangle.
+pub fn type_to_mono_mangle_token(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Str => Some("String".to_string()),
+        Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => {
+            Some(type_display(ty))
+        }
+        Type::Named { name, args } => {
+            if args.is_empty() {
+                Some(name.clone())
+            } else {
+                let parts: Vec<String> = args
+                    .iter()
+                    .map(|a| type_to_mono_mangle_token(a).unwrap_or_else(|| "x".to_string()))
+                    .collect();
+                Some(format!("{name}_{}", parts.join("_")))
+            }
+        }
+        Type::Shared(name) => Some(format!("sh_{name}")),
+        Type::Tuple(elems) => {
+            let parts: Vec<String> = elems
+                .iter()
+                .map(|e| type_to_mono_mangle_token(e).unwrap_or_else(|| "x".to_string()))
+                .collect();
+            Some(format!("tup_{}", parts.join("_")))
+        }
+        Type::Ref(inner) | Type::MutRef(inner) => type_to_mono_mangle_token(inner),
+        _ => None,
+    }
+}
+
 /// Head name + type-argument vector suitable for `env.impls` lookup.
 /// Primitives are keyed under their stringified name (`"i32"`, `"f64"`,
 /// `"bool"`, …) by `register_stdlib_impls` with empty args. Named types

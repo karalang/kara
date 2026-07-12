@@ -2434,6 +2434,14 @@ pub(super) struct Codegen<'ctx> {
     /// through the active `type_subst` (via `llvm_type_for_name`), so a
     /// nested generic call inside a mono flattens transitively.
     pub(crate) call_type_subs: HashMap<(usize, usize), HashMap<String, String>>,
+    /// Element-aware mono-mangle tokens per call site (`T` → `"Vec_i64"` /
+    /// `"Vec_String"` / `"String"`), the sibling of `call_type_subs` (head-only).
+    /// Consulted by `compile_generic_call` to give a generic fn's mono a distinct
+    /// symbol per builtin-collection whole-type-param instantiation — String /
+    /// Vec[i64] / Vec[String] all lower to `{ptr,i64,i64}` and would otherwise
+    /// collide on one `$struct` symbol, sharing an element-erased body
+    /// (B-2026-07-11-35 return-owned-param leg).
+    pub(crate) call_type_subs_mangle: HashMap<(usize, usize), HashMap<String, String>>,
     /// Per-expression Tensor type info (element TypeExpr + static dims),
     /// keyed by `(span.offset, span.length)`. Populated from
     /// `Program.tensor_typed_exprs` (lowering pass, from
@@ -5957,6 +5965,7 @@ impl<'ctx> Codegen<'ctx> {
             string_typed_exprs: HashSet::new(),
             fn_value_typed_exprs: HashMap::new(),
             call_type_subs: HashMap::new(),
+            call_type_subs_mangle: HashMap::new(),
             tensor_typed_exprs: HashMap::new(),
             tensor_var_infos: HashMap::new(),
             pending_let_tensor_info: None,
@@ -6947,6 +6956,11 @@ impl<'ctx> Codegen<'ctx> {
         // `compile_generic_call` bind container element type params the
         // LLVM-type inference can't (B-2026-07-02-41).
         self.call_type_subs = program.call_type_subs.clone();
+        // Sibling: element-aware mono-mangle tokens (B-2026-07-11-35), so
+        // `compile_generic_call` gives a distinct symbol to each builtin-
+        // collection whole-type-param instantiation sharing the `{ptr,i64,i64}`
+        // LLVM shape.
+        self.call_type_subs_mangle = program.call_type_subs_mangle.clone();
         // Sibling: per-span Tensor element-type + static-dims info for
         // construction / let-registration / indexing dispatch (see
         // `src/codegen/tensor.rs`).
