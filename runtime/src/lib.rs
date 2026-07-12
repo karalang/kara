@@ -112,9 +112,17 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     }
     // Fallible / panicking allocation wrappers (`runtime/src/alloc.rs`,
     // phase-8-stdlib-floor item 8). Backs the `try_*` collection companions
-    // (`karac_alloc_fallible`) and the panicking collection methods
-    // (`karac_alloc_or_panic`).
-    keep!(alloc::karac_alloc_fallible, alloc::karac_alloc_or_panic,);
+    // (`karac_alloc_fallible`), the panicking collection methods
+    // (`karac_alloc_or_panic`), and the in-place grow path codegen emits for
+    // `Vec` push/reserve (`karac_realloc_or_panic`, `src/codegen/vec_method.rs`).
+    // Without the realloc entry the LLJIT `dlsym` generator can't materialize it,
+    // so `karac run` (JIT) fails at lookup on ANY Vec-growing program with
+    // "Symbols not found: [_karac_realloc_or_panic]" (B-2026-07-12-22).
+    keep!(
+        alloc::karac_alloc_fallible,
+        alloc::karac_alloc_or_panic,
+        alloc::karac_realloc_or_panic,
+    );
     // Producer-mode runtime lifecycle (additive-interop Slice 2) —
     // `karac_runtime_init` / `karac_runtime_shutdown`, the two entry
     // points the emitted C header surfaces for library-artifact hosts.

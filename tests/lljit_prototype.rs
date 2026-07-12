@@ -113,6 +113,25 @@ fn lljit_post_w1_vec_push_libc_grow_path() {
 }
 
 #[test]
+fn lljit_post_w1_vec_push_realloc_grow_path() {
+    // Regression guard for B-2026-07-12-22. The sibling test above pushes a
+    // SINGLE element into an empty Vec, which takes the initial-allocation
+    // path (`karac_alloc_or_panic`) — it never reallocs, so it did NOT cover
+    // the in-place grow symbol. Pushing PAST the initial capacity grows the
+    // buffer via `karac_realloc_or_panic`; that symbol was missing from
+    // `__preserve_no_mangle_symbols`, so the JIT process-symbol-search
+    // generator could not resolve it and `karac run` (JIT) failed to
+    // materialize `main` ("Symbols not found: [karac_realloc_or_panic]") on
+    // ANY Vec-growing program. Looping 64 pushes forces several reallocs.
+    let src = "fn main() { \
+               let v: Vec[i64] = Vec.new(); \
+               let mut i: i64 = 0; \
+               while i < 64 { v.push(i); i = i + 1; } \
+               }";
+    assert_eq!(jit(src), 0);
+}
+
+#[test]
 fn lljit_post_w1_control_flow_while() {
     let src = "fn main() { let mut i: i64 = 0; while i < 10 { i = i + 1; } }";
     assert_eq!(jit(src), 0);
