@@ -1482,36 +1482,14 @@ fn test_build_project_lists_discovered_modules() {
     assert!(stdout.contains("<crate root>"));
 }
 
-#[cfg(feature = "llvm")]
-#[test]
-fn test_fs_read_lines_build_rejected_loudly() {
-    // phase-8 `fs.read_lines()` slice: interpreter-only at v1 (the
-    // `Result[Vec[String], IoError]` return codegen is a tracked follow-on,
-    // B-2026-07-11-38). `karac build` must fail LOUDLY at the call site with a
-    // helpful message — not a misleading downstream error or a silent no-op.
-    let tmp = scratch_project("fs-read-lines-reject");
-    write(
-        &tmp.join("m.kara"),
-        "fn main() with reads(FileSystem) {\n\
-         \x20   match fs.read_lines(\"x.txt\") { Ok(v) => { println(v.len()); } Err(_) => {} }\n\
-         }\n",
-    );
-    let out = karac_bin()
-        .current_dir(&tmp)
-        .args(["build", "m.kara"])
-        .output()
-        .unwrap();
-    let _ = std::fs::remove_dir_all(&tmp);
-    assert!(
-        !out.status.success(),
-        "expected build to fail for fs.read_lines"
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("read_lines") && stderr.contains("not yet"),
-        "expected a loud fs.read_lines codegen rejection; got: {stderr}",
-    );
-}
+// NOTE: `test_fs_read_lines_build_rejected_loudly` was removed 2026-07-12.
+// It asserted `karac build` REJECTS `fs.read_lines()` loudly ("not yet"), but
+// B-2026-07-11-38 (commit b3ee7bb) shipped `fs.read_lines()` codegen end to
+// end and intentionally removed both loud gates — so the build now SUCCEEDS
+// and the assertion was stale (it made `cargo test --features llvm` red). The
+// replacement build==run coverage lives in tests/codegen.rs
+// (test_e2e_fs_read_lines_splits_file_into_vec + siblings) and
+// tests/memory_sanitizer.rs::asan_fs_read_lines_vec_string_elements_freed.
 
 #[cfg(feature = "llvm")]
 #[test]
