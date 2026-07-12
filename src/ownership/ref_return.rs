@@ -45,10 +45,17 @@ impl<'a> super::OwnershipChecker<'a> {
         // "follows the same borrow rules as `ref T`"). Without this, a view
         // sliced from an owned local would be a silent use-after-free.
         let is_slice_ret = type_expr_is_string_slice(ret);
-        if !is_ref_ret && !is_slice_ret {
-            // Tier-1: plain `ref T` / `mut ref T` (+ `StringSlice`) returns
-            // only. Borrows nested in generic wrappers (`Option[ref T]`) are a
-            // follow-on.
+        // Borrowed-collection return (B-2026-07-11-30): the return type is not
+        // itself a `ref` but STORES a `ref` in an element/payload position
+        // (`Vec[ref T]`, `Option[ref T]`, a tuple with a `ref` member). design.md
+        // Feature 4 Part 3 makes this a borrowed collection whose scope is
+        // bounded by every element source, so a local-sourced element escapes
+        // exactly as a `-> ref Struct` field does. Traced conservatively below.
+        let is_container_ref_ret = !is_ref_ret && !is_slice_ret && type_expr_has_ref_element(ret);
+        if !is_ref_ret && !is_slice_ret && !is_container_ref_ret {
+            // Tier-1: plain `ref T` / `mut ref T` (+ `StringSlice`) returns, plus
+            // the borrowed-collection case above. Everything else is not a
+            // borrow return.
             return;
         }
 
@@ -78,6 +85,14 @@ impl<'a> super::OwnershipChecker<'a> {
         let ref_returning_fns = self.ref_returning_fn_names();
         let mut ref_locals: HashSet<String> = HashSet::new();
         collect_ref_locals(&f.body, &ref_returning_fns, &mut ref_locals);
+
+        // Borrowed-collection path (B-2026-07-11-30) — separate from the Tier-1
+        // ref-return classification, since the returned value is an OWNED
+        // container (its element *type* is the borrow, not the container).
+        if is_container_ref_ret {
+            self.check_borrowed_collection_pinning(f, &ref_params, &ref_locals);
+            return;
+        }
         // StringSlice-locals: `let w = <borrowable>.slice(a, b)` whose receiver
         // root is itself a borrowable source — `w` then carries that borrow and
         // may be returned (`let w = s.slice(0, n); … w`).
@@ -258,6 +273,86 @@ impl<'a> super::OwnershipChecker<'a> {
             }
         }
         worst
+    }
+
+    /// Borrowed-collection source pinning (B-2026-07-11-30). A `-> Vec[ref T]` /
+    /// `-> Option[ref T]` / `-> Result[ref T, E]` return whose element borrows
+    /// function-local storage is a dangling escape exactly as a `-> ref Struct`
+    /// field is (design.md Feature 4 Part 3: a container with a `ref` in a
+    /// stored position is a borrowed collection bounded by every element
+    /// source). CONSERVATIVE — this tightens soundness for the clear local-
+    /// escape case only: an element source is rejected iff `classify_borrow_-
+    /// return` calls it `DanglingSource` (a local / temporary / literal); a
+    /// borrowable source (`ref` param / `ref self` / ref-local) or any
+    /// untraceable form is accepted, so no currently-valid program is newly
+    /// rejected. Two witness shapes are traced: a returned container identifier
+    /// whose `.push(arg)` element sources are classified, and a directly
+    /// returned `Some(arg)` / `Ok(arg)` wrapper (the borrow-payload position).
+    fn check_borrowed_collection_pinning(
+        &mut self,
+        f: &Function,
+        ref_params: &HashSet<String>,
+        ref_locals: &HashSet<String>,
+    ) {
+        let mut returns: Vec<&Expr> = Vec::new();
+        collect_return_exprs_in_block(&f.body, &mut returns);
+        if let Some(tail) = &f.body.final_expr {
+            returns.push(tail);
+        }
+        for e in returns {
+            let is_dangling = match &e.kind {
+                // Returned container identifier (`… v`): every `v.push(src)` in
+                // the body contributes an element source. A local source dangles.
+                ExprKind::Identifier(name) => {
+                    let mut sources: Vec<&Expr> = Vec::new();
+                    collect_container_push_sources(&f.body, name, &mut sources);
+                    sources.iter().any(|src| {
+                        matches!(
+                            classify_borrow_return(src, ref_params, ref_locals),
+                            Some(BorrowReturnShape::DanglingSource)
+                        )
+                    })
+                }
+                // Directly returned wrapper: `Some(src)` (`Option[ref T]`) /
+                // `Ok(src)` (`Result[ref T, E]`) — `src` is the borrow payload.
+                // `Err`/other callees carry no `ref`-payload here.
+                ExprKind::Call { callee, args } => {
+                    let is_borrow_wrapper = matches!(
+                        &callee.kind,
+                        ExprKind::Identifier(n) if n == "Some" || n == "Ok"
+                    );
+                    is_borrow_wrapper
+                        && args.len() == 1
+                        && matches!(
+                            classify_borrow_return(&args[0].value, ref_params, ref_locals),
+                            Some(BorrowReturnShape::DanglingSource)
+                        )
+                }
+                // Any other return form is conservatively accepted.
+                _ => false,
+            };
+            if is_dangling {
+                self.errors.push(OwnershipError {
+                    message: "returned borrowed collection holds an element that borrows \
+                              function-local storage; the element's source is dropped when the \
+                              function returns, leaving the collection's borrows dangling"
+                        .to_string(),
+                    span: e.span.clone(),
+                    kind: OwnershipErrorKind::BorrowReturnNotSourcePinned {
+                        shape: BorrowReturnShape::DanglingSource,
+                    },
+                    suggestion: Some(
+                        "every element of a returned `Vec[ref T]` / `Option[ref T]` must borrow a \
+                         `ref` parameter (or a value that outlives the call), not a local — push \
+                         borrows of parameters. To return owned elements, drop `ref` from the \
+                         element type."
+                            .to_string(),
+                    ),
+                    replacement: None,
+                    consume_span: None,
+                });
+            }
+        }
     }
 
     /// Caller-side borrow registration (check 3b). When `value` is a call
@@ -663,6 +758,80 @@ fn collect_ref_locals_in_stmt(stmt: &Stmt, ref_fns: &HashSet<String>, out: &mut 
 
 fn collect_ref_locals_in_expr(e: &Expr, ref_fns: &HashSet<String>, out: &mut HashSet<String>) {
     for_each_subblock(e, &mut |b| collect_ref_locals(b, ref_fns, out));
+}
+
+/// True when `te` is a container / wrapper type that STORES a `ref` in an
+/// element / payload position (`Vec[ref T]`, `Option[ref T]`,
+/// `Result[ref T, E]`, a tuple with a `ref` member) — a "borrowed collection"
+/// per design.md Feature 4 Part 3. A top-level `ref T` / `mut ref T` return is
+/// Tier-1 (handled separately), so it is not reported here.
+fn type_expr_has_ref_element(te: &TypeExpr) -> bool {
+    match &te.kind {
+        TypeKind::Path(p) => p.generic_args.as_ref().is_some_and(|args| {
+            args.iter().any(|a| match a {
+                GenericArg::Type(inner) => type_expr_contains_ref(inner),
+                _ => false,
+            })
+        }),
+        TypeKind::Tuple(elems) => elems.iter().any(type_expr_contains_ref),
+        _ => false,
+    }
+}
+
+/// `te` is (or transitively contains, through a generic arg / tuple member) a
+/// `ref` / `mut ref`. The element-position recursion of `type_expr_has_ref_-
+/// element` so `Vec[Option[ref T]]` is seen too.
+fn type_expr_contains_ref(te: &TypeExpr) -> bool {
+    matches!(te.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) || type_expr_has_ref_element(te)
+}
+
+/// Collect the argument of every `<container>.push(arg)` call on the named
+/// container binding, anywhere in the block tree — the element sources of a
+/// returned borrowed collection (B-2026-07-11-30).
+fn collect_container_push_sources<'e>(block: &'e Block, container: &str, out: &mut Vec<&'e Expr>) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let { value, .. }
+            | StmtKind::LetElse { value, .. }
+            | StmtKind::Expr(value)
+            | StmtKind::Assign { value, .. }
+            | StmtKind::CompoundAssign { value, .. } => {
+                collect_container_push_sources_in_expr(value, container, out)
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                collect_container_push_sources(body, container, out)
+            }
+            StmtKind::MultiAssign { .. } | StmtKind::LetUninit { .. } => {}
+        }
+    }
+    if let Some(e) = &block.final_expr {
+        collect_container_push_sources_in_expr(e, container, out);
+    }
+}
+
+fn collect_container_push_sources_in_expr<'e>(
+    e: &'e Expr,
+    container: &str,
+    out: &mut Vec<&'e Expr>,
+) {
+    if let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+        ..
+    } = &e.kind
+    {
+        if method == "push" && args.len() == 1 {
+            if let ExprKind::Identifier(n) = &object.kind {
+                if n == container {
+                    out.push(&args[0].value);
+                }
+            }
+        }
+    }
+    for_each_subblock(e, &mut |b| {
+        collect_container_push_sources(b, container, out)
+    });
 }
 
 /// Collect every `return e;` expression in the block tree.

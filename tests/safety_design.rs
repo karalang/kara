@@ -868,15 +868,10 @@ fn adversarial_escape_via_closure_capture() {
 /// dangles at the return point — but the `ref` element type becomes a lie
 /// and the borrowed-collection scope bound is not enforced.
 ///
-/// This test asserts the *desired* rejection and is `#[ignore]`d so the
-/// green build is unaffected; it auto-enables (and passes) when
-/// generic-wrapper source pinning lands. Same auto-enabling pattern as the
-/// `spec_*` field-projection cases above.
+/// This test asserts the desired rejection. It landed with B-2026-07-11-30:
+/// `check_borrowed_collection_pinning` (ref_return.rs) now source-pins a
+/// `-> Vec[ref T]` / `-> Option[ref T]` return whose element borrows a local.
 #[test]
-#[ignore = "generic-wrapper / borrowed-collection borrow-return source \
-            pinning is a follow-on (ref_return.rs Tier-1 gate); tracked as \
-            bug-ledger B-2026-07-11-30. Un-ignore when `-> Vec[ref T]` / \
-            `-> Option[ref T]` returns are source-pinned."]
 fn adversarial_escape_via_borrowed_collection_local() {
     assert_rejected_by_source_pinning(
         "fn bad() -> Vec[ref String] {\n\
