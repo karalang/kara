@@ -1203,6 +1203,76 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// `Result[shared T, E]` sibling of [`Self::track_rc_option_var`]
+    /// (B-2026-07-12-24). The seeded generic `Result` layout carries all-`None`
+    /// drop kinds, so a `Result` binding whose `Ok`/`Err` payload is a `shared`
+    /// (RC) type gets no scope-exit rc-dec — a value that arrived owning a +1
+    /// (a call return, a `v[i]` deep-clone, a fresh `Ok(node)`) leaks its
+    /// payload node once per binding. Register a `CleanupAction::RcDecOption`
+    /// (the action is tag-parameterized — the same reload-slot / tag-guard /
+    /// word-1 inner-ptr / `emit_refcount_dec` shape works for Result's wider
+    /// `{tag, w0..w4}` struct) for each arm that names a shared type, keyed on
+    /// that arm's tag (`Ok` and/or `Err`). No-op for a non-shared `Result`
+    /// (`result_arms_shared_type_for_type_expr` returns `None`) or a non-Result
+    /// `te`, so callers can invoke it unconditionally alongside the inline-heap
+    /// registrar.
+    ///
+    /// Unlike `track_rc_option_var`, this does NOT record a reassignment table
+    /// (`var_option_shared_heap` has no Result analog), so a `mut` Result[shared]
+    /// binding reassigned mid-scope leaks the OLD payload (the plain-store
+    /// overwrite is not rc-aware) — a leak, never a double-free (the scope-exit
+    /// dec releases whatever value is live in the slot at exit). Reassignment
+    /// coverage is a deliberate follow-up; the common bind-once shapes (the
+    /// B-24 leak class) are fully covered.
+    pub(super) fn track_rc_result_var(
+        &mut self,
+        var_name: &str,
+        result_slot: PointerValue<'ctx>,
+        result_te: &TypeExpr,
+    ) {
+        let Some((ok_shared, err_shared)) = self.result_arms_shared_type_for_type_expr(result_te)
+        else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Result") else {
+            return;
+        };
+        let result_ty = layout.llvm_type;
+        let ok_tag = layout.tags.get("Ok").copied().unwrap_or(0);
+        let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
+        // Nested-block let: zero the slot in the entry block so a not-taken
+        // path's `undef` tag can't spuriously match `Ok`/`Err` at a function-
+        // level drain and dec a garbage pointer. Mirrors the Option / inline
+        // Result paths.
+        let is_nested = self
+            .current_fn
+            .and_then(|f| f.get_first_basic_block())
+            .zip(self.builder.get_insert_block())
+            .map(|(entry, cur)| entry != cur)
+            .unwrap_or(false);
+        if is_nested {
+            self.zero_init_option_slot_in_entry_block(result_slot, result_ty);
+        }
+        // Lazy-synth each shared arm's recursive drop fn (same rationale as
+        // `track_rc_option_var`) and queue one tag-guarded RcDecOption per
+        // shared arm. The tag guard means only the live arm's dec fires.
+        for (tag, arm) in [(ok_tag, &ok_shared), (err_tag, &err_shared)] {
+            let Some((struct_name, info)) = arm else {
+                continue;
+            };
+            let _ = self.emit_shared_struct_rc_drop_fn(struct_name);
+            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                frame.push(CleanupAction::RcDecOption {
+                    name: var_name.to_string(),
+                    option_slot: result_slot,
+                    option_ty: result_ty,
+                    heap_type: info.heap_type,
+                    some_tag: tag,
+                });
+            }
+        }
+    }
+
     /// Queue a scope-exit free of the heap box backing an enum binding
     /// whose payload `T` was too wide to inline (`Option[Wide]` /
     /// `Result[Wide, _]` — see `coerce_to_payload_words`'s boxing path).

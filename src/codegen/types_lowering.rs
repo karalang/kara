@@ -2621,6 +2621,50 @@ impl<'ctx> super::Codegen<'ctx> {
         Some((inner_name.clone(), info))
     }
 
+    /// `Result[T, E]` sibling of [`Self::option_inner_shared_type_for_type_expr`]
+    /// (B-2026-07-12-24). Returns the per-arm shared-heap info for whichever of
+    /// `Ok(T)` / `Err(E)` names a `shared` (RC) type — `(ok_shared, err_shared)`,
+    /// each `Some((name, info))` only when that arm's payload is a `shared`
+    /// struct/enum. Returns the outer `Some` only when AT LEAST one arm is
+    /// shared (a fully-non-shared `Result` gets `None`, so no rc cleanup is
+    /// registered). Mirrors `result_inline_payload_elems`'s arg extraction
+    /// (`Ok` = arg 0, `Err` = arg 1) but resolves the RC heap type instead of
+    /// the inline `{ptr,len,cap}` element type.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn result_arms_shared_type_for_type_expr(
+        &self,
+        te: &TypeExpr,
+    ) -> Option<(
+        Option<(String, SharedTypeInfo<'ctx>)>,
+        Option<(String, SharedTypeInfo<'ctx>)>,
+    )> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
+            return None;
+        }
+        let args = p.generic_args.as_ref()?;
+        let arm_shared = |idx: usize| -> Option<(String, SharedTypeInfo<'ctx>)> {
+            let arg = match args.get(idx)? {
+                GenericArg::Type(t) => t,
+                _ => return None,
+            };
+            let TypeKind::Path(ap) = &arg.kind else {
+                return None;
+            };
+            let name = ap.segments.last()?;
+            let info = self.shared_types.get(name.as_str())?.clone();
+            Some((name.clone(), info))
+        };
+        let ok_shared = arm_shared(0);
+        let err_shared = arm_shared(1);
+        if ok_shared.is_none() && err_shared.is_none() {
+            return None;
+        }
+        Some((ok_shared, err_shared))
+    }
+
     /// For a let-binding's declared `Option[T]` / `Result[T, E]` type,
     /// return each *boxed* payload variant as
     /// `(enum_name, payload_variant, inner_struct_name)`. A variant's

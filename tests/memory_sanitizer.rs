@@ -540,6 +540,156 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_call_match_result_shared_no_leak() {
+        // B-2026-07-12-24 — the `Result[shared]` sibling of the Option B-23
+        // leak. A direct `match take()` where `take` returns
+        // `Result[shared Node, i64]` via a returning arm (`Some(n) => Ok(n)`)
+        // leaked the node once per match (6,400 B / 200 iters pre-fix): the
+        // B-21/B-23 lowering rewrite routes it through a synthetic let-bound
+        // scrutinee, but `Result` had no rc cleanup for that scrutinee (the
+        // Option-only `track_rc_option_var` had no Result sibling). The new
+        // `track_rc_result_var` registers a tag-guarded RcDecOption for the
+        // synthetic `__karac_msc_*` scrutinee. Looped 200x; prints 1400.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[Node, i64] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => Err(1),
+        Some(n) => Ok(n),
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        match take() {
+            Err(e) => { t = t + e; }
+            Ok(n) => { t = t + n.val; }
+        }
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["1400"],
+            "freshtemp_call_match_result_shared_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_direct_index_match_result_shared_no_leak() {
+        // B-2026-07-12-24 — the index-read (`match v[i]`) `Result[shared]` case
+        // (sibling of the Option B-21 index fix). The index deep-clone rc-INCs
+        // the node; the synthetic let-bound scrutinee the rewrite emits now
+        // releases it via `track_rc_result_var`. Looped 200x; prints 2000.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn xfer() -> i64 {
+    let mut dst: Vec[Result[Node, i64]] = Vec.new();
+    dst.push(Ok(Node { val: 10, left: None, right: None }));
+    let mut r: i64 = 0;
+    match dst[0] {
+        Err(_) => {}
+        Ok(nd) => { r = nd.val; }
+    }
+    r
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + xfer();
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["2000"],
+            "direct_index_match_result_shared_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_call_match_result_shared_err_arm_no_leak() {
+        // B-2026-07-12-24 — the `Err`-shared arm: `Result[i64, shared Node]`
+        // where the payload node lives in `Err`. `track_rc_result_var`
+        // registers a tag-guarded RcDecOption for BOTH arms, so the live `Err`
+        // node is released. Guards the two-arm registration. Prints 1800.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[i64, Node] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 9, left: None, right: None }));
+    match src[0] {
+        None => Ok(0),
+        Some(n) => Err(n),
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        match take() {
+            Ok(v) => { t = t + v; }
+            Err(n) => { t = t + n.val; }
+        }
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["1800"],
+            "freshtemp_call_match_result_shared_err_arm_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_call_match_result_shared_rebuild_arm_no_double_free() {
+        // B-2026-07-12-24 guard — a returning-arm rebuild `Ok(n) => Ok(n)` that
+        // hands the node out through a consumer `match relay()` (whose own
+        // synthetic scrutinee releases it) must not double-free: the scrutinee
+        // release and the rebuilt value's ownership are independent. Prints 1400.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[Node, i64] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => Err(1),
+        Some(n) => Ok(n),
+    }
+}
+fn relay() -> Result[Node, i64] {
+    match take() {
+        Err(e) => Err(e),
+        Ok(n) => Ok(n),
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        match relay() {
+            Err(e) => { t = t + e; }
+            Ok(n) => { t = t + n.val; }
+        }
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["1400"],
+            "freshtemp_call_match_result_shared_rebuild_arm_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_return_owned_heap_struct_param_no_leak() {
         // B-2026-07-08-6 (non-generic leg, FIXED) — a fn that returns an owned
         // heap-owning STRUCT param used to leak the arg buffer: the caller's

@@ -3673,6 +3673,81 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_freshtemp_call_match_result_shared_correct() {
+        // B-2026-07-12-24 correctness pin (the ASAN/leak gate lives in
+        // tests/memory_sanitizer.rs::asan_freshtemp_call_match_result_shared_no_leak).
+        // The `Result[shared]` sibling of the Option B-23 case: `match take()`
+        // where `take` returns `Result[shared Node, i64]` via a returning arm
+        // leaked the node (the B-21/B-23 lowering rewrite routes it through a
+        // synthetic let-bound scrutinee, but Result had no rc cleanup for that
+        // scrutinee — `track_rc_result_var` now supplies it). Pins that the
+        // rewrite + release preserve the value.
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[Node, i64] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => Err(1),
+        Some(n) => Ok(n),
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        match take() {
+            Err(e) => { t = t + e; }
+            Ok(n) => { t = t + n.val; }
+        }
+        i = i + 1;
+    }
+    println(t);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1400");
+        }
+    }
+
+    #[test]
+    fn test_e2e_direct_index_match_result_shared_correct() {
+        // B-2026-07-12-24 correctness pin — the index-read (`match v[i]`)
+        // `Result[shared]` case (sibling of the Option B-21 index fix). Pins
+        // that the bound arm reads the right node's field after the rewrite +
+        // rc release.
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn xfer() -> i64 {
+    let mut dst: Vec[Result[Node, i64]] = Vec.new();
+    dst.push(Ok(Node { val: 10, left: None, right: None }));
+    let mut r: i64 = 0;
+    match dst[0] {
+        Err(_) => {}
+        Ok(nd) => { r = nd.val; }
+    }
+    r
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + xfer();
+        i = i + 1;
+    }
+    println(t);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2000");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_set_get_is_set_lifecycle() {
         // `OnceLock[i64]` write-once lifecycle under `karac build`/JIT (was
         // interpreter-only). Empty → `is_set() == false`, `get() == None`;
