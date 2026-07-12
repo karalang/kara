@@ -254,6 +254,19 @@ const CORPUS: &[&str] = &[
     "fn g() -> i64 { 0 }\nfn f() -> i64 { g(1) }",
     // Correct count with a forward reference (caller before callee) is clean.
     "fn f() -> i64 { g(1, 2) }\nfn g(a: i64, b: i64) -> i64 { a }",
+    // ── Slice 13: InvalidUnaryOp ──
+    // A KNOWN operand of the wrong category — `-`/`~` on a non-NUM, `not` on a
+    // non-BOOL — is InvalidUnaryOp at the whole unary-expr span. A valid operand
+    // (or an UNKNOWN one) is clean; the invalid unary's result is UNKNOWN so no
+    // spurious downstream mismatch fires.
+    "fn f(b: bool) -> bool { -b }",
+    "fn f(n: i64) -> i64 { not n }",
+    "fn f(c: char) -> char { -c }",
+    "fn f(s: String) -> i64 { ~s }",
+    "fn f(n: i64) -> i64 { -n }",
+    "fn f(b: bool) -> bool { not b }",
+    "fn f(n: i64) -> i64 { ~n }",
+    "fn f(n: i64) -> i64 { -(n + 1) }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
@@ -296,6 +309,7 @@ fn rust_render(src: &str) -> String {
             "NonExhaustiveMatch" => "non-exhaustive",
             "MissingField" => "missing-field",
             "WrongNumberOfArgs" => "wrong-arg-count",
+            "InvalidUnaryOp" => "invalid-unary-op",
             other => panic!(
                 "corpus entry {src:?} produced an out-of-Slice-1 type-error kind {other} \
                  (message: {}); trim the corpus or extend the slice",

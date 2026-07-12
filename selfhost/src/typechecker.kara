@@ -732,9 +732,51 @@ impl Checker {
                 ExprInfo { category: rc, span: span }
             }
             Unary(n) => {
+                // Operator VALIDITY + result category in one match on `op`
+                // (Slice 13). A KNOWN operand of the wrong category — `-`/`~` on a
+                // non-NUM, `not` on a non-BOOL — is InvalidUnaryOp (kind 8) at the
+                // whole unary-expr span; the result then stays UNKNOWN so no
+                // spurious downstream mismatch fires (the seed's Error result).
+                // `*` (Deref) is never reasoned about. An UNKNOWN operand never
+                // flags.
                 let UnaryExpr { op, operand, span } = n;
                 let oi = self.check_expr(operand);
-                let rc = un_result_cat(op, oi.category);
+                let oc = oi.category;
+                let mut inv = false;
+                let mut rc = 4;
+                match op {
+                    Neg => {
+                        if oc == 0 {
+                            rc = 0;
+                        } else {
+                            if oc != 4 {
+                                inv = true;
+                            }
+                        }
+                    }
+                    BitNot => {
+                        if oc == 0 {
+                            rc = 0;
+                        } else {
+                            if oc != 4 {
+                                inv = true;
+                            }
+                        }
+                    }
+                    Not => {
+                        if oc == 1 {
+                            rc = 1;
+                        } else {
+                            if oc != 4 {
+                                inv = true;
+                            }
+                        }
+                    }
+                    Deref => {}
+                }
+                if inv {
+                    self.push_err(8, span.offset, span.length);
+                }
                 ExprInfo { category: rc, span: span }
             }
             Call(n) => {
@@ -1246,27 +1288,6 @@ fn same_or_unknown(l: i64, r: i64) -> i64 {
     4
 }
 
-// The RESULT category of a unary operator. `-` / `~` on a NUM yield NUM; `not`
-// yields BOOL; `*` (deref) is UNKNOWN (pointee typing is a later slice).
-fn un_result_cat(op: UnaryOp, o: i64) -> i64 {
-    match op {
-        Neg => {
-            if o == 0 {
-                return 0;
-            }
-            4
-        }
-        BitNot => {
-            if o == 0 {
-                return 0;
-            }
-            4
-        }
-        Not => 1,
-        Deref => 4,
-    }
-}
-
 fn zero_span() -> Span {
     Span { offset: 0, length: 0, line: 0, column: 0 }
 }
@@ -1292,7 +1313,10 @@ fn kind_tag(kind: i64) -> String {
     if kind == 6 {
         return "missing-field".to_string();
     }
-    "wrong-arg-count".to_string()
+    if kind == 7 {
+        return "wrong-arg-count".to_string();
+    }
+    "invalid-unary-op".to_string()
 }
 
 pub fn render_errors(errs: Vec[TypeError]) -> String {
