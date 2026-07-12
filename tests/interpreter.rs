@@ -5293,6 +5293,39 @@ fn test_into_drives_user_from_impl() {
     assert_eq!(output, "25\n");
 }
 
+#[test]
+fn test_tryinto_drives_user_tryfrom_impl() {
+    // A user `impl TryFrom[Celsius] for Kelvin` must drive BOTH the explicit
+    // `Kelvin.try_from(c)` call and the `.try_into()` sugar at a
+    // `let: Result[Kelvin, _]` position — the fallible sibling of
+    // `test_into_drives_user_from_impl`. Exercises the Ok arm (valid
+    // conversion) and the Err arm (predicate failure returns the error
+    // message). Guards the whole `.try_into()` → `Target.try_from(x)` desugar
+    // chain, which had no runtime coverage before.
+    let src = "struct Celsius { deg: i64 }\n\
+               struct Kelvin { deg: i64 }\n\
+               impl TryFrom for Kelvin {\n\
+                   type Error = String;\n\
+                   fn try_from(c: Celsius) -> Result[Kelvin, String] {\n\
+                       if c.deg < -273 { Err(\"below absolute zero\") }\n\
+                       else { Ok(Kelvin { deg: c.deg + 273 }) }\n\
+                   }\n\
+               }\n\
+               fn main() {\n\
+                   match Kelvin.try_from(Celsius { deg: 27 }) {\n\
+                       Ok(k) => println(k.deg),\n\
+                       Err(e) => println(e),\n\
+                   }\n\
+                   let r: Result[Kelvin, String] = (Celsius { deg: -300 }).try_into();\n\
+                   match r {\n\
+                       Ok(k) => println(k.deg),\n\
+                       Err(e) => println(e),\n\
+                   }\n\
+               }";
+    let output = run(src);
+    assert_eq!(output, "300\nbelow absolute zero\n");
+}
+
 // ── Atomic[T] Runtime ─────────────────────────────────────────
 
 #[test]

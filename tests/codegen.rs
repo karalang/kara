@@ -28398,6 +28398,45 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tryinto_drives_user_tryfrom_impl() {
+        // A user `impl TryFrom[Celsius] for Kelvin` compiles as `Kelvin.try_from`;
+        // `.try_into()` at a `let: Result[Kelvin, _]` position lowers to
+        // `Kelvin.try_from(...)` and routes to it. Exercises the Ok arm and the
+        // Err arm (a heap `String` error payload). The fallible sibling of
+        // `test_e2e_into_drives_user_from_impl`; the whole `.try_into()` desugar
+        // chain had no codegen coverage before. (Leak-clean under valgrind — the
+        // `Result[Kelvin, String]` Err String is freed on the discard/`e.len()`
+        // paths; verified by hand.)
+        let out = run_program(
+            r#"
+struct Celsius { deg: i64 }
+struct Kelvin { deg: i64 }
+impl TryFrom for Kelvin {
+    type Error = String;
+    fn try_from(c: Celsius) -> Result[Kelvin, String] {
+        if c.deg < -273 { Err("below absolute zero") }
+        else { Ok(Kelvin { deg: c.deg + 273 }) }
+    }
+}
+fn main() {
+    match Kelvin.try_from(Celsius { deg: 27 }) {
+        Ok(k) => println(k.deg),
+        Err(e) => println(e),
+    }
+    let r: Result[Kelvin, String] = (Celsius { deg: -300 }).try_into();
+    match r {
+        Ok(k) => println(k.deg),
+        Err(e) => println(e),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "300\nbelow absolute zero");
+        }
+    }
+
+    #[test]
     fn test_e2e_user_impl_eq_drives_equality() {
         // End-to-end: `a == b` on user type lowers to `Point.eq(a, b)`,
         // which routes through the codegen-compiled impl method.
