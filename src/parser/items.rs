@@ -480,15 +480,20 @@ impl super::Parser {
                 );
             }
             other => {
-                self.error_at(
-                    &format!(
-                        "unsupported FFI export ABI \"{other}\" — only \"C\" \
-                         and \"C-unwind\" may be used on a `extern \"ABI\" fn` \
-                         definition. See design.md § Panic Semantics at the \
-                         FFI Boundary."
-                    ),
-                    abi_span,
-                );
+                // Reserved-but-unimplemented calling conventions get a
+                // targeted "reserved at v1" diagnostic; only a genuinely
+                // unknown ABI falls through to the generic message.
+                if !self.reserved_abi_diagnostic(other, abi_span.clone()) {
+                    self.error_at(
+                        &format!(
+                            "unsupported FFI export ABI \"{other}\" — only \"C\" \
+                             and \"C-unwind\" may be used on a `extern \"ABI\" fn` \
+                             definition. See design.md § Panic Semantics at the \
+                             FFI Boundary."
+                        ),
+                        abi_span,
+                    );
+                }
             }
         }
         let mut func = self.parse_function(attributes, is_pub, is_private, false, false)?;

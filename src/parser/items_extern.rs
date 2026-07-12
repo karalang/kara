@@ -57,6 +57,7 @@ impl super::Parser {
 
         self.expect(&Token::Extern)?;
 
+        let abi_span = self.current_span();
         let abi = match self.peek_token() {
             Token::StringLiteral(s) => {
                 let s = s.clone();
@@ -80,6 +81,10 @@ impl super::Parser {
                  see syntax.md § 3.16).",
             );
         }
+        // Reserved-but-unimplemented calling conventions (`"stdcall"`, … ) get
+        // the targeted "reserved at v1" diagnostic here too, so the frozen
+        // syntax is rejected consistently on the import surface.
+        self.reserved_abi_diagnostic(&abi, abi_span);
 
         self.expect(&Token::LeftBrace)?;
 

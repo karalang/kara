@@ -72,6 +72,14 @@ pub(crate) fn starts_upper(s: &str) -> bool {
 
 // ── Parser ───────────────────────────────────────────────────────
 
+/// FFI calling-convention ABIs the grammar recognizes but reserves for a
+/// future release: they parse (freezing the syntax at v1 so a later
+/// implementation is not source-breaking) but are rejected with a targeted
+/// "reserved" diagnostic distinct from the generic "unknown ABI" error.
+/// `extern "C"` / `extern "C-unwind"` are the implemented set. See the
+/// Phase-11 embedded/hardware tracker and design.md § FFI.
+const RESERVED_FFI_ABIS: &[&str] = &["stdcall", "fastcall", "win64", "sysv64"];
+
 pub struct Parser {
     pub(crate) tokens: Vec<SpannedToken>,
     pub(crate) pos: usize,
@@ -540,6 +548,31 @@ impl Parser {
             message: message.to_string(),
             span,
         });
+    }
+
+    /// If `abi` names one of the calling conventions reserved-but-unimplemented
+    /// at v1, emit the targeted "reserved" diagnostic at `span` and return
+    /// `true`; otherwise return `false` so the caller applies its own
+    /// valid/unknown-ABI handling. Recognizing the syntax now (rather than
+    /// lumping it into the generic "unknown ABI" error) freezes it at v1 so a
+    /// future implementation is not source-breaking — the same reservation
+    /// posture as the `f16` / `bf16` numeric keywords. See the Phase-11
+    /// embedded/hardware tracker and design.md § FFI.
+    fn reserved_abi_diagnostic(&mut self, abi: &str, span: Span) -> bool {
+        if RESERVED_FFI_ABIS.contains(&abi) {
+            self.error_at(
+                &format!(
+                    "the `\"{abi}\"` calling convention is reserved for a future release \
+                     and cannot be used yet — at v1 an `extern` ABI may only be `\"C\"` or \
+                     `\"C-unwind\"`. (`\"stdcall\"`, `\"fastcall\"`, `\"win64\"`, `\"sysv64\"` \
+                     are recognized but unimplemented; see design.md § FFI.)"
+                ),
+                span,
+            );
+            true
+        } else {
+            false
+        }
     }
 
     /// Emit a non-fatal diagnostic if `name` does not have the expected

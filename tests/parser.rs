@@ -11324,6 +11324,43 @@ fn extern_export_fn_rejects_host_abi() {
 }
 
 #[test]
+fn extern_export_fn_reserves_future_calling_conventions() {
+    // `"stdcall"` / `"fastcall"` / `"win64"` / `"sysv64"` are recognized-but-
+    // reserved at v1 (syntax frozen so a future impl is not source-breaking).
+    // They get a targeted "reserved" diagnostic, NOT the generic "unsupported
+    // ABI" message a genuinely unknown ABI (`"Rust"`) receives.
+    for abi in ["stdcall", "fastcall", "win64", "sysv64"] {
+        let src = format!("extern \"{abi}\" fn f() {{}}");
+        let (_, errors) = parse_with_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("reserved for a future release")),
+            "expected a reserved-ABI diagnostic for \"{abi}\", got: {errors:?}"
+        );
+        assert!(
+            !errors
+                .iter()
+                .any(|e| e.message.contains("unsupported FFI export ABI")),
+            "reserved ABI \"{abi}\" should not also trip the generic unknown-ABI \
+             diagnostic, got: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn unsafe_extern_import_block_reserves_future_calling_conventions() {
+    // The reserved-ABI syntax is frozen consistently on the import surface too.
+    let (_, errors) = parse_with_errors("unsafe extern \"sysv64\" {\n    fn f(x: i64);\n}\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("reserved for a future release")),
+        "expected a reserved-ABI diagnostic on the import block, got: {errors:?}"
+    );
+}
+
+#[test]
 fn bare_extern_import_block_still_rejected_at_module_scope() {
     // `extern "C" { ... }` (no `unsafe`, no `fn`) is a bare foreign-import
     // block — still rejected; imports need `unsafe extern { ... }`.
