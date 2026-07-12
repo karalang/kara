@@ -437,6 +437,15 @@ pub type EnumInstTypeExprsTable = std::collections::HashMap<(usize, usize), Type
 /// without taking a full `TypeCheckResult` dependency.
 pub type StringTypedExprsTable = std::collections::HashSet<(usize, usize)>;
 
+/// Spans of every expression whose typechecked type is `Iterator[..]`.
+/// Codegen uses this as the SOUND gate for materializing a `let it =
+/// <chain>` iterator binding (B-2026-07-11-19): only an expression the
+/// typechecker actually typed `Iterator` is inlined, so an `.iter()` that
+/// returns a real collection (`Column.iter() -> Vec[Option[T]]`, the eager
+/// `chars()`/`bytes()` materializations) is never mis-intercepted. Sibling of
+/// `StringTypedExprsTable`; same key shape.
+pub type IteratorTypedExprsTable = std::collections::HashSet<(usize, usize)>;
+
 /// Plain-data record describing a `Tensor[T, Shape]`-typed expression for
 /// codegen (phase-11 numerical stdlib). `elem` is the element type as an
 /// AST `TypeExpr` (codegen lowers it via `llvm_type_for_type_expr`);
@@ -660,6 +669,9 @@ pub struct Program {
     /// the same `{ptr, i64, i64}` LLVM struct shape without taking a
     /// `TypeCheckResult` dependency.
     pub string_typed_exprs: StringTypedExprsTable,
+    /// Spans of every `Iterator[..]`-typed expression — the sound gate for
+    /// materialized iterator-let inlining (B-2026-07-11-19).
+    pub iterator_typed_exprs: IteratorTypedExprsTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: for every
     /// `Fn(..)` / `OnceFn(..)`-typed expression, its `FnType` `TypeExpr`. Lets
     /// codegen register an un-annotated fn-value binding (`let g = h.f;`) in

@@ -7409,6 +7409,61 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_materialized_iterator_binding() {
+        // B-2026-07-11-19 — a `let it = v.iter()` iterator binding used at a
+        // terminal / adaptor / for-loop. Codegen has no runtime iterator value,
+        // so the binding's chain is recorded and inlined at each use (gated on
+        // the RHS being typechecker-typed `Iterator`, so a collection-returning
+        // `.iter()` like `Column.iter()` / `bytes()` is never mis-intercepted).
+        // Covers: bare fold, adaptor-in-let sum, for_each, a chained
+        // `let it5 = it4.filter(..)`, and a for-loop over the binding.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4];\n\
+                 let it = v.iter();\n\
+                 println(it.fold(0, |a, x| a + x));\n\
+                 let it2 = v.iter().map(|x| x * 2);\n\
+                 println(it2.sum());\n\
+                 let it3 = v.iter();\n\
+                 let mut tot = 0;\n\
+                 it3.for_each(|x| { tot = tot + x; });\n\
+                 println(tot);\n\
+                 let it4 = v.iter();\n\
+                 let it5 = it4.filter(|x| x > 2);\n\
+                 println(it5.sum());\n\
+                 let it6 = v.iter();\n\
+                 let mut s = 0;\n\
+                 for x in it6 { s = s + x; }\n\
+                 println(s);\n\
+             }",
+        ) {
+            // 10, 20, 10, 7 (3+4), 10
+            assert_eq!(out, "10\n20\n10\n7\n10\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_collection_returning_iter_not_mis_materialized() {
+        // Guard the SOUND gate: `Column.iter()` returns `Vec[Option[T]]` (a real
+        // collection, NOT an Iterator), so a `let all = c.iter()` binding must be
+        // compiled as the Vec value it is (indexed / for-looped), never inlined
+        // as an iterator chain. Was a regression in the syntactic-only draft.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut c: Column[i64] = Column.new();\n\
+                 c.push(10);\n\
+                 c.push(30);\n\
+                 let all: Vec[Option[i64]] = c.iter();\n\
+                 println(all.len());\n\
+                 let b = \"ab\".bytes();\n\
+                 println(b[0] + b[1]);\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n195\n");
+        }
+    }
+
+    #[test]
     fn test_stored_mutating_closure_rejected_in_codegen() {
         // B-2026-07-11-23 — a STORED closure that mutates a captured local is a
         // `mut ref` capture codegen doesn't support (by-value env); it must be

@@ -448,6 +448,18 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
         call_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Materialized iterator binding (B-2026-07-11-19): `let it =
+        // <iter-chain>` recorded its chain instead of codegen'ing a runtime
+        // iterator; if this call's receiver bottoms out at such a name, inline
+        // the chain and re-dispatch (`it.fold(..)` → `v.iter().fold(..)`), which
+        // the fused terminals/adaptors handle. Guarded on a non-empty table so
+        // the common no-materialized-iter program pays nothing.
+        if !self.iter_let_bindings.is_empty() {
+            if let Some(sub) = self.substitute_iter_let_receiver(object) {
+                return self.compile_method_call(&sub, method, args, call_span);
+            }
+        }
+
         // Cooperative cancel check before each call inside a par-branch.
         // The receiver's `Type.method` key is precomputed by lowering and
         // stored in `method_callee_types`; consult it so a provably pure
@@ -6855,6 +6867,73 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         Some((base, steps))
+    }
+
+    /// Materialized-iterator substitution (B-2026-07-11-19): if `recv`'s base
+    /// receiver is a name bound by a recorded `let it = <iter-chain>`, return a
+    /// copy of `recv` with that base replaced by the recorded chain expr (so
+    /// `it.map(f).fold(..)` becomes `v.iter().map(f).fold(..)`, which the fused
+    /// terminals/adaptors handle). Returns `None` when no recorded name appears
+    /// at the base — the caller then compiles `recv` unchanged.
+    pub(super) fn substitute_iter_let_receiver(&self, recv: &Expr) -> Option<Expr> {
+        match &recv.kind {
+            ExprKind::Identifier(name) => self.iter_let_bindings.get(name).cloned(),
+            ExprKind::MethodCall {
+                object,
+                method,
+                turbofish,
+                args,
+                args_close_span,
+            } => {
+                let new_object = self.substitute_iter_let_receiver(object)?;
+                Some(Expr {
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(new_object),
+                        method: method.clone(),
+                        turbofish: turbofish.clone(),
+                        args: args.clone(),
+                        args_close_span: args_close_span.clone(),
+                    },
+                    span: recv.span.clone(),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// True iff `e` is a fusable iterator chain whose base is a genuine
+    /// `.iter()` / `.iter_mut()` / `.into_iter()` (possibly under `map`/`filter`
+    /// adaptors) — the shape a `let it = <e>` binding can be materialized-inlined
+    /// instead of codegen'd as a (nonexistent) runtime iterator value
+    /// (B-2026-07-11-19). Deliberately NARROWER than `peel`'s base set: `chars` /
+    /// `bytes` / `keys` / `values` are excluded because codegen materializes them
+    /// to an INDEXABLE collection (`let b = s.bytes(); b[0]`), and a bare `Range`
+    /// is excluded because `let r = a..b; for i in r` is the dominant use and
+    /// ranges compile to real values — inlining either would break a
+    /// non-iterator use. An `X.iter()` binding, by contrast, is `Iterator[T]`:
+    /// its only uses are adaptor/terminal method calls (handled by
+    /// `substitute_iter_let_receiver`) and `for` loops (handled in `compile_for`).
+    pub(super) fn is_materializable_iter_chain(&self, e: &Expr) -> bool {
+        // Sound gate: the expr must be typed `Iterator` by the typechecker. This
+        // is what distinguishes `Vec.iter()` (a real iterator) from an `.iter()`
+        // that returns a collection (`Column.iter() -> Vec[Option[T]]`) — the
+        // latter is never in `iterator_typed_exprs`, so it is left to compile as
+        // the value it is. The span is the RHS expr's own span (preserved across
+        // `substitute_iter_let_receiver`, which clones the original span).
+        if !self
+            .iterator_typed_exprs
+            .contains(&(e.span.offset, e.span.length))
+        {
+            return false;
+        }
+        let Some((base, _steps)) = Self::peel_fused_map_filter_chain(e) else {
+            return false;
+        };
+        matches!(
+            &base.kind,
+            ExprKind::MethodCall { method, .. }
+                if matches!(method.as_str(), "iter" | "iter_mut" | "into_iter")
+        )
     }
 
     /// The bound name for a single iterator-terminal closure param, synthesizing

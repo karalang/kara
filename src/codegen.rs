@@ -2361,6 +2361,15 @@ pub(super) struct Codegen<'ctx> {
     /// reads it to seed the fused-loop accumulator with a correctly-typed zero
     /// so `acc = acc + x` type-checks for every numeric width (B-2026-07-11-19).
     pub(crate) iter_terminal_elem_types: HashMap<(usize, usize), TypeExpr>,
+    /// Materialized iterator bindings (B-2026-07-11-19): a `let it =
+    /// <iter-chain>` whose RHS is a fusable iterator chain (`v.iter()...`, a
+    /// range) is NOT codegen'd as a value (codegen has no runtime iterator);
+    /// instead the binding name maps to the (already-inlined) chain expr, and
+    /// each `it.<adaptor|terminal>(..)` use substitutes the chain as the
+    /// receiver so the existing fused terminals handle it. Not scope-tracked —
+    /// a later same-named binding overwrites; a non-iterator `let` never
+    /// registers here.
+    pub(crate) iter_let_bindings: HashMap<String, Expr>,
     /// Per-channel-op MethodCall → element `TypeExpr` side-table — populated
     /// from `Program.channel_elem_types`. Key: `(span.offset, span.length)`
     /// of the `Sender.send` / `Receiver.recv` / `Receiver.try_recv`
@@ -2415,6 +2424,10 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch arm — `String` and `Vec[u8]` are indistinguishable from
     /// the LLVM value alone, so the span-set is what tells them apart.
     pub(crate) string_typed_exprs: HashSet<(usize, usize)>,
+    /// Spans of every `Iterator[..]`-typed expression (from
+    /// `Program.iterator_typed_exprs`) — the sound gate for materializing an
+    /// iterator-let binding (B-2026-07-11-19).
+    pub(crate) iterator_typed_exprs: HashSet<(usize, usize)>,
     /// Per-expression `Fn(..)` / `OnceFn(..)` signature (as a `FnType`
     /// TypeExpr), from `Program.fn_value_typed_exprs` (lowering pass, from
     /// `TypeCheckResult.expr_types`). Keyed by the expression's
@@ -5954,6 +5967,7 @@ impl<'ctx> Codegen<'ctx> {
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
             iter_terminal_elem_types: HashMap::new(),
+            iter_let_bindings: HashMap::new(),
             channel_elem_types: HashMap::new(),
             stats_elem_types: HashMap::new(),
             gpu_dispatch_wgsl: HashMap::new(),
@@ -5963,6 +5977,7 @@ impl<'ctx> Codegen<'ctx> {
             display_option_result_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             string_typed_exprs: HashSet::new(),
+            iterator_typed_exprs: HashSet::new(),
             fn_value_typed_exprs: HashMap::new(),
             call_type_subs: HashMap::new(),
             call_type_subs_mangle: HashMap::new(),
@@ -6951,6 +6966,7 @@ impl<'ctx> Codegen<'ctx> {
         // LLVM struct shape is identical to `Vec[u8]` and a few other
         // 3-word types, so the value alone can't distinguish them.
         self.string_typed_exprs = program.string_typed_exprs.clone();
+        self.iterator_typed_exprs = program.iterator_typed_exprs.clone();
         self.fn_value_typed_exprs = program.fn_value_typed_exprs.clone();
         // Per-generic-call-site resolved type-arg substitution — lets
         // `compile_generic_call` bind container element type params the

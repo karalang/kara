@@ -1669,15 +1669,24 @@ impl<'ctx> super::Codegen<'ctx> {
             StmtKind::Let {
                 pattern, value, ty, ..
             } => {
-                // Borrow-returning call bound to a name (`let n = name_of(u)`
-                // where `name_of -> ref T`): the RHS evaluates to a `ptr`
-                // (the borrow's address), not a value. Bind it as a
-                // ref-local — store the ptr, register it in `ref_params` so
-                // every use derefs (symmetric to a `ref` parameter), and
-                // queue NO heap cleanup (a borrow owns nothing; freeing it
-                // would double-free the source). Caller half of
-                // B-2026-06-07-5. Sits ahead of the value-oriented Vec/String
-                // tracking below, which would mis-handle the raw pointer.
+                // Materialized iterator binding (B-2026-07-11-19): `let it =
+                // <iter-chain>` where the RHS is a fusable iterator chain
+                // (`v.iter()...`, a range) — codegen has no runtime iterator
+                // value, so instead of compiling the RHS (which fails at the
+                // bare `.iter()`), record the (recursively-inlined) chain expr
+                // for the binding name and skip. Each later `it.<adaptor|
+                // terminal>(..)` inlines it via `substitute_iter_let_receiver`.
+                // The RHS is first substituted so a chained `let it2 = it.map(f)`
+                // records `v.iter().map(f)`.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    let inlined = self
+                        .substitute_iter_let_receiver(value)
+                        .unwrap_or_else(|| value.clone());
+                    if self.is_materializable_iter_chain(&inlined) {
+                        self.iter_let_bindings.insert(var_name.clone(), inlined);
+                        return Ok(());
+                    }
+                }
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     // Shared-ownership inc-on-copy (B-2026-06-22-2): `let g = f`
                     // where `f` is a heap-env closure binding. Both owners share

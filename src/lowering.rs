@@ -247,6 +247,18 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             }
         })
         .collect();
+    // Spans of every `Iterator[..]`-typed expression — the sound gate for
+    // materialized iterator-let inlining (B-2026-07-11-19): codegen only
+    // inlines a `let it = <chain>` when the RHS is genuinely `Iterator`-typed,
+    // so an `.iter()` returning a real collection (`Column.iter()`) is skipped.
+    program.iterator_typed_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Named { name, .. } if name == "Iterator" => Some((k.0, k.1)),
+            _ => None,
+        })
+        .collect();
     // For every `Fn(..)` / `OnceFn(..)`-typed expression, record its `FnType`
     // TypeExpr so codegen can recover a first-class fn value's signature from
     // the expression alone — e.g. an un-annotated `let g = h.f;` reading a

@@ -85,6 +85,16 @@ impl<'ctx> super::Codegen<'ctx> {
         iterable: &Expr,
         body: &Block,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Materialized iterator binding (B-2026-07-11-19): `for x in it` where
+        // `it` was bound by a recorded `let it = <v.iter()-chain>` — inline the
+        // chain as the iterable (`for x in v.iter()...`) so the existing
+        // `.iter()` / fused-adaptor for-loop paths handle it.
+        if !self.iter_let_bindings.is_empty() {
+            if let Some(sub) = self.substitute_iter_let_receiver(iterable) {
+                return self.compile_for(label, pattern, &sub, body);
+            }
+        }
+
         // `for x in coll.iter()` / `for x in coll.into_iter()` —
         // codegen iterates the underlying storage directly via the
         // existing `compile_for_*_var` paths (no `Value::Iterator`
