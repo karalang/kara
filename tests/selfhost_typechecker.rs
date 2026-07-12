@@ -229,6 +229,19 @@ const CORPUS: &[&str] = &[
     "enum Color { Red, Green, Blue }\nfn f(c: Color) -> i64 { let y = c; y }",
     "enum Color { Red, Green, Blue }\nfn f(c: Color) -> bool { c }",
     "enum Color { Red, Green, Blue }\nstruct P { x: i64 }\nfn f(c: Color) -> P { c }",
+    // ── Slice 11: MissingField ──
+    // A declared field absent from a struct literal is MissingField at the
+    // literal span, one per absent field in DECLARATION order — and the seed
+    // (matched here) IGNORES the spread, so `..b` does not suppress it. The
+    // full field-check order is missing → extra → value (all three below).
+    "struct P { x: i64, y: i64 }\nfn f() -> P { P { x: 1 } }",
+    "struct P { x: i64, y: i64 }\nfn f() -> P { P { x: 1, y: 2 } }",
+    "struct P { x: i64, y: i64 }\nfn f(b: P) -> P { P { x: 1, ..b } }",
+    "struct P { x: i64, y: i64 }\nfn f(b: P) -> P { P { ..b } }",
+    "struct P { x: i64 }\nfn f() -> P { P { } }",
+    "struct P { x: i64, y: i64, z: i64 }\nfn f() -> P { P { x: 1 } }",
+    // Ordering lock: missing (decl order) → extra → value mismatch.
+    "struct P { x: i64, y: i64 }\nfn f() -> P { P { x: true, z: 3 } }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
@@ -269,6 +282,7 @@ fn rust_render(src: &str) -> String {
             "UndefinedField" => "undef-field",
             "ExtraField" => "extra-field",
             "NonExhaustiveMatch" => "non-exhaustive",
+            "MissingField" => "missing-field",
             other => panic!(
                 "corpus entry {src:?} produced an out-of-Slice-1 type-error kind {other} \
                  (message: {}); trim the corpus or extend the slice",

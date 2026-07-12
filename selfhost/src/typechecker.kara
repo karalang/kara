@@ -116,8 +116,9 @@ struct ExprInfo {
 }
 
 // A type error: `kind` is 0=TypeMismatch, 1=ConditionNotBool, 2=UndefinedField,
-// 3=ExtraField, 5=NonExhaustiveMatch; `off`/`len` are the byte span. Mirrors the
-// resolver's `ResolveError` shape so the oracle renders both identically.
+// 3=ExtraField, 5=NonExhaustiveMatch, 6=MissingField; `off`/`len` are the byte
+// span. Mirrors the resolver's `ResolveError` shape so the oracle renders both
+// identically.
 pub struct TypeError {
     kind: i64,
     off: i64,
@@ -439,6 +440,26 @@ impl Checker {
         }
     }
 
+    // The GLOBAL index (into `fld_*`) of struct `struct_idx`'s field `fname`, or
+    // -1 if the struct has no such field. Lets the struct-literal walk record
+    // which declared fields were provided as i64 indices — so `fname` is only
+    // ever borrowed, never moved into a `Vec` (moving a ref-borrowed String out
+    // of a consumed struct element into a Vec double-frees under codegen).
+    fn field_index(ref self, struct_idx: i64, fname: ref String) -> i64 {
+        let mut i = 0;
+        loop {
+            if i >= self.fld_owner.len() {
+                return -1;
+            }
+            if self.fld_owner[i] == struct_idx {
+                if self.fld_names[i] == fname {
+                    return i;
+                }
+            }
+            i = i + 1;
+        }
+    }
+
     // The category of struct `struct_idx`'s field `fname`, or UNKNOWN (4) if the
     // struct has no such field.
     fn field_cat(ref self, struct_idx: i64, fname: ref String) -> i64 {
@@ -714,42 +735,7 @@ impl Checker {
                 }
                 ExprInfo { category: rc, span: span }
             }
-            StructLit(n) => {
-                // Check each field VALUE against its declared field category
-                // (mismatch at the value span); the literal's own category is the
-                // struct type (`STRUCT_BASE + index`) so `p.x` on it can resolve.
-                let StructLitExpr { name, fields, spread, span } = n;
-                let sid = self.struct_id_of(name);
-                for f in fields {
-                    let StructLitField { name: fname, value, shorthand, span: fsp } = f;
-                    let vi = self.check_expr(value);
-                    if sid >= 0 {
-                        if not self.has_field(sid, fname) {
-                            // A field name not declared by the struct — ExtraField
-                            // (kind 3) at the whole `name: value` span (Slice 7).
-                            self.push_err(3, fsp.offset, fsp.length);
-                        } else {
-                            let fc = self.field_cat(sid, fname);
-                            if fc != 4 and vi.category != 4 {
-                                if not cats_compatible(fc, vi.category) {
-                                    self.push_err(0, vi.span.offset, vi.span.length);
-                                }
-                            }
-                        }
-                    }
-                }
-                match spread {
-                    Some(sv) => {
-                        let svi = self.check_expr(sv);
-                    }
-                    None => {}
-                }
-                let mut cat = 4;
-                if sid >= 0 {
-                    cat = 1000 + sid;
-                }
-                ExprInfo { category: cat, span: span }
-            }
+            StructLit(n) => self.check_struct_lit(n),
             Field(n) => {
                 // `obj.field`: resolve the object's struct type, then the field's
                 // category. The FieldAccessExpr span is the object span (length of
@@ -909,6 +895,106 @@ impl Checker {
             }
             _ => ExprInfo { category: 4, span: zero_span() },
         }
+    }
+
+    // Struct-literal check (Slices 6/7/11), extracted to its own method: the
+    // `check_expr` match is enormous and all arms' locals share one stack frame,
+    // so the field buffers below overflow it when inlined (memory corruption).
+    // A dedicated method gets a fresh, small frame. Diagnostics are emitted in
+    // the seed's order — missing (declaration order, at the literal span) →
+    // extra (literal order) → value mismatch (literal order) — by buffering the
+    // provided declared-field INDICES (`hit`) and the deferred extra/value spans
+    // during ONE consuming pass, then emitting after. `fname` is only borrowed
+    // (moving it into a Vec double-frees), and `fields` cannot be scanned by
+    // borrow before the consume (a `ref Vec` plain-struct element read
+    // double-frees), which is why the walk records i64 indices/spans only.
+    fn check_struct_lit(mut ref self, n: StructLitExpr) -> ExprInfo {
+        let StructLitExpr { name, fields, spread, span } = n;
+        let sid = self.struct_id_of(name);
+        let mut hit: Vec[i64] = Vec.new();
+        let mut extra_off: Vec[i64] = Vec.new();
+        let mut extra_len: Vec[i64] = Vec.new();
+        let mut vbad_off: Vec[i64] = Vec.new();
+        let mut vbad_len: Vec[i64] = Vec.new();
+        for f in fields {
+            let StructLitField { name: fname, value, shorthand, span: fsp } = f;
+            let vi = self.check_expr(value);
+            if sid >= 0 {
+                let di = self.field_index(sid, fname);
+                if di >= 0 {
+                    hit.push(di);
+                    let fc = self.fld_cats[di];
+                    if fc != 4 and vi.category != 4 {
+                        if not cats_compatible(fc, vi.category) {
+                            vbad_off.push(vi.span.offset);
+                            vbad_len.push(vi.span.length);
+                        }
+                    }
+                } else {
+                    extra_off.push(fsp.offset);
+                    extra_len.push(fsp.length);
+                }
+            }
+        }
+        // Pass 1 — MissingField (kind 6): each declared field of the struct NOT
+        // hit by a provided field, in DECLARATION order, at the literal span. The
+        // spread is NOT consulted (the seed flags a field missing even under
+        // `..b`).
+        if sid >= 0 {
+            let mut i = 0;
+            loop {
+                if i >= self.fld_owner.len() {
+                    break;
+                }
+                if self.fld_owner[i] == sid {
+                    let mut present = false;
+                    let mut j = 0;
+                    loop {
+                        if j >= hit.len() {
+                            break;
+                        }
+                        if hit[j] == i {
+                            present = true;
+                        }
+                        j = j + 1;
+                    }
+                    if not present {
+                        self.push_err(6, span.offset, span.length);
+                    }
+                }
+                i = i + 1;
+            }
+        }
+        // Pass 2 — ExtraField (kind 3), then pass 3 — value mismatch (kind 0),
+        // both in literal order: the seed emits all extras before any value
+        // mismatch.
+        let mut e = 0;
+        loop {
+            if e >= extra_off.len() {
+                break;
+            }
+            self.push_err(3, extra_off[e], extra_len[e]);
+            e = e + 1;
+        }
+        let mut v = 0;
+        loop {
+            if v >= vbad_off.len() {
+                break;
+            }
+            self.push_err(0, vbad_off[v], vbad_len[v]);
+            v = v + 1;
+        }
+        match spread {
+            Some(sv) => {
+                let svi = self.check_expr(sv);
+            }
+            None => {}
+        }
+        let mut cat = 4;
+        if sid >= 0 {
+            cat = 1000 + sid;
+        }
+        ExprInfo { category: cat, span: span }
     }
 
     // Classify one (non-`OrPat`) `match` arm pattern for exhaustiveness (Slice
@@ -1166,7 +1252,10 @@ fn kind_tag(kind: i64) -> String {
     if kind == 3 {
         return "extra-field".to_string();
     }
-    "non-exhaustive".to_string()
+    if kind == 5 {
+        return "non-exhaustive".to_string();
+    }
+    "missing-field".to_string()
 }
 
 pub fn render_errors(errs: Vec[TypeError]) -> String {

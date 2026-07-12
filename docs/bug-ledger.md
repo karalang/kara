@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **389 surfaced · 8 open · 378 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **390 surfaced · 9 open · 378 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -103,6 +103,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **389 surfaced 
 | B-2026-07-12-3 | 2026-07-12 | codegen | high | Assignment through a `mut ref Option[shared]` parameter does not write back to the caller on codegen (interpreter correct) — silent wrong result, SIGSEGV downstream | kata #99 |
 | B-2026-07-12-4 | 2026-07-12 | codegen | medium | Pushing a FIELD-READ `Option[shared]` (`stack.push(n.left)`) onto a `Vec[Option[shared]]` and dropping the Vec with residual elements LEAKS the pushed handles; a fresh `Some(..)` push is clean | kata #100 |
 | B-2026-07-12-6 | 2026-07-12 | typecheck | medium | Inside a GENERIC method (`impl[T] Box[T]`), the result of `self.items.pop()` on a `Vec[T]` FIELD is INFERRED as `Option[Option[T]]` (one extra Option layer) when it flows into a position without a pushed expected type — a `Some(...)` argument or an un-annotated `let`. The DIRECT tail return (`fn take(mut ref self)->Option[T]{self.items.pop()}`) checks fine (the expected `Option[T]` unifies it away), and the non-generic `Vec[i64]` sibling infers `Option[i64]` correctly. So `fn pop(mut ref self)->Option[T]{ if .. {return None;} Some(self.items.pop()) }` is rejected: `expected Option<T>, found Option<Option<Option<T>>>` (the double-nested infer + the outer Some = triple). | minimal repros below; loud (a type error, not a silent miscompile). Discriminators isolate it to a generic METHOD + `.pop()` on a `Vec[T]` FIELD whose result flows into an inferring (non-checking) position. |
+| B-2026-07-12-6 | 2026-07-12 | codegen | medium | A match ARM inside a very large recursive match-method that declares ~4+ heap-typed (Vec) locals corrupts memory (segfault / double-free / spurious vec-index-out-of-bounds); moving the arm body into its own method is clean | phase-12 self-hosting |
 
 ### Fixed (378)
 
