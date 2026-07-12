@@ -1094,6 +1094,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(span) = self.func_tail_heap_closure_span(func) {
             self.current_fn_heap_closure_spans.insert(span);
         }
+        // B-2026-07-12-24 (residual): value-spans of `let` bindings whose name
+        // never escapes (used only as a `match` scrutinee, or unused). A
+        // `Result[shared]` such binding can safely take a scope-exit RcDecOption
+        // (`track_rc_result_var`) — see the field doc + `crate::result_escape`.
+        self.result_shared_nonescaping_let_spans =
+            crate::result_escape::nonescaping_let_value_spans(func);
         self.heap_env_closure_vars.clear();
         self.heap_env_owner_fields.clear();
         self.heap_env_tuple_owners.clear();

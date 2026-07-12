@@ -3641,45 +3641,50 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
-                // B-2026-07-12-24: `Result[shared T, E]` scope-exit rc release
-                // for the SYNTHETIC match-scrutinee temporaries the B-21/B-23
-                // lowering rewrite emits (`__karac_msc_*`). The Option path above
-                // (`track_rc_option_var` → RcDecOption) has no Result sibling, so
-                // a `Result[shared]` value that owns a +1 (a call return, a
-                // `v[i]` deep-clone) was never released — the direct `match
-                // take()` / `match v[i]` on a shared-bearing Result leaked the
-                // payload node once per match (the rewrite routes both through
-                // `{ let __karac_msc_… : Result[..] = <expr>; match __karac_msc_…
-                // }`, and that let-bound scrutinee had no rc cleanup).
-                // `track_rc_result_var` reuses the tag-parameterized RcDecOption
-                // action (Ok/Err tag), and self-gates to `Result[shared]`.
+                // B-2026-07-12-24: `Result[shared T, E]` scope-exit rc release.
+                // The Option path above (`track_rc_option_var` → RcDecOption)
+                // has no Result sibling, so a `Result[shared]` value that owns a
+                // +1 (a call return, a `v[i]` deep-clone, a fresh `Ok`/`Err`)
+                // was never released — the seeded generic `Result` layout carries
+                // all-`None` drop-kinds. `track_rc_result_var` reuses the
+                // tag-parameterized RcDecOption action (Ok/Err tag) and
+                // self-gates to `Result[shared]`.
                 //
-                // Scoped to the synthetic `__karac_msc_*` scrutinee bindings on
-                // purpose: they are consumed IN PLACE by the immediately
-                // following `match` and never escape (never returned, pushed
-                // into a collection, or passed to a consuming call), so a
-                // scope-exit dec can never double-free. A USER `let d:
-                // Result[shared] = …` CAN be moved out, and Result has no
+                // Registered ONLY for bindings that are consumed IN PLACE and
+                // never escape:
+                //   - the synthetic `__karac_msc_*` scrutinee the B-21/B-23
+                //     lowering rewrite emits for a direct `match take()` /
+                //     `match v[i]`; and
+                //   - a USER `let d = …` whose name is used solely as a `match`
+                //     scrutinee (or is unused), per the conservative escape
+                //     analysis in `crate::result_escape` (recorded per function
+                //     in `result_shared_nonescaping_let_spans`).
+                // A binding that ESCAPES — returned, pushed into a collection,
+                // passed to a consuming call, stored in a struct/tuple, captured
+                // by a closure, or reassigned — is NOT registered: Result has no
                 // move-out coordination (the `var_option_shared_heap`-keyed
-                // tail-return inc / consuming-arg / collection-insert / explicit-
-                // return machinery is Option-only), so registering a dec for a
-                // user binding would turn today's leak into a DOUBLE-FREE
-                // (verified: `return d`, `v.push(d)` both crash). Those user
-                // bindings stay leaking — a documented residual of B-24 needing
-                // the full Result move-out coordination as a follow-up.
-                // `shared_option_info.is_none()` keeps Option and Result
-                // mutually exclusive.
+                // tail-return inc / consuming-arg / collection-insert machinery
+                // is Option-only), so a producer-side dec there would turn the
+                // leak into a DOUBLE-FREE (verified: `return d`, `v.push(d)`
+                // crash under full registration). Escaping user bindings stay
+                // leaking — the documented B-24 residual. The `owned_rhs` gate
+                // additionally excludes an identifier alias / borrow RHS (a
+                // second dec against the same node). `shared_option_info.is_none()`
+                // keeps Option and Result mutually exclusive.
                 if shared_option_info.is_none() {
                     if let PatternKind::Binding(var_name) = &pattern.kind {
-                        if var_name.starts_with("__karac_msc_") {
+                        let value_key = (value.span.offset, value.span.length);
+                        let consumed_in_place = var_name.starts_with("__karac_msc_")
+                            || self
+                                .result_shared_nonescaping_let_spans
+                                .contains(&value_key);
+                        if consumed_in_place {
                             let owned_rhs = matches!(value.kind, ExprKind::Index { .. })
                                 || self.rhs_is_fresh_inline_enum(value);
                             if owned_rhs {
-                                let res_te = ty.clone().or_else(|| {
-                                    self.enum_inst_type_exprs
-                                        .get(&(value.span.offset, value.span.length))
-                                        .cloned()
-                                });
+                                let res_te = ty
+                                    .clone()
+                                    .or_else(|| self.enum_inst_type_exprs.get(&value_key).cloned());
                                 if let Some(te) = res_te {
                                     if let Some(slot) =
                                         self.variables.get(var_name.as_str()).copied()

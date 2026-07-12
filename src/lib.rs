@@ -101,6 +101,7 @@ pub mod registry_proxy;
 pub mod repl;
 pub mod resolver;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod result_escape;
 pub mod scaffold;
 pub mod simd_report;
 pub mod span_visitor;

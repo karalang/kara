@@ -3748,6 +3748,53 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_closure_captured_result_shared_correct() {
+        // B-2026-07-12-24 (residual) closure-capture correctness pin. A
+        // `Result[shared]` binding captured by a closure that only `match`es it
+        // inside must NOT be given a producer-side dec (that would use-after-free
+        // the closure's env — the escape analysis treats a capture as escaping).
+        // A mis-classification would dec the node at `caller` exit while the
+        // closure still holds it → a corrupt read or crash. This pins the value
+        // stays correct (the leak-vs-clean gate is intentionally omitted: a
+        // captured binding is a documented residual leak, never a UAF).
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[Node, i64] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => Err(1),
+        Some(n) => Ok(n),
+    }
+}
+fn caller() -> i64 {
+    let d = take();
+    let c = || {
+        match d {
+            Err(e) => e,
+            Ok(n) => n.val,
+        }
+    };
+    c()
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + caller();
+        i = i + 1;
+    }
+    println(t);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1400");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_set_get_is_set_lifecycle() {
         // `OnceLock[i64]` write-once lifecycle under `karac build`/JIT (was
         // interpreter-only). Empty → `is_set() == false`, `get() == None`;

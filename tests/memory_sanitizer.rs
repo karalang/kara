@@ -690,6 +690,92 @@ fn main() {
     }
 
     #[test]
+    fn asan_let_bound_match_result_shared_no_leak() {
+        // B-2026-07-12-24 (residual, escape-gated): a USER `let d = take(); match
+        // d { … }` — the idiomatic bind-then-match, `d` consumed in place — used
+        // to leak (only the synthetic direct-`match` scrutinee was released). The
+        // conservative escape analysis (`crate::result_escape`) recognizes `d` as
+        // non-escaping (used solely as a match scrutinee) and `track_rc_result_var`
+        // releases it. Looped 200x; prints 1400.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[Node, i64] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => Err(1),
+        Some(n) => Ok(n),
+    }
+}
+fn caller() -> i64 {
+    let d = take();
+    match d {
+        Err(e) => e,
+        Ok(n) => n.val,
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + caller();
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["1400"],
+            "let_bound_match_result_shared_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_escaping_result_shared_binding_no_double_free() {
+        // B-2026-07-12-24 (residual) safety guard: a USER `Result[shared]` binding
+        // that ESCAPES must NOT be given a producer-side dec (that would
+        // double-free). Here `d` is returned whole (`relay` → `d`) and reaches a
+        // consumer (`match relay()`) that releases it — the escape analysis leaves
+        // `d` unregistered, so exactly one release happens: no leak, no
+        // double-free / use-after-free. A mis-classification would crash under
+        // ASAN or corrupt the value; this pins clean + correct (1400).
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Result[Node, i64] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => Err(1),
+        Some(n) => Ok(n),
+    }
+}
+fn relay() -> Result[Node, i64] {
+    let d = take();
+    d
+}
+fn caller() -> i64 {
+    match relay() {
+        Err(e) => e,
+        Ok(n) => n.val,
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + caller();
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["1400"],
+            "escaping_result_shared_binding_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_return_owned_heap_struct_param_no_leak() {
         // B-2026-07-08-6 (non-generic leg, FIXED) — a fn that returns an owned
         // heap-owning STRUCT param used to leak the arg buffer: the caller's

@@ -1574,6 +1574,18 @@ pub(super) struct Codegen<'ctx> {
     /// per function (`compile_function`) from the same return-position analysis
     /// as the Slice 0 guard.
     pub(crate) current_fn_heap_closure_spans: std::collections::HashSet<(usize, usize)>,
+    /// B-2026-07-12-24 (residual): value-spans (offset,length) of `let`
+    /// bindings in the CURRENTLY-compiled function whose binding name NEVER
+    /// ESCAPES — every use is a direct `match` scrutinee, or the binding is
+    /// unused. For a `Result[shared]` such binding it is safe to register a
+    /// scope-exit `RcDecOption` (via `track_rc_result_var`): a non-escaping
+    /// binding is consumed in place and never handed to another owner, so the
+    /// dec can never double-free. Recomputed per function in `compile_function`
+    /// by `crate::result_escape::nonescaping_let_value_spans` (a compiler-
+    /// exhaustive AST walk — a new AST node breaks its build rather than
+    /// silently missing a move-out). Escaping user bindings stay leaking (the
+    /// documented residual) rather than risk a double-free.
+    pub(crate) result_shared_nonescaping_let_spans: std::collections::HashSet<(usize, usize)>,
     /// Names of functions whose return value is a heap-env closure (their direct
     /// tail / `return` is an escaping capturing closure literal). A
     /// `let f = <call to such a fn>` binding therefore owns a heap env and gets
@@ -5897,6 +5909,7 @@ impl<'ctx> Codegen<'ctx> {
             indexed_elem_counter: 0,
             closure_fn_types: HashMap::new(),
             current_fn_heap_closure_spans: std::collections::HashSet::new(),
+            result_shared_nonescaping_let_spans: std::collections::HashSet::new(),
             fns_returning_heap_env: std::collections::HashSet::new(),
             heap_env_closure_vars: std::collections::HashSet::new(),
             curry_closure_vars: std::collections::HashSet::new(),
