@@ -27,7 +27,7 @@ use crate::ast::*;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
-use super::inference::resolve_type_vars;
+use super::inference::{resolve_type_var_top, resolve_type_vars};
 use super::types::{
     is_integer, is_numeric, is_prelude_type_or_module_name, is_string_concat_operand,
     strip_refinement, type_display, types_compatible, ConstArg, DimArg, Type, UIntSize,
@@ -1331,6 +1331,42 @@ impl<'a> super::TypeChecker<'a> {
         if left_ty == Type::Error || right_ty == Type::Error {
             return Type::Error;
         }
+
+        // Pull-side closure-param inference (B-2026-07-12-10). A let-bound
+        // closure with an un-annotated numeric param (`let f = |x| x + 1`) types
+        // `x` as a fresh inference var; nothing else solves it, so without this
+        // the arithmetic below rejects `?T0` as non-numeric. When exactly one
+        // arithmetic operand resolves to an unsolved inference var and the other
+        // to a concrete numeric type (here `1: i64`), solve the var to that type
+        // — the closure then types as `Fn(i64) -> i64` and the later call
+        // `f(5)` checks cleanly. This is the pull-side complement of the working
+        // push-side case (`xs.iter().map(|x| x + 1)`, where the element type is
+        // already concrete). After solving, re-resolve both operands so the
+        // checks below see the concrete types. `resolve_type_var_top` is the
+        // identity on a non-var / unsolved-var type, so nothing else is
+        // affected.
+        let (left_ty, right_ty) = if matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+        ) {
+            let lr = resolve_type_var_top(&left_ty, &self.env.substitutions);
+            let rr = resolve_type_var_top(&right_ty, &self.env.substitutions);
+            match (&lr, &rr) {
+                (Type::TypeVar(id), other) if is_numeric(other) => {
+                    self.env.substitutions.insert(*id, other.clone());
+                }
+                (other, Type::TypeVar(id)) if is_numeric(other) => {
+                    self.env.substitutions.insert(*id, other.clone());
+                }
+                _ => {}
+            }
+            (
+                resolve_type_var_top(&left_ty, &self.env.substitutions),
+                resolve_type_var_top(&right_ty, &self.env.substitutions),
+            )
+        } else {
+            (left_ty, right_ty)
+        };
 
         // Element-wise tensor arithmetic on `Tensor[T, Shape]` (design.md
         // § Numerical Types — "Tensor-tensor requires exact shape match";

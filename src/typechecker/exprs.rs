@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use super::env::{FunctionSig, ImplInfo};
 use super::inference::{
     const_value_from_literal, instantiate_signature_with_fresh_vars, resolve_const_arg,
-    resolve_type_vars, substitute_const_idents_in_expr, substitute_type_params, unify_types,
-    InstantiatedSignature,
+    resolve_type_var_top, resolve_type_vars, substitute_const_idents_in_expr,
+    substitute_type_params, unify_types, InstantiatedSignature,
 };
 use super::types::{
     contains_type_param, impl_args_match, impl_table_key, int_coercion_is_widening, is_integer,
@@ -3078,6 +3078,16 @@ impl<'a> super::TypeChecker<'a> {
                 let body_ty = self.infer_expr(body);
                 self.local_scope.pop();
                 self.break_value_types = saved_break_values;
+                // Resolve any closure param inference vars the body solved
+                // (pull-side inference, B-2026-07-12-10) so the closure's
+                // `Function` type carries the concrete param type — `Fn(i64) ->
+                // i64` for `|x| x + 1`, not an unsolved `?T0`. Identity for
+                // annotated params and for the push-side case (already concrete).
+                let param_types: Vec<Type> = param_types
+                    .iter()
+                    .map(|t| resolve_type_var_top(t, &self.env.substitutions))
+                    .collect();
+                let body_ty = resolve_type_var_top(&body_ty, &self.env.substitutions);
                 self.closure_type_with_capture_inference(
                     &expr.span,
                     *capture_mode,

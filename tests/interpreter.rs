@@ -1873,6 +1873,25 @@ fn test_closure_basic() {
 }
 
 #[test]
+fn test_closure_unannotated_param_inferred_from_arith_body() {
+    // B-2026-07-12-10: a let-bound closure with an un-annotated numeric param
+    // infers it from the arithmetic body — `|x| x + 1` → `Fn(i64) -> i64` —
+    // with no annotation and no pushed context. Runs on both backends (build ==
+    // run: the closure's `Function` type carries the solved `i64`).
+    assert_eq!(
+        run("fn main() {\n\
+             let f = |x| x + 1;\n\
+             println(f(5));\n\
+             let g = |x| x * 2;\n\
+             println(g(10));\n\
+             let h = |y| y + 1.5;\n\
+             println(h(2.0));\n\
+         }"),
+        "6\n20\n3.5\n"
+    );
+}
+
+#[test]
 fn test_closure_captures() {
     assert_eq!(
         run("fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\

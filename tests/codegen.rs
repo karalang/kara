@@ -7846,6 +7846,26 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_closure_unannotated_param_inferred_from_body() {
+        // B-2026-07-12-10: a let-bound closure with an un-annotated numeric
+        // param inferred from its arithmetic body (`|x| x + 1` -> Fn(i64) ->
+        // i64). build == run — the closure's Function type carries the solved
+        // `i64`, so codegen lays out the param at the right width.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let f = |x| x + 1;\n\
+                 println(f(5));\n\
+                 let g = |x| x * 2;\n\
+                 println(g(10));\n\
+                 let h = |y| y + 1.5;\n\
+                 println(h(2.0));\n\
+             }",
+        ) {
+            assert_eq!(out, "6\n20\n3.5\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_index_vec_field_through_self() {
         // Regression for the self-hosting lexer index blocker: indexing a
         // `Vec` field through the `self` receiver (`self.bytes[self.current]`)

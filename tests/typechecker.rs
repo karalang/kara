@@ -3329,6 +3329,24 @@ fn test_closure_types() {
 // closure body with fresh vars in place of the expected param types.
 
 #[test]
+fn test_closure_pullside_param_inferred_from_arith_body() {
+    // B-2026-07-12-10: a let-bound closure with an UN-annotated numeric param
+    // and NO pushed `Fn(..)` type infers the param from its arithmetic body
+    // (the pull side of the pushdown case above). `|x| x + 1` types as
+    // `Fn(i64) -> i64`, so the later `f(5)` checks cleanly; a float body infers
+    // `f64`. Pre-fix the param stayed an unsolved `?T0` and both the body and
+    // the call were rejected.
+    typecheck_ok(
+        "fn main() {\n\
+             let f = |x| x + 1;\n\
+             let _a: i64 = f(5);\n\
+             let g = |y| y * 2.0;\n\
+             let _b: f64 = g(1.5);\n\
+         }",
+    );
+}
+
+#[test]
 fn test_closure_pushdown_unannotated_params() {
     // Closure params have no type annotation; expected `Fn(i64) -> i64`
     // pushdown gives `x` type `i64`, so `x + 1` resolves to `i64`.
