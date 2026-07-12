@@ -138,6 +138,12 @@ struct Checker {
     binds: Vec[TypeBind],
     parents: Vec[i64],
     current: i64,
+    // Top-level function-signature table (Slice 5): parallel vecs of every
+    // free function's name and its declared-return category. Populated by a
+    // COLLECT pass before any body is checked, so a call resolves its callee's
+    // return type regardless of declaration order (forward references).
+    fn_names: Vec[String],
+    fn_rets: Vec[i64],
 }
 
 // ── Entry point ──
@@ -153,19 +159,68 @@ pub fn typecheck_program(items: Vec[Item]) -> Vec[TypeError] with panics {
         binds: Vec.new(),
         parents: Vec.new(),
         current: 0,
+        fn_names: Vec.new(),
+        fn_rets: Vec.new(),
     };
     // Root scope (parent = -1); each function pushes its own child scope.
     c.parents.push(-1);
+    // COLLECT pass (borrows `items`): record every top-level fn's return
+    // category so forward calls resolve, then CHECK pass (consumes `items`).
+    c.collect_sigs(items);
     for it in items {
         c.check_item(it);
     }
-    let Checker { errors, binds, parents, current } = c;
+    let Checker { errors, binds, parents, current, fn_names, fn_rets } = c;
     errors
 }
 
 impl Checker {
     fn push_err(mut ref self, kind: i64, off: i64, len: i64) {
         self.errors.push(TypeError { kind: kind, off: off, len: len });
+    }
+
+    // ── Function-signature collect pass (Slice 5) ──
+    //
+    // Record every top-level fn's (name, return-category). Borrows `items` (a
+    // `ref Vec[Item]`, the only by-ref iteration form) so the CHECK pass can
+    // still consume them. Reading `f.name` / `f.ret` through the `ref Item`
+    // yields owned deep-copies; the `Option[TypeExpr]` is matched INLINE (never
+    // passed by value to a helper — B-2026-07-11-37), threading only the
+    // unwrapped `TypeExpr` to `category_of_type`. A fn with no `-> T` (unit) or a
+    // non-primitive return records UNKNOWN, so calls to it are never checked.
+    fn collect_sigs(mut ref self, items: ref Vec[Item]) {
+        for it in items {
+            match it {
+                Func(f) => {
+                    let mut rc = 4;
+                    match f.ret {
+                        Some(t) => {
+                            rc = category_of_type(t);
+                        }
+                        None => {}
+                    }
+                    self.fn_names.push(f.name);
+                    self.fn_rets.push(rc);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // The declared-return category of the free function `name`, or UNKNOWN (4)
+    // if there is no such top-level function (a local/closure call, a method, or
+    // an unknown callee — none checked in Slice 5).
+    fn lookup_fn_ret(ref self, name: ref String) -> i64 {
+        let mut i = 0;
+        loop {
+            if i >= self.fn_names.len() {
+                return 4;
+            }
+            if self.fn_names[i] == name {
+                return self.fn_rets[i];
+            }
+            i = i + 1;
+        }
     }
 
     // ── Scope / binding environment (Slice 2) ──
@@ -403,6 +458,27 @@ impl Checker {
                 let UnaryExpr { op, operand, span } = n;
                 let oi = self.check_expr(operand);
                 let rc = un_result_cat(op, oi.category);
+                ExprInfo { category: rc, span: span }
+            }
+            Call(n) => {
+                // A bare-name call `g(...)` infers its result from the callee's
+                // declared return category (Slice 5). A non-identifier callee
+                // (method / path / computed) stays UNKNOWN — recurse it for
+                // nested `if`s. Args are always walked. The CallExpr span is the
+                // callee span (no parens), matching the seed's mismatch anchor.
+                let CallExpr { callee, args, span } = n;
+                let mut rc = 4;
+                match callee {
+                    Ident(ie) => {
+                        let IdentExpr { name, span: isp } = ie;
+                        rc = self.lookup_fn_ret(name);
+                    }
+                    _ => {}
+                }
+                for a in args {
+                    let CallArg { label, mut_marker, value, span: asp } = a;
+                    let ai = self.check_expr(value);
+                }
                 ExprInfo { category: rc, span: span }
             }
             Blk(b) => self.check_block(b),

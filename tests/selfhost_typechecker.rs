@@ -122,10 +122,29 @@ const CORPUS: &[&str] = &[
     "fn al_str_ret_bad() -> bool { let s: String = \"a\"; s }",
     // Initializer inferred from a param, checked against the annotation.
     "fn al_from_param(n: i64) { let m: bool = n; if m { } }",
+    // ── Slice 5: call-return typing ──
+    // A bare-name call infers its result from the callee's declared return
+    // category (a COLLECT pass records every fn's return type first, so forward
+    // references work). The mismatch anchors on the callee span (no parens).
+    "fn call_ret_bad() -> bool { g() }\nfn g() -> i64 { 0 }",
+    "fn call_ret_ok() -> i64 { g() }\nfn g() -> i64 { 0 }",
+    "fn call_cond_bad() { if g() { } }\nfn g() -> i64 { 0 }",
+    "fn call_cond_ok() { if g() { } }\nfn g() -> bool { true }",
+    "fn call_str_bad() -> i64 { greet() }\nfn greet() -> String { \"hi\" }",
+    // Call result flows through a `let` binding, then a downstream check.
+    "fn call_via_let() -> i64 { let x = g(); x }\nfn g() -> bool { true }",
+    // Call with arguments; args are walked (a bad arg-internal cond is caught).
+    "fn call_args(n: i64) -> bool { add(n, 1) }\nfn add(a: i64, b: i64) -> i64 { a }",
+    // Forward reference the other way: callee declared BEFORE the caller.
+    "fn g() -> i64 { 0 }\nfn h() -> bool { g() }",
+    // Recursion: a fn calling itself resolves its own signature.
+    "fn fib(n: i64) -> i64 { fib(n) }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
-    // A call result is UNKNOWN (call typing is a later slice); with a matching
-    // declared return the seed is clean, so the carve-out must not false-positive.
-    "fn call_ret_ok() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
+    // A call to a fn whose return matches the declared type is clean.
+    "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
+    // A call to a UNIT-returning fn is UNKNOWN in Slice 5 (unit is not a tracked
+    // category), so it is never checked — the declared return can be anything.
+    "fn unit_call() { noop() }\nfn noop() { }",
     // A non-primitive annotation (`Vec[i64]`) is UNKNOWN — the initializer check
     // is skipped, and the binding stays UNKNOWN (references to it not checked).
     "fn al_unknown_ann() -> i64 { let v: Vec[i64] = mk(); 0 }\nfn mk() -> Vec[i64] { Vec.new() }",
