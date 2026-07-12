@@ -242,6 +242,18 @@ const CORPUS: &[&str] = &[
     "struct P { x: i64, y: i64, z: i64 }\nfn f() -> P { P { x: 1 } }",
     // Ordering lock: missing (decl order) → extra → value mismatch.
     "struct P { x: i64, y: i64 }\nfn f() -> P { P { x: true, z: 3 } }",
+    // ── Slice 12: argument-count check ──
+    // A call to a KNOWN top-level free function with the wrong number of
+    // arguments is WrongNumberOfArgs at the callee span (the `CallExpr.span`,
+    // no parens — same anchor as the call-return mismatch). The correct count is
+    // clean; a method / unknown callee is never checked.
+    "fn g(a: i64, b: i64) -> i64 { a }\nfn f() -> i64 { g(1) }",
+    "fn g(a: i64, b: i64) -> i64 { a }\nfn f() -> i64 { g(1, 2) }",
+    "fn g(a: i64, b: i64) -> i64 { a }\nfn f() -> i64 { g(1, 2, 3) }",
+    "fn g(a: i64) -> i64 { a }\nfn f() -> i64 { g() }",
+    "fn g() -> i64 { 0 }\nfn f() -> i64 { g(1) }",
+    // Correct count with a forward reference (caller before callee) is clean.
+    "fn f() -> i64 { g(1, 2) }\nfn g(a: i64, b: i64) -> i64 { a }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
@@ -283,6 +295,7 @@ fn rust_render(src: &str) -> String {
             "ExtraField" => "extra-field",
             "NonExhaustiveMatch" => "non-exhaustive",
             "MissingField" => "missing-field",
+            "WrongNumberOfArgs" => "wrong-arg-count",
             other => panic!(
                 "corpus entry {src:?} produced an out-of-Slice-1 type-error kind {other} \
                  (message: {}); trim the corpus or extend the slice",

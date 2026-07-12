@@ -159,6 +159,9 @@ struct Checker {
     // return type regardless of declaration order (forward references).
     fn_names: Vec[String],
     fn_rets: Vec[i64],
+    // Parallel to `fn_names`: each free function's VALUE-parameter count (Slice
+    // 12), so a call to a known callee with the wrong argument count is flagged.
+    fn_arity: Vec[i64],
     // Struct-definition tables (Slice 6). `struct_names[i]` is the i-th struct;
     // its type category is `STRUCT_BASE + i` (see `cat_of_type`). Fields live in
     // three parallel vecs keyed by owning struct index — a struct's fields are
@@ -193,6 +196,7 @@ pub fn typecheck_program(items: Vec[Item]) -> Vec[TypeError] with panics {
         current: 0,
         fn_names: Vec.new(),
         fn_rets: Vec.new(),
+        fn_arity: Vec.new(),
         struct_names: Vec.new(),
         fld_owner: Vec.new(),
         fld_names: Vec.new(),
@@ -220,6 +224,7 @@ pub fn typecheck_program(items: Vec[Item]) -> Vec[TypeError] with panics {
         current,
         fn_names,
         fn_rets,
+        fn_arity,
         struct_names,
         fld_owner,
         fld_names,
@@ -294,6 +299,8 @@ impl Checker {
                         None => {}
                     }
                     self.fn_rets.push(rc);
+                    // Value-parameter count for the arg-count check (Slice 12).
+                    self.fn_arity.push(f.params.len());
                 }
                 Enum(e) => {
                     // Register each variant NAME keyed by the owning enum index
@@ -326,6 +333,22 @@ impl Checker {
             }
             if self.fn_names[i] == name {
                 return self.fn_rets[i];
+            }
+            i = i + 1;
+        }
+    }
+
+    // The declared value-parameter count of the free function `name`, or -1 if
+    // there is no such top-level function (a local / method / unknown callee —
+    // none arg-count-checked in Slice 12).
+    fn lookup_fn_arity(ref self, name: ref String) -> i64 {
+        let mut i = 0;
+        loop {
+            if i >= self.fn_names.len() {
+                return -1;
+            }
+            if self.fn_names[i] == name {
+                return self.fn_arity[i];
             }
             i = i + 1;
         }
@@ -721,17 +744,28 @@ impl Checker {
                 // nested `if`s. Args are always walked. The CallExpr span is the
                 // callee span (no parens), matching the seed's mismatch anchor.
                 let CallExpr { callee, args, span } = n;
+                let argc = args.len();
                 let mut rc = 4;
+                let mut expected = -1;
                 match callee {
                     Ident(ie) => {
                         let IdentExpr { name, span: isp } = ie;
                         rc = self.lookup_fn_ret(name);
+                        // Arg-count check (Slice 12): the callee's declared
+                        // value-parameter count, or -1 if it is not a known
+                        // top-level free function (then never checked).
+                        expected = self.lookup_fn_arity(name);
                     }
                     _ => {}
                 }
                 for a in args {
                     let CallArg { label, mut_marker, value, span: asp } = a;
                     let ai = self.check_expr(value);
+                }
+                // A call to a KNOWN callee with the wrong number of arguments is
+                // WrongNumberOfArgs (kind 7) at the callee span, matching the seed.
+                if expected >= 0 and expected != argc {
+                    self.push_err(7, span.offset, span.length);
                 }
                 ExprInfo { category: rc, span: span }
             }
@@ -1255,7 +1289,10 @@ fn kind_tag(kind: i64) -> String {
     if kind == 5 {
         return "non-exhaustive".to_string();
     }
-    "missing-field".to_string()
+    if kind == 6 {
+        return "missing-field".to_string();
+    }
+    "wrong-arg-count".to_string()
 }
 
 pub fn render_errors(errs: Vec[TypeError]) -> String {
