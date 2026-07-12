@@ -7275,6 +7275,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_for_each_terminal() {
+        // B-2026-07-11-19 / -23 — the side-effecting `for_each` terminal on a
+        // fused iterator chain. Desugars to a `for` loop over the peeled base
+        // with the closure body inlined, so a capture-mutating body propagates.
+        // Covers a bare for_each, a map().for_each, a filter().for_each, and a
+        // range for_each. Interp == codegen.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4];\n\
+                 let mut total = 0;\n\
+                 v.iter().for_each(|x| { total = total + x; });\n\
+                 println(f\"{total}\");\n\
+                 v.iter().map(|x| x * 2).for_each(|x| { total = total + x; });\n\
+                 println(f\"{total}\");\n\
+                 let mut ev = 0;\n\
+                 v.iter().filter(|x| x % 2 == 0).for_each(|x| { ev = ev + x; });\n\
+                 println(f\"{ev}\");\n\
+                 let mut rng = 0;\n\
+                 (1..5).for_each(|x| { rng = rng + x; });\n\
+                 println(f\"{rng}\");\n\
+             }",
+        ) {
+            // 10, 30 (10+20), 6 (2+4), 10 (1+2+3+4)
+            assert_eq!(out, "10\n30\n6\n10\n");
+        }
+    }
+
+    #[test]
     fn test_stored_mutating_closure_rejected_in_codegen() {
         // B-2026-07-11-23 — a STORED closure that mutates a captured local is a
         // `mut ref` capture codegen doesn't support (by-value env); it must be

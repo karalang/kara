@@ -227,6 +227,36 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![item.clone()],
                 }
             }
+            "for_each" => {
+                // `for_each(f: Fn(T) -> ()) -> ()` — terminal. Runs `f` for its
+                // side effects on each element and yields unit. The body may
+                // MUTATE a captured local (`for_each(|x| total = total + x)`);
+                // that shape was blocked until `mut ref` closure capture landed
+                // (B-2026-07-11-23). The closure param is seeded from T; the
+                // return is inferred freely (any body type — the result is
+                // discarded) via a fresh type var, exactly like `map`.
+                // B-2026-07-11-19.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Iterator.for_each() expects 1 argument, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Unit;
+                }
+                let f_ty = Type::Function {
+                    params: vec![item.clone()],
+                    return_type: Box::new(Type::TypeParam("__for_each_ret".to_string())),
+                };
+                self.check_expr(&args[0].value, &f_ty);
+                Type::Unit
+            }
             "any" | "all" => {
                 // Short-circuit terminals — `any(pred) -> bool` /
                 // `all(pred) -> bool`. Same predicate signature as
@@ -769,6 +799,7 @@ impl<'a> super::TypeChecker<'a> {
                     "filter",
                     "flat_map",
                     "fold",
+                    "for_each",
                     "inspect",
                     "map",
                     "next",

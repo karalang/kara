@@ -3998,6 +3998,34 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<iter-chain>.for_each(|x| body)` — the side-effecting terminal on a
+        // fused iterator chain (B-2026-07-11-19). Same iterator-chain gate as
+        // `fold`. Desugars to a `for` loop over the peeled base with the closure
+        // body as the loop body — so a capture-mutating body
+        // (`for_each(|x| total = total + x)`) INLINES and propagates correctly
+        // (the same live-outer-access `fold`/`any`/`all` get; it never
+        // constructs a closure value, so the stored-mut-ref-closure refusal in
+        // `compile_closure` does not apply). Yields unit.
+        if method == "for_each"
+            && args.len() == 1
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                if params.len() == 1 {
+                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__fep") {
+                        if let Some(v) =
+                            self.try_compile_iter_chain_for_each(object, &param, body, call_span)?
+                        {
+                            return Ok(v);
+                        }
+                    }
+                }
+            }
+        }
+
         // `<iter-chain>.reduce(|a, x| ..)` — the `Option[A]`-returning fold
         // terminal (B-2026-07-11-19). Typecheck + interpreter support it, but a
         // codegen terminal would have to construct a synthetic `Option[A]`
@@ -6955,6 +6983,92 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
         self.try_compile_iter_chain_fold(recv, &zero, &acc_p, &x_p, &fold_body, call_span)
+    }
+
+    /// Lower `<src>.iter().{map|filter}*.for_each(|x| body)` — the side-effecting
+    /// terminal on a fused iterator chain (B-2026-07-11-19). Desugars to a `for`
+    /// loop over the peeled base whose body binds the closure param to the
+    /// fully-adapted element and runs the closure body for its side effects,
+    /// yielding unit. The body INLINES (no closure value is built), so a
+    /// capture-mutating body propagates just like `fold`/`any`/`all`. Fails
+    /// closed (`Ok(None)` → the loud dispatch error) for a chain shape the shared
+    /// peel rejects.
+    fn try_compile_iter_chain_for_each(
+        &mut self,
+        recv: &Expr,
+        param: &str,
+        body: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some((base, steps)) = Self::peel_fused_map_filter_chain(recv) else {
+            return Ok(None);
+        };
+        let sp = call_span.clone();
+        let elem_name = steps
+            .first()
+            .map(|(_, p, _)| p.clone())
+            .unwrap_or_else(|| param.to_string());
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+
+        // Sink: bind the closure param to the fully-adapted element (elide a
+        // redundant self-bind), then run the closure body as a statement.
+        let sink = |current: Expr| -> Vec<Stmt> {
+            let mut out = Vec::new();
+            let current_is_param = matches!(&current.kind, ExprKind::Identifier(n) if n == param);
+            if !current_is_param {
+                out.push(Stmt {
+                    kind: StmtKind::Let {
+                        is_mut: false,
+                        pattern: Pattern {
+                            kind: PatternKind::Binding(param.to_string()),
+                            span: sp.clone(),
+                        },
+                        ty: None,
+                        value: current,
+                    },
+                    span: sp.clone(),
+                });
+            }
+            out.push(Stmt {
+                kind: StmtKind::Expr(body.clone()),
+                span: sp.clone(),
+            });
+            out
+        };
+        let for_body = Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sp);
+        let for_loop = Expr {
+            kind: ExprKind::For {
+                label: None,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(elem_name),
+                    span: sp.clone(),
+                },
+                iterable: Box::new(base.clone()),
+                attributes: Vec::new(),
+                body: Block {
+                    stmts: for_body,
+                    final_expr: None,
+                    span: sp.clone(),
+                },
+            },
+            span: sp.clone(),
+        };
+        // The terminal yields unit — run the `for` loop as a statement.
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![Stmt {
+                    kind: StmtKind::Expr(for_loop),
+                    span: sp.clone(),
+                }],
+                final_expr: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
     }
 
     /// Lower `<src>.iter().{map|filter}*.any(|x| pred)` / `.all(|x| pred)` — the

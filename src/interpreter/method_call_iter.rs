@@ -633,6 +633,35 @@ impl<'a> super::Interpreter<'a> {
                     });
                 }
             }
+            "for_each" => {
+                // Terminal — `for_each(f)`. Runs `f` for its side effects on each
+                // yielded element and returns unit. A capture-mutating body
+                // (`for_each(|x| total = total + x)`) propagates now that bare
+                // mut-ref closure capture is inferred (B-2026-07-11-23).
+                if matches!(obj, Value::Iterator { .. }) {
+                    if args.len() != 1 {
+                        return Some(self.record_runtime_error(
+                            format!("Iterator.for_each() expects 1 argument, got {}", args.len()),
+                            span,
+                        ));
+                    }
+                    let f = self.eval_expr_inner(&args[0].value);
+                    if !matches!(f, Value::Function { .. }) {
+                        return Some(self.record_runtime_error(
+                            format!("Iterator.for_each() expects a closure; got {}", f),
+                            span,
+                        ));
+                    }
+                    let mut iter_val = obj;
+                    while let Some(item) = self.iterator_step(&mut iter_val) {
+                        self.invoke_function_value(f.clone(), vec![item]);
+                        if self.pending_cf.is_some() {
+                            return Some(Value::Unit);
+                        }
+                    }
+                    return Some(Value::Unit);
+                }
+            }
             "any" | "all" => {
                 // Short-circuit terminals. `any(pred)` returns true the
                 // first time `pred` returns true; `all(pred)` returns

@@ -13233,6 +13233,34 @@ fn main() {
 }
 
 #[test]
+fn test_iter_for_each_terminal() {
+    // B-2026-07-11-19 / -23 — the side-effecting `for_each` terminal, unblocked
+    // by mut-ref closure capture (its natural use mutates a captured
+    // accumulator). Covers a bare for_each, a map().for_each, a
+    // filter().for_each, and a range for_each.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4];
+    let mut total = 0i64;
+    v.iter().for_each(|x: i64| { total = total + x; });
+    println(f"{total}");
+    v.iter().map(|x: i64| x * 2i64).for_each(|x: i64| { total = total + x; });
+    println(f"{total}");
+    let mut ev = 0i64;
+    v.iter().filter(|x: i64| x % 2i64 == 0i64).for_each(|x: i64| { ev = ev + x; });
+    println(f"{ev}");
+    let mut rng = 0i64;
+    (1i64..5i64).for_each(|x: i64| { rng = rng + x; });
+    println(f"{rng}");
+}
+"#,
+    );
+    // 10, 30 (10+20), 6 (2+4), 10 (1+2+3+4)
+    assert_eq!(output, "10\n30\n6\n10\n");
+}
+
+#[test]
 fn test_iter_fold_empty_returns_init_unchanged() {
     let output = run_no_errors(
         r#"
