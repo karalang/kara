@@ -7425,6 +7425,47 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_narrow_int_method_multi_instantiation() {
+        // B-2026-07-12-16 — two coupled generic-monomorphization codegen bugs.
+        // GAP 1: a mono'd generic method with a by-value narrow-int type param
+        // (`fn set[T](v: T)` at `T=i32`) declared an `i32` param but the call
+        // site passed the arg as i64, hard-failing LLVM verification. GAP 2: the
+        // generic field-return deep-clone helper was named + cached by the bare
+        // param (`karac_clone_T`, last-writer-wins), so a later `Box[i32].get`
+        // reused an earlier `Box[i16].get`'s i16-width clone body and truncated
+        // the returned i32 to 16 bits (2000000000 -> 37888). The truncation only
+        // bites when MULTIPLE instantiations coexist. Fix: coerce mono args to
+        // the param widths (GAP 1); resolve the field's generic param through
+        // the active monomorph substitution and gate on the concrete type so a
+        // scalar field skips the clone entirely (GAP 2). Covers narrow+narrow
+        // (i16/i32/i64), a bool, and a heap field (String) that must still
+        // round-trip and stay leak-clean (verified separately under valgrind).
+        if let Some(out) = run_program(
+            "struct Box[T] { v: T }\n\
+             impl[T] Box[T] {\n\
+                 fn new(v: T) -> Box[T] { Box { v: v } }\n\
+                 fn set(mut ref self, v: T) { self.v = v; }\n\
+                 fn get(ref self) -> T { self.v }\n\
+             }\n\
+             fn main() {\n\
+                 let mut a: Box[i16] = Box.new(1);\n\
+                 let mut b: Box[i32] = Box.new(1);\n\
+                 let mut c: Box[i64] = Box.new(1);\n\
+                 a.set(30000); b.set(2000000000); c.set(9000000000);\n\
+                 println(a.get()); println(b.get()); println(c.get());\n\
+                 let mut d: Box[bool] = Box.new(false);\n\
+                 d.set(true);\n\
+                 println(d.get());\n\
+                 let mut s: Box[String] = Box.new(f\"hello\");\n\
+                 s.set(f\"world\");\n\
+                 println(s.get());\n\
+             }",
+        ) {
+            assert_eq!(out, "30000\n2000000000\n9000000000\ntrue\nworld\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_mut_ref_option_shared_writeback() {
         // B-2026-07-12-3 — a reassignment through a `mut ref Option[shared]`
         // parameter (`slot = Some(n)`) did not propagate back to the caller

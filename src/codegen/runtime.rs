@@ -2987,6 +2987,29 @@ impl<'ctx> super::Codegen<'ctx> {
                             })
                             .cloned();
                         if let Some(field_te) = field_te {
+                            // B-2026-07-12-16 gap 2: inside a monomorph the
+                            // field's declared TypeExpr is the bare generic
+                            // param (`Box[T].v` → `T`), and `te_owns_heap_
+                            // below_buffer(T)` is conservatively TRUE for a bare
+                            // param — so this deep-clone fired even for a SCALAR
+                            // field. `emit_clone_fn_for_type_expr(T)` then named
+                            // + cached the helper under the param name
+                            // `karac_clone_T` (last-writer-wins across every
+                            // instantiation), so `Box[i32].get` reused
+                            // `Box[i16].get`'s i16-width clone body and truncated
+                            // the returned i32 to 16 bits (2000000000 → 37888).
+                            // Resolve the param through the active
+                            // `type_subst_names` to the CONCRETE type and gate on
+                            // THAT: a scalar mono field (`i16`/`i32`/`bool`) owns
+                            // no heap → the clone is skipped entirely → the field
+                            // is returned directly at its correct width. A no-op
+                            // outside a monomorph (empty subst). The EMIT below
+                            // still uses the original declared `field_te`, so a
+                            // HEAP field keeps its pre-existing (leak-clean,
+                            // shallow) path byte-for-byte — the generic heap-field
+                            // return-clone is a separate concern out of this
+                            // narrow-int bug's scope.
+                            let field_te_concrete = self.subst_monomorph_type_params(&field_te);
                             // `Option[shared T]` fields are excluded: this
                             // return path ALREADY incs the returned alias
                             // (the ref-rooted FieldAccess arm in
@@ -2996,10 +3019,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             // (`asan_option_shared_method_tail_field_step_
                             // repeat`). The historical shallow handling +
                             // tail-arm inc is the balanced pair.
-                            if self.te_owns_heap_below_buffer(&field_te)
-                                && self.shared_heap_type_for_type_expr(&field_te).is_none()
+                            if self.te_owns_heap_below_buffer(&field_te_concrete)
                                 && self
-                                    .option_inner_shared_type_for_type_expr(&field_te)
+                                    .shared_heap_type_for_type_expr(&field_te_concrete)
+                                    .is_none()
+                                && self
+                                    .option_inner_shared_type_for_type_expr(&field_te_concrete)
                                     .is_none()
                             {
                                 if let Some(fn_val) = self.current_fn {

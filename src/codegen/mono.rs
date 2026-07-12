@@ -1084,6 +1084,19 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .collect::<Result<_, _>>()?;
 
+        // GAP 1 (B-2026-07-12-16): a mono'd generic method with a by-value
+        // narrow-int type param (`fn set[T](v: T)` at `T=i32`) declares an
+        // `i32` param, but Kāra's narrow-ints-live-in-i64-slots convention
+        // hands the argument over as i64 — so the by-value scalar pushes above
+        // pass an i64 against an i32 param and LLVM module verification hard-
+        // fails ("Call parameter type does not match function signature") even
+        // for a single instantiation. The non-generic direct-call path narrows
+        // via `coerce_args_to_fn_params`; the generic mono-call path skipped it.
+        // Coerce here (int/float scalars only; ref pointers / aggregates are
+        // left untouched by the helper) so the mono param widths are honoured.
+        let mut compiled_args = compiled_args;
+        self.coerce_args_to_fn_params(func, &mut compiled_args);
+
         let call = self
             .builder
             .build_call(func, &compiled_args, "call")
