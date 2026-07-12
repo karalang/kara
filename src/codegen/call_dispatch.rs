@@ -1709,9 +1709,22 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Call { callee, args, .. } = &expr.kind else {
             return None;
         };
-        if args
-            .iter()
-            .any(|a| self.fresh_arg_bare_shared_heap_type(&a.value).is_some())
+        // The self-exclusion below is a passthrough-chain guard for a
+        // FUNCTION call `g(make())`: g may forward make()'s box, so the box is
+        // dec'd once at the outer link, not here. A VARIANT CONSTRUCTOR is not
+        // a passthrough — `Node(inner)` MOVES `inner` into its own payload and
+        // its recursive `__karac_rc_drop` frees the payload, so the outer temp
+        // always needs its own caller-side dec regardless of whether `inner` is
+        // itself a fresh shared temp. Applying the guard to a constructor made
+        // the drop TOGGLE with nesting depth: `fresh_arg_..` flipped Some/None
+        // each level, so odd-depth `Node(Node(…))` args registered no drop and
+        // leaked the whole RC chain while even depths were clean
+        // (B-2026-07-12-25). Skip the guard for a variant constructor.
+        let is_variant_ctor = self.enum_name_of_expr(expr).is_some();
+        if !is_variant_ctor
+            && args
+                .iter()
+                .any(|a| self.fresh_arg_bare_shared_heap_type(&a.value).is_some())
         {
             return None;
         }

@@ -24353,4 +24353,41 @@ fn main() {
             "shared_scrutinee_shadowed_by_local",
         );
     }
+
+    #[test]
+    fn asan_recursive_shared_enum_arg_no_leak() {
+        // B-2026-07-12-25: a freshly-constructed `shared enum` value passed by
+        // value into a recursive self-call leaked the whole RC chain at ODD
+        // constructor-nesting depth. `fresh_arg_bare_shared_heap_type`'s
+        // passthrough self-exclusion (correct for a `g(make())` function chain)
+        // recursed through the constructor's payload arg and flipped Some/None
+        // per level, so the caller-side RC-dec was registered only at even
+        // depth; odd depths (`Node(Leaf)`, `Node(Node(Node(Leaf)))`) registered
+        // nothing and leaked every node. Fix: skip the guard for a variant
+        // constructor, which owns its payload via its recursive drop. Uses an
+        // ODD (depth-3) chain — the leaking case pre-fix — looped so LSan sees
+        // the per-iteration leak.
+        assert_clean_asan_run(
+            r#"
+shared enum E { Leaf(i64), Node(E) }
+fn chk(e: E) -> i64 {
+    match e {
+        Leaf(n) => n,
+        Node(x) => chk(x)
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + chk(Node(Node(Node(Leaf(1)))));
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["200"],
+            "recursive_shared_enum_arg_no_leak",
+        );
+    }
 }

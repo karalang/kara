@@ -3643,6 +3643,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_recursive_shared_enum_arg_correct() {
+        // B-2026-07-12-25 correctness pin (the ASAN/leak gate lives in
+        // tests/memory_sanitizer.rs::asan_recursive_shared_enum_arg_no_leak).
+        // A freshly-constructed `shared enum` value passed by value to a
+        // recursive self-call registered a caller-side RC-dec only at EVEN
+        // constructor-nesting depth (`fresh_arg_bare_shared_heap_type`'s
+        // passthrough self-exclusion recursed and flipped Some/None per level),
+        // so odd-depth `Node(Node(...))` args leaked the whole chain. The fix
+        // skips the passthrough guard for a variant constructor (which owns its
+        // payload via its recursive drop). This pins the value at odd nesting.
+        let out = run_program(
+            r#"
+shared enum E { Leaf(i64), Node(E) }
+fn chk(e: E) -> i64 {
+    match e {
+        Leaf(n) => n,
+        Node(x) => chk(x)
+    }
+}
+fn main() {
+    println(chk(Node(Node(Node(Leaf(42))))));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_set_get_is_set_lifecycle() {
         // `OnceLock[i64]` write-once lifecycle under `karac build`/JIT (was
         // interpreter-only). Empty → `is_set() == false`, `get() == None`;
