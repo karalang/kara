@@ -1815,6 +1815,55 @@ fn test_push_empty_vec_new_into_nested_vec_infers_element() {
     );
 }
 
+#[test]
+fn test_generic_method_some_over_field_pop_no_extra_option_layer() {
+    // B-2026-07-12-6 (typecheck): inside a generic method `impl[T] Box[T]`,
+    // `Some(self.items.pop())` on a `Vec[T]` FIELD over-nested by one Option
+    // layer in an inferring position — the tail typed as `Option[Option[
+    // Option[T]]]` and the method was rejected `expected Option<Option<T>>,
+    // found Option<Option<Option<T>>>`. Root cause: the GAT-only
+    // `substitute_type_params` pass in `check_call_args_with_substitution_full`
+    // ran over the already-resolved return type, re-substituting the inner
+    // `TypeParam("T")` because the constructor's own generic param and the
+    // enclosing method's are both literally `"T"` (so `solutions = {"T":
+    // Option[T]}` re-applied to `Option[Option[T]]`). Now gated on the return
+    // type actually carrying an `AssocProjection`.
+    typecheck_ok(
+        "struct Box[T] { items: Vec[T] }\n\
+         impl[T] Box[T] {\n\
+             fn dbl(mut ref self) -> Option[Option[T]] { Some(self.items.pop()) }\n\
+         }",
+    );
+    // The let-through-a-local form was rejected identically.
+    typecheck_ok(
+        "struct Box[T] { items: Vec[T] }\n\
+         impl[T] Box[T] {\n\
+             fn dbl(mut ref self) -> Option[Option[T]] {\n\
+                 let x = self.items.pop();\n\
+                 Some(x)\n\
+             }\n\
+         }",
+    );
+    // The realistic early-return + Some(field-pop) shape from the report.
+    typecheck_ok(
+        "struct Stack[T] { items: Vec[T] }\n\
+         impl[T] Stack[T] {\n\
+             fn pop_wrapped(mut ref self) -> Option[Option[T]] {\n\
+                 if self.items.len() == 0 { return None; }\n\
+                 Some(self.items.pop())\n\
+             }\n\
+         }",
+    );
+    // Discriminator that already passed pre-fix must stay clean: the direct
+    // tail return of the single-layer pop.
+    typecheck_ok(
+        "struct Box[T] { items: Vec[T] }\n\
+         impl[T] Box[T] {\n\
+             fn take(mut ref self) -> Option[T] { self.items.pop() }\n\
+         }",
+    );
+}
+
 // ── Lint-level slice 7 — lint_name on TypeError carry-through ──
 //
 // Every warning emitted by the compiler must record the lint name in

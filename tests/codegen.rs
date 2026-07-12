@@ -7417,6 +7417,48 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_method_some_over_field_pop() {
+        // B-2026-07-12-6 (typecheck) — `Some(self.items.pop())` inside a generic
+        // method `impl[T] Stack[T]` over-nested by one Option layer and was
+        // rejected at typecheck. This E2E confirms the once-rejected shape now
+        // both compiles AND runs correctly (interp == JIT == AOT): the value
+        // flows through the double `Option[Option[T]]` unchanged. The early-
+        // return `None` path and the `Some(field-pop)` path are both exercised.
+        if let Some(out) = run_program(
+            "struct Stack[T] { items: Vec[T] }\n\
+             impl[T] Stack[T] {\n\
+                 fn new() -> Stack[T] { Stack { items: Vec.new() } }\n\
+                 fn push(mut ref self, v: T) { self.items.push(v); }\n\
+                 fn pop_wrapped(mut ref self) -> Option[Option[T]] {\n\
+                     if self.items.len() == 0 { return None; }\n\
+                     Some(self.items.pop())\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut s: Stack[i64] = Stack.new();\n\
+                 s.push(10);\n\
+                 s.push(20);\n\
+                 match s.pop_wrapped() {\n\
+                     Some(inner) => {\n\
+                         match inner {\n\
+                             Some(v) => { println(f\"got {v}\"); }\n\
+                             None => { println(\"inner none\"); }\n\
+                         }\n\
+                     }\n\
+                     None => { println(\"outer none\"); }\n\
+                 }\n\
+                 let _ = s.pop_wrapped();\n\
+                 match s.pop_wrapped() {\n\
+                     Some(_) => { println(\"unexpected some\"); }\n\
+                     None => { println(\"empty -> outer none\"); }\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "got 20\nempty -> outer none\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_generic_fn_divergent_loop_tail() {
         // B-2026-07-12-8 — a GENERIC (monomorphized) function `fn f[T](..) -> i64`
         // whose body TAIL is a divergent `loop { .. return <value>; .. }` (exits

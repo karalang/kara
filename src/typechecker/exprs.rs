@@ -1196,7 +1196,21 @@ impl<'a> super::TypeChecker<'a> {
         // where-clause projection path; routing the call's return
         // type through it keeps the projection resolution surface
         // consistent.
-        let ret = if solutions.is_empty() {
+        //
+        // GATE (B-2026-07-12-6): run this ONLY when `ret` actually
+        // carries an `AssocProjection`. `ret` is already fully resolved
+        // by `resolve_type_vars` above; re-running `substitute_type_params`
+        // over a projection-free type re-substitutes bare `TypeParam`
+        // nodes that resolution already handled. When a solution value
+        // re-introduces the same param name — e.g. a generic method
+        // `impl[T] Box[T]` calling `Some(self.items.pop())`, where the
+        // constructor's own generic param and the enclosing method's are
+        // BOTH literally `"T"`, so `solutions = {"T": Option[T]}` and the
+        // already-resolved `ret = Option[Option[T]]` — the second pass
+        // rewrites the inner `T` again, nesting a spurious extra layer
+        // (`Option[Option[Option[T]]]`). The projection-param rewrite is
+        // the only thing `resolve_type_vars` can't do, so gate on it.
+        let ret = if solutions.is_empty() || !type_contains_assoc_projection(&ret) {
             ret
         } else {
             let solutions_as_subs: HashMap<String, SubstValue> = solutions
@@ -3663,5 +3677,59 @@ pub(super) fn borrow_context_for_param(param_ty: &Type) -> Option<&'static str> 
         Type::Ref(_) => Some("ref"),
         Type::MutRef(_) => Some("mut ref"),
         _ => None,
+    }
+}
+
+/// True if `ty` contains an `AssocProjection` node anywhere in its
+/// structure. Used to gate the GAT-only `substitute_type_params` pass in
+/// `check_call_args_with_substitution_full` (B-2026-07-12-6): a projection's
+/// `param` string is the only thing `resolve_type_vars` can't rewrite, so
+/// the extra substitution pass is worth running only when a projection is
+/// actually present — over a projection-free type it re-substitutes bare
+/// `TypeParam`s that resolution already handled and can nest a spurious
+/// extra layer when a solution value re-introduces the same param name.
+fn type_contains_assoc_projection(ty: &Type) -> bool {
+    match ty {
+        Type::AssocProjection { .. } => true,
+        Type::Tuple(elems) => elems.iter().any(type_contains_assoc_projection),
+        Type::Named { args, .. } => args.iter().any(type_contains_assoc_projection),
+        Type::Array { element, .. }
+        | Type::Vector { element, .. }
+        | Type::Slice { element, .. } => type_contains_assoc_projection(element),
+        Type::Rc(inner)
+        | Type::Arc(inner)
+        | Type::Ref(inner)
+        | Type::MutRef(inner)
+        | Type::Weak(inner)
+        | Type::Pointer { inner, .. } => type_contains_assoc_projection(inner),
+        Type::Function {
+            params,
+            return_type,
+        }
+        | Type::OnceFunction {
+            params,
+            return_type,
+        } => {
+            params.iter().any(type_contains_assoc_projection)
+                || type_contains_assoc_projection(return_type)
+        }
+        Type::Existential { trait_args, .. } => {
+            trait_args.iter().any(type_contains_assoc_projection)
+        }
+        Type::Refinement { base, .. } => type_contains_assoc_projection(base),
+        // Terminal / projection-free shapes.
+        Type::Int(_)
+        | Type::UInt(_)
+        | Type::Float(_)
+        | Type::Bool
+        | Type::Char
+        | Type::Str
+        | Type::Unit
+        | Type::Never
+        | Type::Shared(_)
+        | Type::TypeParam(_)
+        | Type::TypeVar(_)
+        | Type::Shape(_)
+        | Type::Error => false,
     }
 }
