@@ -61081,6 +61081,33 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_secret_ct_eq() {
+        // `std.secret.Secret[String].ct_eq(other)` — constant-time equality
+        // lowered to the `karac_secret_ct_eq` runtime helper (OR-accumulate +
+        // `black_box`, NOT the short-circuiting `karac_string_cmp`). `karac
+        // build` output must match `karac run`. Equal contents → true;
+        // differing contents (same OR different length) → false. Soft-skips
+        // without the runtime archive. Matches the interpreter's
+        // `test_secret_ct_eq`.
+        if let Some(out) = run_program(
+            r#"
+import std.secret.{Secret};
+fn main() {
+    let a = Secret.new("s3cr3t-token-01");
+    let b = Secret.new("s3cr3t-token-01");
+    let c = Secret.new("s3cr3t-token-99");
+    let d = Secret.new("short");
+    println(a.ct_eq(b));
+    println(a.ct_eq(c));
+    println(a.ct_eq(d));
+}
+"#,
+        ) {
+            assert_eq!(out, "true\nfalse\nfalse\n");
+        }
+    }
+
+    #[test]
     fn owned_value_ptr_param_emits_noalias() {
         // An OWNED value-semantics type that lowers to a single heap `ptr`
         // (`Tensor` / `Map`) is moved into the callee — the sole live handle to

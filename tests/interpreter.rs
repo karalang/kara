@@ -20821,3 +20821,26 @@ fn main() {
         + "cfg=Config { name: alice, token: <redacted> }\n";
     assert_eq!(out, expected);
 }
+
+#[test]
+fn test_secret_ct_eq() {
+    // `std.secret.Secret[String].ct_eq(other)` — constant-time equality. The
+    // interpreter upholds the boolean contract (constant time has no observable
+    // effect in a tree-walk); the runtime helper `karac_secret_ct_eq` provides
+    // the timing guarantee under codegen. Matches codegen's
+    // `test_e2e_secret_ct_eq`. Equal contents → true; differing contents of the
+    // same OR different length → false.
+    let out = run(r#"
+import std.secret.{Secret};
+fn main() {
+    let a = Secret.new("s3cr3t-token-01");
+    let b = Secret.new("s3cr3t-token-01");
+    let c = Secret.new("s3cr3t-token-99");
+    let d = Secret.new("short");
+    println(a.ct_eq(b));
+    println(a.ct_eq(c));
+    println(a.ct_eq(d));
+}
+"#);
+    assert_eq!(out, "true\nfalse\nfalse\n");
+}

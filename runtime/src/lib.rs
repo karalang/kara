@@ -192,6 +192,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         clone::karac_string_decode_char,
         clone::karac_string_encode_char,
         karac_string_cmp,
+        karac_secret_ct_eq,
         karac_float_cmp,
         karac_runtime_f64_to_str,
         karac_vec_sort_by,
@@ -7143,6 +7144,56 @@ pub unsafe extern "C" fn karac_string_cmp(
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,
     }
+}
+
+/// Constant-time byte-equality of two strings. Returns `1` if the byte
+/// contents are equal, `0` otherwise. Backs `Secret[String].ct_eq`
+/// (`std.secret`), closing the timing side-channel that `==` opens on
+/// tokens / HMAC tags / CSRF values (`karac_string_cmp` above is
+/// lexicographic and short-circuits on the first differing byte — the exact
+/// leak `ct_eq` exists to avoid).
+///
+/// Unequal *lengths* short-circuit to `0`: length is not the secret (MAC tags
+/// and tokens are fixed-width, and a length mismatch cannot be equal), and the
+/// guarantee `ct_eq` makes is over the byte *contents*. The equal-length path
+/// OR-accumulates the per-byte XOR differences across the whole buffer with no
+/// data-dependent branch, then a `black_box` optimization barrier defeats the
+/// compiler's early-exit / `memcmp` lowering before the `== 0` test — the
+/// accepted no-dependency constant-time technique (what `subtle`'s
+/// `ConstantTimeEq` does under the hood). As `design.md § Secret Type` notes,
+/// kernel-level guarantees (swap, core dumps, speculative execution) are out
+/// of scope.
+///
+/// # Safety
+///
+/// `a_ptr` must point to `a_len` initialized, contiguous bytes the caller
+/// exclusively owns for the duration of the call; same for `b_ptr` / `b_len`.
+/// A null pointer paired with `len == 0` is accepted (empty string); a null
+/// pointer with `len > 0` is undefined. Negative lengths are treated as zero.
+#[no_mangle]
+pub unsafe extern "C" fn karac_secret_ct_eq(
+    a_ptr: *const u8,
+    a_len: i64,
+    b_ptr: *const u8,
+    b_len: i64,
+) -> i64 {
+    let an = if a_len < 0 { 0 } else { a_len as usize };
+    let bn = if b_len < 0 { 0 } else { b_len as usize };
+    if an != bn {
+        return 0;
+    }
+    let mut acc: u8 = 0;
+    if an > 0 {
+        let a = std::slice::from_raw_parts(a_ptr, an);
+        let b = std::slice::from_raw_parts(b_ptr, an);
+        // `an == bn`, so the zip covers every byte — no data-dependent branch.
+        for (x, y) in a.iter().zip(b.iter()) {
+            acc |= x ^ y;
+        }
+    }
+    // `black_box` before the branch so the optimizer can't reason that a
+    // nonzero `acc` lets it exit the loop (or the comparison) early.
+    i64::from(std::hint::black_box(acc) == 0)
 }
 
 /// Total-order compare on two `f64` values, returning `-1` / `0` / `+1`.

@@ -181,6 +181,33 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // Inner `T` of every `Secret[T]`-typed expression, keyed by span. A
+    // `.ct_eq(...)` call's result is a plain `bool`, so — unlike a borrow
+    // accessor — it leaves no entry in `ref_return_inner_types` for codegen to
+    // key on; this forward lets the ct_eq intercept resolve the receiver's
+    // inner type (by the receiver span, which the parser shares with the
+    // method-call span) and gate the constant-time compare to the
+    // `Secret[String]` inner it supports in v1 (`std.secret`, phase-11).
+    program.secret_inner_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| {
+            // Peel a leading borrow: a `ref Secret[T]` argument records the
+            // borrowed type at its span, and the receiver's own `Secret[T]`
+            // may be shadowed at the shared method-call span by the call's
+            // result type — so codegen keys off whichever span survives.
+            let inner = match ty {
+                Type::Ref(b) | Type::MutRef(b) => b.as_ref(),
+                other => other,
+            };
+            match inner {
+                Type::Named { name, args } if name == "Secret" && args.len() == 1 => {
+                    Some(((k.0, k.1), TypeChecker::type_to_type_expr(&args[0])))
+                }
+                _ => None,
+            }
+        })
+        .collect();
     // Forward the pattern-binding type table so codegen can reconstitute
     // struct payloads (single-field error wrappers, etc.) from the i64
     // word at match-arm bind sites. Without this, `Err(e) => e.field`

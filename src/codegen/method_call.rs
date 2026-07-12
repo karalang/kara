@@ -3136,6 +3136,141 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(recv_ptr.into());
         }
 
+        // `Secret.ct_eq(other) -> bool` (std.secret): constant-time equality
+        // via the reviewed `karac_secret_ct_eq` runtime helper (OR-accumulate +
+        // `black_box` barrier — deliberately NOT the short-circuiting
+        // `karac_string_cmp`, whose first-differing-byte exit is the timing
+        // leak `ct_eq` exists to close). `inner` is field 0, so the Secret
+        // struct pointer IS the inner String's `{ptr,len,cap}` header (offset
+        // 0). v1 supports `Secret[String]`; any other inner type fails closed
+        // to a clear error here (the interpreter mirrors this with a runtime
+        // error), so both backends reject the same programs.
+        if method == "ct_eq"
+            && args.len() == 1
+            && matches!(
+                self.inferred_receiver_type(object).as_deref(),
+                Some("Secret")
+            )
+            && self.secret_type_is_stdlib
+        {
+            // Resolve the receiver's inner `T` (shared with the arg, since the
+            // signature is `ct_eq(ref self, other: ref Secret[T])`). The parser
+            // sets `MethodCall.span == receiver.span`, so the receiver's own
+            // `Secret[T]` type is shadowed at that span by the call's `bool`
+            // result — the argument's span does not collide, so consult it
+            // first, then fall back to the receiver span.
+            let arg_span = &args[0].value.span;
+            let inner_te = self
+                .secret_inner_types
+                .get(&(arg_span.offset, arg_span.length))
+                .or_else(|| {
+                    self.secret_inner_types
+                        .get(&(object.span.offset, object.span.length))
+                });
+            let inner_is_string = inner_te
+                .map(|te| self.is_string_type_expr(te))
+                .unwrap_or(false);
+            if !inner_is_string {
+                return Err(
+                    "`Secret.ct_eq` is only supported for `Secret[String]` in v1 \
+                     (Vec[u8] / [u8; N] are planned)"
+                        .to_string(),
+                );
+            }
+            let name_of = |e: &Expr| -> Option<String> {
+                match &e.kind {
+                    ExprKind::Identifier(n) => Some(n.clone()),
+                    ExprKind::SelfValue => Some("self".to_string()),
+                    _ => None,
+                }
+            };
+            let recv_name = name_of(object).ok_or_else(|| {
+                "`Secret.ct_eq` requires an identifier or `self` receiver".to_string()
+            })?;
+            let arg_name = name_of(&args[0].value).ok_or_else(|| {
+                "`Secret.ct_eq` requires an identifier argument (compare two named secrets); \
+                 an inline expression argument is not yet supported"
+                    .to_string()
+            })?;
+            let recv_ptr = self.get_data_ptr(&recv_name).ok_or_else(|| {
+                format!("`Secret.ct_eq`: no storage pointer for receiver `{recv_name}`")
+            })?;
+            let arg_ptr = self.get_data_ptr(&arg_name).ok_or_else(|| {
+                format!("`Secret.ct_eq`: no storage pointer for argument `{arg_name}`")
+            })?;
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let i64_t = self.context.i64_type();
+            let str_ty = self.vec_struct_type();
+            // Load `{ptr, len}` (fields 0, 1) from each inner String header.
+            let ap_p = self
+                .builder
+                .build_struct_gep(str_ty, recv_ptr, 0, "cte.a.ptr.p")
+                .unwrap();
+            let a_ptr = self
+                .builder
+                .build_load(ptr_ty, ap_p, "cte.a.ptr")
+                .unwrap()
+                .into_pointer_value();
+            let al_p = self
+                .builder
+                .build_struct_gep(str_ty, recv_ptr, 1, "cte.a.len.p")
+                .unwrap();
+            let a_len = self
+                .builder
+                .build_load(i64_t, al_p, "cte.a.len")
+                .unwrap()
+                .into_int_value();
+            let bp_p = self
+                .builder
+                .build_struct_gep(str_ty, arg_ptr, 0, "cte.b.ptr.p")
+                .unwrap();
+            let b_ptr = self
+                .builder
+                .build_load(ptr_ty, bp_p, "cte.b.ptr")
+                .unwrap()
+                .into_pointer_value();
+            let bl_p = self
+                .builder
+                .build_struct_gep(str_ty, arg_ptr, 1, "cte.b.len.p")
+                .unwrap();
+            let b_len = self
+                .builder
+                .build_load(i64_t, bl_p, "cte.b.len")
+                .unwrap()
+                .into_int_value();
+            let ct_fn = self
+                .module
+                .get_function("karac_secret_ct_eq")
+                .unwrap_or_else(|| {
+                    let ft = i64_t.fn_type(
+                        &[ptr_ty.into(), i64_t.into(), ptr_ty.into(), i64_t.into()],
+                        false,
+                    );
+                    self.module.add_function(
+                        "karac_secret_ct_eq",
+                        ft,
+                        Some(inkwell::module::Linkage::External),
+                    )
+                });
+            let raw = self
+                .builder
+                .build_call(
+                    ct_fn,
+                    &[a_ptr.into(), a_len.into(), b_ptr.into(), b_len.into()],
+                    "cte.call",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            // Helper returns 1 / 0; map to an `i1` bool.
+            let as_bool = self
+                .builder
+                .build_int_compare(IntPredicate::NE, raw, i64_t.const_zero(), "cte.bool")
+                .unwrap();
+            return Ok(as_bool.into());
+        }
+
         // `OnceLock`/`OnceCell` `set`/`get`/`is_set`/`get_or_init` on a local
         // binding. Gated on the receiver identifier's membership in
         // `once_var_types` (populated by `register_var_from_type_expr` from the

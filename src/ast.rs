@@ -641,6 +641,14 @@ pub struct Program {
     /// variable name to key on) via its concrete Display fn — the call-result
     /// half of B-2026-07-08-9. See [`DisplayOptionResultTypesTable`].
     pub display_option_result_types: DisplayOptionResultTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: the inner
+    /// `T` of every expression typed `Secret[T]` (`std.secret`), keyed by span.
+    /// Lets codegen resolve a `Secret[T]` receiver's inner type at a
+    /// `.ct_eq(...)` call site (whose result is a plain `bool`, so it has no
+    /// borrow-return entry to piggyback on) — gating the constant-time compare
+    /// to the `Secret[String]` inner it supports in v1. Reuses the span-keyed
+    /// `RefReturnInnerTypesTable` shape.
+    pub secret_inner_types: RefReturnInnerTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_types`.
     pub pattern_binding_types: PatternBindingTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_inner_types`.
