@@ -7425,6 +7425,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_tuple_pattern_discriminated() {
+        // B-2026-07-12-13 — a `match` on a TUPLE scrutinee was not DISCRIMINATED
+        // under codegen: the tuple pattern fell through to the catch-all
+        // always-match, so the FIRST tuple-pattern arm always fired regardless
+        // of the element values (`match (a,b) { (0,0)=>10, (1,2)=>20, _=>30 }`
+        // returned 10 for every input). Now each element emits its own equality
+        // test, AND'd together. Covers: i64 tuples, bool tuples, mixed
+        // binding+literal elements (`(0, y)` / `(x, 0)`), and a nested tuple
+        // (`(0, (1, 2))`) whose inner elements are tested recursively.
+        if let Some(out) = run_program(
+            "fn f(a: i64, b: i64) -> i64 { match (a, b) { (0, 0) => 10, (1, 2) => 20, _ => 30 } }\n\
+             fn bt(a: bool, b: bool) -> i64 { match (a, b) { (true, true) => 1, _ => 0 } }\n\
+             fn mixed(a: i64, b: i64) -> i64 {\n\
+                 match (a, b) { (0, y) => y + 100, (x, 0) => x + 200, (1, 2) => 20, _ => 30 }\n\
+             }\n\
+             fn nested(a: i64, b: i64, c: i64) -> i64 {\n\
+                 match (a, (b, c)) { (0, (1, 2)) => 1, (0, (_, _)) => 2, _ => 3 }\n\
+             }\n\
+             fn main() {\n\
+                 println(f\"{f(0, 0)} {f(1, 2)} {f(5, 5)}\");\n\
+                 println(f\"{bt(true, true)} {bt(true, false)} {bt(false, false)}\");\n\
+                 println(f\"{mixed(0, 5)} {mixed(7, 0)} {mixed(1, 2)} {mixed(9, 9)}\");\n\
+                 println(f\"{nested(0, 1, 2)} {nested(0, 4, 5)} {nested(8, 1, 2)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "10 20 30\n1 0 0\n105 207 20 30\n1 2 3\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_iter_chain_reduce_scalar_terminal() {
         // B-2026-07-11-19 — the `reduce(|a, x| ..) -> Option[A]` terminal for a
         // SCALAR element. Desugars to an `Option[i64]` accumulator folded via a

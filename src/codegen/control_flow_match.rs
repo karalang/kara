@@ -1782,6 +1782,35 @@ impl<'ctx> super::Codegen<'ctx> {
             PatternKind::AtBinding { pattern: inner, .. } => {
                 self.compile_pattern_condition(inner, scrut)
             }
+            // Plain tuple pattern `(p0, p1, ...)`: the scrutinee is an aggregate
+            // struct value. Extract each element and AND the per-element
+            // sub-pattern conditions together (recursively — a nested tuple /
+            // literal / range element emits its own test). Without this arm the
+            // tuple pattern fell through to the catch-all `_ => true` below, so
+            // EVERY tuple pattern matched unconditionally and the first tuple
+            // arm always won regardless of the element values — the tuple
+            // sibling of the range / guard "no discriminating test emitted"
+            // class (B-2026-07-12-13). Binding / wildcard elements recurse to
+            // an always-true leaf, so `(x, 0)` correctly tests only the second
+            // element.
+            PatternKind::Tuple(elems) => {
+                if let BasicValueEnum::StructValue(sv) = scrut {
+                    let mut cond = tru;
+                    for (idx, sub) in elems.iter().enumerate() {
+                        let elem = self
+                            .builder
+                            .build_extract_value(sv, idx as u32, "tup.cond.elem")
+                            .unwrap();
+                        let sub_cond = self.compile_pattern_condition(sub, elem)?.into_int_value();
+                        cond = self.builder.build_and(cond, sub_cond, "tup.and").unwrap();
+                    }
+                    Ok(cond.into())
+                } else {
+                    // A non-aggregate scrutinee under a tuple pattern would be a
+                    // type error upstream; match rather than mis-extract.
+                    Ok(tru.into())
+                }
+            }
             // Plain struct pattern or anything else — always matches
             _ => Ok(tru.into()),
         }

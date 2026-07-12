@@ -13453,6 +13453,26 @@ fn main() {
 }
 
 #[test]
+fn test_match_tuple_pattern() {
+    // B-2026-07-12-13 — a `match` on a tuple scrutinee discriminates on each
+    // element. The interpreter has always been correct; this is the oracle for
+    // the codegen fix (codegen previously always fired the first tuple arm).
+    let output = run_no_errors(
+        r#"
+fn f(a: i64, b: i64) -> i64 { match (a, b) { (0i64, 0i64) => 10i64, (1i64, 2i64) => 20i64, _ => 30i64 } }
+fn nested(a: i64, b: i64, c: i64) -> i64 {
+    match (a, (b, c)) { (0i64, (1i64, 2i64)) => 1i64, (0i64, (_, _)) => 2i64, _ => 3i64 }
+}
+fn main() {
+    println(f"{f(0i64, 0i64)} {f(1i64, 2i64)} {f(5i64, 5i64)}");
+    println(f"{nested(0i64, 1i64, 2i64)} {nested(0i64, 4i64, 5i64)} {nested(8i64, 1i64, 2i64)}");
+}
+"#,
+    );
+    assert_eq!(output, "10 20 30\n1 2 3\n");
+}
+
+#[test]
 fn test_iter_fold_empty_returns_init_unchanged() {
     let output = run_no_errors(
         r#"
