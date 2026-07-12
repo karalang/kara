@@ -369,33 +369,11 @@ fn main() {
         );
     }
 
-    #[test]
-    fn asan_vec_option_shared_field_push_residual_no_uaf() {
-        // B-2026-07-12-4 (UAF half) — pushing a FIELD-READ `Option[shared]`
-        // (`stack.push(n.left)`) onto a `Vec[Option[shared]]` and dropping the
-        // Vec while it still holds that residual element used to double-free the
-        // node: the Vec's per-element `RcDecOption` AND the parent field's drop
-        // both dec an rc-1 node → the first frees, the second reads freed memory
-        // (ASAN: heap-use-after-free). The push-side field retain co-owns the
-        // node (rc 2) so the two decs balance.
-        assert_clean_asan_run(
-            r#"
-shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
-fn main() {
-    let root = Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None });
-    let mut stack: Vec[Option[Node]] = Vec.new();
-    match root {
-        None => {}
-        Some(n) => { stack.push(n.left); }
-    }
-    println(stack.len().to_string());
-}
-"#,
-            &["1"],
-            "vec_option_shared_field_push_residual_no_uaf",
-        );
-    }
-
+    // NOTE: the field-push residual UAF half (DEFECT 2) is covered by the
+    // sibling's stronger `asan_field_read_option_shared_push_no_leak_or_uaf`
+    // (200-iteration loop, drains + reads back) — no duplicate here. The two
+    // tests below cover the pop-consume DRAIN leak (DEFECT 1), which the
+    // sibling's for-loop-drain test does not exercise.
     #[test]
     fn asan_vec_option_shared_pop_consume_no_leak() {
         // B-2026-07-12-4 (leak half) — draining a `Vec[Option[shared]]` via
