@@ -1988,6 +1988,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 // pointed at it — a use-after-free (B-2026-07-11-29 `let s = v[i];
                 // out.push(s)` and `let orig = Some(..); out.push(orig)`).
                 self.share_option_shared_ref_for_arg(&args[0].value);
+                // Field-read sibling of the Identifier retain above:
+                // `stack.push(n.left)` — a FieldAccess reading an
+                // `Option[shared T]` field of another shared node — is ALSO
+                // aliasing co-ownership (the pushed handle stays live at its
+                // source `n`), so the container needs an independent +1. The
+                // generic method-arg loop applies this via
+                // `share_option_shared_field_ref_for_arg`, but push is a builtin
+                // that bypasses it and only the Identifier leg was mirrored here
+                // — so a field-read push left the node UNDER-counted: the Vec's
+                // per-element drop AND the source node's own drop both released
+                // it, freeing it once and reading the freed block on the second
+                // release (use-after-free, B-2026-07-12-4; a leak before the Vec
+                // per-element drop began releasing residuals). A fresh
+                // `push(Some(..))` is a non-place arg → does not fire → still
+                // owns its sole +1, unchanged. NOTE: the direct index sibling
+                // (`out.push(v[i])`) is deliberately NOT retained here — that
+                // read already yields an independent element (deep-cloned), so an
+                // extra inc would leak; only the aliasing field read needs it.
+                self.share_option_shared_field_ref_for_arg(&args[0].value, elem_val);
 
                 // Load current vec fields.
                 let data_ptr_ptr = self

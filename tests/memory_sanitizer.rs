@@ -24049,4 +24049,47 @@ fn main() {
             "generic_ref_enum_display_no_leak",
         );
     }
+
+    #[test]
+    fn asan_field_read_option_shared_push_no_leak_or_uaf() {
+        // B-2026-07-12-4: pushing a FIELD-READ `Option[shared]` (`stack.push(
+        // n.left)`) onto a `Vec[Option[shared]]` and dropping the Vec with
+        // residual elements is aliasing co-ownership — the pushed handle stays
+        // live at its source node `n`. `Vec.push` is a builtin that bypassed the
+        // generic method-arg retain, so the field read went un-inc'd: the Vec's
+        // per-element drop AND `n`'s own drop both released the node — a
+        // use-after-free (read of a freed 32-byte block; a leak before the Vec
+        // per-element drop began releasing residuals). The fix inc's the
+        // field-read inner on push (`share_option_shared_field_ref_for_arg`).
+        // Looped to amplify any per-iteration imbalance well past noise; reads
+        // the pushed values back so a wrong-node miscompile would also surface.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 200 {
+        let root = Some(Node {
+            val: 1,
+            left: Some(Node { val: 2, left: None, right: None }),
+            right: Some(Node { val: 3, left: None, right: None }),
+        });
+        let mut stack: Vec[Option[Node]] = Vec.new();
+        match root {
+            None => {}
+            Some(n) => { stack.push(n.left); stack.push(n.right); }
+        }
+        for item in stack {
+            match item { None => {} Some(node) => { total = total + node.val; } }
+        }
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            &["1000"],
+            "field_read_option_shared_push_no_leak_or_uaf",
+        );
+    }
 }

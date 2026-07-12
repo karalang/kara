@@ -3491,6 +3491,41 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_field_read_option_shared_push_correct() {
+        // B-2026-07-12-4 correctness pin (the ASAN/leak gate lives in
+        // tests/memory_sanitizer.rs). Pushing a FIELD-READ `Option[shared]`
+        // (`stack.push(n.left)` / `n.right`) onto a `Vec[Option[shared]]`, then
+        // reading the pushed nodes back, must yield the correct values — the
+        // co-ownership retain fix must not disturb the stored handles. Non-ASAN
+        // so it runs everywhere as a value regression guard.
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn main() {
+    let root = Some(Node {
+        val: 1,
+        left: Some(Node { val: 2, left: None, right: None }),
+        right: Some(Node { val: 3, left: None, right: None }),
+    });
+    let mut stack: Vec[Option[Node]] = Vec.new();
+    match root {
+        None => {}
+        Some(n) => { stack.push(n.left); stack.push(n.right); }
+    }
+    let mut sum: i64 = 0;
+    for item in stack {
+        match item { None => {} Some(node) => { sum = sum + node.val; } }
+    }
+    println(sum);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_set_get_is_set_lifecycle() {
         // `OnceLock[i64]` write-once lifecycle under `karac build`/JIT (was
         // interpreter-only). Empty → `is_set() == false`, `get() == None`;
