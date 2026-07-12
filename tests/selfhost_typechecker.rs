@@ -267,6 +267,22 @@ const CORPUS: &[&str] = &[
     "fn f(b: bool) -> bool { not b }",
     "fn f(n: i64) -> i64 { ~n }",
     "fn f(n: i64) -> i64 { -(n + 1) }",
+    // ── Slice 14: InvalidBinaryOp (comparison of distinct primitive types) ──
+    // A comparison (`== != < <= > >=`) between two KNOWN PRIMITIVE operands of
+    // DIFFERENT categories is InvalidBinaryOp at the whole binary-expr span.
+    // Same-category (incl. int vs float — both NUM) is clean; struct/enum/unknown
+    // operands are skipped. The result is BOOL either way.
+    "fn f(n: i64, c: char) -> bool { n < c }",
+    "fn f(n: i64, x: f64) -> bool { n < x }",
+    "fn f(n: i64, s: String) -> bool { n == s }",
+    "fn f(c: char, s: String) -> bool { c == s }",
+    "fn f(b: bool, n: i64) -> bool { b == n }",
+    "fn f(n: i64, m: i64) -> bool { n == m }",
+    "fn f(s: String, t: String) -> bool { s < t }",
+    "fn f(c: char, d: char) -> bool { c != d }",
+    "fn f(n: i64, c: char) -> bool { n >= c }",
+    // A distinct-type comparison feeding a condition still types the result BOOL.
+    "fn f(n: i64, c: char) { if n < c { } }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
@@ -310,6 +326,7 @@ fn rust_render(src: &str) -> String {
             "MissingField" => "missing-field",
             "WrongNumberOfArgs" => "wrong-arg-count",
             "InvalidUnaryOp" => "invalid-unary-op",
+            "InvalidBinaryOp" => "invalid-binary-op",
             other => panic!(
                 "corpus entry {src:?} produced an out-of-Slice-1 type-error kind {other} \
                  (message: {}); trim the corpus or extend the slice",

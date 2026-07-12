@@ -728,8 +728,20 @@ impl Checker {
                 let BinaryExpr { op, left, right, span } = n;
                 let li = self.check_expr(left);
                 let ri = self.check_expr(right);
-                let rc = bin_result_cat(op, li.category, ri.category);
-                ExprInfo { category: rc, span: span }
+                // `bin_info` matches `op` ONCE (BinOp is not Copy) and returns
+                // both the result category and whether this is an invalid
+                // comparison (Slice 14): a `== != < <= > >=` between two KNOWN
+                // PRIMITIVE operands of DIFFERENT categories is InvalidBinaryOp
+                // (kind 9) at the whole binary-expr span. int-vs-float are both
+                // NUM here, so a numeric comparison never flags (the seed's
+                // `types_compatible(int, float)` is true); struct / enum / unknown
+                // operands are skipped (the seed's Eq/Ord derive checks are out of
+                // this slice). The result category is BOOL either way.
+                let bi = bin_info(op, li.category, ri.category);
+                if bi.bad {
+                    self.push_err(9, span.offset, span.length);
+                }
+                ExprInfo { category: bi.rc, span: span }
             }
             Unary(n) => {
                 // Operator VALIDITY + result category in one match on `op`
@@ -1247,36 +1259,54 @@ fn cats_compatible(a: i64, b: i64) -> bool {
     a == b
 }
 
-// The RESULT category of a binary operator given its operand categories (Slice
-// 3). Comparisons and logical connectives always yield BOOL (the seed types
-// them bool regardless of operands, an incomparable-operand pair is a separate
-// InvalidBinaryOp the corpus avoids). Arithmetic / bitwise yield the SHARED
-// operand category when both operands agree on a known category — `n + 1` (NUM)
-// and, polymorphically, `s + s` (STR) — else UNKNOWN so an unknown operand
-// never drives a false mismatch.
-fn bin_result_cat(op: BinOp, l: i64, r: i64) -> i64 {
+// The result category AND comparison-validity of a binary operator, computed
+// in ONE match on `op` (BinOp is not Copy, so it can be inspected only once —
+// Slices 3 + 14). Comparisons and logical connectives yield BOOL; arithmetic /
+// bitwise yield the shared operand category (NUM op NUM → NUM, and — for `+` —
+// STR + STR → STR), else UNKNOWN. `bad` is set only for a COMPARISON between two
+// known primitive operands (both categories 0-3) of DIFFERENT categories — the
+// InvalidBinaryOp condition; int vs float are both NUM, so numeric comparisons
+// never flag, and struct / enum / unknown operands are skipped.
+struct BinInfo {
+    rc: i64,
+    bad: bool,
+}
+
+fn bin_info(op: BinOp, l: i64, r: i64) -> BinInfo {
     match op {
-        Eq => 1,
-        NotEq => 1,
-        Lt => 1,
-        LtEq => 1,
-        Gt => 1,
-        GtEq => 1,
-        And => 1,
-        Or => 1,
-        Add => same_or_unknown(l, r),
-        Sub => same_or_unknown(l, r),
-        Mul => same_or_unknown(l, r),
-        Div => same_or_unknown(l, r),
-        Mod => same_or_unknown(l, r),
-        BitAnd => same_or_unknown(l, r),
-        BitOr => same_or_unknown(l, r),
-        BitXor => same_or_unknown(l, r),
-        Shl => same_or_unknown(l, r),
-        Shr => same_or_unknown(l, r),
-        Range => 4,
-        RangeInclusive => 4,
+        Eq => cmp_bin_info(l, r),
+        NotEq => cmp_bin_info(l, r),
+        Lt => cmp_bin_info(l, r),
+        LtEq => cmp_bin_info(l, r),
+        Gt => cmp_bin_info(l, r),
+        GtEq => cmp_bin_info(l, r),
+        And => BinInfo { rc: 1, bad: false },
+        Or => BinInfo { rc: 1, bad: false },
+        Add => BinInfo { rc: same_or_unknown(l, r), bad: false },
+        Sub => BinInfo { rc: same_or_unknown(l, r), bad: false },
+        Mul => BinInfo { rc: same_or_unknown(l, r), bad: false },
+        Div => BinInfo { rc: same_or_unknown(l, r), bad: false },
+        Mod => BinInfo { rc: same_or_unknown(l, r), bad: false },
+        BitAnd => BinInfo { rc: same_or_unknown(l, r), bad: false },
+        BitOr => BinInfo { rc: same_or_unknown(l, r), bad: false },
+        BitXor => BinInfo { rc: same_or_unknown(l, r), bad: false },
+        Shl => BinInfo { rc: same_or_unknown(l, r), bad: false },
+        Shr => BinInfo { rc: same_or_unknown(l, r), bad: false },
+        Range => BinInfo { rc: 4, bad: false },
+        RangeInclusive => BinInfo { rc: 4, bad: false },
     }
+}
+
+// A comparison result: always BOOL; `bad` iff both operands are known primitives
+// (0-3) of DIFFERENT categories.
+fn cmp_bin_info(l: i64, r: i64) -> BinInfo {
+    let mut bad = false;
+    if l <= 3 and r <= 3 {
+        if l != r {
+            bad = true;
+        }
+    }
+    BinInfo { rc: 1, bad: bad }
 }
 
 // The shared operand category when both are the SAME known primitive, else
@@ -1316,7 +1346,10 @@ fn kind_tag(kind: i64) -> String {
     if kind == 7 {
         return "wrong-arg-count".to_string();
     }
-    "invalid-unary-op".to_string()
+    if kind == 8 {
+        return "invalid-unary-op".to_string();
+    }
+    "invalid-binary-op".to_string()
 }
 
 pub fn render_errors(errs: Vec[TypeError]) -> String {
