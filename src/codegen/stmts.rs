@@ -1933,10 +1933,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         // scope-exit RC-drop and mark it so a not-yet-supported
                         // escape (return / copy / store of the binding) is
                         // rejected rather than freed twice / leaked.
-                        let rhs_is_heap_env_call = matches!(&value.kind,
-                            ExprKind::Call { callee, .. }
-                                if matches!(&callee.kind, ExprKind::Identifier(n)
-                                    if self.fns_returning_heap_env.contains(n)));
+                        // A named heap-env fn call OR (currying, B-2026-07-12-12)
+                        // a call through a curry closure-value binding — both
+                        // mint an RC env this binding now owns.
+                        let rhs_is_heap_env_call = self.is_heap_env_producing_call(value);
                         if rhs_is_heap_env_call {
                             if let Some(frame) = self.scope_cleanup_actions.last_mut() {
                                 frame.push(super::state::CleanupAction::FreeClosureEnv {

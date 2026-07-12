@@ -15424,6 +15424,46 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_closure_returning_closure_currying() {
+        // B-2026-07-12-12 — a closure whose body is itself a closure (currying:
+        // `let make = |n| |x| x + n`) failed codegen: the outer closure fn was
+        // declared `-> i64` (the closure-return-type default) while its body
+        // returned a `{ptr, ptr}` fat pointer → LLVM verifier reject. Fixed by
+        // (1) inferring a closure body's return type as the fat-pointer type and
+        // (2) heap-allocating the escaping inner env PER outer call so distinct
+        // instances don't alias one reused stack env (`make(5)` and `make(10)`
+        // must stay independent). interp == JIT == AOT.
+        let single = run_program(
+            r#"
+fn main() {
+    let make = |n: i64| |x: i64| x + n;
+    let add5 = make(5);
+    println(add5(10));
+}
+"#,
+        );
+        if let Some(out) = single {
+            assert_eq!(out.trim(), "15");
+        }
+        // Multi-instance: the regression the prior investigation hit — a naive
+        // return-type-only fix aliased the env and printed `20` for both.
+        let multi = run_program(
+            r#"
+fn main() {
+    let make = |n: i64| |x: i64| x + n;
+    let add5 = make(5);
+    let add10 = make(10);
+    println(add5(10));
+    println(add10(10));
+}
+"#,
+        );
+        if let Some(out) = multi {
+            assert_eq!(out.trim(), "15\n20");
+        }
+    }
+
+    #[test]
     fn test_e2e_closure_captures_in_loop() {
         let out = run_program(
             r#"

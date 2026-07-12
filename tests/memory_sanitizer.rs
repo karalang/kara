@@ -493,6 +493,37 @@ fn main() {
     }
 
     #[test]
+    fn asan_curry_closure_vec_store_no_leak() {
+        // B-2026-07-12-12 — a curried closure (`let make = |n| |x| x + n`)
+        // heap-allocates a reference-counted env box per outer call. When those
+        // closures are stored in a `Vec[Fn]` that persists, the env boxes must
+        // be freed when the Vec drops. This is un-elidable (the boxes escape
+        // into a heap Vec, so LLVM's malloc-to-stack promotion can't remove
+        // them): pre-fix it leaked one 16-byte box per iteration (1000 = 16 KB
+        // definitely-lost under valgrind). The fix routes the curry call through
+        // the SAME `is_heap_env_producing_call` predicate as a named heap-env
+        // fn, so the Vec-owner slice frees each element's env on drop. 200 boxes
+        // built + stored + dropped, so any per-iteration leak accumulates past
+        // noise for LSan (Linux CI).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let make = |n: i64| |x: i64| x + n;
+    let mut fs: Vec[Fn(i64) -> i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 200 {
+        fs.push(make(i));
+        i = i + 1;
+    }
+    println(f"{fs[100](0)}");
+}
+"#,
+            &["100"],
+            "asan_curry_closure_vec_store_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_generic_assoc_fn_vec_field_no_leak() {
         // B-2026-07-11-25 — a generic struct `S[T]` whose associated constructor
         // `S.new()` returns `S { items: Vec.new() }`, then pushes through

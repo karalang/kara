@@ -334,7 +334,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// a `let f = <call>` binding is wired to free it (a `FreeClosureEnv`
     /// cleanup), so any other occurrence of the call leaks or escapes the env.
     pub(super) fn is_heap_env_producing_call(&self, e: &Expr) -> bool {
+        // A call to a NAMED heap-env fn, OR (currying, B-2026-07-12-12) a call
+        // through a local closure-VALUE binding whose value returns a heap-env
+        // closure (`make` in `let make = |n| |x| x + n; make(5)`). Both mint an
+        // RC heap env the caller binding must free / own — routing the curry
+        // call through this predicate reuses the whole free / owner / misuse
+        // machinery unchanged.
         self.is_heap_env_producing_call_in(e, &self.fns_returning_heap_env)
+            || self.is_heap_env_producing_call_in(e, &self.curry_closure_vars)
     }
 
     /// As [`Self::is_heap_env_producing_call`] but against an EXPLICIT set —
@@ -407,7 +414,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// copy RHS. The walk ([`expr_has_heap_env_misuse`]) is exhaustive over
     /// `ExprKind` (no silent wildcard) so no escaping occurrence is missed.
     pub(super) fn reject_heap_env_misuse(&mut self, func: &Function) -> Result<(), String> {
-        if self.fns_returning_heap_env.is_empty() {
+        // Inert unless SOME heap-env source is in play — a named fn returning a
+        // heap env, or (currying, B-2026-07-12-12) a local closure-value
+        // binding whose call returns one. Either populates the misuse walk's
+        // `is_heap_env_producing_call` recognition.
+        if self.fns_returning_heap_env.is_empty() && self.curry_closure_vars.is_empty() {
             return Ok(());
         }
         // Pass 1 — sanctioned top-level heap-env bindings and aggregate owners
@@ -1460,6 +1471,85 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         None
+    }
+
+    /// Currying sibling of [`Self::func_tail_heap_closure_span`]
+    /// (B-2026-07-12-12): if the tail of a CLOSURE body (`|n| |x| x + n`, or
+    /// `|n| { … |x| x + n }`) is itself a *capturing* closure literal, that
+    /// inner closure escapes via the outer closure's return, so its
+    /// environment must be a per-call reference-counted HEAP box — not a stack
+    /// alloca that every `make(n)` instance would alias. Returns the inner
+    /// closure's span. The outer's capturable names are its own params plus its
+    /// body-block's top-level `let` bindings (the analog of
+    /// `outer_capturable_names` for a closure rather than a named fn).
+    pub(super) fn closure_tail_heap_closure_span(
+        &self,
+        outer_params: &[ClosureParam],
+        outer_body: &Expr,
+    ) -> Option<(usize, usize)> {
+        // Unwrap a block body to its tail expression.
+        let tail = match &outer_body.kind {
+            ExprKind::Block(block) | ExprKind::Seq(block) => block.final_expr.as_deref()?,
+            _ => outer_body,
+        };
+        let ExprKind::Closure { params, body, .. } = &tail.kind else {
+            return None;
+        };
+        // Outer capturable names: the outer closure's params + its body-block's
+        // top-level lets (a bare-expression body contributes only params).
+        let mut outer: HashSet<String> = outer_params
+            .iter()
+            .flat_map(|p| p.pattern.binding_names())
+            .collect();
+        if let ExprKind::Block(block) | ExprKind::Seq(block) = &outer_body.kind {
+            for stmt in &block.stmts {
+                match &stmt.kind {
+                    StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                        outer.extend(pattern.binding_names());
+                    }
+                    StmtKind::LetUninit { name, .. } => {
+                        outer.insert(name.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if self.closure_literal_captures(params, body, &outer) {
+            return Some((tail.span.offset, tail.span.length));
+        }
+        None
+    }
+
+    /// Currying (B-2026-07-12-12): the local closure-VALUE bindings in `func`
+    /// whose CALL returns a heap-env closure — `let make = |n| |x| x + n;`
+    /// binds `make`, whose call `make(5)` yields the inner closure's RC heap
+    /// env. A forward scan collects both the direct form (a `let` whose RHS is a
+    /// closure literal whose tail is a *capturing* closure) and transitive
+    /// value copies (`let g = make`, `make` already collected). Populated per
+    /// function before the misuse guard runs; consulted via
+    /// `is_heap_env_producing_call` so a `make(..)` call reuses the same
+    /// free/owner/misuse machinery as a call to a named `fns_returning_heap_env`
+    /// function. Top-level `let`s only — mirrors the named-fn machinery's
+    /// top-level scan discipline.
+    pub(super) fn compute_curry_closure_vars(&self, func: &Function) -> HashSet<String> {
+        let mut set: HashSet<String> = HashSet::new();
+        for stmt in &func.body.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+                let is_curry = match &value.kind {
+                    ExprKind::Closure { params, body, .. } => {
+                        self.closure_tail_heap_closure_span(params, body).is_some()
+                    }
+                    ExprKind::Identifier(n) => set.contains(n),
+                    _ => false,
+                };
+                if is_curry {
+                    if let [b] = pattern.binding_names().as_slice() {
+                        set.insert(b.clone());
+                    }
+                }
+            }
+        }
+        set
     }
 
     /// Populate `fns_returning_heap_env` (functions whose return value is a
@@ -2853,6 +2943,16 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // 7b½. Currying (B-2026-07-12-12): if this closure's tail is itself a
+        // capturing closure literal, mark that inner span heap-env for the
+        // body compile so the nested `compile_closure` gives it a per-call RC
+        // heap box (each `make(n)` instance owns a distinct env — no aliasing).
+        // Saved/restored around the body so sibling closures don't inherit it.
+        let saved_heap_spans = self.current_fn_heap_closure_spans.clone();
+        if let Some(inner_span) = self.closure_tail_heap_closure_span(params, body) {
+            self.current_fn_heap_closure_spans.insert(inner_span);
+        }
+
         // 7c. Compile body and build return.
         //
         // A BLOCK body is compiled like a function body — via the raw
@@ -2903,6 +3003,9 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_scope_cleanup();
             self.builder.build_return(Some(&result)).unwrap();
         }
+        // Restore the heap-span set (7b½): the inner-closure marking is scoped
+        // to this closure's body compile only.
+        self.current_fn_heap_closure_spans = saved_heap_spans;
 
         // 8. Restore outer state.
         self.type_subst = saved_subst;
@@ -3320,6 +3423,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 self.context.i64_type().into()
             }
+            // A closure body that is ITSELF a closure (currying:
+            // `|n| |x| x + n`) evaluates to a closure fat pointer
+            // `{ fn_ptr, env_ptr }`, not the `i64` default. Without this the
+            // outer closure fn is declared `-> i64` while its body returns the
+            // fat-pointer struct → LLVM verifier "return type does not match
+            // operand type of return inst" (B-2026-07-12-12). The escaping
+            // inner env is heap-allocated per outer call (see the tail-heap-
+            // closure marking in `compile_closure`) so distinct instances
+            // (`make(5)` / `make(10)`) don't alias one reused stack env.
+            ExprKind::Closure { .. } => self.closure_value_type().into(),
             _ => self.context.i64_type().into(),
         }
     }

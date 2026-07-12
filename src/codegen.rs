@@ -1584,6 +1584,15 @@ pub(super) struct Codegen<'ctx> {
     /// escapes of such a binding (return / copy / store / pass — Slice 1 is
     /// call-only) and reset per function.
     pub(crate) heap_env_closure_vars: std::collections::HashSet<String>,
+    /// Currying (B-2026-07-12-12): local closure-VALUE bindings in the current
+    /// function whose CALL returns a heap-env closure — `let make = |n| |x| x +
+    /// n;` binds `make`, and `make(5)` yields the inner closure's reference-
+    /// counted heap env. Populated per function (before the misuse guard runs)
+    /// by `compute_curry_closure_vars`, then consulted by
+    /// `is_heap_env_producing_call` so a `make(..)` call routes through the SAME
+    /// free / owner / misuse machinery as a call to a named
+    /// `fns_returning_heap_env` function. Reset per function.
+    pub(crate) curry_closure_vars: std::collections::HashSet<String>,
     /// Per-function map (set at the top of `reject_heap_env_misuse`, read by its
     /// exhaustive walk): a struct local `h` constructed as `let h = H { f:
     /// make(..) }` → the set of its fields that hold a heap-env closure. Such an
@@ -5890,6 +5899,7 @@ impl<'ctx> Codegen<'ctx> {
             current_fn_heap_closure_spans: std::collections::HashSet::new(),
             fns_returning_heap_env: std::collections::HashSet::new(),
             heap_env_closure_vars: std::collections::HashSet::new(),
+            curry_closure_vars: std::collections::HashSet::new(),
             heap_env_aggregate_owners: std::collections::HashMap::new(),
             fns_returning_heap_env_aggregate: std::collections::HashMap::new(),
             fns_returning_heap_env_tuple: std::collections::HashMap::new(),
