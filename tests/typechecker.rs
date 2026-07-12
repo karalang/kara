@@ -14132,6 +14132,23 @@ fn test_iter_sum_rejects_non_numeric_element() {
 }
 
 #[test]
+fn test_iter_reduce_accepts_and_yields_option() {
+    // B-2026-07-11-19 — `reduce(|a, x| ..)` typechecks (it was rejected as "no
+    // method 'reduce'") and its result is `Option[T]`, so unwrapping it with a
+    // match on Some/None binding an `i64` is well-typed. `typecheck_ok` asserts
+    // zero type errors.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = [1, 2, 3];
+             match v.iter().reduce(|a: i64, x: i64| a + x) {
+                 Some(s) => { let _t: i64 = s; }
+                 None => {}
+             }
+         }",
+    );
+}
+
+#[test]
 fn test_iter_peek_on_plain_iterator_rejected() {
     // peek() is only on Peekable[T] — calling it on a bare Iterator
     // should raise a type error rather than silently dispatching.

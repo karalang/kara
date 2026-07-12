@@ -590,6 +590,49 @@ impl<'a> super::Interpreter<'a> {
                     return Some(acc.unwrap_or(Value::Int(0)));
                 }
             }
+            "reduce" => {
+                // Terminal — `reduce(f)`. Folds elements with the first as the
+                // seed; returns `Some(acc)`, or `None` for an empty source.
+                // B-2026-07-11-19.
+                if matches!(obj, Value::Iterator { .. }) {
+                    if args.len() != 1 {
+                        return Some(self.record_runtime_error(
+                            format!("Iterator.reduce() expects 1 argument, got {}", args.len()),
+                            span,
+                        ));
+                    }
+                    let f = self.eval_expr_inner(&args[0].value);
+                    if !matches!(f, Value::Function { .. }) {
+                        return Some(self.record_runtime_error(
+                            format!("Iterator.reduce() expects a closure; got {}", f),
+                            span,
+                        ));
+                    }
+                    let mut iter_val = obj;
+                    let mut acc: Option<Value> = None;
+                    while let Some(item) = self.iterator_step(&mut iter_val) {
+                        acc = Some(match acc {
+                            None => item,
+                            Some(a) => self.invoke_function_value(f.clone(), vec![a, item]),
+                        });
+                        if self.pending_cf.is_some() {
+                            return Some(Value::Unit);
+                        }
+                    }
+                    return Some(match acc {
+                        Some(v) => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![v]),
+                        },
+                        None => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "None".to_string(),
+                            data: EnumData::Unit,
+                        },
+                    });
+                }
+            }
             "any" | "all" => {
                 // Short-circuit terminals. `any(pred)` returns true the
                 // first time `pred` returns true; `all(pred)` returns

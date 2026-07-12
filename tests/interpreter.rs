@@ -13155,6 +13155,27 @@ fn main() {
 }
 
 #[test]
+fn test_iter_reduce_terminal() {
+    // B-2026-07-11-19 — the `reduce(f) -> Option[A]` terminal. Folds with the
+    // first element as the seed; `None` on an empty source. Covers a sum
+    // reduce, a max reduce, an empty source (None), and a `map().reduce`.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4];
+    match v.iter().reduce(|a: i64, x: i64| a + x) { Some(s) => { println(s.to_string()); } None => { println("none"); } }
+    match v.iter().reduce(|a: i64, x: i64| if a > x { a } else { x }) { Some(s) => { println(s.to_string()); } None => { println("none"); } }
+    let e: Vec[i64] = [];
+    match e.iter().reduce(|a: i64, x: i64| a + x) { Some(s) => { println(s.to_string()); } None => { println("none"); } }
+    match v.iter().map(|x: i64| x * 2i64).reduce(|a: i64, x: i64| a + x) { Some(s) => { println(s.to_string()); } None => { println("none"); } }
+}
+"#,
+    );
+    // 10, 4, none, 20
+    assert_eq!(output, "10\n4\nnone\n20\n");
+}
+
+#[test]
 fn test_iter_fold_empty_returns_init_unchanged() {
     let output = run_no_errors(
         r#"

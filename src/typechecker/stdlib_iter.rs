@@ -194,6 +194,39 @@ impl<'a> super::TypeChecker<'a> {
                     .insert(SpanKey::from_span(span), Self::type_to_type_expr(item));
                 item.clone()
             }
+            "reduce" => {
+                // `reduce(f: Fn(A, A) -> A) -> Option[A]` — terminal. Folds the
+                // elements with the first as the seed; `None` when the source is
+                // empty (no seed). Both closure params and the return are the
+                // element type, so check_expr suffices for closure-pushdown. The
+                // element `TypeExpr` is recorded span-keyed for codegen (same
+                // table as `sum`). B-2026-07-11-19.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("Iterator.reduce() expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![item.clone()],
+                    };
+                }
+                let f_ty = Type::Function {
+                    params: vec![item.clone(), item.clone()],
+                    return_type: Box::new(item.clone()),
+                };
+                self.check_expr(&args[0].value, &f_ty);
+                self.iter_terminal_elem_types
+                    .insert(SpanKey::from_span(span), Self::type_to_type_expr(item));
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
             "any" | "all" => {
                 // Short-circuit terminals — `any(pred) -> bool` /
                 // `all(pred) -> bool`. Same predicate signature as
@@ -741,6 +774,7 @@ impl<'a> super::TypeChecker<'a> {
                     "next",
                     "peek",
                     "peekable",
+                    "reduce",
                     "scan",
                     "skip",
                     "skip_while",

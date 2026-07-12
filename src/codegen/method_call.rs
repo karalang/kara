@@ -3863,6 +3863,33 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<iter-chain>.reduce(|a, x| ..)` — the `Option[A]`-returning fold
+        // terminal (B-2026-07-11-19). Typecheck + interpreter support it, but a
+        // codegen terminal would have to construct a synthetic `Option[A]`
+        // accumulator + per-element `match`/`Some`/`None` whose layout depends on
+        // typechecker-supplied payload sizing this fused desugar can't rederive —
+        // so `reduce` is INTERPRETER-FIRST at v1. Emit an intentional, actionable
+        // deferral here (rather than the generic "no handler" fall-through, which
+        // reads as an accidental codegen bug) so the shape stays loud, never a
+        // silent wrong answer.
+        if method == "reduce"
+            && args.len() == 1
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            return Err(
+                "`Iterator.reduce()` is not yet supported under `karac build` \
+                        (codegen); it works under `karac run` (the tree-walk interpreter). \
+                        Its `Option[A]` result needs a synthetic accumulator whose layout \
+                        codegen can't yet size for an arbitrary element type. Re-run with \
+                        `--interp` (or `KARAC_RUN_JIT=0`), or use `.fold(init, f)` for a \
+                        non-optional accumulation."
+                    .to_string(),
+            );
+        }
+
         // General owned-temp tracking, slice 3b — element-type-aware read
         // methods (`get`/`first`/`last`/`get_unchecked`/`contains`) on a
         // FRESH-TEMP `Vec`/`VecDeque` receiver (`make_vec().get(0)`). Needs the
