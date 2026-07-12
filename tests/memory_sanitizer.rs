@@ -3153,6 +3153,31 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_closure_mut_ref_capture_no_leak() {
+        // B-2026-07-11-23 — a non-escaping stored closure that MUTATES a captured
+        // local captures it BY REFERENCE (a `ptr` to the outer slot in the env).
+        // The body writes through the pointer to the real binding, so the write
+        // lands on the outer `c` (yielding 7 over `f(3); f(4)`) and the by-ref
+        // env carries no separate heap allocation to leak — a wrong (value-copy)
+        // capture would silently drop the write. Also mixes in a read-only (by-
+        // value) capture `k` to exercise the mixed per-name env layout.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut c: i64 = 0;
+    let k: i64 = 100;
+    let f = |x: i64| { c = c + x + k; };
+    f(3i64);
+    f(4i64);
+    println(f"{c}");
+}
+"#,
+            &["207"],
+            "asan_closure_mut_ref_capture_no_leak",
+        );
+    }
+
     /// Shared-ownership inc-on-copy (B-2026-06-22-2): copying a heap-env closure
     /// binding (`let g = f`, plus a copy-of-a-copy `let h = g`) shares ONE RC env
     /// box across all owners — the copy increments the refcount and each owner's

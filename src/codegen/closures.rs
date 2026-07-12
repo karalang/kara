@@ -2584,31 +2584,45 @@ impl<'ctx> super::Codegen<'ctx> {
         //    via `self.variables` for the root types.
         let free_vars = self.collect_closure_free_vars(params, body);
 
-        // 1a. `mut ref` closure capture (B-2026-07-11-23): a STORED closure
-        //     VALUE whose body MUTATES a captured name needs that name to alias
-        //     the outer binding so writes propagate (design.md Rule 2). Codegen
-        //     captures each free var BY VALUE into the env struct, so the write
-        //     would land on the env copy and be silently lost — the interpreter
-        //     (which promotes the slot to a shared cell) now returns the correct
-        //     value, so emitting a wrong value here would be a silent run-vs-
-        //     build divergence. Refuse loudly instead until by-reference env
-        //     capture lands. This never fires for the inlined `fold`/`any`/`all`/
-        //     `sum` terminals — those inline the closure body into the fused loop
-        //     and never construct a closure value, so their capture-mutation
-        //     (`fold(0, |a, x| { count = count + 1; a + x })`) stays correct.
-        {
+        // 1a. `mut ref` closure capture (B-2026-07-11-23): a stored closure
+        //     VALUE whose body MUTATES a captured name captures that name BY
+        //     REFERENCE (design.md Rule 2) — the write must land on the OUTER
+        //     binding, not an env copy. Codegen captures such a name as a
+        //     POINTER to its outer slot (env field is `ptr`, the body reads and
+        //     writes through it), so mutations propagate to the real slot and
+        //     the interpreter's shared-cell semantics are matched (`|x|{c=c+x}`
+        //     over `f(3); f(4)` yields 7 on both engines).
+        //
+        //     Soundness: a by-reference capture is valid only while the outer
+        //     slot outlives the closure — i.e. for a NON-escaping closure. An
+        //     ESCAPING (returned → heap-env) closure would dangle, so it is
+        //     still refused. `reject_escaping_capturing_closure`
+        //     (`compile_function`) already rejects every OTHER escape route
+        //     (return-of-a-non-tail, struct field, collection store, id chain),
+        //     so a closure reaching here with `is_heap_env == false` provably
+        //     does not escape its frame. The inlined `fold`/`any`/`all`/`sum`
+        //     terminals never build a closure value, so they never reach here.
+        let is_heap_env = self
+            .current_fn_heap_closure_spans
+            .contains(&(closure_span.offset, closure_span.length));
+        let mutref_caps: HashSet<String> = {
             let mut assigned: HashSet<String> = HashSet::new();
             collect_assigned_roots_expr(body, &mut assigned);
-            if let Some(name) = free_vars.iter().find(|n| assigned.contains(n.as_str())) {
-                return Err(format!(
-                    "a stored closure that mutates the captured variable `{name}` (`mut ref` \
-                     capture, design.md Rule 2) is not yet supported under `karac build` \
-                     (codegen): captures are taken by value, so the write would be lost. It \
-                     works under `karac run` (the tree-walk interpreter aliases the captured \
-                     slot). Re-run with `--interp` (or `KARAC_RUN_JIT=0`), or thread the \
-                     mutated state through the closure's parameters / return value instead."
-                ));
-            }
+            free_vars
+                .iter()
+                .filter(|n| assigned.contains(n.as_str()))
+                .cloned()
+                .collect()
+        };
+        if !mutref_caps.is_empty() && is_heap_env {
+            let name = mutref_caps.iter().next().unwrap();
+            return Err(format!(
+                "a stored closure that BOTH mutates the captured variable `{name}` (`mut ref` \
+                 capture, design.md Rule 2) AND escapes its defining function (returned) is not \
+                 yet supported under `karac build`: the by-reference capture would outlive the \
+                 frame that owns `{name}`. Re-run with `--interp` (or `KARAC_RUN_JIT=0`), or \
+                 thread the mutated state through the closure's parameters / return value instead."
+            ));
         }
 
         // 1b. Disjoint-capture slice 4: per-path env layout when the
@@ -2619,11 +2633,32 @@ impl<'ctx> super::Codegen<'ctx> {
         //     projection step that can't be resolved (treated as a
         //     whole-root capture for that root inside the path layout
         //     builder).
-        let path_layout = self.build_capture_path_layout(closure_span, &free_vars);
+        //
+        //     A `mut ref` capture (1a) forces the per-name layout: its env
+        //     slot is a POINTER to the outer root (not a value / sub-field),
+        //     which the per-path struct-field-precise layout does not model.
+        let path_layout = if mutref_caps.is_empty() {
+            self.build_capture_path_layout(closure_span, &free_vars)
+        } else {
+            None
+        };
+
+        // The original (value) type of each per-name capture, aligned with
+        // `free_vars`. A `mut ref` capture stores a `ptr` to the outer slot in
+        // the env, but the body still binds the var at its real type `T` (reads
+        // / writes go through the pointer), so keep `T` here for the body's
+        // `VarSlot.ty`. Only populated on the per-name path.
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let orig_cap_tys: Vec<BasicTypeEnum<'ctx>> = if path_layout.is_none() {
+            free_vars.iter().map(|n| self.variables[n].ty).collect()
+        } else {
+            Vec::new()
+        };
 
         // 2. Build the env struct type: { T0_cap, T1_cap, ... }.
         //    Use a dummy i8 when there are no captures so we always have
-        //    a valid struct type.
+        //    a valid struct type. A `mut ref`-captured name's slot is a `ptr`
+        //    to its outer binding (by-reference capture, 1a).
         let env_field_types: Vec<BasicTypeEnum<'ctx>> = if let Some(layout) = path_layout.as_ref() {
             if layout.slot_tys.is_empty() {
                 vec![self.context.i8_type().into()]
@@ -2633,7 +2668,17 @@ impl<'ctx> super::Codegen<'ctx> {
         } else if free_vars.is_empty() {
             vec![self.context.i8_type().into()]
         } else {
-            free_vars.iter().map(|n| self.variables[n].ty).collect()
+            free_vars
+                .iter()
+                .zip(orig_cap_tys.iter())
+                .map(|(n, &t)| {
+                    if mutref_caps.contains(n) {
+                        ptr_ty.into()
+                    } else {
+                        t
+                    }
+                })
+                .collect()
         };
         let env_struct_ty = self.context.struct_type(&env_field_types, false);
 
@@ -2643,9 +2688,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // `{ i64 refcount, <env_struct> }` instead of a stack alloca. The
         // closure body GEPs past the refcount to reach the payload; the
         // owning caller binding frees it (refcount dec) at scope exit.
-        let is_heap_env = self
-            .current_fn_heap_closure_spans
-            .contains(&(closure_span.offset, closure_span.length));
+        // (`is_heap_env` is computed in 1a — an escaping closure with a
+        // `mut ref` capture was already refused there.)
         if is_heap_env {
             // Slice 1 supports POD captures only. A heap (String / Vec / shared)
             // capture would need its own drop when the env is freed (Slice 2);
@@ -2869,6 +2913,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_extract_value(env_val.into_struct_value(), i as u32, var_name)
                     .unwrap();
+                if mutref_caps.contains(var_name) {
+                    // By-reference (`mut ref`) capture: the env slot holds a
+                    // POINTER to the outer binding. Register the var to read /
+                    // write THROUGH it — no local copy — so body mutations land
+                    // on the real outer slot (design.md Rule 2, B-2026-07-11-23).
+                    self.variables.insert(
+                        var_name.clone(),
+                        VarSlot {
+                            ptr: field_val.into_pointer_value(),
+                            ty: orig_cap_tys[i],
+                        },
+                    );
+                    if let Some(type_name) = saved_var_types.get(var_name) {
+                        self.var_type_names
+                            .insert(var_name.clone(), type_name.clone());
+                    }
+                    continue;
+                }
                 let alloca = self.create_entry_alloca(closure_fn, var_name, cap_ty);
                 self.builder.build_store(alloca, field_val).unwrap();
                 self.variables.insert(
@@ -3072,14 +3134,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(env_alloca, env_agg).unwrap();
             }
         } else if !free_vars.is_empty() {
-            // Build the env struct by inserting each captured value.
+            // Build the env struct by inserting each captured value. A
+            // `mut ref`-captured name stores the ADDRESS of its outer slot (by-
+            // reference capture, 1a) so the closure body writes through to the
+            // real binding; every other name stores its loaded value.
             let mut env_agg = env_struct_ty.get_undef();
             for (i, var_name) in free_vars.iter().enumerate() {
                 let slot = self.variables[var_name];
-                let val = self
-                    .builder
-                    .build_load(slot.ty, slot.ptr, var_name)
-                    .unwrap();
+                let val: BasicValueEnum<'ctx> = if mutref_caps.contains(var_name) {
+                    slot.ptr.into()
+                } else {
+                    self.builder
+                        .build_load(slot.ty, slot.ptr, var_name)
+                        .unwrap()
+                };
                 env_agg = self
                     .builder
                     .build_insert_value(env_agg, val, i as u32, "__env_field")

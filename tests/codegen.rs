@@ -8110,13 +8110,15 @@ fn main() {
     }
 
     #[test]
-    fn test_stored_mutating_closure_rejected_in_codegen() {
-        // B-2026-07-11-23 — a STORED closure that mutates a captured local is a
-        // `mut ref` capture codegen doesn't support (by-value env); it must be
-        // REFUSED loudly rather than silently drop the write (the interpreter
-        // aliases the slot and returns the correct value, so a wrong codegen
-        // value would be a silent run-vs-build divergence).
-        let err = ir_result(
+    fn test_stored_mutating_closure_by_ref_capture() {
+        // B-2026-07-11-23 — a NON-escaping STORED closure that mutates a captured
+        // local now captures that local BY REFERENCE (a `ptr` to the outer slot
+        // in the env; the body reads / writes through it), so the mutation
+        // propagates to the outer binding and codegen agrees with the
+        // interpreter's shared-cell semantics. `f(3); f(4)` over `c = c + x`
+        // yields 7. (Correctness pin; the ASAN/leak gate lives in
+        // tests/memory_sanitizer.rs::asan_closure_mut_ref_capture_no_leak.)
+        if let Some(out) = run_program(
             "fn main() {\n\
                  let mut c: i64 = 0;\n\
                  let f = |x: i64| { c = c + x; };\n\
@@ -8124,11 +8126,29 @@ fn main() {
                  f(4i64);\n\
                  println(f\"{c}\");\n\
              }",
+        ) {
+            assert_eq!(out.trim(), "7");
+        }
+    }
+
+    #[test]
+    fn test_escaping_mutating_closure_still_rejected_in_codegen() {
+        // B-2026-07-11-23 — the by-reference capture is sound only for a
+        // NON-escaping closure (the outer slot must outlive it). A closure that
+        // BOTH mutates a captured local AND escapes via the function return
+        // would dangle, so it is still refused loudly rather than compiled to a
+        // use-after-free.
+        let err = ir_result(
+            "fn mk() -> Fn(i64) {\n\
+                 let mut c: i64 = 0;\n\
+                 |x: i64| { c = c + x; }\n\
+             }\n\
+             fn main() { let f = mk(); println(f\"done\"); }",
         )
-        .expect_err("expected a codegen error for a stored capture-mutating closure");
+        .expect_err("expected a codegen error for an escaping capture-mutating closure");
         assert!(
-            err.contains("mut ref") && err.contains("captured variable"),
-            "expected a loud mut-ref-capture refusal, got: {err}"
+            err.contains("mut ref") && err.contains("escapes"),
+            "expected a loud escaping-mut-ref-capture refusal, got: {err}"
         );
     }
 
