@@ -609,6 +609,36 @@ fn test_unknown_primitive_method_is_runtime_error_not_ice() {
 }
 
 #[test]
+fn test_mmio_intrinsics_clean_error_not_panic() {
+    // B-2026-07-12-7 — the tree-walk interpreter has no raw-pointer model, so
+    // `ptr.mut`/`ptr.const` and `volatile_read`/`volatile_write` are codegen-
+    // only. Reaching them used to panic with `unreachable!("variable 'ptr' not
+    // found")` (the `ptr` receiver evaluated as an unbound identifier); they now
+    // record a clean structured runtime error naming the intrinsic + the
+    // `karac build` / non-`--interp` workaround.
+    let errors = runtime_errors(
+        "fn main() { let cell: i32 = 0; unsafe { let p: *const i32 = ptr.const(cell); } }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("ptr.const") && e.message.contains("codegen")),
+        "expected a clean ptr-intrinsic runtime error, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // The `volatile_write` free-call peer.
+    let errors = runtime_errors(
+        "fn main() { let cell: i32 = 0; unsafe { volatile_write(ptr.mut(cell), 5); } }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("codegen")
+            && (e.message.contains("volatile_write") || e.message.contains("ptr.mut"))),
+        "expected a clean MMIO-intrinsic runtime error, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_to_string_on_primitives() {
     assert_eq!(run("fn main() { println((-42i64).to_string()); }"), "-42\n");
     assert_eq!(run("fn main() { println((3.5f64).to_string()); }"), "3.5\n");

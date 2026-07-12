@@ -3368,6 +3368,47 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_volatile_write_narrow_field_ref_param_roundtrip() {
+        // B-2026-07-12-7 — `volatile_write(pw, 777)` through a `*mut i32` used
+        // to store an `i64` (an integer literal defaults to i64 in codegen),
+        // mismatching the `i32` pointee. Under `-O` (AOT) the 8-byte volatile
+        // store and the paired 4-byte volatile load didn't forward, so a
+        // same-function read-back value-numbered to the pre-write value: `karac
+        // build` printed the stale `20` while `karac run`/JIT (at -O0) printed
+        // the correct `777`. `run_program` builds a REAL optimized binary, so it
+        // exercises the AOT path where this reproduced. Both the in-function
+        // read-back (bump's return) AND the cross-function read-back (main) must
+        // now be 777. The fix coerces the written value to the pointee width.
+        let out = run_program(
+            r#"
+struct Reg { status: i32, control: i32 }
+fn bump(r: mut ref Reg) -> i32 {
+    // Safety: r is a live borrow of the caller's Reg.
+    unsafe {
+        let pw: *mut i32 = ptr.mut(r.control);
+        volatile_write(pw, 777);
+        let pr: *const i32 = ptr.const(r.control);
+        volatile_read(pr)
+    }
+}
+fn main() {
+    let mut r: Reg = Reg { status: 10, control: 20 };
+    let inside = bump(mut r);
+    println(inside);
+    // Safety: r is still live here.
+    unsafe {
+        let pr: *const i32 = ptr.const(r.control);
+        println(volatile_read(pr));
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "777\n777");
+        }
+    }
+
+    #[test]
     fn test_e2e_ptr_const_mut_place_shapes_roundtrip() {
         // `ptr.const(place)` / `ptr.mut(place)` over the full place grammar the
         // typechecker's place-validator accepts — field access, a nested field

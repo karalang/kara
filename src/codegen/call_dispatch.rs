@@ -2295,9 +2295,19 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// `volatile_write(dst, value)` — a volatile store of `value` through the
-    /// raw pointer `dst`. Peer of `compile_volatile_read`; the value's own
-    /// type drives the store width, so no pointee lookup is needed. Returns
-    /// the shared `i64 0` unit placeholder (the call's static type is unit).
+    /// raw pointer `dst`. Peer of `compile_volatile_read`: the store width comes
+    /// from `dst`'s recorded POINTEE type, and the value is coerced to it before
+    /// the store — NOT from the value's own LLVM type. Using the value's type
+    /// was a silent miscompile (B-2026-07-12-7): an integer literal defaults to
+    /// `i64` in codegen, so `volatile_write(pw /* *mut i32 */, 777)` emitted
+    /// `store volatile i64 777` through an `i32*`. That 8-byte store both wrote
+    /// 4 bytes past the field AND — because its width didn't match the paired
+    /// `load volatile i32` — defeated the optimizer's volatile load-forwarding
+    /// under `-O` (AOT), so a same-function read-back value-numbered back to the
+    /// pre-write value (`karac build` printed the stale `20`, `karac run`/JIT at
+    /// `-O0` happened to print the correct `777`). Matching the store width to
+    /// the pointee makes the two accesses the same shape and the AOT round-trip
+    /// correct. Returns the shared `i64 0` unit placeholder (call type is unit).
     fn compile_volatile_write(
         &mut self,
         dst: &Expr,
@@ -2305,6 +2315,19 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let ptr_val = self.compile_expr(dst)?.into_pointer_value();
         let v = self.compile_expr(value)?;
+        // Coerce the value to `dst`'s pointee type so the store width matches
+        // the memory it targets (and the paired volatile read). The pointee is
+        // recorded per `*const T` / `*mut T`-typed expression by lowering, keyed
+        // on the expression's span — the same table `compile_volatile_read`
+        // consults. Missing entry ⇒ fall back to the value's own type (a
+        // best-effort store rather than a hard error).
+        let key = (dst.span.offset, dst.span.length);
+        let v = if let Some(pointee_te) = self.raw_pointer_pointee_types.get(&key).cloned() {
+            let pointee_ty = self.llvm_type_for_type_expr(&pointee_te);
+            self.coerce_scalar_to_type(v, pointee_ty)
+        } else {
+            v
+        };
         let store = self
             .builder
             .build_store(ptr_val, v)

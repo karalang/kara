@@ -79,6 +79,27 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Volatile MMIO intrinsics `volatile_read(p)` / `volatile_write(p, v)`
+        // are codegen-only (they operate on raw pointers the interpreter cannot
+        // model). Reject cleanly here rather than execute their `{ 0 }`
+        // placeholder stub bodies and silently return a wrong value — the peer
+        // of the `ptr.*` intercept in `eval_method_call` (B-2026-07-12-7).
+        // Guarded on the name not being shadowed by a user binding.
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if (name == "volatile_read" || name == "volatile_write") && self.env.get(name).is_none()
+            {
+                return self.record_runtime_error(
+                    format!(
+                        "MMIO intrinsic `{name}(..)` is only supported under `karac build` / \
+                         the JIT (codegen), not the tree-walk interpreter — it operates on raw \
+                         pointers the interpreter cannot model. Run without `--interp` (unset \
+                         KARAC_RUN_JIT) to use the compiled backend."
+                    ),
+                    span,
+                );
+            }
+        }
+
         // Layout-query intrinsics `size_of[T]()` / `align_of[T]()`
         // (design.md § Field Offsets family). Intercepted before normal
         // dispatch — like codegen's `compile_call` twin — so the `{ 0 }`

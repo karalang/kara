@@ -575,6 +575,24 @@ impl<'a> super::Interpreter<'a> {
                 ("gpu", "dispatch") => return self.eval_gpu_dispatch(args, span),
                 _ => {}
             }
+            // Raw-pointer / MMIO intrinsics (`ptr.const`/`ptr.mut`/`ptr.addr`/
+            // …) are codegen-only — the tree-walk interpreter has no model for
+            // raw pointers. Emit a clean, honest diagnostic instead of falling
+            // through to evaluate the `ptr` receiver as a value, which panicked
+            // with an `unreachable!("variable 'ptr' not found")` internal error
+            // (B-2026-07-12-7). Guarded on `ptr` not being a user binding so a
+            // local genuinely named `ptr` still dispatches its own methods.
+            if module == "ptr" && self.env.get("ptr").is_none() {
+                return self.record_runtime_error(
+                    format!(
+                        "raw-pointer intrinsic `ptr.{method}(..)` is only supported under \
+                         `karac build` / the JIT (codegen), not the tree-walk interpreter — \
+                         it has no raw-pointer model. Run without `--interp` (unset \
+                         KARAC_RUN_JIT) to use the compiled backend."
+                    ),
+                    span,
+                );
+            }
         }
 
         // SIMD static constructor — `Vector[T, N].splat(x)`. The receiver is
