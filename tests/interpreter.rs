@@ -13428,6 +13428,31 @@ fn main() {
 }
 
 #[test]
+fn test_match_arm_guard() {
+    // B-2026-07-12-9 — a `match` arm guard (`pat if cond => ..`) falls through
+    // to the next arm when the condition is false. The interpreter has always
+    // been correct here; this is the oracle the codegen fix is verified against
+    // (codegen previously ignored the guard entirely). Covers scalar-binding,
+    // enum-pattern, and multi-guard cascades.
+    let output = run_no_errors(
+        r#"
+fn classify(n: i64) -> String {
+    match n { 0 => f"zero", x if x < 0i64 => f"neg", x if x < 10i64 => f"small", _ => f"big" }
+}
+fn g(o: Option[i64]) -> i64 { match o { Some(x) if x > 5i64 => 1i64, Some(_) => 2i64, None => 3i64 } }
+fn main() {
+    println(classify(0i64));
+    println(classify(0i64 - 3i64));
+    println(classify(5i64));
+    println(classify(100i64));
+    println(f"{g(Some(10i64))} {g(Some(2i64))} {g(None)}");
+}
+"#,
+    );
+    assert_eq!(output, "zero\nneg\nsmall\nbig\n1 2 3\n");
+}
+
+#[test]
 fn test_iter_fold_empty_returns_init_unchanged() {
     let output = run_no_errors(
         r#"

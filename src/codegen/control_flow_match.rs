@@ -335,6 +335,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
 
+            // Arm GUARD (`pat if cond => body`): after the pattern matched and
+            // its bindings are in scope, evaluate the guard expression. When it
+            // is false, Rust semantics fall through to the NEXT arm's pattern
+            // test — so branch to `fail_bb`. This must run BEFORE the move/
+            // suppression machinery below and before the body: on the guard-
+            // false edge nothing is moved out (the body never runs) and we emit
+            // NO binding cleanup, so the scrutinee source retains ownership and
+            // frees each heap payload exactly once (the bindings are aliases
+            // into the still-owned source). The per-arm scope frame pushed above
+            // is left intact for the guard-pass path, where the body appends to
+            // it and the end-of-arm drain fires it once (with the source caps
+            // zeroed by the suppression below → exactly one free). Guards were
+            // previously never emitted, so the arm fired whenever its pattern
+            // matched regardless of the condition (B-2026-07-12-9).
+            if let Some(guard) = &arm.guard {
+                let guard_val = self.compile_expr(guard)?.into_int_value();
+                let guard_pass_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("match.guardpass{}", i));
+                self.builder
+                    .build_conditional_branch(guard_val, guard_pass_bb, fail_bb)
+                    .unwrap();
+                self.builder.position_at_end(guard_pass_bb);
+            }
+
             // Value-move destructure: when the scrutinee is an owned
             // enum binding and the arm's pattern is `Variant(...args)`
             // binding heap-bearing payload fields (Vec / String), the

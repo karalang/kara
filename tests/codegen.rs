@@ -7386,6 +7386,45 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_arm_guard() {
+        // B-2026-07-12-9 — a `match` arm GUARD (`pat if cond => ..`) was SILENTLY
+        // IGNORED under codegen: the arm fired whenever its pattern matched,
+        // regardless of the `if` condition, so the first pattern-matching arm
+        // won even when its guard was false. Now the guard is evaluated after
+        // the pattern binds and the arm falls through to the next arm's test on
+        // guard-false (Rust semantics). Covers: (a) scalar binding guards
+        // (`x if x > N`), (b) an enum-pattern guard (`Some(x) if x > 5`), and
+        // (c) a guard that reads a heap payload binding (`Some(s) if s.len() > 3`)
+        // — the guard-false edge must not double-free or leak the aliased
+        // payload (valgrind-clean; the source retains ownership).
+        if let Some(out) = run_program(
+            "fn classify(n: i64) -> String {\n\
+                 match n { 0 => f\"zero\", x if x < 0 => f\"neg\", x if x < 10 => f\"small\", _ => f\"big\" }\n\
+             }\n\
+             fn g(o: Option[i64]) -> i64 { match o { Some(x) if x > 5 => 1, Some(_) => 2, None => 3 } }\n\
+             fn h(n: i64) -> i64 { match n { x if x > 100 => 1, x if x > 10 => 2, x => x } }\n\
+             fn pick(o: Option[String]) -> String {\n\
+                 match o { Some(s) if s.len() > 3 => s, Some(_) => f\"short\", None => f\"none\" }\n\
+             }\n\
+             fn main() {\n\
+                 println(classify(0));\n\
+                 println(classify(0 - 3));\n\
+                 println(classify(5));\n\
+                 println(classify(100));\n\
+                 println(f\"{g(Some(10))} {g(Some(2))} {g(None)}\");\n\
+                 println(f\"{h(500)} {h(50)} {h(5)}\");\n\
+                 println(pick(Some(f\"hello\")));\n\
+                 println(pick(Some(f\"hi\")));\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "zero\nneg\nsmall\nbig\n1 2 3\n1 2 5\nhello\nshort\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_iter_chain_reduce_scalar_terminal() {
         // B-2026-07-11-19 — the `reduce(|a, x| ..) -> Option[A]` terminal for a
         // SCALAR element. Desugars to an `Option[i64]` accumulator folded via a
