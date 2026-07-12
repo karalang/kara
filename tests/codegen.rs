@@ -3466,6 +3466,72 @@ fn main() {
         );
     }
 
+    #[test]
+    fn test_e2e_module_global_oncelock_config_pattern() {
+        // The canonical late-bound global: `let CONFIG: OnceLock[T] =
+        // OnceLock.new()` at module scope, `set` once in `main`, `get` from a
+        // sibling fn. The handle lives in a global filled by the static-init
+        // prologue (`karac_runtime_once_new` before `main`), so the write is
+        // observable across calls. Module bindings are codegen-only (no
+        // interpreter support), so this is a `karac build` feature — matching
+        // the Map/Set module-binding tests. Also pins the double-set →
+        // `AlreadySetError` (0) path against the persisted global.
+        let src = "let CONFIG: OnceLock[i64] = OnceLock.new();\n\
+                   fn show() {\n\
+                       match CONFIG.get() { Some(v) => println(v), None => println(-1), }\n\
+                   }\n\
+                   fn main() {\n\
+                       println(CONFIG.is_set());\n\
+                       show();\n\
+                       match CONFIG.set(1234) { Ok(_) => println(1), Err(_) => println(0), }\n\
+                       println(CONFIG.is_set());\n\
+                       show();\n\
+                       match CONFIG.set(9999) { Ok(_) => println(1), Err(_) => println(0), }\n\
+                       show();\n\
+                   }";
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "module-scope OnceLock.new() must typecheck clean, got: {:?}",
+            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+        let output = run_program(src).expect("compile + run failed");
+        assert_eq!(output, "false\n-1\n1\ntrue\n1234\n0\n1234\n");
+    }
+
+    #[test]
+    fn test_ir_module_global_oncelock_static_init() {
+        // A module-scope `OnceLock.new()` takes the placeholder-null-ptr-global
+        // + static-init path: `__karac_static_init` builds the cell via
+        // `karac_runtime_once_new`, and `main` forward-calls the prologue.
+        let ir = ir_for(
+            "let CONFIG: OnceLock[i64] = OnceLock.new();\n\
+             fn main() { let _ = CONFIG.set(7); }",
+        );
+        assert!(
+            ir.contains("@CONFIG = internal global ptr null"),
+            "expected null-ptr placeholder global for CONFIG; ir:\n{ir}"
+        );
+        let init = function_body(&ir, "__karac_static_init")
+            .expect("__karac_static_init must be emitted for a module OnceLock");
+        assert!(
+            init.contains("call ptr @karac_runtime_once_new"),
+            "static-init should build the once cell; body:\n{init}"
+        );
+        let main = function_body(&ir, "main").expect("main must lower");
+        assert!(
+            main.contains("call void @__karac_static_init"),
+            "main should forward-call the static-init prologue; body:\n{main}"
+        );
+    }
+
     /// `forget(x)` (FFI ownership-handoff primitive, additive-interop
     /// Slice 4) consumes `x` and suppresses its destructor. A user-`Drop`
     /// counter makes suppression observable at codegen: with `forget(b)`

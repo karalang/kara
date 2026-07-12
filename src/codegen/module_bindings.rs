@@ -128,6 +128,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.map_set_module_inits.push((b.name.clone(), is_set));
                 continue;
             }
+            // `let CONFIG: OnceLock[T] = OnceLock.new()` — same placeholder-null-
+            // ptr-global + static-init-prologue shape as Map/Set (the opaque
+            // `*mut KaracOnce` handle is a runtime value, not a compile-time
+            // constant). `karac_runtime_once_new` runs in `__karac_static_init`
+            // before `main`. Never freed (module-lifetime). `#[thread_local]`
+            // not honored (main-thread init only), matching Map/Set.
+            if module_binding_is_once_new(b) {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let global = self.module.add_global(ptr_ty, None, &b.name);
+                global.set_initializer(&ptr_ty.const_null());
+                global.set_constant(false);
+                global.set_linkage(Linkage::Internal);
+                self.module_bindings.insert(
+                    b.name.clone(),
+                    ModuleBindingInfo {
+                        global,
+                        llvm_ty: ptr_ty.into(),
+                        is_mut: b.is_mut,
+                        declared_type: b.ty.clone(),
+                    },
+                );
+                self.once_module_inits.push(b.name.clone());
+                continue;
+            }
             let Some((llvm_ty, initializer)) = self.module_binding_init(b) else {
                 // Not a foldable const shape. A COMPUTED / cross-referencing
                 // initializer (`let DOUBLED: i64 = COUNT * 2;`) with a declared
@@ -192,7 +216,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // type metadata is available; `main`'s entry emits a forward
         // `call` to it (a valid LLVM reference to an internal fn defined
         // later in the same module).
-        if (!self.map_set_module_inits.is_empty() || !self.computed_module_inits.is_empty())
+        if (!self.map_set_module_inits.is_empty()
+            || !self.computed_module_inits.is_empty()
+            || !self.once_module_inits.is_empty())
             && self.static_init_fn.is_none()
         {
             let void_ty = self.context.void_type();
@@ -246,6 +272,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(&name)
                 .map(|i| i.global.as_pointer_value());
             let handle = self.build_map_new_handle(&name, is_set);
+            if let Some(gp) = global_ptr {
+                self.builder.build_store(gp, handle).unwrap();
+            }
+        }
+
+        // `OnceLock[T]` module bindings: build a fresh runtime cell handle
+        // (`karac_runtime_once_new`) and store it into the binding's global.
+        // No side-table reseed is needed to *construct* the cell (the handle is
+        // type-agnostic; `T` only matters at the `set`/`get` call sites, where
+        // `reseed_module_binding_side_tables` repopulates `once_var_types` per
+        // function). Never freed — module-lifetime.
+        let once_inits = self.once_module_inits.clone();
+        for name in once_inits {
+            let global_ptr = self
+                .module_bindings
+                .get(&name)
+                .map(|i| i.global.as_pointer_value());
+            let new_fn = self
+                .module
+                .get_function("karac_runtime_once_new")
+                .expect("karac_runtime_once_new declared in Codegen::new");
+            let handle = self
+                .builder
+                .build_call(new_fn, &[], "modonce.new")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic();
             if let Some(gp) = global_ptr {
                 self.builder.build_store(gp, handle).unwrap();
             }
@@ -682,6 +735,25 @@ fn module_binding_is_map_set_new(b: &ModuleBinding) -> Option<bool> {
         "Set" => Some(true),
         _ => None,
     }
+}
+
+/// `true` when the binding's initializer is a zero-arg `OnceLock.new()` call.
+/// Like Map/Set this needs a runtime handle (`karac_runtime_once_new`), so it
+/// takes the placeholder-global + static-init path rather than const-init.
+/// `OnceCell.new()` is intentionally excluded — `OnceCell` is rejected at
+/// module scope by the typechecker (`E_ONCE_CELL_AT_MODULE_SCOPE`), so a
+/// module binding is always `OnceLock`.
+fn module_binding_is_once_new(b: &ModuleBinding) -> bool {
+    let ExprKind::Call { callee, args } = &b.value.kind else {
+        return false;
+    };
+    if !args.is_empty() {
+        return false;
+    }
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return false;
+    };
+    segments.len() == 2 && segments[0] == "OnceLock" && segments[1] == "new"
 }
 
 /// `true` when `ty` names `StringSlice` (single-segment path). The

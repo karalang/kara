@@ -2609,6 +2609,15 @@ pub(super) struct Codegen<'ctx> {
     /// by `declare_module_bindings`; consumed by
     /// `finalize_module_binding_static_init`.
     pub(crate) map_set_module_inits: Vec<(String, bool)>,
+    /// Module-level `OnceLock[T]` bindings (`let CONFIG: OnceLock[T] =
+    /// OnceLock.new()`) — the canonical late-bound global (set once in startup,
+    /// read everywhere). Like the Map/Set entries these need a runtime handle
+    /// (`karac_runtime_once_new`), so they take the placeholder-null-ptr-global
+    /// plus static-init-prologue path. Never freed — a module binding lives for
+    /// the whole process (reachable through the global at exit; LSan-clean). Only
+    /// `OnceLock` reaches here: `OnceCell` is rejected at module scope by the
+    /// typechecker (`E_ONCE_CELL_AT_MODULE_SCOPE`).
+    pub(crate) once_module_inits: Vec<String>,
     /// Module bindings whose initializer is a COMPUTED / cross-referencing
     /// expression (`let DOUBLED: i64 = COUNT * 2;`, referencing another module
     /// binding, or any arithmetic the const-shape path can't fold) — the shapes
@@ -5963,6 +5972,7 @@ impl<'ctx> Codegen<'ctx> {
             consts: HashMap::new(),
             module_bindings: HashMap::new(),
             map_set_module_inits: Vec::new(),
+            once_module_inits: Vec::new(),
             computed_module_inits: Vec::new(),
             module_binding_types: std::collections::HashMap::new(),
             static_init_fn: None,
