@@ -1922,6 +1922,26 @@ fn test_closure_unannotated_param_inferred_from_arith_body() {
 }
 
 #[test]
+fn test_closure_param_inferred_from_call_site() {
+    // B-2026-07-12-20: a let-bound closure whose un-annotated param has NO body
+    // constraint (`let id = |x| x`) infers the param from the monomorphic call
+    // site's argument type. The return shares the param's var, so `id(5)` types
+    // as `i64` and `s("hi")` as `String`. build == run — the closure's recorded
+    // type is resolved through the substitutions at finalize so codegen lays the
+    // param out at the right width (the `String` case caught a build!=run gap).
+    assert_eq!(
+        run("fn main() {\n\
+             let id = |x| x;\n\
+             let n: i64 = id(5);\n\
+             println(n + 1);\n\
+             let s = |y| y;\n\
+             println(s(\"hello\"));\n\
+         }"),
+        "6\nhello\n"
+    );
+}
+
+#[test]
 fn test_closure_captures() {
     assert_eq!(
         run("fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\

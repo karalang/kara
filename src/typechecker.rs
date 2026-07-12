@@ -1877,6 +1877,7 @@ impl<'a> TypeChecker<'a> {
         self.emit_missing_non_exhaustive_warnings();
         self.check_items();
         self.finalize_pattern_binding_inner_types();
+        self.finalize_closure_expr_types();
         // Fallible-allocation: under `panic_on_alloc_failure = false`, reject
         // every panicking heap-allocating site (phase-8-stdlib-floor item 4).
         // Runs after `check_items` so `expr_types` (the receiver-type source)

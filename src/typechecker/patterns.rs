@@ -1418,6 +1418,46 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Call-site-driven closure param inference (B-2026-07-12-20). A closure
+    /// whose un-annotated param was solved only at a LATER call site — e.g.
+    /// `let id = |x| x; id(5)` — had its `Fn(?T0) -> ?T0` recorded in
+    /// `expr_types` at the closure literal, before the call solved `?T0`.
+    /// Re-resolve every recorded `Function` / `OnceFunction` type against the
+    /// now-final substitutions so codegen (which reads closure signatures from
+    /// `fn_value_typed_exprs`, built in lowering from `expr_types`) sees the
+    /// concrete param/return types instead of defaulting an unresolved param to
+    /// `i64`. Mirrors `finalize_pattern_binding_inner_types`; runs at the same
+    /// finalize point. Only `Fn`-typed entries whose resolution actually changes
+    /// are rewritten, so the common (already-concrete) case is untouched.
+    pub(super) fn finalize_closure_expr_types(&mut self) {
+        let id_to_name: HashMap<TypeVarId, String> = HashMap::new();
+        let const_id_to_name: HashMap<ConstVarId, String> = HashMap::new();
+        let updates: Vec<(SpanKey, Type)> = self
+            .expr_types
+            .iter()
+            .filter_map(|(key, ty)| {
+                let core = match ty {
+                    Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                    other => other,
+                };
+                if !matches!(core, Type::Function { .. } | Type::OnceFunction { .. }) {
+                    return None;
+                }
+                let resolved = resolve_type_vars(
+                    ty,
+                    &self.env.substitutions,
+                    &id_to_name,
+                    &self.env.const_substitutions,
+                    &const_id_to_name,
+                );
+                (resolved != *ty).then_some((*key, resolved))
+            })
+            .collect();
+        for (key, ty) in updates {
+            self.expr_types.insert(key, ty);
+        }
+    }
+
     pub(super) fn bind_pattern_types(&mut self, pattern: &Pattern, ty: &Type) {
         match &pattern.kind {
             PatternKind::Binding(name) => {

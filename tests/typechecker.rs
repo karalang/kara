@@ -3347,6 +3347,41 @@ fn test_closure_pullside_param_inferred_from_arith_body() {
 }
 
 #[test]
+fn test_closure_param_inferred_from_call_site() {
+    // B-2026-07-12-20: a let-bound closure with an un-annotated param and NO
+    // body constraint infers the param from the monomorphic call site.
+    // `let id = |x| x; id(5)` types `x` (and the shared return) as `i64`.
+    typecheck_ok(
+        "fn main() {\n\
+             let id = |x| x;\n\
+             let _n: i64 = id(5);\n\
+             let s = |y| y;\n\
+             let _t: String = s(\"hi\");\n\
+         }",
+    );
+}
+
+#[test]
+fn test_closure_param_call_site_second_type_mismatches() {
+    // Closures are monomorphic: once the first call fixes the param, a second
+    // call with a different type is a mismatch (not re-inferred).
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let id = |x| x;\n\
+             let _a: i64 = id(5);\n\
+             let _b = id(\"hi\");\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'i64'") && e.message.contains("String")),
+        "expected an i64-vs-String monomorphic mismatch, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_closure_pushdown_unannotated_params() {
     // Closure params have no type annotation; expected `Fn(i64) -> i64`
     // pushdown gives `x` type `i64`, so `x + 1` resolves to `i64`.

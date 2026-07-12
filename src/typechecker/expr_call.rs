@@ -14,7 +14,7 @@ use crate::cross_task_safe::is_cross_task_safe_with;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
-use super::inference::{expr_as_type_expr, is_literal_const_arg_expr};
+use super::inference::{expr_as_type_expr, is_literal_const_arg_expr, resolve_type_var_top};
 use super::types::{type_display, ConstArg, DimArg, IntSize, Type, UIntSize};
 use super::TypeErrorKind;
 
@@ -1292,8 +1292,34 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     return *return_type.clone();
                 }
-                let params = params.clone();
-                let return_type = *return_type.clone();
+                // Call-site-driven closure param inference (B-2026-07-12-20): a
+                // param still an unsolved inference var — an un-annotated closure
+                // param with no body constraint to fix it, e.g. `let id = |x| x`
+                // — is solved from this monomorphic call's argument type.
+                // Closures are monomorphic, so one call fixes the var (a later
+                // call with a different type then mismatches, as intended).
+                // Only the arg opposite a var param is inferred here (the rare
+                // case); concrete params fall straight through to the normal
+                // arg-check below. For the identity closure the return shares the
+                // param's var, so solving the param also resolves the return. The
+                // closure literal's RECORDED type (`expr_types`) is resolved
+                // separately in `finalize_closure_expr_types` so codegen's
+                // `fn_value_typed_exprs` sees the solved param.
+                for (param, arg) in params.iter().zip(args.iter()) {
+                    if let Type::TypeVar(id) = resolve_type_var_top(param, &self.env.substitutions)
+                    {
+                        let arg_ty = self.infer_expr(&arg.value);
+                        if arg_ty != Type::Error && !matches!(arg_ty, Type::TypeVar(_)) {
+                            self.env.substitutions.insert(id, arg_ty);
+                        }
+                    }
+                }
+                let params: Vec<Type> = params
+                    .iter()
+                    .map(|p| resolve_type_var_top(p, &self.env.substitutions))
+                    .collect();
+                let return_type =
+                    resolve_type_var_top(return_type.as_ref(), &self.env.substitutions);
                 self.check_call_args_with_substitution_full(
                     args,
                     &params,

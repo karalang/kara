@@ -7907,6 +7907,29 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_closure_param_inferred_from_call_site() {
+        // B-2026-07-12-20: a let-bound closure with an un-annotated param and NO
+        // body constraint (`let id = |x| x`) infers the param from the call
+        // site. The call-site solve lands after the closure literal's type is
+        // recorded, so `finalize_closure_expr_types` re-resolves the recorded
+        // `Fn` type through the substitutions — without it codegen defaulted the
+        // param to i64 and a `String` identity closure failed module
+        // verification. build == run; the `String` closure is heap and
+        // valgrind-clean.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let id = |x| x;\n\
+                 let n: i64 = id(5);\n\
+                 println(n + 1);\n\
+                 let s = |y| y;\n\
+                 println(s(\"hello\"));\n\
+             }",
+        ) {
+            assert_eq!(out, "6\nhello\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_index_vec_field_through_self() {
         // Regression for the self-hosting lexer index blocker: indexing a
         // `Vec` field through the `self` receiver (`self.bytes[self.current]`)
