@@ -82,6 +82,10 @@ import ast.{
     StructLitExpr,
     Pattern,
     BindingPattern,
+    TupleVariantPattern,
+    StructPattern,
+    StructFieldPat,
+    OrPattern,
     IfExpr,
     ReturnExpr,
     WhileExpr,
@@ -111,13 +115,23 @@ struct ExprInfo {
     span: Span,
 }
 
-// A type error: `kind` is 0=TypeMismatch, 1=ConditionNotBool; `off`/`len` are
-// the byte span. Mirrors the resolver's `ResolveError` shape so the oracle
-// renders both identically.
+// A type error: `kind` is 0=TypeMismatch, 1=ConditionNotBool, 2=UndefinedField,
+// 3=ExtraField, 5=NonExhaustiveMatch; `off`/`len` are the byte span. Mirrors the
+// resolver's `ResolveError` shape so the oracle renders both identically.
 pub struct TypeError {
     kind: i64,
     off: i64,
     len: i64,
+}
+
+// The classification of ONE `match` arm pattern for the exhaustiveness check
+// (Slice 9). `code`: 0 = catch-all (wildcard, or a binding that is not a
+// variant), 1 = covers a single enum variant (named in `variant`), 2 = skip
+// (a pattern outside the checkable subset — its presence makes the whole match
+// un-analyzable, so no diagnostic fires), 3 = ignore (contributes nothing).
+struct PatClass {
+    code: i64,
+    variant: String,
 }
 
 // A bound name's inferred category tagged with its owning scope (Slice 2). A
@@ -152,6 +166,15 @@ struct Checker {
     fld_owner: Vec[i64],
     fld_names: Vec[String],
     fld_cats: Vec[i64],
+    // Enum-definition tables (Slice 9). `enum_names[i]` is the i-th enum; its
+    // type category is `ENUM_BASE + i` (see `cat_of_type`). Variant names live in
+    // two parallel vecs keyed by owning enum index — an enum's variants are the
+    // entries whose `var_owner` equals its index. Used by the `match`
+    // exhaustiveness check; enum categories are otherwise transparent (never a
+    // mismatch / condition flag) so no new false positive is introduced.
+    enum_names: Vec[String],
+    var_owner: Vec[i64],
+    var_names: Vec[String],
 }
 
 // ── Entry point ──
@@ -173,6 +196,9 @@ pub fn typecheck_program(items: Vec[Item]) -> Vec[TypeError] with panics {
         fld_owner: Vec.new(),
         fld_names: Vec.new(),
         fld_cats: Vec.new(),
+        enum_names: Vec.new(),
+        var_owner: Vec.new(),
+        var_names: Vec.new(),
     };
     // Root scope (parent = -1); each function pushes its own child scope.
     c.parents.push(-1);
@@ -197,6 +223,9 @@ pub fn typecheck_program(items: Vec[Item]) -> Vec[TypeError] with panics {
         fld_owner,
         fld_names,
         fld_cats,
+        enum_names,
+        var_owner,
+        var_names,
     } = c;
     errors
 }
@@ -220,6 +249,9 @@ impl Checker {
                 Func(f) => {
                     self.fn_names.push(f.name);
                 }
+                Enum(e) => {
+                    self.enum_names.push(e.name);
+                }
                 _ => {}
             }
         }
@@ -231,6 +263,7 @@ impl Checker {
     // INLINE (never passed by value to a helper — B-2026-07-11-37).
     fn collect_details(mut ref self, items: ref Vec[Item]) {
         let mut si = 0;
+        let mut ei = 0;
         for it in items {
             match it {
                 Struct(s) => {
@@ -260,6 +293,21 @@ impl Checker {
                         None => {}
                     }
                     self.fn_rets.push(rc);
+                }
+                Enum(e) => {
+                    // Register each variant NAME keyed by the owning enum index
+                    // (== enum position in registration order, tracked by `ei`).
+                    let owner = ei;
+                    ei = ei + 1;
+                    let mut vi = 0;
+                    loop {
+                        if vi >= e.variants.len() {
+                            break;
+                        }
+                        self.var_owner.push(owner);
+                        self.var_names.push(e.variants[vi].name);
+                        vi = vi + 1;
+                    }
                 }
                 _ => {}
             }
@@ -308,6 +356,45 @@ impl Checker {
         1000 + idx
     }
 
+    // The index of enum `name` in registration order, or -1 if unknown.
+    fn enum_id_of(ref self, name: ref String) -> i64 {
+        let mut i = 0;
+        loop {
+            if i >= self.enum_names.len() {
+                return -1;
+            }
+            if self.enum_names[i] == name {
+                return i;
+            }
+            i = i + 1;
+        }
+    }
+
+    // The enum-type category (`ENUM_BASE + index`) of `name`, or -1 if unknown.
+    fn enum_cat_of(ref self, name: ref String) -> i64 {
+        let idx = self.enum_id_of(name);
+        if idx < 0 {
+            return -1;
+        }
+        100000 + idx
+    }
+
+    // True iff enum `enum_idx` declares a variant named `vname`.
+    fn enum_has_variant(ref self, enum_idx: i64, vname: ref String) -> bool {
+        let mut i = 0;
+        loop {
+            if i >= self.var_owner.len() {
+                return false;
+            }
+            if self.var_owner[i] == enum_idx {
+                if self.var_names[i] == vname {
+                    return true;
+                }
+            }
+            i = i + 1;
+        }
+    }
+
     // A declared type's category: a primitive (via `cat_of_name`), a known
     // struct (`STRUCT_BASE + index`), else UNKNOWN. A METHOD (not a free fn)
     // because it consults the struct table.
@@ -325,6 +412,10 @@ impl Checker {
                 let sc = self.struct_cat_of(segments[0]);
                 if sc >= 0 {
                     return sc;
+                }
+                let ec = self.enum_cat_of(segments[0]);
+                if ec >= 0 {
+                    return ec;
                 }
                 4
             }
@@ -666,7 +757,7 @@ impl Checker {
                 let FieldAccessExpr { object, field, span } = n;
                 let oi = self.check_expr(object);
                 let mut cat = 4;
-                if oi.category >= 1000 {
+                if oi.category >= 1000 and oi.category < 100000 {
                     let sid = oi.category - 1000;
                     if not self.has_field(sid, field) {
                         // Access of a field the struct doesn't declare —
@@ -682,8 +773,9 @@ impl Checker {
             If(n) => {
                 let IfExpr { cond, then_block, else_branch, span } = n;
                 let ci = self.check_expr(cond);
-                // A known NON-bool primitive condition is ConditionNotBool.
-                if ci.category != 4 and ci.category != 1 {
+                // A known NON-bool condition is ConditionNotBool. Enum categories
+                // (>= ENUM_BASE) are transparent (Slice 9), so they never flag.
+                if ci.category != 4 and ci.category != 1 and ci.category < 100000 {
                     self.push_err(1, ci.span.offset, ci.span.length);
                 }
                 self.check_block(then_block);
@@ -719,7 +811,152 @@ impl Checker {
                 }
                 ExprInfo { category: cat, span: span }
             }
+            Match(n) => {
+                // Infer the scrutinee, walk every arm (guard + body, so nested
+                // checks inside them fire), and — for an ENUM scrutinee whose arms
+                // are all in the checkable subset — verify exhaustiveness (Slice
+                // 9). Coverage is accumulated inline (no Vec passed by ref): a
+                // guardless arm's pattern contributes a catch-all, a covered
+                // variant, or (for an out-of-subset pattern) a `skip` that makes
+                // the whole match un-analyzable. A guarded arm never counts toward
+                // coverage (its guard may fail), mirroring the seed. The
+                // NonExhaustiveMatch anchor is the whole `match` span, which the
+                // seed uses too.
+                let MatchExpr { scrutinee, arms, span } = n;
+                let si = self.check_expr(scrutinee);
+                let mut covered: Vec[String] = Vec.new();
+                let mut catchall = false;
+                let mut skip = false;
+                for arm in arms {
+                    let MatchArm { pattern, guard, body, span: asp } = arm;
+                    let has_guard = match guard {
+                        Some(g) => {
+                            let gi = self.check_expr(g);
+                            true
+                        }
+                        None => false,
+                    };
+                    // Only a GUARDLESS arm contributes to coverage. An `OrPat` is
+                    // flattened here (each alt classified separately); every other
+                    // pattern is classified once.
+                    if not has_guard {
+                        match pattern {
+                            OrPat(op) => {
+                                let OrPattern { alts, span: osp } = op;
+                                for alt in alts {
+                                    let pc = self.classify_one(si.category, alt);
+                                    if pc.code == 0 {
+                                        catchall = true;
+                                    }
+                                    if pc.code == 1 {
+                                        covered.push(pc.variant);
+                                    }
+                                    if pc.code == 2 {
+                                        skip = true;
+                                    }
+                                }
+                            }
+                            other => {
+                                let pc = self.classify_one(si.category, other);
+                                if pc.code == 0 {
+                                    catchall = true;
+                                }
+                                if pc.code == 1 {
+                                    covered.push(pc.variant);
+                                }
+                                if pc.code == 2 {
+                                    skip = true;
+                                }
+                            }
+                        }
+                    }
+                    let bi = self.check_expr(body);
+                }
+                // Exhaustiveness fires only for a known ENUM scrutinee with no
+                // catch-all and no out-of-subset arm; a missing variant (one whose
+                // name is absent from `covered`) is NonExhaustiveMatch (kind 5).
+                if si.category >= 100000 and not catchall and not skip {
+                    let eidx = si.category - 100000;
+                    let mut all = true;
+                    let mut i = 0;
+                    loop {
+                        if i >= self.var_owner.len() {
+                            break;
+                        }
+                        if self.var_owner[i] == eidx {
+                            let mut found = false;
+                            let mut j = 0;
+                            loop {
+                                if j >= covered.len() {
+                                    break;
+                                }
+                                if covered[j] == self.var_names[i] {
+                                    found = true;
+                                }
+                                j = j + 1;
+                            }
+                            if not found {
+                                all = false;
+                            }
+                        }
+                        i = i + 1;
+                    }
+                    if not all {
+                        self.push_err(5, span.offset, span.length);
+                    }
+                }
+                ExprInfo { category: 4, span: span }
+            }
             _ => ExprInfo { category: 4, span: zero_span() },
+        }
+    }
+
+    // Classify one (non-`OrPat`) `match` arm pattern for exhaustiveness (Slice
+    // 9). See `PatClass`. A binding whose name is a variant of the scrutinee enum
+    // COVERS it; any other binding / wildcard is a catch-all. A tuple- or
+    // struct-variant pattern covers its variant only when EVERY sub-pattern is
+    // irrefutable (a wildcard or a lowercase binding) — otherwise it is a `skip`,
+    // so a refutable payload (`Some(1)`, `Some(None)`) never claims full
+    // coverage. Literals / tuples / nested or-patterns are `skip`.
+    fn classify_one(ref self, enum_cat: i64, p: Pattern) -> PatClass {
+        let eidx = enum_cat - 100000;
+        match p {
+            WildcardPat(w) => PatClass { code: 0, variant: "".to_string() },
+            BindingPat(bp) => {
+                let BindingPattern { name, span } = bp;
+                if self.enum_has_variant(eidx, name) {
+                    PatClass { code: 1, variant: name }
+                } else {
+                    PatClass { code: 0, variant: "".to_string() }
+                }
+            }
+            TupleVariantPat(tv) => {
+                let TupleVariantPattern { segments, elems, span } = tv;
+                let vn = last_seg(segments);
+                let irref = all_irref(elems);
+                if not irref {
+                    return PatClass { code: 2, variant: "".to_string() };
+                }
+                if self.enum_has_variant(eidx, vn) {
+                    PatClass { code: 1, variant: vn }
+                } else {
+                    PatClass { code: 2, variant: "".to_string() }
+                }
+            }
+            StructPat(sp) => {
+                let StructPattern { segments, fields, has_rest, span } = sp;
+                let vn = last_seg(segments);
+                let irref = all_irref_fields(fields);
+                if not irref {
+                    return PatClass { code: 2, variant: "".to_string() };
+                }
+                if self.enum_has_variant(eidx, vn) {
+                    PatClass { code: 1, variant: vn }
+                } else {
+                    PatClass { code: 2, variant: "".to_string() }
+                }
+            }
+            _ => PatClass { code: 2, variant: "".to_string() },
         }
     }
 }
@@ -773,9 +1010,81 @@ fn cat_of_name(name: ref String) -> i64 {
     4
 }
 
+// True iff `name`'s first character is uppercase (mirrors the parser's
+// `pat_name_is_upper` — an uppercase bare identifier reads as a constructor).
+fn pat_name_is_upper(name: ref String) -> bool {
+    for c in name.chars() {
+        return c.is_uppercase();
+    }
+    false
+}
+
+// The LAST segment of a constructor path (the variant name), or "" if empty.
+// Consumes the segment vector (owned); the last element is read by copy.
+fn last_seg(segments: Vec[String]) -> String {
+    let n = segments.len();
+    if n == 0 {
+        return "".to_string();
+    }
+    segments[n - 1]
+}
+
+// True iff a payload sub-pattern is IRREFUTABLE for the exhaustiveness subset:
+// a wildcard, or a LOWERCASE binding (an uppercase binding may name a nested
+// variant — refutable — so it disqualifies the arm). Consumes the pattern.
+fn is_irref_sub(p: Pattern) -> bool {
+    match p {
+        WildcardPat(w) => true,
+        BindingPat(bp) => {
+            let BindingPattern { name, span } = bp;
+            not pat_name_is_upper(name)
+        }
+        _ => false,
+    }
+}
+
+// True iff every tuple-variant payload sub-pattern is irrefutable. Consumes the
+// element vector; uses a flag (never an early return out of the `for`).
+fn all_irref(elems: Vec[Pattern]) -> bool {
+    let mut ok = true;
+    for e in elems {
+        let this = is_irref_sub(e);
+        if not this {
+            ok = false;
+        }
+    }
+    ok
+}
+
+// True iff every struct-variant field sub-pattern is irrefutable. A shorthand
+// field (`Foo { x }`, `pattern` is None) binds irrefutably; `name: sub` checks
+// `sub`. The `Option[Pattern]` is matched INLINE (never passed by value).
+fn all_irref_fields(fields: Vec[StructFieldPat]) -> bool {
+    let mut ok = true;
+    for f in fields {
+        let StructFieldPat { name, pattern, span } = f;
+        match pattern {
+            Some(sub) => {
+                let this = is_irref_sub(sub);
+                if not this {
+                    ok = false;
+                }
+            }
+            None => {}
+        }
+    }
+    ok
+}
+
 // Two KNOWN categories are compatible iff equal — NUM is a single category, so
 // i64 vs f64 (both NUM) is compatible, reproducing the seed's numeric leniency.
+// An ENUM category (>= `ENUM_BASE`) is transparent — treated as compatible with
+// anything — so registering enums for the `match` exhaustiveness check (Slice 9)
+// never introduces an enum-vs-X mismatch (that check is a later slice).
 fn cats_compatible(a: i64, b: i64) -> bool {
+    if a >= 100000 or b >= 100000 {
+        return true;
+    }
     a == b
 }
 
@@ -857,7 +1166,10 @@ fn kind_tag(kind: i64) -> String {
     if kind == 2 {
         return "undef-field".to_string();
     }
-    "extra-field".to_string()
+    if kind == 3 {
+        return "extra-field".to_string();
+    }
+    "non-exhaustive".to_string()
 }
 
 pub fn render_errors(errs: Vec[TypeError]) -> String {

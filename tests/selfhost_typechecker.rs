@@ -191,6 +191,30 @@ const CORPUS: &[&str] = &[
     "fn f(s: String) -> bool { let n = s.len(); n }",
     // A method call as a bare statement is walked; its result is discarded.
     "fn f(s: String) { s.len(); }",
+    // ── Slice 9: match exhaustiveness (NonExhaustiveMatch) ──
+    // A `match` on a known ENUM scrutinee whose guardless arms leave a variant
+    // uncovered — with no catch-all (wildcard, or a binding that is not a
+    // variant) — is NonExhaustiveMatch at the whole `match` span. A binding
+    // whose name IS a variant covers it; an or-pattern covers each alt; a
+    // guarded arm never counts. Tuple/struct-variant patterns cover their
+    // variant when every payload sub-pattern is irrefutable (`Som(x)`,
+    // `Circle { r }`).
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) -> i64 { match c { Red => 1, Green => 2 } }",
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) -> i64 { match c { Red => 1, Green => 2, Blue => 3 } }",
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) -> i64 { match c { Red => 1, _ => 2 } }",
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) -> i64 { match c { Red => 1, other => 2 } }",
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) -> i64 { match c { Red => 1 } }",
+    // Or-pattern coverage (each alt counts) — exhaustive and non-exhaustive.
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) -> i64 { match c { Red | Green => 1, Blue => 2 } }",
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) -> i64 { match c { Red | Green => 1 } }",
+    // Tuple-variant payloads: an irrefutable binding covers the variant.
+    "enum Opt { Som(i64), Non }\nfn f(o: Opt) -> i64 { match o { Som(x) => x, Non => 0 } }",
+    "enum Opt { Som(i64), Non }\nfn f(o: Opt) -> i64 { match o { Som(x) => x } }",
+    // A GUARDED arm never counts toward coverage — `Red` here stays missing.
+    "enum Color { Red, Green, Blue }\nfn f(c: Color, b: bool) -> i64 { match c { Red if b => 1, Green => 2, Blue => 3 } }",
+    // Struct-variant patterns: irrefutable field bindings cover the variant.
+    "enum Shape { Circle { r: i64 }, Sq }\nfn f(s: Shape) -> i64 { match s { Circle { r } => r, Sq => 0 } }",
+    "enum Shape { Circle { r: i64 }, Sq }\nfn f(s: Shape) -> i64 { match s { Circle { r } => r } }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
@@ -230,6 +254,7 @@ fn rust_render(src: &str) -> String {
             "ConditionNotBool" => "cond-not-bool",
             "UndefinedField" => "undef-field",
             "ExtraField" => "extra-field",
+            "NonExhaustiveMatch" => "non-exhaustive",
             other => panic!(
                 "corpus entry {src:?} produced an out-of-Slice-1 type-error kind {other} \
                  (message: {}); trim the corpus or extend the slice",
