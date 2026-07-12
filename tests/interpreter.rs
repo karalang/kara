@@ -5294,6 +5294,41 @@ fn test_into_drives_user_from_impl() {
 }
 
 #[test]
+fn test_into_at_struct_field_if_and_match_tails() {
+    // `.into()` must thread the expected type through three positions the
+    // let/return/call-arg tests above don't reach: a struct-literal field
+    // value (checked against the declared field type), an if/else tail, and
+    // a match-arm tail. All three already flow through `check_expr` with the
+    // contextual type, so the user `impl From[Celsius] for Kelvin` fires at
+    // each — this guards that the threading stays wired at every position.
+    let output = run("struct Celsius { deg: i64 }\n\
+         struct Kelvin { k: i64 }\n\
+         impl From for Kelvin {\n\
+             fn from(c: Celsius) -> Kelvin { Kelvin { k: c.deg + 273 } }\n\
+         }\n\
+         struct Reading { temp: Kelvin }\n\
+         fn pick(hot: bool) -> Kelvin {\n\
+             if hot { (Celsius { deg: 100 }).into() }\n\
+             else { (Celsius { deg: 0 }).into() }\n\
+         }\n\
+         fn classify(n: i64) -> Kelvin {\n\
+             match n {\n\
+                 0 => (Celsius { deg: 0 }).into(),\n\
+                 _ => (Celsius { deg: n }).into(),\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let r: Reading = Reading { temp: (Celsius { deg: 27 }).into() };\n\
+             println(r.temp.k);\n\
+             println(pick(true).k);\n\
+             println(pick(false).k);\n\
+             println(classify(0).k);\n\
+             println(classify(50).k);\n\
+         }");
+    assert_eq!(output, "300\n373\n273\n273\n323\n");
+}
+
+#[test]
 fn test_tryinto_drives_user_tryfrom_impl() {
     // A user `impl TryFrom[Celsius] for Kelvin` must drive BOTH the explicit
     // `Kelvin.try_from(c)` call and the `.try_into()` sugar at a

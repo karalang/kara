@@ -28398,6 +28398,48 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_into_at_struct_field_if_and_match_tails() {
+        // `.into()` threads the expected type through a struct-literal field
+        // value, an if/else tail, and a match-arm tail — the three positions
+        // the let/return/call-arg codegen tests above don't reach. Each flows
+        // through `check_expr` with the contextual type, so the user
+        // `impl From[Celsius] for Kelvin` lowers to `Kelvin.from(...)` at
+        // every one. Build==run parity with the interpreter sibling
+        // (`test_into_at_struct_field_if_and_match_tails`).
+        let out = run_program(
+            r#"
+struct Celsius { deg: i64 }
+struct Kelvin { k: i64 }
+impl From for Kelvin {
+    fn from(c: Celsius) -> Kelvin { Kelvin { k: c.deg + 273 } }
+}
+struct Reading { temp: Kelvin }
+fn pick(hot: bool) -> Kelvin {
+    if hot { (Celsius { deg: 100 }).into() }
+    else { (Celsius { deg: 0 }).into() }
+}
+fn classify(n: i64) -> Kelvin {
+    match n {
+        0 => (Celsius { deg: 0 }).into(),
+        _ => (Celsius { deg: n }).into(),
+    }
+}
+fn main() {
+    let r: Reading = Reading { temp: (Celsius { deg: 27 }).into() };
+    println(r.temp.k);
+    println(pick(true).k);
+    println(pick(false).k);
+    println(classify(0).k);
+    println(classify(50).k);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "300\n373\n273\n273\n323");
+        }
+    }
+
+    #[test]
     fn test_e2e_tryinto_drives_user_tryfrom_impl() {
         // A user `impl TryFrom[Celsius] for Kelvin` compiles as `Kelvin.try_from`;
         // `.try_into()` at a `let: Result[Kelvin, _]` position lowers to
