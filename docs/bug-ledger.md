@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **403 surfaced · 9 open · 391 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **404 surfaced · 9 open · 392 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
@@ -103,11 +103,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **403 surfaced 
 | B-2026-07-12-4 | 2026-07-12 | codegen | medium | Pushing a FIELD-READ `Option[shared]` (`stack.push(n.left)`) onto a `Vec[Option[shared]]` and dropping the Vec with residual elements LEAKS the pushed handles; a fresh `Some(..)` push is clean | kata #100 |
 | B-2026-07-12-6 | 2026-07-12 | codegen | medium | A match ARM inside a very large recursive match-method that declares ~4+ heap-typed (Vec) locals corrupts memory (segfault / double-free / spurious vec-index-out-of-bounds); moving the arm body into its own method is clean | phase-12 self-hosting |
 | B-2026-07-12-7 | 2026-07-12 | codegen | medium | A volatile read through `ptr.const(param.field)` does NOT observe a prior volatile write through `ptr.mut(param.field)` to the SAME field, IN THE SAME FUNCTION, when `param` is a `mut ref` struct parameter (reads the stale pre-write value); the write DOES reach real memory (a caller reading the same field back through a raw pointer sees it). The identical shape on an OWNED LOCAL is correct. Root: `ptr.const`/`ptr.mut` emit no address-taken/escape marker on the rooted binding, so mem2reg promotes a `ref`-param's local slot and the two independent pointer derivations read a promoted (stale) SSA value instead of shared memory. | raw-pointer construction (`ptr.const`/`ptr.mut`) does not mark the rooted binding as address-taken → mem2reg promotion → stale read-through-pointer for ref-param roots |
-| B-2026-07-12-10 | 2026-07-12 | typecheck | low | A `let`-bound closure with an UN-ANNOTATED param whose type must be PULLED from the body's arithmetic or from later call sites is not inferred — the param stays an unresolved `?T0`. `let f = |x| x + 1; f(5)` fails with `arithmetic operator requires numeric type, found '?T0'` + `expected '?T0', found 'i64'` at the call. Inference works when the type is PUSHED from context (e.g. `xs.iter().map(|x| x + 100)` — the element type flows in), and an explicit `|x: i64|` annotation works. | minimal repros below. LOUD (typecheck error `?T0`), consistent interp==build, workaround = annotate the param. Common ergonomic pattern. |
+| B-2026-07-12-20 | 2026-07-12 | typecheck | low | CALL-SITE-driven closure param inference is not implemented: a `let`-bound closure whose un-annotated param has NO body constraint to solve it (`let id = |x| x; id(5)`) stays an unsolved inference var (`?T0`) and the call is rejected (`expected '?T0', found 'i64'`). The BODY-driven half — `let f = |x| x + 1` inferring `x: i64` from the arithmetic — is FIXED (B-2026-07-12-10, 3fd34c0); this is the remaining half. To solve it the typechecker would collect the monomorphic call site's arg type(s) and unify them with the closure's param var (and propagate to the return, so `id(5): i64`). Low severity; workaround is to annotate (`|x: i64| x`) or give the body a solving constraint. Not a codegen/run bug (loud rejection). | — |
 
-### Fixed (391)
+### Fixed (392)
 
-<details><summary>391 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>392 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -493,6 +493,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **403 surfaced 
 | B-2026-07-12-6 | typecheck | medium | Inside a GENERIC method (`impl[T] Box[T]`), the result of `self.items.pop()` on a `Vec[T]` FIELD is INFERRED as `Option[Option[T]]` (one extra Option… | 237e27b |
 | B-2026-07-12-8 | codegen | medium | A GENERIC (monomorphized) function `fn f[T](..) -> i64` whose body TAIL is a bare `loop { . | 49c8c64 |
 | B-2026-07-12-9 | codegen | high | A `match` ARM GUARD (`p if cond => ..`) is SILENTLY IGNORED under codegen (`karac build` / JIT): the arm fires whenever its PATTERN matches, regardle… | 92656ed |
+| B-2026-07-12-10 | typecheck | low | FIXED (3fd34c0) for the arithmetic-body case | 3fd34c0 |
 | B-2026-07-12-11 | typecheck+interp+codegen | medium | `Option[T].map(f)` and `Result[T,E].map(f)` TYPECHECK CLEAN (`karac check` -> `All checks passed`) but are UNIMPLEMENTED in BOTH the interpreter AND… | ba52795 |
 | B-2026-07-12-12 | codegen | medium | A CLOSURE whose body is itself a CLOSURE (a closure returning a closure / currying) fails codegen: the OUTER closure's return type is lowered as the… | d29b6b0 |
 | B-2026-07-12-13 | codegen | high | A `match` on a TUPLE scrutinee is not DISCRIMINATED under codegen (`karac build` / JIT): the FIRST tuple-pattern arm always fires regardless of the t… | be39032 |
