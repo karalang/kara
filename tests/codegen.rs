@@ -7303,6 +7303,29 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_reduce_scalar_terminal() {
+        // B-2026-07-11-19 — the `reduce(|a, x| ..) -> Option[A]` terminal for a
+        // SCALAR element. Desugars to an `Option[i64]` accumulator folded via a
+        // synthetic `match` (None => Some(x), Some(a) => Some(body)). Covers a
+        // sum reduce, a max reduce, an empty source (None), a map().reduce, and a
+        // filter().reduce. (Heap-element reduce stays interp-only — gated out.)
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4];\n\
+                 match v.iter().reduce(|a, x| a + x) { Some(s) => println(s), None => println(-1) }\n\
+                 match v.iter().reduce(|a, x| if a > x { a } else { x }) { Some(s) => println(s), None => println(-1) }\n\
+                 let e: Vec[i64] = [];\n\
+                 match e.iter().reduce(|a, x| a + x) { Some(s) => println(s), None => println(-1) }\n\
+                 match v.iter().map(|x| x * 2).reduce(|a, x| a + x) { Some(s) => println(s), None => println(-1) }\n\
+                 match v.iter().filter(|x| x > 1).reduce(|a, x| a + x) { Some(s) => println(s), None => println(-1) }\n\
+             }",
+        ) {
+            // 10, 4, -1 (empty), 20, 9 (2+3+4)
+            assert_eq!(out, "10\n4\n-1\n20\n9\n");
+        }
+    }
+
+    #[test]
     fn test_stored_mutating_closure_rejected_in_codegen() {
         // B-2026-07-11-23 — a STORED closure that mutates a captured local is a
         // `mut ref` capture codegen doesn't support (by-value env); it must be

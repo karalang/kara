@@ -4027,14 +4027,15 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // `<iter-chain>.reduce(|a, x| ..)` — the `Option[A]`-returning fold
-        // terminal (B-2026-07-11-19). Typecheck + interpreter support it, but a
-        // codegen terminal would have to construct a synthetic `Option[A]`
-        // accumulator + per-element `match`/`Some`/`None` whose layout depends on
-        // typechecker-supplied payload sizing this fused desugar can't rederive —
-        // so `reduce` is INTERPRETER-FIRST at v1. Emit an intentional, actionable
-        // deferral here (rather than the generic "no handler" fall-through, which
-        // reads as an accidental codegen bug) so the shape stays loud, never a
-        // silent wrong answer.
+        // terminal (B-2026-07-11-19). For a SCALAR element it desugars to an
+        // `Option[A]` accumulator seeded `None`, folded per element via a `match`
+        // (`None => Some(x)`, `Some(acc) => Some(body)`) — the type-erased Option
+        // layout makes the synthetic `Some(...)` / `None` construction and the
+        // tag-dispatched match work without a typecheck pass over the nodes. A
+        // HEAP element (String/Vec/struct) falls through to the loud deferral
+        // below (its payload rc-accounting in the synthetic match is the
+        // remaining piece; the interpreter runs it). Also fails closed when the
+        // element type wasn't recorded or the chain shape isn't peelable.
         if method == "reduce"
             && args.len() == 1
             && matches!(
@@ -4042,13 +4043,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 ExprKind::MethodCall { .. } | ExprKind::Range { .. }
             )
         {
+            if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                if params.len() == 2 {
+                    if let (Some(acc_p), Some(x_p)) = (
+                        Self::closure_param_name(&params[0].pattern, "__rda"),
+                        Self::closure_param_name(&params[1].pattern, "__rdx"),
+                    ) {
+                        if let Some(v) = self
+                            .try_compile_iter_chain_reduce(object, &acc_p, &x_p, body, call_span)?
+                        {
+                            return Ok(v);
+                        }
+                    }
+                }
+            }
             return Err(
-                "`Iterator.reduce()` is not yet supported under `karac build` \
+                "`Iterator.reduce()` is not yet supported under `karac build` for this shape \
                         (codegen); it works under `karac run` (the tree-walk interpreter). \
-                        Its `Option[A]` result needs a synthetic accumulator whose layout \
-                        codegen can't yet size for an arbitrary element type. Re-run with \
-                        `--interp` (or `KARAC_RUN_JIT=0`), or use `.fold(init, f)` for a \
-                        non-optional accumulation."
+                        Re-run with `--interp` (or `KARAC_RUN_JIT=0`), or use `.fold(init, f)` \
+                        for a non-optional accumulation."
                     .to_string(),
             );
         }
@@ -6983,6 +6996,201 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
         self.try_compile_iter_chain_fold(recv, &zero, &acc_p, &x_p, &fold_body, call_span)
+    }
+
+    /// Lower `<src>.iter().{map|filter}*.reduce(|acc, x| body)` — the
+    /// `Option[A]`-returning fold terminal (B-2026-07-11-19). Desugars to
+    ///
+    /// ```text
+    /// { let mut __racc: Option[A] = None;
+    ///   for <elem> in <base> {
+    ///       <adapters>; let <x_p> = <adapted>;
+    ///       __racc = match __racc {
+    ///           None => Some(<x_p>),
+    ///           Some(<acc_p>) => Some(<body>),
+    ///       };
+    ///   }
+    ///   __racc }
+    /// ```
+    ///
+    /// The type-erased 4-word Option layout lets the synthetic `Some(...)` /
+    /// `None` construction (`coerce_to_payload_words`) and the tag-dispatched
+    /// match (which recognizes a bare `None` binding as a unit variant by tag)
+    /// work with no typecheck pass over these nodes. The `Option[A]` annotation
+    /// on the accumulator supplies the element type A for the `Some(acc)` payload
+    /// binding. Fails closed (`Ok(None)`) when the element type wasn't recorded
+    /// or the chain shape isn't one the shared peel understands.
+    fn try_compile_iter_chain_reduce(
+        &mut self,
+        recv: &Expr,
+        acc_p: &str,
+        x_p: &str,
+        reduce_body: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some(elem_te) = self
+            .iter_terminal_elem_types
+            .get(&(call_span.offset, call_span.length))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        // Gate to trivially-copyable (scalar) elements. A heap element (String /
+        // Vec / struct) would double-free in the synthetic `Some(acc) =>
+        // Some(f(acc, x))` match: the extracted payload is consumed by `f` AND
+        // the old accumulator's copy is dropped. Getting that rc-accounting
+        // right for arbitrary payloads is the deferred piece — non-Copy elements
+        // fall through to the loud `--interp` deferral (the interpreter runs
+        // them correctly). Scalar reduce (the common numeric case) is exact.
+        if !super::vec_method::is_trivially_copyable_te(&elem_te) {
+            return Ok(None);
+        }
+        let Some((base, steps)) = Self::peel_fused_map_filter_chain(recv) else {
+            return Ok(None);
+        };
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let sp = call_span.clone();
+        let raccname = format!("__racc_{}", uid);
+        let elem_name = steps
+            .first()
+            .map(|(_, p, _)| p.clone())
+            .unwrap_or_else(|| x_p.to_string());
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        // `Option[<elem>]`
+        let opt_te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Option".to_string()],
+                generic_args: Some(vec![GenericArg::Type(elem_te)]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        // `Some(<e>)` — the ctor callee is a bare `Identifier` (the form the
+        // parser produces and codegen's enum-variant-call recognition expects).
+        let some_of = |e: Expr| Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Identifier("Some".to_string()),
+                    span: sp.clone(),
+                }),
+                args: vec![CallArg {
+                    label: None,
+                    mut_marker: false,
+                    value: e,
+                    span: sp.clone(),
+                }],
+            },
+            span: sp.clone(),
+        };
+        let let_bind = |name: &str, value: Expr| Stmt {
+            kind: StmtKind::Let {
+                is_mut: false,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name.to_string()),
+                    span: sp.clone(),
+                },
+                ty: None,
+                value,
+            },
+            span: sp.clone(),
+        };
+        // Sink: bind x_p to the fully-adapted element, then fold `__racc` via a
+        // match — seed with `Some(x)` on the first (None) element, else combine.
+        let sink = |current: Expr| -> Vec<Stmt> {
+            let mut out = Vec::new();
+            let current_is_x = matches!(&current.kind, ExprKind::Identifier(n) if n == x_p);
+            if !current_is_x {
+                out.push(let_bind(x_p, current));
+            }
+            let match_expr = Expr {
+                kind: ExprKind::Match {
+                    scrutinee: Box::new(ident(&raccname)),
+                    arms: vec![
+                        MatchArm {
+                            pattern: Pattern {
+                                kind: PatternKind::Binding("None".to_string()),
+                                span: sp.clone(),
+                            },
+                            guard: None,
+                            body: some_of(ident(x_p)),
+                            span: sp.clone(),
+                        },
+                        MatchArm {
+                            pattern: Pattern {
+                                kind: PatternKind::TupleVariant {
+                                    path: vec!["Some".to_string()],
+                                    patterns: vec![Pattern {
+                                        kind: PatternKind::Binding(acc_p.to_string()),
+                                        span: sp.clone(),
+                                    }],
+                                },
+                                span: sp.clone(),
+                            },
+                            guard: None,
+                            body: some_of(reduce_body.clone()),
+                            span: sp.clone(),
+                        },
+                    ],
+                },
+                span: sp.clone(),
+            };
+            out.push(Stmt {
+                kind: StmtKind::Assign {
+                    target: ident(&raccname),
+                    value: match_expr,
+                },
+                span: sp.clone(),
+            });
+            out
+        };
+        let for_body = Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sp);
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(elem_name),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(base.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: for_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![
+                    Stmt {
+                        kind: StmtKind::Let {
+                            is_mut: true,
+                            pattern: Pattern {
+                                kind: PatternKind::Binding(raccname.clone()),
+                                span: sp.clone(),
+                            },
+                            ty: Some(opt_te),
+                            value: ident("None"),
+                        },
+                        span: sp.clone(),
+                    },
+                    for_loop,
+                ],
+                final_expr: Some(Box::new(ident(&raccname))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
     }
 
     /// Lower `<src>.iter().{map|filter}*.for_each(|x| body)` — the side-effecting
