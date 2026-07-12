@@ -10922,6 +10922,90 @@ impl<'ctx> super::Codegen<'ctx> {
         )
     }
 
+    /// Resolve a place expression to its in-memory address for
+    /// `ptr.const(place)` / `ptr.mut(place)`. Mirrors the typechecker's
+    /// structural place-validator (`is_place_expression` in
+    /// `expr_method_call.rs`, which accepts a binding / `self` / field
+    /// access / tuple index / index / dereference chain). Unlike the
+    /// match-suppression `field_chain_place_ptr`, the root binding is
+    /// resolved through `get_data_ptr`, so a chain rooted at a `ref` /
+    /// `mut ref` parameter or an RC-promoted binding yields the correct
+    /// pointee address — not the address of the slot that *holds* the
+    /// pointer. Returns `None` for a shape it can't resolve (a
+    /// call-rooted base, an unknown struct type, a non-simple Vec index),
+    /// so the `ptr.const` / `ptr.mut` dispatch falls through to the
+    /// status-quo diagnostic rather than emit a wrong address.
+    fn ptr_place_addr(&mut self, place: &Expr) -> Option<inkwell::values::PointerValue<'ctx>> {
+        match &place.kind {
+            ExprKind::Identifier(name) => self.get_data_ptr(name),
+            ExprKind::SelfValue => self.get_data_ptr("self"),
+            ExprKind::FieldAccess { object, field } => {
+                let base_ptr = self.ptr_place_addr(object)?;
+                let obj_ty = self.place_chain_type_name(object)?;
+                let st = *self.struct_types.get(obj_ty.as_str())?;
+                let idx = self
+                    .struct_field_names
+                    .get(obj_ty.as_str())?
+                    .iter()
+                    .position(|n| n == field)? as u32;
+                self.builder
+                    .build_struct_gep(st, base_ptr, idx, "ptr.place.field")
+                    .ok()
+            }
+            ExprKind::TupleIndex { object, index } => {
+                let base_ptr = self.ptr_place_addr(object)?;
+                let tuple_ty = self.place_chain_aggregate_llvm_type(object)?;
+                self.builder
+                    .build_struct_gep(tuple_ty, base_ptr, *index as u32, "ptr.place.tupidx")
+                    .ok()
+            }
+            ExprKind::Index { object, index } => {
+                let ExprKind::Identifier(vec_var) = &object.kind else {
+                    return None;
+                };
+                // Restricted to a plain (non-array-slot) Vec variable indexed
+                // by a side-effect-free index — `vec_index_elem_ptr` re-evaluates
+                // the index to recompute the element pointer, and a pure index
+                // makes that re-eval a no-op. Mirrors `field_chain_place_ptr`.
+                if !self.vec_elem_types.contains_key(vec_var.as_str())
+                    || !matches!(index.kind, ExprKind::Identifier(_) | ExprKind::Integer(..))
+                {
+                    return None;
+                }
+                let slot_is_array = self
+                    .variables
+                    .get(vec_var.as_str())
+                    .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)));
+                if slot_is_array {
+                    return None;
+                }
+                let vec_var = vec_var.clone();
+                self.vec_index_elem_ptr(&vec_var, index).ok()
+            }
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                operand,
+            } => {
+                // The operand's *value* is the address; reseat through
+                // `inttoptr` if it still flows as an integer.
+                let v = self.compile_expr(operand).ok()?;
+                match v {
+                    BasicValueEnum::PointerValue(pv) => Some(pv),
+                    BasicValueEnum::IntValue(iv) => self
+                        .builder
+                        .build_int_to_ptr(
+                            iv,
+                            self.context.ptr_type(AddressSpace::default()),
+                            "ptr.place.deref",
+                        )
+                        .ok(),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Slice 3 of the strict-provenance work (line 511). Lower one of
     /// the seven `ptr.*` module functions to its LLVM cast counterpart.
     /// Returns `Ok(None)` for an unknown method so the caller's
@@ -11057,42 +11141,21 @@ impl<'ctx> super::Codegen<'ctx> {
             // construction from a place expression (typechecker
             // place-validator gate is upstream — design.md § Raw
             // Pointer Construction, v60 item 19). The result is the
-            // place's storage address as a genuine `ptr` value. v1
-            // covers the two common shapes:
-            //  - Identifier place: look up the binding's storage
-            //    slot via `get_data_ptr` (handles owned alloca and
-            //    ref-param indirection) — that slot pointer IS the
-            //    result, no cast needed.
-            //  - Deref of an already-pointer SSA: the operand's value
-            //    *is* the address; reseat through `to_ptr` in case it
-            //    still flows as an integer.
-            // Field / index / nested-deref places fall through to
-            // the generic identifier path via the synth-identifier
-            // mechanism if reachable; a focused diagnostic for
-            // unsupported shapes lands as a follow-up.
-            "const" | "mut" if args.len() == 1 => {
-                let place = &args[0].value;
-                match &place.kind {
-                    ExprKind::Identifier(name) => {
-                        if let Some(ptr) = self.get_data_ptr(name) {
-                            return Ok(Some(ptr.into()));
-                        }
-                        // Identifier didn't resolve to a binding (e.g.
-                        // a free function name reached here). Fall
-                        // through to the generic method-call path,
-                        // which will surface its own diagnostic.
-                        Ok(None)
-                    }
-                    ExprKind::Unary {
-                        op: UnaryOp::Deref,
-                        operand,
-                    } => {
-                        let v = self.compile_expr(operand)?;
-                        Ok(Some(to_ptr(self, v, "ptr.place.deref")))
-                    }
-                    _ => Ok(None),
-                }
-            }
+            // place's storage address as a genuine `ptr` value.
+            // `ptr_place_addr` resolves the full place grammar the
+            // typechecker accepts — binding / `self` / field access /
+            // tuple index / Vec index / dereference chains — rooting
+            // through `get_data_ptr` so a `ref` / `mut ref` / RC-promoted
+            // root yields the pointee address, not the slot address.
+            // `const` and `mut` share one path: the address is identical
+            // (LLVM `ptr` is unqualified); mutability is the typechecker's
+            // concern. `None` for an unresolvable shape (call-rooted base,
+            // unknown struct type) falls through to the generic
+            // method-call diagnostic rather than emit a wrong address.
+            "const" | "mut" if args.len() == 1 => match self.ptr_place_addr(&args[0].value) {
+                Some(ptr) => Ok(Some(ptr.into())),
+                None => Ok(None),
+            },
             // `ptr.null[T]()` / `ptr.null_mut[T]()` -> the all-zeroes
             // pointer (LLVM `ptr null`). The two methods differ only
             // in their typechecker-reported return type (`*const T`

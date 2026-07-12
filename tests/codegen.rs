@@ -3368,6 +3368,60 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ptr_const_mut_place_shapes_roundtrip() {
+        // `ptr.const(place)` / `ptr.mut(place)` over the full place grammar the
+        // typechecker's place-validator accepts — field access, a nested field
+        // chain, a tuple index, and a Vec index — not just the bare-binding /
+        // deref shapes the earlier codegen slice covered. Each place: write a
+        // sentinel through `ptr.mut(place)`, read it back through
+        // `ptr.const(place)`, and expect the sentinel. Witnesses `ptr_place_addr`
+        // GEPing to the correct in-place field / element address (owned-local
+        // roots, where the same-scope round-trip is observable — the reliable
+        // pattern the volatile-roundtrip test above also uses).
+        let out = run_program(
+            r#"
+struct Reg { status: i32, control: i32 }
+struct Block { inner: Reg, id: i64 }
+fn main() {
+    let mut r: Reg = Reg { status: 10, control: 20 };
+    // Safety: every pointer addresses a live owned local for the duration of use.
+    unsafe {
+        let pw: *mut i32 = ptr.mut(r.status);
+        volatile_write(pw, 99);
+        let pr: *const i32 = ptr.const(r.status);
+        println(volatile_read(pr));
+    }
+    let mut b: Block = Block { inner: Reg { status: 1, control: 2 }, id: 7 };
+    unsafe {
+        let pw: *mut i32 = ptr.mut(b.inner.control);
+        volatile_write(pw, 500);
+        let pr: *const i32 = ptr.const(b.inner.control);
+        println(volatile_read(pr));
+    }
+    let mut pair: (i32, i32) = (11, 22);
+    unsafe {
+        let pw: *mut i32 = ptr.mut(pair.1);
+        volatile_write(pw, 222);
+        let pr: *const i32 = ptr.const(pair.1);
+        println(volatile_read(pr));
+    }
+    let mut v: Vec[i32] = Vec.new();
+    v.push(3);
+    v.push(4);
+    unsafe {
+        let pw: *mut i32 = ptr.mut(v[1]);
+        volatile_write(pw, 444);
+    }
+    println(v[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "99\n500\n222\n444");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_set_get_is_set_lifecycle() {
         // `OnceLock[i64]` write-once lifecycle under `karac build`/JIT (was
         // interpreter-only). Empty → `is_set() == false`, `get() == None`;
@@ -13594,6 +13648,39 @@ fn main() {
         assert!(
             !ir.contains("method dispatch fell through"),
             "ptr.mut dispatch must not fall through; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_ptr_const_on_field_place_compiles() {
+        // `ptr.const(place)` over a field-access place must resolve to a GEP'd
+        // field address (`ptr_place_addr`), not fall through — matching the
+        // typechecker's place-validator, which already accepts field / index /
+        // tuple-index places.
+        let ir = ir_for(
+            "struct Reg { status: i32, control: i32 } \
+             fn main() { let r: Reg = Reg { status: 1, control: 2 }; \
+             let p: *const i32 = ptr.const(r.control); }",
+        );
+        assert!(
+            !ir.contains("method dispatch fell through"),
+            "ptr.const on a field place must not fall through; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_ptr_mut_on_tuple_and_index_place_compiles() {
+        // Tuple-index place (`pair.0`) and Vec-index place (`v[0]`) both resolve
+        // via `ptr_place_addr` rather than falling through.
+        let ir = ir_for(
+            "fn main() { let mut pair: (i32, i32) = (1, 2); \
+             let pt: *mut i32 = ptr.mut(pair.0); \
+             let mut v: Vec[i32] = Vec.new(); v.push(9); \
+             let pv: *mut i32 = ptr.mut(v[0]); }",
+        );
+        assert!(
+            !ir.contains("method dispatch fell through"),
+            "ptr.mut on tuple / index places must not fall through; got IR:\n{ir}"
         );
     }
 
