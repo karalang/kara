@@ -1041,6 +1041,19 @@ impl<'a> Lowerer<'a> {
             return None;
         }
         let target = self.tc.into_conversions.get(&SpanKey::from_span(span))?;
+        // Wrapping conversions (design.md § Conversion Traits): the typechecker
+        // records the bare enum name `Option` / `Result` for the
+        // `From[T] for Option[T]` / `From[T] for Result[T, E]` blankets. There
+        // is no `Option.from` / `Result.from` method — build the `Some(x)` /
+        // `Ok(x)` variant constructor directly. Downstream this is
+        // indistinguishable from a hand-written `Some(x)` / `Ok(x)`, so every
+        // existing enum-construction path (interpreter + codegen) applies and
+        // the `Result` `E` type resolves from the surrounding annotation.
+        match target.as_str() {
+            "Option" => return Some(call_ident("Some", object.clone())),
+            "Result" => return Some(call_ident("Ok", object.clone())),
+            _ => {}
+        }
         Some(call_path(
             vec![target.clone(), "from".to_string()],
             vec![object.clone()],
@@ -1171,6 +1184,27 @@ impl<'a> Lowerer<'a> {
 }
 
 /// Build a `Call(Path(segments), [args])` ExprKind with no labels.
+/// Build `Name(arg)` — a `Call` on a single-`Identifier` callee. Used for the
+/// Option/Result wrapping desugar (`Some(x)` / `Ok(x)`): both backends key
+/// built-in variant construction on an `Identifier` callee (interpreter
+/// `eval_call`'s `"Some"`/`"Ok"` arms; codegen's identifier-callee variant
+/// path), so the `Identifier` shape — not a single-segment `Path` — is the one
+/// that dispatches.
+fn call_ident(name: &str, arg: Expr) -> ExprKind {
+    ExprKind::Call {
+        callee: Box::new(Expr {
+            span: arg.span.clone(),
+            kind: ExprKind::Identifier(name.to_string()),
+        }),
+        args: vec![CallArg {
+            label: None,
+            mut_marker: false,
+            span: arg.span.clone(),
+            value: arg,
+        }],
+    }
+}
+
 fn call_path(segments: Vec<String>, args: Vec<Expr>) -> ExprKind {
     let span = args
         .first()

@@ -7910,6 +7910,41 @@ fn test_into_numeric_widening() {
 }
 
 #[test]
+fn test_into_wraps_in_option_and_result() {
+    // `From[T] for Option[T]` / `From[T] for Result[T, E]` blanket wraps
+    // (design.md § Conversion Traits). `.into()` at an `Option[T]` /
+    // `Result[T, E]` position type-checks (later lowered to `Some(x)`/`Ok(x)`);
+    // `E` is supplied by the annotation and does not constrain the source.
+    typecheck_ok(
+        "fn main() {
+             let o: Option[i64] = 5.into();
+             let r: Result[i64, String] = 7.into();
+             let s: Option[String] = \"hi\".into();
+         }",
+    );
+}
+
+#[test]
+fn test_into_wrap_payload_mismatch_rejected() {
+    // The wrap is same-`T` (`From[T] for Option[T]`), so a `String` source at
+    // an `Option[i64]` position is a payload-type mismatch, not a silent
+    // double conversion. The payload type is threaded through the check, so
+    // the diagnostic is the ordinary "expected 'i64', found 'String'".
+    let errors = typecheck_errors(
+        "fn main() {
+             let o: Option[i64] = \"x\".into();
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'i64'") && e.message.contains("String")),
+        "expected an i64-vs-String payload mismatch, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_eq_ord_methods_directly_callable() {
     // `.ne`/`.lt`/`.le`/`.gt`/`.ge` now registered as Eq/Ord methods,
     // so user code can call them explicitly with the same shape as the

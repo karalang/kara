@@ -2078,6 +2078,38 @@ impl<'a> super::TypeChecker<'a> {
         if method != "into" || !args.is_empty() {
             return None;
         }
+        // Wrapping conversions — `From[T] for Option[T]` (wrap in `Some`) and
+        // `From[T] for Result[T, E]` (wrap in `Ok`), design.md § Conversion
+        // Traits. Unlike the numeric / user-type `From` impls there is no
+        // `.from()` method to dispatch: lowering rewrites the call straight to
+        // `Some(x)` / `Ok(x)`, so this arm only verifies the source matches the
+        // payload type (`args[0]`) and records the target enum name for
+        // lowering. `E` in `Result[T, E]` is supplied entirely by `expected`
+        // (the surrounding annotation), exactly as a hand-written `Ok(x)` at
+        // the same position resolves it — nothing here constrains `args[1]`.
+        // Checking the source against the payload via `check_expr` threads the
+        // payload type down (so a bare literal types against it, e.g.
+        // `let o: Option[i32] = 5.into()`) and reuses the shared check-mode
+        // diagnostics on a mismatch. Previously every `.into()` at an
+        // Option/Result position fell through to the "no impl From" error, so
+        // this is purely additive.
+        if let Type::Named { name, args: targs } = expected {
+            let is_wrap =
+                (name == "Option" && targs.len() == 1) || (name == "Result" && targs.len() == 2);
+            if is_wrap {
+                let payload = targs[0].clone();
+                let before = self.errors.len();
+                self.check_expr(object, &payload);
+                if self.errors.len() == before {
+                    self.into_conversions
+                        .insert(SpanKey::from_span(&expr.span), name.clone());
+                    self.record_expr_type(&expr.span, expected);
+                    return Some(expected.clone());
+                }
+                self.record_expr_type(&expr.span, &Type::Error);
+                return Some(Type::Error);
+            }
+        }
         let target_name = match expected {
             Type::Named { name, .. } => name.clone(),
             Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char | Type::Str => {

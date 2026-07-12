@@ -5329,6 +5329,34 @@ fn test_into_at_struct_field_if_and_match_tails() {
 }
 
 #[test]
+fn test_into_wraps_value_in_some_and_ok() {
+    // `From[T] for Option[T]` / `From[T] for Result[T, E]` blanket wraps
+    // (design.md § Conversion Traits): `.into()` at an `Option[T]`-expected
+    // position builds `Some(x)`, and at a `Result[T, E]`-expected position
+    // builds `Ok(x)`. `E` comes entirely from the annotation. Covers the
+    // let-annotation, if/else-tail return, and struct-field positions, plus a
+    // heap `String` payload; the `Err`/`None` arms stay hand-writable.
+    let output = run("fn get_opt(present: bool) -> Option[i64] {\n\
+             if present { 42.into() } else { None }\n\
+         }\n\
+         fn get_res(ok: bool) -> Result[i64, String] {\n\
+             if ok { 7.into() } else { Err(\"nope\") }\n\
+         }\n\
+         struct Holder { slot: Option[String] }\n\
+         fn main() {\n\
+             let o: Option[i64] = 5.into();\n\
+             match o { Some(v) => println(v), None => println(-1) };\n\
+             match get_opt(true) { Some(v) => println(v), None => println(-1) };\n\
+             match get_opt(false) { Some(v) => println(v), None => println(-1) };\n\
+             match get_res(true) { Ok(v) => println(v), Err(e) => println(e) };\n\
+             match get_res(false) { Ok(v) => println(v), Err(e) => println(e) };\n\
+             let h: Holder = Holder { slot: \"hi\".into() };\n\
+             match h.slot { Some(s) => println(s), None => println(\"none\") };\n\
+         }");
+    assert_eq!(output, "5\n42\n-1\n7\nnope\nhi\n");
+}
+
+#[test]
 fn test_tryinto_drives_user_tryfrom_impl() {
     // A user `impl TryFrom[Celsius] for Kelvin` must drive BOTH the explicit
     // `Kelvin.try_from(c)` call and the `.try_into()` sugar at a

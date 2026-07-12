@@ -28450,6 +28450,43 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_into_wraps_value_in_some_and_ok() {
+        // `From[T] for Option[T]` / `From[T] for Result[T, E]` blanket wraps
+        // (design.md § Conversion Traits): `.into()` lowers to `Some(x)` /
+        // `Ok(x)`, indistinguishable from hand-written variant construction, so
+        // codegen reuses its existing enum-build path. Covers the let,
+        // if/else-tail return, and struct-field positions plus a heap `String`
+        // payload; the `Err`/`None` arms stay hand-writable. Build==run parity
+        // with the interpreter sibling `test_into_wraps_value_in_some_and_ok`.
+        // (Leak-clean under valgrind — the `String` payloads are freed on the
+        // match/discard paths; verified by hand.)
+        let out = run_program(
+            r#"
+fn get_opt(present: bool) -> Option[i64] {
+    if present { 42.into() } else { None }
+}
+fn get_res(ok: bool) -> Result[i64, String] {
+    if ok { 7.into() } else { Err("nope") }
+}
+struct Holder { slot: Option[String] }
+fn main() {
+    let o: Option[i64] = 5.into();
+    match o { Some(v) => println(v), None => println(-1) };
+    match get_opt(true) { Some(v) => println(v), None => println(-1) };
+    match get_opt(false) { Some(v) => println(v), None => println(-1) };
+    match get_res(true) { Ok(v) => println(v), Err(e) => println(e) };
+    match get_res(false) { Ok(v) => println(v), Err(e) => println(e) };
+    let h: Holder = Holder { slot: "hi".into() };
+    match h.slot { Some(s) => println(s), None => println("none") };
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5\n42\n-1\n7\nnope\nhi");
+        }
+    }
+
+    #[test]
     fn test_e2e_into_at_struct_field_if_and_match_tails() {
         // `.into()` threads the expected type through a struct-literal field
         // value, an if/else tail, and a match-arm tail — the three positions

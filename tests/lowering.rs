@@ -306,6 +306,60 @@ fn test_lower_into_at_call_argument() {
 }
 
 #[test]
+fn test_lower_into_wraps_option_in_some_ident_callee() {
+    // `let o: Option[i64] = 5.into();` lowers to `Some(5)` — a `Call` on a
+    // single-`Identifier` callee (NOT a `Path`), because both backends key
+    // built-in variant construction on the `Identifier` shape.
+    let program = lower_program("fn f() { let o: Option[i64] = 5.into(); }");
+    let Item::Function(func) = program
+        .items
+        .iter()
+        .find(|i| matches!(i, Item::Function(f) if f.name == "f"))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    let value = match &func.body.stmts[0].kind {
+        StmtKind::Let { value, .. } => value,
+        other => panic!("expected Let, got {:?}", other),
+    };
+    let ExprKind::Call { callee, args } = &value.kind else {
+        panic!("expected Call, got {:?}", value.kind);
+    };
+    assert_eq!(args.len(), 1);
+    let ExprKind::Identifier(name) = &callee.kind else {
+        panic!("expected Identifier callee, got {:?}", callee.kind);
+    };
+    assert_eq!(name, "Some");
+}
+
+#[test]
+fn test_lower_into_wraps_result_in_ok_ident_callee() {
+    // `let r: Result[i64, String] = 7.into();` lowers to `Ok(7)` — Identifier
+    // callee, same as the Option/Some case.
+    let program = lower_program("fn f() { let r: Result[i64, String] = 7.into(); }");
+    let Item::Function(func) = program
+        .items
+        .iter()
+        .find(|i| matches!(i, Item::Function(f) if f.name == "f"))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    let value = match &func.body.stmts[0].kind {
+        StmtKind::Let { value, .. } => value,
+        other => panic!("expected Let, got {:?}", other),
+    };
+    let ExprKind::Call { callee, .. } = &value.kind else {
+        panic!("expected Call, got {:?}", value.kind);
+    };
+    let ExprKind::Identifier(name) = &callee.kind else {
+        panic!("expected Identifier callee, got {:?}", callee.kind);
+    };
+    assert_eq!(name, "Ok");
+}
+
+#[test]
 fn test_lower_inside_let_value() {
     // `let x = 1 + 2;` — the value position must also be lowered.
     let program = lower_program("fn main() { let _x: i64 = 1 + 2; }");
