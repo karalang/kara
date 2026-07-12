@@ -169,9 +169,9 @@ struct Checker {
     // Enum-definition tables (Slice 9). `enum_names[i]` is the i-th enum; its
     // type category is `ENUM_BASE + i` (see `cat_of_type`). Variant names live in
     // two parallel vecs keyed by owning enum index — an enum's variants are the
-    // entries whose `var_owner` equals its index. Used by the `match`
-    // exhaustiveness check; enum categories are otherwise transparent (never a
-    // mismatch / condition flag) so no new false positive is introduced.
+    // entries whose `var_owner` equals its index. Drives the `match`
+    // exhaustiveness check (Slice 9); enum categories also participate in the
+    // mismatch / condition checks with struct-like identity (Slice 10).
     enum_names: Vec[String],
     var_owner: Vec[i64],
     var_names: Vec[String],
@@ -773,9 +773,9 @@ impl Checker {
             If(n) => {
                 let IfExpr { cond, then_block, else_branch, span } = n;
                 let ci = self.check_expr(cond);
-                // A known NON-bool condition is ConditionNotBool. Enum categories
-                // (>= ENUM_BASE) are transparent (Slice 9), so they never flag.
-                if ci.category != 4 and ci.category != 1 and ci.category < 100000 {
+                // Any known NON-bool condition (primitive, struct, or enum) is
+                // ConditionNotBool (Slice 10 lets enums flag like structs do).
+                if ci.category != 4 and ci.category != 1 {
                     self.push_err(1, ci.span.offset, ci.span.length);
                 }
                 self.check_block(then_block);
@@ -1078,13 +1078,10 @@ fn all_irref_fields(fields: Vec[StructFieldPat]) -> bool {
 
 // Two KNOWN categories are compatible iff equal — NUM is a single category, so
 // i64 vs f64 (both NUM) is compatible, reproducing the seed's numeric leniency.
-// An ENUM category (>= `ENUM_BASE`) is transparent — treated as compatible with
-// anything — so registering enums for the `match` exhaustiveness check (Slice 9)
-// never introduces an enum-vs-X mismatch (that check is a later slice).
+// Struct (`STRUCT_BASE + i`) and enum (`ENUM_BASE + i`) categories are distinct
+// integers, so equality also gives struct/enum IDENTITY (P ≠ Q, Color ≠ Mood,
+// Color ≠ i64) — the enum-vs-X mismatch check (Slice 10).
 fn cats_compatible(a: i64, b: i64) -> bool {
-    if a >= 100000 or b >= 100000 {
-        return true;
-    }
     a == b
 }
 

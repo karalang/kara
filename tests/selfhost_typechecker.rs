@@ -215,6 +215,20 @@ const CORPUS: &[&str] = &[
     // Struct-variant patterns: irrefutable field bindings cover the variant.
     "enum Shape { Circle { r: i64 }, Sq }\nfn f(s: Shape) -> i64 { match s { Circle { r } => r, Sq => 0 } }",
     "enum Shape { Circle { r: i64 }, Sq }\nfn f(s: Shape) -> i64 { match s { Circle { r } => r } }",
+    // ── Slice 10: enum-vs-X mismatch ──
+    // Enum categories now carry struct-like identity through the return /
+    // condition / annotated-let checks: a `Color` where `i64` / `bool` / a
+    // distinct enum / a struct is wanted is a TypeMismatch; an enum condition is
+    // ConditionNotBool; the same enum is compatible. Anchors match the seed
+    // (return / cond / value span).
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) -> i64 { c }",
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) -> Color { c }",
+    "enum Color { Red, Green, Blue }\nenum Mood { Calm, Angry }\nfn f(c: Color) -> Mood { c }",
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) { if c { } }",
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) { let x: i64 = c; }",
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) -> i64 { let y = c; y }",
+    "enum Color { Red, Green, Blue }\nfn f(c: Color) -> bool { c }",
+    "enum Color { Red, Green, Blue }\nstruct P { x: i64 }\nfn f(c: Color) -> P { c }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
