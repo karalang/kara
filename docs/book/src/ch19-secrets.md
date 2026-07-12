@@ -43,7 +43,7 @@ Authorization: Bearer sk-live-abc123
 
 The point of the wrapper is what it *refuses* to do. Comparing two secrets with `==` doesn't type-check:
 
-```kara
+```kara,ignore
 let a = Secret.new("x");
 let b = Secret.new("y");
 println(a == b);
@@ -55,7 +55,7 @@ error[typecheck]: type 'Secret<String>' does not implement Eq; add #[derive(Eq)]
 
 The suggestion to `#[derive(Eq)]` is a dead end *on purpose* — deriving it is itself blocked:
 
-```kara
+```kara,ignore
 impl Display for Secret[String] {
     fn fmt(ref self) -> String { "leak" }
 }
