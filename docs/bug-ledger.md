@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **383 surfaced · 5 open · 375 fixed** (2026-05-20 → 2026-07-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **384 surfaced · 6 open · 375 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -100,6 +100,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **383 surfaced 
 | B-2026-07-11-23 | 2026-07-11 | interp+codegen | medium | `mut ref` closure capture (mutation of a captured mutable local) is unimplemented: a closure that writes a captured name mutates a SNAPSHOT, not the outer binding. Stored closures drop the mutation in BOTH interp and codegen; the inlined iterator terminals (fold/any/all) DIVERGE — codegen inlines (mutates outer = design-correct) while the interpreter snapshots. | unfixed; repros below |
 | B-2026-07-11-30 | 2026-07-11 | ownership | low | Borrow-return source pinning is not applied to borrows nested in generic wrappers / borrowed collections: `-> Vec[ref T]` / `-> Option[ref T]` returns whose element sources are locals are accepted, while `-> ref T` / `-> ref Struct` returns are pinned. design.md § Feature 4 Part 3 says a container with a `ref` in a stored position is a borrowed collection whose scope is bounded by every borrowed source, so the escape should be pinned like the struct-field case. | tests/safety_design.rs::adversarial_escape_via_borrowed_collection_local (#[ignore]d, asserts the desired rejection; auto-enables when fixed); docs/implementation_checklist/phase-9-verification.md |
 | B-2026-07-11-35 | 2026-07-11 | codegen | high | A GENERIC container over a NON-COPY element (`Heap[String]`, `H[T]{xs:Vec[T]}`) is/was broken across several DIRECT-field-access legs. FIXED: (1) field-index READ `h.xs[i]`/`self.xs[i]` mis-resolved the element to the i64 default (a663328); (3a) RETURNING a field-rooted index element (`fn get(ref self)->T{self.xs[i]}`) aliased the container's element (d3a72bb). STILL OPEN: (2) generic method PUSH — needs owned-`T` deep-copy classification AND per-monomorph struct-drop synthesis (the drop fn is cached by struct NAME, so a generic container's heap elements are never freed → leak); (3b) returning an owned `T` PARAM (`fn echo[T](x:T)->T{x}`) double-frees. Interpreter correct throughout. Sibling of B-2026-07-11-31 (generic METHOD dispatch). | FIXED legs: tests/codegen.rs::e2e_generic_container_field_index_read_resolves_element (read, a663328); tests/codegen.rs::e2e_return_field_index_element_clones + tests/memory_sanitizer.rs::asan_return_field_index_element_no_double_free (return-field-element, d3a72bb). Open legs: repros in detail. Discriminators: examples/heap.kara (i64, works); the non-generic B-2026-07-11-32 probes; B-2026-07-11-31 (generic method dispatch). |
+| B-2026-07-12-1 | 2026-07-12 | codegen | high | Passing a struct FIELD (`self.names`) BY REF to a FREE function double-frees the field's Vec under codegen (AOT `free(): double free detected in tcache 2`); interpreter correct. A LOCAL Vec passed by ref to the same free fn is CLEAN, and a `ref self` METHOD scanning `self.field` directly is CLEAN — only the self-field-to-free-fn-by-ref path corrupts. | worked around in selfhost by making the scan a method on `self` (direct `self.field` access, no free-fn arg); minimal repro below |
 
 ### Fixed (375)
 

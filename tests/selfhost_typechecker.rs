@@ -139,6 +139,27 @@ const CORPUS: &[&str] = &[
     "fn g() -> i64 { 0 }\nfn h() -> bool { g() }",
     // Recursion: a fn calling itself resolves its own signature.
     "fn fib(n: i64) -> i64 { fib(n) }",
+    // ── Slice 6: struct-literal + field-access typing ──
+    // Struct-literal field VALUES are checked against declared field types
+    // (mismatch at the value span); the literal's category is the struct type,
+    // so `p.x` resolves through it. Distinct structs are incompatible.
+    "struct P { x: i64 }\nfn f() -> P { P { x: 1 } }",
+    "struct P { x: i64 }\nfn f() -> P { P { x: true } }",
+    "struct P { x: i64 }\nfn f() -> bool { P { x: 1 } }",
+    "struct P { x: i64, y: bool }\nfn f() -> P { P { x: 1, y: 2 } }",
+    // Field access through a param, a let binding, and a call result.
+    "struct P { x: i64 }\nfn f(p: P) -> i64 { p.x }",
+    "struct P { x: i64 }\nfn f(p: P) -> bool { p.x }",
+    "struct P { x: i64 }\nfn f(p: P) { if p.x { } }",
+    "struct P { x: bool }\nfn f(p: P) { if p.x { } }",
+    "struct P { x: i64 }\nfn f() { let p = P { x: 1 }; if p.x { } }",
+    "struct P { x: i64 }\nfn mk() -> P { P { x: 1 } }\nfn f() -> i64 { mk().x }",
+    // Struct identity: a `P` value where `Q` is declared is a mismatch; the same
+    // struct is compatible.
+    "struct P { x: i64 }\nfn f(p: P) -> P { p }",
+    "struct P { x: i64 }\nstruct Q { x: i64 }\nfn f(p: P) -> Q { p }",
+    // Annotated let with a struct type: initializer struct checked vs the annotation.
+    "struct P { x: i64 }\nstruct Q { x: i64 }\nfn f(p: P) { let q: Q = p; }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",

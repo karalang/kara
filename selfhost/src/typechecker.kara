@@ -144,6 +144,14 @@ struct Checker {
     // return type regardless of declaration order (forward references).
     fn_names: Vec[String],
     fn_rets: Vec[i64],
+    // Struct-definition tables (Slice 6). `struct_names[i]` is the i-th struct;
+    // its type category is `STRUCT_BASE + i` (see `cat_of_type`). Fields live in
+    // three parallel vecs keyed by owning struct index — a struct's fields are
+    // the entries whose `fld_owner` equals its index (flat, HashMap-free).
+    struct_names: Vec[String],
+    fld_owner: Vec[i64],
+    fld_names: Vec[String],
+    fld_cats: Vec[i64],
 }
 
 // ── Entry point ──
@@ -161,16 +169,35 @@ pub fn typecheck_program(items: Vec[Item]) -> Vec[TypeError] with panics {
         current: 0,
         fn_names: Vec.new(),
         fn_rets: Vec.new(),
+        struct_names: Vec.new(),
+        fld_owner: Vec.new(),
+        fld_names: Vec.new(),
+        fld_cats: Vec.new(),
     };
     // Root scope (parent = -1); each function pushes its own child scope.
     c.parents.push(-1);
-    // COLLECT pass (borrows `items`): record every top-level fn's return
-    // category so forward calls resolve, then CHECK pass (consumes `items`).
-    c.collect_sigs(items);
+    // COLLECT (all borrow `items`; the CHECK pass then consumes them):
+    //   pass 1 — register every struct + fn NAME (so a category can name any
+    //            struct, and calls resolve any fn, regardless of order);
+    //   pass 2 — compute struct FIELD categories and fn RETURN categories (which
+    //            may reference any struct name registered in pass 1).
+    c.collect_names(items);
+    c.collect_details(items);
     for it in items {
         c.check_item(it);
     }
-    let Checker { errors, binds, parents, current, fn_names, fn_rets } = c;
+    let Checker {
+        errors,
+        binds,
+        parents,
+        current,
+        fn_names,
+        fn_rets,
+        struct_names,
+        fld_owner,
+        fld_names,
+        fld_cats,
+    } = c;
     errors
 }
 
@@ -179,27 +206,59 @@ impl Checker {
         self.errors.push(TypeError { kind: kind, off: off, len: len });
     }
 
-    // ── Function-signature collect pass (Slice 5) ──
+    // ── Collect passes (Slices 5–6) ──
     //
-    // Record every top-level fn's (name, return-category). Borrows `items` (a
-    // `ref Vec[Item]`, the only by-ref iteration form) so the CHECK pass can
-    // still consume them. Reading `f.name` / `f.ret` through the `ref Item`
-    // yields owned deep-copies; the `Option[TypeExpr]` is matched INLINE (never
-    // passed by value to a helper — B-2026-07-11-37), threading only the
-    // unwrapped `TypeExpr` to `category_of_type`. A fn with no `-> T` (unit) or a
-    // non-primitive return records UNKNOWN, so calls to it are never checked.
-    fn collect_sigs(mut ref self, items: ref Vec[Item]) {
+    // Pass 1 — register struct + fn NAMES. Borrows `items` (a `ref Vec[Item]`,
+    // the only by-ref iteration form) so the CHECK pass can still consume them;
+    // reading `s.name` / `f.name` through the `ref Item` yields owned deep-copies.
+    fn collect_names(mut ref self, items: ref Vec[Item]) {
         for it in items {
             match it {
+                Struct(s) => {
+                    self.struct_names.push(s.name);
+                }
+                Func(f) => {
+                    self.fn_names.push(f.name);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Pass 2 — compute struct FIELD categories and fn RETURN categories (both
+    // may name any struct registered in pass 1). `f.ret` / `fld.ty` are owned
+    // deep-copies read through the `ref`; the `Option[TypeExpr]` is matched
+    // INLINE (never passed by value to a helper — B-2026-07-11-37).
+    fn collect_details(mut ref self, items: ref Vec[Item]) {
+        let mut si = 0;
+        for it in items {
+            match it {
+                Struct(s) => {
+                    // The owning struct index is this struct's position in
+                    // registration order (== item order among structs), which the
+                    // running counter `si` tracks in lockstep with pass 1.
+                    let owner = si;
+                    si = si + 1;
+                    let mut fi = 0;
+                    loop {
+                        if fi >= s.fields.len() {
+                            break;
+                        }
+                        let fc = self.cat_of_type(s.fields[fi].ty);
+                        self.fld_owner.push(owner);
+                        self.fld_names.push(s.fields[fi].name);
+                        self.fld_cats.push(fc);
+                        fi = fi + 1;
+                    }
+                }
                 Func(f) => {
                     let mut rc = 4;
                     match f.ret {
                         Some(t) => {
-                            rc = category_of_type(t);
+                            rc = self.cat_of_type(t);
                         }
                         None => {}
                     }
-                    self.fn_names.push(f.name);
                     self.fn_rets.push(rc);
                 }
                 _ => {}
@@ -218,6 +277,73 @@ impl Checker {
             }
             if self.fn_names[i] == name {
                 return self.fn_rets[i];
+            }
+            i = i + 1;
+        }
+    }
+
+    // The index of struct `name` in registration order, or -1 if it names no
+    // known struct. A direct scan of `self.struct_names` (like `lookup_fn_ret`) —
+    // NOT a free helper taking `self.struct_names` by ref, which double-freed.
+    fn struct_id_of(ref self, name: ref String) -> i64 {
+        let mut i = 0;
+        loop {
+            if i >= self.struct_names.len() {
+                return -1;
+            }
+            if self.struct_names[i] == name {
+                return i;
+            }
+            i = i + 1;
+        }
+    }
+
+    // The struct-type category (`STRUCT_BASE + index`) of `name`, or -1 if it
+    // names no known struct.
+    fn struct_cat_of(ref self, name: ref String) -> i64 {
+        let idx = self.struct_id_of(name);
+        if idx < 0 {
+            return -1;
+        }
+        1000 + idx
+    }
+
+    // A declared type's category: a primitive (via `cat_of_name`), a known
+    // struct (`STRUCT_BASE + index`), else UNKNOWN. A METHOD (not a free fn)
+    // because it consults the struct table.
+    fn cat_of_type(ref self, t: TypeExpr) -> i64 {
+        match t {
+            PathTy(p) => {
+                let PathType { segments, generics, span } = p;
+                if segments.len() == 0 {
+                    return 4;
+                }
+                let prim = cat_of_name(segments[0]);
+                if prim <= 3 {
+                    return prim;
+                }
+                let sc = self.struct_cat_of(segments[0]);
+                if sc >= 0 {
+                    return sc;
+                }
+                4
+            }
+            _ => 4,
+        }
+    }
+
+    // The category of struct `struct_idx`'s field `fname`, or UNKNOWN (4) if the
+    // struct has no such field.
+    fn field_cat(ref self, struct_idx: i64, fname: ref String) -> i64 {
+        let mut i = 0;
+        loop {
+            if i >= self.fld_owner.len() {
+                return 4;
+            }
+            if self.fld_owner[i] == struct_idx {
+                if self.fld_names[i] == fname {
+                    return self.fld_cats[i];
+                }
             }
             i = i + 1;
         }
@@ -301,11 +427,11 @@ impl Checker {
         } = f;
         // Declared return category. Match the `Option[TypeExpr]` INLINE (never
         // pass it by value to a helper — B-2026-07-11-37); only the unwrapped
-        // `TypeExpr` reaches `category_of_type`.
+        // `TypeExpr` reaches `cat_of_type`.
         let mut rc = 4;
         match ret {
             Some(t) => {
-                rc = category_of_type(t);
+                rc = self.cat_of_type(t);
             }
             None => {}
         }
@@ -316,7 +442,7 @@ impl Checker {
         self.push_scope();
         for p in params {
             let FnParamNode { name: pn, ty: pty, span: psp } = p;
-            let pc = category_of_type(pty);
+            let pc = self.cat_of_type(pty);
             self.define(pn, pc);
         }
         // Walk the body (finds nested `if`s for the condition check) and learn
@@ -326,7 +452,7 @@ impl Checker {
         // Return-type mismatch only when BOTH the declared return and the tail
         // land in the known primitive set and their categories are incompatible
         // (NUM==NUM regardless of width; else exact category equality).
-        if rc <= 3 and tinfo.category <= 3 {
+        if rc != 4 and tinfo.category != 4 {
             if not cats_compatible(rc, tinfo.category) {
                 self.push_err(0, tinfo.span.offset, tinfo.span.length);
             }
@@ -367,7 +493,7 @@ impl Checker {
                 let mut has_ann = false;
                 match ty {
                     Some(t) => {
-                        ann = category_of_type(t);
+                        ann = self.cat_of_type(t);
                         has_ann = true;
                     }
                     None => {}
@@ -379,7 +505,7 @@ impl Checker {
                 let mut bind_cat = vi.category;
                 if has_ann {
                     bind_cat = ann;
-                    if ann <= 3 and vi.category <= 3 {
+                    if ann != 4 and vi.category != 4 {
                         if not cats_compatible(ann, vi.category) {
                             self.push_err(0, vi.span.offset, vi.span.length);
                         }
@@ -481,12 +607,55 @@ impl Checker {
                 }
                 ExprInfo { category: rc, span: span }
             }
+            StructLit(n) => {
+                // Check each field VALUE against its declared field category
+                // (mismatch at the value span); the literal's own category is the
+                // struct type (`STRUCT_BASE + index`) so `p.x` on it can resolve.
+                let StructLitExpr { name, fields, spread, span } = n;
+                let sid = self.struct_id_of(name);
+                for f in fields {
+                    let StructLitField { name: fname, value, shorthand, span: fsp } = f;
+                    let vi = self.check_expr(value);
+                    if sid >= 0 {
+                        let fc = self.field_cat(sid, fname);
+                        if fc != 4 and vi.category != 4 {
+                            if not cats_compatible(fc, vi.category) {
+                                self.push_err(0, vi.span.offset, vi.span.length);
+                            }
+                        }
+                    }
+                }
+                match spread {
+                    Some(sv) => {
+                        let svi = self.check_expr(sv);
+                    }
+                    None => {}
+                }
+                let mut cat = 4;
+                if sid >= 0 {
+                    cat = 1000 + sid;
+                }
+                ExprInfo { category: cat, span: span }
+            }
+            Field(n) => {
+                // `obj.field`: resolve the object's struct type, then the field's
+                // category. The FieldAccessExpr span is the object span (length of
+                // the receiver), matching the seed's mismatch anchor.
+                let FieldAccessExpr { object, field, span } = n;
+                let oi = self.check_expr(object);
+                let mut cat = 4;
+                if oi.category >= 1000 {
+                    let sid = oi.category - 1000;
+                    cat = self.field_cat(sid, field);
+                }
+                ExprInfo { category: cat, span: span }
+            }
             Blk(b) => self.check_block(b),
             If(n) => {
                 let IfExpr { cond, then_block, else_branch, span } = n;
                 let ci = self.check_expr(cond);
                 // A known NON-bool primitive condition is ConditionNotBool.
-                if ci.category == 0 or ci.category == 2 or ci.category == 3 {
+                if ci.category != 4 and ci.category != 1 {
                     self.push_err(1, ci.span.offset, ci.span.length);
                 }
                 self.check_block(then_block);
@@ -505,21 +674,6 @@ impl Checker {
 
 // ── Category helpers ──
 
-// Map a declared type to its category. Only single-rooted `PathTy` primitives
-// are recognised; everything else (generics, tuples, pointers, Vec, user types)
-// is UNKNOWN and therefore never drives a Slice-1 mismatch.
-fn category_of_type(t: TypeExpr) -> i64 {
-    match t {
-        PathTy(p) => {
-            let PathType { segments, generics, span } = p;
-            if segments.len() == 0 {
-                return 4;
-            }
-            cat_of_name(segments[0])
-        }
-        _ => 4,
-    }
-}
 
 fn cat_of_name(name: ref String) -> i64 {
     if name == "i8" or name == "i16" or name == "i32" or name == "i64" {
