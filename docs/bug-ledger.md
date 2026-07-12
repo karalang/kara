@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **391 surfaced · 10 open · 378 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **392 surfaced · 11 open · 378 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -105,6 +105,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **391 surfaced 
 | B-2026-07-12-6 | 2026-07-12 | typecheck | medium | Inside a GENERIC method (`impl[T] Box[T]`), the result of `self.items.pop()` on a `Vec[T]` FIELD is INFERRED as `Option[Option[T]]` (one extra Option layer) when it flows into a position without a pushed expected type — a `Some(...)` argument or an un-annotated `let`. The DIRECT tail return (`fn take(mut ref self)->Option[T]{self.items.pop()}`) checks fine (the expected `Option[T]` unifies it away), and the non-generic `Vec[i64]` sibling infers `Option[i64]` correctly. So `fn pop(mut ref self)->Option[T]{ if .. {return None;} Some(self.items.pop()) }` is rejected: `expected Option<T>, found Option<Option<Option<T>>>` (the double-nested infer + the outer Some = triple). | minimal repros below; loud (a type error, not a silent miscompile). Discriminators isolate it to a generic METHOD + `.pop()` on a `Vec[T]` FIELD whose result flows into an inferring (non-checking) position. |
 | B-2026-07-12-6 | 2026-07-12 | codegen | medium | A match ARM inside a very large recursive match-method that declares ~4+ heap-typed (Vec) locals corrupts memory (segfault / double-free / spurious vec-index-out-of-bounds); moving the arm body into its own method is clean | phase-12 self-hosting |
 | B-2026-07-12-7 | 2026-07-12 | codegen | medium | A volatile read through `ptr.const(param.field)` does NOT observe a prior volatile write through `ptr.mut(param.field)` to the SAME field, IN THE SAME FUNCTION, when `param` is a `mut ref` struct parameter (reads the stale pre-write value); the write DOES reach real memory (a caller reading the same field back through a raw pointer sees it). The identical shape on an OWNED LOCAL is correct. Root: `ptr.const`/`ptr.mut` emit no address-taken/escape marker on the rooted binding, so mem2reg promotes a `ref`-param's local slot and the two independent pointer derivations read a promoted (stale) SSA value instead of shared memory. | raw-pointer construction (`ptr.const`/`ptr.mut`) does not mark the rooted binding as address-taken → mem2reg promotion → stale read-through-pointer for ref-param roots |
+| B-2026-07-12-8 | 2026-07-12 | codegen | medium | A GENERIC (monomorphized) function `fn f[T](..) -> i64` whose body TAIL is a bare `loop { .. return <value>; .. }` (a divergent loop that exits only via `return`/`break`) fails module verification under `karac build`/JIT: `Function return type does not match operand type of return inst!  ret void   i64` — the mono emits a spurious `ret void` at the loop's unreachable fall-through in an i64-returning function. The NON-generic sibling compiles fine, and a generic `while`+tail-return or `loop{..break;}`+tail-return also compiles fine. interp runs correctly (falls back via the printed hint). | minimal repros below; LOUD (module verification failure -> codegen refuses and prints the `--interp` fallback hint, not a silent miscompile). Interp is correct. Inverse-sibling of B-2026-07-11-28 (a VOID generic mono emitting `ret i64 0`); this is a NON-void generic mono emitting `ret void`. |
 
 ### Fixed (378)
 
