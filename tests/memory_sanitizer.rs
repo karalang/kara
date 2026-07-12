@@ -24304,4 +24304,53 @@ fn main() {
             "direct_index_match_option_shared_no_leak",
         );
     }
+
+    #[test]
+    fn asan_shared_scrutinee_shadowed_by_local() {
+        // B-2026-07-12-6: a `match e { … }` arm over a by-value shared-enum
+        // param `e` that declares a same-named local (`let mut e = 0`) shadows
+        // the scrutinee's pointer slot. The param's scope-exit RC-dec reloaded
+        // its pointer BY NAME from `variables["e"]`, which the shadow had
+        // repointed at an `i64` alloca — so the dec walked an integer-as-pointer
+        // and corrupted the heap (segfault at O2, hang at O0). The fix gates the
+        // reload on the slot being pointer-typed, falling back to the pointer
+        // captured at registration. Looped so each call allocates + frees the
+        // shared node; a garbage-pointer RC-dec surfaces as ASAN
+        // use-after-free / heap corruption and a wrong-slot drop as an LSan
+        // leak. Kept a NON-recursive enum with i64 payloads so this isolates
+        // the shadow RC-dec — a recursive `Node(E)` shape would also exercise
+        // the separate shared-enum recursive-payload-drop path.
+        assert_clean_asan_run(
+            r#"
+shared enum E { A(i64), B(i64) }
+fn chk(e: E) -> i64 {
+    match e {
+        A(n) => n,
+        B(m) => {
+            let mut e = 0;
+            let mut i = 0;
+            loop {
+                if i >= 3 { break; }
+                e = e + i;
+                i = i + 1;
+            }
+            m + e
+        }
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        t = t + chk(B(10));
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            // (10 payload + 3 from 0+1+2) * 200 = 13 * 200 = 2600.
+            &["2600"],
+            "shared_scrutinee_shadowed_by_local",
+        );
+    }
 }

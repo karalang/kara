@@ -3603,6 +3603,46 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_shared_scrutinee_shadowed_by_local_no_corruption() {
+        // B-2026-07-12-6 correctness pin (the ASAN/leak gate lives in
+        // tests/memory_sanitizer.rs::asan_shared_scrutinee_shadowed_by_local).
+        // A `match e { … }` arm over a by-value shared-enum param `e` that
+        // declares a local `let mut e = 0` shadows the scrutinee's slot. The
+        // param's scope-exit RC-dec reloaded its pointer BY NAME, picking up
+        // the i64 shadow slot and dec'ing a garbage address (segfault at O2 /
+        // hang at O0). The fix gates the reload on the slot being pointer-typed.
+        // This pins that the shadow is honored (the arm returns the i64 sum)
+        // AND the program completes cleanly.
+        let out = run_program(
+            r#"
+shared enum E { A(i64), B(i64) }
+fn chk(e: E) -> i64 {
+    match e {
+        A(n) => n,
+        B(m) => {
+            let mut e = 0;
+            let mut i = 0;
+            loop {
+                if i >= 3 { break; }
+                e = e + i;
+                i = i + 1;
+            }
+            m + e
+        }
+    }
+}
+fn main() {
+    println(chk(B(10)));
+}
+"#,
+        );
+        if let Some(out) = out {
+            // 10 (payload) + 3 (0+1+2) = 13.
+            assert_eq!(out.trim(), "13");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_set_get_is_set_lifecycle() {
         // `OnceLock[i64]` write-once lifecycle under `karac build`/JIT (was
         // interpreter-only). Empty → `is_set() == false`, `get() == None`;

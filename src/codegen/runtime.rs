@@ -4659,13 +4659,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 member_type,
                 link_field_index,
             } => {
-                let current_ptr = if let Some(slot) = self.variables.get(name) {
-                    self.builder
+                // Pointer-type gate mirrors RcDec (B-2026-07-12-6): a
+                // same-named non-pointer shadow in an inner scope must not
+                // redirect this reload to a garbage slot; fall back to the
+                // registration-time pointer when the current slot isn't the
+                // binding's own pointer slot.
+                let current_ptr = match self.variables.get(name) {
+                    Some(slot) if slot.ty.is_pointer_type() => self
+                        .builder
                         .build_load(ptr_ty, slot.ptr, &format!("{}_cluster_cleanup", name))
                         .unwrap()
-                        .into_pointer_value()
-                } else {
-                    *ptr
+                        .into_pointer_value(),
+                    _ => *ptr,
                 };
                 let heap_type = self
                     .shared_types
@@ -4864,13 +4869,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the elision analysis proved rc can never exceed 1 and
                 // the type holds no heap fields, so the whole
                 // dec/zero-test/drop-fn dance collapses to `free`.
-                let current_ptr = if let Some(slot) = self.variables.get(name) {
-                    self.builder
+                // Pointer-type gate mirrors RcDec (B-2026-07-12-6): a
+                // same-named non-pointer shadow in an inner scope must not
+                // redirect this reload to a garbage slot; fall back to the
+                // registration-time pointer when the current slot isn't the
+                // binding's own pointer slot.
+                let current_ptr = match self.variables.get(name) {
+                    Some(slot) if slot.ty.is_pointer_type() => self
+                        .builder
                         .build_load(ptr_ty, slot.ptr, &format!("{}_elide_cleanup", name))
                         .unwrap()
-                        .into_pointer_value()
-                } else {
-                    *ptr
+                        .into_pointer_value(),
+                    _ => *ptr,
                 };
                 let null = ptr_ty.const_null();
                 let is_null = self
@@ -4897,13 +4907,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 ptr,
                 heap_type,
             } => {
-                let current_ptr = if let Some(slot) = self.variables.get(name) {
-                    self.builder
+                // Reload the current pointer from the binding's slot so a
+                // reassignment (`e = other_shared`) drops the live value —
+                // BUT only when the slot is still the shared binding's own
+                // pointer slot. A *shadowing* local of a different type in an
+                // inner scope (`let mut e = 0` inside a `match e { … }` arm,
+                // where `e` is a shared param) repoints `variables[name]` at an
+                // unrelated non-pointer slot; loading a `ptr` from an `i64`
+                // shadow reinterprets an integer as a heap pointer and the RC
+                // dec walks a garbage address (B-2026-07-12-6 frame
+                // corruption). A genuine shared binding — and any reassignment
+                // of it — is always pointer-typed, so gate the reload on the
+                // slot type and otherwise fall back to the pointer captured at
+                // registration (the original binding's value, which for a
+                // never-reassigned param is exactly the incoming object).
+                let current_ptr = match self.variables.get(name) {
+                    Some(slot) if slot.ty.is_pointer_type() => self
+                        .builder
                         .build_load(ptr_ty, slot.ptr, &format!("{}_rc_cleanup", name))
                         .unwrap()
-                        .into_pointer_value()
-                } else {
-                    *ptr
+                        .into_pointer_value(),
+                    _ => *ptr,
                 };
                 // Null-guard the dec: body-local shared-struct slots
                 // whose let-binding never executed (the enclosing loop
