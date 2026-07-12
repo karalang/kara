@@ -3946,6 +3946,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_oncelock_scalar_reject_recovery() {
+        // A second `set` on a filled cell returns `Err(AlreadySetError {
+        // rejected: v })`; the caller can recover `v` via `e.rejected`.
+        // `AlreadySetError` is a BAKED stdlib struct that is NOT spliced into
+        // `program.items`, so codegen never registered its field layout —
+        // `seed_builtin_struct_types` now seeds its metadata + generic base so a
+        // construct-and-read resolves the `rejected` field instead of the `i64`
+        // fall-through (which silently returned 0). This is a scalar-`T`
+        // (ungated) case that shipped as a silent miscompile pre-fix; heap `T`
+        // stays loud-gated. Also pins the direct-construction read.
+        let out = run_program(
+            r#"
+fn main() {
+    let cell: OnceLock[i64] = OnceLock.new();
+    match cell.set(10) { Ok(_) => {} Err(_) => {} }
+    match cell.set(77) {
+        Ok(_) => { println(-1); }
+        Err(e) => { println(e.rejected); }
+    }
+    let direct: AlreadySetError[i64] = AlreadySetError { rejected: 42 };
+    println(direct.rejected);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "77\n42");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_get_or_init_runs_closure_once() {
         // `get_or_init(|| ...)` for a scalar `T`: the first call runs the
         // closure and seals the cell; a second call returns the existing value

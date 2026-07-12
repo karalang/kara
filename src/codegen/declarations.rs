@@ -4413,6 +4413,51 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
             }
         }
+        // `AlreadySetError[T] { rejected: T }` — the `OnceLock`/`OnceCell` `set`
+        // error type (`runtime/stdlib/once.kara`). Unlike the monomorphic seeds
+        // above it is GENERIC, so there is no single LLVM shape to register:
+        // seed the per-field METADATA instead (field name, per-field `TypeExpr`
+        // naming the param `T`, and the generic-param list) so `mono_struct_type`
+        // builds each instantiation (`AlreadySetError[i64]` = `{i64}`,
+        // `AlreadySetError[String]` = `{ {ptr,i64,i64} }`) on demand and a
+        // field access (`e.rejected`) GEPs field 0 at the right shape — exactly
+        // as a user generic struct does via `register_struct_metadata`. Baked
+        // stdlib structs are NOT spliced into `program.items`, so that pass never
+        // sees `AlreadySetError`; without this seed every construct-and-read of
+        // it (even a scalar `Err(e) => e.rejected`) read the `i64` fall-through
+        // and returned garbage (B-2026-07-12-2 recovery leg). No `struct_types`
+        // entry is seeded (generic — the mono pass owns the LLVM type). Guarded
+        // so a user's own `struct AlreadySetError` (in `program.items`, seen by
+        // `register_struct_metadata`) is left untouched.
+        if !self.struct_field_names.contains_key("AlreadySetError") {
+            let t_param = TypeExpr {
+                kind: TypeKind::Path(PathExpr {
+                    segments: vec!["T".to_string()],
+                    generic_args: None,
+                    span: crate::token::Span::default(),
+                }),
+                span: crate::token::Span::default(),
+            };
+            self.struct_field_names
+                .insert("AlreadySetError".to_string(), vec!["rejected".to_string()]);
+            self.struct_field_type_names
+                .insert("AlreadySetError".to_string(), vec![Some("T".to_string())]);
+            self.struct_field_type_exprs
+                .insert("AlreadySetError".to_string(), vec![t_param]);
+            self.struct_generic_params
+                .insert("AlreadySetError".to_string(), vec!["T".to_string()]);
+            // Generic-base `struct_types` placeholder (single `T`-field → the
+            // `i64` param fall-through, exactly what `build_struct_types` builds
+            // for a user generic struct like `MyErr[T]`). The per-instantiation
+            // LLVM shape comes from `mono_struct_type`; this base entry is what
+            // makes the enum-variant payload binding (`Err(e)`) recognize `e` as
+            // a struct rather than a raw word — without it `e.rejected` read the
+            // scalar fall-through and returned 0.
+            self.struct_types.insert(
+                "AlreadySetError".to_string(),
+                self.context.struct_type(&[i64_t.into()], false),
+            );
+        }
     }
 
     /// DP slice helper — classify a payload field's TypeExpr into an
