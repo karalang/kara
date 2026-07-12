@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **400 surfaced · 15 open · 382 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **400 surfaced · 14 open · 383 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (15)
+### Open (14)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -109,11 +109,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **400 surfaced 
 | B-2026-07-12-11 | 2026-07-12 | typecheck+interp+codegen | medium | `Option[T].map(f)` and `Result[T,E].map(f)` TYPECHECK CLEAN (`karac check` -> `All checks passed`) but are UNIMPLEMENTED in BOTH the interpreter AND codegen: `karac run` dies with `method 'map' not found on type 'Option'/'Result' (no interpreter dispatch arm)` and `karac build` dies with `no handler for method 'map' ... (method dispatch fell through)`. Affects a fn-reference (`a.map(dbl)`) AND a closure (`a.map(|x: i64| x*2)`). design.md (`self.fetch_profile(user.id).map(Response.ok)`) documents `.map` on Result as intended, so this is typecheck-ahead-of-runtime, not a should-reject. | minimal repros below. `karac check` PASSES (false confidence) but BOTH `karac run` (interp) AND `karac build` (codegen) fail loudly. Distinct from the closure-param-inference gap B-2026-07-12-10 (which is an un-annotated-closure typecheck error) — here even a fn-reference or an annotated closure gets past typecheck and then has no runtime. |
 | B-2026-07-12-12 | 2026-07-12 | codegen | medium | A CLOSURE whose body is itself a CLOSURE (a closure returning a closure / currying) fails codegen: the OUTER closure's return type is lowered as the default `i64` instead of a closure fat pointer `{ptr, ptr}`, so the mono emits `ret { ptr, ptr } %closure_env` in an `i64`-returning LLVM fn -> `Function return type does not match operand type of return inst!`. interp runs correctly; `karac build`/JIT fails. | minimal repro below. LOUD (module verification failure -> codegen refuses, prints the `--interp` fallback hint). Interp is correct. A top-level fn returning a closure WITH an explicit `-> Fn(..)` annotation compiles fine — the gap is the un-annotated let-bound outer closure. |
 | B-2026-07-12-15 | 2026-07-12 | codegen | low | A bare `self.to_string()` inside an impl method fails under codegen for EVERY `#[derive(Display)]` type (struct, all-unit enum, payload enum) with `no handler for method 'to_string' on non-identifier receiver`, while the interpreter renders it correctly — a build==run divergence. `self` parses as `ExprKind::SelfValue`, which none of the `to_string` name-lookup helpers (`expr_user_struct_name` / `expr_user_enum_name{,_any}`) match; they key on `Identifier` / `FieldAccess`. Pre-existing and general (NOT specific to payload enums — struct and all-unit-enum `self.to_string()` typecheck under the old gate and fail codegen the same way). Blocks the clean `impl Error { fn message(ref self) -> String { self.to_string() } }` pattern under `karac build` (works under `karac run`). FIX DIRECTION: `self` is a `ref` receiver (a pointer), so it needs REF-AWARE rendering — a naive normalize-to-`Identifier("self")` (attempted) misreads the enum tag (garbage `Other()`) and DOUBLE-FREES a struct receiver, because the helpers then compile `self` as an owned value. The real fix resolves `self`'s Self-type name and renders through the receiver's data pointer (`get_data_ptr("self")`, as the atomic-on-self and self-field paths already do) rather than compiling it as an owned SSA value. Not urgent: the interpreter is correct and codegen fails loudly (no miscompile). Workaround: render via a free helper or `f"{x}"` on a non-self binding. | — |
-| B-2026-07-12-16 | 2026-07-12 | codegen | high | Two coupled generic-monomorphization codegen bugs, both blocking `VolatileCell[i32]`. (1) A generic method with a by-value narrow-int type param (`fn set[T](v: T)` mono'd at `T=i32`) declares an `i32` param, but the call site passes the argument as i64 (Kara's narrow-ints-live-in-i64-slots convention), so LLVM module verification HARD-FAILS ("Call parameter type does not match function signature") even for a SINGLE instantiation. (2) A generic struct instantiated at MULTIPLE types shares ONE LLVM field layout via the last-writer-wins `struct_types[base_name]` entry, so a later instantiation's field access reads the wrong width -> silent truncation/garbage; backend-DIVERGENT (interpreter can be correct while build is wrong). | generic methods with by-value narrow-int (i8/i16/i32/u8/u16/u32) params: (1) call-site arg not coerced to the mono's param type -> LLVM verifier hard-fail; (2) generic struct field LAYOUT shared last-writer-wins across instantiations -> silent field mis-sizing |
 
-### Fixed (382)
+### Fixed (383)
 
-<details><summary>382 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>383 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -499,6 +498,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **400 surfaced 
 | B-2026-07-12-9 | codegen | high | A `match` ARM GUARD (`p if cond => ..`) is SILENTLY IGNORED under codegen (`karac build` / JIT): the arm fires whenever its PATTERN matches, regardle… | 92656ed |
 | B-2026-07-12-13 | codegen | high | A `match` on a TUPLE scrutinee is not DISCRIMINATED under codegen (`karac build` / JIT): the FIRST tuple-pattern arm always fires regardless of the t… | be39032 |
 | B-2026-07-12-14 | typecheck+codegen | medium | Explicit `e.to_string()` on a `#[derive(Display)]` enum with PAYLOAD variants (e.g | 7521a16 |
+| B-2026-07-12-16 | codegen | high | Two coupled generic-monomorphization codegen bugs, both blocking `VolatileCell[i32]` | 21b52c4 |
 
 </details>
 
