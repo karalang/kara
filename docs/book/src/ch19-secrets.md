@@ -23,7 +23,7 @@ That import line is deliberate. `std.secret` is a **gated module** — code that
 
 The wrapped value is reachable through exactly one read path, `.expose()`:
 
-```kara
+```kara,run
 import std.secret.{Secret};
 
 fn main() {
@@ -75,7 +75,7 @@ The same rejection covers `Debug`, `Display`, `Serialize`, `Deserialize`, `Parti
 
 Most secrets don't travel alone — they sit in a config or a session struct. Deriving `Display` on a struct that *contains* a `Secret` field is fine; the field just renders as `<redacted>`:
 
-```kara
+```kara,run
 import std.secret.{Secret};
 
 #[derive(Display)]
@@ -97,7 +97,7 @@ So the reflexive "log the whole config" debugging move is safe by construction: 
 
 The one comparison a `Secret` permits is `.ct_eq()`:
 
-```kara
+```kara,run
 import std.secret.{Secret};
 
 fn main() {

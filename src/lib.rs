@@ -783,6 +783,16 @@ fn run_static_checks(
 
     desugar_program(&mut parsed.program);
 
+    // Splice gated stdlib modules (`import std.secret.{Secret};`,
+    // `import std.stats.{...};`, …) into the program before resolve, matching
+    // the CLI single-file pipeline (`run_program_full` / `cli.rs`). A no-op for
+    // programs with no gated import. Without this, `check_source` resolves the
+    // import against baked signatures but `run_playground` has no spliced method
+    // *bodies*, so the web playground (and this fn's interpreter caller) errors
+    // at the first gated call (`Secret.new` etc.) — a divergence from
+    // `karac run`. Runs after desugar, before resolve, exactly as the CLI does.
+    crate::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+
     let resolved = resolve(&parsed.program);
     if !resolved.errors.is_empty() {
         for e in &resolved.errors {
@@ -1197,6 +1207,24 @@ mod playground_tests {
             result.stdout,
             vec!["hello\n".to_string(), "world\n".to_string()]
         );
+    }
+
+    #[test]
+    fn run_playground_runs_gated_stdlib_import() {
+        // A gated stdlib module (`std.secret`) must be spliced before resolve so
+        // the interpreter has the method *bodies* — otherwise the playground
+        // diverges from `karac run` and errors at the first gated call. Mirrors
+        // the CLI pipeline's `expand_gated_stdlib_imports` step.
+        let result = run_playground(
+            "import std.secret.{Secret};\n\
+             fn main() {\n\
+             \x20   let a = Secret.new(\"tok\");\n\
+             \x20   let b = Secret.new(\"tok\");\n\
+             \x20   println(a.ct_eq(b));\n\
+             }",
+        );
+        assert!(result.ok, "diagnostics: {:?}", result.diagnostics);
+        assert_eq!(result.stdout, vec!["true\n".to_string()]);
     }
 
     #[test]
