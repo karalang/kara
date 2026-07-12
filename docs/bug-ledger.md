@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **395 surfaced · 14 open · 378 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **396 surfaced · 15 open · 378 fixed** (2026-05-20 → 2026-07-12). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (14)
+### Open (15)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -109,6 +109,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **395 surfaced 
 | B-2026-07-12-9 | 2026-07-12 | codegen | high | A `match` ARM GUARD (`p if cond => ..`) is SILENTLY IGNORED under codegen (`karac build` / JIT): the arm fires whenever its PATTERN matches, regardless of the `if` condition. So the first arm whose pattern matches wins even when its guard is false. Affects BOTH an irrefutable binding pattern (`x if x < 0`) and a refutable enum pattern (`Some(x) if x > 5`). interp is correct; JIT+native produce identical wrong output. Extremely common construct. | minimal repros below. SILENT miscompile (interp != build, no error). Interp is correct (tests/interpreter.rs::test_match_with_guard covers guards on the interp side). No codegen/par E2E test appears to exercise a match-arm guard — the same untested-harness gap that hid B-2026-07-12-5. |
 | B-2026-07-12-10 | 2026-07-12 | typecheck | low | A `let`-bound closure with an UN-ANNOTATED param whose type must be PULLED from the body's arithmetic or from later call sites is not inferred — the param stays an unresolved `?T0`. `let f = |x| x + 1; f(5)` fails with `arithmetic operator requires numeric type, found '?T0'` + `expected '?T0', found 'i64'` at the call. Inference works when the type is PUSHED from context (e.g. `xs.iter().map(|x| x + 100)` — the element type flows in), and an explicit `|x: i64|` annotation works. | minimal repros below. LOUD (typecheck error `?T0`), consistent interp==build, workaround = annotate the param. Common ergonomic pattern. |
 | B-2026-07-12-11 | 2026-07-12 | typecheck+interp+codegen | medium | `Option[T].map(f)` and `Result[T,E].map(f)` TYPECHECK CLEAN (`karac check` -> `All checks passed`) but are UNIMPLEMENTED in BOTH the interpreter AND codegen: `karac run` dies with `method 'map' not found on type 'Option'/'Result' (no interpreter dispatch arm)` and `karac build` dies with `no handler for method 'map' ... (method dispatch fell through)`. Affects a fn-reference (`a.map(dbl)`) AND a closure (`a.map(|x: i64| x*2)`). design.md (`self.fetch_profile(user.id).map(Response.ok)`) documents `.map` on Result as intended, so this is typecheck-ahead-of-runtime, not a should-reject. | minimal repros below. `karac check` PASSES (false confidence) but BOTH `karac run` (interp) AND `karac build` (codegen) fail loudly. Distinct from the closure-param-inference gap B-2026-07-12-10 (which is an un-annotated-closure typecheck error) — here even a fn-reference or an annotated closure gets past typecheck and then has no runtime. |
+| B-2026-07-12-12 | 2026-07-12 | codegen | medium | A CLOSURE whose body is itself a CLOSURE (a closure returning a closure / currying) fails codegen: the OUTER closure's return type is lowered as the default `i64` instead of a closure fat pointer `{ptr, ptr}`, so the mono emits `ret { ptr, ptr } %closure_env` in an `i64`-returning LLVM fn -> `Function return type does not match operand type of return inst!`. interp runs correctly; `karac build`/JIT fails. | minimal repro below. LOUD (module verification failure -> codegen refuses, prints the `--interp` fallback hint). Interp is correct. A top-level fn returning a closure WITH an explicit `-> Fn(..)` annotation compiles fine — the gap is the un-annotated let-bound outer closure. |
 
 ### Fixed (378)
 
