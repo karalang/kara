@@ -7882,6 +7882,38 @@ fn test_from_narrowing_rejected() {
 }
 
 #[test]
+fn test_numeric_try_from_types_as_result() {
+    // Built-in numeric narrowing `T.try_from(x: <int>) -> Result[T, String]`
+    // (design.md § Conversion Traits). Direct associated call and the
+    // `.try_into()` desugar at a `Result[T, _]` position both type-check.
+    typecheck_ok(
+        "fn main() {
+             let r: Result[i8, String] = i8.try_from(300);
+             let n: i32 = 5;
+             let s: Result[i16, String] = n.try_into();
+         }",
+    );
+}
+
+#[test]
+fn test_numeric_try_from_non_integer_source_rejected() {
+    // The source must be an integer — `i8.try_from(a_string)` is a clean
+    // diagnostic, not the ICE it used to be ("variable 'i8' not found").
+    let errors = typecheck_errors(
+        "fn main() {
+             let r: Result[i8, String] = i8.try_from(\"x\");
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("try_from") && e.message.contains("integer")),
+        "expected an integer-argument diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_into_missing_from_impl_diagnoses() {
     // `.into()` with an expected target that has no `impl From[S] for T`
     // emits a targeted diagnostic.

@@ -1161,6 +1161,55 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
+                // Numeric narrowing / sign-changing `T.try_from(x: <int>) ->
+                // Result[T, String]` for an integer target `T` (design.md
+                // § Conversion Traits — "fails if out of range"). Dispatch
+                // mirrors the `from` arm above: the registered built-in TryFrom
+                // impls (env_build) disambiguate on the source type, and the
+                // arm returns the impl's `Result[T, String]` return type. `char`
+                // has its own `try_from` arm above; refinement / distinct-type
+                // `try_from` target their own names, so this only fires for the
+                // primitive integer targets and never shadows them.
+                if method == "try_from"
+                    && matches!(
+                        type_name.as_str(),
+                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                    )
+                {
+                    if args.len() != 1 {
+                        self.type_error(
+                            format!(
+                                "{}.try_from expects 1 argument, got {}",
+                                type_name,
+                                args.len()
+                            ),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                        return Type::Error;
+                    }
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if arg_ty == Type::Error {
+                        return Type::Error;
+                    }
+                    if let Some(imp) = self.env.find_tryfrom_impl(&arg_ty, type_name, &[]) {
+                        return imp
+                            .methods
+                            .get("try_from")
+                            .map(|sig| sig.return_type.clone())
+                            .unwrap_or(Type::Error);
+                    }
+                    self.type_error(
+                        format!(
+                            "`{}.try_from` expects an integer argument, got `{}`",
+                            type_name,
+                            type_display(&arg_ty)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
                 // General associated call: look up the method on the target
                 // type with inherent-beats-trait priority per design.md
                 // § Method Resolution Step 3. Multi-inherent / multi-trait

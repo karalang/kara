@@ -136,6 +136,112 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(phi.as_basic_value())
     }
 
+    /// `<int>.try_from(x: <int>) -> Result[<int>, String]` — numeric narrowing /
+    /// sign-changing conversion (design.md § Conversion Traits). Widens the
+    /// source to `i128`, compares against the target's inclusive bounds, and
+    /// branches `Ok(value)` / `Err("out of range for T")`. Every in-scope target
+    /// bound fits the `i64`/`u64` domain, so the `i128` bound constants are
+    /// exact; widening the source to `i128` keeps the comparison honest even for
+    /// an unsigned `i64` source above `i64::MAX`. Structural mirror of
+    /// `compile_char_try_from`; the `Err` `String` is a static (`cap=0`) value,
+    /// so the error path allocates nothing and needs no drop. Parity with the
+    /// interpreter's `numeric_try_from_value`; also the lowered target of the
+    /// `.try_into()` desugar.
+    pub(super) fn compile_numeric_try_from(
+        &mut self,
+        target: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "{}.try_from expects 1 argument, got {}",
+                target,
+                args.len()
+            ));
+        }
+        let i64_t = self.context.i64_type();
+        let i128_t = self.context.i128_type();
+        let raw = self.compile_expr(&args[0].value)?;
+        let iv = match raw {
+            BasicValueEnum::IntValue(iv) => iv,
+            _ => return Err(format!("{}.try_from expects an integer argument", target)),
+        };
+        let src_unsigned = self.expr_is_unsigned_int(&args[0].value);
+        // Normalize the source to i64 (the value model) preserving its value.
+        let src64 = if iv.get_type().get_bit_width() < 64 {
+            if src_unsigned {
+                self.builder
+                    .build_int_z_extend(iv, i64_t, "ntf.zx64")
+                    .unwrap()
+            } else {
+                self.builder
+                    .build_int_s_extend(iv, i64_t, "ntf.sx64")
+                    .unwrap()
+            }
+        } else {
+            iv
+        };
+        // Widen to i128 so the comparison can't itself overflow — an unsigned
+        // i64 source above i64::MAX zero-extends to a positive i128.
+        let src128 = if src_unsigned {
+            self.builder
+                .build_int_z_extend(src64, i128_t, "ntf.zx128")
+                .unwrap()
+        } else {
+            self.builder
+                .build_int_s_extend(src64, i128_t, "ntf.sx128")
+                .unwrap()
+        };
+        let (min, max) = crate::numeric_conv::int_target_range(target)
+            .ok_or_else(|| format!("{} is not an integer target", target))?;
+        // min >= i64::MIN (sign-extend the i64 bit pattern), max <= u64::MAX
+        // (zero-extend) — both in-domain for a single-word const_int.
+        let min128 = i128_t.const_int(min as i64 as u64, true);
+        let max128 = i128_t.const_int(max as u64, false);
+        let ge = self
+            .builder
+            .build_int_compare(IntPredicate::SGE, src128, min128, "ntf.ge")
+            .unwrap();
+        let le = self
+            .builder
+            .build_int_compare(IntPredicate::SLE, src128, max128, "ntf.le")
+            .unwrap();
+        let valid = self.builder.build_and(ge, le, "ntf.valid").unwrap();
+
+        let cur_fn = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .ok_or("<int>.try_from outside a function context")?;
+        let ok_bb = self.context.append_basic_block(cur_fn, "ntf.ok");
+        let err_bb = self.context.append_basic_block(cur_fn, "ntf.err");
+        let merge_bb = self.context.append_basic_block(cur_fn, "ntf.merge");
+        self.builder
+            .build_conditional_branch(valid, ok_bb, err_bb)
+            .unwrap();
+
+        self.builder.position_at_end(ok_bb);
+        // In range: the i64 payload word carries the value's bit pattern; a
+        // match binding typed as the target re-reads it at the target width.
+        let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[src64.into()])?;
+        let ok_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(err_bb);
+        let msg = self.build_static_string_value(&format!("out of range for {}", target));
+        let err_result = self.build_nonshared_enum_value("Result", "Err", &[msg.into()])?;
+        let err_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        let phi = self
+            .builder
+            .build_phi(ok_result.get_type(), "ntf.result")
+            .unwrap();
+        phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+        Ok(phi.as_basic_value())
+    }
+
     /// Coerce an integer value to `target` width: truncate when wider, zero- or
     /// sign-extend (per `unsigned`) when narrower, identity when equal.
     pub(super) fn coerce_int_to(
@@ -1637,6 +1743,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // range and returns `Ok(char)` / `Err(codepoint)`.
                 if method == "try_from" && type_name.as_str() == "char" {
                     return self.compile_char_try_from(args);
+                }
+                // `<int>.try_from(x: <int>) -> Result[<int>, String]` — numeric
+                // narrowing / sign-changing conversion (design.md § Conversion
+                // Traits). Range-checks the source against the target's bounds
+                // and returns `Ok(value)` / `Err("out of range for T")`. Also
+                // the lowered target of the `.try_into()` desugar. Parity with
+                // the interpreter's `numeric_try_from_value`.
+                if method == "try_from"
+                    && matches!(
+                        type_name.as_str(),
+                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                    )
+                {
+                    return self.compile_numeric_try_from(type_name.as_str(), args);
                 }
             }
         }

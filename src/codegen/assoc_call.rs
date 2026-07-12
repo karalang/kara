@@ -611,6 +611,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 return self.compile_expr(&arg.value);
             }
         }
+        // Numeric narrowing `T.try_from(x) -> Result[T, String]` in path-call
+        // form — this is what the `.try_into()` desugar lowers to
+        // (`x.try_into()` → `Call(Path([T, try_from]))`). The identifier-receiver
+        // form (`T.try_from(x)`) is handled in `compile_method_call`; both route
+        // to the same `compile_numeric_try_from`.
+        if method == "try_from"
+            && matches!(
+                type_name,
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+            )
+        {
+            return self.compile_numeric_try_from(type_name, _args);
+        }
         // `<int_type>.parse(s: String) -> Option[i64]` — base-10 signed
         // parse via the `karac_runtime_parse_i64` extern. Returns
         // `Option.Some(value)` on success, `Option.None` on failure

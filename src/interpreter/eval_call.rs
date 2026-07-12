@@ -210,6 +210,17 @@ impl<'a> super::Interpreter<'a> {
                 if let Some(v) = self.eval_refinement_try_from(&segments[0], args) {
                     return v;
                 }
+                // Numeric narrowing `<int>.try_from(x)` in path form — the
+                // `.try_into()` desugar (`x.try_into()` → `T.try_from(x)`)
+                // lowers to this shape. Same range check + Result shape as the
+                // identifier-form receiver arm in `method_call.rs`.
+                if super::method_call::is_numeric_try_from_target(&segments[0]) {
+                    let n = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Int(n)) => n,
+                        _ => 0,
+                    };
+                    return super::method_call::numeric_try_from_value(n, &segments[0]);
+                }
             }
         }
 

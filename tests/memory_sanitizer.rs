@@ -23868,4 +23868,34 @@ fn main() {
             "struct_field_by_ref_to_free_fn_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_numeric_try_from_err_string_no_leak() {
+        // Numeric narrowing `T.try_from(x) -> Result[T, String]`: the `Err`
+        // payload is a static (`cap=0`) String, so the failure path must
+        // allocate nothing and free nothing. Loops the Err arm (out-of-range)
+        // and the Ok arm many times; any per-iteration String leak or bad free
+        // accumulates for ASAN + LSan. Both the match-consumed `e` and the
+        // discarded-Result shapes are exercised.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut oks: i64 = 0;
+    let mut errs: i64 = 0;
+    while i < 200 {
+        match i8.try_from(i) {
+            Ok(v) => { oks = oks + 1; }
+            Err(e) => { if e.len() > 0 { errs = errs + 1; } }
+        }
+        i = i + 1;
+    }
+    println(f"{oks}");
+    println(f"{errs}");
+}
+"#,
+            &["128", "72"],
+            "numeric_try_from_err_string_no_leak",
+        );
+    }
 }

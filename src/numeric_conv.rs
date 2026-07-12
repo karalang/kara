@@ -180,10 +180,79 @@ fn in_range(f: f64, bits: u32, signed: bool) -> bool {
     t >= min_f && t <= max_f
 }
 
+/// Inclusive `(min, max)` bounds of an integer target type, in `i128`. `None`
+/// for a name that is not an integer target. `usize` uses the 64-bit model
+/// (the only supported pointer width). Drives the integer-narrowing `TryFrom`
+/// range check — every in-scope target (`i8`..`u64`, `usize`) has bounds that
+/// fit the `i64`/`u64` domain, so `i128` holds them all exactly.
+pub fn int_target_range(name: &str) -> Option<(i128, i128)> {
+    let &(_, bits, signed) = INT_TARGETS.iter().find(|(n, _, _)| *n == name)?;
+    Some(int_range(bits, signed))
+}
+
+fn int_range(bits: u32, signed: bool) -> (i128, i128) {
+    if bits >= 128 {
+        // u128's true max (2^128-1) exceeds i128::MAX; cap it — a non-negative
+        // i128 always fits an unsigned 128-bit target, which is all the check
+        // needs. (i128/u128 are not TryFrom targets today, but keep the helper
+        // total.)
+        return if signed {
+            (i128::MIN, i128::MAX)
+        } else {
+            (0, i128::MAX)
+        };
+    }
+    if signed {
+        (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+    } else {
+        (0, (1i128 << bits) - 1)
+    }
+}
+
+/// `true` iff the integer `value` fits in the target integer type `name` — the
+/// narrowing / sign-changing `TryFrom[S] for T` predicate (design.md
+/// § Conversion Traits: "fails if out of range"). An out-of-range value is the
+/// `Err` case. `false` for a non-integer target name. Widening / identity pairs
+/// always fit, so `T.try_from(x)` on a losslessly-convertible `x` is always
+/// `Ok` — uniform with Rust's universal `TryFrom` availability.
+pub fn fits_in_target(value: i128, name: &str) -> bool {
+    match int_target_range(name) {
+        Some((min, max)) => value >= min && value <= max,
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use FloatToIntFamily::*;
+
+    #[test]
+    fn int_range_bounds_and_fits() {
+        assert_eq!(int_target_range("i8"), Some((-128, 127)));
+        assert_eq!(int_target_range("u8"), Some((0, 255)));
+        assert_eq!(
+            int_target_range("i32"),
+            Some((i32::MIN as i128, i32::MAX as i128))
+        );
+        assert_eq!(int_target_range("u64"), Some((0, u64::MAX as i128)));
+        assert_eq!(int_target_range("usize"), Some((0, u64::MAX as i128)));
+        assert_eq!(int_target_range("nope"), None);
+        // narrowing failures
+        assert!(!fits_in_target(300, "i8"));
+        assert!(!fits_in_target(-1, "u8"));
+        assert!(!fits_in_target(i64::MAX as i128, "i32"));
+        // in-range successes, incl. sign-change and identity/widening
+        assert!(fits_in_target(127, "i8"));
+        assert!(fits_in_target(-128, "i8"));
+        assert!(fits_in_target(255, "u8"));
+        assert!(fits_in_target(0, "u8"));
+        assert!(fits_in_target(2_147_483_647, "i32"));
+        assert!(fits_in_target(u64::MAX as i128, "u64"));
+        assert!(!fits_in_target(-5, "u32")); // signed→unsigned negative fails
+        assert!(fits_in_target(3_000_000_000, "u32")); // fits u32, not i32
+        assert!(!fits_in_target(3_000_000_000, "i32"));
+    }
 
     #[test]
     fn parses_every_family_and_target() {

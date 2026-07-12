@@ -46071,6 +46071,37 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_numeric_try_from() {
+        // Built-in numeric narrowing `T.try_from(x) -> Result[T, String]`
+        // (design.md § Conversion Traits). Build==run parity with the
+        // interpreter sibling `test_numeric_try_from_interpreter`. Covers
+        // in-range Ok, narrowing Err, sign-change (negative → unsigned) Err,
+        // widening always Ok, an unsigned target correctly printing a value that
+        // overflows the signed target (a signedness-of-payload check), and the
+        // `.try_into()` desugar. The `Err` String is a static (`cap=0`) value —
+        // valgrind-clean (verified by hand).
+        let output = run_program(
+            "fn main() {\n\
+                 match i8.try_from(100) { Ok(v) => println(v), Err(e) => println(e) }\n\
+                 match i8.try_from(300) { Ok(v) => println(v), Err(e) => println(e) }\n\
+                 match u8.try_from(-1) { Ok(v) => println(v), Err(e) => println(e) }\n\
+                 match i64.try_from(42) { Ok(v) => println(v), Err(e) => println(e) }\n\
+                 let big: i64 = 3000000000;\n\
+                 match u32.try_from(big) { Ok(v) => println(v), Err(e) => println(e) }\n\
+                 match i32.try_from(big) { Ok(v) => println(v), Err(e) => println(e) }\n\
+                 let n: i32 = 70000;\n\
+                 let r: Result[i16, String] = n.try_into();\n\
+                 match r { Ok(v) => println(v), Err(e) => println(e) }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(
+            output,
+            "100\nout of range for i8\nout of range for u8\n42\n3000000000\nout of range for i32\nout of range for i16\n"
+        );
+    }
+
+    #[test]
     fn test_e2e_println_preserves_interior_nul() {
         // L5: `println`/`print` must emit interior NUL bytes, not truncate at
         // the first NUL. Pre-fix TWO bugs compounded — the print path lowered

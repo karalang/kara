@@ -1633,6 +1633,51 @@ impl<'a> super::TypeChecker<'a> {
         for (_src_name, src_ty, tgt_name, tgt_ty) in widening_pairs {
             self.register_builtin_impl("From", tgt_name, vec![("from", from_sig(src_ty, tgt_ty))]);
         }
+
+        // Numeric narrowing / sign-changing conversions: `impl TryFrom[S] for T`
+        // for every ordered integer type pair (design.md § Conversion Traits —
+        // "Narrowing numeric conversion — fails if out of range"). The Error
+        // type is `String` (matching the refinement-/distinct-`TryFrom`
+        // convention); the runtime range-checks the value and returns
+        // `Err("out of range …")` when it doesn't fit. Every pair is registered
+        // — including widening / identity pairs, which always succeed — so
+        // `T.try_from(any_int)` and `x.try_into()` at a `Result[T, _]` position
+        // are uniformly available (Rust makes `TryFrom` universal the same way).
+        // The registration only carries the signature for dispatch + return
+        // typing; the fallible value computation lives in the interpreter and
+        // codegen (`numeric_conv::fits_in_target`). Sources/targets are the
+        // fixed-width integer set plus `usize` — matching the `is_known_type`
+        // primitive list in `expr_method_call.rs` (no `i128`/`u128`/`isize`).
+        let int_types: &[(&str, Type)] = &[
+            ("i8", Type::Int(IntSize::I8)),
+            ("i16", Type::Int(IntSize::I16)),
+            ("i32", Type::Int(IntSize::I32)),
+            ("i64", Type::Int(IntSize::I64)),
+            ("u8", Type::UInt(UIntSize::U8)),
+            ("u16", Type::UInt(UIntSize::U16)),
+            ("u32", Type::UInt(UIntSize::U32)),
+            ("u64", Type::UInt(UIntSize::U64)),
+            ("usize", Type::UInt(UIntSize::Usize)),
+        ];
+        let try_from_sig = |source: &Type, target: &Type| FunctionSig {
+            generic_params: vec![],
+            param_names: vec![Some("value".into())],
+            params: vec![source.clone()],
+            return_type: Type::Named {
+                name: "Result".to_string(),
+                args: vec![target.clone(), Type::Str],
+            },
+            where_clause: None,
+        };
+        for (_src_name, src_ty) in int_types {
+            for (tgt_name, tgt_ty) in int_types {
+                self.register_builtin_impl(
+                    "TryFrom",
+                    tgt_name,
+                    vec![("try_from", try_from_sig(src_ty, tgt_ty))],
+                );
+            }
+        }
     }
 
     fn env_add_struct(&mut self, s: &StructDef) {

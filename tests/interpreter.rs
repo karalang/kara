@@ -11843,6 +11843,32 @@ fn test_char_try_from_interpreter() {
 }
 
 #[test]
+fn test_numeric_try_from_interpreter() {
+    // Built-in numeric narrowing `T.try_from(x) -> Result[T, String]`
+    // (design.md § Conversion Traits). Covers: in-range Ok, narrowing
+    // out-of-range Err, sign-change (negative → unsigned) Err, widening always
+    // Ok, an unsigned target printing a value that overflows the signed target,
+    // and the `.try_into()` desugar. Must match the codegen E2E
+    // (`test_e2e_numeric_try_from`).
+    let output = run(r#"fn main() {
+            match i8.try_from(100) { Ok(v) => println(v), Err(e) => println(e) }
+            match i8.try_from(300) { Ok(v) => println(v), Err(e) => println(e) }
+            match u8.try_from(-1) { Ok(v) => println(v), Err(e) => println(e) }
+            match i64.try_from(42) { Ok(v) => println(v), Err(e) => println(e) }
+            let big: i64 = 3000000000;
+            match u32.try_from(big) { Ok(v) => println(v), Err(e) => println(e) }
+            match i32.try_from(big) { Ok(v) => println(v), Err(e) => println(e) }
+            let n: i32 = 70000;
+            let r: Result[i16, String] = n.try_into();
+            match r { Ok(v) => println(v), Err(e) => println(e) }
+        }"#);
+    assert_eq!(
+        output,
+        "100\nout of range for i8\nout of range for u8\n42\n3000000000\nout of range for i32\nout of range for i16\n"
+    );
+}
+
+#[test]
 fn test_f64_parse_interpreter() {
     // Float parse: decimal / scientific / negative / reject / integer-form.
     // The self-hosting lexer's float-literal path.

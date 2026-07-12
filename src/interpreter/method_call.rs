@@ -103,6 +103,34 @@ pub(super) fn result_ok(v: Value) -> Value {
     }
 }
 
+/// `<int>.try_from(x) -> Result[<int>, String]` — numeric narrowing /
+/// sign-changing conversion (design.md § Conversion Traits). Shared by the
+/// identifier-form receiver dispatch (`Type.try_from(x)`) and the path-form
+/// `.try_into()` desugar (`Call(Path([Type, try_from]))`). In range →
+/// `Ok(value)`; otherwise `Err("out of range for T")`. The range check
+/// (`numeric_conv::fits_in_target`) and the `Err` message are shared bit-for-bit
+/// with codegen so `karac run` and `karac build` stay at parity. `target` must
+/// be one of the integer type names; the single arg is evaluated here.
+pub(super) fn numeric_try_from_value(n: i64, target: &str) -> Value {
+    if crate::numeric_conv::fits_in_target(n as i128, target) {
+        result_ok(Value::Int(n))
+    } else {
+        Value::EnumVariant {
+            enum_name: "Result".to_string(),
+            variant: "Err".to_string(),
+            data: EnumData::Tuple(vec![Value::String(format!("out of range for {}", target))]),
+        }
+    }
+}
+
+/// `true` iff `name` is an integer type that carries a numeric `try_from`.
+pub(super) fn is_numeric_try_from_target(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+    )
+}
+
 impl<'a> super::Interpreter<'a> {
     /// Run a refinement type's `try_from` at runtime if `type_name` names a
     /// refinement (phase-9 step 5b): evaluate the predicate against the
@@ -966,6 +994,22 @@ impl<'a> super::Interpreter<'a> {
                             data: EnumData::Tuple(vec![Value::Int(cp)]),
                         },
                     };
+                }
+                // `<int>.try_from(x: <int>) -> Result[<int>, String]` — numeric
+                // narrowing / sign-changing conversion (design.md § Conversion
+                // Traits). In range → `Ok(value)`; otherwise `Err("out of range
+                // for T")`. The range check is `numeric_conv::fits_in_target`,
+                // shared bit-for-bit with codegen. Caveat: `Value::Int` is i64,
+                // so a `u64` source above `i64::MAX` is already stored as a
+                // negative i64 (the pre-existing interpreter wide-int limit) and
+                // would be misjudged — the same limitation the int `parse` arms
+                // carry; codegen is exact.
+                if method == "try_from" && is_numeric_try_from_target(target) {
+                    let n = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Int(n)) => n,
+                        _ => 0,
+                    };
+                    return numeric_try_from_value(n, target);
                 }
                 if let Some(result) = self.dispatch_lowered_op(method, args, span) {
                     return result;
