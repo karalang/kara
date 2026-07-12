@@ -3946,10 +3946,54 @@ impl<'ctx> super::Codegen<'ctx> {
     /// scope exit — only the struct's own inline storage (the
     /// `{ptr, len, cap}` field for a Vec field) was released, the actual
     /// heap-allocated backing buffer leaked.
+    /// Build the `param -> concrete arg` substitution for a generic struct
+    /// binding from its recorded instantiation TypeExpr (`S[String]` →
+    /// `{T: String}`). Empty for a non-generic struct or when the instantiation
+    /// doesn't name this struct. Used to thread the concrete instantiation into
+    /// per-monomorph struct-drop synthesis (B-2026-07-11-35 push leg).
+    pub(super) fn generic_struct_subst_from_inst(
+        &self,
+        struct_name: &str,
+        inst: &TypeExpr,
+    ) -> std::collections::HashMap<String, TypeExpr> {
+        let mut subst = std::collections::HashMap::new();
+        if let TypeKind::Path(p) = &inst.kind {
+            if p.segments.last().map(String::as_str) == Some(struct_name) {
+                if let (Some(params), Some(args)) = (
+                    self.struct_generic_params.get(struct_name),
+                    p.generic_args.as_ref(),
+                ) {
+                    for (param, arg) in params.iter().zip(args.iter()) {
+                        if let GenericArg::Type(te) = arg {
+                            subst.insert(param.clone(), te.clone());
+                        }
+                    }
+                }
+            }
+        }
+        subst
+    }
+
     pub(super) fn track_struct_var(
         &mut self,
         struct_name: &str,
         struct_alloca: PointerValue<'ctx>,
+    ) {
+        self.track_struct_var_inst(struct_name, struct_alloca, None);
+    }
+
+    /// `track_struct_var` with an explicit generic instantiation (`S[String]`),
+    /// so the scope-exit drop is the per-monomorph
+    /// `__karac_drop_struct_S$String` that drains the concrete `Vec[String]`
+    /// field's element buffers — not the name-shared `__karac_drop_struct_S`
+    /// that resolves the element from bare `T` and leaks every element
+    /// (B-2026-07-11-35 push leg). A `None` instantiation (or a non-generic
+    /// struct) reproduces the original name-keyed behavior exactly.
+    pub(super) fn track_struct_var_inst(
+        &mut self,
+        struct_name: &str,
+        struct_alloca: PointerValue<'ctx>,
+        inst: Option<TypeExpr>,
     ) {
         // B-2026-07-03-28 shared leg — a struct that transitively owns a
         // `shared` / `Option[shared]` / `Vec[shared]` field needs the COMBINED
@@ -3971,7 +4015,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 None => return,
             }
         } else {
-            match self.emit_struct_drop_synthesis(struct_name) {
+            let subst = inst
+                .as_ref()
+                .map(|i| self.generic_struct_subst_from_inst(struct_name, i))
+                .unwrap_or_default();
+            match self.emit_struct_drop_synthesis_mono(struct_name, &subst) {
                 Some(f) => f,
                 None => return,
             }

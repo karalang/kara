@@ -19,7 +19,7 @@ use inkwell::values::{FunctionValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
-use crate::ast::{Item, TypeExpr, TypeKind, VariantKind};
+use crate::ast::{GenericArg, Item, TypeExpr, TypeKind, VariantKind};
 
 use super::state::EnumDropKind;
 
@@ -942,7 +942,105 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         struct_name: &str,
     ) -> Option<FunctionValue<'ctx>> {
-        if let Some(f) = self.struct_drop_fns.get(struct_name) {
+        self.emit_struct_drop_synthesis_impl(struct_name, None)
+    }
+
+    /// B-2026-07-11-35 (push leg) — per-MONOMORPH struct-drop synthesis. A
+    /// generic container `S[T] { items: Vec[T] }` synthesizes ONE drop fn per
+    /// struct NAME under `emit_struct_drop_synthesis`, resolving the `Vec[T]`
+    /// field's element from the DECLARED bare `T` — so `T`'s heap (a `Vec[String]`
+    /// field's char buffers) is never drained and every unconsumed element leaks
+    /// (9x under `asan_generic_assoc_fn_vec_field_no_leak` once the push deep-copies).
+    /// The drop fn is also shared across `S[String]` / `S[i64]` (same name, same
+    /// `{ptr,len,cap}` Vec LLVM type), so a name-shared drop CANNOT free
+    /// instantiation-specific heap without corrupting the other (running a
+    /// String-element drain over an `i64` Vec would `free` each i64 as a bogus
+    /// `{ptr,len,cap}`). This variant threads the concrete `param -> arg` subst
+    /// (built from the binding's recorded instantiation `S[String]`), which (a)
+    /// mangles a distinct symbol per instantiation (`__karac_drop_struct_S$String`)
+    /// and (b) resolves each `Vec[T]` field element to the concrete `String`
+    /// before picking its per-element drop. Non-generic structs pass `None` and
+    /// are byte-for-byte unchanged (empty subst → bare name, no resolution).
+    pub(super) fn emit_struct_drop_synthesis_mono(
+        &mut self,
+        struct_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if subst.is_empty() {
+            return self.emit_struct_drop_synthesis_impl(struct_name, None);
+        }
+        self.emit_struct_drop_synthesis_impl(struct_name, Some(subst))
+    }
+
+    /// Recursively mangle a concrete type arg into a drop-fn symbol suffix
+    /// component — `String`, `i64`, `Vec_i64`, `Box_String`, `tup_i64_String`.
+    /// Unlike `mangled_type_name` (head-only, so `Vec[i64]` and `Vec[String]`
+    /// collide) this descends into generic args and tuple elements so two
+    /// instantiations that differ only in a nested arg get distinct symbols.
+    fn drop_mono_mangle_component(te: &TypeExpr) -> String {
+        match &te.kind {
+            TypeKind::Path(p) => {
+                let head = p
+                    .segments
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                match &p.generic_args {
+                    Some(args) if !args.is_empty() => {
+                        let parts: Vec<String> = args
+                            .iter()
+                            .map(|a| match a {
+                                GenericArg::Type(t) => Self::drop_mono_mangle_component(t),
+                                _ => "c".to_string(),
+                            })
+                            .collect();
+                        format!("{head}_{}", parts.join("_"))
+                    }
+                    _ => head,
+                }
+            }
+            TypeKind::Tuple(elems) => {
+                let parts: Vec<String> =
+                    elems.iter().map(Self::drop_mono_mangle_component).collect();
+                format!("tup_{}", parts.join("_"))
+            }
+            _ => "unknown".to_string(),
+        }
+    }
+
+    fn emit_struct_drop_synthesis_impl(
+        &mut self,
+        struct_name: &str,
+        subst: Option<&std::collections::HashMap<String, TypeExpr>>,
+    ) -> Option<FunctionValue<'ctx>> {
+        // Per-monomorph cache key + symbol suffix: for a generic struct with a
+        // non-empty subst, append `$<concrete>` per generic param (in declared
+        // order) so `S[String]` / `S[i64]` get distinct cached drop fns and LLVM
+        // symbols. Non-generic (or `None`) → bare name, unchanged.
+        let mono_suffix: Option<String> = subst.and_then(|subst| {
+            let params = self.struct_generic_params.get(struct_name).cloned()?;
+            let mut suf = String::new();
+            for p in &params {
+                if let Some(te) = subst.get(p) {
+                    suf.push('$');
+                    suf.push_str(&Self::drop_mono_mangle_component(te));
+                }
+            }
+            if suf.is_empty() {
+                None
+            } else {
+                Some(suf)
+            }
+        });
+        let cache_key = match &mono_suffix {
+            Some(s) => format!("{struct_name}{s}"),
+            None => struct_name.to_string(),
+        };
+        // The active subst only drives field-element resolution when a real
+        // mono suffix was produced (a generic struct with bound params); a
+        // non-generic struct treats it as absent.
+        let subst = mono_suffix.as_ref().and(subst);
+        if let Some(f) = self.struct_drop_fns.get(&cache_key) {
             return Some(*f);
         }
         // Shared structs use the RC machinery; their cleanup is via
@@ -1237,9 +1335,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
 
-        let fn_name = format!("__karac_drop_struct_{struct_name}");
+        let fn_name = format!("__karac_drop_struct_{cache_key}");
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.struct_drop_fns.insert(struct_name.to_string(), f);
+            self.struct_drop_fns.insert(cache_key.clone(), f);
             return Some(f);
         }
 
@@ -1255,8 +1353,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let drop_fn = self
             .module
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
-        self.struct_drop_fns
-            .insert(struct_name.to_string(), drop_fn);
+        self.struct_drop_fns.insert(cache_key.clone(), drop_fn);
 
         let entry_bb = self.context.append_basic_block(drop_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -1302,6 +1399,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         .and_then(|v| v.get(field_idx))
                         .cloned()
                         .and_then(|fte| crate::codegen::helpers::vec_inner_type_expr(&fte))
+                        // B-2026-07-11-35 (push leg) — resolve a generic `Vec[T]`
+                        // field's element (`T`) to the concrete monomorph type
+                        // (`String`) so its per-element drop is chosen and the
+                        // deep-copied element buffers are drained. A no-op (`subst`
+                        // absent) for a non-generic struct.
+                        .map(|elem_te| match subst {
+                            Some(subst) => crate::codegen::helpers::subst_type_params_in_type_expr(
+                                &elem_te, subst,
+                            ),
+                            None => elem_te,
+                        })
                         .and_then(|elem_te| {
                             let f = self.vec_elem_agg_drop_for_type_expr(&elem_te).or_else(|| {
                                 if Self::elem_te_needs_direct_recursive_drain(&elem_te) {

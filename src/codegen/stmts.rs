@@ -4170,7 +4170,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             if has_user_drop && !self.shared_types.contains_key(&struct_name) {
                                 self.track_user_drop_var(&struct_name, var_name, alloca);
                             } else if self.struct_types.contains_key(&struct_name) {
-                                self.track_struct_var(&struct_name, alloca);
+                                // B-2026-07-11-35 (push leg) — thread the binding's
+                                // recorded generic instantiation (`S[String]`) so
+                                // the scope-exit drop is the per-monomorph drop that
+                                // drains the concrete `Vec[String]` field, not the
+                                // name-shared drop that leaks every element.
+                                let inst = self.enum_inst_var_types.get(var_name).cloned();
+                                self.track_struct_var_inst(&struct_name, alloca, inst);
                             }
                             // B-2026-07-04-17: `x`'s heap aliases a heap-owning
                             // for-loop struct ELEMENT the container's per-element

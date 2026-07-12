@@ -4924,6 +4924,44 @@ fn main() {
         }
     }
 
+    /// B-2026-07-11-35 (push leg): a GENERIC container built via a generic
+    /// constructor (`Box.new()`) and filled through a generic method
+    /// (`fn add(mut ref self, x: T) { self.xs.push(x) }`) with NON-COPY (String)
+    /// elements. The mono param prologue registered `x: T` off the bare `T`
+    /// (never entering `owned_vecstr_params`), so the retaining `self.xs.push(x)`
+    /// MOVED the caller's buffer instead of deep-copying it — every method-pushed
+    /// element read back as garbage from the caller (interp/oracle stayed
+    /// correct; only codegen — JIT + native — corrupted). The prologue now
+    /// resolves the param to its concrete monomorph type before registration.
+    /// Also pins the coexistence of `Box[String]` and `Box[i64]` in one program:
+    /// the per-monomorph struct-drop synthesis gives each a distinct
+    /// `__karac_drop_struct_Box$*` so the String drain never runs over the i64
+    /// Vec (which would `free` each i64 as a bogus `{ptr,len,cap}`). The leak is
+    /// pinned in `tests/memory_sanitizer.rs::asan_generic_container_method_push_no_leak`.
+    #[test]
+    fn e2e_generic_container_method_push_noncopy_element() {
+        if let Some(out) = run_program(
+            "struct Box[T] { xs: Vec[T] }\n\
+             impl[T] Box[T] {\n\
+             \x20   fn new() -> Box[T] { Box { xs: Vec.new() } }\n\
+             \x20   fn add(mut ref self, x: T) { self.xs.push(x); }\n\
+             \x20   fn at(ref self, i: i64) -> T { self.xs[i] }\n\
+             \x20   fn size(ref self) -> i64 { self.xs.len() }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut s: Box[String] = Box.new();\n\
+             \x20   s.add(f\"alpha\"); s.add(f\"beta\"); s.add(f\"gamma\");\n\
+             \x20   let mut n: Box[i64] = Box.new();\n\
+             \x20   n.add(100); n.add(200);\n\
+             \x20   println(s.at(0)); println(s.at(1)); println(s.at(2));\n\
+             \x20   println(f\"{n.at(0)}\"); println(f\"{n.at(1)}\");\n\
+             \x20   println(f\"{s.size()} {n.size()}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "alpha\nbeta\ngamma\n100\n200\n3 2\n");
+        }
+    }
+
     /// B-2026-07-11-35 (return leg): a method/fn whose tail is a FIELD-rooted
     /// index element (`fn get(ref self) -> String { self.xs[i] }`,
     /// `fn getf(h: ref H, i) -> String { h.xs[i] }`) returned an ALIAS of the

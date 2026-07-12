@@ -1503,6 +1503,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
                     _ => &param.ty,
                 };
+                // B-2026-07-11-35 (push leg) — resolve a bare type-param param
+                // (`x: T`) to its CONCRETE monomorph type before registration.
+                // Without this the registrar sees `Path("T")` (not String/Vec),
+                // so a `x: T` (T=String) param never enters `vec_elem_types` /
+                // `owned_vecstr_params`, and the retaining `self.xs.push(x)` MOVES
+                // the caller's buffer instead of deep-copying it — the element
+                // then reads as garbage from the caller (a `Box[String].add(...)`
+                // push corrupted every element). The active `type_subst_names`
+                // (set by `compile_generic_call`) drives the resolution; a no-op
+                // outside a monomorph. Paired with per-monomorph struct-drop
+                // synthesis (so the now-deep-copied element buffers are freed at
+                // the container's drop) and caller-side fresh-owned-temp cleanup.
+                let resolved_registration_te = self.subst_monomorph_type_params(registration_te);
+                let registration_te = &resolved_registration_te;
                 self.register_var_from_type_expr(&param_name, registration_te);
                 // A bare-type-param param bound to a handle-backed builtin
                 // (Column/Tensor) registers from the call site's recorded

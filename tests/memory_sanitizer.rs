@@ -23711,4 +23711,62 @@ fn main() {
             "return_field_index_element_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_generic_container_method_push_no_leak() {
+        // B-2026-07-11-35 (push leg): a GENERIC container `Box[T] { xs: Vec[T] }`
+        // built via a generic constructor (`Box.new()`) and filled through a
+        // generic method (`fn add(mut ref self, x: T) { self.xs.push(x) }`) with
+        // NON-COPY (String) elements. Two coupled defects: (1) the mono param
+        // prologue registered `x: T` off the bare `T`, so `self.xs.push(x)` MOVED
+        // the caller's buffer (garbage reads — the correctness leg, pinned in
+        // `tests/codegen.rs`); (2) once the push deep-copies (the fix), the
+        // element buffers leaked because the struct DROP was synthesized ONCE per
+        // struct NAME and resolved the `Vec[T]` field from bare `T`, never
+        // draining the concrete `Vec[String]`. Per-monomorph struct-drop synthesis
+        // (`__karac_drop_struct_Box$String`, distinct from `Box$i64`) now drains
+        // each element. Loops so any per-iteration leak accumulates for LSan, and
+        // coexists `Box[String]` with `Box[i64]` so the String drain never runs
+        // over the i64 Vec (a name-shared drop would `free` each i64 as a bogus
+        // `{ptr,len,cap}` — a heap-buffer-overflow / invalid-free, not just a leak).
+        assert_clean_asan_run(
+            r#"
+struct Box[T] { xs: Vec[T] }
+impl[T] Box[T] {
+    fn new() -> Box[T] { Box { xs: Vec.new() } }
+    fn add(mut ref self, x: T) { self.xs.push(x); }
+    fn at(ref self, i: i64) -> T { self.xs[i] }
+    fn size(ref self) -> i64 { self.xs.len() }
+}
+fn main() {
+    let mut r: i64 = 0;
+    while r < 3 {
+        let mut s: Box[String] = Box.new();
+        s.add(f"row-{r}-aaaaaa");
+        s.add(f"row-{r}-bbbbbb");
+        s.add(f"row-{r}-cccccc");
+        let mut n: Box[i64] = Box.new();
+        n.add(r * 10);
+        n.add(r * 10 + 1);
+        println(s.at(0));
+        println(s.at(2));
+        println(f"{n.at(1)} {s.size()} {n.size()}");
+        r = r + 1;
+    }
+}
+"#,
+            &[
+                "row-0-aaaaaa",
+                "row-0-cccccc",
+                "1 3 2",
+                "row-1-aaaaaa",
+                "row-1-cccccc",
+                "11 3 2",
+                "row-2-aaaaaa",
+                "row-2-cccccc",
+                "21 3 2",
+            ],
+            "generic_container_method_push_no_leak",
+        );
+    }
 }
