@@ -3564,6 +3564,45 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_freshtemp_call_match_option_shared_correct() {
+        // B-2026-07-12-23 correctness pin (the ASAN/leak gate lives in
+        // tests/memory_sanitizer.rs::asan_freshtemp_call_match_option_shared_no_leak).
+        // A direct `match take()` on a call returning `Option[shared]` leaked the
+        // node; the lowering fix rewrites the call scrutinee into a let-bound
+        // scrutinee. This pins that the rewrite preserves the value — the bound
+        // arm must still read the returned node's field. Non-ASAN so it guards
+        // the value everywhere.
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Option[Node] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => None,
+        Some(n) => Some(n),
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        match take() {
+            None => {}
+            Some(n) => { t = t + n.val; }
+        }
+        i = i + 1;
+    }
+    println(t);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1400");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_set_get_is_set_lifecycle() {
         // `OnceLock[i64]` write-once lifecycle under `karac build`/JIT (was
         // interpreter-only). Empty → `is_set() == false`, `get() == None`;

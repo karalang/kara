@@ -467,6 +467,79 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_call_match_option_shared_no_leak() {
+        // B-2026-07-12-23 — a direct `match <call returning Option[shared]>`
+        // fresh-temp scrutinee leaked the extracted node once per match (6,400 B
+        // / 200 iters pre-fix). The callee (`take`) rebuilds its Option through a
+        // returning arm (`Some(n) => Some(n)`), so it hands back an owned +1 the
+        // caller's match never dropped — the fresh-temp scrutinee's drop was
+        // resolved from the erased generic Option layout (all-None drop-kinds),
+        // so has_droppable was false. The lowering pass now rewrites the direct
+        // call form into a let-bound scrutinee whose concrete-type cleanup
+        // releases the rc (sibling of the B-21 index-read rewrite). Looped 200x
+        // so any per-iteration leak accumulates well past noise; prints 1400.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn take() -> Option[Node] {
+    let mut src: Vec[Option[Node]] = Vec.new();
+    src.push(Some(Node { val: 7, left: None, right: None }));
+    match src[0] {
+        None => None,
+        Some(n) => Some(n),
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        match take() {
+            None => {}
+            Some(n) => { t = t + n.val; }
+        }
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["1400"],
+            "freshtemp_call_match_option_shared_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_literal_call_match_option_shared_no_double_free() {
+        // B-2026-07-12-23 discriminator (b) — a fresh-LITERAL `match make()`
+        // (callee returns a bare `Some(Node{..})`, no returning-arm rebuild) was
+        // already CLEAN pre-fix. The B-23 lowering rewrite widens to all `Call`
+        // scrutinees, so this case is now rewritten too; it must STAY clean — a
+        // spurious extra release here would double-free the freshly-built node.
+        // Guards the widened gate against over-release.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn make() -> Option[Node] {
+    Some(Node { val: 7, left: None, right: None })
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 200 {
+        match make() {
+            None => {}
+            Some(n) => { t = t + n.val; }
+        }
+        i = i + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &["1400"],
+            "freshtemp_literal_call_match_option_shared_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_return_owned_heap_struct_param_no_leak() {
         // B-2026-07-08-6 (non-generic leg, FIXED) — a fn that returns an owned
         // heap-owning STRUCT param used to leak the arg buffer: the caller's

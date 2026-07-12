@@ -926,17 +926,21 @@ impl<'a> Lowerer<'a> {
             | ExprKind::Error => {}
         }
 
-        // B-2026-07-12-21: a direct `match vec[i]` whose scrutinee is an
-        // `Option`/`Result` carrying a *shared* (RC) payload LEAKS the
-        // extracted node once per match — the fresh-temp scrutinee's drop is
-        // resolved from the erased generic `Option`/`Result` layout (all-`None`
-        // drop-kinds), so the payload the index-read deep-cloned (rc-INC) is
-        // never released. A let-bound scrutinee (`let e = vec[i]; match e`) is
-        // clean: the binding carries the CONCRETE type, so its cleanup releases
-        // the clone correctly. Rewrite the direct form into the proven-clean
-        // let-bound form. Gated to shared payloads (String/Vec/box payloads are
-        // already balanced — the concrete drop is reached through their own
-        // layouts), so no working case is perturbed.
+        // B-2026-07-12-21 / B-2026-07-12-23: a direct `match <fresh-temp>` whose
+        // scrutinee is an `Option`/`Result` carrying a *shared* (RC) payload
+        // LEAKS the extracted node once per match — the fresh-temp scrutinee's
+        // drop is resolved from the erased generic `Option`/`Result` layout
+        // (all-`None` drop-kinds), so the retained rc is never released. Both an
+        // index read (`vec[i]`, B-21) and a call return (`take()`, B-23) hit
+        // this: the index read deep-clones (rc-INC), and a call that rebuilds
+        // its Option through a returning arm (`Some(n) => Some(n)`) hands back an
+        // owned +1 the caller's match never drops. A let-bound scrutinee
+        // (`let e = <expr>; match e`) is clean: the binding carries the CONCRETE
+        // type, so its cleanup releases the retained rc correctly. Rewrite the
+        // direct form into the proven-clean let-bound form. Gated to shared
+        // payloads (String/Vec/box payloads are already balanced — the concrete
+        // drop is reached through their own layouts), so no working case is
+        // perturbed.
         self.bind_shared_index_match_scrutinee(expr);
 
         // Then rewrite this node if it's an operator we lower.
@@ -945,19 +949,30 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// B-2026-07-12-21 rewrite: `match <vec[i]> { arms }` where the scrutinee
-    /// is a bare index-read of an `Option`/`Result` with a shared (RC) payload
-    /// becomes `{ let __karac_msc_… : <ScrutTy> = <vec[i]>; match __karac_msc_…
-    /// { arms } }`. The synthetic binding carries an explicit type annotation
-    /// so codegen resolves the concrete payload drop from the annotation (the
-    /// typechecker never saw this binding, so there is no `expr_types` entry to
-    /// key on). Semantically identical to the direct form — `vec[i]` reads a
-    /// copy either way — so the interpreter and both codegen paths agree.
+    /// B-2026-07-12-21 / B-2026-07-12-23 rewrite: `match <fresh-temp> { arms }`
+    /// where the scrutinee is a bare index-read (`vec[i]`, B-21) or a free
+    /// function call (`take()`, B-23) of an `Option`/`Result` with a shared (RC)
+    /// payload becomes `{ let __karac_msc_… : <ScrutTy> = <expr>; match
+    /// __karac_msc_… { arms } }`. The synthetic binding carries an explicit
+    /// type annotation so codegen resolves the concrete payload drop from the
+    /// annotation (the typechecker never saw this binding, so there is no
+    /// `expr_types` entry to key on). Semantically identical to the direct form
+    /// — the scrutinee is evaluated exactly once either way — so the interpreter
+    /// and both codegen paths agree.
+    ///
+    /// Scoped to `Index` and `Call` scrutinees: a `vec.pop()` / `pop_back` /
+    /// `pop_front` MethodCall returns `Option[Option[shared]]` (heap-boxed) and
+    /// is already balanced by the fresh-temp boxed-enum drop path
+    /// (`track_freshtemp_boxed_enum_scrutinee`, B-2026-07-12-4), so it is left
+    /// untouched here.
     fn bind_shared_index_match_scrutinee(&self, expr: &mut Expr) {
         let ExprKind::Match { scrutinee, .. } = &expr.kind else {
             return;
         };
-        if !matches!(scrutinee.kind, ExprKind::Index { .. }) {
+        if !matches!(
+            scrutinee.kind,
+            ExprKind::Index { .. } | ExprKind::Call { .. }
+        ) {
             return;
         }
         let key = SpanKey::from_span(&scrutinee.span);
@@ -975,27 +990,27 @@ impl<'a> Lowerer<'a> {
         else {
             unreachable!("guarded by the match above");
         };
-        let idx_expr = *scrutinee;
-        let idx_span = idx_expr.span.clone();
-        let binding = format!("__karac_msc_{}_{}", idx_span.offset, idx_span.length);
+        let scrut_expr = *scrutinee;
+        let scrut_span = scrut_expr.span.clone();
+        let binding = format!("__karac_msc_{}_{}", scrut_span.offset, scrut_span.length);
 
         let let_stmt = Stmt {
             kind: StmtKind::Let {
                 is_mut: false,
                 pattern: Pattern {
                     kind: PatternKind::Binding(binding.clone()),
-                    span: idx_span.clone(),
+                    span: scrut_span.clone(),
                 },
                 ty: Some(scrut_ty_expr),
-                value: idx_expr,
+                value: scrut_expr,
             },
-            span: idx_span.clone(),
+            span: scrut_span.clone(),
         };
         let inner_match = Expr {
             kind: ExprKind::Match {
                 scrutinee: Box::new(Expr {
                     kind: ExprKind::Identifier(binding),
-                    span: idx_span.clone(),
+                    span: scrut_span.clone(),
                 }),
                 arms,
             },
