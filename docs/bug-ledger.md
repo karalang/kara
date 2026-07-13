@@ -516,7 +516,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **420 surfaced 
 | B-2026-07-12-29 | codegen | med | ARM64-ONLY leak: `work[i] = <place>` on `Vec[Option[shared]]`/`Vec[shared]` (e.g | 63d618e |
 | B-2026-07-13-1 | codegen | high | An owned Vec/String PARAM returned from an `if`/`match`/nested-block BRANCH TAIL double-frees under codegen (AOT/JIT `free(): double free detected in… | 78a9a4a |
 | B-2026-07-13-2 | codegen | high | A bare generic param `x: T` bound to a builtin COLLECTION (String/Vec/VecDeque) misses its owned-param return DEEP-COPY in the monomorph body under t… | d20a515 |
-| B-2026-07-13-3 | codegen | medium | A GENERIC function whose body is a `match` expression evaluating to a HEAP type `T` (String/Vec), monomorphized, lowers the match VALUE to the i64 co… | 0e7face |
+| B-2026-07-13-3 | codegen | medium | A GENERIC function whose body is a `match` expression evaluating to a HEAP type `T` (String/Vec), monomorphized, lowers the match VALUE to the i64 co… | 0e7face,0d680d7 |
 | B-2026-07-13-6 | codegen | high | A `let` that SHADOWS an outer variable inside ANY nested scope (plain block, `if`/`else` block, `while` body, `for` body, `match` arm, nested block)… | 07fe865 |
 
 </details>
