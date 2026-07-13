@@ -986,6 +986,31 @@ impl<'a> super::TypeChecker<'a> {
                 && args.len() == 1
             {
                 let inner_ty = self.infer_expr(&args[0].value);
+                // `Atomic[T]` requires `T` to be an integer, `bool`, or raw
+                // pointer — the only types LLVM can lower to a single hardware
+                // atomic op (deferred.md § Atomic Operations). A non-eligible
+                // inner type otherwise slips past `check` and crashes codegen
+                // with an opaque LLVM verifier error while the interpreter
+                // silently accepts it — a `run`/`build` divergence, so the
+                // rejection is run-fatal. `Mutex[T]` is unrestricted (a lock
+                // guards any type), so this guard is `Atomic`-only.
+                if segments[0] == "Atomic" {
+                    let resolved = resolve_type_var_top(&inner_ty, &self.env.substitutions);
+                    if let Some(kind) = atomic_ineligible_inner_kind(&resolved) {
+                        self.type_error(
+                            format!(
+                                "Atomic[{}] is not a valid atomic type: {kind} cannot be operated \
+                                 on atomically. An atomic's inner type must be an integer \
+                                 (i8..i64 / u8..u64 / usize / isize), `bool`, or a raw pointer \
+                                 (`*const T` / `*mut T`); to share richer data across tasks use \
+                                 `Mutex[T]`, which can guard any type",
+                                type_display(&resolved)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::AtomicInvalidInnerType,
+                        );
+                    }
+                }
                 let ty = Type::Named {
                     name: segments[0].clone(),
                     args: vec![inner_ty],
@@ -1654,6 +1679,50 @@ impl<'a> super::TypeChecker<'a> {
         };
         self.record_expr_type(span, &ty);
         ty
+    }
+}
+
+/// Classify an `Atomic[T]` inner type for atomic eligibility. Returns
+/// `Some(human-readable kind)` when `T` is a *definitively concrete*
+/// non-eligible type (so the caller can reject with a clear message), and
+/// `None` when `T` is eligible (integer / `bool` / raw pointer, per
+/// deferred.md § Atomic Operations) OR when `T` is not yet pinned down —
+/// an unresolved inference var, a generic type parameter, an opaque
+/// existential / associated-type projection, or an error type. Deferring
+/// the uncertain cases keeps the guard from false-positiving inside a
+/// generic body (`fn f[T](x: T) { Atomic.new(x) }`); a truly-bad
+/// monomorphization is still caught downstream by codegen.
+fn atomic_ineligible_inner_kind(ty: &Type) -> Option<&'static str> {
+    match ty {
+        // Eligible — the set LLVM lowers to a single hardware atomic.
+        Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Pointer { .. } => None,
+        // Not-yet-known — defer, do not reject.
+        Type::TypeVar(_)
+        | Type::TypeParam(_)
+        | Type::Error
+        | Type::AssocProjection { .. }
+        | Type::Existential { .. } => None,
+        // Concrete but ineligible — name the shape for the diagnostic.
+        Type::Float(_) => Some("a floating-point type"),
+        Type::Char => Some("`char`"),
+        Type::Str => Some("a string type"),
+        Type::Tuple(_) => Some("a tuple"),
+        Type::Array { .. } => Some("an array"),
+        Type::Vector { .. } => Some("a SIMD vector"),
+        Type::Slice { .. } => Some("a slice"),
+        Type::Shared(_) => Some("a shared struct"),
+        Type::Rc(_) => Some("an `Rc[T]`"),
+        Type::Arc(_) => Some("an `Arc[T]`"),
+        Type::Function { .. } | Type::OnceFunction { .. } => Some("a function type"),
+        Type::Ref(_) | Type::MutRef(_) => Some("a reference type"),
+        Type::Weak(_) => Some("a `weak` reference"),
+        Type::Named { name, .. } if name == "String" => Some("a string type"),
+        // Any other concrete named type (a plain struct / enum) is ineligible.
+        Type::Named { .. } => Some("a struct or enum type"),
+        // Unit / Never / shape-kinded and any future variant — reject by
+        // default (the safe direction: a new eligible type must be added to
+        // the eligible arm above explicitly, never silently allowed here).
+        _ => Some("this type"),
     }
 }
 

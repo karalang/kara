@@ -3170,6 +3170,10 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // witnesses (design.md § `impl Trait`: one witness per
                 // monomorphization). Run-fatal (B-2026-07-08-1).
                 crate::typechecker::TypeErrorKind::ImplTraitMultipleWitnesses => "E0271",
+                // `Atomic[T]` with a non-atomic inner type (`T` must be an
+                // integer, `bool`, or raw pointer). Run-fatal: codegen crashes
+                // the LLVM verifier while the interpreter silently accepts it.
+                crate::typechecker::TypeErrorKind::AtomicInvalidInnerType => "E0272",
                 // FE-2 — a `#[gpu]` function uses a non-GPU-safe type.
                 crate::typechecker::TypeErrorKind::GpuNotSafe => "E0801",
             };
@@ -8672,6 +8676,7 @@ fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'static str {
         K::StringNotIndexable => "E0268",
         K::SharedFieldNotMut => "E0269",
         K::AtomicMissingOrdering => "E0270",
+        K::AtomicInvalidInnerType => "E0272",
         _ => "E0200",
     }
 }

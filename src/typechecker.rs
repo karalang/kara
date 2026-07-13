@@ -474,6 +474,20 @@ pub enum TypeErrorKind {
     /// `karac run`'s lenient path downgrade-and-execute a program that
     /// `karac build` rejects, re-opening the divergence this kind closes.
     AtomicMissingOrdering,
+    /// `Atomic[T]` was constructed with an inner type `T` that cannot be
+    /// atomically operated on. Per deferred.md § Atomic Operations, `T` must
+    /// be an **integer, `bool`, or raw pointer** — the only types LLVM can
+    /// lower to a single hardware atomic load/store/RMW. A non-eligible inner
+    /// type (`String`, a struct, a tuple, a float, …) is rejected by codegen
+    /// with an opaque LLVM module-verifier crash ("atomic load operand must
+    /// have integer, pointer, or floating point type"), while the tree-walk
+    /// interpreter silently accepts it (treating `Atomic[T]` as a transparent
+    /// cell) — a straight `run`/`build` divergence, the same shape as
+    /// `AtomicMissingOrdering`. Run-fatal: there is no atomic lowering for
+    /// aggregate `T` to iterate toward, so downgrading would only re-open the
+    /// divergence. (`Mutex[T]` is unrestricted — a lock guards any type — so
+    /// this kind is `Atomic`-specific.)
+    AtomicInvalidInnerType,
     /// A `#[repr(transparent)]` carrier violates a shape rule (design.md §
     /// `#[repr(transparent)]` for distinct-type FFI). One kind for the whole
     /// family; the specific rule is named by the symbolic code embedded in the
@@ -874,6 +888,7 @@ impl TypeErrorKind {
                 | TypeErrorKind::StringNotIndexable
                 | TypeErrorKind::SharedFieldNotMut
                 | TypeErrorKind::AtomicMissingOrdering
+                | TypeErrorKind::AtomicInvalidInnerType
                 | TypeErrorKind::ImplTraitMultipleWitnesses
         )
     }
@@ -902,6 +917,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::BranchTypeMismatch
         | TypeErrorKind::ReturnTypeMismatch
         | TypeErrorKind::ImplTraitMultipleWitnesses
+        | TypeErrorKind::AtomicInvalidInnerType
         | TypeErrorKind::InvalidTupleIndex
         | TypeErrorKind::StringNotIndexable
         | TypeErrorKind::LabelMismatch

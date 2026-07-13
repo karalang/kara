@@ -6442,6 +6442,66 @@ fn test_atomic_op_with_explicit_ordering_typechecks() {
 }
 
 #[test]
+fn test_atomic_non_scalar_inner_type_rejected() {
+    // `Atomic[T]` requires `T` to be an integer, `bool`, or raw pointer
+    // (deferred.md § Atomic Operations — "all atomic types are integer, bool,
+    // or pointer"). A non-eligible inner type used to slip past `check` and
+    // crash codegen with an opaque LLVM module-verifier error ("atomic load
+    // operand must have integer, pointer, or floating point type") while the
+    // tree-walk interpreter silently accepted it as a transparent cell — a
+    // run/build divergence. It is now `AtomicInvalidInnerType`, run-fatal.
+    for (inner, ctor) in [
+        ("String", r#"Atomic.new("hi")"#),
+        ("f64", "Atomic.new(1.5)"),
+        ("(i64, i64)", "Atomic.new((1, 2))"),
+    ] {
+        let src = format!("fn main() {{ let _a = {ctor}; }}");
+        let errors = typecheck_errors(&src);
+        let e = errors
+            .iter()
+            .find(|e| e.kind == TypeErrorKind::AtomicInvalidInnerType)
+            .unwrap_or_else(|| {
+                panic!("expected AtomicInvalidInnerType for Atomic[{inner}], got: {errors:?}")
+            });
+        assert!(
+            e.message.contains("not a valid atomic type")
+                && e.message.contains("integer")
+                && e.message.contains("Mutex[T]"),
+            "message must explain the eligible set + Mutex fallback for Atomic[{inner}]: {}",
+            e.message
+        );
+        assert!(
+            e.kind.is_run_fatal(),
+            "AtomicInvalidInnerType must be run-fatal so `karac run` and \
+             `karac build` agree on rejecting Atomic[{inner}]"
+        );
+    }
+}
+
+#[test]
+fn test_atomic_eligible_inner_types_typecheck() {
+    // The eligible set — integers, unsigned integers, `bool`, and raw pointers
+    // — all construct cleanly. (`usize` covers the canonical `Atomic[usize]`
+    // counter; `*mut i32` is the `Atomic[*mut T]` cross-task pointer form from
+    // design.md § raw-pointer replacement.)
+    typecheck_ok("fn main() { let _a: Atomic[i64] = Atomic.new(0); }");
+    typecheck_ok("fn main() { let _a = Atomic.new(0 as u32); }");
+    typecheck_ok("fn main() { let _a = Atomic.new(0 as usize); }");
+    typecheck_ok("fn main() { let _a: Atomic[bool] = Atomic.new(false); }");
+    typecheck_ok("fn main() { let mut c: i32 = 0; let _p = unsafe { Atomic.new(ptr.mut(c)) }; }");
+}
+
+#[test]
+fn test_mutex_non_scalar_inner_type_allowed() {
+    // The atomic-eligibility guard is `Atomic`-specific: a `Mutex[T]` guards
+    // any type, so a `String` / struct / collection inner is perfectly fine.
+    // Regression pin — the guard must NOT fire on the shared `Atomic|Mutex`
+    // constructor arm for the `Mutex` case.
+    typecheck_ok(r#"fn main() { let _m: Mutex[String] = Mutex.new("hi"); }"#);
+    typecheck_ok("fn main() { let _m: Mutex[(i64, i64)] = Mutex.new((1, 2)); }");
+}
+
+#[test]
 fn test_ordering_helper_methods_typecheck() {
     // `impl Ordering { fn is_lt … }` (design.md lines 5162-5168) lives in
     // baked source. Both the typechecker (via `register_baked_stdlib`'s
