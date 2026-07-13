@@ -418,7 +418,7 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 ### Core Types
 - [ ] `Option[T]` — nullable values (enum)
 - [ ] `Result[T, E]` — error handling (enum)
-- [ ] `ref_eq(a, b)` — reference identity comparison for `shared` types (free function, returns `bool`)
+- [x] `ref_eq(a, b)` — reference identity comparison for `shared` types (free function, returns `bool`). `#[compiler_builtin]` in `runtime/stdlib/intrinsics.kara` + prelude; typecheck `infer_ref_eq_intrinsic` requires the same `shared` type on both args (non-shared → error pointing at `==`); interpreter compares `Arc::ptr_eq`, codegen emits `icmp eq` on the two heap pointers (non-consuming). interp==JIT==build, valgrind-clean.
 
 ### Operator Traits
 > **Slice 1 shipped** (commit `1c8cb26`): trait registration + impl-table infrastructure (`env.impls_by_trait`, `find_impl`, `find_from_impl`); ~150 built-in stdlib impls (arithmetic, bitwise, Eq/Ord, String Add); arithmetic + `Neg` lowered through `src/lowering.rs`; resolver restriction on user operator-trait impls; `From[T]` dispatch + 19 numeric widening impls; `?` cross-error conversion via typechecker side-table.
