@@ -1894,6 +1894,35 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Euclidean division / remainder on `i64` (typed in expr_method_call.rs,
+        // i64-only in this slice): `div_euclid` / `rem_euclid`, matching Rust's
+        // `i64::{div_euclid,rem_euclid}`. Traps identically to `/` and `%` — a
+        // zero divisor is `division by zero`, and `i64::MIN.{div,rem}_euclid(-1)`
+        // is `integer overflow` (`checked_*_euclid` returns `None`). Codegen
+        // mirrors the trap set via `emit_int_div_guards`.
+        if matches!(method, "div_euclid" | "rem_euclid") && args.len() == 1 {
+            if let Value::Int(a) = &obj {
+                let a = *a;
+                if let Value::Int(b) = self.eval_expr_inner(&args[0].value) {
+                    if self.pending_cf.is_some() {
+                        return Value::Int(b);
+                    }
+                    if b == 0 {
+                        return self.record_runtime_error("division by zero", span);
+                    }
+                    let r = if method == "div_euclid" {
+                        a.checked_div_euclid(b)
+                    } else {
+                        a.checked_rem_euclid(b)
+                    };
+                    return match r {
+                        Some(v) => Value::Int(v),
+                        None => self.record_integer_overflow(span),
+                    };
+                }
+            }
+        }
+
         // Bit intrinsics on integer scalars (typed in expr_method_call.rs):
         // `count_ones` / `leading_zeros` / `trailing_zeros` -> u32, computed at
         // the receiver width recovered from `args_close_span`. Signed `iN` values

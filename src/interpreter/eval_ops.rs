@@ -913,7 +913,7 @@ impl<'a> super::Interpreter<'a> {
         Some(Value::Int(v as i64))
     }
 
-    fn record_integer_overflow(&mut self, span: &Span) -> Value {
+    pub(super) fn record_integer_overflow(&mut self, span: &Span) -> Value {
         self.record_runtime_error("integer overflow", span)
     }
 }

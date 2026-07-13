@@ -428,6 +428,55 @@ fn test_abs_int_min_traps() {
 }
 
 #[test]
+fn test_i64_div_rem_euclid() {
+    // `i64::{div_euclid, rem_euclid}` — the remainder is always non-negative,
+    // so the quotient rounds toward negative infinity. Exercises all four
+    // dividend/divisor sign combinations against Rust's semantics.
+    let out = run("fn main() {\n\
+             println((-7i64).div_euclid(3i64));\n\
+             println((-7i64).rem_euclid(3i64));\n\
+             println((7i64).div_euclid(3i64));\n\
+             println((7i64).rem_euclid(3i64));\n\
+             println((-7i64).div_euclid(-3i64));\n\
+             println((-7i64).rem_euclid(-3i64));\n\
+             println((7i64).div_euclid(-3i64));\n\
+             println((7i64).rem_euclid(-3i64));\n\
+             println((6i64).div_euclid(3i64));\n\
+             println((6i64).rem_euclid(3i64));\n\
+         }");
+    assert_eq!(out, "-3\n2\n2\n1\n3\n2\n-2\n1\n2\n0\n");
+}
+
+#[test]
+fn test_i64_div_rem_euclid_traps() {
+    // Same trap set as `/` and `%`: a zero divisor is `division by zero`, and
+    // `i64::MIN.{div,rem}_euclid(-1)` overflows (`checked_*_euclid` → None).
+    for m in ["div_euclid", "rem_euclid"] {
+        let errors = runtime_errors(&format!(
+            "fn main() {{ let z: i64 = 0; println((5i64).{m}(z)); }}"
+        ));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("division by zero")),
+            "expected division-by-zero trap for {m}, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+        let errors = runtime_errors(&format!(
+            "fn main() {{ let m: i64 = -9223372036854775807i64 - 1i64; \
+             let n: i64 = 0i64 - 1i64; println(m.{m}(n)); }}"
+        ));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("integer overflow")),
+            "expected MIN/-1 overflow trap for {m}, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn test_narrow_int_overflow_traps() {
     // Narrow integers are real fixed-width types (design.md § Integer
     // overflow): `u8 200 + u8 100 = 300` overflows the width and traps,

@@ -3588,7 +3588,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// guard. Without these, AOT div-by-zero was full IR-level UB —
     /// measured printing garbage where `karac run` traps (2026-06-07,
     /// `docs/investigations/bce_monotonic_assume.md` filing session).
-    fn emit_int_div_guards(
+    pub(super) fn emit_int_div_guards(
         &mut self,
         lv: inkwell::values::IntValue<'ctx>,
         rv: inkwell::values::IntValue<'ctx>,

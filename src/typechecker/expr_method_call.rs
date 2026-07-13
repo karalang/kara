@@ -4032,6 +4032,51 @@ impl<'a> super::TypeChecker<'a> {
             }
             return receiver_for_lookup.clone();
         }
+        // Euclidean division / remainder — `div_euclid` / `rem_euclid`
+        // (design.md § Arithmetic Overflow, the Rust `iN::div_euclid` /
+        // `rem_euclid` semantics: the remainder is always non-negative, so
+        // `(-7).rem_euclid(3) == 2`). Both trap like `/` and `%` — `division by
+        // zero` on a zero divisor, `integer overflow` on `iN::MIN / -1`.
+        // **Scoped to `i64` in this slice** (same 64-bit-first cut as
+        // `wrapping_*`): i64 is i64-backed end-to-end, so the interpreter's
+        // `checked_div_euclid`/`checked_rem_euclid` and codegen's signed
+        // correction agree without width-masking. Narrow signed widths and the
+        // unsigned widths (where Euclidean == truncating) are a tracked
+        // follow-on (`NoMethodFound` until then). Same strict same-type /
+        // literal-promotion arg rule as `wrapping_*`.
+        if matches!(method, "div_euclid" | "rem_euclid")
+            && matches!(&receiver_for_lookup, Type::Int(IntSize::I64))
+        {
+            if args.len() != 1 {
+                self.type_error(
+                    format!("{method} expects 1 argument, got {}", args.len()),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Type::Error;
+            }
+            let arg = &args[0].value;
+            let arg_ty = self.infer_expr(arg);
+            if matches!(&arg.kind, ExprKind::Integer(_, None)) {
+                self.record_expr_type(&arg.span, &receiver_for_lookup);
+                self.record_expr_type(args_close_span, &receiver_for_lookup);
+                return receiver_for_lookup.clone();
+            }
+            if arg_ty != Type::Error && arg_ty != receiver_for_lookup {
+                self.type_error(
+                    format!(
+                        "{method} expects an argument of type `{}`, got `{}`",
+                        type_display(&receiver_for_lookup),
+                        type_display(&arg_ty)
+                    ),
+                    arg.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+            self.record_expr_type(args_close_span, &receiver_for_lookup);
+            return receiver_for_lookup.clone();
+        }
         // Overflow-aware integer arithmetic — `{checked,saturating,overflowing}_{add,sub,mul}`
         // (design.md § Arithmetic Overflow): the explicit-overflow siblings of the
         // checked `+`/`-`/`*` path. Unlike `wrapping_*` (64-bit only), these are

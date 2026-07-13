@@ -2341,6 +2341,62 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(r.into());
         }
 
+        // Euclidean division / remainder on `i64` (typed in expr_method_call.rs,
+        // i64-only in this slice): `div_euclid` / `rem_euclid`. `emit_int_div_guards`
+        // first traps the exact set the interpreter's `checked_*_euclid` reject
+        // (`division by zero`, `i64::MIN / -1` → `integer overflow`); the
+        // signed correction then matches Rust: the remainder is made
+        // non-negative and the quotient adjusted toward negative infinity.
+        if matches!(method, "div_euclid" | "rem_euclid") && args.len() == 1 {
+            let lv = self.compile_expr(object)?.into_int_value();
+            let rv = self.compile_expr(&args[0].value)?.into_int_value();
+            self.emit_int_div_guards(lv, rv, false);
+            let ty = lv.get_type();
+            let zero = ty.const_zero();
+            let one = ty.const_int(1, false);
+            let rem = self
+                .builder
+                .build_int_signed_rem(lv, rv, "eucl.rem")
+                .unwrap();
+            let rem_neg = self
+                .builder
+                .build_int_compare(IntPredicate::SLT, rem, zero, "eucl.rneg")
+                .unwrap();
+            let r = if method == "rem_euclid" {
+                // rem < 0 → `rem - rhs` when rhs < 0, else `rem + rhs`.
+                let rhs_neg = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, rv, zero, "eucl.yneg")
+                    .unwrap();
+                let add = self.builder.build_int_add(rem, rv, "eucl.add").unwrap();
+                let sub = self.builder.build_int_sub(rem, rv, "eucl.sub").unwrap();
+                let corrected = self
+                    .builder
+                    .build_select(rhs_neg, sub, add, "eucl.corr")
+                    .unwrap();
+                self.builder
+                    .build_select(rem_neg, corrected, rem.into(), "rem_euclid")
+                    .unwrap()
+            } else {
+                // q = x / y; if rem < 0 then `q - 1` (rhs > 0) / `q + 1` (rhs < 0).
+                let q = self.builder.build_int_signed_div(lv, rv, "eucl.q").unwrap();
+                let rhs_pos = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, rv, zero, "eucl.ypos")
+                    .unwrap();
+                let q_dec = self.builder.build_int_sub(q, one, "eucl.qdec").unwrap();
+                let q_inc = self.builder.build_int_add(q, one, "eucl.qinc").unwrap();
+                let adj = self
+                    .builder
+                    .build_select(rhs_pos, q_dec, q_inc, "eucl.adj")
+                    .unwrap();
+                self.builder
+                    .build_select(rem_neg, adj, q.into(), "div_euclid")
+                    .unwrap()
+            };
+            return Ok(r);
+        }
+
         // Integer `.pow(exp)` (typed in expr_method_call.rs): `n.pow(k) -> Self`,
         // a repeated-multiply loop whose body reuses the `*` operator's
         // overflow-trapping multiply (`emit_checked_int_arith("mul", …)`), so an

@@ -6758,6 +6758,45 @@ fn main() {
         }
     }
 
+    /// `i64::{div_euclid, rem_euclid}` codegen: the signed correction (lowered
+    /// via `emit_int_div_guards` + `select`s) matches the interpreter oracle
+    /// (`tests/interpreter.rs::test_i64_div_rem_euclid`) across all four sign
+    /// combinations.
+    #[test]
+    fn e2e_i64_div_rem_euclid() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println((-7i64).div_euclid(3i64));\n\
+                 println((-7i64).rem_euclid(3i64));\n\
+                 println((7i64).div_euclid(-3i64));\n\
+                 println((7i64).rem_euclid(-3i64));\n\
+                 println((-7i64).div_euclid(-3i64));\n\
+                 println((-7i64).rem_euclid(-3i64));\n\
+                 println((6i64).div_euclid(3i64));\n\
+             }",
+        ) {
+            assert_eq!(out, "-3\n2\n-2\n1\n3\n2\n2\n");
+        }
+    }
+
+    /// `div_euclid` shares `/`'s trap set — a zero divisor traps `division by
+    /// zero` (exit 1), matching the interpreter. Built via `let mut` so the
+    /// fault isn't const-folded away.
+    #[test]
+    fn e2e_i64_div_euclid_zero_traps() {
+        if let Some(cap) = run_program_capturing(
+            "fn main() { let mut z = 3i64; z = z - 3i64; println((5i64).div_euclid(z)); }",
+        ) {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains("division by zero"),
+                "expected division-by-zero trap, got stdout={:?} stderr={:?}",
+                cap.stdout,
+                cap.stderr
+            );
+        }
+    }
+
     /// `#[track_caller]` codegen (phase-5 slices 4+5): a panic inside a
     /// `#[track_caller]` fn reports the CALLER's source location, while the
     /// `in <fn>` frame name still identifies the emitting function. Pins the
