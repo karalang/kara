@@ -26897,6 +26897,25 @@ fn vector_simd_math_transcendentals_float_only() {
 }
 
 #[test]
+fn vector_simd_math_rounding_float_only() {
+    // std.simd.math (phase-11): the vector rounding ops `floor`/`ceil`/`round`/
+    // `trunc` on a float-element vector type-check and yield the same
+    // `Vector[T, N]` (the SIMD sibling of the scalar float rounding surface).
+    typecheck_ok(
+        "fn main() { let v = Vector[f32, 4].splat(1.5f32); \
+         let _a = v.floor(); let _b = v.ceil(); let _c = v.round(); let _d = v.trunc(); }",
+    );
+    typecheck_ok("fn main() { let v = Vector[f64, 2].splat(2.5); let _a = v.round(); }");
+    // Rejected on an integer-element vector (rounding is float-only).
+    let errs =
+        typecheck_errors("fn main() { let v = Vector[i64, 4](1, 2, 3, 4); let _a = v.floor(); }");
+    assert!(
+        errs.iter().any(|e| e.message.contains("floating-point")),
+        "expected floor on an integer vector to be rejected as float-only, got: {errs:?}"
+    );
+}
+
+#[test]
 fn vector_from_slice_ok() {
     // Vector[T, N].from_slice of a Slice[T] type-checks; the runtime len==N
     // check is deferred to codegen / interpreter (length is a runtime value).

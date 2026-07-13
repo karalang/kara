@@ -1311,13 +1311,15 @@ impl<'a> super::Interpreter<'a> {
         };
         let lanes = lanes.clone();
         match method {
-            // `std.simd.math` transcendentals (phase-11): element-wise `sqrt` /
-            // `exp` / `ln` / `tanh` / `sigmoid` on a float-lane vector. Computed
-            // per lane at f64 precision (the tree-walk is untyped — all floats
-            // are f64); the compiled backends compute at the vector's element
-            // width, so an `f32` vector's low-order bits can differ, as for the
-            // other float ops.
-            "sqrt" | "exp" | "ln" | "tanh" | "sigmoid" => {
+            // `std.simd.math` transcendentals + rounding (phase-11):
+            // element-wise `sqrt` / `exp` / `ln` / `tanh` / `sigmoid` and
+            // `floor` / `ceil` / `round` / `trunc` on a float-lane vector.
+            // Computed per lane at f64 precision (the tree-walk is untyped — all
+            // floats are f64); the compiled backends compute at the vector's
+            // element width, so an `f32` vector's low-order bits can differ, as
+            // for the other float ops. `round` is half-away-from-zero (Rust
+            // `f64::round` ≡ `llvm.round`, matching the scalar `x.round()`).
+            "sqrt" | "exp" | "ln" | "tanh" | "sigmoid" | "floor" | "ceil" | "round" | "trunc" => {
                 let out: Vec<Value> = lanes
                     .into_iter()
                     .map(|lane| match lane {
@@ -1326,6 +1328,10 @@ impl<'a> super::Interpreter<'a> {
                             "exp" => x.exp(),
                             "ln" => x.ln(),
                             "tanh" => x.tanh(),
+                            "floor" => x.floor(),
+                            "ceil" => x.ceil(),
+                            "round" => x.round(),
+                            "trunc" => x.trunc(),
                             _ => 1.0 / (1.0 + (-x).exp()), // sigmoid
                         }),
                         other => other,

@@ -58853,6 +58853,54 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vector_floor_uses_vector_intrinsic() {
+        // `std.simd.math` rounding (phase-11): `v.floor()` on a `Vector[f32, 4]`
+        // lowers to the overloaded LLVM VECTOR intrinsic `@llvm.floor.v4f32`
+        // (one hardware `roundps`), not a scalarized per-lane call.
+        let ir = ir_for(
+            r#"
+fn f(a: f32, b: f32, c: f32, d: f32) -> f32 {
+    let v: Vector[f32, 4] = Vector[f32, 4](a, b, c, d);
+    let r = v.floor();
+    r[0]
+}
+fn main() { println(f(1.5f32, 2.5f32, 3.5f32, 4.5f32)); }
+"#,
+        );
+        assert!(
+            ir.contains("@llvm.floor.v4f32"),
+            "v.floor() should lower to the vector intrinsic @llvm.floor.v4f32; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_vector_simd_math_rounding() {
+        // floor/ceil/round/trunc on a float vector (std.simd.math). `round` is
+        // half-away-from-zero (llvm.round). Lanes [2.5, -2.5] pin the distinct
+        // rounding directions: floor→[2,-3], ceil→[3,-2], round→[3,-3] (ties
+        // away from zero, NOT to-even), trunc→[2,-2]. Matches the interpreter
+        // twin tests/interpreter.rs::test_vector_simd_math_rounding.
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[f32, 4].from_array([2.5f32, -2.5f32, 2.7f32, -2.3f32]);
+    let fl = v.floor();
+    println(fl[0]); println(fl[1]);
+    let ce = v.ceil();
+    println(ce[0]); println(ce[1]);
+    let ro = v.round();
+    println(ro[0]); println(ro[1]);
+    let tr = v.trunc();
+    println(tr[0]); println(tr[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "2\n-3\n3\n-2\n3\n-3\n2\n-2\n");
+        }
+    }
+
+    #[test]
     fn test_vector_dot_i64() {
         let out = run_program(
             r#"

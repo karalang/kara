@@ -778,12 +778,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "Vector.shuffle"
                     | "Vector.store_masked"
                     | "Vector.scatter"
-                    // std.simd.math transcendentals (phase-11 numerical stdlib)
+                    // std.simd.math transcendentals + rounding (phase-11 numerical stdlib)
                     | "Vector.sqrt"
                     | "Vector.exp"
                     | "Vector.ln"
                     | "Vector.tanh"
                     | "Vector.sigmoid"
+                    | "Vector.floor"
+                    | "Vector.ceil"
+                    | "Vector.round"
+                    | "Vector.trunc"
             ) {
                 return self.compile_vector_method(object, method, args);
             }
@@ -12294,15 +12298,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 .map_err(|e| format!("vector extractelement failed: {e}"))
         };
         match method {
-            // `std.simd.math` transcendentals (phase-11 numerical stdlib) on a
-            // float-lane vector. `sqrt` / `exp` / `ln` lower to the overloaded
-            // LLVM float-vector intrinsics (`llvm.sqrt` is one hardware
-            // `sqrtps`/`sqrtpd`; `llvm.exp`/`llvm.log` vectorize where the
-            // target math lib supports it, else scalarize — still correct).
-            // `sigmoid` = 1/(1+e^-x) and `tanh` = (e^2ˣ-1)/(e^2ˣ+1) are derived
-            // from `exp` with vector arithmetic. The typechecker guarantees a
-            // float element.
-            "sqrt" | "exp" | "ln" | "sigmoid" | "tanh" => {
+            // `std.simd.math` transcendentals + rounding (phase-11 numerical
+            // stdlib) on a float-lane vector. `sqrt` / `exp` / `ln` and the four
+            // rounding ops `floor` / `ceil` / `round` / `trunc` lower to the
+            // overloaded LLVM float-vector intrinsics (`llvm.sqrt` is one
+            // hardware `sqrtps`/`sqrtpd`; the rounding intrinsics lower to
+            // `roundps`/`roundpd` on SSE4.1+; `llvm.exp`/`llvm.log` vectorize
+            // where the target math lib supports it, else scalarize — still
+            // correct). `sigmoid` = 1/(1+e^-x) and `tanh` = (e^2ˣ-1)/(e^2ˣ+1)
+            // are derived from `exp` with vector arithmetic. `round` is
+            // half-away-from-zero (`llvm.round`, matching the scalar `.round()`
+            // and the interpreter). The typechecker guarantees a float element.
+            "sqrt" | "exp" | "ln" | "sigmoid" | "tanh" | "floor" | "ceil" | "round" | "trunc" => {
                 let ft = recv.get_type().get_element_type().into_float_type();
                 // Broadcast a scalar constant across all `n` lanes (LLVM folds
                 // the insert chain to a constant splat).
@@ -12339,6 +12346,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     "sqrt" => apply(self, "llvm.sqrt", recv),
                     "exp" => apply(self, "llvm.exp", recv),
                     "ln" => apply(self, "llvm.log", recv),
+                    "floor" => apply(self, "llvm.floor", recv),
+                    "ceil" => apply(self, "llvm.ceil", recv),
+                    "round" => apply(self, "llvm.round", recv),
+                    "trunc" => apply(self, "llvm.trunc", recv),
                     "sigmoid" => {
                         let neg = self.builder.build_float_neg(recv, "sig.neg").unwrap();
                         let e = apply(self, "llvm.exp", neg);

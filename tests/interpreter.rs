@@ -17663,6 +17663,31 @@ fn main() {
 }
 
 #[test]
+fn test_vector_simd_math_rounding() {
+    // std.simd.math (phase-11): element-wise floor/ceil/round/trunc on a float
+    // vector, per lane. `round` is half-away-from-zero. Oracle matches
+    // tests/codegen.rs::test_e2e_vector_simd_math_rounding. Lanes [2.5, -2.5]
+    // pin the distinct rounding directions: floor→[2,-3], ceil→[3,-2],
+    // round→[3,-3] (ties away from zero), trunc→[2,-2].
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let v = Vector[f32, 4].from_array([2.5f32, -2.5f32, 2.7f32, -2.3f32]);
+    let fl = v.floor();
+    println(fl[0]); println(fl[1]);
+    let ce = v.ceil();
+    println(ce[0]); println(ce[1]);
+    let ro = v.round();
+    println(ro[0]); println(ro[1]);
+    let tr = v.trunc();
+    println(tr[0]); println(tr[1]);
+}
+"#,
+    );
+    assert_eq!(out, "2\n-3\n3\n-2\n3\n-3\n2\n-2\n");
+}
+
+#[test]
 fn test_vector_i64_construct_add_index() {
     let out = run_no_errors(
         r#"

@@ -5546,13 +5546,14 @@ impl<'a> super::TypeChecker<'a> {
             // Vector[T, 3]`, defined for 3-lane vectors only. Requires a
             // statically-known lane count of exactly 3 and a same-typed
             // argument; the result is the same `Vector[T, 3]`.
-            // `std.simd.math` transcendentals (phase-11 numerical stdlib):
-            // element-wise `sqrt` / `exp` / `ln` / `tanh` / `sigmoid` on a
-            // FLOAT-element vector, yielding the same `Vector[T, N]`. No
-            // arguments. Codegen lowers `sqrt`/`exp`/`ln` to the overloaded
-            // LLVM vector intrinsics and derives `sigmoid` / `tanh` from `exp`;
-            // the interpreter computes them per lane.
-            "sqrt" | "exp" | "ln" | "tanh" | "sigmoid" => {
+            // `std.simd.math` transcendentals + rounding (phase-11 numerical
+            // stdlib): element-wise `sqrt` / `exp` / `ln` / `tanh` / `sigmoid`
+            // and `floor` / `ceil` / `round` / `trunc` on a FLOAT-element
+            // vector, yielding the same `Vector[T, N]`. No arguments. Codegen
+            // lowers `sqrt`/`exp`/`ln` and the four rounding ops to the
+            // overloaded LLVM vector intrinsics and derives `sigmoid` / `tanh`
+            // from `exp`; the interpreter computes them per lane.
+            "sqrt" | "exp" | "ln" | "tanh" | "sigmoid" | "floor" | "ceil" | "round" | "trunc" => {
                 if !args.is_empty() {
                     self.type_error(
                         format!("'{}' takes no arguments", method),
