@@ -54407,6 +54407,37 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_zip_with_ref_param_cosine_similarity() {
+        // B-2026-07-13-5 gap C: a `ref Tensor[f32, [D]]` PARAM forwarded as the
+        // `other` argument to `zip_with` (whose baked param is `other: ref Self`)
+        // must typecheck — previously `check_assignable(Tensor, ref Tensor)`
+        // rejected it. This is the shape the numerical stdlib needs:
+        // `cosine_similarity` uses each `ref` input multiple times (a `dot(a,a)`
+        // norm + `dot(a,b)`), which owned params can't express (double-move).
+        // Orthogonal vectors → 0, identical → 1 (exact).
+        let src = r#"
+fn dot[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
+    let p = a.zip_with(b, |x, y| x * y);
+    p.sum()
+}
+fn cosine_similarity[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
+    let na: f32 = dot(a, a).sqrt();
+    let nb: f32 = dot(b, b).sqrt();
+    dot(a, b) / (na * nb)
+}
+fn main() {
+    let a: Tensor[f32, [3]] = Tensor.from([1.0f32, 0.0f32, 0.0f32]);
+    let b: Tensor[f32, [3]] = Tensor.from([0.0f32, 1.0f32, 0.0f32]);
+    let c: Tensor[f32, [3]] = Tensor.from([1.0f32, 0.0f32, 0.0f32]);
+    println(cosine_similarity(a, b));
+    println(cosine_similarity(a, c));
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "0\n1\n");
+    }
+
+    #[test]
     fn test_e2e_column_zip_with_propagates_nulls() {
         // A null on EITHER side yields a null result (bitmap AND); the closure
         // is not called there.

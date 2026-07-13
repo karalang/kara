@@ -2543,8 +2543,19 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     return Type::Error;
                 }
-                // `other` must be the same container type (`ref Self`).
-                let other_ty = self.infer_expr(&args[0].value);
+                // `other` must be the same container type. The baked
+                // signature declares it `other: ref Self` (a read borrow), so
+                // a `ref Tensor` / `ref Column` argument — e.g. forwarding a
+                // `ref Tensor[T, S]` parameter, the shape `dot`/`cosine`
+                // helpers need — is correct; unwrap the borrow before the
+                // same-container check, symmetric to the receiver unwrap
+                // above. An owned argument (which auto-refs at the call)
+                // passes through unchanged. (B-2026-07-13-5 gap C.)
+                let other_ty_raw = self.infer_expr(&args[0].value);
+                let other_ty = match &other_ty_raw {
+                    Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                    _ => other_ty_raw,
+                };
                 self.check_assignable(&self_ty, &other_ty, args[0].value.span.clone());
                 let f_ty = Type::Function {
                     params: vec![elem.clone(), elem.clone()],
