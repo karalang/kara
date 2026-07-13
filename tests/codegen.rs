@@ -36542,6 +36542,39 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_method_on_enum_unit_variant_literal() {
+        // B-2026-07-13-4: a method called directly on an enum UNIT-VARIANT
+        // LITERAL — `Dir.North.code()` — parses as `Call(Path([Dir, North,
+        // code]))`. The typechecker left it untyped and neither backend
+        // dispatched a method on a bare enum-literal receiver (codegen keys on
+        // an identifier receiver). The typechecker now types it via
+        // `infer_method_call` and lowering materializes the receiver into a
+        // fresh local (`{ let __recv: Dir = Dir.North; __recv.code() }`).
+        // Covers: a chained `.to_string()` (the block-value receiver), a method
+        // with an argument, a heap (String) return, and use of the result in
+        // arithmetic — each previously failed codegen or the interpreter.
+        let out = run_program(
+            r#"
+enum Color { Red, Green, Blue }
+impl Color {
+    fn code(self) -> i64 { match self { Color.Red => 0, Color.Green => 1, Color.Blue => 2 } }
+    fn name(self) -> String { match self { Color.Red => f"red", Color.Green => f"green", Color.Blue => f"blue" } }
+    fn plus(self, n: i64) -> i64 { self.code() + n }
+}
+fn main() {
+    println(Color.Green.code().to_string());
+    println(Color.Blue.name());
+    println(Color.Red.plus(10).to_string());
+    let z = Color.Blue.code() + 5;
+    println(z.to_string());
+}
+"#,
+        );
+        let out = out.expect("method on enum unit-variant literal should compile");
+        assert_eq!(out.trim(), "1\nblue\n10\n7");
+    }
+
+    #[test]
     fn test_e2e_enum_explicit_discriminants_payload() {
         // Explicit discriminants are declarations, not layout commitments
         // (design.md § Explicit Discriminants on Payload Variants): codegen

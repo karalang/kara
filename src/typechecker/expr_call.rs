@@ -632,6 +632,42 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // B-2026-07-13-4: a method called directly on an enum UNIT-VARIANT
+        // LITERAL — `Dir.North.code()` — parses as `Call(Path([Enum, Variant,
+        // method]))`. Type it as a method call on the enum-literal receiver so
+        // `expr_types[span]` records the method's return type. Without this the
+        // call was accepted but left UNTYPED (no `infer_method_call` ran), so
+        // codegen — which reads the static type — could not resolve the result
+        // or any downstream use (`let z = Dir.North.code() + 1; z.to_string()`
+        // fell through). The lowering pass materializes the receiver into a
+        // fresh local (`rewrite_enum_literal_method_call`) so both backends
+        // dispatch the resulting identifier-receiver method call. Gated to a
+        // UNIT variant of a known enum, so a payload-variant literal and a
+        // genuine `module.Sub.fn()` path stay on their existing routes.
+        if let ExprKind::Path {
+            segments,
+            generic_args: None,
+        } = &callee.kind
+        {
+            if segments.len() == 3 {
+                let is_unit_variant = self.env.enums.get(&segments[0]).is_some_and(|einfo| {
+                    einfo.variants.iter().any(|(n, vi)| {
+                        n == &segments[1] && matches!(vi, super::types::VariantTypeInfo::Unit)
+                    })
+                });
+                if is_unit_variant {
+                    let synth_object = Expr {
+                        span: callee.span.clone(),
+                        kind: ExprKind::Path {
+                            segments: vec![segments[0].clone(), segments[1].clone()],
+                            generic_args: None,
+                        },
+                    };
+                    return self.infer_method_call(&synth_object, &segments[2], args, span, span);
+                }
+            }
+        }
+
         // Const generics slice 1b + 1c: explicit-generic-args call
         // shapes. Two forms reach here:
         //

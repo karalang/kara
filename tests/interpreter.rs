@@ -192,6 +192,31 @@ fn test_enum_self_to_string_in_impl_method() {
 }
 
 #[test]
+fn test_method_on_enum_unit_variant_literal() {
+    // B-2026-07-13-4: `Dir.North.code()` — a method on an enum unit-variant
+    // LITERAL — parses as a 3-segment path call the interpreter had no
+    // evaluation rule for ("path 'Dir.North.code' has no interpreter evaluation
+    // rule"). The typechecker now types it and lowering materializes the
+    // receiver into a fresh local, so the tree-walk interpreter dispatches it
+    // like `let d = Dir.North; d.code()`.
+    let src = "enum Dir { North, South, East, West }
+        impl Dir {
+            fn code(self) -> i64 {
+                match self { Dir.North => 0, Dir.South => 1, Dir.East => 2, Dir.West => 3 }
+            }
+            fn opposite(self) -> i64 { self.code() + 100 }
+        }
+        fn main() {
+            println(Dir.North.code().to_string());
+            println(Dir.West.code().to_string());
+            let z = Dir.East.code() + 5;
+            println(z.to_string());
+            println(Dir.South.opposite().to_string());
+        }";
+    assert_eq!(run_no_errors(src), "0\n3\n7\n101\n");
+}
+
+#[test]
 fn test_user_impl_display_dispatches_through_to_string() {
     // A user `impl Display { fn to_string(ref self) -> String }` must win over
     // the built-in renderer across all three Display positions — `.to_string()`,

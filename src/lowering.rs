@@ -19,6 +19,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{
     ConstArg, DimArg, FloatSize, IntSize, Type, TypeCheckResult, TypeChecker, UIntSize,
+    VariantTypeInfo,
 };
 
 /// The set of method names this pass desugars comparison operators into.
@@ -1069,9 +1070,103 @@ impl<'a> Lowerer<'a> {
                 .or_else(|| self.rewrite_try_into_call(object, method, args, &expr.span)),
             ExprKind::Call { callee, args } => self
                 .rewrite_path_call_to_method_call(callee, args, &expr.span)
-                .or_else(|| self.rewrite_bare_assoc_fn_call(callee, args, &expr.span)),
+                .or_else(|| self.rewrite_bare_assoc_fn_call(callee, args, &expr.span))
+                .or_else(|| self.rewrite_enum_literal_method_call(callee, args, &expr.span)),
             _ => None,
         }
+    }
+
+    /// B-2026-07-13-4: a method called directly on an enum UNIT-VARIANT LITERAL
+    /// — `Dir.North.code()` — parses as `Call(Path([Enum, Variant, method]))`.
+    /// The typechecker accepts it, but neither backend dispatches a method whose
+    /// receiver is a bare enum-literal path: codegen keys instance-method
+    /// dispatch on an IDENTIFIER receiver (to resolve its type via
+    /// `var_type_names`) and the interpreter has no evaluation rule for the
+    /// 3-segment path-call shape. Materialize the receiver into a fresh local —
+    /// `{ let __recv = Enum.Variant; __recv.method(args) }` — reducing it to the
+    /// already-supported identifier-receiver method call (the same block-
+    /// materialize the shared-index match-scrutinee rewrite uses). Runs after
+    /// the args are lowered (bottom-up traversal), so the moved args are final.
+    /// Gated to a UNIT variant of a known enum: a payload-carrying variant
+    /// literal (`Opt.Yes(x).m()`) and a genuine `module.Sub.fn()` path are left
+    /// untouched.
+    fn rewrite_enum_literal_method_call(
+        &self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<ExprKind> {
+        let ExprKind::Path {
+            segments,
+            generic_args: None,
+        } = &callee.kind
+        else {
+            return None;
+        };
+        if segments.len() != 3 {
+            return None;
+        }
+        let einfo = self.tc.enum_info.get(&segments[0])?;
+        let is_unit_variant = einfo
+            .variants
+            .iter()
+            .any(|(n, vi)| n == &segments[1] && matches!(vi, VariantTypeInfo::Unit));
+        if !is_unit_variant {
+            return None;
+        }
+        // Deterministic, collision-free fresh name from the call site span.
+        let recv = format!("__karac_elm_{}_{}", span.offset, span.length);
+        let enum_lit = Expr {
+            kind: ExprKind::Path {
+                segments: vec![segments[0].clone(), segments[1].clone()],
+                generic_args: None,
+            },
+            span: callee.span.clone(),
+        };
+        // Annotate the synthesized binding with the enum type so codegen —
+        // which never saw this binding at type-check time — records
+        // `var_type_names[__recv] = Enum` and resolves the method impl (mirrors
+        // the shared-index match-scrutinee rewrite, which annotates the same
+        // way). Without the annotation codegen can't type the fresh local and
+        // the dispatch falls through.
+        let enum_ty = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![segments[0].clone()],
+                generic_args: None,
+                span: callee.span.clone(),
+            }),
+            span: callee.span.clone(),
+        };
+        let let_stmt = Stmt {
+            kind: StmtKind::Let {
+                is_mut: false,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(recv.clone()),
+                    span: callee.span.clone(),
+                },
+                ty: Some(enum_ty),
+                value: enum_lit,
+            },
+            span: span.clone(),
+        };
+        let mcall = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(Expr {
+                    kind: ExprKind::Identifier(recv),
+                    span: callee.span.clone(),
+                }),
+                method: segments[2].clone(),
+                turbofish: None,
+                args: args.to_vec(),
+                args_close_span: span.clone(),
+            },
+            span: span.clone(),
+        };
+        Some(ExprKind::Block(Block {
+            stmts: vec![let_stmt],
+            final_expr: Some(Box::new(mcall)),
+            span: span.clone(),
+        }))
     }
 
     /// Rewrite `Call(Path([X, method]), args)` to
