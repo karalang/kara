@@ -17880,6 +17880,42 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_shared_enum_map_shared_value_payload_drop_no_leak() {
+        // B-2026-07-13-15 (the shared-enum sibling of B-2026-07-13-12). A
+        // `shared enum Store { Full(Map[i64, Node]) }` (Node shared) dropped with
+        // its payload intact released the Map's bucket storage via the type-erased
+        // `karac_map_free_with_drop_vec` but never dec'd the shared VALUES —
+        // `emit_shared_enum_field_drop`'s Map/Set arm lacked the per-bucket
+        // `emit_map_shared_half_rc_dec_walk` the struct-drop peer runs. One ref
+        // leaked per live entry (LSan: 16-byte Node boxes). 50 iters × 2 entries:
+        // the arm now walks each shared value before the bucket free.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { mut val: i64 }
+shared enum Store { Empty, Full(Map[i64, Node]) }
+fn build(n: i64) -> Store {
+    let mut m: Map[i64, Node] = Map.new();
+    m.insert(1, Node { val: n });
+    m.insert(2, Node { val: n + 1 });
+    Store.Full(m)
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        let s = build(i);
+        total = total + 1;
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            &["50"],
+            "shared_enum_map_shared_value_payload_drop_no_leak",
+        );
+    }
+
     /// Column heap lifecycle (phase-11 data-science stdlib, Arrow codegen
     /// core slice): each `Column[T]` is a control block + a separate data
     /// buffer + a separate validity bitmap, all freed once at scope exit

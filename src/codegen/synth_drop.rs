@@ -3333,6 +3333,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_int_to_ptr(w, ptr_ty, &format!("{label}.map.handle"))
                     .unwrap();
+                // B-2026-07-13-15 (the shared-enum sibling of B-2026-07-13-12): a
+                // shared K or V needs a per-bucket rc-dec BEFORE the runtime free
+                // releases the bucket storage — `karac_map_free_with_drop_vec` is
+                // type-erased (its flags are 0 for a shared side, so it never
+                // touches the RC handles), so a `shared enum Store { Full(Map[i64,
+                // Node]) }` (Node shared) dropped the bucket storage without ever
+                // dec'ing the shared VALUES → one ref leaked per live entry.
+                // Mirrors the struct-drop MapOrSet arm. `current_fn` is the enum
+                // drop fn here, so the walk's blocks attach to this body.
+                if let Some((k_te, v_te)) = super::helpers::map_kv_type_exprs(te) {
+                    if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&v_te) {
+                        self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, true);
+                    }
+                    if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&k_te) {
+                        self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, false);
+                    }
+                } else if let Some(elem_te) = super::helpers::set_inner_type_expr(te) {
+                    // `Set[T]` lowers to `Map[T, ()]`; the element is the key half.
+                    if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&elem_te) {
+                        self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, false);
+                    }
+                }
                 // Per-side flags from the payload's `Map[K,V]` / `Set[T]` type,
                 // not the old hardcoded `(1, 1)` — a scalar-keyed map payload
                 // (`Map[i64, u64]`) would otherwise free the key VALUE as a
