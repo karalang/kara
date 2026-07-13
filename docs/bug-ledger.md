@@ -519,7 +519,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **422 surfaced 
 | B-2026-07-13-6 | codegen | high | A `let` that SHADOWS an outer variable inside ANY nested scope (plain block, `if`/`else` block, `while` body, `for` body, `match` arm, nested block)… | 07fe865 |
 | B-2026-07-13-7 | codegen | high | Reading the row sub-tensors returned by `Tensor.iter_axis(n)` double-frees under JIT/native (`free(): double free detected in tcache 2`); the interpr… | 0de5fc8 |
 | B-2026-07-13-8 | codegen | high | `String.from(<String>)` returned the source's `{ptr,len,cap}` aggregate UNCHANGED (an ALIAS of its heap buffer) instead of an owned copy | 257059b |
-| B-2026-07-13-9 | codegen | high | A generic `shared`/`par` struct with a BARE type-parameter field (`shared struct Box[T] { mut v: T }`) instantiated at a HEAP type (`Box[String]`, `B… | 3158b3c |
+| B-2026-07-13-9 | codegen | high | A generic `shared`/`par` struct with a BARE type-parameter field (`shared struct Box[T] { mut v: T }`) instantiated at a HEAP type (`Box[String]`, `B… | 11ed098 |
 
 </details>
 
