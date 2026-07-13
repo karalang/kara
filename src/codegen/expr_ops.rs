@@ -1883,6 +1883,53 @@ impl<'ctx> super::Codegen<'ctx> {
                 let obj_ty = self.type_name_of_expr(object)?;
                 let field_names = self.struct_field_names.get(obj_ty.as_str())?;
                 let idx = field_names.iter().position(|n| n == field)?;
+                // Generic-mono struct receiver (`e.inner` where `e: Wrap[Pair]`):
+                // the field's DECLARED type is a generic PARAM (`T`), so the
+                // `struct_field_type_names` fallback below would return `"T"` —
+                // not a struct name — and a chained access (`e.inner.a`) would
+                // then find no field layout and silently read the `i64 0`
+                // placeholder (B-2026-07-12-2 gap 3: wide-`T` OnceLock recovery
+                // `Err(e) => e.rejected.field`, and the general
+                // `Result[_, Wrap[Rec]]` recovery it mirrors). Resolve the
+                // field's type through the object's CONCRETE instantiation
+                // (`enum_inst_var_types`, seeded at generic-struct binding sites)
+                // by substituting the struct's generic params with its concrete
+                // args. Self-gated to a recorded generic instantiation, so a
+                // non-generic struct receiver is untouched (its field type name
+                // already resolves via the fallback).
+                if let Some(inst_te) = self.enum_inst_type_of_expr(object) {
+                    if let TypeKind::Path(p) = &inst_te.kind {
+                        if let (Some(params), Some(field_tes), Some(args)) = (
+                            self.struct_generic_params.get(obj_ty.as_str()),
+                            self.struct_field_type_exprs.get(obj_ty.as_str()),
+                            p.generic_args.as_ref(),
+                        ) {
+                            if !params.is_empty()
+                                && params.len() == args.len()
+                                && idx < field_tes.len()
+                            {
+                                let mut subst: std::collections::HashMap<String, TypeExpr> =
+                                    std::collections::HashMap::new();
+                                for (pp, aa) in params.iter().zip(args.iter()) {
+                                    if let GenericArg::Type(te) = aa {
+                                        subst.insert(pp.clone(), te.clone());
+                                    }
+                                }
+                                let concrete = super::helpers::subst_type_params_in_type_expr(
+                                    &field_tes[idx],
+                                    &subst,
+                                );
+                                if let TypeKind::Path(cp) = &concrete.kind {
+                                    if let Some(n) = cp.segments.last() {
+                                        if self.struct_field_names.contains_key(n.as_str()) {
+                                            return Some(n.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 let field_ty_names = self.struct_field_type_names.get(obj_ty.as_str())?;
                 field_ty_names.get(idx).and_then(|n| n.clone())
             }

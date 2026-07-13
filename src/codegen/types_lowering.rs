@@ -976,6 +976,75 @@ impl<'ctx> super::Codegen<'ctx> {
         Some((ok_elem, err_elem))
     }
 
+    /// The `(Ok, Err)` payload STRUCT drop fns for a `Result[T, E]` whose
+    /// payload is a heap-bearing STRUCT the inline `{ptr,len,cap}` overlay
+    /// (`inline_heap_payload_elem`) can't free: a MULTI-FIELD struct
+    /// (`Rec { id: i64, name: String }`), or a transparent single-field wrapper
+    /// of one (`AlreadySetError[Rec]`, `Wrap[Rec]`). Each side is
+    /// `Some(karac_drop_<payload>)` only for that struct case — a direct
+    /// `String`/`Vec` (or a wrapper of one) is `None` here (the overlay
+    /// `result_inline_payload_elems` frees it), as is a scalar / heapless
+    /// payload. Drives the struct-drop arm of `CleanupAction::
+    /// FreeInlineResultPayload`: a discarded fresh-temp `Result` whose payload
+    /// is such a struct (`match cell.set(v) { Err(_) => {} }` on a wide element)
+    /// otherwise leaks the payload's inner heap — the seeded `Result` layout
+    /// carries no per-instantiation drop kind, and the overlay only frees a
+    /// single `{ptr,len,cap}` at payload offset 0. B-2026-07-12-2 gap 3.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn result_inline_payload_struct_drops(
+        &mut self,
+        te: &TypeExpr,
+    ) -> (
+        Option<inkwell::values::FunctionValue<'ctx>>,
+        Option<inkwell::values::FunctionValue<'ctx>>,
+    ) {
+        let TypeKind::Path(p) = &te.kind else {
+            return (None, None);
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
+            return (None, None);
+        }
+        let Some(args) = p.generic_args.as_ref() else {
+            return (None, None);
+        };
+        let ok_arg = match args.first() {
+            Some(GenericArg::Type(t)) => Some(t.clone()),
+            _ => None,
+        };
+        let err_arg = match args.get(1) {
+            Some(GenericArg::Type(t)) => Some(t.clone()),
+            _ => None,
+        };
+        let ok_drop = ok_arg.and_then(|t| self.inline_struct_payload_drop(&t));
+        let err_drop = err_arg.and_then(|t| self.inline_struct_payload_drop(&t));
+        (ok_drop, err_drop)
+    }
+
+    /// The FULL struct drop fn for an inline `Result`/`Option` payload arg that
+    /// is a heap-bearing STRUCT the overlay can't handle, else `None`. Skips a
+    /// payload the overlay already frees (`inline_heap_payload_elem` is
+    /// `Some` — a direct `String`/`Vec` or a transparent wrapper of one). Peels
+    /// a transparent single-field wrapper (`AlreadySetError[Rec]`) to its
+    /// CONCRETE inner (`Rec`) — layout-identical at offset 0, and a concrete
+    /// type lowers reliably through `emit_drop_fn_for_type_expr` (a generic
+    /// wrapper's own mono drop is not guaranteed). Gated on the drop target
+    /// actually owning heap. B-2026-07-12-2 gap 3.
+    pub(super) fn inline_struct_payload_drop(
+        &mut self,
+        arg: &TypeExpr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        if self.inline_heap_payload_elem(arg).is_some() {
+            return None;
+        }
+        let drop_te = self
+            .transparent_single_heap_field_te(arg)
+            .unwrap_or_else(|| arg.clone());
+        if !self.type_expr_has_drop_heap(&drop_te) {
+            return None;
+        }
+        Some(self.emit_drop_fn_for_type_expr(&drop_te))
+    }
+
     /// `StringSlice` borrowed-view type — a `Path` whose head segment is
     /// `StringSlice`. Kept separate from [`is_string_type_expr`] so the
     /// owned-String drop/copy/move consumers of that predicate don't treat a

@@ -20,10 +20,17 @@
 //!   and returns the borrow — the closure fires only on the `unset` branch.
 //!   Scalar `T` only (an aggregate closure return uses the deferred sret ABI).
 //!
-//! Element-type support: scalar and small all-scalar-struct `T` work for
-//! `set`/`get`/`is_set`; `get_or_init` additionally requires a single-scalar
-//! `T`. Heap-owning / wide `T` (and a non-scalar `get_or_init`) are loud-gated
-//! with a `--interp` hint — tracked as B-2026-07-12-2.
+//! Element-type support (B-2026-07-12-2): `set`/`get`/`is_set` handle ANY `T` —
+//! scalar, `String`/`Vec` (heap-fitting, 3 words), and WIDE `T` (> 3 words: a
+//! multi-field struct, a struct with a heap field, a 4+-scalar struct). A wide
+//! `T`'s value can't fit the 3-word `Option`/`Result` inline payload area, so
+//! `get` heap-BOXES it (a shallow bit-copy behind a pointer, the `Vec.get`/
+//! `Map.get` `Option[ref T]` convention — freed box-only for the borrow) and
+//! `set`'s `Err(AlreadySetError { rejected })` payload boxes past the 5-word
+//! `Result` area; a discarded wide/struct-with-heap rejected value is freed by
+//! the `FreeInlineResultPayload` struct-drop arm. `get_or_init` still requires a
+//! SCALAR `T` (its closure returns an aggregate via the deferred sret ABI) and
+//! loud-gates a non-scalar `T` with a `--interp` hint.
 
 use crate::ast::*;
 
@@ -84,42 +91,6 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok((elem_ty, size))
     }
 
-    /// Loud-gate the element types the v1 `set`/`get` codegen can't handle
-    /// correctly yet: (1) a **heap-owning** `T` (`String`, `Vec[_]`, a struct/
-    /// enum with a heap field) — `set` moves it into the cell but the
-    /// rejected-value (`AlreadySetError`) path leaks it, and only the
-    /// success-path element-drop is wired; (2) a **wide** `T` whose word count
-    /// exceeds the `Option`/`Result` inline payload area (>3 words) — `get`'s
-    /// `Option[ref T]` construction has no boxing path and would overflow the
-    /// payload. Both need the deferred heap-`T` slice (move-suppression +
-    /// rejected-value drop + payload boxing). Scalars and small all-scalar
-    /// structs pass. Fail loudly (with a `--interp` hint) rather than emit a
-    /// leak or a payload-overflow miscompile.
-    fn reject_unsupported_once_elem(&mut self, recv: &str, method: &str) -> Result<(), String> {
-        let te = self
-            .once_var_types
-            .get(recv)
-            .map(|(te, _)| te.clone())
-            .ok_or_else(|| format!("OnceLock/OnceCell binding '{recv}' missing element type"))?;
-        let elem_ty = self.llvm_type_for_type_expr(&te);
-        let wide = Self::llvm_type_word_count(elem_ty) > 3;
-        // heap-but-FITTING `T` (`String` / `Vec[_]` / a small single-heap-field
-        // struct, <=3 words) is now supported: recovery is sound (B-2026-07-12-27)
-        // and the success-path element drop + rejected-value drop are wired below.
-        // A WIDE `T` (>3 words) still overflows the `Option`/`Result` inline
-        // payload area with no boxing path (gap 3) — keep it loud-gated.
-        if wide {
-            return Err(format!(
-                "codegen: `OnceLock`/`OnceCell`.{method}` with an element type wider than the \
-                 3-word inline payload is not yet supported under `karac build` (the wide-`T` \
-                 payload-boxing slice is a tracked follow-on, B-2026-07-12-2 gap 3). Scalar, \
-                 `String`/`Vec`, and small heap-fitting structs work; for a wide `T`, run with \
-                 `karac run --interp` (or `KARAC_RUN_JIT=0`)."
-            ));
-        }
-        Ok(())
-    }
-
     /// `cell.is_set() -> bool`. The runtime returns `u8` (0/1); codegen rides
     /// that as the bool value directly, mirroring `Map.contains_key`.
     fn compile_once_is_set(&mut self, recv: &str) -> Result<BasicValueEnum<'ctx>, String> {
@@ -162,7 +133,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 args.len()
             ));
         }
-        self.reject_unsupported_once_elem(recv, "set")?;
         let (elem_ty, size) = self.once_elem_ty_and_size(recv)?;
         let handle = self.load_once_handle(recv)?;
         let fn_val = self.current_fn.unwrap();
@@ -247,7 +217,6 @@ impl<'ctx> super::Codegen<'ctx> {
     /// borrow into the sealed value or null. Non-null → `Some(<T loaded>)`,
     /// null → `None` — the `Map.get` alias-into-container phi shape.
     fn compile_once_get(&mut self, recv: &str) -> Result<BasicValueEnum<'ctx>, String> {
-        self.reject_unsupported_once_elem(recv, "get")?;
         let (elem_ty, _size) = self.once_elem_ty_and_size(recv)?;
         let handle = self.load_once_handle(recv)?;
         let fn_val = self.current_fn.unwrap();
@@ -279,7 +248,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem_ty, got, "once.get.val")
             .unwrap();
-        let num_words = (Self::llvm_type_word_count(elem_ty)).max(1);
+        // Cap the requested word count at the `Option` inline payload area
+        // (3 words). A FITTING `T` (scalar / `String` / `Vec` / small struct,
+        // `<= 3` words) fills the payload inline as before. A WIDE `T` (`> 3`
+        // words — a struct with a `String` field, a `4+`-scalar struct) would
+        // overflow `build_option_some_via_phis` (which inserts one word per
+        // element into the fixed 3-word area and PANICS past field 3), so we
+        // hand `coerce_to_payload_words` the AREA, not the full width: it then
+        // heap-BOXES the value (a shallow bit-copy, ptr in word 0) — exactly
+        // the `Vec.get`/`Map.get` `Option[ref T]` convention for wide elements
+        // (collections.rs). `reconstruct_payload_value` deboxes on the mirror
+        // predicate (`want > field_words.len()`), and because `get` is a BORROW
+        // call (`scrutinee_is_borrow_call`), the consumer takes no arm-drop and
+        // `track_freshtemp_boxed_enum_scrutinee` runs a box-ONLY free — the box
+        // copy's interior heap (aliasing the sealed value) is left to the cell's
+        // `FreeOnceHandle` elem-drop, so no leak and no double-free
+        // (B-2026-07-12-2 gap 3).
+        const OPTION_PAYLOAD_WORDS: usize = 3;
+        let num_words = Self::llvm_type_word_count(elem_ty).clamp(1, OPTION_PAYLOAD_WORDS);
         let some_words = self.coerce_to_payload_words(loaded, num_words)?;
         let some_end_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_bb).unwrap();
@@ -300,7 +286,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// closure. The closure fires at most once (only on the `unset` branch).
     /// The returned `ref T` is represented as the loaded `T` value (the `get`
     /// precedent — the borrow is a no-op auto-deref for the heap-free `T` this
-    /// lowering supports). Heap/wide `T` is loud-gated like `set`/`get`.
+    /// lowering supports). A NON-SCALAR `T` is loud-gated here (the aggregate
+    /// closure-return sret ABI is a separate deferred slice — B-2026-07-12-2);
+    /// `set`/`get` accept any `T`, but `get_or_init` invokes the closure.
     fn compile_once_get_or_init(
         &mut self,
         recv: &str,
@@ -312,7 +300,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 args.len()
             ));
         }
-        self.reject_unsupported_once_elem(recv, "get_or_init")?;
         let (elem_ty, size) = self.once_elem_ty_and_size(recv)?;
         // The closure ABI returns a multi-word AGGREGATE via sret (a hidden
         // out-pointer), not the direct-return this lowering assumes — so

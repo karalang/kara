@@ -3838,13 +3838,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(layout) = self.enum_layouts.get("Result") else {
             return;
         };
-        let i64_t = self.context.i64_type();
-        if let Ok(cap_ptr) =
-            self.builder
-                .build_struct_gep(layout.llvm_type, slot.ptr, 3, "respl.suppress.cap")
-        {
-            let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
-        }
+        self.zero_result_payload_area(layout.llvm_type, slot.ptr, "respl.suppress");
     }
 
     /// Suppress the scope-exit `FreeInlineOptionPayload` /
@@ -4639,7 +4633,24 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         let te = self.enum_inst_type_from_span(scrutinee)?;
-        let (ok_payload_elem_ty, err_payload_elem_ty) = self.result_inline_payload_elems(&te)?;
+        // Overlay (direct `String`/`Vec` or transparent-wrapper-of-one) payload
+        // elems, AND the FULL struct drops for a multi-field / struct-with-heap
+        // payload the overlay can't free (B-2026-07-12-2 gap 3: a discarded
+        // wide-`T` `AlreadySetError[Rec]` rejected value). Register if EITHER
+        // path has heap on EITHER side — the struct-drop half is why we no
+        // longer early-return on a `None` overlay.
+        let (ok_payload_elem_ty, err_payload_elem_ty) = self
+            .result_inline_payload_elems(&te)
+            .unwrap_or((None, None));
+        let (ok_payload_struct_drop, err_payload_struct_drop) =
+            self.result_inline_payload_struct_drops(&te);
+        if ok_payload_elem_ty.is_none()
+            && err_payload_elem_ty.is_none()
+            && ok_payload_struct_drop.is_none()
+            && err_payload_struct_drop.is_none()
+        {
+            return None;
+        }
         let layout = self.enum_layouts.get("Result")?;
         let result_ty = layout.llvm_type;
         let ok_tag = layout.tags.get("Ok").copied().unwrap_or(0);
@@ -4656,6 +4667,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     err_tag,
                     ok_payload_elem_ty,
                     err_payload_elem_ty,
+                    ok_payload_struct_drop,
+                    err_payload_struct_drop,
                 },
             );
         }
@@ -4740,12 +4753,32 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(layout) = self.enum_layouts.get("Result") else {
             return;
         };
+        self.zero_result_payload_area(layout.llvm_type, slot, "respl.suppress.at");
+    }
+
+    /// Zero every payload word of a materialized `Result` scrutinee slot
+    /// (fields 1..=payload-area). The overlay `FreeInlineResultPayload` only
+    /// needs its `cap` word (field 3) at zero to skip, but a struct-drop payload
+    /// (B-2026-07-12-2 gap 3) caps-guards on the CONCRETE struct's heap-field
+    /// offsets — which vary — so zeroing the whole area disarms BOTH shapes on a
+    /// consuming move-out arm without knowing the field layout. Safe superset:
+    /// the overlay's `cap` word is inside the zeroed range.
+    fn zero_result_payload_area(
+        &self,
+        result_ty: inkwell::types::StructType<'ctx>,
+        slot: PointerValue<'ctx>,
+        name: &str,
+    ) {
         let i64_t = self.context.i64_type();
-        if let Ok(cap_ptr) =
-            self.builder
-                .build_struct_gep(layout.llvm_type, slot, 3, "respl.suppress.cap.at")
-        {
-            let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
+        let zero = i64_t.const_int(0, false);
+        let n_fields = result_ty.count_fields();
+        for f in 1..n_fields {
+            if let Ok(word_ptr) =
+                self.builder
+                    .build_struct_gep(result_ty, slot, f, &format!("{name}.w{f}"))
+            {
+                let _ = self.builder.build_store(word_ptr, zero);
+            }
         }
     }
 

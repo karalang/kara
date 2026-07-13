@@ -4316,15 +4316,18 @@ fn main() {
     }
 
     #[test]
-    fn test_oncelock_wide_element_gated_heap_fitting_ok() {
-        // B-2026-07-12-2: a heap-owning but FITTING element (`OnceLock[String]`,
-        // `<= 3` words) is now SUPPORTED under `karac build` — leak-free via the
-        // element-drop (gap 1) + rejected-value-drop (gap 2) slice, validated in
-        // `tests/memory_sanitizer.rs::asan_oncelock_*`. A WIDE element (a struct
-        // wider than the 3-word inline `Option`/`Result` payload) stays
-        // loud-gated (gap 3, payload boxing deferred) — codegen MUST reject it
-        // rather than silently overflow the payload. The interpreter handles
-        // all `T`.
+    fn test_oncelock_wide_element_now_supported_get_or_init_scalar_gated() {
+        // B-2026-07-12-2: `set`/`get` now handle ANY element `T` under `karac
+        // build`. A heap-FITTING `T` (`OnceLock[String]`, `<= 3` words) was
+        // unblocked by the element-drop (gap 1) + rejected-value-drop (gap 2)
+        // slice; a WIDE `T` (a struct wider than the 3-word inline `Option`/
+        // `Result` payload) is unblocked by the payload-BOXING slice (gap 3):
+        // `get` heap-boxes the borrow, `set`'s `Err` payload boxes past the
+        // 5-word `Result` area, and a discarded struct-with-heap rejected value
+        // is freed by the `FreeInlineResultPayload` struct-drop arm. Leak-freedom
+        // is validated in `tests/memory_sanitizer.rs::asan_oncelock_wide_*`.
+        // `get_or_init` still gates a NON-SCALAR `T` (its closure returns an
+        // aggregate via the deferred sret ABI). The interpreter handles all `T`.
         use karac::codegen::compile_to_object_with_options;
         let compile_err = |src: &str, tag: &str| -> Option<String> {
             let mut parsed = karac::parse(src);
@@ -4351,7 +4354,7 @@ fn main() {
             let _ = std::fs::remove_file(&obj_path);
             err
         };
-        // (a) heap-FITTING `String` element now compiles clean (was gated).
+        // (a) heap-FITTING `String` element compiles clean.
         let ok = compile_err(
             "fn main() {\n\
              let c: OnceLock[String] = OnceLock.new();\n\
@@ -4361,22 +4364,117 @@ fn main() {
         );
         assert!(
             ok.is_none(),
-            "heap-FITTING OnceLock[String] must now compile under karac build; got: {ok:?}"
+            "heap-FITTING OnceLock[String] must compile under karac build; got: {ok:?}"
         );
-        // (b) a WIDE (>3-word) struct element stays loud-gated.
+        // (b) a WIDE (>3-word) struct element now compiles too (was gated).
         let wide = compile_err(
             "struct Wide { a: i64, b: i64, c: i64, d: i64 }\n\
              fn main() {\n\
              let c: OnceLock[Wide] = OnceLock.new();\n\
              match c.set(Wide { a: 1i64, b: 2i64, c: 3i64, d: 4i64 }) { Ok(_) => {}, Err(_) => {}, }\n\
+             match c.get() { Some(_) => {}, None => {}, }\n\
              }",
             "wide",
         );
-        let msg = wide.expect("WIDE-T OnceLock.set must still be rejected under karac build");
         assert!(
-            msg.contains("wider than the 3-word inline payload"),
-            "gate error should name the wide-payload limitation; got: {msg}"
+            wide.is_none(),
+            "WIDE-T OnceLock.set/get must now compile under karac build (gap 3); got: {wide:?}"
         );
+        // (c) `get_or_init` with a NON-SCALAR element stays loud-gated.
+        let goi = compile_err(
+            "struct P { a: i64, b: i64 }\n\
+             fn main() {\n\
+             let c: OnceLock[P] = OnceLock.new();\n\
+             let p = c.get_or_init(|| P { a: 1i64, b: 2i64 });\n\
+             }",
+            "get_or_init_nonscalar",
+        );
+        let msg = goi.expect("get_or_init with a non-scalar element must be rejected");
+        assert!(
+            msg.contains("non-scalar element type"),
+            "gate error should name the get_or_init non-scalar limitation; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_oncelock_wide_allscalar_set_get_reject() {
+        // B-2026-07-12-2 gap 3: a WIDE all-scalar element (4 words > the 3-word
+        // Option inline area). `get` heap-boxes the borrow; `set`'s second call
+        // is rejected and `get` still reads the first value. Build must match the
+        // interpreter.
+        if let Some(out) = run_program(
+            "struct Wide { a: i64, b: i64, c: i64, d: i64 }\n\
+             fn main() {\n\
+                 let c: OnceLock[Wide] = OnceLock.new();\n\
+                 match c.set(Wide { a: 1i64, b: 2i64, c: 3i64, d: 4i64 }) { Ok(_) => { println(\"set ok\"); }, Err(_) => { println(\"set err\"); }, }\n\
+                 match c.get() { Some(w) => { println((w.a + w.b + w.c + w.d).to_string()); }, None => { println(\"none\"); }, }\n\
+                 match c.set(Wide { a: 9i64, b: 9i64, c: 9i64, d: 9i64 }) { Ok(_) => { println(\"2 ok\"); }, Err(_) => { println(\"2 rejected\"); }, }\n\
+                 match c.get() { Some(w) => { println((w.a + w.b + w.c + w.d).to_string()); }, None => { println(\"none\"); }, }\n\
+             }",
+        ) {
+            assert_eq!(out, "set ok\n10\n2 rejected\n10\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_oncelock_wide_heap_struct_set_get() {
+        // B-2026-07-12-2 gap 3: a WIDE struct-with-heap element (`Rec { id,
+        // name: String }`, 4 words). `get`'s boxed borrow reconstructs the
+        // struct and reads its `String` field.
+        if let Some(out) = run_program(
+            "struct Rec { id: i64, name: String }\n\
+             fn main() {\n\
+                 let c: OnceLock[Rec] = OnceLock.new();\n\
+                 match c.set(Rec { id: 7i64, name: \"hello\".to_string() }) { Ok(_) => { println(\"set ok\"); }, Err(_) => { println(\"set err\"); }, }\n\
+                 match c.get() { Some(r) => { println(f\"{r.id}:{r.name}\"); }, None => { println(\"none\"); }, }\n\
+             }",
+        ) {
+            assert_eq!(out, "set ok\n7:hello\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_oncelock_wide_heap_struct_reject_recover() {
+        // B-2026-07-12-2 gap 3: recover the rejected WIDE struct out of `set`'s
+        // `Err(AlreadySetError { rejected })` payload and read its fields
+        // (chained field READ recovery, unblocked by the generic-mono chained-
+        // field-access fix).
+        if let Some(out) = run_program(
+            "struct Rec { id: i64, name: String }\n\
+             fn main() {\n\
+                 let c: OnceLock[Rec] = OnceLock.new();\n\
+                 match c.set(Rec { id: 1i64, name: \"first\".to_string() }) { Ok(_) => { println(\"1 ok\"); }, Err(_) => { println(\"1 err\"); }, }\n\
+                 match c.set(Rec { id: 2i64, name: \"second\".to_string() }) {\n\
+                     Ok(_) => { println(\"2 ok\"); },\n\
+                     Err(e) => { println(f\"rejected {e.rejected.id}:{e.rejected.name}\"); },\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "1 ok\nrejected 2:second\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_result_chained_generic_mono_struct_field_read() {
+        // B-2026-07-12-2 gap 3 (general, NOT once-specific): a chained field
+        // READ through a generic-instantiated struct payload binding
+        // (`Err(e) => e.inner.a` where `e: Wrap[Pair]`) used to silently read the
+        // `i64 0` placeholder — `type_name_of_expr` returned the generic PARAM
+        // name (`T`) for `e.inner` instead of resolving the concrete `Pair`
+        // through the mono instantiation. Now it substitutes the concrete args.
+        if let Some(out) = run_program(
+            "struct Pair { a: i64, b: i64 }\n\
+             struct Wrap[T] { inner: T }\n\
+             fn boom() -> Result[i64, Wrap[Pair]] { Err(Wrap { inner: Pair { a: 3i64, b: 4i64 } }) }\n\
+             fn main() {\n\
+                 match boom() {\n\
+                     Ok(_) => { println(\"ok\"); },\n\
+                     Err(e) => { println((e.inner.a + e.inner.b).to_string()); },\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n");
+        }
     }
 
     #[test]

@@ -615,6 +615,157 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_oncelock_wide_allscalar_no_leak() {
+        // B-2026-07-12-2 gap 3 — a WIDE all-scalar element (`Wide { a,b,c,d }`,
+        // 4 words > the 3-word `Option`/`Result` inline area). `get` heap-boxes
+        // the borrow (box-only free) and `set`'s `Err` payload boxes past the
+        // 5-word `Result` area; the double-set discard + the get borrow must
+        // both stay leak-free.
+        assert_clean_asan_run(
+            r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64 }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Wide] = OnceLock.new();
+        match cell.set(Wide { a: 1i64, b: 2i64, c: 3i64, d: 4i64 }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set(Wide { a: 9i64, b: 9i64, c: 9i64, d: 9i64 }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.get() { Some(w) => { total = total + w.a + w.b + w.c + w.d; }, None => {}, }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // first wins → 1+2+3+4 = 10; 40 * 10 = 400
+            &["400"],
+            "oncelock_wide_allscalar_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_oncelock_wide_heap_struct_no_leak() {
+        // B-2026-07-12-2 gap 3 — a WIDE struct-with-heap element (`Rec { id:
+        // i64, name: String }`, 4 words with a heap field). `get`'s boxed
+        // borrow-copy aliases the cell's `String` (box-only free leaves the
+        // cell's elem-drop sole owner); the DISCARDED second-`set` rejected
+        // value's inner `String` is freed by the `FreeInlineResultPayload`
+        // struct-drop arm (the multi-field struct the overlay can't handle).
+        assert_clean_asan_run(
+            r#"
+struct Rec { id: i64, name: String }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Rec] = OnceLock.new();
+        match cell.set(Rec { id: 7i64, name: "first".to_string() }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set(Rec { id: 8i64, name: "second".to_string() }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.get() { Some(r) => { total = total + r.id + r.name.len(); }, None => {}, }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // first wins → 7 + len("first")=5 → 12; 40 * 12 = 480
+            &["480"],
+            "oncelock_wide_heap_struct_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_oncelock_wide_heap_struct_reject_recover_no_leak() {
+        // B-2026-07-12-2 gap 3 — recover the rejected WIDE struct value out of
+        // the `Err` arm (`Err(e) => let r: Rec = e.rejected`). The move-out
+        // binding `r` owns the recovered struct (its scope-exit drop frees the
+        // inner `String`); the consuming arm zeros the whole payload area so the
+        // discard struct-drop skips (no double-free). Chained field READ recovery
+        // works too; a `let`-bind avoids the deferred chained-method-receiver.
+        assert_clean_asan_run(
+            r#"
+struct Rec { id: i64, name: String }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Rec] = OnceLock.new();
+        match cell.set(Rec { id: 1i64, name: "first".to_string() }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set(Rec { id: 2i64, name: "second".to_string() }) {
+            Ok(_) => {},
+            Err(e) => { let r: Rec = e.rejected; total = total + r.id + r.name.len(); },
+        }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // rejected: 2 + len("second")=6 → 8; 40 * 8 = 320
+            &["320"],
+            "oncelock_wide_heap_struct_reject_recover_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_oncelock_wide_vec_field_struct_no_leak() {
+        // B-2026-07-12-2 gap 3 — a WIDE struct whose heap field is a `Vec`
+        // (`Bag { tag: i64, items: Vec[i64] }`, 4 words). Exercises the
+        // struct-drop's recursive `Vec` buffer free through set/get.
+        assert_clean_asan_run(
+            r#"
+struct Bag { tag: i64, items: Vec[i64] }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Bag] = OnceLock.new();
+        let mut v: Vec[i64] = Vec.new();
+        v.push(10i64);
+        v.push(20i64);
+        match cell.set(Bag { tag: 3i64, items: v }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.get() { Some(b) => { total = total + b.tag + b.items.len(); }, None => {}, }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // (3 + 2) * 40 = 200
+            &["200"],
+            "oncelock_wide_vec_field_struct_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_result_discard_struct_with_heap_no_leak() {
+        // B-2026-07-12-2 gap 3 (general, NOT once-specific) — a discarded
+        // fresh-temp `Result[i64, Rec]` whose `Err` payload is a multi-field
+        // struct-with-heap. The seeded `Result` layout carries no drop kind and
+        // the `{ptr,len,cap}` overlay only frees a single buffer at offset 0, so
+        // the struct's inner `String` leaked; the `FreeInlineResultPayload`
+        // struct-drop arm now frees it. `boom` is side-effecting (mutates a
+        // module-less counter via a Vec push) so the discarded `Err` survives DCE.
+        assert_clean_asan_run(
+            r#"
+struct Rec { id: i64, name: String }
+fn boom(v: mut ref Vec[i64]) -> Result[i64, Rec] {
+    v.push(1i64);
+    Err(Rec { id: 2i64, name: "leakme".to_string() })
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut sink: Vec[i64] = Vec.new();
+    while i < 40i64 {
+        match boom(mut sink) { Ok(_) => {}, Err(_) => {}, }
+        i = i + 1i64;
+    }
+    println(sink.len().to_string());
+}
+"#,
+            &["40"],
+            "result_discard_struct_with_heap_no_leak",
+        );
+    }
+
     // NOTE: the field-push residual UAF half (DEFECT 2) is covered by the
     // sibling's stronger `asan_field_read_option_shared_push_no_leak_or_uaf`
     // (200-iteration loop, drains + reads back) — no duplicate here. The two

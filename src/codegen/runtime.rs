@@ -3756,11 +3756,22 @@ impl<'ctx> super::Codegen<'ctx> {
         result_slot: PointerValue<'ctx>,
         result_te: &TypeExpr,
     ) {
-        let Some((ok_payload_elem_ty, err_payload_elem_ty)) =
-            self.result_inline_payload_elems(result_te)
-        else {
+        let (ok_payload_elem_ty, err_payload_elem_ty) = self
+            .result_inline_payload_elems(result_te)
+            .unwrap_or((None, None));
+        // Struct-with-heap payload drops (B-2026-07-12-2 gap 3) — the overlay
+        // `_elems` above only covers a direct `String`/`Vec` (or transparent
+        // wrapper of one); a multi-field struct-with-heap payload needs a full
+        // drop. Register if either overlay OR struct-drop half has heap.
+        let (ok_payload_struct_drop, err_payload_struct_drop) =
+            self.result_inline_payload_struct_drops(result_te);
+        if ok_payload_elem_ty.is_none()
+            && err_payload_elem_ty.is_none()
+            && ok_payload_struct_drop.is_none()
+            && err_payload_struct_drop.is_none()
+        {
             return;
-        };
+        }
         let Some(layout) = self.enum_layouts.get("Result") else {
             return;
         };
@@ -3787,6 +3798,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 err_tag,
                 ok_payload_elem_ty,
                 err_payload_elem_ty,
+                ok_payload_struct_drop,
+                err_payload_struct_drop,
             });
         }
         self.inline_result_payload_vars.insert(var_name.to_string());
@@ -3804,10 +3817,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(te) = self.enum_inst_type_exprs.get(&key).cloned() else {
             return false;
         };
-        let Some((ok_payload_elem_ty, err_payload_elem_ty)) = self.result_inline_payload_elems(&te)
-        else {
+        let (ok_payload_elem_ty, err_payload_elem_ty) = self
+            .result_inline_payload_elems(&te)
+            .unwrap_or((None, None));
+        // Struct-with-heap payload drops (B-2026-07-12-2 gap 3): a discarded
+        // `Result` temp whose payload is a multi-field struct-with-heap needs a
+        // full drop the overlay `_elems` can't provide.
+        let (ok_payload_struct_drop, err_payload_struct_drop) =
+            self.result_inline_payload_struct_drops(&te);
+        if ok_payload_elem_ty.is_none()
+            && err_payload_elem_ty.is_none()
+            && ok_payload_struct_drop.is_none()
+            && err_payload_struct_drop.is_none()
+        {
             return false;
-        };
+        }
         let Some(layout) = self.enum_layouts.get("Result") else {
             return false;
         };
@@ -3831,6 +3855,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 err_tag,
                 ok_payload_elem_ty,
                 err_payload_elem_ty,
+                ok_payload_struct_drop,
+                err_payload_struct_drop,
             });
             return true;
         }
@@ -5791,15 +5817,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 err_tag,
                 ok_payload_elem_ty,
                 err_payload_elem_ty,
+                ok_payload_struct_drop,
+                err_payload_struct_drop,
             } => {
                 // `Result[T, E]` shares the tagged-union layout `{tag, w0,
                 // w1, w2}` — the `Ok` and `Err` payloads OVERLAY the same
                 // words, distinguished only by the tag. Free whichever
-                // variant is live, keyed on its concrete payload elem type
-                // (the erased layout can't carry it — B-2026-06-10-6's
-                // `Result` follow-on). Each side is independently `None` for
-                // a scalar/non-heap half (`Result[String, i64]` frees only
-                // the Ok side; `Result[i64, String]` only the Err side).
+                // variant is live, keyed on its concrete payload shape (the
+                // erased layout can't carry it — B-2026-06-10-6's `Result`
+                // follow-on). Each side is one of THREE shapes: a scalar/
+                // non-heap half (both `None` → nothing), a direct-heap overlay
+                // (`elem_ty` = `Some`, a `{ptr,len,cap}` at payload offset 0),
+                // or a struct-with-heap payload (`struct_drop` = `Some` — a
+                // multi-field `Rec { id, name: String }` / a transparent
+                // wrapper like `AlreadySetError[Rec]`, freed by running the
+                // full struct drop on a pointer to the payload area,
+                // B-2026-07-12-2 gap 3). The two are mutually exclusive per
+                // side. A consuming match arm zeros the whole payload area
+                // (`suppress_inline_result_payload_cleanup*`) so a moved-out
+                // payload's overlay `cap` reads 0 AND its struct drop's heap-
+                // field caps read 0 — both skip, leaving the binding sole owner.
                 let tag_ptr = self
                     .builder
                     .build_struct_gep(*result_ty, *result_slot, 0, "respl.tag.ptr")
@@ -5810,8 +5847,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
                 let done_bb = self.context.append_basic_block(fn_val, "respl.done");
+                // Pointer to the payload area (result field 1 = w0) — the
+                // struct payload lays out there bit-for-bit, so the drop fn
+                // reads it as the concrete struct.
+                let payload_ptr = self
+                    .builder
+                    .build_struct_gep(*result_ty, *result_slot, 1, "respl.payload.ptr")
+                    .unwrap();
                 // Ok arm.
-                if ok_payload_elem_ty.is_some() {
+                if ok_payload_elem_ty.is_some() || ok_payload_struct_drop.is_some() {
                     let ok_c = i64_t.const_int(*ok_tag, false);
                     let is_ok = self
                         .builder
@@ -5823,21 +5867,27 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_conditional_branch(is_ok, ok_bb, after_ok_bb)
                         .unwrap();
                     self.builder.position_at_end(ok_bb);
-                    self.emit_free_inline_payload_overlay(
-                        *result_slot,
-                        *result_ty,
-                        *ok_payload_elem_ty,
-                        fn_val,
-                        vec_ty,
-                        ptr_ty,
-                        i64_t,
-                        "respl.ok",
-                    );
+                    if let Some(drop_fn) = ok_payload_struct_drop {
+                        self.builder
+                            .build_call(*drop_fn, &[payload_ptr.into()], "")
+                            .unwrap();
+                    } else {
+                        self.emit_free_inline_payload_overlay(
+                            *result_slot,
+                            *result_ty,
+                            *ok_payload_elem_ty,
+                            fn_val,
+                            vec_ty,
+                            ptr_ty,
+                            i64_t,
+                            "respl.ok",
+                        );
+                    }
                     self.builder.build_unconditional_branch(done_bb).unwrap();
                     self.builder.position_at_end(after_ok_bb);
                 }
                 // Err arm.
-                if err_payload_elem_ty.is_some() {
+                if err_payload_elem_ty.is_some() || err_payload_struct_drop.is_some() {
                     let err_c = i64_t.const_int(*err_tag, false);
                     let is_err = self
                         .builder
@@ -5849,16 +5899,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_conditional_branch(is_err, err_bb, after_err_bb)
                         .unwrap();
                     self.builder.position_at_end(err_bb);
-                    self.emit_free_inline_payload_overlay(
-                        *result_slot,
-                        *result_ty,
-                        *err_payload_elem_ty,
-                        fn_val,
-                        vec_ty,
-                        ptr_ty,
-                        i64_t,
-                        "respl.err",
-                    );
+                    if let Some(drop_fn) = err_payload_struct_drop {
+                        self.builder
+                            .build_call(*drop_fn, &[payload_ptr.into()], "")
+                            .unwrap();
+                    } else {
+                        self.emit_free_inline_payload_overlay(
+                            *result_slot,
+                            *result_ty,
+                            *err_payload_elem_ty,
+                            fn_val,
+                            vec_ty,
+                            ptr_ty,
+                            i64_t,
+                            "respl.err",
+                        );
+                    }
                     self.builder.build_unconditional_branch(done_bb).unwrap();
                     self.builder.position_at_end(after_err_bb);
                 }

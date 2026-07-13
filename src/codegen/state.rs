@@ -668,7 +668,8 @@ pub(crate) enum CleanupAction<'ctx> {
     /// `set(v)` moved `v`'s buffer into the cell, so the cell owns it and the
     /// drain must free the ELEMENT's inner heap (the char/element buffer) before
     /// reclaiming the header + control block. `None` for a heap-free `T` (the
-    /// header free is complete on its own). A WIDE `T` stays loud-gated.
+    /// header free is complete on its own). Any-width `T` is supported (a wide
+    /// `T`'s sealed value is dropped by its full `karac_drop_<T>` all the same).
     FreeOnceHandle {
         /// Alloca that holds the opaque `*mut KaracOnce` pointer.
         once_alloca: PointerValue<'ctx>,
@@ -946,6 +947,17 @@ pub(crate) enum CleanupAction<'ctx> {
         ok_payload_elem_ty: Option<BasicTypeEnum<'ctx>>,
         /// Payload element type for the `Err` overlay (`None` = scalar/non-heap).
         err_payload_elem_ty: Option<BasicTypeEnum<'ctx>>,
+        /// FULL struct drop fn for the `Ok` payload when it is a heap-bearing
+        /// STRUCT the `{ptr,len,cap}` overlay can't free (a multi-field
+        /// `Rec { id, name: String }`, or a transparent single-field wrapper of
+        /// one like `AlreadySetError[Rec]`). `Some(karac_drop_<payload>)` runs
+        /// on a pointer to the payload area (result field 1) for the live tag;
+        /// mutually exclusive with `ok_payload_elem_ty` (the overlay handles the
+        /// direct-heap case). `None` = scalar / direct-heap-overlay / heapless.
+        /// B-2026-07-12-2 gap 3 (wide/struct-with-heap rejected-value discard).
+        ok_payload_struct_drop: Option<FunctionValue<'ctx>>,
+        /// `Err`-side twin of [`Self::FreeInlineResultPayload::ok_payload_struct_drop`].
+        err_payload_struct_drop: Option<FunctionValue<'ctx>>,
     },
     /// `Option[Map[K,V]]` / `Option[Set[T]]` inline payload free. Unlike the
     /// `{ptr,len,cap}` Vec/String payload, the `Some` payload is a single

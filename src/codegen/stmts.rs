@@ -4583,8 +4583,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // cell, so compute the per-`T` `elem_drop` (`karac_drop_<T>`) the
                 // drain runs on the sealed value before `once_free` — else the
                 // element's inner heap leaks (B-2026-07-12-2 gap 1). A heap-free
-                // `T` records `None` (header free is complete). A WIDE `T` stays
-                // loud-gated in `compile_once_set`/`_get`. Gated on a fresh
+                // `T` records `None` (header free is complete). A WIDE `T` (> 3
+                // words) is supported too — `emit_drop_fn_for_type_expr` lowers a
+                // full struct drop regardless of width. Gated on a fresh
                 // `*.new()` Call RHS (a rebind `let c2 = cell` would double-free
                 // the shared handle — deferred; the tests never rebind). Mirrors
                 // the Map/Set fresh-handle arm above. B-8 OnceLock codegen.
