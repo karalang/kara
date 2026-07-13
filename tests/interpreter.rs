@@ -698,6 +698,32 @@ fn test_bit_intrinsics_width_correct() {
 }
 
 #[test]
+fn test_bit_permute_and_count_zeros_width_correct() {
+    // `count_zeros` (complement of count_ones), `reverse_bits`, and `swap_bytes`
+    // are all width-dependent (Rust `iN::*`). `reverse_bits` reverses the
+    // receiver's `bits`; `swap_bytes` reverses its bytes (identity on u8/i8).
+    // A signed narrow result is sign-extended in the i64 model
+    // (`1i8.reverse_bits() == -128`). Codegen mirrors this bit-for-bit
+    // (`tests/codegen.rs::e2e_bit_permute_and_count_zeros_width_correct`).
+    let out = run("fn main() {\n\
+             println((200u8).count_zeros());\n\
+             println((255u8).count_zeros());\n\
+             println((0i64).count_zeros());\n\
+             println((1u8).reverse_bits());\n\
+             println((258u16).swap_bytes());\n\
+             println((1u32).swap_bytes());\n\
+             println((5u8).swap_bytes());\n\
+             println((4278255360u32).reverse_bits());\n\
+             println((1i8).reverse_bits());\n\
+             println((1i32).reverse_bits());\n\
+         }");
+    assert_eq!(
+        out,
+        "5\n0\n64\n128\n513\n16777216\n5\n16711935\n-128\n-2147483648\n"
+    );
+}
+
+#[test]
 fn test_char_to_digit_some_none_and_radix() {
     // `c.to_digit(radix) -> Option[u32]`: digit value in the given radix, None
     // when not a digit. Radix is u32 (suffix-free literal promotes); 'a'/'z'

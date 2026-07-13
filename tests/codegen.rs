@@ -7111,6 +7111,34 @@ fn main() {
         }
     }
 
+    /// `count_zeros` / `reverse_bits` / `swap_bytes` lowered on the receiver's
+    /// declared iN width (`llvm.ctpop`-complement / `llvm.bitreverse` /
+    /// `llvm.bswap`, with `swap_bytes` identity on 8-bit). Must match the
+    /// interpreter oracle (`test_bit_permute_and_count_zeros_width_correct`),
+    /// including signed-narrow sign extension (`1i8.reverse_bits() == -128`).
+    #[test]
+    fn e2e_bit_permute_and_count_zeros_width_correct() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println((200u8).count_zeros());\n\
+                 println((255u8).count_zeros());\n\
+                 println((0i64).count_zeros());\n\
+                 println((1u8).reverse_bits());\n\
+                 println((258u16).swap_bytes());\n\
+                 println((1u32).swap_bytes());\n\
+                 println((5u8).swap_bytes());\n\
+                 println((4278255360u32).reverse_bits());\n\
+                 println((1i8).reverse_bits());\n\
+                 println((1i32).reverse_bits());\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "5\n0\n64\n128\n513\n16777216\n5\n16711935\n-128\n-2147483648\n"
+            );
+        }
+    }
+
     /// B-2026-06-19-13 codegen follow-on: `char.to_digit(radix) -> Option[u32]`
     /// now LOWERS under `karac build` (was an honest "not yet supported"
     /// diagnostic). Covers a decimal digit, lowercase + uppercase hex-ish digits

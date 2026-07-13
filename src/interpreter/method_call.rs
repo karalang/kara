@@ -1930,10 +1930,27 @@ impl<'a> super::Interpreter<'a> {
         // the receiver width recovered from `args_close_span`. Signed `iN` values
         // are sign-extended in the i64-backed model, so the value is masked to the
         // width's low bits before counting.
-        if args.is_empty() && matches!(method, "count_ones" | "leading_zeros" | "trailing_zeros") {
+        if args.is_empty()
+            && matches!(
+                method,
+                "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros"
+            )
+        {
             if let Value::Int(n) = &obj {
                 let w = self.int_width_at(args_close_span);
                 return Value::Int(eval_bit_intrinsic(method, *n, w) as i64);
+            }
+        }
+
+        // Bit-permutation intrinsics `reverse_bits` / `swap_bytes` -> Self
+        // (typed in expr_method_call.rs). Permute within the receiver width
+        // recovered from `args_close_span`, then re-sign-extend so the i64-model
+        // value round-trips (a narrow signed result keeps its two's-complement
+        // shape). Codegen lowers to `llvm.bitreverse` / `llvm.bswap` on the iN.
+        if args.is_empty() && matches!(method, "reverse_bits" | "swap_bytes") {
+            if let Value::Int(n) = &obj {
+                let w = self.int_width_at(args_close_span);
+                return Value::Int(eval_bit_permute(method, *n, w));
             }
         }
 
@@ -2209,6 +2226,8 @@ fn eval_bit_intrinsic(method: &str, n: i64, w: IntW) -> u32 {
     };
     match method {
         "count_ones" => masked.count_ones(),
+        // Zero bits within the `bits`-wide value: the complement of the ones.
+        "count_zeros" => bits - masked.count_ones(),
         // Leading zeros within the `bits`-wide value: the 128-bit count minus
         // the high padding. For `masked == 0` this yields `bits`.
         "leading_zeros" => masked.leading_zeros() - (128 - bits),
@@ -2222,6 +2241,49 @@ fn eval_bit_intrinsic(method: &str, n: i64, w: IntW) -> u32 {
             }
         }
         _ => unreachable!("non-bit-intrinsic method routed to eval_bit_intrinsic: {method}"),
+    }
+}
+
+/// Evaluate a width-correct bit permutation (`reverse_bits` / `swap_bytes`) on
+/// the i64-backed value `n` at receiver width `w`, returning the result encoded
+/// the way the interpreter models the receiver type: sign-extended from `bits`
+/// for a signed narrow width, zero-extended otherwise. `reverse_bits` reverses
+/// the `bits` low bits; `swap_bytes` reverses the `bits/8` bytes (identity for
+/// `u8`/`i8`), matching Rust's `iN::{reverse_bits,swap_bytes}`.
+fn eval_bit_permute(method: &str, n: i64, w: IntW) -> i64 {
+    let (bits, signed) = match w {
+        IntW::S(b) => (b, true),
+        IntW::U(b) => (b, false),
+    };
+    let masked: u64 = if bits >= 64 {
+        n as u64
+    } else {
+        (n as u64) & ((1u64 << bits) - 1)
+    };
+    let permuted: u64 = match method {
+        // Reverse all 64 bits, then shift the meaningful `bits` back down.
+        "reverse_bits" => {
+            if bits >= 64 {
+                masked.reverse_bits()
+            } else {
+                masked.reverse_bits() >> (64 - bits)
+            }
+        }
+        "swap_bytes" => match bits {
+            16 => u64::from((masked as u16).swap_bytes()),
+            32 => u64::from((masked as u32).swap_bytes()),
+            64 => masked.swap_bytes(),
+            // 8-bit (and any non-multiple-of-16 width) → identity.
+            _ => masked,
+        },
+        _ => unreachable!("non-permute method routed to eval_bit_permute: {method}"),
+    };
+    // Re-encode into the i64 model: sign-extend a signed narrow result whose
+    // width-top bit is set, so it round-trips like the other narrow-int values.
+    if signed && bits < 64 && (permuted & (1u64 << (bits - 1))) != 0 {
+        (permuted | !((1u64 << bits) - 1)) as i64
+    } else {
+        permuted as i64
     }
 }
 

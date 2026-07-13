@@ -4291,10 +4291,27 @@ impl<'a> super::TypeChecker<'a> {
         // overloaded `llvm.ctpop` / `llvm.ctlz` / `llvm.cttz` intrinsics.
         if args.is_empty()
             && matches!(&receiver_for_lookup, Type::Int(_) | Type::UInt(_))
-            && matches!(method, "count_ones" | "leading_zeros" | "trailing_zeros")
+            && matches!(
+                method,
+                "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros"
+            )
         {
             self.record_expr_type(args_close_span, &receiver_for_lookup);
             return Type::UInt(UIntSize::U32);
+        }
+        // Bit-permutation intrinsics on integer scalars — `reverse_bits` /
+        // `swap_bytes` -> Self (Rust's `iN::{reverse_bits,swap_bytes}`). Both
+        // are width-dependent (they permute within the receiver's `bits`), so
+        // the `Self` result means the receiver span keeps its type; the
+        // interpreter recovers the width from `args_close_span` like the count
+        // family. Effect-free; codegen lowers to `llvm.bitreverse` / `llvm.bswap`
+        // on the receiver's iN type.
+        if args.is_empty()
+            && matches!(&receiver_for_lookup, Type::Int(_) | Type::UInt(_))
+            && matches!(method, "reverse_bits" | "swap_bytes")
+        {
+            self.record_expr_type(args_close_span, &receiver_for_lookup);
+            return receiver_for_lookup.clone();
         }
         // Built-in `clone` / `to_string` on the scalar numeric + bool + char
         // primitives (all `Copy`). `clone` is identity → `Self`; `to_string`

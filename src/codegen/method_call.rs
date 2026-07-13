@@ -2520,13 +2520,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // defined to return the bit width on a zero input, matching Rust and the
         // interpreter). The non-negative count is z-extended to the i64-backed
         // representation the `u32` result flows in.
-        if args.is_empty() && matches!(method, "count_ones" | "leading_zeros" | "trailing_zeros") {
+        if args.is_empty()
+            && matches!(
+                method,
+                "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros"
+            )
+        {
             let (bits, unsigned) = self.receiver_int_kind(object, call_span, method);
             let int_ty = self.int_type_for_bits(bits);
             let v_raw = self.compile_expr(object)?.into_int_value();
             let v = self.coerce_int_to(v_raw, int_ty, unsigned);
+            // `count_zeros` has no direct intrinsic — it is `bits - popcount`.
             let (base_name, is_clz_ctz) = match method {
-                "count_ones" => ("llvm.ctpop", false),
+                "count_ones" | "count_zeros" => ("llvm.ctpop", false),
                 "leading_zeros" => ("llvm.ctlz", true),
                 "trailing_zeros" => ("llvm.cttz", true),
                 _ => unreachable!(),
@@ -2536,7 +2542,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let decl = intrinsic
                 .get_declaration(&self.module, &[int_ty.into()])
                 .ok_or_else(|| format!("{base_name} has no declaration for width {bits}"))?;
-            let raw = if is_clz_ctz {
+            let mut raw = if is_clz_ctz {
                 let no_poison = self.context.bool_type().const_zero();
                 self.builder
                     .build_call(decl, &[v.into(), no_poison.into()], "bitintr")
@@ -2547,10 +2553,51 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_int_value();
+            if method == "count_zeros" {
+                let bits_c = int_ty.const_int(u64::from(bits), false);
+                raw = self.builder.build_int_sub(bits_c, raw, "czero").unwrap();
+            }
             let i64_t = self.context.i64_type();
             // The count is non-negative and ≤ 64, so a zero-extend is always
             // correct regardless of the receiver's signedness.
             let res = self.coerce_int_to(raw, i64_t, true);
+            return Ok(res.into());
+        }
+
+        // Bit-permutation intrinsics `reverse_bits` / `swap_bytes` -> Self
+        // (typed in expr_method_call.rs). Lowered on the receiver's declared iN
+        // width to `llvm.bitreverse` / `llvm.bswap`; `swap_bytes` on an 8-bit
+        // receiver is identity (`llvm.bswap` requires ≥ i16). The iN result is
+        // re-extended to the i64-backed representation with the receiver's
+        // signedness (sign-extend signed, zero-extend unsigned) so it matches
+        // the interpreter's `eval_bit_permute` encoding.
+        if args.is_empty() && matches!(method, "reverse_bits" | "swap_bytes") {
+            let (bits, unsigned) = self.receiver_int_kind(object, call_span, method);
+            let int_ty = self.int_type_for_bits(bits);
+            let v_raw = self.compile_expr(object)?.into_int_value();
+            let v = self.coerce_int_to(v_raw, int_ty, unsigned);
+            let permuted = if method == "swap_bytes" && bits <= 8 {
+                v
+            } else {
+                let base_name = if method == "reverse_bits" {
+                    "llvm.bitreverse"
+                } else {
+                    "llvm.bswap"
+                };
+                let intrinsic = inkwell::intrinsics::Intrinsic::find(base_name)
+                    .ok_or_else(|| format!("{base_name} intrinsic must exist in LLVM"))?;
+                let decl = intrinsic
+                    .get_declaration(&self.module, &[int_ty.into()])
+                    .ok_or_else(|| format!("{base_name} has no declaration for width {bits}"))?;
+                self.builder
+                    .build_call(decl, &[v.into()], "bitperm")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value()
+            };
+            let i64_t = self.context.i64_type();
+            let res = self.coerce_int_to(permuted, i64_t, unsigned);
             return Ok(res.into());
         }
 
