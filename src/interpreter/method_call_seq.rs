@@ -165,6 +165,21 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
+            "lines" => {
+                // `String.lines() -> Vec[String]` — split into lines at `\n`,
+                // stripping a trailing `\r` from each and dropping a final empty
+                // line for a trailing newline (Rust `str::lines`). Codegen's
+                // `karac_runtime_string_lines` decodes to `&str` and calls the
+                // same `str::lines`, so the two backends are byte-identical.
+                if let Value::String(s) = &obj {
+                    let pieces: Vec<Value> = s
+                        .lines()
+                        .map(|line| Value::String(line.to_string()))
+                        .collect();
+                    return Some(Value::Array(Arc::new(std::sync::RwLock::new(pieces))));
+                }
+                return None;
+            }
             "substring" => {
                 // `String.substring(start) -> String` — bytes from `start` to end.
                 // `String.substring(start, end) -> String` — bytes in `[start, end)`.

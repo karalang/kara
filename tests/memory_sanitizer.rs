@@ -5708,6 +5708,40 @@ fn main() {
         );
     }
 
+    // ── `String.lines()` → Vec[String] — per-line heap ownership ──
+    //
+    // `lines()` allocates a fresh `Vec[String]`, one malloc'd buffer per
+    // non-empty line (empty lines are non-owning `{null,0,0}`). Each buffer is
+    // owned by the result Vec and freed exactly once at scope exit (same
+    // ownership path as `split`); a missed element drop leaks (LSan), a stray
+    // alias double-frees (ASAN). Looped 1000× with ≥36-byte lines past any
+    // short-String fast path; the CRLF + empty-middle-line input exercises the
+    // `\r`-strip / empty-`{null,0,0}` branches, and the `for l in lines`
+    // consumes the materialized Vec.
+    #[test]
+    fn asan_string_lines_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let text = "first-line-payload-aaaaaaaaaaaaaaaa\r\n\r\nthird-line-payload-bbbbbbbbbbbbbbbb\n";
+        let ls = text.lines();
+        total = total + ls.len();
+        for l in ls { total = total + l.len(); }
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            // lines: ["first…"(35), ""(0), "third…"(35)] → 3 lines/iter,
+            // len sum 70; (3 + 70) × 1000 = 73000.
+            &["73000"],
+            "string_lines_loop",
+        );
+    }
+
     // ── `Vec[String].binary_search(fresh_needle)` — needle-temp ownership ──
     //
     // `binary_search` itself allocates nothing (the `Option[i64]` result is

@@ -9860,6 +9860,37 @@ fn main() {
         }
     }
 
+    /// `String.lines() -> Vec[String]` via `karac_runtime_string_lines` — must
+    /// match the interpreter oracle (`test_string_lines_interpreter`): multi-
+    /// line, trailing-newline (no final empty line), CRLF (`\r` stripped),
+    /// preserved empty middle line, and empty string (zero lines). Leak-freedom
+    /// is gated in `tests/memory_sanitizer.rs::asan_string_lines_no_leak_no_double_free`.
+    #[test]
+    fn test_e2e_string_lines() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: String = \"one\\ntwo\\nthree\";\n\
+                 let v = a.lines();\n\
+                 println(f\"{v.len()}\");\n\
+                 println(v[0]);\n\
+                 println(v[2]);\n\
+                 let t: String = \"trailing\\n\";\n\
+                 println(f\"{t.lines().len()}\");\n\
+                 let c: String = \"crlf\\r\\nhandling\\r\\n\";\n\
+                 let w = c.lines();\n\
+                 println(f\"{w.len()}\");\n\
+                 println(w[1]);\n\
+                 let d: String = \"a\\n\\nb\";\n\
+                 let x = d.lines();\n\
+                 println(f\"{x.len()} {x[1].len()}\");\n\
+                 let e: String = \"\";\n\
+                 println(f\"{e.lines().len()}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "3\none\nthree\n1\n2\nhandling\n3 0\n0\n");
+        }
+    }
+
     /// Allocating String→String methods (`trim` / `replace` / `to_lowercase` /
     /// `to_uppercase`) lowered through the `karac_string_*` runtime helpers, so
     /// codegen computes the byte-identical full-Unicode result as the

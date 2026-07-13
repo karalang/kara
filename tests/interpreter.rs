@@ -12017,6 +12017,37 @@ fn test_string_split_interpreter() {
 }
 
 #[test]
+fn test_string_lines_interpreter() {
+    // `String.lines() -> Vec[String]` (Rust `str::lines`): split at `\n`, strip
+    // a trailing `\r`, and drop a final empty line for a trailing newline.
+    // Codegen's `karac_runtime_string_lines` decodes to `&str` and calls the
+    // same `str::lines`, so the backends are byte-identical
+    // (`tests/codegen.rs::test_e2e_string_lines`; leak-checked in
+    // `tests/memory_sanitizer.rs`).
+    let output = run(r#"fn main() {
+            let a = "one\ntwo\nthree";
+            let v = a.lines();
+            println(f"{v.len()}");
+            println(v[0]);
+            println(v[2]);
+            // Trailing newline → no final empty line.
+            println(f"{"trailing\n".lines().len()}");
+            // CRLF endings → `\r` stripped, no trailing empty.
+            let c = "crlf\r\nhandling\r\n";
+            let w = c.lines();
+            println(f"{w.len()}");
+            println(w[1]);
+            // Empty middle line is preserved.
+            let d = "a\n\nb";
+            let x = d.lines();
+            println(f"{x.len()} {x[1].len()}");
+            // Empty string → zero lines.
+            println(f"{"".lines().len()}");
+        }"#);
+    assert_eq!(output, "3\none\nthree\n1\n2\nhandling\n3 0\n0\n");
+}
+
+#[test]
 fn test_string_substring_interpreter() {
     // Mirrors `/tmp/kara-probes/substring_probe.kara`:
     // in-range / start-zero / out-of-range / negative / empty-receiver.

@@ -427,6 +427,17 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Str],
                 }
             }
+            "lines" => {
+                // lines() -> Vec[String]. Splits the receiver into lines at
+                // `\n`, stripping a trailing `\r` from each (so `\r\n` endings
+                // are handled) and NOT emitting a final empty line for a
+                // trailing newline — Rust `str::lines` semantics. No argument.
+                self.expect_no_args("String.lines", args, span);
+                Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![Type::Str],
+                }
+            }
             "starts_with" | "ends_with" => {
                 // starts_with(prefix: String) / ends_with(suffix: String) -> bool.
                 // True iff the receiver's bytes begin / end with the argument's.

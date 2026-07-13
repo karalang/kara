@@ -5040,6 +5040,78 @@ mod string_split_ffi {
         *out_len = n as i64;
         *out_cap = n as i64;
     }
+
+    /// `String.lines() -> Vec[String]`. Split the receiver into lines using
+    /// Rust's own `str::lines` (split at `\n`, strip one trailing `\r`, no
+    /// final empty line for a trailing newline), so the result is byte-
+    /// identical to the interpreter's `s.lines()`. Each line is a fresh
+    /// malloc'd `{data, len, cap}` (empty line → non-owning `{null, 0, 0}`,
+    /// whose element-drop `cap > 0` guard skips the free) — the same
+    /// ownership convention as `karac_runtime_string_split`.
+    ///
+    /// # Safety
+    /// `s` must point to `s_len` valid UTF-8 bytes (or be null with
+    /// `s_len == 0`); the three out-params must be valid writable pointers.
+    #[no_mangle]
+    pub unsafe extern "C" fn karac_runtime_string_lines(
+        s: *const u8,
+        s_len: u64,
+        out_data: *mut *mut u8,
+        out_len: *mut i64,
+        out_cap: *mut i64,
+    ) {
+        let s_len = usize::try_from(s_len).unwrap_or(usize::MAX);
+        let hay: &[u8] = if s.is_null() || s_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(s, s_len)
+        };
+        // Kāra strings are UTF-8; `\n` / `\r` are ASCII so they never appear as
+        // continuation bytes. Decode to `&str` to reuse Rust's exact `lines`
+        // semantics (guaranteeing interpreter parity); an invalid-UTF-8 input
+        // (shouldn't occur) degrades to no lines.
+        let text = std::str::from_utf8(hay).unwrap_or("");
+        let pieces: Vec<&[u8]> = text.lines().map(str::as_bytes).collect();
+
+        let n = pieces.len();
+        let elem_size = std::mem::size_of::<KHeader>();
+        // A zero-line input still needs a distinguishable empty Vec; malloc(0)
+        // is implementation-defined, so hand back `{null, 0, 0}`.
+        if n == 0 {
+            *out_data = std::ptr::null_mut();
+            *out_len = 0;
+            *out_cap = 0;
+            return;
+        }
+        let arr = malloc(n * elem_size) as *mut KHeader;
+        if arr.is_null() {
+            *out_data = std::ptr::null_mut();
+            *out_len = 0;
+            *out_cap = 0;
+            return;
+        }
+        for (k, p) in pieces.iter().enumerate() {
+            let header = if p.is_empty() {
+                KHeader {
+                    data: std::ptr::null_mut(),
+                    len: 0,
+                    cap: 0,
+                }
+            } else {
+                let buf = malloc(p.len());
+                std::ptr::copy_nonoverlapping(p.as_ptr(), buf, p.len());
+                KHeader {
+                    data: buf,
+                    len: p.len() as i64,
+                    cap: p.len() as i64,
+                }
+            };
+            arr.add(k).write(header);
+        }
+        *out_data = arr as *mut u8;
+        *out_len = n as i64;
+        *out_cap = n as i64;
+    }
 }
 
 // ── std.http client codegen path (phase-8 line 17 slice 1) ────────────
