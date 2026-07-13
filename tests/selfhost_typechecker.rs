@@ -345,6 +345,13 @@ const CORPUS: &[&str] = &[
     "enum E { A, B }\nfn f(e: E) { let x = match e { A => 1, B => 2 }; }",
     "fn f(n: i64) { let x = match n { 1 => true, _ => 1 }; }",
     "enum E { A, B, C }\nfn f(e: E) { let x = match e { A => 1, B => true }; }",
+    // ── Slice 21: while-condition check (ConditionNotBool) ──
+    // A `while <cond>` with a KNOWN non-bool condition is ConditionNotBool at the
+    // condition span, exactly like an `if`.
+    "fn f(n: i64) { while n { } }",
+    "fn f(b: bool) { while b { } }",
+    "fn f(c: char) { while c { } }",
+    "fn f(n: i64) { while n < 10 { } }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",

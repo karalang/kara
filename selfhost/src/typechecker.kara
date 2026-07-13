@@ -1098,6 +1098,18 @@ impl Checker {
                 }
                 ExprInfo { category: 4, span: span }
             }
+            While(n) => {
+                // A `while <cond>` condition is checked exactly like an `if`
+                // condition (Slice 21): a KNOWN non-bool is ConditionNotBool
+                // (kind 1) at the condition span. The body is walked.
+                let WhileExpr { label, cond, body, span } = n;
+                let ci = self.check_expr(cond);
+                if ci.category != 4 and ci.category != 1 {
+                    self.push_err(1, ci.span.offset, ci.span.length);
+                }
+                self.check_block(body);
+                ExprInfo { category: 4, span: span }
+            }
             _ => ExprInfo { category: 4, span: zero_span() },
         }
     }
