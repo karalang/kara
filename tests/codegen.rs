@@ -7167,6 +7167,30 @@ fn main() {
         }
     }
 
+    /// `uN::is_power_of_two` -> bool lowered to the inline
+    /// `(x != 0) & ((x & (x-1)) == 0)` on the receiver's iN. Must match the
+    /// interpreter oracle (`test_is_power_of_two_unsigned`), including the 2^63
+    /// `u64` case (built via `rotate_left(63)` so no >i64 literal is needed) and
+    /// the narrow u8/u16 widths.
+    #[test]
+    fn e2e_is_power_of_two_unsigned() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println((1u32).is_power_of_two());\n\
+                 println((2u32).is_power_of_two());\n\
+                 println((3u32).is_power_of_two());\n\
+                 println((0u32).is_power_of_two());\n\
+                 let big: u64 = 1;\n\
+                 println(big.rotate_left(63).is_power_of_two());\n\
+                 println((128u8).is_power_of_two());\n\
+                 println((129u8).is_power_of_two());\n\
+                 println((1024u16).is_power_of_two());\n\
+             }",
+        ) {
+            assert_eq!(out, "true\ntrue\nfalse\nfalse\ntrue\ntrue\nfalse\ntrue\n");
+        }
+    }
+
     /// B-2026-06-19-13 codegen follow-on: `char.to_digit(radix) -> Option[u32]`
     /// now LOWERS under `karac build` (was an honest "not yet supported"
     /// diagnostic). Covers a decimal digit, lowercase + uppercase hex-ish digits

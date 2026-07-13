@@ -2639,6 +2639,32 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(res.into());
         }
 
+        // `is_power_of_two` on unsigned integer scalars -> bool (i1) (typed in
+        // expr_method_call.rs). Inline `(x != 0) & ((x & (x-1)) == 0)`, computed
+        // on the receiver's declared iN width (zero-extended into the value, so a
+        // narrow receiver's high bits are already clear). No intrinsic, no runtime
+        // extern; matches the interpreter's single-bit test.
+        if args.is_empty() && method == "is_power_of_two" {
+            let (bits, unsigned) = self.receiver_int_kind(object, call_span, method);
+            let int_ty = self.int_type_for_bits(bits);
+            let v_raw = self.compile_expr(object)?.into_int_value();
+            let v = self.coerce_int_to(v_raw, int_ty, unsigned);
+            let zero = int_ty.const_zero();
+            let one = int_ty.const_int(1, false);
+            let nonzero = self
+                .builder
+                .build_int_compare(IntPredicate::NE, v, zero, "ipot.nz")
+                .unwrap();
+            let minus1 = self.builder.build_int_sub(v, one, "ipot.m1").unwrap();
+            let anded = self.builder.build_and(v, minus1, "ipot.and").unwrap();
+            let no_low = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, anded, zero, "ipot.z")
+                .unwrap();
+            let r = self.builder.build_and(nonzero, no_low, "ipot").unwrap();
+            return Ok(r.into());
+        }
+
         // Overflow-aware integer arithmetic — `{checked,saturating,overflowing}_{add,sub,mul}`
         // (C2, B-2026-06-19-10). Lowered at the receiver's DECLARED width via the
         // `llvm.{s,u}{op}.with.overflow.iN` intrinsic (codegen widens narrow ints

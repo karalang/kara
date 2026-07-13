@@ -4299,6 +4299,20 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(args_close_span, &receiver_for_lookup);
             return Type::UInt(UIntSize::U32);
         }
+        // `is_power_of_two` on unsigned integer scalars -> bool (Rust's
+        // `uN::is_power_of_two`; unsigned-only, since power-of-two-ness is
+        // meaningless for a signed/negative value). The bool result differs from
+        // the receiver, so the receiver type is stashed at `args_close_span` for
+        // the interpreter to recover the width (it masks the stored value to
+        // width before the single-bit test). Effect-free; codegen lowers to the
+        // inline `(x != 0) & ((x & (x-1)) == 0)`.
+        if args.is_empty()
+            && matches!(&receiver_for_lookup, Type::UInt(_))
+            && method == "is_power_of_two"
+        {
+            self.record_expr_type(args_close_span, &receiver_for_lookup);
+            return Type::Bool;
+        }
         // Bit-permutation intrinsics on integer scalars — `reverse_bits` /
         // `swap_bytes` -> Self (Rust's `iN::{reverse_bits,swap_bytes}`). Both
         // are width-dependent (they permute within the receiver's `bits`), so

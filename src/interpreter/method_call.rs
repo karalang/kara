@@ -1942,6 +1942,26 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `is_power_of_two` on unsigned integer scalars -> bool (typed in
+        // expr_method_call.rs). The stored value is masked to the receiver width
+        // recovered from `args_close_span` (a narrow unsigned value is already
+        // zero-extended, but the mask keeps the test width-correct regardless);
+        // the result is true iff exactly one bit is set — 0 is not a power of two.
+        if args.is_empty() && method == "is_power_of_two" {
+            if let Value::Int(n) = &obj {
+                let w = self.int_width_at(args_close_span);
+                let bits = match w {
+                    IntW::S(b) | IntW::U(b) => b,
+                };
+                let masked: u64 = if bits >= 64 {
+                    *n as u64
+                } else {
+                    (*n as u64) & ((1u64 << bits) - 1)
+                };
+                return Value::Bool(masked != 0 && masked & (masked - 1) == 0);
+            }
+        }
+
         // Bit-permutation intrinsics `reverse_bits` / `swap_bytes` -> Self
         // (typed in expr_method_call.rs). Permute within the receiver width
         // recovered from `args_close_span`, then re-sign-extend so the i64-model

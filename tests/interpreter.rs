@@ -775,6 +775,26 @@ fn test_bit_rotate_width_correct() {
 }
 
 #[test]
+fn test_is_power_of_two_unsigned() {
+    // `uN::is_power_of_two` -> bool: true iff exactly one bit is set (0 is NOT a
+    // power of two). Unsigned-only. Includes the 2^63 `u64` case (high bit set)
+    // and narrow widths (u8/u16). Codegen mirrors this bit-for-bit
+    // (`tests/codegen.rs::e2e_is_power_of_two_unsigned`).
+    let out = run("fn main() {\n\
+             println((1u32).is_power_of_two());\n\
+             println((2u32).is_power_of_two());\n\
+             println((3u32).is_power_of_two());\n\
+             println((0u32).is_power_of_two());\n\
+             let big: u64 = 1;\n\
+             println(big.rotate_left(63).is_power_of_two());\n\
+             println((128u8).is_power_of_two());\n\
+             println((129u8).is_power_of_two());\n\
+             println((1024u16).is_power_of_two());\n\
+         }");
+    assert_eq!(out, "true\ntrue\nfalse\nfalse\ntrue\ntrue\nfalse\ntrue\n");
+}
+
+#[test]
 fn test_char_to_digit_some_none_and_radix() {
     // `c.to_digit(radix) -> Option[u32]`: digit value in the given radix, None
     // when not a digit. Radix is u32 (suffix-free literal promotes); 'a'/'z'
