@@ -1,0 +1,64 @@
+// `std.embeddings` — vector-similarity primitives for RAG / semantic search /
+// recommendation workloads (design.md § std.embeddings; phase-11 numerical
+// stdlib). A thin, generic-over-dimension surface over `Tensor[f32, [D]]`.
+//
+//     import std.embeddings.{cosine_similarity, l2_normalize, dot, l2_norm};
+//
+// Every function is generic in the embedding dimension `D`, so it works for
+// any width (384, 768, 1536, …) — the caller's concrete `Tensor[f32, [N]]`
+// monomorphizes the body. Inputs are taken by `ref` (read borrows) so a query
+// vector can be reused across many comparisons without moving it.
+//
+// Each function is self-contained (it does not call the others) so that any
+// subset can be `import`ed on its own — a gated stdlib module only splices the
+// names you name, not their internal callees.
+//
+// v1 scope: the scalar single-pair surface (`dot`, `l2_norm`,
+// `cosine_similarity`, `l2_normalize`). The batched single-query
+// (`… vs Tensor[f32, [N, D]]`) and Q×N-matrix forms are a follow-on slice
+// (they need 2-D row iteration).
+
+/// Dot product of two same-width embedding vectors: `Σ aᵢ·bᵢ`.
+#[must_use = "the dot product is the whole result — discarding it wastes the traversal"]
+pub fn dot[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
+    let products = a.zip_with(b, |x, y| x * y);
+    products.sum()
+}
+
+/// Euclidean (L2) norm of an embedding vector: `√(Σ aᵢ²)`.
+#[must_use = "the norm is the whole result — discarding it wastes the traversal"]
+pub fn l2_norm[D](a: ref Tensor[f32, [D]]) -> f32 {
+    let squares = a.zip_with(a, |x, y| x * y);
+    let ss = squares.sum();
+    ss.sqrt()
+}
+
+/// Cosine similarity of two embedding vectors: `dot(a, b) / (‖a‖·‖b‖)`.
+/// Ranges in `[-1, 1]`; `1` for parallel, `0` for orthogonal, `-1` for
+/// antiparallel. Both inputs are borrowed, so the query vector `a` is reused
+/// across the two norms and the dot product without being consumed.
+#[must_use = "the similarity score is the whole result — discarding it wastes the computation"]
+pub fn cosine_similarity[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 with panics {
+    let pab = a.zip_with(b, |x, y| x * y);
+    let ab = pab.sum();
+    let paa = a.zip_with(a, |x, y| x * y);
+    let aa = paa.sum();
+    let pbb = b.zip_with(b, |x, y| x * y);
+    let bb = pbb.sum();
+    ab / (aa.sqrt() * bb.sqrt())
+}
+
+/// Return a unit-length copy of `v` (`v / ‖v‖`) — the standard preprocessing
+/// step so a later `dot` equals the cosine similarity. A zero vector is
+/// returned unchanged (its norm is 0; dividing would produce NaNs).
+#[must_use = "l2_normalize returns a new unit vector; it does not mutate the input"]
+pub fn l2_normalize[D](v: ref Tensor[f32, [D]]) -> Tensor[f32, [D]] with panics {
+    let squares = v.zip_with(v, |x, y| x * y);
+    let ss = squares.sum();
+    let n = ss.sqrt();
+    if n == 0.0f32 {
+        v.map(|x| x)
+    } else {
+        v.map(|x| x / n)
+    }
+}

@@ -63883,6 +63883,33 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_embeddings_cosine_and_normalize() {
+        // `std.embeddings` (phase-11 numerical stdlib) — generic-over-dimension
+        // similarity primitives over `ref Tensor[f32, [D]]`, monomorphized at
+        // the caller's concrete width. Exact oracles: orthogonal → 0, identical
+        // → 1, `dot([3,4,0],·)` = 25, and a normalized vector has unit norm.
+        // Exercises the gap-C fix (ref-Tensor params forwarded to `zip_with`)
+        // end-to-end through a gated stdlib import.
+        if let Some(out) = run_program(
+            r#"
+import std.embeddings.{cosine_similarity, l2_normalize, dot};
+fn main() {
+    let a: Tensor[f32, [3]] = Tensor.from([1.0f32, 0.0f32, 0.0f32]);
+    let b: Tensor[f32, [3]] = Tensor.from([0.0f32, 1.0f32, 0.0f32]);
+    let c: Tensor[f32, [3]] = Tensor.from([3.0f32, 4.0f32, 0.0f32]);
+    println(cosine_similarity(a, b));
+    println(cosine_similarity(a, a));
+    println(dot(c, c));
+    let u = l2_normalize(c);
+    println(dot(u, u));
+}
+"#,
+        ) {
+            assert_eq!(out, "0\n1\n25\n1\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_secret_field_redacted_in_display() {
         // A struct containing a `Secret[T]` field renders the field as
         // `<redacted>` in the derived Display (build_struct_display_parts
