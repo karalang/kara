@@ -1752,6 +1752,15 @@ impl<'a> super::Interpreter<'a> {
                             "floor" => x.floor(),
                             "ceil" => x.ceil(),
                             "round" => x.round(),
+                            "asin" => x.asin(),
+                            "acos" => x.acos(),
+                            "atan" => x.atan(),
+                            "sinh" => x.sinh(),
+                            "cosh" => x.cosh(),
+                            "tanh" => x.tanh(),
+                            "exp2" => x.exp2(),
+                            "log10" => x.log10(),
+                            "trunc" => x.trunc(),
                             _ => unreachable!("float_math unary classify/match drift"),
                         };
                         return Value::Float(r);

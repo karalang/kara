@@ -2107,16 +2107,17 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Built-in scalar transcendental + rounding math on float primitives
         // (typed in expr_method_call.rs; surface in `crate::float_math`): unary
-        // `sin`/`cos`/`tan`/`exp`/`ln`/`log2`/`floor`/`ceil`/`round` and binary
+        // `sin`/`cos`/`tan`/`asin`/`acos`/`atan`/`sinh`/`cosh`/`tanh`/`exp`/
+        // `exp2`/`ln`/`log2`/`log10`/`floor`/`ceil`/`round`/`trunc` and binary
         // `pow`/`atan2`. Most lower to their overloaded LLVM intrinsic, which
         // becomes a libm call on most targets — and on wasm too, where the math
         // symbols live in wasi-libc's `libc.a` (already linked by the wasm-ld
-        // path), so no archive/`--export` work is needed. `tan` and `atan2` are
-        // the exceptions: `llvm.tan` / `llvm.atan2` are LLVM-19+, absent on the
-        // 18.1 pin, so they lower to a direct width-correct libm call
-        // (`tan`/`tanf`, `atan2`/`atan2f`). Float-only; a non-float receiver
-        // (e.g. a user type with its own `round` method) falls through to
-        // normal dispatch.
+        // path), so no archive/`--export` work is needed. The exceptions are the
+        // functions whose LLVM intrinsic is LLVM-19+ (absent on the 18.1 pin) —
+        // `tan`/`atan2` and the inverse-trig / hyperbolic set — which lower to a
+        // direct width-correct libm call (`tan`/`tanf`, `asin`/`asinf`, …).
+        // Float-only; a non-float receiver (e.g. a user type with its own
+        // `round` method) falls through to normal dispatch.
         if let Some(kind) = crate::float_math::classify(method) {
             let v = self.compile_expr(object)?;
             if let BasicValueEnum::FloatValue(fv) = v {
@@ -2129,6 +2130,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     ("tan", true) => Some("tanf"),
                     ("atan2", false) => Some("atan2"),
                     ("atan2", true) => Some("atan2f"),
+                    // Inverse-trig / hyperbolic: no LLVM-18 intrinsic, call libm
+                    // directly (width-correct `f`-suffixed symbol for f32).
+                    ("asin", false) => Some("asin"),
+                    ("asin", true) => Some("asinf"),
+                    ("acos", false) => Some("acos"),
+                    ("acos", true) => Some("acosf"),
+                    ("atan", false) => Some("atan"),
+                    ("atan", true) => Some("atanf"),
+                    ("sinh", false) => Some("sinh"),
+                    ("sinh", true) => Some("sinhf"),
+                    ("cosh", false) => Some("cosh"),
+                    ("cosh", true) => Some("coshf"),
+                    ("tanh", false) => Some("tanh"),
+                    ("tanh", true) => Some("tanhf"),
                     _ => None,
                 };
                 if let Some(sym) = libm_sym {
@@ -2169,6 +2184,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     "ceil" => "llvm.ceil",
                     "round" => "llvm.round",
                     "pow" => "llvm.pow",
+                    "exp2" => "llvm.exp2",
+                    "log10" => "llvm.log10",
+                    "trunc" => "llvm.trunc",
                     _ => unreachable!("float_math codegen classify/match drift"),
                 };
                 let intrinsic = inkwell::intrinsics::Intrinsic::find(intrinsic_name)

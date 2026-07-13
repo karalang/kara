@@ -6555,6 +6555,32 @@ fn main() {
         }
     }
 
+    /// Second wave of the `crate::float_math` surface: inverse trig
+    /// (`asin`/`acos`/`atan`, direct libm calls), hyperbolics
+    /// (`sinh`/`cosh`/`tanh`, direct libm calls), and `exp2`/`log10`/`trunc`
+    /// (LLVM intrinsics). Exact-result inputs so the assertion is
+    /// platform-independent and matches the interpreter twin
+    /// (`tests/interpreter.rs::test_float_math_inverse_hyperbolic_and_extras`).
+    #[test]
+    fn e2e_float_math_inverse_hyperbolic_and_extras() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println(f\"{(0.0f64).asin()}\");\n\
+                 println(f\"{(1.0f64).acos()}\");\n\
+                 println(f\"{(0.0f64).atan()}\");\n\
+                 println(f\"{(0.0f64).sinh()}\");\n\
+                 println(f\"{(0.0f64).cosh()}\");\n\
+                 println(f\"{(0.0f64).tanh()}\");\n\
+                 println(f\"{(3.0f64).exp2()}\");\n\
+                 println(f\"{(1000.0f64).log10()}\");\n\
+                 println(f\"{(2.7f64).trunc()}\");\n\
+                 println(f\"{(-2.7f64).trunc()}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "0\n0\n0\n0\n1\n0\n8\n3\n2\n-2\n");
+        }
+    }
+
     /// `f32` receivers lower through the same path — the LLVM intrinsics are
     /// width-overloaded and the libm fallbacks pick the `f`-suffixed symbol
     /// (`tanf`/`atan2f`). Exact-result inputs.

@@ -302,6 +302,30 @@ fn test_float_math_transcendental_and_rounding() {
 }
 
 #[test]
+fn test_float_math_inverse_hyperbolic_and_extras() {
+    // Second wave of the `crate::float_math` surface: inverse trig
+    // (`asin`/`acos`/`atan`), hyperbolics (`sinh`/`cosh`/`tanh`), and
+    // `exp2`/`log10`/`trunc`. Exact-result inputs so the assertion is
+    // platform-independent (codegen's libm twin must match — the inverse-trig /
+    // hyperbolic set lowers to direct libm calls, the rest to LLVM intrinsics).
+    assert_eq!(run("fn main() { println((0.0f64).asin()); }"), "0\n");
+    assert_eq!(run("fn main() { println((1.0f64).acos()); }"), "0\n");
+    assert_eq!(run("fn main() { println((0.0f64).atan()); }"), "0\n");
+    assert_eq!(run("fn main() { println((0.0f64).sinh()); }"), "0\n");
+    assert_eq!(run("fn main() { println((0.0f64).cosh()); }"), "1\n");
+    assert_eq!(run("fn main() { println((0.0f64).tanh()); }"), "0\n");
+    assert_eq!(run("fn main() { println((3.0f64).exp2()); }"), "8\n");
+    assert_eq!(run("fn main() { println((1000.0f64).log10()); }"), "3\n");
+    assert_eq!(run("fn main() { println((2.7f64).trunc()); }"), "2\n");
+    assert_eq!(run("fn main() { println((-2.7f64).trunc()); }"), "-2\n");
+    // Irrational check — the interpreter is the f64 reference oracle.
+    assert_eq!(
+        run("fn main() { println((0.5f64).asin()); }"),
+        "0.5235987755982989\n"
+    );
+}
+
+#[test]
 fn test_float_bit_reinterpret_roundtrip() {
     // IEEE-754 bit reinterpretation: `to_bits`/`to_bits32` and the inverse
     // `bits_as_f64`/`bits_as_f32` round-trip a float through its integer bits.

@@ -13,13 +13,15 @@
 //!
 //! **Lowering** (codegen `method_call.rs`): most map to their LLVM intrinsic
 //! (`llvm.sin` / `llvm.cos` / `llvm.exp` / `llvm.log` / `llvm.log2` /
-//! `llvm.pow` / `llvm.floor` / `llvm.ceil` / `llvm.round`), which lower to
-//! libm calls on most targets (and on wasm too — the math symbols live in
-//! wasi-libc's `libc.a`, already linked by the wasm-ld path, so no
-//! archive/`--export` work is needed). `tan` and `atan2` are the exceptions:
-//! `llvm.tan` / `llvm.atan2` are LLVM-19+, absent on the 18.1 pin, so they
-//! lower to a direct width-correct libm call (`tan`/`tanf`, `atan2`/`atan2f`).
-//! The interpreter (`method_call.rs`) delegates to Rust's `f64::*`.
+//! `llvm.pow` / `llvm.floor` / `llvm.ceil` / `llvm.round` / `llvm.exp2` /
+//! `llvm.log10` / `llvm.trunc`), which lower to libm calls on most targets
+//! (and on wasm too — the math symbols live in wasi-libc's `libc.a`, already
+//! linked by the wasm-ld path, so no archive/`--export` work is needed). The
+//! inverse-trig / hyperbolic set (`asin`/`acos`/`atan`, `sinh`/`cosh`/`tanh`)
+//! and `tan`/`atan2` are the exceptions: their LLVM intrinsics are LLVM-19+,
+//! absent on the 18.1 pin, so they lower to a direct width-correct libm call
+//! (`tan`/`tanf`, `asin`/`asinf`, …). The interpreter (`method_call.rs`)
+//! delegates to Rust's `f64::*`.
 
 /// Arity of a float-math method beyond the receiver.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -36,7 +38,8 @@ pub enum FloatMathKind {
 /// and stay inline at each site.
 pub fn classify(method: &str) -> Option<FloatMathKind> {
     Some(match method {
-        "sin" | "cos" | "tan" | "exp" | "ln" | "log2" | "floor" | "ceil" | "round" => {
+        "sin" | "cos" | "tan" | "exp" | "ln" | "log2" | "floor" | "ceil" | "round" | "asin"
+        | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "exp2" | "log10" | "trunc" => {
             FloatMathKind::Unary
         }
         "pow" | "atan2" => FloatMathKind::Binary,
