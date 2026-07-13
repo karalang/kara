@@ -5546,6 +5546,41 @@ impl<'a> super::TypeChecker<'a> {
             // Vector[T, 3]`, defined for 3-lane vectors only. Requires a
             // statically-known lane count of exactly 3 and a same-typed
             // argument; the result is the same `Vector[T, 3]`.
+            // `std.simd.math` transcendentals (phase-11 numerical stdlib):
+            // element-wise `sqrt` / `exp` / `ln` / `tanh` / `sigmoid` on a
+            // FLOAT-element vector, yielding the same `Vector[T, N]`. No
+            // arguments. Codegen lowers `sqrt`/`exp`/`ln` to the overloaded
+            // LLVM vector intrinsics and derives `sigmoid` / `tanh` from `exp`;
+            // the interpreter computes them per lane.
+            "sqrt" | "exp" | "ln" | "tanh" | "sigmoid" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'{}' takes no arguments", method),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                }
+                if !matches!(elem, Type::Float(_)) {
+                    self.type_error(
+                        format!(
+                            "'{}' requires a floating-point Vector element (f32 / f64); \
+                             Vector element is '{}'",
+                            method,
+                            type_display(&elem)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                Type::Vector {
+                    element: Box::new(elem),
+                    lanes: lanes.clone(),
+                }
+            }
             "cross" => {
                 let vec_ty = Type::Vector {
                     element: Box::new(elem.clone()),

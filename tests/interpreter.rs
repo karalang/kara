@@ -17554,6 +17554,34 @@ fn shared_struct_mut_field_still_persists() {
 // same behaviour for construction, element-wise arithmetic, and lane read.
 
 #[test]
+fn test_vector_simd_math_transcendentals() {
+    // std.simd.math (phase-11): element-wise sqrt/exp/ln/sigmoid/tanh on a
+    // float vector, computed per lane. Exact/saturating oracles matching
+    // tests/codegen.rs::test_e2e_vector_simd_math_transcendentals.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let v = Vector[f32, 4].from_array([4.0f32, 9.0f32, 16.0f32, 25.0f32]);
+    let s = v.sqrt();
+    println(s[0]);
+    println(s[3]);
+    let z = Vector[f32, 4].splat(0.0f32);
+    let ex = z.exp();
+    println(ex[0]);
+    let sg = z.sigmoid();
+    println(sg[0]);
+    let th = z.tanh();
+    println(th[0]);
+    let o = Vector[f32, 4].splat(1.0f32);
+    let l = o.ln();
+    println(l[0]);
+}
+"#,
+    );
+    assert_eq!(out, "2\n5\n1\n0.5\n0\n0\n");
+}
+
+#[test]
 fn test_vector_i64_construct_add_index() {
     let out = run_no_errors(
         r#"

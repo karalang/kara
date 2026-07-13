@@ -1294,6 +1294,28 @@ impl<'a> super::Interpreter<'a> {
         };
         let lanes = lanes.clone();
         match method {
+            // `std.simd.math` transcendentals (phase-11): element-wise `sqrt` /
+            // `exp` / `ln` / `tanh` / `sigmoid` on a float-lane vector. Computed
+            // per lane at f64 precision (the tree-walk is untyped — all floats
+            // are f64); the compiled backends compute at the vector's element
+            // width, so an `f32` vector's low-order bits can differ, as for the
+            // other float ops.
+            "sqrt" | "exp" | "ln" | "tanh" | "sigmoid" => {
+                let out: Vec<Value> = lanes
+                    .into_iter()
+                    .map(|lane| match lane {
+                        Value::Float(x) => Value::Float(match method {
+                            "sqrt" => x.sqrt(),
+                            "exp" => x.exp(),
+                            "ln" => x.ln(),
+                            "tanh" => x.tanh(),
+                            _ => 1.0 / (1.0 + (-x).exp()), // sigmoid
+                        }),
+                        other => other,
+                    })
+                    .collect();
+                Some(Value::Vector(out))
+            }
             // Horizontal folds: combine all lanes with the matching scalar op.
             // The typechecker guarantees N >= 1 (and an integer element for the
             // bitwise folds), so `lanes` is non-empty.

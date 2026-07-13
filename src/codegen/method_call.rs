@@ -778,6 +778,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "Vector.shuffle"
                     | "Vector.store_masked"
                     | "Vector.scatter"
+                    // std.simd.math transcendentals (phase-11 numerical stdlib)
+                    | "Vector.sqrt"
+                    | "Vector.exp"
+                    | "Vector.ln"
+                    | "Vector.tanh"
+                    | "Vector.sigmoid"
             ) {
                 return self.compile_vector_method(object, method, args);
             }
@@ -12288,6 +12294,71 @@ impl<'ctx> super::Codegen<'ctx> {
                 .map_err(|e| format!("vector extractelement failed: {e}"))
         };
         match method {
+            // `std.simd.math` transcendentals (phase-11 numerical stdlib) on a
+            // float-lane vector. `sqrt` / `exp` / `ln` lower to the overloaded
+            // LLVM float-vector intrinsics (`llvm.sqrt` is one hardware
+            // `sqrtps`/`sqrtpd`; `llvm.exp`/`llvm.log` vectorize where the
+            // target math lib supports it, else scalarize — still correct).
+            // `sigmoid` = 1/(1+e^-x) and `tanh` = (e^2ˣ-1)/(e^2ˣ+1) are derived
+            // from `exp` with vector arithmetic. The typechecker guarantees a
+            // float element.
+            "sqrt" | "exp" | "ln" | "sigmoid" | "tanh" => {
+                let ft = recv.get_type().get_element_type().into_float_type();
+                // Broadcast a scalar constant across all `n` lanes (LLVM folds
+                // the insert chain to a constant splat).
+                let splat = |cg: &Self, c: f64| -> inkwell::values::VectorValue<'ctx> {
+                    let scalar = ft.const_float(c);
+                    let mut sv = recv.get_type().get_undef();
+                    for i in 0..n {
+                        sv = cg
+                            .builder
+                            .build_insert_element(
+                                sv,
+                                scalar,
+                                i32_t.const_int(i as u64, false),
+                                "splat",
+                            )
+                            .unwrap();
+                    }
+                    sv
+                };
+                let apply = |cg: &Self, name: &str, v: inkwell::values::VectorValue<'ctx>| {
+                    let intr = inkwell::intrinsics::Intrinsic::find(name)
+                        .expect("float-vector intrinsic must exist");
+                    let decl = intr
+                        .get_declaration(&cg.module, &[v.get_type().into()])
+                        .expect("intrinsic declaration for vector float type");
+                    cg.builder
+                        .build_call(decl, &[v.into()], "simdmath")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_vector_value()
+                };
+                let out = match method {
+                    "sqrt" => apply(self, "llvm.sqrt", recv),
+                    "exp" => apply(self, "llvm.exp", recv),
+                    "ln" => apply(self, "llvm.log", recv),
+                    "sigmoid" => {
+                        let neg = self.builder.build_float_neg(recv, "sig.neg").unwrap();
+                        let e = apply(self, "llvm.exp", neg);
+                        let one = splat(self, 1.0);
+                        let denom = self.builder.build_float_add(one, e, "sig.denom").unwrap();
+                        self.builder.build_float_div(one, denom, "sigmoid").unwrap()
+                    }
+                    _ => {
+                        // tanh(x) = (e^{2x} - 1) / (e^{2x} + 1)
+                        let two = splat(self, 2.0);
+                        let x2 = self.builder.build_float_mul(recv, two, "tanh.x2").unwrap();
+                        let e = apply(self, "llvm.exp", x2);
+                        let one = splat(self, 1.0);
+                        let num = self.builder.build_float_sub(e, one, "tanh.num").unwrap();
+                        let den = self.builder.build_float_add(e, one, "tanh.den").unwrap();
+                        self.builder.build_float_div(num, den, "tanh").unwrap()
+                    }
+                };
+                Ok(out.into())
+            }
             "reduce_sum" | "reduce_product" | "reduce_and" | "reduce_or" | "reduce_xor" => {
                 let fold_op = match method {
                     "reduce_sum" => BinOp::Add,

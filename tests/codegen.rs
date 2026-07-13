@@ -58688,6 +58688,57 @@ fn main() { println(sum4(1, 2, 3, 4)); }
     }
 
     #[test]
+    fn test_ir_vector_sqrt_uses_vector_intrinsic() {
+        // `std.simd.math` (phase-11): `v.sqrt()` on a `Vector[f32, 4]` lowers
+        // to the overloaded LLVM VECTOR intrinsic `@llvm.sqrt.v4f32` (one
+        // hardware `sqrtps`), not a scalarized per-lane call.
+        let ir = ir_for(
+            r#"
+fn f(a: f32, b: f32, c: f32, d: f32) -> f32 {
+    let v: Vector[f32, 4] = Vector[f32, 4](a, b, c, d);
+    let r = v.sqrt();
+    r[0]
+}
+fn main() { println(f(4.0f32, 9.0f32, 16.0f32, 25.0f32)); }
+"#,
+        );
+        assert!(
+            ir.contains("@llvm.sqrt.v4f32"),
+            "v.sqrt() should lower to the vector intrinsic @llvm.sqrt.v4f32; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_vector_simd_math_transcendentals() {
+        // sqrt/exp/ln/sigmoid/tanh on float vectors (std.simd.math). Exact /
+        // saturating oracles: sqrt([4,9,16,25])=[2,3,4,5]; exp(0)=1; ln(1)=0;
+        // sigmoid(0)=0.5; tanh(0)=0.
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[f32, 4].from_array([4.0f32, 9.0f32, 16.0f32, 25.0f32]);
+    let s = v.sqrt();
+    println(s[0]);
+    println(s[3]);
+    let z = Vector[f32, 4].splat(0.0f32);
+    let ex = z.exp();
+    println(ex[0]);
+    let sg = z.sigmoid();
+    println(sg[0]);
+    let th = z.tanh();
+    println(th[0]);
+    let o = Vector[f32, 4].splat(1.0f32);
+    let l = o.ln();
+    println(l[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "2\n5\n1\n0.5\n0\n0\n");
+        }
+    }
+
+    #[test]
     fn test_vector_dot_i64() {
         let out = run_program(
             r#"

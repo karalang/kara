@@ -26878,6 +26878,25 @@ fn vector_reduce_min_max_unsigned_ok() {
 }
 
 #[test]
+fn vector_simd_math_transcendentals_float_only() {
+    // std.simd.math (phase-11): `sqrt`/`exp`/`ln`/`tanh`/`sigmoid` on a
+    // float-element vector type-check and yield the same `Vector[T, N]`.
+    typecheck_ok(
+        "fn main() { let v = Vector[f32, 4].splat(1.0f32); \
+         let _a = v.sqrt(); let _b = v.exp(); let _c = v.ln(); \
+         let _d = v.tanh(); let _e = v.sigmoid(); }",
+    );
+    typecheck_ok("fn main() { let v = Vector[f64, 2].splat(2.0); let _a = v.sqrt(); }");
+    // Rejected on an integer-element vector (transcendentals are float-only).
+    let errs =
+        typecheck_errors("fn main() { let v = Vector[i64, 4](1, 2, 3, 4); let _a = v.sqrt(); }");
+    assert!(
+        errs.iter().any(|e| e.message.contains("floating-point")),
+        "expected sqrt on an integer vector to be rejected as float-only, got: {errs:?}"
+    );
+}
+
+#[test]
 fn vector_from_slice_ok() {
     // Vector[T, N].from_slice of a Slice[T] type-checks; the runtime len==N
     // check is deferred to codegen / interpreter (length is a runtime value).
