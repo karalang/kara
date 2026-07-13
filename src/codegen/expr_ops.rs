@@ -2395,6 +2395,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return true;
                 }
+                // Builtin integer scalar methods that return `Self` carry the
+                // receiver's signedness, so a `u64`-receiver result with the
+                // high bit set must print unsigned (`1u64.reverse_bits()` is
+                // 9223372036854775808, not -9223372036854775808). The bit
+                // permutations / rotations and `min`/`max`/`clamp` all return
+                // the receiver type; recurse on the receiver. (Mirror of the
+                // `expr_is_char` builtin-method arm.)
+                if matches!(
+                    method.as_str(),
+                    "reverse_bits"
+                        | "swap_bytes"
+                        | "rotate_left"
+                        | "rotate_right"
+                        | "min"
+                        | "max"
+                        | "clamp"
+                ) {
+                    return self.expr_is_unsigned_int(object);
+                }
                 let recv_ty = match &object.kind {
                     ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
                     ExprKind::SelfValue => self.var_type_names.get("self"),

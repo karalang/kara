@@ -4313,6 +4313,45 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(args_close_span, &receiver_for_lookup);
             return receiver_for_lookup.clone();
         }
+        // Bit-rotation intrinsics on integer scalars — `rotate_left(n)` /
+        // `rotate_right(n)` -> Self (Rust's `iN::rotate_{left,right}`, `n: u32`).
+        // Width-dependent: the rotation wraps within the receiver's `bits`
+        // (`n` is taken mod `bits`). The `Self` result keeps the receiver span's
+        // type; the interpreter recovers the width from `args_close_span`.
+        // Codegen lowers to `llvm.fshl` / `llvm.fshr` on the receiver's iN.
+        if matches!(method, "rotate_left" | "rotate_right")
+            && matches!(&receiver_for_lookup, Type::Int(_) | Type::UInt(_))
+        {
+            if args.len() != 1 {
+                self.type_error(
+                    format!(
+                        "`{method}` expects 1 argument (the rotation amount), got {}",
+                        args.len()
+                    ),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Type::Error;
+            }
+            let arg = &args[0].value;
+            let arg_ty = self.infer_expr(arg);
+            // The amount is `u32`; a suffix-free integer literal promotes.
+            if matches!(&arg.kind, ExprKind::Integer(_, None)) {
+                self.record_expr_type(&arg.span, &Type::UInt(UIntSize::U32));
+            } else if arg_ty != Type::Error && !matches!(arg_ty, Type::Int(_) | Type::UInt(_)) {
+                self.type_error(
+                    format!(
+                        "`{method}` expects an integer rotation amount, got `{}`",
+                        type_display(&arg_ty)
+                    ),
+                    arg.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+            self.record_expr_type(args_close_span, &receiver_for_lookup);
+            return receiver_for_lookup.clone();
+        }
         // Built-in `clone` / `to_string` on the scalar numeric + bool + char
         // primitives (all `Copy`). `clone` is identity → `Self`; `to_string`
         // renders the value → `String` (`Type::Str`). Like `abs`, these are

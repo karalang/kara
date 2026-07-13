@@ -2601,6 +2601,44 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(res.into());
         }
 
+        // Bit-rotation intrinsics `rotate_left(n)` / `rotate_right(n)` -> Self
+        // (typed in expr_method_call.rs). A rotate is a funnel shift with both
+        // inputs equal: `rotate_left` = `llvm.fshl(x, x, n)`, `rotate_right` =
+        // `llvm.fshr(x, x, n)`. All three operands are the receiver's iN; the
+        // shift `n` (a `u32` in Kāra) is truncated to iN — `fshl`/`fshr` take it
+        // mod width, matching Rust's `rotate_*`. The result is re-extended to
+        // the i64-backed value with the receiver's signedness.
+        if args.len() == 1 && matches!(method, "rotate_left" | "rotate_right") {
+            let (bits, unsigned) = self.receiver_int_kind(object, call_span, method);
+            let int_ty = self.int_type_for_bits(bits);
+            let v_raw = self.compile_expr(object)?.into_int_value();
+            let v = self.coerce_int_to(v_raw, int_ty, unsigned);
+            let amt_raw = self.compile_expr(&args[0].value)?.into_int_value();
+            // The amount is unsigned (a bit count), so a zero-extend/truncate to
+            // the receiver width is correct.
+            let amt = self.coerce_int_to(amt_raw, int_ty, true);
+            let base_name = if method == "rotate_left" {
+                "llvm.fshl"
+            } else {
+                "llvm.fshr"
+            };
+            let intrinsic = inkwell::intrinsics::Intrinsic::find(base_name)
+                .ok_or_else(|| format!("{base_name} intrinsic must exist in LLVM"))?;
+            let decl = intrinsic
+                .get_declaration(&self.module, &[int_ty.into()])
+                .ok_or_else(|| format!("{base_name} has no declaration for width {bits}"))?;
+            let rotated = self
+                .builder
+                .build_call(decl, &[v.into(), v.into(), amt.into()], "bitrot")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let i64_t = self.context.i64_type();
+            let res = self.coerce_int_to(rotated, i64_t, unsigned);
+            return Ok(res.into());
+        }
+
         // Overflow-aware integer arithmetic — `{checked,saturating,overflowing}_{add,sub,mul}`
         // (C2, B-2026-06-19-10). Lowered at the receiver's DECLARED width via the
         // `llvm.{s,u}{op}.with.overflow.iN` intrinsic (codegen widens narrow ints

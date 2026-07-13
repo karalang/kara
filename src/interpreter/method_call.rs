@@ -1954,6 +1954,24 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Bit-rotation intrinsics `rotate_left(n)` / `rotate_right(n)` -> Self
+        // (typed in expr_method_call.rs). Rotate within the receiver width
+        // recovered from `args_close_span`; the amount is `u32`. Codegen lowers
+        // to `llvm.fshl` / `llvm.fshr`.
+        if matches!(method, "rotate_left" | "rotate_right") && args.len() == 1 {
+            if let Value::Int(n) = &obj {
+                let n = *n;
+                let amount = self.eval_expr_inner(&args[0].value);
+                if self.pending_cf.is_some() {
+                    return amount;
+                }
+                if let Value::Int(amount) = amount {
+                    let w = self.int_width_at(args_close_span);
+                    return Value::Int(eval_bit_rotate(method, n, amount as u32, w));
+                }
+            }
+        }
+
         // ASCII byte-classification predicates on integer scalars (the `u8`
         // bytes from `String.bytes()`): `is_ascii_digit` / `is_ascii_alphabetic`
         // / `is_ascii_hexdigit` → bool. Phase-8 floor for the self-hosting lexer
@@ -2284,6 +2302,63 @@ fn eval_bit_permute(method: &str, n: i64, w: IntW) -> i64 {
         (permuted | !((1u64 << bits) - 1)) as i64
     } else {
         permuted as i64
+    }
+}
+
+/// Evaluate a width-correct bit rotation (`rotate_left` / `rotate_right`) on the
+/// i64-backed value `n` at receiver width `w`, rotating by `amount` within the
+/// receiver's `bits` (Rust `iN::rotate_{left,right}`, amount mod width). The
+/// result is re-encoded like [`eval_bit_permute`] (sign-extended for a signed
+/// narrow width). Rotation is bit-level, so signedness only affects the final
+/// encoding, not the rotated bits.
+fn eval_bit_rotate(method: &str, n: i64, amount: u32, w: IntW) -> i64 {
+    let (bits, signed) = match w {
+        IntW::S(b) => (b, true),
+        IntW::U(b) => (b, false),
+    };
+    let masked: u64 = if bits >= 64 {
+        n as u64
+    } else {
+        (n as u64) & ((1u64 << bits) - 1)
+    };
+    let left = method == "rotate_left";
+    let rotated: u64 = match bits {
+        8 => {
+            let v = masked as u8;
+            u64::from(if left {
+                v.rotate_left(amount)
+            } else {
+                v.rotate_right(amount)
+            })
+        }
+        16 => {
+            let v = masked as u16;
+            u64::from(if left {
+                v.rotate_left(amount)
+            } else {
+                v.rotate_right(amount)
+            })
+        }
+        32 => {
+            let v = masked as u32;
+            u64::from(if left {
+                v.rotate_left(amount)
+            } else {
+                v.rotate_right(amount)
+            })
+        }
+        _ => {
+            if left {
+                masked.rotate_left(amount)
+            } else {
+                masked.rotate_right(amount)
+            }
+        }
+    };
+    if signed && bits < 64 && (rotated & (1u64 << (bits - 1))) != 0 {
+        (rotated | !((1u64 << bits) - 1)) as i64
+    } else {
+        rotated as i64
     }
 }
 

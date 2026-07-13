@@ -743,11 +743,35 @@ fn test_bit_permute_and_count_zeros_width_correct() {
              println((4278255360u32).reverse_bits());\n\
              println((1i8).reverse_bits());\n\
              println((1i32).reverse_bits());\n\
+             let big: u64 = 1;\n\
+             println(big.reverse_bits());\n\
          }");
     assert_eq!(
         out,
-        "5\n0\n64\n128\n513\n16777216\n5\n16711935\n-128\n-2147483648\n"
+        // Last line: `1u64.reverse_bits()` = 2^63, which MUST print as the
+        // unsigned 9223372036854775808 (not the signed -9223372036854775808).
+        "5\n0\n64\n128\n513\n16777216\n5\n16711935\n-128\n-2147483648\n9223372036854775808\n"
     );
+}
+
+#[test]
+fn test_bit_rotate_width_correct() {
+    // `rotate_left(n)` / `rotate_right(n)` wrap within the receiver's `bits`
+    // (Rust `iN::rotate_*`, amount mod width). Signed-narrow results
+    // sign-extend (`1i8.rotate_right(1) == -128`); a `u64` result with the
+    // high bit set prints unsigned. Codegen mirrors this via `llvm.fshl`/`fshr`
+    // (`tests/codegen.rs::e2e_bit_rotate_width_correct`).
+    let out = run("fn main() {\n\
+             println((1u8).rotate_left(1));\n\
+             println((128u8).rotate_left(1));\n\
+             println((1u8).rotate_right(1));\n\
+             println((16u32).rotate_right(4));\n\
+             println((5u8).rotate_left(8));\n\
+             println((1i8).rotate_right(1));\n\
+             let big: u64 = 1;\n\
+             println(big.rotate_left(63));\n\
+         }");
+    assert_eq!(out, "2\n1\n128\n1\n5\n-128\n9223372036854775808\n");
 }
 
 #[test]

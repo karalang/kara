@@ -7130,12 +7130,40 @@ fn main() {
                  println((4278255360u32).reverse_bits());\n\
                  println((1i8).reverse_bits());\n\
                  println((1i32).reverse_bits());\n\
+                 let big: u64 = 1;\n\
+                 println(big.reverse_bits());\n\
              }",
         ) {
+            // Last line pins the u64-high-bit print: `1u64.reverse_bits()` is
+            // 2^63, which must render unsigned (the `expr_is_unsigned_int`
+            // builtin-Self-method arm) — pre-fix it printed the signed
+            // -9223372036854775808.
             assert_eq!(
                 out,
-                "5\n0\n64\n128\n513\n16777216\n5\n16711935\n-128\n-2147483648\n"
+                "5\n0\n64\n128\n513\n16777216\n5\n16711935\n-128\n-2147483648\n9223372036854775808\n"
             );
+        }
+    }
+
+    /// `rotate_left(n)` / `rotate_right(n)` lowered to `llvm.fshl` / `llvm.fshr`
+    /// on the receiver's iN. Must match the interpreter oracle
+    /// (`test_bit_rotate_width_correct`), incl. the signed-narrow sign
+    /// extension and the u64-high-bit unsigned print.
+    #[test]
+    fn e2e_bit_rotate_width_correct() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println((1u8).rotate_left(1));\n\
+                 println((128u8).rotate_left(1));\n\
+                 println((1u8).rotate_right(1));\n\
+                 println((16u32).rotate_right(4));\n\
+                 println((5u8).rotate_left(8));\n\
+                 println((1i8).rotate_right(1));\n\
+                 let big: u64 = 1;\n\
+                 println(big.rotate_left(63));\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n1\n128\n1\n5\n-128\n9223372036854775808\n");
         }
     }
 
