@@ -18185,13 +18185,14 @@ fn main() {
     // ten cases split unpredictably); ASAN catches it deterministically.
 
     #[test]
-    // B-2026-07-12-29: this leaks on ARM64 only (compound index-assign of a
-    // shared/Option[shared] Vec element — `work[i] = merge_two(work[i], …)` —
-    // orphans the overwritten node; balances on x86, unbalanced on arm64).
-    // Ignored on aarch64 so the arm64 memory-sanitizer CI leg is green except
-    // for NEW arm64 leaks; still runs (and passes) on x86. Un-ignore when the
-    // bug is fixed.
-    #[cfg_attr(target_arch = "aarch64", ignore = "B-2026-07-12-29 arm64-only leak")]
+    // B-2026-07-12-29 (FIXED): the compound index-assign of a shared/
+    // Option[shared] Vec element — `work[i] = merge_two(work[i], …)` — orphaned
+    // the OVERWRITTEN old node with no rc-dec, an ARM64-only leak (balanced on
+    // x86 via an arch-dependent struct-move/ABI path, unbalanced on arm64). The
+    // fix adds the ARC setter rule (retain-new → store → release-old) to
+    // `compile_vec_index_store`, releasing the old value via the same per-element
+    // drop the scope-exit drain uses. Previously `#[cfg_attr(aarch64, ignore)]`;
+    // the ignore is removed now that the arm64 leg is clean.
     fn asan_owned_vec_param_let_move_interval_merge() {
         // kata-23 merge_k_lists shape: param Vec[Option[shared]] moved to
         // a mut local, in-place interval element reads/assignments, slot 0
@@ -18272,6 +18273,83 @@ fn main() {
 "#,
             &["1", "2", "3"],
             "owned_vec_param_let_move_interval_merge",
+        );
+    }
+
+    #[test]
+    fn asan_vec_option_shared_index_overwrite_place_rhs_no_leak() {
+        // B-2026-07-12-29 minimal repro (Option[shared] element, place RHS):
+        // `work[0] = work[1]` overwrites slot 0's OLD node with slot 1's — the
+        // overwritten node must be rc-dec'd or it leaks on arm64. The retain of
+        // the RHS is upstream (the index-read clone rc-incs), so the store site
+        // must release the old. slot0 holds a 2-node chain so BOTH orphaned
+        // nodes would leak pre-fix; the driver keeps slot 1 alive and walks it.
+        assert_clean_asan_run(
+            r#"
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn probe(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+    let mut work = lists;
+    work[0] = work[1];
+    work[0]
+}
+
+fn main() {
+    let a2 = ListNode { val: 10, next: None };
+    let a1 = ListNode { val: 11, next: Some(a2) };
+    let b = ListNode { val: 22, next: None };
+    let mut v: Vec[Option[ListNode]] = Vec.new();
+    v.push(Some(a1));
+    v.push(Some(b));
+    let mut cur = probe(v);
+    loop {
+        match cur {
+            Some(node) => {
+                println(node.val);
+                cur = node.next;
+            }
+            None => break,
+        }
+    }
+}
+"#,
+            &["22"],
+            "vec_option_shared_index_overwrite_place_rhs",
+        );
+    }
+
+    #[test]
+    fn asan_vec_plain_shared_index_overwrite_place_rhs_no_leak() {
+        // B-2026-07-12-29 sibling — plain `Vec[shared T]` (non-Option) element.
+        // The element clone is a SHALLOW pointer copy (no rc-inc), so
+        // `work[0] = work[1]` pre-fix BOTH double-freed slot 1's box (two slots
+        // aliasing one un-inc'd box → two scope-exit decs) AND leaked slot 0's
+        // old box. The setter rule retains the new (place RHS) and releases the
+        // old, balancing both.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64 }
+
+fn probe(xs: Vec[Node]) -> i64 {
+    let mut work = xs;
+    work[0] = work[1];
+    work[0].val
+}
+
+fn main() {
+    let a = Node { val: 7 };
+    let b = Node { val: 9 };
+    let mut v: Vec[Node] = Vec.new();
+    v.push(a);
+    v.push(b);
+    println(probe(v));
+}
+"#,
+            &["9"],
+            "vec_plain_shared_index_overwrite_place_rhs",
         );
     }
 

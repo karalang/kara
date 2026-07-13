@@ -5197,7 +5197,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.try_compile_heap_env_vec_elem_reassign(object, index, val, value)? {
                         return Ok(());
                     }
-                    self.compile_index_store(object, index, val)?;
+                    self.compile_index_store(object, index, val, rhs_is_fresh)?;
                     // B-2026-07-11-32: an f-string RHS stored into a Vec element
                     // slot (`v[i] = f"…"`). `compile_vec_index_store` already
                     // dropped the old element and MOVED the acc's {ptr,len,cap}
@@ -5407,7 +5407,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.compile_field_store(object, field, result, false)?;
                     }
                     ExprKind::Index { object, index } => {
-                        self.compile_index_store(object, index, result)?;
+                        // A compound-assign result (`v[i] OP= rhs`) is a freshly
+                        // computed value, never an alias of a tracked ref — pass
+                        // `rhs_is_fresh = true`. A `shared` element can't be an
+                        // `OP=` operand (typecheck-rejected), so the refcount-
+                        // aware overwrite arm is unreachable here regardless.
+                        self.compile_index_store(object, index, result, true)?;
                     }
                     // `*x OP= rhs` for a value-represented `mut ref` (a closure
                     // `and_modify` param or a CICO fn `mut ref` param): the

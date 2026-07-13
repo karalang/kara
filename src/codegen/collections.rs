@@ -3605,6 +3605,7 @@ impl<'ctx> super::Codegen<'ctx> {
         var_name: &str,
         index: &Expr,
         val: BasicValueEnum<'ctx>,
+        rhs_is_fresh: bool,
     ) -> Result<(), String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let vec_ty = self.vec_struct_type();
@@ -3646,8 +3647,65 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`Vec[i64]`, `Vec[u8]`), whose slots own no heap. Pairs with the
         // moved-source cleanup suppression at the `Index` assign site
         // (B-2026-06-19-7).
+        // B-2026-07-12-29 — refcount-aware element overwrite for a `shared` /
+        // `Option[shared]` element. The store ORPHANS the overwritten old
+        // value's refcount unless we release it (an ARM64-only LEAK: the
+        // missing rc-dec balances on x86 via an arch-dependent struct-move/ABI
+        // path but not on arm64). The setter rule is retain-new → store →
+        // release-old, aliasing-safe because the retain runs FIRST (so
+        // `work[i] = work[i]` / `work[i] = work[j]` survive). Where the retain
+        // happens differs by element shape:
+        //   - `Option[shared]`: `clone_owned_vec_index_element` already rc-inc'd
+        //     a place RHS (`karac_clone_Option_<T>`, verified in IR); a fresh
+        //     `Some(..)`/`Call` RHS carries its own +1. So retain is UPSTREAM —
+        //     we ONLY release the old value here.
+        //   - plain `Vec[shared T]`: the element clone is a SHALLOW pointer copy
+        //     (no rc-inc), so a place RHS is NOT retained upstream — retain it
+        //     here when `!rhs_is_fresh` (a fresh `Call`/`StructLiteral` already
+        //     carries +1).
+        // The release reuses the SAME per-element drop the scope-exit Vec drain
+        // uses (`karac_drop_Option_<T>` / `__karac_vec_elem_rc_dec_<T>` via
+        // `vec_elem_agg_drop_for_type_expr`), so the rc discipline (plain vs
+        // atomic) matches automatically. Distinct from the `Vec[Vec[T]]` /
+        // `Vec[String]` outer-buffer free above (B-2026-06-19-7); those elements
+        // are `{ptr,len,cap}` vec-structs, mutually exclusive with the ptr /
+        // 4-word-Option slots handled here.
+        let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+        let is_opt_shared = elem_te
+            .as_ref()
+            .is_some_and(|te| self.option_inner_shared_type_for_type_expr(te).is_some());
+        let plain_shared_heap = elem_te
+            .as_ref()
+            .and_then(|te| self.shared_heap_type_for_type_expr(te));
+
         if self.llvm_ty_is_vec_struct(elem_ty) {
             self.emit_free_vec_buffer_if_owned(elem_ptr);
+        } else if is_opt_shared || plain_shared_heap.is_some() {
+            let elem_te = elem_te.expect("shared/opt-shared element implies a recorded TypeExpr");
+            let fn_val = self.current_fn.unwrap();
+            // Save the OLD value BEFORE overwriting, so the release below runs
+            // LAST (after the retain + store) — the ordering that keeps a
+            // self-alias safe.
+            let old_tmp = self.create_entry_alloca(fn_val, "vidx.rc.old", elem_ty);
+            let old_v = self
+                .builder
+                .build_load(elem_ty, elem_ptr, "vidx.rc.old.v")
+                .unwrap();
+            self.builder.build_store(old_tmp, old_v).unwrap();
+            // Plain `Vec[shared T]` retain (Option retain is upstream). Type-
+            // keyed inc to match the type-keyed dec in the scope-exit drain.
+            if let Some(heap_type) = plain_shared_heap {
+                if !rhs_is_fresh {
+                    self.emit_refcount_inc_by_type(heap_type, val.into_pointer_value());
+                }
+            }
+            self.builder.build_store(elem_ptr, val).unwrap();
+            if let Some(drop_fn) = self.vec_elem_agg_drop_for_type_expr(&elem_te) {
+                self.builder
+                    .build_call(drop_fn, &[old_tmp.into()], "")
+                    .unwrap();
+            }
+            return Ok(());
         }
         // Narrow to the element width before storing — a computed scalar for a
         // sub-word element (`v[i] = b'a' + (k as u8)` into `Vec[u8]`) compiles
@@ -3868,6 +3926,7 @@ impl<'ctx> super::Codegen<'ctx> {
         object: &Expr,
         index: &Expr,
         val: BasicValueEnum<'ctx>,
+        rhs_is_fresh: bool,
     ) -> Result<(), String> {
         // Tensor element store: `t[i, j] = v` — same layout helpers as
         // the read path (`src/codegen/tensor.rs`).
@@ -3926,7 +3985,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(name.as_str())
                     .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)));
                 if !slot_is_array {
-                    return self.compile_vec_index_store(name, index, val);
+                    return self.compile_vec_index_store(name, index, val, rhs_is_fresh);
                 }
             }
         }
@@ -4001,7 +4060,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     kind: ExprKind::Identifier(synth.clone()),
                     span: object.span.clone(),
                 };
-                let result = self.compile_index_store(&synth_expr, index, val);
+                let result = self.compile_index_store(&synth_expr, index, val, rhs_is_fresh);
 
                 // Clean up synth registrations (same set as the FR slice).
                 self.variables.remove(&synth);
