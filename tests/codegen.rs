@@ -4219,44 +4219,66 @@ fn main() {
     }
 
     #[test]
-    fn test_oncelock_heap_element_rejected_under_build() {
-        // A heap-owning element (`OnceLock[String]`) is loud-gated under
-        // `karac build` at v1 (the heap-`T` move-suppression / rejected-value
-        // drop / payload boxing slice is deferred, B-2026-07-12-1) — codegen
-        // MUST return an error, not silently leak the element or overflow the
-        // `Option` payload. The interpreter path handles it; this pins the loud
-        // build-time gate so a heap `T` can never regress into a silent leak.
+    fn test_oncelock_wide_element_gated_heap_fitting_ok() {
+        // B-2026-07-12-2: a heap-owning but FITTING element (`OnceLock[String]`,
+        // `<= 3` words) is now SUPPORTED under `karac build` — leak-free via the
+        // element-drop (gap 1) + rejected-value-drop (gap 2) slice, validated in
+        // `tests/memory_sanitizer.rs::asan_oncelock_*`. A WIDE element (a struct
+        // wider than the 3-word inline `Option`/`Result` payload) stays
+        // loud-gated (gap 3, payload boxing deferred) — codegen MUST reject it
+        // rather than silently overflow the payload. The interpreter handles
+        // all `T`.
         use karac::codegen::compile_to_object_with_options;
-        let src = "fn main() {\n\
-                   let c: OnceLock[String] = OnceLock.new();\n\
-                   let _ = c.set(\"hi\");\n\
-                   }";
-        let mut parsed = karac::parse(src);
-        assert!(parsed.errors.is_empty(), "source must parse");
-        let resolved = karac::resolve(&parsed.program);
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        assert!(
-            typed.errors.is_empty(),
-            "OnceLock[String] must typecheck clean (interpreter supports it): {:?}",
-            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        let compile_err = |src: &str, tag: &str| -> Option<String> {
+            let mut parsed = karac::parse(src);
+            assert!(parsed.errors.is_empty(), "{tag}: source must parse");
+            let resolved = karac::resolve(&parsed.program);
+            let typed = karac::typecheck(&parsed.program, &resolved);
+            assert!(
+                typed.errors.is_empty(),
+                "{tag}: must typecheck clean: {:?}",
+                typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+            );
+            karac::lower(&mut parsed.program, &typed);
+            let ownership = karac::ownershipcheck(&parsed.program, &typed);
+            let obj_path = format!("/tmp/karac_once_gate_{}_{}.o", tag, std::process::id());
+            let err = compile_to_object_with_options(
+                &parsed.program,
+                &obj_path,
+                Some(&ownership),
+                None,
+                None,
+                None,
+            )
+            .err();
+            let _ = std::fs::remove_file(&obj_path);
+            err
+        };
+        // (a) heap-FITTING `String` element now compiles clean (was gated).
+        let ok = compile_err(
+            "fn main() {\n\
+             let c: OnceLock[String] = OnceLock.new();\n\
+             match c.set(\"hi\".to_string()) { Ok(_) => {}, Err(_) => {}, }\n\
+             }",
+            "fitting",
         );
-        karac::lower(&mut parsed.program, &typed);
-        let ownership = karac::ownershipcheck(&parsed.program, &typed);
-        let obj_path = format!("/tmp/karac_once_heap_gate_{}.o", std::process::id());
-        let err = compile_to_object_with_options(
-            &parsed.program,
-            &obj_path,
-            Some(&ownership),
-            None,
-            None,
-            None,
-        )
-        .err();
-        let _ = std::fs::remove_file(&obj_path);
-        let msg = err.expect("heap-T OnceLock.set must be rejected under karac build");
         assert!(
-            msg.contains("not yet supported") && msg.contains("heap-owning"),
-            "gate error should name the heap-owning limitation; got: {msg}"
+            ok.is_none(),
+            "heap-FITTING OnceLock[String] must now compile under karac build; got: {ok:?}"
+        );
+        // (b) a WIDE (>3-word) struct element stays loud-gated.
+        let wide = compile_err(
+            "struct Wide { a: i64, b: i64, c: i64, d: i64 }\n\
+             fn main() {\n\
+             let c: OnceLock[Wide] = OnceLock.new();\n\
+             match c.set(Wide { a: 1i64, b: 2i64, c: 3i64, d: 4i64 }) { Ok(_) => {}, Err(_) => {}, }\n\
+             }",
+            "wide",
+        );
+        let msg = wide.expect("WIDE-T OnceLock.set must still be rejected under karac build");
+        assert!(
+            msg.contains("wider than the 3-word inline payload"),
+            "gate error should name the wide-payload limitation; got: {msg}"
         );
     }
 

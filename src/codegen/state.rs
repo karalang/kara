@@ -660,15 +660,21 @@ pub(crate) enum CleanupAction<'ctx> {
     },
     /// Scope-exit free for a local `OnceLock`/`OnceCell` binding. The alloca
     /// holds the opaque `*mut KaracOnce` handle from `OnceLock.new()`. The
-    /// drain emits `karac_runtime_once_free(load(once_alloca))` — null-handle
-    /// is a runtime no-op, so no guard here. Mirrors `FreeFileHandle`'s shape.
-    /// The element `T` is heap-free (a scalar or plain-value struct) — a
-    /// heap-bearing / wide `T` is loud-gated under `karac build` in
-    /// `compile_once_set`/`_get`, so the cell's `free` reclaiming the header +
-    /// control block is complete. B-8 OnceLock codegen.
+    /// drain runs the element drop (if any) on the sealed value, then emits
+    /// `karac_runtime_once_free(load(once_alloca))` — null-handle is a runtime
+    /// no-op, so no guard on the free. Mirrors `FreeFileHandle`'s shape.
+    /// `elem_drop` is `Some(karac_drop_<T>)` for a heap-owning fitting `T`
+    /// (`String`/`Vec`/small single-heap-field struct — B-2026-07-12-2 gap 1):
+    /// `set(v)` moved `v`'s buffer into the cell, so the cell owns it and the
+    /// drain must free the ELEMENT's inner heap (the char/element buffer) before
+    /// reclaiming the header + control block. `None` for a heap-free `T` (the
+    /// header free is complete on its own). A WIDE `T` stays loud-gated.
     FreeOnceHandle {
         /// Alloca that holds the opaque `*mut KaracOnce` pointer.
         once_alloca: PointerValue<'ctx>,
+        /// `karac_drop_<T>` run on the sealed value ptr before free, when `T`
+        /// owns heap; `None` for a heap-free `T`.
+        elem_drop: Option<FunctionValue<'ctx>>,
     },
     /// Heap-closure-env epic Slice 1 (B-2026-06-22-2): a binding holding a
     /// heap-env closure value. At scope exit, load the fat pointer, extract its

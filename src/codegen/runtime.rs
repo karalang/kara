@@ -4680,7 +4680,7 @@ impl<'ctx> super::Codegen<'ctx> {
             CleanupAction::FreeDataFrame { df_alloca } => Some(name_of(*df_alloca)),
             CleanupAction::FreeSoaGroups { soa_alloca, .. } => Some(name_of(*soa_alloca)),
             CleanupAction::FreeFileHandle { file_alloca } => Some(name_of(*file_alloca)),
-            CleanupAction::FreeOnceHandle { once_alloca } => Some(name_of(*once_alloca)),
+            CleanupAction::FreeOnceHandle { once_alloca, .. } => Some(name_of(*once_alloca)),
             CleanupAction::FreeClosureEnv { fat_alloca } => Some(name_of(*fat_alloca)),
             CleanupAction::DropChannelEnd { chan_alloca, .. } => Some(name_of(*chan_alloca)),
             CleanupAction::FreeInlineOptionPayload { option_slot, .. } => {
@@ -5988,12 +5988,51 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_call(close_fn, &[handle.into()], "")
                     .unwrap();
             }
-            CleanupAction::FreeOnceHandle { once_alloca } => {
+            CleanupAction::FreeOnceHandle {
+                once_alloca,
+                elem_drop,
+            } => {
                 let handle = self
                     .builder
                     .build_load(ptr_ty, *once_alloca, "cleanup.once.handle")
                     .unwrap()
                     .into_pointer_value();
+                // Heap-owning `T` (B-2026-07-12-2 gap 1): the sealed value's
+                // inner heap (a `String`/`Vec` buffer moved in by `set`) is owned
+                // by the cell, so run the element drop on the sealed value ptr
+                // BEFORE freeing the header + control block. `karac_runtime_once_get`
+                // returns a stable pointer to the sealed `T` (or null if the cell
+                // was never sealed) — null-guard the drop so an unset cell is a
+                // no-op. The `once_free` below then reclaims the header.
+                if let Some(drop_fn) = elem_drop {
+                    let get_fn = self
+                        .module
+                        .get_function("karac_runtime_once_get")
+                        .expect("karac_runtime_once_get declared in Codegen::new");
+                    let vptr = self
+                        .builder
+                        .build_call(get_fn, &[handle.into()], "cleanup.once.val")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_pointer_value();
+                    let is_null = self
+                        .builder
+                        .build_is_null(vptr, "cleanup.once.val.null")
+                        .unwrap();
+                    let fn_val = self.current_fn.unwrap();
+                    let drop_bb = self.context.append_basic_block(fn_val, "cleanup.once.drop");
+                    let cont_bb = self.context.append_basic_block(fn_val, "cleanup.once.cont");
+                    self.builder
+                        .build_conditional_branch(is_null, cont_bb, drop_bb)
+                        .unwrap();
+                    self.builder.position_at_end(drop_bb);
+                    self.builder
+                        .build_call(*drop_fn, &[vptr.into()], "")
+                        .unwrap();
+                    self.builder.build_unconditional_branch(cont_bb).unwrap();
+                    self.builder.position_at_end(cont_bb);
+                }
                 let free_fn = self
                     .module
                     .get_function("karac_runtime_once_free")

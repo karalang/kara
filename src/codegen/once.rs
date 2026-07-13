@@ -101,21 +101,20 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(recv)
             .map(|(te, _)| te.clone())
             .ok_or_else(|| format!("OnceLock/OnceCell binding '{recv}' missing element type"))?;
-        let heap = self.type_expr_has_drop_heap(&te);
         let elem_ty = self.llvm_type_for_type_expr(&te);
         let wide = Self::llvm_type_word_count(elem_ty) > 3;
-        if heap || wide {
-            let why = if heap {
-                "a heap-owning element type (`String` / `Vec[_]` / a struct with a heap field)"
-            } else {
-                "an element type wider than the 3-word inline payload"
-            };
+        // heap-but-FITTING `T` (`String` / `Vec[_]` / a small single-heap-field
+        // struct, <=3 words) is now supported: recovery is sound (B-2026-07-12-27)
+        // and the success-path element drop + rejected-value drop are wired below.
+        // A WIDE `T` (>3 words) still overflows the `Option`/`Result` inline
+        // payload area with no boxing path (gap 3) — keep it loud-gated.
+        if wide {
             return Err(format!(
-                "codegen: `OnceLock`/`OnceCell`.{method}` with {why} is not yet supported under \
-                 `karac build` (the heap-`T` move-suppression / rejected-value drop / payload \
-                 boxing slice is a tracked follow-on, B-2026-07-12-2). Scalar and small \
-                 all-scalar-struct element types work; for a heap `T`, run with `karac run \
-                 --interp` (or `KARAC_RUN_JIT=0`)."
+                "codegen: `OnceLock`/`OnceCell`.{method}` with an element type wider than the \
+                 3-word inline payload is not yet supported under `karac build` (the wide-`T` \
+                 payload-boxing slice is a tracked follow-on, B-2026-07-12-2 gap 3). Scalar, \
+                 `String`/`Vec`, and small heap-fitting structs work; for a wide `T`, run with \
+                 `karac run --interp` (or `KARAC_RUN_JIT=0`)."
             ));
         }
         Ok(())
@@ -168,6 +167,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let handle = self.load_once_handle(recv)?;
         let fn_val = self.current_fn.unwrap();
         let val = self.compile_expr(&args[0].value)?;
+        // Move-suppress the source (B-2026-07-12-2 gap 1): `set(v)` transfers
+        // `v`'s buffer to EITHER the cell (win — freed by `FreeOnceHandle`'s
+        // elem_drop) OR the returned `Err(AlreadySetError { rejected: v })`
+        // payload (lose — freed by that payload's drop). In BOTH cases the source
+        // binding must not also free it. A named `String`/`Vec` source has its
+        // `cap` zeroed so its scope-exit `FreeVecBuffer` no-ops (else double-free
+        // with the cell's elem_drop); a fresh-temp source (`"x".to_string()`) is
+        // a no-op here (nothing else owns it — the cell/Err payload is the sole
+        // owner). The loaded `val` SSA keeps its real `cap`, so the Err payload
+        // still carries a live buffer. Mirrors the `Vec.push` arg suppression.
+        self.suppress_source_vec_cleanup_for_arg(&args[0].value);
         let val_slot = self.create_entry_alloca(fn_val, "once.set.val", elem_ty);
         self.builder.build_store(val_slot, val).unwrap();
 

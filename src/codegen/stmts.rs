@@ -4578,10 +4578,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // OnceLock/OnceCell local binding: `let cell: OnceLock[T] =
                 // OnceLock.new()` — queue a scope-exit `FreeOnceHandle` so the
                 // heap cell + its sealed value buffer are reclaimed at frame
-                // exit. `T` is heap-free here (a heap-bearing / wide `T` is
-                // loud-gated in `compile_once_set`/`_get`, so the build fails
-                // before reaching a `set`/`get`), so freeing the cell + header
-                // is complete — no element drop needed. Gated on a fresh
+                // exit. For a heap-owning fitting `T` (`String`/`Vec`/small
+                // single-heap-field struct), `set(v)` moved `v`'s buffer into the
+                // cell, so compute the per-`T` `elem_drop` (`karac_drop_<T>`) the
+                // drain runs on the sealed value before `once_free` — else the
+                // element's inner heap leaks (B-2026-07-12-2 gap 1). A heap-free
+                // `T` records `None` (header free is complete). A WIDE `T` stays
+                // loud-gated in `compile_once_set`/`_get`. Gated on a fresh
                 // `*.new()` Call RHS (a rebind `let c2 = cell` would double-free
                 // the shared handle — deferred; the tests never rebind). Mirrors
                 // the Map/Set fresh-handle arm above. B-8 OnceLock codegen.
@@ -4589,10 +4592,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.once_var_types.contains_key(var_name.as_str())
                         && matches!(&value.kind, ExprKind::Call { .. })
                     {
+                        let elem_te = self
+                            .once_var_types
+                            .get(var_name.as_str())
+                            .map(|(te, _)| te.clone());
+                        let elem_drop = elem_te.and_then(|te| {
+                            if self.type_expr_has_drop_heap(&te) {
+                                Some(self.emit_drop_fn_for_type_expr(&te))
+                            } else {
+                                None
+                            }
+                        });
                         if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
                             if let Some(frame) = self.scope_cleanup_actions.last_mut() {
                                 frame.push(super::state::CleanupAction::FreeOnceHandle {
                                     once_alloca: slot.ptr,
+                                    elem_drop,
                                 });
                             }
                         }

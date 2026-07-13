@@ -151,6 +151,18 @@ impl<'ctx> super::Codegen<'ctx> {
             let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
             self.track_freshtemp_boxed_enum_scrutinee(scrutinee, &pats, scrut);
         }
+        // Fresh-temp INLINE-heap `Result` scrutinee (`match cell.set(v) { Err(_)
+        // => {} }`, B-2026-07-12-2 gap 2a): neither the enum-drop nor boxed path
+        // above tracks a discarded fitting inline heap payload (a `String`/`Vec`
+        // or transparent single-field wrapper Err). Register its
+        // `FreeInlineResultPayload` so a no-bind arm frees it; a consuming arm's
+        // per-arm `suppress_inline_result_payload_cleanup_at` (in the arm loop)
+        // zeros the slot `cap`. Only for a fresh-temp, non-borrow scrutinee.
+        let freshtemp_inline_res = if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() {
+            self.track_freshtemp_inline_result_scrutinee(scrutinee, scrut)
+        } else {
+            None
+        };
         // Detect borrow-returning scrutinees so pattern bindings don't
         // register a `FreeVecBuffer` against a buffer the container still
         // owns. `Map.get` is the canonical case (the returned `Option[V]`
@@ -397,6 +409,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     // free would otherwise double-free against the binding.
                     self.suppress_inline_option_payload_cleanup(scrutinee, &arm.pattern);
                     self.suppress_inline_result_payload_cleanup(scrutinee, &arm.pattern);
+                    // Fresh-temp inline `Result` scrutinee (B-2026-07-12-2 gap
+                    // 2): suppress the source's payload free on a CONSUMING arm so
+                    // the binding / consumer owns the buffer — UNLESS the arm only
+                    // BORROWS a STRUCT-WRAPPER payload (`Err(e) =>
+                    // e.rejected.len()`). A struct-wrapper binding
+                    // (`AlreadySetError[String]`) has NO cleanup of its own (a
+                    // struct payload is not `track_vec_var`'d), so on a recover-
+                    // READ the source must free it at arm-end, else it leaks. A
+                    // DIRECT `String`/`Vec` payload binding DOES get its own
+                    // `track_vec_var` free, so it must ALWAYS suppress here (else
+                    // double-free) — hence the wrapper gate.
+                    if let Some(slot) = freshtemp_inline_res {
+                        let borrow_only = self.arm_only_borrows_inline_result_payload(
+                            &arm.pattern,
+                            &arm.body,
+                            arm.guard.as_ref(),
+                        );
+                        let wrapper =
+                            self.inline_result_payload_binding_is_struct_wrapper(&arm.pattern);
+                        if !(borrow_only && wrapper) {
+                            self.suppress_inline_result_payload_cleanup_at(slot, &arm.pattern);
+                        }
+                    }
                     self.suppress_inline_option_map_payload_cleanup(scrutinee, &arm.pattern);
                     // B-2026-07-03-31: skip disarming the source payload drop
                     // when the arm ONLY BORROWS the bound payload (it is not
@@ -4561,6 +4596,146 @@ impl<'ctx> super::Codegen<'ctx> {
                 inner_struct_name.as_deref(),
             );
             return;
+        }
+    }
+
+    /// Fresh-temp INLINE (fitting, `<=` area) heap `Result` match scrutinee
+    /// (`match cell.set(v) { Err(_) => {} }` — B-2026-07-12-2 gap 2a): the
+    /// seeded `Result` layout has all-`None` drop kinds so
+    /// `materialize_freshtemp_enum_scrutinee` never tracks it, and
+    /// `track_freshtemp_boxed_enum_scrutinee` covers only a heap-BOXED WIDE
+    /// payload — so a DISCARDED inline heap payload (a `String`/`Vec`, or a
+    /// transparent single-field wrapper like `AlreadySetError[String]`, that
+    /// fits the 5-word `Result` area) leaks. Materialize the scrutinee value
+    /// into an alloca and register `FreeInlineResultPayload`: a no-bind arm
+    /// (`Err(_)`) frees it, and a CONSUMING arm's per-arm
+    /// `suppress_inline_result_payload_cleanup_at` zeros the alloca `cap` so the
+    /// binding / consumer owns it (no double-free — the alloca shares the fresh
+    /// temp's buffer, and the temp is dead after the match). Returns the alloca
+    /// for the arm loop's suppression, or `None` when it does not apply
+    /// (non-fresh-temp, borrow, scalar payload, or a WIDE payload — boxed path).
+    pub(super) fn track_freshtemp_inline_result_scrutinee(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Option<PointerValue<'ctx>> {
+        if !self.expr_yields_fresh_owned_temp(scrutinee) {
+            return None;
+        }
+        if self.scrutinee_is_borrow_call(scrutinee) {
+            return None;
+        }
+        let BasicValueEnum::StructValue(sv) = val else {
+            return None;
+        };
+        let te = self.enum_inst_type_from_span(scrutinee)?;
+        let (ok_payload_elem_ty, err_payload_elem_ty) = self.result_inline_payload_elems(&te)?;
+        let layout = self.enum_layouts.get("Result")?;
+        let result_ty = layout.llvm_type;
+        let ok_tag = layout.tags.get("Ok").copied().unwrap_or(0);
+        let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
+        let fn_val = self.current_fn?;
+        let alloca = self.create_entry_alloca(fn_val, "__freshtemp_inline_res", result_ty.into());
+        let _ = self.builder.build_store(alloca, sv);
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(
+                crate::codegen::state::CleanupAction::FreeInlineResultPayload {
+                    result_slot: alloca,
+                    result_ty,
+                    ok_tag,
+                    err_tag,
+                    ok_payload_elem_ty,
+                    err_payload_elem_ty,
+                },
+            );
+        }
+        Some(alloca)
+    }
+
+    /// Does a fresh-temp inline `Result` arm leave its `Ok(_)`/`Err(_)`-bound
+    /// payload ONLY BORROWED — read but never moved out (`Err(e) =>
+    /// e.rejected.len()`)? Consults the consumption classifier over the arm body
+    /// (and guard). Combined with the struct-wrapper check, a borrow-only
+    /// struct-wrapper arm skips the source-payload suppression so the source
+    /// frees the read-only payload at arm-end (B-2026-07-12-2 gap 2).
+    pub(super) fn arm_only_borrows_inline_result_payload(
+        &self,
+        pattern: &Pattern,
+        body: &Expr,
+        guard: Option<&Expr>,
+    ) -> bool {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return false;
+        };
+        let mut binds: Vec<String> = Vec::new();
+        for pat in patterns {
+            collect_pattern_bindings(pat, &mut binds);
+        }
+        if binds.is_empty() {
+            return false;
+        }
+        binds.iter().all(|v| {
+            super::consume_class::binding_only_borrowed(v, body)
+                && guard.is_none_or(|g| super::consume_class::binding_only_borrowed(v, g))
+        })
+    }
+
+    /// Is the `Ok(_)`/`Err(_)` payload binding of a fresh-temp inline `Result`
+    /// arm a user STRUCT (a transparent heap wrapper like `AlreadySetError[
+    /// String]`) rather than a DIRECT `String`/`Vec`? A struct-wrapper binding
+    /// registers no cleanup of its own, so on a borrow-only read the source must
+    /// keep its payload free armed; a direct `String`/`Vec` binding is
+    /// `track_vec_var`'d and must always suppress the source (else double-free).
+    /// B-2026-07-12-2 gap 2.
+    pub(super) fn inline_result_payload_binding_is_struct_wrapper(
+        &self,
+        pattern: &Pattern,
+    ) -> bool {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return false;
+        };
+        patterns.iter().any(|p| {
+            if matches!(&p.kind, PatternKind::Binding(_)) {
+                let key = (p.span.offset, p.span.length);
+                if let Some(tn) = self.pattern_binding_types.get(&key) {
+                    return self.struct_types.contains_key(tn.as_str());
+                }
+            }
+            false
+        })
+    }
+
+    /// Alloca-keyed sibling of `suppress_inline_result_payload_cleanup` for a
+    /// FRESH-TEMP inline `Result` scrutinee (no identifier to resolve). Zeros
+    /// the materialized scrutinee slot's `cap` (field 3) on a CONSUMING `Ok`/
+    /// `Err` arm so its `FreeInlineResultPayload` skips — the binding / consumer
+    /// now owns the payload buffer (B-2026-07-12-2 gap 2a). A no-bind / `_` arm
+    /// is NOT consuming, so the free stays armed and reclaims the discarded
+    /// payload. The CALLER gates a borrow-only STRUCT-WRAPPER arm out.
+    pub(super) fn suppress_inline_result_payload_cleanup_at(
+        &self,
+        slot: PointerValue<'ctx>,
+        pattern: &Pattern,
+    ) {
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        let variant = path.last().map(|s| s.as_str());
+        if variant != Some("Ok") && variant != Some("Err") {
+            return;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        let Some(layout) = self.enum_layouts.get("Result") else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        if let Ok(cap_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, slot, 3, "respl.suppress.cap.at")
+        {
+            let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
         }
     }
 

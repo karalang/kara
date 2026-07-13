@@ -887,7 +887,56 @@ impl<'ctx> super::Codegen<'ctx> {
                     .or_else(|| Some(self.context.i8_type().into()));
             }
         }
+        // TRANSPARENT single-heap-field wrapper struct (`AlreadySetError[H]`,
+        // `Wrap[H]` — B-2026-07-12-2 gap 2): a struct with EXACTLY ONE field
+        // whose concrete type is an inline-heap `{ptr,len,cap}` value lays out
+        // bit-identically to that inner heap `H` at the payload START, so the
+        // `FreeInlineResultPayload` overlay free at the payload words frees the
+        // wrapper's buffer. Recurse on the mono field type so `AlreadySetError[
+        // String]`/`Wrap[Vec[i64]]` drop their inner buffer when a `Result`/
+        // `Option` carrying them is discarded. Restricted to ONE field so the
+        // heap `{ptr,len,cap}` is guaranteed at payload offset 0.
+        if let Some(inner) = self.transparent_single_heap_field_te(arg) {
+            return self.inline_heap_payload_elem(&inner);
+        }
         None
+    }
+
+    /// The concrete (generic-substituted) type of a wrapper struct's sole field
+    /// when that struct has EXACTLY ONE field — else `None`. Used by
+    /// `inline_heap_payload_elem` to see through a transparent single-field
+    /// heap wrapper (`struct AlreadySetError[T] { rejected: T }` instantiated at
+    /// `String` → `String`). Handles both a generic instantiation (subst the
+    /// declared param → arg) and a plain non-generic single-field struct.
+    fn transparent_single_heap_field_te(&self, arg: &TypeExpr) -> Option<TypeExpr> {
+        let TypeKind::Path(p) = &arg.kind else {
+            return None;
+        };
+        let name = p.segments.last()?.as_str();
+        let field_tes = self.struct_field_type_exprs.get(name)?;
+        if field_tes.len() != 1 {
+            return None;
+        }
+        let field_te = &field_tes[0];
+        // Non-generic single-field struct: the field type is already concrete.
+        let Some(args) = p.generic_args.as_ref() else {
+            return Some(field_te.clone());
+        };
+        // Generic: substitute the declared params with the concrete args.
+        let params = self.struct_generic_params.get(name)?;
+        if params.is_empty() || params.len() != args.len() {
+            return Some(field_te.clone());
+        }
+        let mut subst: std::collections::HashMap<String, TypeExpr> =
+            std::collections::HashMap::new();
+        for (param, a) in params.iter().zip(args.iter()) {
+            if let GenericArg::Type(t) = a {
+                subst.insert(param.clone(), t.clone());
+            }
+        }
+        Some(super::helpers::subst_type_params_in_type_expr(
+            field_te, &subst,
+        ))
     }
 
     /// For a `Result[T, E]` type expr, return `(ok_elem, err_elem)` payload

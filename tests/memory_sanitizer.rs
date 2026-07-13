@@ -369,6 +369,184 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_oncelock_string_set_get_no_leak() {
+        // B-2026-07-12-2 heap-`T` ungate (gap 1, success-path element leak): a
+        // heap-owning `OnceLock[String]` `set(v)` moves `v`'s buffer into the
+        // cell; the scope-exit `FreeOnceHandle` must run the ELEMENT drop on the
+        // sealed value (the `String` char buffer) before `once_free`, else every
+        // iteration leaks the buffer. 40 fresh cells, each a single `set` + a
+        // `get` read-back.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[String] = OnceLock.new();
+        match cell.set("hello".to_string()) { Ok(_) => {}, Err(_) => {}, }
+        match cell.get() { Some(v) => { total = total + v.len(); }, None => {}, }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // 40 * len("hello") = 200
+            &["200"],
+            "oncelock_string_set_get_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_oncelock_string_double_set_discard_no_leak() {
+        // B-2026-07-12-2 heap-`T` ungate (gap 2, rejected-value discard leak): a
+        // second `set` on a filled cell returns `Err(AlreadySetError { rejected:
+        // v2 })` carrying `v2`'s `String` buffer; a `match ... { Err(_) => {} }`
+        // that discards it must free that buffer (the source `set`-result temp is
+        // side-effecting, so it survives DCE and genuinely leaks). 40 cells, each
+        // a winning `set` + a losing discarded `set` + a `get`.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[String] = OnceLock.new();
+        match cell.set("first".to_string()) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set("second".to_string()) { Ok(_) => {}, Err(_) => {}, }
+        match cell.get() { Some(v) => { total = total + v.len(); }, None => {}, }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // first wins → get is "first" (5); 40 * 5 = 200
+            &["200"],
+            "oncelock_string_double_set_discard_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_oncelock_string_reject_recover_no_leak_or_double_free() {
+        // B-2026-07-12-2 heap-`T` ungate (recover path — the double-free guard):
+        // a losing `set`'s `Err(e) => use(e.rejected)` MOVES the rejected `String`
+        // out and consumes it (`println`). The consuming-arm suppressor must zero
+        // the source so the rejected value is freed EXACTLY once — a missed
+        // suppression double-frees, a missed free (when NOT recovered) leaks. 40
+        // iterations recover-and-print.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[String] = OnceLock.new();
+        match cell.set("first".to_string()) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set("second".to_string()) {
+            Ok(_) => {}
+            Err(e) => { n = n + e.rejected.len(); }
+        }
+        i = i + 1i64;
+    }
+    println(n.to_string());
+}
+"#,
+            // 40 * len("second") = 240
+            &["240"],
+            "oncelock_string_reject_recover_no_leak_or_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_oncelock_string_reject_recover_consume_no_double_free() {
+        // B-2026-07-12-2 heap-`T` recover-CONSUME: `Err(e) => { let s =
+        // e.rejected; ... }` MOVES the rejected `String` out into `s`, which
+        // owns + frees it. The materialized source's `FreeInlineResultPayload`
+        // must be SUPPRESSED on this consuming arm (else double-free with `s`);
+        // the borrow-only skip must NOT fire here (a field IS moved out). The
+        // read variant (`e.rejected.len()`) is the sibling test above.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[String] = OnceLock.new();
+        match cell.set("first".to_string()) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set("second".to_string()) {
+            Ok(_) => {}
+            Err(e) => { let s = e.rejected; n = n + s.len(); }
+        }
+        i = i + 1i64;
+    }
+    println(n.to_string());
+}
+"#,
+            // 40 * len("second") = 240
+            &["240"],
+            "oncelock_string_reject_recover_consume_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_oncelock_single_field_struct_no_leak() {
+        // B-2026-07-12-2 heap-`T` ungate — a single-heap-field WRAPPER struct
+        // `T` (`Holder { val: String }`, exactly 3 words, fits): the only
+        // heap-bearing struct shape that clears the `wide` (>3-word) gate, since
+        // a `String`/`Vec` field is itself 3 words so any 2-field struct is >=4.
+        // The cell's element drop (gap 1) + the discarded rejected value (gap 2)
+        // both drive through `emit_struct_drop_synthesis_mono` / the transparent
+        // single-field wrapper `inline_heap_payload_elem`.
+        assert_clean_asan_run(
+            r#"
+struct Holder { val: String }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Holder] = OnceLock.new();
+        match cell.set(Holder { val: "hi".to_string() }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.set(Holder { val: "second".to_string() }) { Ok(_) => {}, Err(_) => {}, }
+        match cell.get() { Some(h) => { total = total + h.val.len(); }, None => {}, }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // first wins → get "hi" (2); 40 * 2 = 80
+            &["80"],
+            "oncelock_single_field_struct_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_oncelock_vec_set_get_no_leak() {
+        // B-2026-07-12-2 heap-`T` ungate — `OnceLock[Vec[i64]]` (Vec is also a
+        // 3-word `{ptr,len,cap}` fitting `T`): the moved-in Vec buffer must be
+        // freed by the cell's element drop.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Vec[i64]] = OnceLock.new();
+        let mut v: Vec[i64] = Vec.new();
+        v.push(1i64);
+        v.push(2i64);
+        match cell.set(v) { Ok(_) => {}, Err(_) => {}, }
+        match cell.get() { Some(g) => { total = total + g.len(); }, None => {}, }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // 40 * 2 = 80
+            &["80"],
+            "oncelock_vec_set_get_no_leak",
+        );
+    }
+
     // NOTE: the field-push residual UAF half (DEFECT 2) is covered by the
     // sibling's stronger `asan_field_read_option_shared_push_no_leak_or_uaf`
     // (200-iteration loop, drains + reads back) — no duplicate here. The two
