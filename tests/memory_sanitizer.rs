@@ -584,6 +584,50 @@ fn main() {
     }
 
     #[test]
+    fn asan_generic_enum_heap_payload_bind_return_no_leak_or_double_free() {
+        // B-2026-07-13-3: a GENERIC enum's bare-`T` variant payload (`enum
+        // Opt[T] { Yes(T) }`) sizes its payload AREA for the erased `T` (1 word)
+        // at declare time, so a heap monomorph (T=String/Vec, 3 words) is stored
+        // BOXED. `match o { Opt.Yes(v) => v, Opt.No => d }` at T=String must
+        // debox `v` (loading the full `{ptr,i64,i64}` from the heap box, freeing
+        // the box) and return it deep-copied; the No arm returns the owned param
+        // `d`. 200 iterations exercise both arms for String and Vec[i64]: a
+        // missed debox / box-free leaks (LSan), a double-counted free aborts
+        // (ASAN). Before the fix this failed codegen outright (`ret i64 0` vs
+        // `{ptr,i64,i64}` module-verification failure), so it never linked.
+        assert_clean_asan_run(
+            r#"
+enum Opt[T] { Yes(T), No }
+fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 200i64 {
+        let a: String = get(Opt.Yes(f"yes{i}"), f"fb");
+        total = total + a.len();
+        let b: String = get(Opt.No, f"no{i}");
+        total = total + b.len();
+        let mut vv: Vec[i64] = Vec.new();
+        vv.push(i);
+        vv.push(i);
+        vv.push(i);
+        let empty: Vec[i64] = Vec.new();
+        let w: Vec[i64] = get(Opt.Yes(vv), empty);
+        total = total + w.len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // String Yes ("yes{i}", len 3+digits): 10*4 + 90*5 + 100*6 = 1090.
+            // String No ("no{i}", len 2+digits):   10*3 + 90*4 + 100*5 = 890.
+            // Vec Yes (len 3 each): 200*3 = 600. Grand total = 1090+890+600 = 2580.
+            &["2580"],
+            "generic_enum_heap_payload_bind_return_no_leak_or_double_free",
+        );
+    }
+
+    #[test]
     fn asan_owned_string_param_if_branch_return_no_leak_or_double_free() {
         // B-2026-07-13-1: an owned String param returned from an `if` branch
         // tail deep-copies (the caller retains the arg buffer). 200 iterations:

@@ -2287,6 +2287,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 .sum(),
             PatternKind::Binding(_) => {
                 let key = (pat.span.offset, pat.span.length);
+                // B-2026-07-13-3: a generic enum's bare-`T` payload binding has
+                // no typechecker-recorded surface type, but the active monomorph
+                // substitution resolved it to a concrete heap type (String/Vec)
+                // stashed in `mono_payload_binding_type_exprs`. Size from THAT so
+                // the reconstruct triggers the debox unpack (`want >
+                // field_words.len()`) and the arm value lowers at its true width
+                // instead of the erased 1-word default. Only consulted when the
+                // typechecker recorded nothing (a concrete recorded type wins).
+                if let Some(te) = self.mono_payload_binding_type_expr_for(&key) {
+                    return Self::llvm_type_word_count(self.llvm_type_for_type_expr(&te)).max(1);
+                }
                 // Tuple-typed bindings (e.g. `Some(node)` where node is
                 // `(i64, i64)`) — sum element widths from the recorded
                 // tuple `TypeExpr` so multi-word payloads reconstitute
@@ -2406,6 +2417,13 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             PatternKind::Binding(_) => {
                 let key = (pat.span.offset, pat.span.length);
+                // B-2026-07-13-3: monomorph-concrete heap payload type for a
+                // generic bare-`T` binding (String/Vec) — the debox `load`
+                // needs the full `{ptr,i64,i64}` shape, not the erased i64, or
+                // it reads only the box pointer word and zero-pads the rest.
+                if let Some(te) = self.mono_payload_binding_type_expr_for(&key) {
+                    return self.llvm_type_for_type_expr(&te);
+                }
                 // Tuple-typed binding: lower the recorded tuple
                 // `TypeExpr` to its LLVM struct type so the
                 // reconstruction builds a value with the right shape

@@ -2660,6 +2660,23 @@ pub(super) struct Codegen<'ctx> {
     /// routes through the right element-typed path. PB sibling slice
     /// (2026-05-09).
     pub(crate) pattern_binding_inner_types: HashMap<(usize, usize), TypeExpr>,
+    /// B-2026-07-13-3: monomorph-resolved concrete payload `TypeExpr` for a
+    /// GENERIC enum's bare-type-param variant payload binding (`enum Opt[T] {
+    /// Yes(T) }`, matched as `Opt.Yes(v)` at `T = String`). The typechecker
+    /// records NOTHING for a `Type::TypeParam` binding (it never sees the
+    /// concrete arg), so `pattern_binding_types` / `pattern_binding_inner_types`
+    /// are both empty at the binding span — codegen would then size the payload
+    /// at the erased 1-word default and load only the box pointer. Populated at
+    /// the match-bind site (`bind_pattern_values`, TupleVariant arm) by
+    /// substituting the enum's declared payload `TypeExpr` through the active
+    /// monomorph substitution (`subst_monomorph_type_params`), and consulted —
+    /// ONLY when the typechecker recorded no concrete surface type — by
+    /// `pattern_payload_word_count` / `pattern_payload_llvm_type` (to trigger and
+    /// size the debox unpack) and the Binding metadata path (to register the
+    /// heap-owning binding's scope-exit free). Keyed by the sub-pattern's
+    /// `(span.offset, span.length)`; refreshed on every monomorph's body compile
+    /// and cleared per function.
+    pub(crate) mono_payload_binding_type_exprs: HashMap<(usize, usize), TypeExpr>,
     /// Per-leaf-binding borrow mode populated from
     /// `Program.pattern_binding_borrow_modes`. Consumed by
     /// `bind_pattern_values` (Binding arm) to wrap a value-typed leaf
@@ -6102,6 +6119,7 @@ impl<'ctx> Codegen<'ctx> {
             enum_inst_var_types: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
+            mono_payload_binding_type_exprs: HashMap::new(),
             pattern_binding_borrow_modes: HashMap::new(),
             consts: HashMap::new(),
             module_bindings: HashMap::new(),

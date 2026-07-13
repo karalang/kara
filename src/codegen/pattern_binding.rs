@@ -17,9 +17,107 @@ use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 
-use super::state::{EnumLayout, VarSlot};
+use super::state::VarSlot;
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// B-2026-07-13-3: populate `mono_payload_binding_type_exprs` for a
+    /// GENERIC enum's bare-type-param variant payload bindings before the
+    /// destructure loop reconstructs them. `enum Opt[T] { Yes(T) }` sizes its
+    /// payload AREA for the ERASED `T` (1 word) at declare time, so a heap
+    /// monomorph (`T = String`, 3 words) is stored BOXED (`coerce_to_payload_words`
+    /// boxes any value wider than its area). The typechecker records no surface
+    /// type for a `Type::TypeParam` binding — it never sees the concrete arg — so
+    /// resolve the enum's declared payload `TypeExpr` through the active monomorph
+    /// substitution here and stash it span-keyed; `pattern_payload_word_count` /
+    /// `pattern_payload_llvm_type` / the Binding metadata path consult it to
+    /// trigger, size, and free the debox unpack. ONLY a bare single-segment
+    /// type-param payload field under an active substitution is recorded — a
+    /// `Vec[T]` payload is already sized 3 words at declare (Vec is always 3
+    /// words, so no boxing), and a concrete/scalar field takes the existing path
+    /// unchanged.
+    pub(super) fn record_mono_generic_enum_payload_types(
+        &mut self,
+        enum_name: &str,
+        variant_name: &str,
+        patterns: &[Pattern],
+    ) {
+        if self.type_subst_names.is_empty() && self.type_subst_type_exprs.is_empty() {
+            return;
+        }
+        let variants = self.enum_variant_field_type_exprs(enum_name);
+        let Some((_, _, field_tys)) = variants.iter().find(|(_, n, _)| n == variant_name) else {
+            return;
+        };
+        let mut to_record: Vec<((usize, usize), TypeExpr)> = Vec::new();
+        for (i, sub_pat) in patterns.iter().enumerate() {
+            if !matches!(sub_pat.kind, PatternKind::Binding(_)) {
+                continue;
+            }
+            let Some(decl_te) = field_tys.get(i) else {
+                continue;
+            };
+            let TypeKind::Path(p) = &decl_te.kind else {
+                continue;
+            };
+            if p.generic_args.as_ref().is_some_and(|a| !a.is_empty()) || p.segments.len() != 1 {
+                continue;
+            }
+            let Some(seg) = p.segments.first() else {
+                continue;
+            };
+            if !(self.type_subst_names.contains_key(seg)
+                || self.type_subst_type_exprs.contains_key(seg))
+            {
+                continue;
+            }
+            let concrete = self.subst_monomorph_type_params(decl_te);
+            to_record.push(((sub_pat.span.offset, sub_pat.span.length), concrete));
+        }
+        for (k, te) in to_record {
+            self.mono_payload_binding_type_exprs.insert(k, te);
+        }
+    }
+
+    /// B-2026-07-13-3: monomorph-concrete payload `TypeExpr` for a generic
+    /// bare-`T` payload binding, but ONLY when the typechecker recorded no
+    /// concrete surface type at this span (a concrete recorded type always
+    /// wins — this is the fallback for the `Type::TypeParam` case the checker
+    /// leaves empty).
+    pub(super) fn mono_payload_binding_type_expr_for(
+        &self,
+        key: &(usize, usize),
+    ) -> Option<TypeExpr> {
+        if self.pattern_binding_types.contains_key(key) {
+            return None;
+        }
+        self.mono_payload_binding_type_exprs.get(key).cloned()
+    }
+
+    /// Sibling of [`Self::mono_payload_binding_type_expr_for`] that decomposes
+    /// the concrete payload type into the head surface name (`"String"` /
+    /// `"Vec"`) and the inner element `TypeExpr` (for an element-bearing
+    /// collection) so the Binding metadata path can register the heap-owning
+    /// binding exactly like a typechecker-recorded surface type would.
+    pub(super) fn mono_payload_binding_surface(
+        &self,
+        key: &(usize, usize),
+    ) -> Option<(String, Option<TypeExpr>)> {
+        let te = self.mono_payload_binding_type_expr_for(key)?;
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let head = p.segments.last()?.clone();
+        let inner = p
+            .generic_args
+            .as_ref()
+            .and_then(|a| a.first())
+            .and_then(|g| match g {
+                GenericArg::Type(t) => Some(t.clone()),
+                _ => None,
+            });
+        Some((head, inner))
+    }
+
     pub(super) fn bind_pattern_values(
         &mut self,
         pattern: &Pattern,
@@ -219,7 +317,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // table; user struct types use it for `.field` access.
                 let key = (pattern.span.offset, pattern.span.length);
                 let mut bound_vec_elem: Option<BasicTypeEnum<'ctx>> = None;
-                if let Some(type_name) = self.pattern_binding_types.get(&key).cloned() {
+                // B-2026-07-13-3: a generic enum's bare-`T` payload binding has
+                // no typechecker-recorded surface type, so fold in the monomorph-
+                // resolved concrete type (String/Vec) here — the SAME metadata
+                // registration a recorded surface type gets (element dispatch +
+                // the scope-exit buffer free). Empty for concrete/non-generic
+                // bindings, so their path is unchanged.
+                let mono_surface = self.mono_payload_binding_surface(&key);
+                let mono_inner_te: Option<TypeExpr> =
+                    mono_surface.as_ref().and_then(|(_, i)| i.clone());
+                if let Some(type_name) = self
+                    .pattern_binding_types
+                    .get(&key)
+                    .cloned()
+                    .or_else(|| mono_surface.as_ref().map(|(n, _)| n.clone()))
+                {
                     // PB sibling slice (2026-05-09): when the binding's
                     // surface type is `Vec[T]` / `Slice[T]`, look up the
                     // inner element TypeExpr in the sibling table and
@@ -233,7 +345,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // String / user-struct surface types don't populate
                     // any elem-type registry — they're sufficient via
                     // the existing String-name table.
-                    if let Some(inner_te) = self.pattern_binding_inner_types.get(&key).cloned() {
+                    if let Some(inner_te) = self
+                        .pattern_binding_inner_types
+                        .get(&key)
+                        .cloned()
+                        .or_else(|| mono_inner_te.clone())
+                    {
                         let elem_llvm = self.llvm_type_for_type_expr(&inner_te);
                         match type_name.as_str() {
                             // `VecDeque[T]` shares `Vec[T]`'s `{ptr, len, cap}`
@@ -611,7 +728,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     BasicValueEnum::StructValue(sv) => Some(sv.get_type()),
                     _ => None,
                 };
-                let offsets: Vec<(usize, usize)> = self
+                // Resolve the enum this variant belongs to (same disambiguation
+                // the offsets used to inline), capturing its NAME so the
+                // B-2026-07-13-3 generic-payload recording below can look up the
+                // enum's declared payload TypeExprs.
+                let matched_enum: Option<String> = self
                     .enum_layouts
                     .iter()
                     .find(|(en, l)| {
@@ -634,7 +755,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             (None, None) => true,
                         }
                     })
-                    .map(|(_, l)| l)
+                    .map(|(en, _)| en.clone())
                     .or_else(|| {
                         // Type-match miss — fall back to variant-name
                         // lookup, but prefer user-declared enums over
@@ -642,21 +763,32 @@ impl<'ctx> super::Codegen<'ctx> {
                         // when the name collides. Without this, HashMap
                         // iteration order picks a seeded layout
                         // non-deterministically.
-                        let mut user_hit: Option<&EnumLayout<'ctx>> = None;
-                        let mut seed_hit: Option<&EnumLayout<'ctx>> = None;
+                        let mut user_hit: Option<String> = None;
+                        let mut seed_hit: Option<String> = None;
                         for (en, l) in &self.enum_layouts {
                             if l.tags.contains_key(variant_name) {
                                 if self.seeded_enum_names.contains(en) {
-                                    seed_hit.get_or_insert(l);
+                                    seed_hit.get_or_insert_with(|| en.clone());
                                 } else {
-                                    user_hit.get_or_insert(l);
+                                    user_hit.get_or_insert_with(|| en.clone());
                                 }
                             }
                         }
                         user_hit.or(seed_hit)
-                    })
+                    });
+                let offsets: Vec<(usize, usize)> = matched_enum
+                    .as_ref()
+                    .and_then(|en| self.enum_layouts.get(en))
                     .and_then(|l| l.field_word_offsets.get(variant_name).cloned())
                     .unwrap_or_else(|| (0..patterns.len()).map(|i| (i, 1)).collect());
+                // B-2026-07-13-3: for a generic enum whose variant payload is a
+                // bare type param (`Opt.Yes(v)` over `enum Opt[T] { Yes(T) }`),
+                // record the monomorph-concrete payload type so the reconstruct
+                // sizes/loads/frees the boxed heap payload at its true width.
+                if let Some(en) = &matched_enum {
+                    let en = en.clone();
+                    self.record_mono_generic_enum_payload_types(&en, variant_name, patterns);
+                }
 
                 // Shared enum: extract payload via GEP (words at heap index 2+).
                 if let BasicValueEnum::PointerValue(ptr) = scrut {

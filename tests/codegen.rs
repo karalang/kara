@@ -31414,6 +31414,70 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_generic_enum_heap_payload_match_return() {
+        // B-2026-07-13-3: a generic enum `enum Opt[T] { Yes(T), No }` matched in
+        // a generic fn whose value is a heap `T` (`match o { Opt.Yes(v) => v,
+        // Opt.No => d }`). The payload AREA is sized for the erased `T` (1 word)
+        // at declare, so a String monomorph is BOXED — the match-bind must debox
+        // `v` at the concrete `{ptr,i64,i64}` width so the arm value agrees with
+        // the `d: String` arm. Before the fix this failed module verification
+        // (`ret i64 0` vs `{ptr,i64,i64}`); the interpreter was the only backend.
+        let out = run_program(
+            "enum Opt[T] { Yes(T), No }\n\
+             fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }\n\
+             fn main() {\n\
+             \x20   let r: String = get(Opt.No, f\"def\");\n\
+             \x20   println(r);\n\
+             \x20   let s: String = get(Opt.Yes(f\"data\"), f\"x\");\n\
+             \x20   println(s);\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "def\ndata");
+        }
+    }
+
+    #[test]
+    fn test_e2e_generic_enum_vec_payload_match_return() {
+        // B-2026-07-13-3, Vec[i64] payload sibling: the deboxed 3-word Vec
+        // reconstructs at `{ptr,i64,i64}` and dispatches `.len()`/index.
+        let out = run_program(
+            "enum Opt[T] { Yes(T), No }\n\
+             fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }\n\
+             fn main() {\n\
+             \x20   let mut v: Vec[i64] = Vec.new(); v.push(7); v.push(8);\n\
+             \x20   let e: Vec[i64] = Vec.new();\n\
+             \x20   let w: Vec[i64] = get(Opt.Yes(v), e);\n\
+             \x20   println(w.len().to_string());\n\
+             \x20   println(w[1].to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2\n8");
+        }
+    }
+
+    #[test]
+    fn test_e2e_generic_enum_scalar_payload_unchanged() {
+        // B-2026-07-13-3 regression guard: a SCALAR `T` (1 word) fits the erased
+        // payload area inline (no boxing), so the mono-payload path must NOT
+        // engage — the arm value stays a bare i64, exactly as before the fix.
+        let out = run_program(
+            "enum Opt[T] { Yes(T), No }\n\
+             fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }\n\
+             fn main() {\n\
+             \x20   let a: i64 = get(Opt.Yes(41i64), 7i64);\n\
+             \x20   println(a.to_string());\n\
+             \x20   let b: i64 = get(Opt.No, 99i64);\n\
+             \x20   println(b.to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "41\n99");
+        }
+    }
+
     // ── B follow-up #3: owned struct-destructure dispatch + cleanup ──
     //
     // `let Point { items, count } = make()` used to register neither method

@@ -1182,6 +1182,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .collect();
         self.inline_option_payload_vars.clear();
         self.boxed_enum_payload_vars.clear();
+        self.mono_payload_binding_type_exprs.clear();
         self.inline_result_payload_vars.clear();
         self.inline_option_map_payload_vars.clear();
         self.inline_option_agg_payload_vars.clear();
