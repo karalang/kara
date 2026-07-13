@@ -352,6 +352,45 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(is_zero, free_bb, join_bb)
             .unwrap();
         self.builder.position_at_end(free_bb);
+        // Slice 2 (B-2026-06-22-2): before freeing the RC box, run the
+        // per-closure env-drop fn (box field 1) to free any captured String/Vec
+        // buffers the env owns. The box layout is `{ i64 rc, ptr env_drop, env }`;
+        // field 1 is a FIXED offset regardless of the variable-size env payload,
+        // so a `{ i64, ptr }` prefix GEP reaches it. A null drop slot (a POD-only
+        // Slice 1 env) skips straight to the box free.
+        let dropslot_prefix = self
+            .context
+            .struct_type(&[i64_t.into(), ptr_ty.into()], false);
+        let drop_pp = self
+            .builder
+            .build_struct_gep(dropslot_prefix, env_box, 1, "clo.dec.dropfn.p")
+            .unwrap();
+        let drop_fn_ptr = self
+            .builder
+            .build_load(ptr_ty, drop_pp, "clo.dec.dropfn")
+            .unwrap()
+            .into_pointer_value();
+        let has_drop = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                drop_fn_ptr,
+                ptr_ty.const_null(),
+                "clo.dec.hasdrop",
+            )
+            .unwrap();
+        let call_drop_bb = self.context.append_basic_block(fn_val, "clo.dec.calldrop");
+        let do_free_bb = self.context.append_basic_block(fn_val, "clo.dec.dofree");
+        self.builder
+            .build_conditional_branch(has_drop, call_drop_bb, do_free_bb)
+            .unwrap();
+        self.builder.position_at_end(call_drop_bb);
+        let env_drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        self.builder
+            .build_indirect_call(env_drop_fn_ty, drop_fn_ptr, &[env_box.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(do_free_bb).unwrap();
+        self.builder.position_at_end(do_free_bb);
         self.builder
             .build_call(self.free_fn, &[env_box.into()], "")
             .unwrap();

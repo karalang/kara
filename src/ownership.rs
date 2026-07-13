@@ -1697,7 +1697,7 @@ impl<'a> OwnershipChecker<'a> {
         // enclosing function. Per design.md § Closures Rule 2 sub-
         // case (iv). Emits E0508 at the closure expression with a
         // three-fix message.
-        self.check_closure_ref_capture_escapes(f);
+        let escaping_own_params = self.check_closure_ref_capture_escapes(f);
 
         // Source-pinning for borrow returns (`-> ref T`): every returned
         // borrow must trace to a `ref` parameter, or it would dangle.
@@ -1708,14 +1708,27 @@ impl<'a> OwnershipChecker<'a> {
         let mut modes: Vec<(String, OwnershipMode)> = Vec::new();
         for param in &f.params {
             for name in param.pattern.binding_names() {
-                let usage = param_usage
-                    .get(&name)
-                    .cloned()
-                    .unwrap_or(ParamUsage::Unused);
-                let mode = match usage {
-                    ParamUsage::Unused | ParamUsage::Read => OwnershipMode::Ref,
-                    ParamUsage::Mutated => OwnershipMode::MutRef,
-                    ParamUsage::Consumed => OwnershipMode::Own,
+                // Slice 2 (B-2026-06-22-2): a param whose read-only heap capture
+                // was PROMOTED to an `Own` move-into-a-returned-closure's-env is
+                // forced `Own` here, OVERRIDING the `param_usage`-driven inference
+                // (which saw only a `Read` and would pick `Ref`). Must run AFTER
+                // the normal inference because `check_closure_ref_capture_escapes`
+                // runs before `param_modes` is built, so an in-place patch there
+                // would be overwritten by this insert. `Own` makes the caller
+                // pass by-move and relinquish, so it does not double-free the
+                // buffer the env now owns.
+                let mode = if escaping_own_params.contains(&name) {
+                    OwnershipMode::Own
+                } else {
+                    let usage = param_usage
+                        .get(&name)
+                        .cloned()
+                        .unwrap_or(ParamUsage::Unused);
+                    match usage {
+                        ParamUsage::Unused | ParamUsage::Read => OwnershipMode::Ref,
+                        ParamUsage::Mutated => OwnershipMode::MutRef,
+                        ParamUsage::Consumed => OwnershipMode::Own,
+                    }
                 };
                 modes.push((name, mode));
             }

@@ -3819,6 +3819,118 @@ fn main() {
         );
     }
 
+    /// Slice 2 (B-2026-06-22-2): an escaping closure that captures a heap
+    /// String/Vec value. The env OWNS the buffer (freed by the per-closure
+    /// env-drop fn at RC-zero). A captured owned PARAM shallow-aliases the
+    /// caller's buffer, so it is DEEP-COPIED into the env (caller keeps its own,
+    /// env owns an independent copy); a captured LOCAL is moved (the source
+    /// binding's cap is zeroed so it does not double-free). All strings exceed
+    /// the SSO inline limit so the heap path is exercised. Asserts no leak (LSan) + no
+    /// double-free / UAF (ASAN) — without the env-drop the buffer leaks; without
+    /// the param deep-copy the caller and env both free it (double-free, which
+    /// glibc detects for Vec and silently corrupts for String).
+    #[test]
+    fn asan_heap_env_string_param_capture_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(p: String) -> Fn(i64) -> i64 { |n| p.len() + n }
+fn main() {
+    let name = String.from("a heap-backed string well beyond the sso inline limit");
+    let f = make(name);
+    println(f"{f(0i64)}");
+}
+"#,
+            &["53"],
+            "asan_heap_env_string_param_capture_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_heap_env_vec_param_capture_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(v: Vec[i64]) -> Fn(i64) -> i64 { |n| v.len() + n }
+fn main() {
+    let mut xs = Vec.new();
+    xs.push(1i64);
+    xs.push(2i64);
+    xs.push(3i64);
+    let f = make(xs);
+    println(f"{f(10i64)}");
+}
+"#,
+            &["13"],
+            "asan_heap_env_vec_param_capture_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_heap_env_local_string_capture_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make() -> Fn(i64) -> i64 {
+    let s = String.from("a heap-backed string well beyond the sso inline limit");
+    |n| s.len() + n
+}
+fn main() { let f = make(); println(f"{f(0i64)}"); }
+"#,
+            &["53"],
+            "asan_heap_env_local_string_capture_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_heap_env_local_vec_capture_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make() -> Fn(i64) -> i64 {
+    let mut v = Vec.new();
+    v.push(5i64);
+    v.push(6i64);
+    |n| v.len() + n
+}
+fn main() { let f = make(); println(f"{f(1i64)}"); }
+"#,
+            &["3"],
+            "asan_heap_env_local_vec_capture_no_leak",
+        );
+    }
+
+    /// The heap-capture env box is RC-shared across a copy (`let g = f`); the
+    /// captured buffer is freed EXACTLY once when the last owner drops.
+    #[test]
+    fn asan_heap_env_string_capture_copied_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn make(p: String) -> Fn(i64) -> i64 { |n| p.len() + n }
+fn main() {
+    let f = make(String.from("a heap-backed string well beyond the sso inline limit"));
+    let g = f;
+    println(f"{f(0i64) + g(0i64)}");
+}
+"#,
+            &["106"],
+            "asan_heap_env_string_capture_copied_no_double_free",
+        );
+    }
+
+    /// A mixed env (POD `base` + heap `String`): the env-drop frees ONLY the
+    /// String field's buffer, leaving the POD word untouched.
+    #[test]
+    fn asan_heap_env_mixed_pod_string_capture_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(p: String, base: i64) -> Fn(i64) -> i64 { |n| p.len() + base + n }
+fn main() {
+    let f = make(String.from("a heap-backed string well beyond the sso inline limit"), 100i64);
+    println(f"{f(5i64)}");
+}
+"#,
+            &["158"],
+            "asan_heap_env_mixed_pod_string_capture_no_leak",
+        );
+    }
+
     /// Return-again move-out (B-2026-06-22-2): a relay RE-RETURNS a bound
     /// heap-env closure (explicit `return f`, bare-identifier tail, relay-of-a-
     /// relay, and copy-then-return). The RC env box MOVES OUT of each relay to

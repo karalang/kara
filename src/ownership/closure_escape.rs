@@ -22,7 +22,7 @@
 //!
 //! Lives in a sibling `impl<'a> super::OwnershipChecker<'a>` block.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
 use crate::resolver::SpanKey;
@@ -46,7 +46,14 @@ impl<'a> super::OwnershipChecker<'a> {
     /// parameter) do not fire — the borrow source already extends to
     /// the caller's scope, so the closure's ref capture cannot outlive
     /// it from the current function's perspective.
-    pub(crate) fn check_closure_ref_capture_escapes(&mut self, f: &Function) {
+    /// Returns the set of captured binding names that were PROMOTED from an
+    /// escaping read-only `Ref` capture to an `Own` move-into-env (Slice 2,
+    /// B-2026-06-22-2). The caller (`check_function`) overrides those params'
+    /// modes to `Own` AFTER the normal `param_usage`-driven inference, so the
+    /// caller relinquishes ownership (passes by-move) and does not double-free
+    /// the buffer the closure env now owns.
+    pub(crate) fn check_closure_ref_capture_escapes(&mut self, f: &Function) -> HashSet<String> {
+        let mut promoted_own_params: HashSet<String> = HashSet::new();
         let body = &f.body;
         let mut closure_let_bindings: HashMap<String, Vec<SpanKey>> = HashMap::new();
         Self::collect_closure_let_bindings(body, &mut closure_let_bindings);
@@ -121,6 +128,62 @@ impl<'a> super::OwnershipChecker<'a> {
                 {
                     continue;
                 }
+                // Slice 2 (B-2026-06-22-2): PROMOTE an escaping read-only (`Ref`)
+                // capture of a `String`/`Vec` to an `Own` move-into-the-closure-env
+                // instead of rejecting it. Sound: the env (living in the returned
+                // closure) outlives the defining frame and becomes the SOLE owner
+                // of the heap buffer — codegen zeroes the source `cap` at the
+                // capture site and frees the buffer via the per-closure env-drop fn
+                // at RC-zero (`src/codegen/closures.rs` heap-capture path). Only a
+                // read-only (`Ref`) capture of the codegen-supported heap set
+                // (String / Vec) qualifies: a `MutRef` (mutating) escape stays
+                // rejected (codegen rejects mut-ref heap capture too), and other
+                // heap shapes (shared / Map / Set / by-value struct) keep firing.
+                // Use-after-capture as a hard MOVE error is a deferred diagnostic-
+                // strictness follow-on; for the direct-tail closure codegen lowers,
+                // a post-capture READ is memory-safe (the env holds a live buffer
+                // for the closure's whole life and any source alias has `cap == 0`,
+                // so it never double-frees). Reclassifies the mode to `Own` in both
+                // capture maps so downstream readers see move (not borrow)
+                // semantics; gated to escaping closures, so a par/task closure's
+                // modes (where task-group codegen treats `Own` as moved) are never
+                // touched.
+                if matches!(mode, OwnershipMode::Ref)
+                    && matches!(
+                        self.binding_types.get(cap_name),
+                        Some(Type::Named { name, .. })
+                            if name.as_str() == "String" || name.as_str() == "Vec"
+                    )
+                {
+                    if let Some(caps) = self.closure_captures.get_mut(&closure_key) {
+                        for (n, m) in caps.iter_mut() {
+                            if n == cap_name {
+                                *m = OwnershipMode::Own;
+                            }
+                        }
+                    }
+                    if let Some(paths) = self.closure_capture_path_modes.get_mut(&closure_key) {
+                        for (path, m) in paths.iter_mut() {
+                            if path.root.as_str() == cap_name.as_str() && path.projection.is_empty()
+                            {
+                                *m = OwnershipMode::Own;
+                            }
+                        }
+                    }
+                    // Record the captured name for a possible param-mode override
+                    // in `check_function`. If it is a PARAMETER, its mode was
+                    // inferred `Ref` (the pre-promotion closure only borrowed it),
+                    // so the CALLER passes a borrow and RETAINS ownership of the
+                    // buffer — but the env now MOVES the value in and becomes its
+                    // owner, so the caller must relinquish. `check_function` forces
+                    // such a param to `Own` (after the normal `param_usage`
+                    // inference) so caller-side move-suppression fires (no
+                    // double-free) and a caller use-after-move (`make(xs);
+                    // xs.len()`) is diagnosed. A captured LOCAL is already owned
+                    // by-value and is harmlessly ignored (not in `f.params`).
+                    promoted_own_params.insert(cap_name.clone());
+                    continue;
+                }
                 let mode_str = match mode {
                     OwnershipMode::Ref => "ref",
                     OwnershipMode::MutRef => "mut ref",
@@ -141,6 +204,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 });
             }
         }
+        promoted_own_params
     }
 
     /// Walk `block` recursively, registering each `let pat = expr;`

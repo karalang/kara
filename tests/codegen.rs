@@ -385,6 +385,89 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("36\n"));
     }
 
+    /// Slice 2 (B-2026-06-22-2): an escaping closure may capture a heap
+    /// `String`/`Vec` value — the ownership pass promotes the read-only capture
+    /// to an `Own` move-into-env and codegen frees the env's buffer via a
+    /// per-closure env-drop fn at RC-zero. A captured owned PARAM is deep-copied
+    /// into the env (caller keeps its buffer); a captured LOCAL is moved. All
+    /// strings exceed the SSO inline limit so the heap path runs. Value-
+    /// correctness here; memory cleanliness in `tests/memory_sanitizer.rs`
+    /// (`asan_heap_env_*_capture_*`).
+    #[test]
+    fn heap_env_string_param_capture_runs() {
+        let out = run_program(
+            "fn make(p: String) -> Fn(i64) -> i64 { |n| p.len() + n }\n\
+             fn main() { let name = String.from(\"a heap-backed string beyond the sso inline limit\"); let f = make(name); println(f\"{f(0i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("48\n"));
+    }
+
+    #[test]
+    fn heap_env_vec_param_capture_runs() {
+        let out = run_program(
+            "fn make(v: Vec[i64]) -> Fn(i64) -> i64 { |n| v.len() + n }\n\
+             fn main() { let mut xs = Vec.new(); xs.push(1i64); xs.push(2i64); xs.push(3i64); let f = make(xs); println(f\"{f(10i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("13\n"));
+    }
+
+    #[test]
+    fn heap_env_local_string_capture_runs() {
+        let out = run_program(
+            "fn make() -> Fn(i64) -> i64 { let s = String.from(\"a heap-backed string beyond the sso inline limit\"); |n| s.len() + n }\n\
+             fn main() { let f = make(); println(f\"{f(0i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("48\n"));
+    }
+
+    #[test]
+    fn heap_env_local_vec_capture_runs() {
+        let out = run_program(
+            "fn make() -> Fn(i64) -> i64 { let mut v = Vec.new(); v.push(5i64); v.push(6i64); |n| v.len() + n }\n\
+             fn main() { let f = make(); println(f\"{f(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("3\n"));
+    }
+
+    #[test]
+    fn heap_env_mixed_pod_string_capture_runs() {
+        let out = run_program(
+            "fn make(p: String, base: i64) -> Fn(i64) -> i64 { |n| p.len() + base + n }\n\
+             fn main() { let f = make(String.from(\"a heap-backed string beyond the sso inline limit\"), 100i64); println(f\"{f(5i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("153\n"));
+    }
+
+    /// Slice 2 gate: a heap capture OUTSIDE the supported set (whole String /
+    /// Vec-of-POD) — a `Vec[String]` (heap element), a `Map`, or a `shared` — is
+    /// an honest `E_ESCAPING_CLOSURE_HEAP_CAPTURE_NOT_YET`, never a UAF / leak.
+    /// A `Vec[String]`'s elements would need per-element deep clone/drop the
+    /// shallow env clone/free can't provide.
+    #[test]
+    fn heap_env_unsupported_heap_capture_is_rejected() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "Vec[String] (heap element)",
+                "fn make(v: Vec[String]) -> Fn(i64) -> i64 { |n| v.len() + n }\n\
+                 fn main() { let mut xs = Vec.new(); xs.push(String.from(\"a heap-backed string beyond the sso inline limit\")); let f = make(xs); println(f\"{f(0i64)}\"); }\n",
+            ),
+            (
+                "Map capture",
+                "fn make(m: Map[i64, i64]) -> Fn(i64) -> i64 { |n| m.len() + n }\n\
+                 fn main() { let mut mm = Map.new(); mm.insert(1i64, 2i64); let f = make(mm); println(f\"{f(0i64)}\"); }\n",
+            ),
+        ];
+        for (label, src) in cases {
+            let err = ir_result(src).expect_err(&format!(
+                "unsupported heap capture must be rejected: {label}"
+            ));
+            assert!(
+                err.contains("E_ESCAPING_CLOSURE_HEAP_CAPTURE_NOT_YET"),
+                "{label}: wrong diagnostic: {err}"
+            );
+        }
+    }
+
     /// Slice 1 misuse guard: every NOT-yet-supported use of a heap-env closure
     /// binding (or an unbound `make(..)`) is an honest error, never a UAF /
     /// double-free / leak. Each would otherwise corrupt or leak the single-owner

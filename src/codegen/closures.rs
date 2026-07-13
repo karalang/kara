@@ -2637,7 +2637,18 @@ impl<'ctx> super::Codegen<'ctx> {
         //     A `mut ref` capture (1a) forces the per-name layout: its env
         //     slot is a POINTER to the outer root (not a value / sub-field),
         //     which the per-path struct-field-precise layout does not model.
-        let path_layout = if mutref_caps.is_empty() {
+        // Slice 2 (B-2026-06-22-2): an escaping (heap-env) closure that captures
+        // a WHOLE String / Vec value takes the per-name env layout so the
+        // move-out cap-suppression + env-drop synthesis below can key off each
+        // captured binding by name. A disjoint sub-field (`path_layout`) capture
+        // of a heap field stays rejected by the heap-capture gate (it needs the
+        // source aggregate's own drop coordinated, which is a later slice).
+        let vec_ty_basic: BasicTypeEnum<'ctx> = self.vec_struct_type().into();
+        let has_heap_capture = is_heap_env
+            && free_vars
+                .iter()
+                .any(|n| self.variables.get(n).is_some_and(|s| s.ty == vec_ty_basic));
+        let path_layout = if mutref_caps.is_empty() && !has_heap_capture {
             self.build_capture_path_layout(closure_span, &free_vars)
         } else {
             None
@@ -2691,25 +2702,60 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`is_heap_env` is computed in 1a — an escaping closure with a
         // `mut ref` capture was already refused there.)
         if is_heap_env {
-            // Slice 1 supports POD captures only. A heap (String / Vec / shared)
-            // capture would need its own drop when the env is freed (Slice 2);
-            // until then, reject rather than leak it.
-            let pod = env_field_types
-                .iter()
-                .all(|t| matches!(t, BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)));
-            if !pod {
+            // Slice 2 (B-2026-06-22-2): POD captures (Slice 1) AND whole
+            // String / Vec captures are supported. A String/Vec capture is
+            // OWNED by the env (the ownership pass promotes the escaping
+            // read-only capture to an `Own` move) — an env-drop fn frees its
+            // buffer when the RC box hits zero, and the source binding's `cap`
+            // is zeroed at the capture site so it does not double-free. Any
+            // OTHER heap shape — a `shared` / Map / Set / raw pointer, or a
+            // by-value struct/tuple (including a disjoint `path_layout` heap
+            // sub-field, which is why a `StructType` field is only accepted on
+            // the per-name path, `path_layout.is_none()`) — still needs its own
+            // drop wiring, so reject it rather than leak / double-free it.
+            let vec_ty = self.vec_struct_type();
+            let allow_heap = path_layout.is_none();
+            // On the per-name path `env_field_types[i]` corresponds to
+            // `free_vars[i]`. A `String`/`Vec` field is accepted only when its
+            // ELEMENT is POD (`String`'s bytes are `i8`; `Vec[i64]`'s are `i64`):
+            // a Vec-of-heap (`Vec[String]` / `Vec[Vec]` / `Vec[shared]`) needs
+            // per-element deep clone + drop that the shallow env clone/free can't
+            // provide (its elements would UAF on read after the source deep-frees,
+            // or leak), so it stays rejected for now.
+            let supported = env_field_types.iter().enumerate().all(|(i, t)| match t {
+                BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_) => true,
+                BasicTypeEnum::StructType(st) if allow_heap && *st == vec_ty => free_vars
+                    .get(i)
+                    .and_then(|n| self.vec_elem_types.get(n).copied())
+                    .is_some_and(|et| {
+                        matches!(et, BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_))
+                    }),
+                _ => false,
+            });
+            if !supported {
                 return Err(
                     "error[E_ESCAPING_CLOSURE_HEAP_CAPTURE_NOT_YET]: returning a closure \
-                     that captures a heap value (String / Vec / shared) is not yet supported — \
-                     only POD (integer / float / bool) captures can be returned today \
+                     that captures a non-POD, non-String/Vec value (shared / Map / Set / raw \
+                     pointer / by-value struct or tuple) is not yet supported — POD (integer / \
+                     float / bool) and whole String / Vec captures can be returned today \
                      (heap-closure-environment epic B-2026-06-22-2, Slice 2). Workaround: pass \
                      the closure down by a `Fn(..)` parameter instead of returning it."
                         .to_string(),
                 );
             }
         }
+        // Box layout `{ i64 refcount, ptr env_drop, <env_struct> }`. The env
+        // payload is field 2; field 1 holds the per-closure env-drop fn (Slice 2,
+        // B-2026-06-22-2) — a FIXED offset (8) so the generic
+        // `emit_heap_closure_env_dec` can load + call it via a `{ i64, ptr }`
+        // prefix GEP without knowing the variable-size env struct. `null` when
+        // the env owns no heap (POD-only Slice 1 closures).
         let env_box_ty = self.context.struct_type(
-            &[self.context.i64_type().into(), env_struct_ty.into()],
+            &[
+                self.context.i64_type().into(),
+                self.context.ptr_type(AddressSpace::default()).into(),
+                env_struct_ty.into(),
+            ],
             false,
         );
 
@@ -2843,7 +2889,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if is_heap_env {
             env_ptr = self
                 .builder
-                .build_struct_gep(env_box_ty, env_ptr, 1, "__env_payload")
+                .build_struct_gep(env_box_ty, env_ptr, 2, "__env_payload")
                 .unwrap();
         }
         // Load the env struct value through the env pointer.
@@ -3093,9 +3139,23 @@ impl<'ctx> super::Codegen<'ctx> {
         let outer_fn = self.current_fn.unwrap();
         let (env_alloca, fat_env_ptr) = if is_heap_env {
             let box_ptr = self.emit_rc_alloc(env_box_ty);
+            // Slice 2: store the per-closure env-drop fn (frees captured
+            // String/Vec buffers before the box is freed) at box field 1, or a
+            // null pointer when the env is POD-only (Slice 1).
+            let drop_ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let drop_val: BasicValueEnum<'ctx> =
+                match self.synthesize_closure_env_drop_fn(id, env_box_ty, env_struct_ty) {
+                    Some(f) => f.as_global_value().as_pointer_value().into(),
+                    None => drop_ptr_ty.const_null().into(),
+                };
+            let drop_slot = self
+                .builder
+                .build_struct_gep(env_box_ty, box_ptr, 1, "__env_drop_slot")
+                .unwrap();
+            self.builder.build_store(drop_slot, drop_val).unwrap();
             let payload = self
                 .builder
-                .build_struct_gep(env_box_ty, box_ptr, 1, "__env_box_payload")
+                .build_struct_gep(env_box_ty, box_ptr, 2, "__env_box_payload")
                 .unwrap();
             (payload, box_ptr)
         } else {
@@ -3141,18 +3201,64 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut env_agg = env_struct_ty.get_undef();
             for (i, var_name) in free_vars.iter().enumerate() {
                 let slot = self.variables[var_name];
-                let val: BasicValueEnum<'ctx> = if mutref_caps.contains(var_name) {
+                let mut val: BasicValueEnum<'ctx> = if mutref_caps.contains(var_name) {
                     slot.ptr.into()
                 } else {
                     self.builder
                         .build_load(slot.ty, slot.ptr, var_name)
                         .unwrap()
                 };
+                // Slice 2 (B-2026-06-22-2): a captured owned Vec/String PARAMETER
+                // is a by-value {ptr,len,cap} that SHALLOW-ALIASES the caller's
+                // buffer (the caller passes by value and RETAINS its own drop, per
+                // the `owned_vecstr_params` convention — codegen does not force a
+                // caller-side move). Moving it into the env would then double-free:
+                // the caller frees its buffer AND the env-drop frees the same one.
+                // DEEP-COPY it into the env instead — the env owns an INDEPENDENT
+                // buffer, the caller keeps its own. A captured LOCAL is genuinely
+                // this-frame-owned (absent from `owned_vecstr_params`), so it keeps
+                // the cheap MOVE (alias + the cap-zero below). Shallow outer-buffer
+                // copy — matches the env-drop's outer-only free; the heap-capture
+                // gate keeps nested `Vec[heap]` elements out, so no element aliasing.
+                if is_heap_env
+                    && self.owned_vecstr_params.contains(var_name)
+                    && matches!(slot.ty, BasicTypeEnum::StructType(held) if held == self.vec_struct_type())
+                {
+                    if let Some(elem_ty) = self.vec_elem_types.get(var_name).copied() {
+                        val = self.emit_vecstr_defensive_copy(val, elem_ty, None);
+                    }
+                }
                 env_agg = self
                     .builder
                     .build_insert_value(env_agg, val, i as u32, "__env_field")
                     .unwrap()
                     .into_struct_value();
+                // Slice 2 move-out (B-2026-06-22-2): the heap env now OWNS this
+                // captured String/Vec buffer (freed by the env-drop fn at
+                // RC-zero). Zero the SOURCE binding's `cap` so its own scope-exit
+                // `FreeVecBuffer` `cap > 0` guard skips — the env is the sole
+                // owner, no double-free. Only for a heap-env (escaping) closure:
+                // a stack-env closure aliases a still-live source that keeps
+                // ownership and must NOT be suppressed. The `slot.ty == vec_ty`
+                // check is the correct guard: it holds precisely for a Vec/String
+                // value held INLINE (24-byte `{ptr,len,cap}`) — a `ref` slot is
+                // an 8-byte pointer, excluded (and a by-ref capture never reaches
+                // here anyway, its env field being a pointer the gate rejects).
+                // Gating on `vec_elem_types` instead would MISS a Vec *param*
+                // (absent from that map) and double-free.
+                if is_heap_env {
+                    let vec_ty = self.vec_struct_type();
+                    if matches!(slot.ty, BasicTypeEnum::StructType(held) if held == vec_ty) {
+                        if let Ok(cap_ptr) =
+                            self.builder
+                                .build_struct_gep(vec_ty, slot.ptr, 2, "clo.cap.move")
+                        {
+                            let _ = self
+                                .builder
+                                .build_store(cap_ptr, self.context.i64_type().const_int(0, false));
+                        }
+                    }
+                }
             }
             self.builder.build_store(env_alloca, env_agg).unwrap();
         }
@@ -3176,6 +3282,55 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pending_closure_fn_type = Some(fn_type);
 
         Ok(fat.into())
+    }
+
+    /// Slice 2 (B-2026-06-22-2): synthesize the per-closure env-drop fn that
+    /// frees a heap-env closure's captured String/Vec buffers before the RC box
+    /// is reclaimed. Emitted as `__karac_closure_env_drop_<id>(ptr box)`: it
+    /// GEPs to the env payload (box field 2 — the box is
+    /// `{ i64 rc, ptr drop, env }`) and runs `emit_aggregate_heap_field_frees`
+    /// over the env struct, so each captured String/Vec field's buffer is
+    /// `cap`-guarded-freed (a moved-in capture carries a live `cap`; a POD-only
+    /// env owns no heap → `None`, and the box then stores a null drop slot).
+    /// Called from the free path of `emit_heap_closure_env_dec`. Not memoized —
+    /// a closure literal compiles once, so each heap-capturing closure gets its
+    /// own drop fn keyed by the unique closure `id`.
+    pub(super) fn synthesize_closure_env_drop_fn(
+        &mut self,
+        id: u32,
+        env_box_ty: StructType<'ctx>,
+        env_struct_ty: StructType<'ctx>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if !self.aggregate_has_heap_field(env_struct_ty) {
+            return None;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let fn_name = format!("__karac_closure_env_drop_{}", id);
+        let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self.module.add_function(
+            &fn_name,
+            drop_fn_ty,
+            Some(inkwell::module::Linkage::Internal),
+        );
+        // `emit_aggregate_heap_field_frees` appends BBs to `current_fn` — point
+        // it at the drop fn during synthesis, then restore the outer context.
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let box_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let payload = self
+            .builder
+            .build_struct_gep(env_box_ty, box_ptr, 2, "env.payload")
+            .unwrap();
+        self.emit_aggregate_heap_field_frees(payload, env_struct_ty);
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(drop_fn)
     }
 
     /// Execute an indirect call through a closure fat-pointer variable.
