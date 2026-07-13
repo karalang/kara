@@ -745,12 +745,41 @@ impl Checker {
                 // 17): each KNOWN non-BOOL operand is InvalidBinaryOp (kind 9) at
                 // that operand's span — left first, then right, so `n or m`
                 // reports both in order. An UNKNOWN operand is skipped.
-                if bi.logical {
+                if bi.opk == 1 {
                     if li.category != 4 and li.category != 1 {
                         self.push_err(9, li.span.offset, li.span.length);
                     }
                     if ri.category != 4 and ri.category != 1 {
                         self.push_err(9, ri.span.offset, ri.span.length);
+                    }
+                }
+                // Arithmetic `+ - * / %` operand validity (Slice 18), mirroring
+                // the seed's asymmetry: a BOOL/CHAR LEFT operand is InvalidBinaryOp
+                // (kind 9) at the left span ("arithmetic requires numeric type");
+                // otherwise a NUM left with a BOOL/CHAR right is a "cannot mix"
+                // TypeMismatch (kind 0) at the RIGHT span. STRING operands are
+                // skipped (the `+`-concat exception makes them ambiguous in the
+                // coarse scheme), as are struct/enum (distinct-numeric types) and
+                // UNKNOWN — all under-reported, never falsely flagged. NUM+NUM is
+                // skipped too (int-vs-float mixing is invisible to a single NUM
+                // category).
+                if bi.opk == 2 {
+                    if li.category == 1 or li.category == 2 {
+                        self.push_err(9, li.span.offset, li.span.length);
+                    } else {
+                        if li.category == 0 {
+                            if ri.category == 1 or ri.category == 2 {
+                                self.push_err(0, ri.span.offset, ri.span.length);
+                            }
+                        }
+                    }
+                }
+                // Bitwise `& | ^ << >>` require integer operands; a BOOL/CHAR LEFT
+                // is InvalidBinaryOp at the left span. (NUM left is skipped — the
+                // coarse NUM cannot tell an integer from a float.)
+                if bi.opk == 3 {
+                    if li.category == 1 or li.category == 2 {
+                        self.push_err(9, li.span.offset, li.span.length);
                     }
                 }
                 ExprInfo { category: bi.rc, span: span }
@@ -1318,7 +1347,10 @@ fn cats_compatible(a: i64, b: i64) -> bool {
 struct BinInfo {
     rc: i64,
     bad: bool,
-    logical: bool,
+    // Operator class for the operand-validity checks: 0 = comparison / range /
+    // other, 1 = logical (`and`/`or`), 2 = arithmetic (`+ - * / %`), 3 = bitwise
+    // (`& | ^ << >>`). See the `Binary` arm.
+    opk: i64,
 }
 
 fn bin_info(op: BinOp, l: i64, r: i64) -> BinInfo {
@@ -1329,25 +1361,25 @@ fn bin_info(op: BinOp, l: i64, r: i64) -> BinInfo {
         LtEq => cmp_bin_info(l, r),
         Gt => cmp_bin_info(l, r),
         GtEq => cmp_bin_info(l, r),
-        And => BinInfo { rc: 1, bad: false, logical: true },
-        Or => BinInfo { rc: 1, bad: false, logical: true },
-        Add => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
-        Sub => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
-        Mul => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
-        Div => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
-        Mod => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
-        BitAnd => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
-        BitOr => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
-        BitXor => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
-        Shl => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
-        Shr => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
-        Range => BinInfo { rc: 4, bad: false, logical: false },
-        RangeInclusive => BinInfo { rc: 4, bad: false, logical: false },
+        And => BinInfo { rc: 1, bad: false, opk: 1 },
+        Or => BinInfo { rc: 1, bad: false, opk: 1 },
+        Add => BinInfo { rc: add_result(l, r), bad: false, opk: 2 },
+        Sub => BinInfo { rc: num_result(l, r), bad: false, opk: 2 },
+        Mul => BinInfo { rc: num_result(l, r), bad: false, opk: 2 },
+        Div => BinInfo { rc: num_result(l, r), bad: false, opk: 2 },
+        Mod => BinInfo { rc: num_result(l, r), bad: false, opk: 2 },
+        BitAnd => BinInfo { rc: num_result(l, r), bad: false, opk: 3 },
+        BitOr => BinInfo { rc: num_result(l, r), bad: false, opk: 3 },
+        BitXor => BinInfo { rc: num_result(l, r), bad: false, opk: 3 },
+        Shl => BinInfo { rc: num_result(l, r), bad: false, opk: 3 },
+        Shr => BinInfo { rc: num_result(l, r), bad: false, opk: 3 },
+        Range => BinInfo { rc: 4, bad: false, opk: 0 },
+        RangeInclusive => BinInfo { rc: 4, bad: false, opk: 0 },
     }
 }
 
 // A comparison result: always BOOL; `bad` iff both operands are known primitives
-// (0-3) of DIFFERENT categories. Never logical.
+// (0-3) of DIFFERENT categories. Op class 0.
 fn cmp_bin_info(l: i64, r: i64) -> BinInfo {
     let mut bad = false;
     if l <= 3 and r <= 3 {
@@ -1355,14 +1387,28 @@ fn cmp_bin_info(l: i64, r: i64) -> BinInfo {
             bad = true;
         }
     }
-    BinInfo { rc: 1, bad: bad, logical: false }
+    BinInfo { rc: 1, bad: bad, opk: 0 }
 }
 
-// The shared operand category when both are the SAME known primitive, else
-// UNKNOWN.
-fn same_or_unknown(l: i64, r: i64) -> i64 {
-    if l == r and l <= 3 {
-        return l;
+// The result category of `+`: NUM + NUM → NUM, and — polymorphically — STR + STR
+// → STR (concat); anything else is UNKNOWN (an invalid-operand `+` has an Error
+// result in the seed, so it must not flow a spurious category downstream).
+fn add_result(l: i64, r: i64) -> i64 {
+    if l == 0 and r == 0 {
+        return 0;
+    }
+    if l == 3 and r == 3 {
+        return 3;
+    }
+    4
+}
+
+// The result category of `- * / %` and the bitwise operators: NUM only when both
+// operands are NUM, else UNKNOWN (char/bool/string arithmetic is invalid, so it
+// yields no category — matching the seed's Error result).
+fn num_result(l: i64, r: i64) -> i64 {
+    if l == 0 and r == 0 {
+        return 0;
     }
     4
 }

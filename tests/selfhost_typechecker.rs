@@ -311,6 +311,21 @@ const CORPUS: &[&str] = &[
     "fn f(a: bool, b: bool) -> bool { a and b }",
     // A comparison result is bool, so it is a valid logical operand.
     "fn f(n: i64, m: i64) -> bool { n < m and m < n }",
+    // ── Slice 18: arithmetic / bitwise operand validity ──
+    // A BOOL/CHAR LEFT operand of `+ - * / %` (or `& | ^ << >>`) is
+    // InvalidBinaryOp at the left span; a NUM left with a BOOL/CHAR right is a
+    // TypeMismatch at the right span. NUM+NUM and String operands are skipped.
+    "fn f(b: bool, n: i64) -> i64 { b + n }",
+    "fn f(c: char, n: i64) -> i64 { c + n }",
+    "fn f(n: i64, b: bool) -> i64 { n + b }",
+    "fn f(n: i64, c: char) -> i64 { n + c }",
+    "fn f(b: bool, n: i64) -> i64 { b - n }",
+    "fn f(n: i64, c: char) -> i64 { n * c }",
+    "fn f(c: char, d: char) -> i64 { c - d }",
+    "fn f(b: bool, c: char) -> i64 { b & c }",
+    // Valid arithmetic (NUM+NUM) and String concat are clean.
+    "fn f(n: i64, m: i64) -> i64 { n + m }",
+    "fn f(s: String, t: String) -> String { s + t }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
