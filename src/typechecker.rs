@@ -3288,9 +3288,57 @@ impl<'a> TypeChecker<'a> {
             return None;
         }
         if self.types_compatible_with_projections(a, b) {
-            Some(a.clone())
+            // B-2026-07-12-28: MERGE the two compatible branch types instead of
+            // blindly taking `a`. When one branch pins a slot to a concrete type
+            // and the other left it an abstract `TypeParam` / unsolved `TypeVar`
+            // (`if c { Ok(x) } else { Err(Wrap{..}) }` — the `Ok` side leaves the
+            // `Err` slot `TypeParam("E")`, the `Err` side fills it `Wrap[String]`),
+            // returning `a` verbatim froze the join as `Result[i64, TypeParam("E")]`
+            // and codegen then truncated a heap generic-struct payload bound from
+            // that match to the all-`i64` base width (LLVM `ret i64` vs the mono
+            // aggregate). Preferring the concrete side yields `Result[i64,
+            // Wrap[String]]`, so the downstream match-arm recovery (B-2026-07-12-27)
+            // has the concrete instantiation it needs. Only runs on already-
+            // compatible types, so it can only sharpen — never widen — the result.
+            Some(Self::merge_branch_types(a, b))
         } else {
             None
+        }
+    }
+
+    /// Position-by-position merge of two *already-compatible* branch types
+    /// (see `join_branch_types`), preferring a concrete type over an abstract
+    /// `TypeParam` / unsolved `TypeVar` / `Error` at each leaf and recursing
+    /// through same-head `Named` / `Tuple` / `Ref` / `Slice` shapes. Falls back
+    /// to the first operand for any position where neither side is more
+    /// concrete, so a genuine same-shape join is unchanged.
+    fn merge_branch_types(a: &Type, b: &Type) -> Type {
+        match (a, b) {
+            (Type::TypeParam(_) | Type::TypeVar(_) | Type::Error, other) => other.clone(),
+            (other, Type::TypeParam(_) | Type::TypeVar(_) | Type::Error) => other.clone(),
+            (Type::Named { name: na, args: aa }, Type::Named { name: nb, args: ab })
+                if na == nb && aa.len() == ab.len() =>
+            {
+                Type::Named {
+                    name: na.clone(),
+                    args: aa
+                        .iter()
+                        .zip(ab.iter())
+                        .map(|(x, y)| Self::merge_branch_types(x, y))
+                        .collect(),
+                }
+            }
+            (Type::Tuple(ea), Type::Tuple(eb)) if ea.len() == eb.len() => Type::Tuple(
+                ea.iter()
+                    .zip(eb.iter())
+                    .map(|(x, y)| Self::merge_branch_types(x, y))
+                    .collect(),
+            ),
+            (Type::Ref(ia), Type::Ref(ib)) => Type::Ref(Box::new(Self::merge_branch_types(ia, ib))),
+            (Type::MutRef(ia), Type::MutRef(ib)) => {
+                Type::MutRef(Box::new(Self::merge_branch_types(ia, ib)))
+            }
+            _ => a.clone(),
         }
     }
 

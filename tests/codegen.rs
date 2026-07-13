@@ -15132,6 +15132,48 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_struct_payload_recovery_from_if_scrutinee() {
+        // B-2026-07-12-28: the sibling of B-2026-07-12-27, triggered by an
+        // INLINE `if`/`match` scrutinee (vs a function whose return annotation
+        // pins the type). `match (if c { Ok(x) } else { Err(Wrap{..}) }) { ... }`
+        // joined its branches as `Result[i64, TypeParam("E")]` — the `Ok` side
+        // left the `Err` slot the abstract enum param and the branch join took
+        // the first branch verbatim, freezing it — so the payload binding lost
+        // its concrete `Wrap[String]` and codegen truncated the 3-word String to
+        // the all-`i64` base (LLVM `ret i64` vs the mono aggregate, a module-
+        // verification error). Fixed by MERGING compatible branch types
+        // (`join_branch_types`) so the concrete side wins each slot. Pins the
+        // whole-binding RETURN (`Err(e) => e`), the field read (`e.val`), and a
+        // bind-first move; interp == JIT == AOT.
+        let out = run_program(
+            r#"
+struct Wrap[T] { val: T }
+fn ret_binding(x: i64) -> Wrap[String] {
+    match (if x > 0i64 { Ok(x) } else { Err(Wrap { val: "kept".to_string() }) }) {
+        Ok(_) => { Wrap { val: "ok".to_string() } }
+        Err(e) => { e }
+    }
+}
+fn read_field(x: i64) -> i64 {
+    match (if x > 0i64 { Ok(x) } else { Err(Wrap { val: "hello".to_string() }) }) {
+        Ok(n) => { n }
+        Err(e) => { e.val.len() }
+    }
+}
+fn main() {
+    println(ret_binding(-1i64).val);
+    println(read_field(-1i64).to_string());
+}
+"#,
+        );
+        if let Some(out) = out {
+            // ret_binding returns the recovered Wrap.val = "kept";
+            // read_field returns "hello".len() = 5.
+            assert_eq!(out.trim(), "kept\n5");
+        }
+    }
+
+    #[test]
     fn test_e2e_result_inline_payload_drop_paths() {
         // B-2026-06-10-6 Result follow-on: inline-heap `Result` payloads
         // (`Ok(String)` / `Err(String)`) dropped undestructured must free
