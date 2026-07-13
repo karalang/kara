@@ -17768,6 +17768,77 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_shared_struct_map_shared_value_field_no_leak() {
+        // B-2026-07-13-12. A `shared struct Owner { cache: Map[i64, Node] }`
+        // (Node shared) dropped the Map's bucket storage via the type-erased
+        // `karac_map_free_with_drop_vec` but NEVER dec'd the shared VALUES — the
+        // shared-struct RC-drop's MapOrSet arm lacked the per-bucket
+        // `emit_map_shared_half_rc_dec_walk` that the non-shared struct-drop peer
+        // already runs. One ref leaked per live entry (LSan: 16-byte Node boxes).
+        // 50 iters × 2 entries: the walk now dec's each shared value before the
+        // bucket free.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { mut val: i64 }
+shared struct Owner { mut cache: Map[i64, Node] }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        let o = Owner { cache: Map.new() };
+        o.cache.insert(1, Node { val: 7 });
+        o.cache.insert(2, Node { val: 8 });
+        total = total + 1;
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            &["50"],
+            "shared_struct_map_shared_value_field_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_shared_enum_vec_shared_payload_drop_no_leak() {
+        // B-2026-07-13-13 (the shared-enum sibling of B-2026-07-13-11). A
+        // `shared enum Tree { Branch(Vec[Node]) }` (Node shared) dropped with its
+        // payload INTACT (RC → 0 while the Branch still holds the Vec) froze the
+        // `{ptr,len,cap}` buffer but never dec'd the shared ELEMENTS —
+        // `emit_shared_enum_field_drop`'s Vec/String arm had no element-drain
+        // loop. One ref leaked per element (LSan: 16-byte Node boxes). This
+        // churns the DIRECT-DROP path (construct, never match out the payload,
+        // drop at scope exit) — the path this fix targets; the arm now drains
+        // each element (the shared element's `emit_vec_elem_rc_dec_fn`) before
+        // the buffer free. (The separate match-move shape `Branch(xs) => …`,
+        // where the payload Vec is bound out, is tracked by B-2026-07-13-14.)
+        assert_clean_asan_run(
+            r#"
+shared struct Node { mut val: i64 }
+shared enum Tree { Leaf, Branch(Vec[Node]) }
+fn build(n: i64) -> Tree {
+    let mut v: Vec[Node] = Vec.new();
+    v.push(Node { val: n });
+    v.push(Node { val: n + 1 });
+    Tree.Branch(v)
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        let t = build(i);
+        total = total + 1;
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            &["50"],
+            "shared_enum_vec_shared_payload_drop_no_leak",
+        );
+    }
+
     /// Column heap lifecycle (phase-11 data-science stdlib, Arrow codegen
     /// core slice): each `Column[T]` is a control block + a separate data
     /// buffer + a separate validity bitmap, all freed once at scope exit

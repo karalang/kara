@@ -2836,10 +2836,41 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_load(ptr_ty, field_ptr, &format!("rcdrop.map{field_idx}.handle"))
                         .unwrap()
                         .into_pointer_value();
-                    let (dk, dv) = self
+                    let field_te = self
                         .struct_field_type_exprs
                         .get(struct_name)
                         .and_then(|v| v.get(field_idx))
+                        .cloned();
+                    // B-2026-07-13-11 sibling (B-2026-07-13-12): a shared K or V
+                    // needs a per-bucket rc-dec BEFORE the runtime free releases
+                    // the bucket storage — the type-erased
+                    // `karac_map_free_with_drop_vec` can't see the shared layout
+                    // (its `map_drop_flags` are 0 for a shared side, so it never
+                    // touches the RC handles), so a `shared struct Owner { cache:
+                    // Map[i64, Node] }` (Node shared) dropped the bucket storage
+                    // without ever dec'ing the shared VALUES — one ref leaked per
+                    // live entry. This is exactly what the NON-shared struct-drop
+                    // peer already does (`emit_struct_drop_synthesis`'s MapOrSet
+                    // arm); the shared arm simply lacked the walk. `current_fn` is
+                    // `drop_fn` here, so the walk's blocks attach to this body.
+                    if let Some(field_te) = &field_te {
+                        if let Some((k_te, v_te)) = super::helpers::map_kv_type_exprs(field_te) {
+                            if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&v_te) {
+                                self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, true);
+                            }
+                            if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&k_te) {
+                                self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, false);
+                            }
+                        } else if let Some(elem_te) = super::helpers::set_inner_type_expr(field_te)
+                        {
+                            // `Set[T]` lowers to `Map[T, ()]`; the element is the key half.
+                            if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&elem_te) {
+                                self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, false);
+                            }
+                        }
+                    }
+                    let (dk, dv) = field_te
+                        .as_ref()
                         .map(|fte| self.map_drop_flags(fte))
                         .unwrap_or((0, 0));
                     self.builder
@@ -3157,6 +3188,26 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         match head {
             Some("Vec") | Some("VecDeque") | Some("String") => {
+                // B-2026-07-13-13 (the shared-enum sibling of B-2026-07-13-11):
+                // a `Vec[shared T]` PAYLOAD (`shared enum Tree { Branch(Vec[Node])
+                // }`) must DRAIN each live element's RC box before freeing the
+                // buffer — this arm previously froze only the `{ptr,len,cap}`
+                // buffer, leaking every element's box. Resolve the per-element
+                // drop FIRST (may synthesize a fn / move the builder, which it
+                // save/restores) — `vec_elem_agg_drop_for_type_expr` returns the
+                // shared element's `emit_vec_elem_rc_dec_fn`; `None` for a bare
+                // `String` payload or a `Vec[primitive]` (buffer-free alone).
+                let vec_elem_drop =
+                    crate::codegen::helpers::vec_inner_type_expr(te).and_then(|elem_te| {
+                        let f = self.vec_elem_agg_drop_for_type_expr(&elem_te).or_else(|| {
+                            if Self::elem_te_needs_direct_recursive_drain(&elem_te) {
+                                Some(self.emit_drop_fn_for_type_expr(&elem_te))
+                            } else {
+                                None
+                            }
+                        });
+                        f.map(|f| (f, elem_te))
+                    });
                 let field_ptr = self
                     .builder
                     .build_struct_gep(enum_heap, p_arg, word_idx as u32, &format!("{label}.vec.p"))
@@ -3198,6 +3249,69 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(ptr_ty, data_pp, &format!("{label}.data"))
                     .unwrap()
                     .into_pointer_value();
+                // Drain each live element BEFORE the buffer free (loop `0..len`,
+                // per-element drop on `data + i`). Skipped when `vec_elem_drop`
+                // is `None` (String / Vec[primitive]).
+                if let Some((elem_drop, elem_te)) = &vec_elem_drop {
+                    let elem_ty = self.llvm_type_for_type_expr(elem_te);
+                    let len_ptr = self
+                        .builder
+                        .build_struct_gep(vec_ty, field_ptr, 1, &format!("{label}.len.p"))
+                        .unwrap();
+                    let len = self
+                        .builder
+                        .build_load(i64_t, len_ptr, &format!("{label}.len"))
+                        .unwrap()
+                        .into_int_value();
+                    let cond_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("{label}.elem.cond"));
+                    let body_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("{label}.elem.body"));
+                    let incr_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("{label}.elem.incr"));
+                    let after_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("{label}.elem.after"));
+                    let counter = self.create_entry_alloca(drop_fn, "enumvec.elem.i", i64_t.into());
+                    self.builder
+                        .build_store(counter, i64_t.const_zero())
+                        .unwrap();
+                    self.builder.build_unconditional_branch(cond_bb).unwrap();
+                    self.builder.position_at_end(cond_bb);
+                    let cur = self
+                        .builder
+                        .build_load(i64_t, counter, "enumvec.elem.i.cur")
+                        .unwrap()
+                        .into_int_value();
+                    let lt = self
+                        .builder
+                        .build_int_compare(IntPredicate::ULT, cur, len, "enumvec.elem.i.lt")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(lt, body_bb, after_bb)
+                        .unwrap();
+                    self.builder.position_at_end(body_bb);
+                    let elem_ptr = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, data, &[cur], "enumvec.elem.p")
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_call(*elem_drop, &[elem_ptr.into()], "")
+                        .unwrap();
+                    self.builder.build_unconditional_branch(incr_bb).unwrap();
+                    self.builder.position_at_end(incr_bb);
+                    let next = self
+                        .builder
+                        .build_int_add(cur, i64_t.const_int(1, false), "enumvec.elem.i.next")
+                        .unwrap();
+                    self.builder.build_store(counter, next).unwrap();
+                    self.builder.build_unconditional_branch(cond_bb).unwrap();
+                    self.builder.position_at_end(after_bb);
+                }
                 self.builder
                     .build_call(self.free_fn, &[data.into()], "")
                     .unwrap();
