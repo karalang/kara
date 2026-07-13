@@ -7191,6 +7191,38 @@ fn main() {
         }
     }
 
+    /// `iN/uN::abs_diff(other) -> uN` lowered to `select(a≥b, a-b, b-a)` on the
+    /// receiver's iN then zero-extended. Must match the interpreter oracle
+    /// (`test_abs_diff_unsigned_result`), including i8 MIN/MAX → 255 and the
+    /// near-full-i64-range diff that exceeds i64::MAX and MUST print unsigned.
+    #[test]
+    fn e2e_abs_diff_unsigned_result() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: i32 = 5;\n\
+                 let b: i32 = 3;\n\
+                 println(a.abs_diff(b));\n\
+                 println(b.abs_diff(a));\n\
+                 let n: i32 = -5;\n\
+                 println(n.abs_diff(b));\n\
+                 let u: u32 = 3;\n\
+                 let v: u32 = 10;\n\
+                 println(u.abs_diff(v));\n\
+                 let x: u8 = 200;\n\
+                 let y: u8 = 10;\n\
+                 println(x.abs_diff(y));\n\
+                 let big: i64 = -9223372036854775807;\n\
+                 let top: i64 = 9223372036854775807;\n\
+                 println(big.abs_diff(top));\n\
+                 let s1: i8 = -128;\n\
+                 let s2: i8 = 127;\n\
+                 println(s1.abs_diff(s2));\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n2\n8\n7\n190\n18446744073709551614\n255\n");
+        }
+    }
+
     /// B-2026-06-19-13 codegen follow-on: `char.to_digit(radix) -> Option[u32]`
     /// now LOWERS under `karac build` (was an honest "not yet supported"
     /// diagnostic). Covers a decimal digit, lowercase + uppercase hex-ish digits

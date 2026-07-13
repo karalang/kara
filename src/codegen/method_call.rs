@@ -2668,6 +2668,45 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(r.into());
         }
 
+        // `abs_diff(self, other) -> unsigned sibling` (typed in
+        // expr_method_call.rs). |a - b| at the receiver's iN, which never
+        // overflows: pick the larger by the receiver's signedness, subtract (the
+        // iN wrapping difference is the exact unsigned magnitude since hi ≥ lo),
+        // then zero-extend to the i64-backed unsigned result — matching the
+        // interpreter. No intrinsic, no runtime extern.
+        if method == "abs_diff" && args.len() == 1 {
+            let (bits, unsigned) = self.receiver_int_kind(object, call_span, method);
+            let int_ty = self.int_type_for_bits(bits);
+            let a_raw = self.compile_expr(object)?.into_int_value();
+            let a = self.coerce_int_to(a_raw, int_ty, unsigned);
+            let b_raw = self.compile_expr(&args[0].value)?.into_int_value();
+            let b = self.coerce_int_to(b_raw, int_ty, unsigned);
+            let ge_pred = if unsigned {
+                IntPredicate::UGE
+            } else {
+                IntPredicate::SGE
+            };
+            let a_ge_b = self
+                .builder
+                .build_int_compare(ge_pred, a, b, "absd.ge")
+                .unwrap();
+            let hi = self
+                .builder
+                .build_select(a_ge_b, a, b, "absd.hi")
+                .unwrap()
+                .into_int_value();
+            let lo = self
+                .builder
+                .build_select(a_ge_b, b, a, "absd.lo")
+                .unwrap()
+                .into_int_value();
+            let diff = self.builder.build_int_sub(hi, lo, "absd").unwrap();
+            let i64_t = self.context.i64_type();
+            // The magnitude is non-negative in iN bits → always zero-extend.
+            let res = self.coerce_int_to(diff, i64_t, true);
+            return Ok(res.into());
+        }
+
         // Overflow-aware integer arithmetic — `{checked,saturating,overflowing}_{add,sub,mul}`
         // (C2, B-2026-06-19-10). Lowered at the receiver's DECLARED width via the
         // `llvm.{s,u}{op}.with.overflow.iN` intrinsic (codegen widens narrow ints

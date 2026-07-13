@@ -1962,6 +1962,46 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `abs_diff(self, other) -> unsigned sibling` (typed in
+        // expr_method_call.rs): |self - other| at the receiver width, always
+        // non-negative, never traps. Computed in i128 (so a signed MIN/MAX diff
+        // does not overflow) then masked to the width recovered from
+        // `args_close_span` and returned zero-extended in the i64 model — a
+        // 64-bit unsigned result rides its bit pattern and prints unsigned.
+        if method == "abs_diff" && args.len() == 1 {
+            if let Value::Int(a) = &obj {
+                let a = *a;
+                let other = self.eval_expr_inner(&args[0].value);
+                if self.pending_cf.is_some() {
+                    return other;
+                }
+                if let Value::Int(b) = other {
+                    let w = self.int_width_at(args_close_span);
+                    let (bits, signed) = match w {
+                        IntW::S(x) => (x, true),
+                        IntW::U(x) => (x, false),
+                    };
+                    let av: i128 = if signed {
+                        a as i128
+                    } else {
+                        (a as u64) as i128
+                    };
+                    let bv: i128 = if signed {
+                        b as i128
+                    } else {
+                        (b as u64) as i128
+                    };
+                    let diff: u128 = (av - bv).unsigned_abs();
+                    let masked: u64 = if bits >= 64 {
+                        diff as u64
+                    } else {
+                        (diff as u64) & ((1u64 << bits) - 1)
+                    };
+                    return Value::Int(masked as i64);
+                }
+            }
+        }
+
         // Bit-permutation intrinsics `reverse_bits` / `swap_bytes` -> Self
         // (typed in expr_method_call.rs). Permute within the receiver width
         // recovered from `args_close_span`, then re-sign-extend so the i64-model

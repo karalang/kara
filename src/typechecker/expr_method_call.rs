@@ -4313,6 +4313,53 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(args_close_span, &receiver_for_lookup);
             return Type::Bool;
         }
+        // `abs_diff(self, other) -> unsigned sibling` (Rust `iN/uN::abs_diff`):
+        // the absolute difference of two same-type integers ALWAYS fits the
+        // unsigned type of the same width (`i8::MIN.abs_diff(i8::MAX) == 255u8`),
+        // so it never overflows and never traps. The result type differs from
+        // the receiver (signed → unsigned sibling; unsigned → itself), so the
+        // receiver type is stashed at `args_close_span` for the interpreter's
+        // width recovery. Effect-free; codegen lowers to `select(a≥b, a-b, b-a)`
+        // (signed/unsigned compare per receiver signedness) then zero-extends the
+        // iN magnitude to the i64-backed representation.
+        if method == "abs_diff" && matches!(&receiver_for_lookup, Type::Int(_) | Type::UInt(_)) {
+            if args.len() != 1 {
+                self.type_error(
+                    format!("abs_diff expects 1 argument, got {}", args.len()),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Type::Error;
+            }
+            let arg = &args[0].value;
+            let arg_ty = self.infer_expr(arg);
+            // A suffix-free integer literal arg promotes to the receiver type;
+            // otherwise it must match exactly (mirrors `checked_*`).
+            if matches!(&arg.kind, ExprKind::Integer(_, None)) {
+                self.record_expr_type(&arg.span, &receiver_for_lookup);
+            } else if arg_ty != Type::Error && arg_ty != receiver_for_lookup {
+                self.type_error(
+                    format!(
+                        "abs_diff expects an argument of type `{}`, got `{}`",
+                        type_display(&receiver_for_lookup),
+                        type_display(&arg_ty)
+                    ),
+                    arg.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+            self.record_expr_type(args_close_span, &receiver_for_lookup);
+            return match &receiver_for_lookup {
+                Type::Int(IntSize::I8) => Type::UInt(UIntSize::U8),
+                Type::Int(IntSize::I16) => Type::UInt(UIntSize::U16),
+                Type::Int(IntSize::I32) => Type::UInt(UIntSize::U32),
+                Type::Int(IntSize::I64) => Type::UInt(UIntSize::U64),
+                Type::Int(IntSize::I128) => Type::UInt(UIntSize::U128),
+                // Already unsigned — `abs_diff` returns the same unsigned type.
+                other => other.clone(),
+            };
+        }
         // Bit-permutation intrinsics on integer scalars — `reverse_bits` /
         // `swap_bytes` -> Self (Rust's `iN::{reverse_bits,swap_bytes}`). Both
         // are width-dependent (they permute within the receiver's `bits`), so

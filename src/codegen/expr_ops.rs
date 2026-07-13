@@ -2395,6 +2395,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return true;
                 }
+                // `abs_diff` ALWAYS returns the unsigned sibling of the receiver
+                // (`iN::abs_diff -> uN`), regardless of receiver signedness — so
+                // a 64-bit-wide result with the high bit set prints unsigned
+                // (`i64::MIN.abs_diff(i64::MAX)` is u64::MAX, not -1). Unlike the
+                // Self-returning methods below, this is unconditionally unsigned.
+                if method == "abs_diff" {
+                    return true;
+                }
                 // Builtin integer scalar methods that return `Self` carry the
                 // receiver's signedness, so a `u64`-receiver result with the
                 // high bit set must print unsigned (`1u64.reverse_bits()` is
