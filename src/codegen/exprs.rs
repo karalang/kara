@@ -2132,6 +2132,40 @@ impl<'ctx> super::Codegen<'ctx> {
                             ),
                             None => val,
                         };
+                        // Generic `shared`/`par` struct with an erased
+                        // type-parameter field monomorphized to a HEAP/wide
+                        // type. The shared heap layout is built ONCE at
+                        // declaration (`declare` runs before any
+                        // instantiation), so a bare `T` field erases to a
+                        // single `i64` word — but here the compiled value is a
+                        // multi-word aggregate (`String`/`Vec`/struct = 3
+                        // words). Storing it would write past the 1-word slot
+                        // and clobber the RC box (silent wrong output +
+                        // `free(): invalid next size` under the allocator —
+                        // B-2026-07-13-9). The native/JIT backend does not
+                        // monomorphize the shared heap layout (nor its RC-drop
+                        // field classifier) at v1 — see
+                        // `llvm_type_for_type_expr`'s "Shared/par structs are
+                        // non-generic at v1" note. Reject LOUDLY rather than
+                        // corrupt; the tree-walk interpreter handles this shape
+                        // correctly, so `KARAC_RUN_JIT=0` is the escape hatch.
+                        if let Some(slot_ty) = gep_ty.get_field_type_at_index(idx as u32 + base) {
+                            let slot_words = Self::llvm_type_word_count(slot_ty);
+                            let val_words = Self::llvm_type_word_count(val.get_type());
+                            if val_words > slot_words {
+                                return Err(format!(
+                                    "codegen: `shared`/`par` struct `{name}` field `{}` is a \
+                                     generic type parameter instantiated at a heap type \
+                                     ({val_words}-word value into a {slot_words}-word erased \
+                                     slot). The native/JIT backend does not support generic \
+                                     `shared`/`par` structs with heap-typed fields at v1 \
+                                     (B-2026-07-13-9); use a non-generic `shared` struct, an \
+                                     owned generic struct, or run under the interpreter \
+                                     (KARAC_RUN_JIT=0).",
+                                    field_init.name
+                                ));
+                            }
+                        }
                         self.builder.build_store(field_ptr, val).unwrap();
                     }
                     // Capture-inc for a non-fresh `Option[shared T]` field

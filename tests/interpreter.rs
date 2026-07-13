@@ -217,6 +217,28 @@ fn test_method_on_enum_unit_variant_literal() {
 }
 
 #[test]
+fn test_generic_shared_struct_heap_field_aliases() {
+    // B-2026-07-13-9 oracle pin. A generic `shared struct Box[T] { v: T }`
+    // instantiated at a HEAP type (`Box[String]`) is reference-semantics
+    // (RC): `let b = a` aliases the same object, so writing `b.v` is visible
+    // through `a.v`. The tree-walk interpreter is the oracle for this shape —
+    // it computes the correct "bye" answer — while the native/JIT backend
+    // refuses to compile it (the shared heap layout erases the `v: T` field to
+    // one word and does not monomorphize per instantiation at v1). This test
+    // locks the interpreter's correctness so the backend refusal never
+    // masquerades as the language semantics.
+    let src = "shared struct Box[T] { mut v: T }
+        fn main() {
+            let a = Box { v: \"hi\" };
+            let b = a;
+            b.v = \"bye\";
+            println(a.v);
+            println(b.v);
+        }";
+    assert_eq!(run_no_errors(src), "bye\nbye\n");
+}
+
+#[test]
 fn test_user_impl_display_dispatches_through_to_string() {
     // A user `impl Display { fn to_string(ref self) -> String }` must win over
     // the built-in renderer across all three Display positions — `.to_string()`,

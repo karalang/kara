@@ -8730,6 +8730,55 @@ fn main() {
     }
 
     #[test]
+    fn test_generic_shared_struct_heap_field_rejected_in_codegen() {
+        // B-2026-07-13-9 — a generic `shared struct Box[T] { v: T }`
+        // instantiated at a HEAP type (`Box[String]`) erases its `v: T` field
+        // to a single word (the shared heap layout is built once, at
+        // declaration, before any instantiation), so the 3-word `String`
+        // aggregate overflowed the slot: silent wrong output on native and a
+        // `free(): invalid next size` abort under the allocator on JIT. The
+        // native/JIT backend does not monomorphize the shared heap layout (nor
+        // its RC-drop field classifier) at v1, so the store site now refuses
+        // LOUDLY rather than corrupt. (Scalar `Box[i64]` still compiles — see
+        // test_e2e_generic_shared_struct_scalar_field_ok; the interpreter
+        // handles the heap case correctly — see the interpreter oracle pin
+        // test_generic_shared_struct_heap_field_aliases in tests/interpreter.rs.)
+        let err = ir_result(
+            "shared struct Box[T] { mut v: T }\n\
+             fn main() {\n\
+                 let a = Box { v: \"hi\" };\n\
+                 let b = a;\n\
+                 b.v = \"bye\";\n\
+                 println(a.v);\n\
+             }",
+        )
+        .expect_err("expected a codegen refusal for a heap-typed generic shared-struct field");
+        assert!(
+            err.contains("shared") && err.contains("generic") && err.contains("B-2026-07-13-9"),
+            "expected a loud generic-shared-heap-field refusal, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_generic_shared_struct_scalar_field_ok() {
+        // B-2026-07-13-9 sibling — the rejection is scoped to a value WIDER than
+        // the erased 1-word slot. A scalar instantiation (`Box[i64]`) fits the
+        // slot exactly, so reference-semantics aliasing through the RC handle
+        // still compiles and runs: `b = a; b.v = 9; a.v` reads 9.
+        if let Some(out) = run_program(
+            "shared struct Box[T] { mut v: T }\n\
+             fn main() {\n\
+                 let a = Box { v: 5i64 };\n\
+                 let b = a;\n\
+                 b.v = 9i64;\n\
+                 println(f\"{a.v}\");\n\
+             }",
+        ) {
+            assert_eq!(out.trim(), "9");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_over_iter_chain() {
         // B-2026-07-11-18 — `for x in <src>.iter().{map|filter}+ { .. }`. Before
         // the fix a map/filter adaptor iterable had no `compile_for` arm and fell
