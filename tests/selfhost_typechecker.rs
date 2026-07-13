@@ -301,6 +301,16 @@ const CORPUS: &[&str] = &[
     "fn f(p: Point) -> i64 { p() }\nstruct Point { x: i64 }",
     // A binding introduced by `let` is also flagged.
     "fn f() -> i64 { let x = 1; x() }",
+    // ── Slice 17: logical-operator operands (InvalidBinaryOp) ──
+    // `and`/`or` require BOTH operands to be bool; each KNOWN non-bool operand is
+    // InvalidBinaryOp at that operand's span (left reported before right). A
+    // bool-bool `and` is clean.
+    "fn f(n: i64, b: bool) -> bool { n and b }",
+    "fn f(n: i64, b: bool) -> bool { b and n }",
+    "fn f(n: i64, m: i64) -> bool { n or m }",
+    "fn f(a: bool, b: bool) -> bool { a and b }",
+    // A comparison result is bool, so it is a valid logical operand.
+    "fn f(n: i64, m: i64) -> bool { n < m and m < n }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",

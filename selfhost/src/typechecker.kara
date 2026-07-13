@@ -741,6 +741,18 @@ impl Checker {
                 if bi.bad {
                     self.push_err(9, span.offset, span.length);
                 }
+                // Logical `and`/`or` require BOTH operands to be `bool` (Slice
+                // 17): each KNOWN non-BOOL operand is InvalidBinaryOp (kind 9) at
+                // that operand's span — left first, then right, so `n or m`
+                // reports both in order. An UNKNOWN operand is skipped.
+                if bi.logical {
+                    if li.category != 4 and li.category != 1 {
+                        self.push_err(9, li.span.offset, li.span.length);
+                    }
+                    if ri.category != 4 and ri.category != 1 {
+                        self.push_err(9, ri.span.offset, ri.span.length);
+                    }
+                }
                 ExprInfo { category: bi.rc, span: span }
             }
             Unary(n) => {
@@ -1306,6 +1318,7 @@ fn cats_compatible(a: i64, b: i64) -> bool {
 struct BinInfo {
     rc: i64,
     bad: bool,
+    logical: bool,
 }
 
 fn bin_info(op: BinOp, l: i64, r: i64) -> BinInfo {
@@ -1316,25 +1329,25 @@ fn bin_info(op: BinOp, l: i64, r: i64) -> BinInfo {
         LtEq => cmp_bin_info(l, r),
         Gt => cmp_bin_info(l, r),
         GtEq => cmp_bin_info(l, r),
-        And => BinInfo { rc: 1, bad: false },
-        Or => BinInfo { rc: 1, bad: false },
-        Add => BinInfo { rc: same_or_unknown(l, r), bad: false },
-        Sub => BinInfo { rc: same_or_unknown(l, r), bad: false },
-        Mul => BinInfo { rc: same_or_unknown(l, r), bad: false },
-        Div => BinInfo { rc: same_or_unknown(l, r), bad: false },
-        Mod => BinInfo { rc: same_or_unknown(l, r), bad: false },
-        BitAnd => BinInfo { rc: same_or_unknown(l, r), bad: false },
-        BitOr => BinInfo { rc: same_or_unknown(l, r), bad: false },
-        BitXor => BinInfo { rc: same_or_unknown(l, r), bad: false },
-        Shl => BinInfo { rc: same_or_unknown(l, r), bad: false },
-        Shr => BinInfo { rc: same_or_unknown(l, r), bad: false },
-        Range => BinInfo { rc: 4, bad: false },
-        RangeInclusive => BinInfo { rc: 4, bad: false },
+        And => BinInfo { rc: 1, bad: false, logical: true },
+        Or => BinInfo { rc: 1, bad: false, logical: true },
+        Add => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
+        Sub => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
+        Mul => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
+        Div => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
+        Mod => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
+        BitAnd => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
+        BitOr => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
+        BitXor => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
+        Shl => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
+        Shr => BinInfo { rc: same_or_unknown(l, r), bad: false, logical: false },
+        Range => BinInfo { rc: 4, bad: false, logical: false },
+        RangeInclusive => BinInfo { rc: 4, bad: false, logical: false },
     }
 }
 
 // A comparison result: always BOOL; `bad` iff both operands are known primitives
-// (0-3) of DIFFERENT categories.
+// (0-3) of DIFFERENT categories. Never logical.
 fn cmp_bin_info(l: i64, r: i64) -> BinInfo {
     let mut bad = false;
     if l <= 3 and r <= 3 {
@@ -1342,7 +1355,7 @@ fn cmp_bin_info(l: i64, r: i64) -> BinInfo {
             bad = true;
         }
     }
-    BinInfo { rc: 1, bad: bad }
+    BinInfo { rc: 1, bad: bad, logical: false }
 }
 
 // The shared operand category when both are the SAME known primitive, else
