@@ -3279,10 +3279,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // observers will both see the inner pointers. A follow-up
             // slice should emit per-element clone for non-trivially-
             // copyable element types via the synth_clone machinery.
-            "extend_from_slice" => {
+            "extend_from_slice" | "extend" => {
                 if args.len() != 1 {
                     return Err(format!(
-                        "extend_from_slice expects 1 argument (source), got {}",
+                        "{method} expects 1 argument (source), got {}",
                         args.len()
                     ));
                 }
@@ -4668,6 +4668,45 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
 
                 Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            // `Vec[T].clear()` — empty the Vec. Drop every element and free the
+            // buffer via the SAME per-element drop fn scope-cleanup uses
+            // (`emit_vec_drop_fn`), so heap-owning elements (`Vec[String]`,
+            // `Vec[Vec[T]]`) can't leak, then reset the header to `{null, 0, 0}`
+            // — an empty Vec identical to `Vec.new()`. A later `push` reallocs
+            // from scratch, and the reset header makes the scope-end drop a
+            // no-op (len 0 loop, cap 0 skips the free), so there's no
+            // double-free. `capacity()` is not an observable method, so
+            // resetting the capacity (rather than retaining it, as Rust's
+            // `Vec::clear` does) is invisible to Kāra programs.
+            "clear" => {
+                if !args.is_empty() {
+                    return Err(format!("Vec.clear expects 0 arguments, got {}", args.len()));
+                }
+                if let Some(elem_te) = self.var_elem_type_exprs.get(var_name).cloned() {
+                    let drop_fn = self.emit_vec_drop_fn(&elem_te);
+                    self.builder
+                        .build_call(drop_fn, &[data_ptr.into()], "")
+                        .unwrap();
+                }
+                let data_pp = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "clear.data.p")
+                    .unwrap();
+                self.builder
+                    .build_store(data_pp, ptr_ty.const_null())
+                    .unwrap();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "clear.len.p")
+                    .unwrap();
+                self.builder.build_store(len_p, i64_t.const_zero()).unwrap();
+                let cap_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "clear.cap.p")
+                    .unwrap();
+                self.builder.build_store(cap_p, i64_t.const_zero()).unwrap();
+                Ok(i64_t.const_zero().into())
             }
             "sort_by_key" => {
                 if args.len() != 1 {

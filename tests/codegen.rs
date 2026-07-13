@@ -21760,6 +21760,46 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_clear_and_extend() {
+        // `Vec[T].clear()` empties the Vec (drop-all-elements + reset header)
+        // and it stays usable; `extend(other)` appends clones. Matches the
+        // interpreter oracle (`test_vec_clear_and_extend`); the heap-element
+        // leak-freedom is gated in `tests/memory_sanitizer.rs`.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v.clear();
+    println(v.len());
+    v.push(9);
+    let mut w: Vec[i64] = Vec.new();
+    w.push(7);
+    w.push(8);
+    v.extend(w);
+    println(v.len());
+    println(v[0]);
+    println(v[1]);
+    println(v[2]);
+
+    let mut s: Vec[String] = Vec.new();
+    s.push("alpha");
+    s.push("beta");
+    s.clear();
+    println(s.len());
+    s.push("gamma");
+    println(s[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "0\n3\n9\n7\n8\n0\ngamma\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_narrow_int_payload_narrows_to_surface_width() {
         // Regression: `Vec[u8].pop()` returns `Option[u8]`, whose payload
         // word is i64 in the variant word stream. The `Some(top)` binding

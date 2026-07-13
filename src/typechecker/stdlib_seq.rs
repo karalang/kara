@@ -1285,6 +1285,13 @@ impl<'a> super::TypeChecker<'a> {
                 self.expect_no_args(&format!("Vec.{}", method), args, span);
                 Type::Unit
             }
+            "clear" => {
+                // Empty the Vec (drop every element, length → 0). No-arg
+                // in-place mutator; codegen reuses the element-drop fn so the
+                // heap-owning elements can't leak (`vec_method.rs`).
+                self.expect_no_args("Vec.clear", args, span);
+                Type::Unit
+            }
             "sorted" => {
                 self.expect_no_args("Vec.sorted", args, span);
                 vec_elem

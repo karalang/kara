@@ -3144,7 +3144,7 @@ impl<'a> super::TypeChecker<'a> {
         // that an unsolved typevar on the receiver (e.g. `let mut v =
         // Vec.new(); v.extend_from_slice(other);`) gets pinned to the
         // source's element type, mirroring `push`'s behavior.
-        if method == "extend_from_slice" && args.len() == 1 {
+        if matches!(method, "extend_from_slice" | "extend") && args.len() == 1 {
             let element_ty = match &obj_ty {
                 Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
                     Some(args[0].clone())

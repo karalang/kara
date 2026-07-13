@@ -1129,6 +1129,43 @@ fn test_vec_pop_returns_some_then_none_on_drain() {
 }
 
 #[test]
+fn test_vec_clear_and_extend() {
+    // `Vec[T].clear()` empties the Vec (len → 0) and it stays usable
+    // (push/extend rebuild it); `extend(other)` appends clones of `other`'s
+    // elements. Exercised on a pod (`i64`) and a heap (`String`) element type
+    // — the heap case is leak-checked in
+    // `tests/memory_sanitizer.rs::asan_vec_clear_extend_heap_no_leak_no_double_free`.
+    let out = run(r#"
+        fn main() {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(1);
+            v.push(2);
+            v.push(3);
+            v.clear();
+            println(v.len());
+            v.push(9);
+            let mut w: Vec[i64] = Vec.new();
+            w.push(7);
+            w.push(8);
+            v.extend(w);
+            println(v.len());
+            println(v[0]);
+            println(v[1]);
+            println(v[2]);
+
+            let mut s: Vec[String] = Vec.new();
+            s.push("alpha");
+            s.push("beta");
+            s.clear();
+            println(s.len());
+            s.push("gamma");
+            println(s[0]);
+        }
+    "#);
+    assert_eq!(out, "0\n3\n9\n7\n8\n0\ngamma\n");
+}
+
+#[test]
 fn test_vec_pop_string_elements() {
     // Non-Copy element type flows through the same dispatch — pins the
     // generic shape against future regressions where the arm might

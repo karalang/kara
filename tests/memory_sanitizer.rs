@@ -5858,6 +5858,48 @@ fn main() {
         );
     }
 
+    // ── `Vec[String].clear()` + `.extend(...)` — heap-element drop ownership ──
+    //
+    // `clear()` must DROP every element before resetting the length — for a
+    // `Vec[String]` those are heap buffers, so a "just set len=0" implementation
+    // would leak them (LSan). `extend(other)` appends CLONES of `other`'s
+    // elements, so both vectors own their strings and each buffer is freed
+    // exactly once (a stray alias would double-free under ASAN; a missed clone
+    // would leak the source at scope exit). Looped 1000× with 40-byte payloads
+    // so LSan catches a per-iter leak past any short-String fast path; the
+    // reuse-after-clear (push + extend rebuild the buffer) exercises the
+    // reset-to-`{null,0,0}` header path.
+    #[test]
+    fn asan_vec_clear_extend_heap_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let mut v: Vec[String] = Vec.new();
+        v.push("payload-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        v.push("payload-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        v.push("payload-cccccccccccccccccccccccccccccccc");
+        v.clear();
+        v.push("payload-dddddddddddddddddddddddddddddddd");
+        let mut w: Vec[String] = Vec.new();
+        w.push("payload-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        w.push("payload-ffffffffffffffffffffffffffffffff");
+        v.extend(w);
+        total = total + v[0].len() + v[1].len() + v[2].len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            // Each payload is 40 bytes; after clear+push+extend `v` is [d, e, f]
+            // → 120/iter, ×1000 = 120000.
+            &["120000"],
+            "vec_clear_extend_heap",
+        );
+    }
+
     // ── `String.split` on a NON-identifier receiver — temp drop ownership ──
     //
     // `make_csv().split(',')` — a String method on a CALL-RESULT receiver. The

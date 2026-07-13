@@ -449,7 +449,7 @@ impl<'a> super::Interpreter<'a> {
             // nested-collection sources (Vec[Vec[T]]) don't alias the
             // source's inner storage into the destination — analog of
             // `Vec.filled`'s nested-independent-storage fix.
-            "extend_from_slice" => {
+            "extend_from_slice" | "extend" => {
                 if let Value::Array(rc) = &obj {
                     let src_val = if let Some(arg) = args.first() {
                         self.eval_expr_inner(&arg.value)
@@ -1152,6 +1152,18 @@ impl<'a> super::Interpreter<'a> {
                         _ => "<value>".to_string(),
                     };
                     try_write_or_panic(rc, &label).reverse();
+                    return Some(Value::Unit);
+                }
+            }
+            // `Vec[T].clear()` — drop every element, length → 0 (codegen reuses
+            // the element-drop fn + resets the header, `vec_method.rs`).
+            "clear" => {
+                if let Value::Array(ref rc) = obj {
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    try_write_or_panic(rc, &label).clear();
                     return Some(Value::Unit);
                 }
             }
