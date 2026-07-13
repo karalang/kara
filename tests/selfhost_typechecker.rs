@@ -336,6 +336,15 @@ const CORPUS: &[&str] = &[
     "fn f(c: bool) { let x = if c { 1 } else { 2 }; }",
     "fn f(a: bool, b: bool) { let x = if a { true } else { b }; }",
     "fn f(c: bool) -> i64 { if c { 1 } else { 2 } }",
+    // ── Slice 20: match-arm type consistency (BranchTypeMismatch) ──
+    // When two arm bodies infer to KNOWN but DIFFERENT categories, a single
+    // BranchTypeMismatch (rendered "type-mismatch") fires at the match span,
+    // AFTER any NonExhaustiveMatch. Homogeneous arms are clean; an UNKNOWN arm is
+    // skipped.
+    "enum E { A, B }\nfn f(e: E) { let x = match e { A => 1, B => true }; }",
+    "enum E { A, B }\nfn f(e: E) { let x = match e { A => 1, B => 2 }; }",
+    "fn f(n: i64) { let x = match n { 1 => true, _ => 1 }; }",
+    "enum E { A, B, C }\nfn f(e: E) { let x = match e { A => 1, B => true }; }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",

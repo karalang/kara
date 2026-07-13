@@ -976,6 +976,13 @@ impl Checker {
                 let mut covered: Vec[String] = Vec.new();
                 let mut catchall = false;
                 let mut skip = false;
+                // Arm-type consistency (Slice 20), folded INCREMENTALLY (no second
+                // Vec — keeps the arm's frame small): `branch_result` is the first
+                // KNOWN arm-body category; a later known arm of a DIFFERENT
+                // category sets `branch_bad`. UNKNOWN arms (never-type / call /
+                // unresolved) are skipped, mirroring the seed's Never/Error skip.
+                let mut branch_result = 4;
+                let mut branch_bad = false;
                 for arm in arms {
                     let MatchArm { pattern, guard, body, span: asp } = arm;
                     let has_guard = match guard {
@@ -1020,6 +1027,15 @@ impl Checker {
                         }
                     }
                     let bi = self.check_expr(body);
+                    if bi.category != 4 {
+                        if branch_result == 4 {
+                            branch_result = bi.category;
+                        } else {
+                            if bi.category != branch_result {
+                                branch_bad = true;
+                            }
+                        }
+                    }
                 }
                 // Exhaustiveness fires only for a known ENUM scrutinee with no
                 // catch-all and no out-of-subset arm; a missing variant (one whose
@@ -1053,6 +1069,14 @@ impl Checker {
                     if not all {
                         self.push_err(5, span.offset, span.length);
                     }
+                }
+                // Arm-type mismatch (Slice 20): a single BranchTypeMismatch
+                // (rendered "type-mismatch", kind 0) at the match span, emitted
+                // AFTER exhaustiveness to match the seed's order. The match result
+                // stays UNKNOWN (like the `if` case, to avoid expected-context
+                // divergence).
+                if branch_bad {
+                    self.push_err(0, span.offset, span.length);
                 }
                 ExprInfo { category: 4, span: span }
             }
