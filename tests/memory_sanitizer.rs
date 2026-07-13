@@ -792,6 +792,48 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_nested_scope_heap_shadow_no_leak_or_double_free() {
+        // B-2026-07-13-6 cleanup-safety guard: the lexical-scope revert
+        // (`restore_var_env`) reverts NAME maps only; heap drops stay keyed by
+        // alloca in the cleanup frame, so a heap-typed shadow's inner + outer
+        // buffers must each free exactly once. 200 iterations: a nested block
+        // and an inner loop each shadow the outer String `s` with a fresh heap
+        // buffer; a missed drop leaks and a double-drop aborts — both accumulate
+        // well past noise. The outer `s` must survive every inner scope intact.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 200i64 {
+        let s = f"outer{i}";
+        {
+            let s = f"inner{i}";
+            total = total + s.len();
+        }
+        let mut j: i64 = 0i64;
+        while j < 2i64 {
+            let s = f"loop{i}";
+            total = total + s.len();
+            j = j + 1i64;
+        }
+        total = total + s.len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // Per iter i: len("inner{i}")=5+digits, +2*len("loop{i}")=4+digits,
+            // +len("outer{i}")=5+digits. i 0..9 (1 digit): inner=6,loop=5*2=10,
+            // outer=6 -> 22; i 10..99 (2): inner=7,loop=6*2=12,outer=7 -> 26;
+            // i 100..199 (3): inner=8,loop=7*2=14,outer=8 -> 30.
+            // 10*22 + 90*26 + 100*30 = 220+2340+3000 = 5560.
+            &["5560"],
+            "nested_scope_heap_shadow_no_leak_or_double_free",
+        );
+    }
+
     // NOTE: the field-push residual UAF half (DEFECT 2) is covered by the
     // sibling's stronger `asan_field_read_option_shared_push_no_leak_or_uaf`
     // (200-iteration loop, drains + reads back) — no duplicate here. The two

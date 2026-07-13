@@ -33,11 +33,13 @@
 //!
 //! [`CleanupAction`]: super::state
 
+use std::collections::{HashMap, HashSet};
+
 use inkwell::types::{BasicTypeEnum, FunctionType, StructType};
 
 use crate::ast::TypeExpr;
 
-use super::state::{ColumnVarInfo, TensorVarInfo};
+use super::state::{ColumnVarInfo, TensorVarInfo, VarSlot};
 
 /// A complete snapshot of every per-variable sidecar-metadata entry for one
 /// binding name. Produced by [`Codegen::take_var_metadata`] (which removes
@@ -214,5 +216,147 @@ impl<'ctx> super::Codegen<'ctx> {
     /// one's class tags.
     pub(super) fn forget_var_metadata(&mut self, name: &str) {
         let _ = self.take_var_metadata(name);
+    }
+}
+
+/// A whole-environment snapshot of every name-keyed variable map (the primary
+/// `variables` slot table PLUS every per-variable sidecar map/set — the same
+/// audited field set as [`VarMetadataSnapshot`], the two extra binding-classed
+/// sets `owned_vecstr_params` / `for_loop_borrow_vars`, and `variables`
+/// itself). Produced by [`Codegen::snapshot_var_env`] at NESTED-SCOPE entry and
+/// re-installed by [`Codegen::restore_var_env`] at scope exit — the lexical
+/// scoping that `self.variables` (a flat map with no scope stack) otherwise
+/// lacks. Without it a nested `let x` that SHADOWS an outer `x` overwrote the
+/// outer slot + metadata and never restored them, so reads after the scope saw
+/// the inner value (B-2026-07-13-6: silent wrong result on the everyday
+/// nested-scope shadow — a build/run divergence, the interpreter scopes
+/// correctly). Restoring the WHOLE per-variable env at scope exit is correct by
+/// construction regardless of HOW a name was bound (`let`, `for`-loop var,
+/// `match`/`if let` pattern) and keeps `variables` and its sidecar metadata
+/// CONSISTENT (a variables-only restore would leave the outer slot paired with
+/// the inner shadow's stale class tags — a worse, dispatch-corrupting state).
+///
+/// **Cleanup safety:** scope-exit heap drops are queued as `CleanupAction`s
+/// keyed by the binding's *alloca* (captured eagerly in `scope_cleanup_actions`
+/// at bind time), NOT re-derived from these name maps at drain time (see the
+/// module header). So reverting the name maps here neither drops a needed
+/// cleanup nor resurrects a freed one — it is a pure name-resolution restore.
+/// MUST run AFTER the scope's cleanup frame drains (the drain reads the inner
+/// bindings' allocas) and only on NORMAL scope exit, never during an
+/// `emit_scope_cleanup` return/error walk (which does not pop the scope).
+///
+/// Adding a new per-variable map to `Codegen` REQUIRES adding it here too
+/// (same contract as `VarMetadataSnapshot`), or a shadow will leak its stale
+/// entry past the scope.
+pub(super) struct VarEnvSnapshot<'ctx> {
+    variables: HashMap<String, VarSlot<'ctx>>,
+    owned_vecstr_params: HashSet<String>,
+    for_loop_borrow_vars: HashSet<String>,
+    var_type_names: HashMap<String, String>,
+    tuple_var_elem_type_names: HashMap<String, Vec<Option<String>>>,
+    atomic_var_inner_is_bool: HashSet<String>,
+    closure_fn_types: HashMap<String, FunctionType<'ctx>>,
+    len_alias: HashMap<String, String>,
+    vec_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    slice_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    ref_params: HashMap<String, BasicTypeEnum<'ctx>>,
+    var_option_shared_heap: HashMap<String, StructType<'ctx>>,
+    tensor_var_infos: HashMap<String, TensorVarInfo<'ctx>>,
+    column_var_infos: HashMap<String, ColumnVarInfo<'ctx>>,
+    enum_inst_var_types: HashMap<String, TypeExpr>,
+    map_key_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    map_val_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    map_key_type_names: HashMap<String, String>,
+    var_elem_type_exprs: HashMap<String, TypeExpr>,
+    map_key_type_exprs: HashMap<String, TypeExpr>,
+    set_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    set_elem_type_names: HashMap<String, String>,
+    set_elem_type_exprs: HashMap<String, TypeExpr>,
+    string_vars: HashSet<String>,
+    cstr_vars: HashSet<String>,
+    inline_option_payload_vars: HashSet<String>,
+    inline_result_payload_vars: HashSet<String>,
+    inline_option_map_payload_vars: HashSet<String>,
+    inline_option_agg_payload_vars: HashSet<String>,
+    boxed_enum_payload_vars: HashSet<String>,
+    rc_fallback_heap_types: HashMap<String, StructType<'ctx>>,
+}
+
+impl<'ctx> super::Codegen<'ctx> {
+    /// Clone the whole per-variable name environment for a lexical-scope
+    /// checkpoint. See [`VarEnvSnapshot`]. Cheap relative to codegen: the
+    /// name-keyed maps hold at most a function's live-binding count.
+    pub(super) fn snapshot_var_env(&self) -> VarEnvSnapshot<'ctx> {
+        VarEnvSnapshot {
+            variables: self.variables.clone(),
+            owned_vecstr_params: self.owned_vecstr_params.clone(),
+            for_loop_borrow_vars: self.for_loop_borrow_vars.clone(),
+            var_type_names: self.var_type_names.clone(),
+            tuple_var_elem_type_names: self.tuple_var_elem_type_names.clone(),
+            atomic_var_inner_is_bool: self.atomic_var_inner_is_bool.clone(),
+            closure_fn_types: self.closure_fn_types.clone(),
+            len_alias: self.len_alias.clone(),
+            vec_elem_types: self.vec_elem_types.clone(),
+            slice_elem_types: self.slice_elem_types.clone(),
+            ref_params: self.ref_params.clone(),
+            var_option_shared_heap: self.var_option_shared_heap.clone(),
+            tensor_var_infos: self.tensor_var_infos.clone(),
+            column_var_infos: self.column_var_infos.clone(),
+            enum_inst_var_types: self.enum_inst_var_types.clone(),
+            map_key_types: self.map_key_types.clone(),
+            map_val_types: self.map_val_types.clone(),
+            map_key_type_names: self.map_key_type_names.clone(),
+            var_elem_type_exprs: self.var_elem_type_exprs.clone(),
+            map_key_type_exprs: self.map_key_type_exprs.clone(),
+            set_elem_types: self.set_elem_types.clone(),
+            set_elem_type_names: self.set_elem_type_names.clone(),
+            set_elem_type_exprs: self.set_elem_type_exprs.clone(),
+            string_vars: self.string_vars.clone(),
+            cstr_vars: self.cstr_vars.clone(),
+            inline_option_payload_vars: self.inline_option_payload_vars.clone(),
+            inline_result_payload_vars: self.inline_result_payload_vars.clone(),
+            inline_option_map_payload_vars: self.inline_option_map_payload_vars.clone(),
+            inline_option_agg_payload_vars: self.inline_option_agg_payload_vars.clone(),
+            boxed_enum_payload_vars: self.boxed_enum_payload_vars.clone(),
+            rc_fallback_heap_types: self.rc_fallback_heap_types.clone(),
+        }
+    }
+
+    /// Re-install a [`VarEnvSnapshot`], reverting every name-keyed variable map
+    /// to its pre-scope state. Nested-scope bindings (new names) vanish and
+    /// shadowed outer bindings (name + metadata together) return. See
+    /// [`VarEnvSnapshot`] for the cleanup-safety and ordering contract.
+    pub(super) fn restore_var_env(&mut self, snap: VarEnvSnapshot<'ctx>) {
+        self.variables = snap.variables;
+        self.owned_vecstr_params = snap.owned_vecstr_params;
+        self.for_loop_borrow_vars = snap.for_loop_borrow_vars;
+        self.var_type_names = snap.var_type_names;
+        self.tuple_var_elem_type_names = snap.tuple_var_elem_type_names;
+        self.atomic_var_inner_is_bool = snap.atomic_var_inner_is_bool;
+        self.closure_fn_types = snap.closure_fn_types;
+        self.len_alias = snap.len_alias;
+        self.vec_elem_types = snap.vec_elem_types;
+        self.slice_elem_types = snap.slice_elem_types;
+        self.ref_params = snap.ref_params;
+        self.var_option_shared_heap = snap.var_option_shared_heap;
+        self.tensor_var_infos = snap.tensor_var_infos;
+        self.column_var_infos = snap.column_var_infos;
+        self.enum_inst_var_types = snap.enum_inst_var_types;
+        self.map_key_types = snap.map_key_types;
+        self.map_val_types = snap.map_val_types;
+        self.map_key_type_names = snap.map_key_type_names;
+        self.var_elem_type_exprs = snap.var_elem_type_exprs;
+        self.map_key_type_exprs = snap.map_key_type_exprs;
+        self.set_elem_types = snap.set_elem_types;
+        self.set_elem_type_names = snap.set_elem_type_names;
+        self.set_elem_type_exprs = snap.set_elem_type_exprs;
+        self.string_vars = snap.string_vars;
+        self.cstr_vars = snap.cstr_vars;
+        self.inline_option_payload_vars = snap.inline_option_payload_vars;
+        self.inline_result_payload_vars = snap.inline_result_payload_vars;
+        self.inline_option_map_payload_vars = snap.inline_option_map_payload_vars;
+        self.inline_option_agg_payload_vars = snap.inline_option_agg_payload_vars;
+        self.boxed_enum_payload_vars = snap.boxed_enum_payload_vars;
+        self.rc_fallback_heap_types = snap.rc_fallback_heap_types;
     }
 }

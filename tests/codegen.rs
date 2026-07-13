@@ -33823,6 +33823,189 @@ fn main() { println(go(3i64)); }
         }
     }
 
+    // ── B-2026-07-13-6: lexical scoping — a `let` shadowing an outer binding
+    // in a nested scope must NOT leak past the scope. `variables` is a flat
+    // map with no scope stack; `snapshot_var_env`/`restore_var_env` checkpoint
+    // it at each nested-scope entry. Pre-fix these printed the inner shadow's
+    // value after the scope (silent build/run divergence; interp scoped right).
+
+    #[test]
+    fn test_e2e_shadow_nested_block_reverts() {
+        let out = run_program(
+            "fn main() {\n\
+             let x = 11;\n\
+             {\n\
+                 let x = 22;\n\
+                 println(x.to_string());\n\
+             }\n\
+             println(x.to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "22\n11");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_double_nested_block_reverts() {
+        let out = run_program(
+            "fn main() {\n\
+             let x = 1;\n\
+             { let x = 2; { let x = 3; println(x.to_string()); } println(x.to_string()); }\n\
+             println(x.to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n2\n1");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_if_block_reverts() {
+        let out = run_program(
+            "fn main() {\n\
+             let x = 1;\n\
+             if true { let x = 99; println(x.to_string()); }\n\
+             println(x.to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "99\n1");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_while_body_reverts() {
+        let out = run_program(
+            "fn main() {\n\
+             let x = 100;\n\
+             let mut i = 0;\n\
+             while i < 2 { let x = i; i = i + 1; }\n\
+             println(x.to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "100");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_for_body_reverts() {
+        let out = run_program(
+            "fn main() {\n\
+             let x = 100;\n\
+             for i in 0..2 { let x = i * 5; }\n\
+             println(x.to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "100");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_for_loop_var_reverts() {
+        // The for-loop INDUCTION variable itself shadowing an outer binding.
+        let out = run_program(
+            "fn main() {\n\
+             let i = 999;\n\
+             let mut sum = 0;\n\
+             for i in 0..4 { sum = sum + i; }\n\
+             println(sum.to_string());\n\
+             println(i.to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6\n999");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_match_arm_pattern_reverts() {
+        // A `match` arm's PAYLOAD binding (`Some(v)`) shadowing an outer `v`
+        // must not leak to the code after the match, NOR to a sibling arm that
+        // references the outer `v` (`None => v`).
+        let out = run_program(
+            "fn describe(x: Option[i64]) -> i64 {\n\
+             let v = 100;\n\
+             match x { Some(v) => v, None => v }\n\
+             }\n\
+             fn main() {\n\
+             println(describe(Some(7)).to_string());\n\
+             println(describe(None).to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7\n100");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_if_let_pattern_reverts() {
+        let out = run_program(
+            "fn main() {\n\
+             let v = 100;\n\
+             if let Some(v) = Some(42) { println(v.to_string()); }\n\
+             println(v.to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42\n100");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_heap_typed_reverts_no_leak() {
+        // A String shadow: inner `s` prints "inner", outer restored to "outer".
+        // Both buffers free exactly once (LSan-covered by the sibling
+        // memory_sanitizer test); here we assert the VALUE reverts.
+        let out = run_program(
+            "fn main() {\n\
+             let s = f\"outer\";\n\
+             { let s = f\"inner\"; println(s); }\n\
+             println(s);\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "inner\nouter");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_labeled_block_reverts() {
+        // A labeled block is a lexical scope; a body `let` shadowing an outer
+        // binding must not leak past `break label`.
+        let out = run_program(
+            "fn main() {\n\
+             let x = 1;\n\
+             let y = lbl: { let x = 50; break lbl x; };\n\
+             println(y.to_string());\n\
+             println(x.to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "50\n1");
+        }
+    }
+
+    #[test]
+    fn test_e2e_block_value_escape_with_local_tail_not_broken_by_scope_revert() {
+        // Regression guard for the scope-revert fix: a block that PRODUCES a
+        // value from a block-LOCAL tail (`let s = { let v = …; v }`) must still
+        // give the consumer the right typed value — the consumer re-derives its
+        // metadata from the typechecker type, not the reverted block-local `v`.
+        let out = run_program(
+            "fn main() {\n\
+             let s: Vec[i64] = { let mut v: Vec[i64] = Vec.new(); v.push(10); v.push(20); v };\n\
+             println(s.len().to_string());\n\
+             println(s[1].to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2\n20");
+        }
+    }
+
     // ── ? operator codegen ───────────────────────────────────────────────────
 
     #[test]

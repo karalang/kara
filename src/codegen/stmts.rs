@@ -227,6 +227,19 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         block: &Block,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // B-2026-07-13-6: lexical scoping. `self.variables` (+ its per-var
+        // sidecar metadata) is a FLAT map with no scope stack, so a nested
+        // `let x` that SHADOWS an outer `x` overwrote the outer slot and never
+        // restored it — reads after this block then saw the inner value
+        // (silent build/run divergence; the interpreter scopes correctly).
+        // Checkpoint the whole per-variable env at scope entry and revert it at
+        // scope exit so block-local bindings vanish and shadowed outer bindings
+        // return. Cleanup-safe: heap drops are keyed by alloca in the cleanup
+        // frame, not by these name maps (see `VarEnvSnapshot`). The block's
+        // VALUE (`result`) is an already-loaded SSA value, unaffected by the
+        // env revert; the consuming `let`/arm re-derives its own metadata from
+        // the typechecker's type, not from a block-local tail's name entry.
+        let scope_snap = self.snapshot_var_env();
         self.scope_cleanup_actions.push(Vec::new());
         let result = self.compile_block(block)?;
         let body_has_terminator = self
@@ -253,6 +266,12 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.scope_cleanup_actions.pop();
         }
+        // Revert the name env AFTER the cleanup frame drained (the drain reads
+        // the inner bindings' allocas). Normal scope exit only — a mid-block
+        // `return`/`?` takes the `?` early-return above and never reaches here,
+        // so a return/error `emit_scope_cleanup` walk (which does not pop the
+        // scope) never triggers a revert.
+        self.restore_var_env(scope_snap);
         Ok(result)
     }
 

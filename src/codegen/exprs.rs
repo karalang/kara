@@ -612,8 +612,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 condition,
                 body,
                 ..
-            } => self.compile_while(label.as_deref(), condition, body),
-            ExprKind::Loop { label, body, .. } => self.compile_loop(label.as_deref(), body),
+            } => {
+                // B-2026-07-13-6: a loop is a lexical scope. Its INDUCTION var
+                // (`for i in …`) and body `let`s that shadow an outer binding
+                // must not leak past the loop under codegen (the flat
+                // `variables` map has no scope stack). Checkpoint the name env
+                // and revert at loop exit. The loop drains its own cleanup frame
+                // (per-iteration + at exit) BEFORE returning, so the revert here
+                // lands after every heap drop; a loop is a unit expression so
+                // its result carries no metadata the outer scope needs.
+                let snap = self.snapshot_var_env();
+                let r = self.compile_while(label.as_deref(), condition, body);
+                self.restore_var_env(snap);
+                r
+            }
+            ExprKind::Loop { label, body, .. } => {
+                let snap = self.snapshot_var_env();
+                let r = self.compile_loop(label.as_deref(), body);
+                self.restore_var_env(snap);
+                r
+            }
             ExprKind::Break { label, value } => {
                 self.compile_break(label.as_deref(), value.as_deref())
             }
@@ -1112,13 +1130,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 iterable,
                 body,
                 ..
-            } => self.compile_for(label.as_deref(), pattern, iterable, body),
+            } => {
+                // B-2026-07-13-6: revert the loop's induction var + body binds
+                // at loop exit — see the `While` arm.
+                let snap = self.snapshot_var_env();
+                let r = self.compile_for(label.as_deref(), pattern, iterable, body);
+                self.restore_var_env(snap);
+                r
+            }
             ExprKind::IfLet {
                 pattern,
                 value,
                 then_block,
                 else_branch,
-            } => self.compile_if_let(pattern, value, then_block, else_branch.as_deref()),
+            } => {
+                // B-2026-07-13-6: the `if let` PATTERN binding (`Some(v)`) and
+                // then-block `let`s are then-scoped; revert them so a shadow
+                // doesn't leak to the code after the `if let`. The if-let value
+                // is an SSA value; the consumer re-derives its own metadata.
+                let snap = self.snapshot_var_env();
+                let r = self.compile_if_let(pattern, value, then_block, else_branch.as_deref());
+                self.restore_var_env(snap);
+                r
+            }
             // Unsafe blocks: safety checks live in earlier phases; codegen just
             // compiles the inner block normally.
             ExprKind::Unsafe(block) => match self.compile_block_with_frame(block)? {
@@ -1135,7 +1169,16 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Index { object, index } => self.compile_index(object, index),
             ExprKind::Question(inner) => self.compile_question(inner, &expr.span),
             ExprKind::Path { segments, .. } => self.compile_path_expr(segments, &expr.span),
-            ExprKind::LabeledBlock { label, body, .. } => self.compile_labeled_block(label, body),
+            ExprKind::LabeledBlock { label, body, .. } => {
+                // B-2026-07-13-6: a labeled block is a lexical scope; revert its
+                // body `let`s so a shadow doesn't leak past `break label`. The
+                // block's break value is an SSA value; the consumer re-derives
+                // its own metadata.
+                let snap = self.snapshot_var_env();
+                let r = self.compile_labeled_block(label, body);
+                self.restore_var_env(snap);
+                r
+            }
             ExprKind::OffsetOf { ty, field_path } => self.compile_offset_of(ty, field_path),
             ExprKind::Lock { mutex, alias, body } => {
                 self.compile_lock_block(mutex, alias.as_deref(), body)
@@ -1146,7 +1189,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 value,
                 body,
                 ..
-            } => self.compile_while_let(label.as_deref(), pattern, value, body),
+            } => {
+                // B-2026-07-13-6: revert the `while let` pattern bind + body
+                // binds at loop exit — see the `While`/`IfLet` arms.
+                let snap = self.snapshot_var_env();
+                let r = self.compile_while_let(label.as_deref(), pattern, value, body);
+                self.restore_var_env(snap);
+                r
+            }
             _ => Ok(self.context.i64_type().const_int(0, false).into()),
         }
     }

@@ -300,6 +300,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // this frame and emitted cleanup for its actions).
             self.scope_cleanup_actions.push(Vec::new());
 
+            // B-2026-07-13-6: an arm's PATTERN bindings (`Some(v)`) and body
+            // `let`s are ARM-scoped. Checkpoint the name env here so they revert
+            // at end-of-arm — otherwise a payload/body binding that SHADOWS an
+            // outer name leaks to a sibling arm that references the outer name,
+            // and to the code after the `match`. Reverted after this arm's
+            // cleanup frame drains (below); the arm VALUE is an already-captured
+            // SSA value, unaffected by the revert.
+            let arm_snap = self.snapshot_var_env();
+
             // Bind pattern variables
             if let PatternKind::Slice {
                 prefix,
@@ -557,6 +566,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // so it doesn't shadow subsequent arms' bindings.
                 self.scope_cleanup_actions.pop();
             }
+            // B-2026-07-13-6: revert this arm's pattern/body binds (see the
+            // per-arm snapshot above) so the next arm and the post-`match` code
+            // resolve outer names, not this arm's shadows.
+            self.restore_var_env(arm_snap);
         }
 
         // Wire the entry block. With a qualifying string-dispatch plan, branch
