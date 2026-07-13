@@ -15089,6 +15089,49 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_struct_result_payload_recovery() {
+        // B-2026-07-12-2 heap-recovery gap (the true blocker for the OnceLock
+        // heap-`T` ungate, also a live silent miscompile for ordinary user
+        // code): a concretely-instantiated GENERIC user-struct payload moved
+        // out of a `Result`/`Option` used to silently miscompile — the mono
+        // field layout (e.g. a 3-word `String`) collapsed to the all-`i64`
+        // generic base's single word, so `Err(e) => e.field` read GARBAGE
+        // (a raw pointer word), and `e.field.method()` hit the loud
+        // `__field_elem_0` method-dispatch gap. Fixed by recording the concrete
+        // instantiation `TypeExpr` at the payload binding (typechecker) and
+        // recovering the mono width / field GEP at codegen. Pins field-move,
+        // field-method, bind-first, multi-param, and the `Option` payload
+        // shape. The borrow `Option[ref T]` path (Vec.first) must stay correct
+        // — covered by `test_e2e_vec_get_first_option_ref_t_reread`.
+        let out = run_program(
+            r#"
+struct Wrap[T] { val: T }
+struct Pair[A, B] { a: A, b: B }
+fn boom(x: i64) -> Result[i64, Wrap[String]] {
+    if x > 0i64 { Ok(x) } else { Err(Wrap { val: "badness".to_string() }) }
+}
+fn opt(x: i64) -> Option[Wrap[String]] {
+    if x > 0i64 { Some(Wrap { val: "opt".to_string() }) } else { None }
+}
+fn pair(x: i64) -> Result[i64, Pair[i64, String]] {
+    if x > 0i64 { Ok(x) } else { Err(Pair { a: 7i64, b: "hi".to_string() }) }
+}
+fn main() {
+    match boom(-1i64) { Ok(_) => { println("ok"); } Err(e) => { println(e.val); } }
+    match boom(-1i64) { Ok(_) => { println("ok"); } Err(e) => { println(e.val.len().to_string()); } }
+    match boom(-1i64) { Ok(_) => { println("ok"); } Err(e) => { let s = e.val; println(s.len().to_string()); } }
+    match opt(1i64) { Some(w) => { println(w.val); } None => { println("none"); } }
+    match pair(-1i64) { Ok(_) => { println("ok"); } Err(e) => { println(e.a.to_string()); println(e.b); } }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["badness", "7", "7", "opt", "7", "hi"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_result_inline_payload_drop_paths() {
         // B-2026-06-10-6 Result follow-on: inline-heap `Result` payloads
         // (`Ok(String)` / `Err(String)`) dropped undestructured must free

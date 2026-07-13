@@ -2249,6 +2249,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // A concretely-instantiated GENERIC user-struct payload binding
+                // (`Err(e)` where `e: Wrap[String]`): size from the MONO
+                // instantiation width, not the all-`i64` generic base — the
+                // `Some(name)` arm below would look up `struct_types["Wrap"]`
+                // (the `{i64}` base = 1 word) and truncate a 3-word `String`
+                // field (B-2026-07-12-2 recovery). The inner `TypeExpr` is
+                // recorded by the typechecker only for owned/borrow generic
+                // struct payload bindings, so this branch never fires for a
+                // String/Vec/scalar binding (handled by the explicit arms).
+                if let Some(te) = self.pattern_binding_inner_types.get(&key) {
+                    if self.is_generic_named_struct_type_expr(te) {
+                        return Self::llvm_type_word_count(self.llvm_type_for_type_expr(te)).max(1);
+                    }
+                }
                 match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
                     // VecDeque rides Vec's 3-word `{ptr, len, cap}` layout
                     // (B-2026-06-10-3): without it, a VecDeque enum payload
@@ -2346,6 +2360,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         if matches!(te.kind, TypeKind::Tuple(_)) {
                             return self.llvm_type_for_type_expr(te);
                         }
+                    }
+                }
+                // Generic user-struct payload binding — the mono aggregate type
+                // (sibling of the word-count arm in `pattern_payload_word_count`).
+                if let Some(te) = self.pattern_binding_inner_types.get(&key) {
+                    if self.is_generic_named_struct_type_expr(te) {
+                        return self.llvm_type_for_type_expr(te);
                     }
                 }
                 match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
@@ -2665,7 +2686,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         .cloned(),
                     _ => None,
                 });
-        let target_ty: Option<BasicTypeEnum<'ctx>> =
+        // A generic user-struct payload binding rebuilds into its MONO
+        // aggregate (the concrete-arg field layout), NOT the all-`i64` generic
+        // base `struct_types[name]` the fallthrough would pick — else the
+        // 3-word `String` field collapses into the 1-field base (B-2026-07-12-2).
+        let mono_struct_target: Option<BasicTypeEnum<'ctx>> = self
+            .pattern_binding_inner_types
+            .get(&key)
+            .filter(|te| self.is_generic_named_struct_type_expr(te))
+            .map(|te| self.llvm_type_for_type_expr(te));
+        let target_ty: Option<BasicTypeEnum<'ctx>> = mono_struct_target.or_else(|| {
             type_name.as_ref().and_then(|n| match n.as_str() {
                 "String" | "str" | "Vec" | "VecDeque" | "StringSlice" | "CString" => {
                     Some(self.vec_struct_type().into())
@@ -2688,7 +2718,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             .get(n.as_str())
                             .map(|layout| layout.llvm_type.into())
                     }),
-            });
+            })
+        });
         // Heuristic fallback when the typechecker didn't record a name:
         // 3 words → vec/string shape; 2 words → slice shape.
         let target_ty: BasicTypeEnum<'ctx> = target_ty.unwrap_or_else(|| match field_words.len() {

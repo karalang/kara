@@ -1304,6 +1304,47 @@ impl<'a> super::TypeChecker<'a> {
             .insert(SpanKey::from_span(span), borrow);
     }
 
+    /// Built-in generic type names that codegen lowers through a DEDICATED
+    /// path (`llvm_type_for_type_expr`'s special cases +
+    /// `register_var_from_type_expr`'s early arms), NOT the generic
+    /// `mono_struct_type` route that plain user/baked structs take. Their baked
+    /// stdlib struct shells live in `env.structs`, so the generic-struct
+    /// payload-binding recorder must skip them — recording their inner type
+    /// (and its early `return`) would preempt the Vec/Slice/Map element-type
+    /// side-table recording and mis-lower a plain `let v = [1, 2, 3]`
+    /// (B-2026-07-12-2). Kept in sync with the special-cased names in
+    /// `src/codegen/types_lowering.rs`.
+    fn is_special_lowered_generic_builtin(name: &str) -> bool {
+        matches!(
+            name,
+            "Vec"
+                | "VecDeque"
+                | "Slice"
+                | "Array"
+                | "Vector"
+                | "Map"
+                | "HashMap"
+                | "SortedMap"
+                | "Set"
+                | "HashSet"
+                | "SortedSet"
+                | "String"
+                | "Atomic"
+                | "Mutex"
+                | "VolatileCell"
+                | "OnceLock"
+                | "OnceCell"
+                | "Tensor"
+                | "Column"
+                | "DataFrame"
+                | "Sender"
+                | "Receiver"
+                | "Channel"
+                | "File"
+                | "Request"
+        )
+    }
+
     fn record_pattern_inner_type(&mut self, pattern: &Pattern, ty: &Type) {
         // Tuple bindings (e.g. `Some(node)` where `node: (i64, i64)`):
         // record the whole tuple `TypeExpr` so codegen can reconstruct
@@ -1355,6 +1396,45 @@ impl<'a> super::TypeChecker<'a> {
                 self.pattern_binding_inner_unresolved
                     .insert(key, ty.clone());
                 self.pattern_binding_types.insert(key, name.clone());
+                return;
+            }
+            // A concretely-instantiated GENERIC user struct payload binding
+            // (`Err(e)` where `e: Wrap[String]`, `AlreadySetError[String]`):
+            // record the full instantiation `TypeExpr` so codegen recovers the
+            // MONO field layout (word count + field GEP) rather than truncating
+            // to the all-`i64` generic base. Without this a heap-bearing
+            // generic-struct payload moved out of an `Option`/`Result` silently
+            // miscompiles — the 3-word `String` field collapses to a single
+            // word (B-2026-07-12-2 heap-recovery gap; the true blocker for the
+            // OnceLock heap-`T` ungate). A NON-generic struct already resolves
+            // via `struct_types` under its concrete name, so only the generic
+            // instantiation is lost. The borrow form (`ref Wrap[..]`, peeled
+            // upstream by `record_pattern_binding_surface_types`) reconstructs
+            // the same full-width by-value aliasing view, so recording it too is
+            // correct (its cleanup is separately borrow-suppressed at codegen).
+            //
+            // EXCLUDE built-in generic types with DEDICATED codegen lowering
+            // (`Vec`/`Map`/`Atomic`/`OnceLock`/…): `env.structs` also holds the
+            // baked stdlib struct shells for those, but codegen lowers them via
+            // special-cased paths (NOT `mono_struct_type`), and this arm's early
+            // `return` would otherwise preempt the Vec/Slice element-type
+            // recording below — stripping `v.len()`/`v[i]` dispatch side-tables
+            // and crashing a plain `let v = [1, 2, 3]`. The codegen consumers are
+            // already gated on `is_generic_named_struct_type_expr`
+            // (`struct_generic_params`, which excludes these), so this only
+            // matters for the preemption. Mirrors `llvm_type_for_type_expr`'s
+            // special-cased names.
+            if !args.is_empty()
+                && self.env.structs.contains_key(name)
+                && !Self::is_special_lowered_generic_builtin(name)
+            {
+                let key = SpanKey::from_span(&pattern.span);
+                self.pattern_binding_inner_types
+                    .insert(key, Self::type_to_type_expr(ty));
+                self.pattern_binding_inner_unresolved
+                    .insert(key, ty.clone());
+                // `pattern_binding_types[key]` is already the struct base name,
+                // set by `record_pattern_binding_surface_types`.
                 return;
             }
         }

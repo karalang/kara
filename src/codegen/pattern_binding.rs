@@ -329,6 +329,25 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // A concretely-instantiated GENERIC user-struct payload
+                    // binding (`Err(e)` where `e: Wrap[String]` /
+                    // `AlreadySetError[String]`): record the instantiation into
+                    // `enum_inst_var_types` so `.field` access GEPs through the
+                    // MONO struct layout (the concrete-arg field types), not the
+                    // all-`i64` generic base — mirrors the `let`-site
+                    // registration (stmts.rs, B-2026-07-11-31). Without this a
+                    // heap field read out of the payload returns garbage
+                    // (B-2026-07-12-2 recovery). `record_var_type_name` below
+                    // sets `var_type_names[name]` to the base name, which the
+                    // field-GEP path pairs with these concrete args. No cleanup
+                    // is registered here (the owned struct's scope-exit drop is
+                    // handled by the user-struct arm further down, gated
+                    // `!pattern_binding_is_borrow`).
+                    if let Some(full_te) = self.pattern_binding_inner_types.get(&key).cloned() {
+                        if self.is_generic_named_struct_type_expr(&full_te) {
+                            self.enum_inst_var_types.insert(name.clone(), full_te);
+                        }
+                    }
                     self.record_var_type_name(name.clone(), type_name);
                 }
                 // Register scope-exit cleanup for the heap-owning binding.
