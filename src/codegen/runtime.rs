@@ -3017,6 +3017,46 @@ impl<'ctx> super::Codegen<'ctx> {
         phi.as_basic_value()
     }
 
+    /// Deep-copy a VALUE-POSITION block/branch tail when it ultimately names an
+    /// owned Vec/String PARAM, so the escaping branch value owns an independent
+    /// buffer. The move-suppression the branch already applies
+    /// (`suppress_block_tail_cleanup` / `suppress_source_vec_cleanup_for_arg`)
+    /// only zeroes the source `cap` to skip a *local* owner's free — but an
+    /// owned param is CALLER-retained (the caller frees the arg buffer), so
+    /// zeroing the callee's slot does nothing and the branch value still aliases
+    /// the caller's buffer. Returning/binding that alias then double-frees (the
+    /// caller frees the arg AND the consumer frees the result — same buffer).
+    /// A deep copy gives the consumer its own buffer, exactly as the bare-tail
+    /// return does (`maybe_defensive_copy_param_arg` at the function tail); this
+    /// closes the branch-buried sibling that the bare-tail helper misses because
+    /// there the function's `final_expr` is the whole `if`/`match`, not the leaf.
+    ///
+    /// Recurses through nested `{ … }` / `unsafe { … }` tails to reach the leaf
+    /// identifier, mirroring `suppress_block_tail_cleanup`'s recursion. No-op for
+    /// a local binding (it is not in `owned_vecstr_params`, so
+    /// `maybe_defensive_copy_param_arg` returns `val` untouched and the existing
+    /// move-out semantics are preserved) or any non-identifier tail. Emit-order:
+    /// call AFTER the block's frame drains and BEFORE the branch's terminating
+    /// jump to the merge block, so the copy lands in the branch's predecessor and
+    /// the phi picks up the fresh buffer; `emit_vecstr_defensive_copy` reads the
+    /// already-loaded SSA `val`, so a prior source-`cap` zeroing is irrelevant.
+    pub(super) fn deepcopy_owned_param_branch_tail(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match &tail.kind {
+            ExprKind::Identifier(_) => self.maybe_defensive_copy_param_arg(tail, val),
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+                match b.final_expr.as_deref() {
+                    Some(inner) => self.deepcopy_owned_param_branch_tail(inner, val),
+                    None => val,
+                }
+            }
+            _ => val,
+        }
+    }
+
     /// Defensive-copy shim for retaining consume sites: when `arg_expr`
     /// is a bare Identifier naming an owned String/Vec PARAMETER of the
     /// current function (`owned_vecstr_params`) OR a heap `for`-loop element

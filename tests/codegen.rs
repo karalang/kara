@@ -61885,6 +61885,129 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_owned_string_param_if_branch_return_no_double_free() {
+        // B-2026-07-13-1: `fn pick(a: String, b: String) -> String { if a > b
+        // { a } else { b } }` — each `if` branch tail returns an owned String
+        // PARAM. The branch's move-suppression (zero the source `cap`) is a
+        // no-op for a CALLER-retained param, so the returned value aliased the
+        // caller's arg buffer and the caller double-freed (arg temp + result).
+        // Each branch tail must DEEP-COPY the param, exactly as the bare-tail
+        // return does. Was: interp printed the right value, JIT/native aborted
+        // with "free(): double free detected in tcache 2".
+        let out = run_program(
+            r#"
+fn pick(a: String, b: String) -> String {
+    if a > b { a } else { b }
+}
+
+fn main() {
+    println(pick(f"apple", f"banana"));
+    println(pick(f"zebra", f"apple"));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "banana\nzebra");
+        }
+    }
+
+    #[test]
+    fn test_e2e_owned_string_param_match_arm_return_no_double_free() {
+        // B-2026-07-13-1, `match`-arm sibling: an owned String param returned
+        // from a `match` arm tail must deep-copy for the same reason.
+        let out = run_program(
+            r#"
+fn pick(a: String, b: String) -> String {
+    match a > b {
+        true => a,
+        false => b,
+    }
+}
+
+fn main() {
+    println(pick(f"apple", f"banana"));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "banana");
+        }
+    }
+
+    #[test]
+    fn test_e2e_owned_string_param_let_if_return_no_double_free() {
+        // B-2026-07-13-1, let-binding sibling: `let r = if … { a } else { b };
+        // r` — the `if` value binds an owned-param alias into `r`; returning
+        // `r` double-freed. The per-branch deep-copy gives `r` its own buffer.
+        let out = run_program(
+            r#"
+fn pick(a: String, b: String) -> String {
+    let r = if a > b { a } else { b };
+    r
+}
+
+fn main() {
+    println(pick(f"apple", f"banana"));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "banana");
+        }
+    }
+
+    #[test]
+    fn test_e2e_owned_vec_param_if_branch_return_no_double_free() {
+        // B-2026-07-13-1, nested-heap sibling: a `Vec[String]` param returned
+        // from an `if` branch tail must deep-copy the OUTER buffer AND recurse
+        // into each String element (`emit_vecstr_defensive_copy`'s element
+        // walk), or the shared inner buffers double-free.
+        let out = run_program(
+            r#"
+fn choose(a: Vec[String], b: Vec[String], first: bool) -> Vec[String] {
+    if first { a } else { b }
+}
+
+fn main() {
+    let mut x: Vec[String] = Vec.new();
+    x.push(f"one");
+    x.push(f"two");
+    let mut y: Vec[String] = Vec.new();
+    y.push(f"three");
+    let r = choose(x, y, false);
+    println(r[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "three");
+        }
+    }
+
+    #[test]
+    fn test_e2e_owned_generic_param_if_branch_return_no_double_free() {
+        // B-2026-07-13-1, generic sibling: `fn pick[T: Ord](a: T, b: T) -> T {
+        // if a > b { a } else { b } }` monomorphized at `String` must deep-copy
+        // per branch in the String monomorph; the `i64` monomorph is a POD
+        // no-op (no buffer to copy).
+        let out = run_program(
+            r#"
+fn pick[T: Ord](a: T, b: T) -> T {
+    if a > b { a } else { b }
+}
+
+fn main() {
+    println(pick(f"apple", f"banana"));
+    println(pick(3, 7));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "banana\n7");
+        }
+    }
+
+    #[test]
     fn test_e2e_value_fn_loop_tail_terminates_with_unreachable() {
         // A value-returning function whose body's final expression is a
         // `loop` with interior `return`s produces no tail value — the

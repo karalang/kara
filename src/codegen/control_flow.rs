@@ -122,7 +122,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // binding OWNED here is registered, so borrow scrutinees no-op).
         self.suppress_boxed_payload_struct_destructure(value, pattern);
         self.tail_ret_inner = tail;
-        let then_val = self.compile_block(then_block)?;
+        let mut then_val = self.compile_block(then_block)?;
         let then_terminated = self
             .builder
             .get_insert_block()
@@ -146,6 +146,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             self.drain_top_frame_with_emit();
+            // Deep-copy an owned-param then-tail (caller retains the param's
+            // buffer) so the if-let value owns an independent buffer — the
+            // suppression above only skips a local owner's free, leaving a param
+            // tail aliasing the caller's arg. See `compile_if`.
+            if let (Some(fe), Some(v)) = (then_block.final_expr.as_deref(), then_val) {
+                then_val = Some(self.deepcopy_owned_param_branch_tail(fe, v));
+            }
         } else {
             self.scope_cleanup_actions.pop();
         }
@@ -155,13 +162,21 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.builder.position_at_end(else_bb);
-        let else_val = if let Some(eb) = else_branch {
+        let else_tail: Option<&Expr>;
+        let mut else_val = if let Some(eb) = else_branch {
             self.tail_ret_inner = tail;
             match &eb.kind {
-                ExprKind::Block(blk) => self.compile_block_with_frame(blk)?,
-                _ => Some(self.compile_expr(eb)?),
+                ExprKind::Block(blk) => {
+                    else_tail = blk.final_expr.as_deref();
+                    self.compile_block_with_frame(blk)?
+                }
+                _ => {
+                    else_tail = Some(eb);
+                    Some(self.compile_expr(eb)?)
+                }
             }
         } else {
+            else_tail = None;
             None
         };
         self.tail_ret_inner = None;
@@ -171,6 +186,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .get_terminator()
             .is_some();
+        // Deep-copy an owned-param else-tail — see `compile_if`.
+        if !else_terminated {
+            if let (Some(fe), Some(v)) = (else_tail, else_val) {
+                else_val = Some(self.deepcopy_owned_param_branch_tail(fe, v));
+            }
+        }
         let else_end = self.builder.get_insert_block().unwrap();
         if !else_terminated {
             self.builder.build_unconditional_branch(merge_bb).unwrap();
@@ -1006,37 +1027,59 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(then_bb);
         self.tail_ret_inner = tail;
-        let then_val = self.compile_block_with_frame(then_block)?;
+        let mut then_val = self.compile_block_with_frame(then_block)?;
         let then_terminated = self
             .builder
             .get_insert_block()
             .unwrap()
             .get_terminator()
             .is_some();
+        // Deep-copy an owned-param branch tail (the caller retains the param's
+        // buffer) so the `if`-value owns an independent buffer — the branch's
+        // move-suppression alone leaves it aliasing the caller's arg and the
+        // consumer double-frees. Emit AFTER the frame drained (inside
+        // `compile_block_with_frame`) and BEFORE the jump to merge, so the copy
+        // lands in this branch's predecessor and its blocks are captured by
+        // `then_end_bb` below. No-op for local/non-param tails.
+        if !then_terminated {
+            if let (Some(fe), Some(v)) = (then_block.final_expr.as_deref(), then_val) {
+                then_val = Some(self.deepcopy_owned_param_branch_tail(fe, v));
+            }
+        }
         let then_end_bb = self.builder.get_insert_block().unwrap();
         if !then_terminated {
             self.builder.build_unconditional_branch(merge_bb).unwrap();
         }
 
         self.builder.position_at_end(else_bb);
-        let else_val = if let Some(else_expr) = else_branch {
+        // Leaf tail of the else branch, for the owned-param deep-copy below. A
+        // nested `else if` recurses through `compile_if` (which deep-copies its
+        // own leaves), so it contributes no leaf here.
+        let else_tail: Option<&Expr>;
+        let mut else_val = if let Some(else_expr) = else_branch {
             self.tail_ret_inner = tail;
             match &else_expr.kind {
-                ExprKind::Block(blk) => self.compile_block_with_frame(blk)?,
+                ExprKind::Block(blk) => {
+                    else_tail = blk.final_expr.as_deref();
+                    self.compile_block_with_frame(blk)?
+                }
                 ExprKind::If {
                     condition: c,
                     then_block: tb,
                     else_branch: eb,
                 } => {
+                    else_tail = None;
                     let v = self.compile_if(c, tb, eb.as_deref())?;
                     Some(v)
                 }
                 _ => {
+                    else_tail = Some(else_expr);
                     let v = self.compile_expr(else_expr)?;
                     Some(v)
                 }
             }
         } else {
+            else_tail = None;
             None
         };
         self.tail_ret_inner = None;
@@ -1046,6 +1089,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .get_terminator()
             .is_some();
+        if !else_terminated {
+            if let (Some(fe), Some(v)) = (else_tail, else_val) {
+                else_val = Some(self.deepcopy_owned_param_branch_tail(fe, v));
+            }
+        }
         let else_end_bb = self.builder.get_insert_block().unwrap();
         if !else_terminated {
             self.builder.build_unconditional_branch(merge_bb).unwrap();

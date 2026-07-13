@@ -547,6 +547,74 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_owned_string_param_if_branch_return_no_leak_or_double_free() {
+        // B-2026-07-13-1: an owned String param returned from an `if` branch
+        // tail deep-copies (the caller retains the arg buffer). 200 iterations:
+        // each call frees two arg temps + one deep-copied result, so a missed
+        // copy (double-free, ASAN) or a leaked copy (LSan on Linux CI) both
+        // accumulate well past noise. Was: aborted with double-free on the
+        // first call before the fix.
+        assert_clean_asan_run(
+            r#"
+fn pick(a: String, b: String) -> String {
+    if a > b { a } else { b }
+}
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 200i64 {
+        let r = pick(f"apple{i}", f"banana{i}");
+        total = total + r.len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // "banana{i}" is chosen for i 0..199; len is 7 for i<10 (banana0..9),
+            // 8 for 10..99, 9 for 100..199. 10*7 + 90*8 + 100*9 = 70+720+900 = 1690.
+            &["1690"],
+            "owned_string_param_if_branch_return_no_leak_or_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_owned_vec_param_match_arm_return_no_leak_or_double_free() {
+        // B-2026-07-13-1, nested-heap `match`-arm sibling: a `Vec[String]`
+        // param returned from a `match` arm deep-copies the outer buffer AND
+        // each String element. 100 iterations catch any element or outer leak.
+        assert_clean_asan_run(
+            r#"
+fn choose(a: Vec[String], b: Vec[String], first: bool) -> Vec[String] {
+    match first {
+        true => a,
+        false => b,
+    }
+}
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 100i64 {
+        let mut x: Vec[String] = Vec.new();
+        x.push(f"one{i}");
+        x.push(f"two{i}");
+        let mut y: Vec[String] = Vec.new();
+        y.push(f"three{i}");
+        let r = choose(x, y, false);
+        total = total + r.len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // `choose(.., false)` returns y (len 1) each of 100 iters = 100.
+            &["100"],
+            "owned_vec_param_match_arm_return_no_leak_or_double_free",
+        );
+    }
+
     // NOTE: the field-push residual UAF half (DEFECT 2) is covered by the
     // sibling's stronger `asan_field_read_option_shared_push_no_leak_or_uaf`
     // (200-iteration loop, drains + reads back) — no duplicate here. The two

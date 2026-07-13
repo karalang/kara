@@ -481,7 +481,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
 
-            let arm_val = self.compile_tail_final_expr(&arm.body, tail)?;
+            let mut arm_val = self.compile_tail_final_expr(&arm.body, tail)?;
             let arm_body_end = self.builder.get_insert_block().unwrap();
             if arm_body_end.get_terminator().is_none() {
                 // Move-aware: if the arm's tail expression is an
@@ -528,6 +528,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 self.drain_top_frame_with_emit();
+                // Deep-copy an owned-param arm tail (the caller retains the
+                // param's buffer) so the match result owns an independent
+                // buffer — the move-suppression above only skips a local
+                // owner's free, leaving a param tail aliasing the caller's arg
+                // and the consumer double-frees. Emit AFTER drain so the copy
+                // is the escaping value; its blocks are folded into `merge_pred`
+                // captured just below. No-op for local/non-param arm tails
+                // (`match opt { Some(v) => v }` — `v` is a payload binding, not
+                // in `owned_vecstr_params`). See `compile_if`.
+                arm_val = self.deepcopy_owned_param_branch_tail(&arm.body, arm_val);
                 // Re-read the current bb AFTER drain — the cleanup IR
                 // may have appended new basic blocks (e.g. `cleanup.free`
                 // / `cleanup.skip` for FreeVecBuffer's `cap > 0` guard),
