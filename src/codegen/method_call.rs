@@ -1919,6 +1919,95 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `clamp` on a numeric scalar (typed in expr_method_call.rs):
+        // `v.clamp(lo, hi)` lowers to the nested-bound `select(v < lo, lo,
+        // select(v > hi, hi, v))` — `lo` wins on an inverted range, matching
+        // the interpreter and the `clamp` free fn. Ints use signed/unsigned
+        // `icmp`; floats use ordered `fcmp` (NaN `v` returns `v`, as in Rust).
+        if method == "clamp" && args.len() == 2 {
+            let v = self.compile_expr(object)?;
+            let lo = self.compile_expr(&args[0].value)?;
+            let hi = self.compile_expr(&args[1].value)?;
+            match (v, lo, hi) {
+                (
+                    BasicValueEnum::IntValue(vv),
+                    BasicValueEnum::IntValue(lov),
+                    BasicValueEnum::IntValue(hiv),
+                ) => {
+                    // Harmonize a bare-literal bound (default i64) to the
+                    // receiver width so the `icmp` operands match.
+                    let vw = vv.get_type().get_bit_width();
+                    let unsigned = self.expr_is_unsigned_int(object);
+                    let harmonize = |b: inkwell::values::IntValue<'ctx>| {
+                        let bw = b.get_type().get_bit_width();
+                        if bw == vw {
+                            b
+                        } else if bw > vw {
+                            self.builder
+                                .build_int_truncate(b, vv.get_type(), "cl.tr")
+                                .unwrap()
+                        } else if unsigned {
+                            self.builder
+                                .build_int_z_extend(b, vv.get_type(), "cl.zx")
+                                .unwrap()
+                        } else {
+                            self.builder
+                                .build_int_s_extend(b, vv.get_type(), "cl.sx")
+                                .unwrap()
+                        }
+                    };
+                    let lov = harmonize(lov);
+                    let hiv = harmonize(hiv);
+                    let (lt, gt) = if unsigned {
+                        (IntPredicate::ULT, IntPredicate::UGT)
+                    } else {
+                        (IntPredicate::SLT, IntPredicate::SGT)
+                    };
+                    let v_gt_hi = self
+                        .builder
+                        .build_int_compare(gt, vv, hiv, "cl.gt")
+                        .unwrap();
+                    let upper = self
+                        .builder
+                        .build_select(v_gt_hi, hiv, vv, "cl.hi")
+                        .unwrap();
+                    let v_lt_lo = self
+                        .builder
+                        .build_int_compare(lt, vv, lov, "cl.lt")
+                        .unwrap();
+                    let r = self
+                        .builder
+                        .build_select(v_lt_lo, lov.into(), upper, "clamp")
+                        .unwrap();
+                    return Ok(r);
+                }
+                (
+                    BasicValueEnum::FloatValue(vv),
+                    BasicValueEnum::FloatValue(lov),
+                    BasicValueEnum::FloatValue(hiv),
+                ) => {
+                    let v_gt_hi = self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::OGT, vv, hiv, "cl.gt")
+                        .unwrap();
+                    let upper = self
+                        .builder
+                        .build_select(v_gt_hi, hiv, vv, "cl.hi")
+                        .unwrap();
+                    let v_lt_lo = self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::OLT, vv, lov, "cl.lt")
+                        .unwrap();
+                    let r = self
+                        .builder
+                        .build_select(v_lt_lo, lov.into(), upper, "clamp")
+                        .unwrap();
+                    return Ok(r);
+                }
+                _ => {}
+            }
+        }
+
         // Built-in `sqrt` on float primitives (typed in expr_method_call.rs):
         // `x.sqrt() -> Self`, lowered to the overloaded `llvm.sqrt` intrinsic —
         // a single `f64.sqrt` instruction on wasm (and `sqrtsd` on x86), no

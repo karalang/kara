@@ -22751,6 +22751,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_int_float_clamp_method() {
+        // `v.clamp(lo, hi)` lowers to nested `select`s (icmp for ints, ordered
+        // fcmp for floats). AOT output must match the interpreter oracle
+        // (`test_int_float_clamp_method`), including the inverted-range
+        // low-wins case (`7.clamp(10, 5)` → 10).
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    println(15i64.clamp(0i64, 10i64));
+    println((0 - 3i64).clamp(0i64, 10i64));
+    println(5i64.clamp(0i64, 10i64));
+    println(7i64.clamp(10i64, 5i64));
+    let x: f64 = 1.5;
+    println(x.clamp(2.0, 3.0));
+    let y: f64 = 2.5;
+    println(y.clamp(0.0, 2.0));
+    let u: u8 = 200;
+    println(u.clamp(0u8, 100u8));
+    let w: u32 = 4000000000;
+    println(w.clamp(1u32, 4294967295u32));
+}
+"#,
+        ) {
+            assert_eq!(out, "10\n0\n5\n10\n2\n2\n100\n4000000000\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_abs_float() {
         if let Some(out) = run_program(
             r#"

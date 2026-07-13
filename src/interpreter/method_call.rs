@@ -1669,6 +1669,58 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `clamp` on a numeric scalar (typed in expr_method_call.rs):
+        // `v.clamp(lo, hi)` → `lo` if `v < lo`, else `hi` if `v > hi`, else `v`
+        // (nested-bound form: `lo` wins on an inverted range, matching the
+        // `clamp` free fn). Codegen lowers to nested `select`s.
+        if method == "clamp" && args.len() == 2 {
+            match &obj {
+                Value::Int(v) => {
+                    let v = *v;
+                    let lo = self.eval_expr_inner(&args[0].value);
+                    if self.pending_cf.is_some() {
+                        return lo;
+                    }
+                    let hi = self.eval_expr_inner(&args[1].value);
+                    if self.pending_cf.is_some() {
+                        return hi;
+                    }
+                    if let (Value::Int(lo), Value::Int(hi)) = (lo, hi) {
+                        let r = if v < lo {
+                            lo
+                        } else if v > hi {
+                            hi
+                        } else {
+                            v
+                        };
+                        return Value::Int(r);
+                    }
+                }
+                Value::Float(v) => {
+                    let v = *v;
+                    let lo = self.eval_expr_inner(&args[0].value);
+                    if self.pending_cf.is_some() {
+                        return lo;
+                    }
+                    let hi = self.eval_expr_inner(&args[1].value);
+                    if self.pending_cf.is_some() {
+                        return hi;
+                    }
+                    if let (Value::Float(lo), Value::Float(hi)) = (lo, hi) {
+                        let r = if v < lo {
+                            lo
+                        } else if v > hi {
+                            hi
+                        } else {
+                            v
+                        };
+                        return Value::Float(r);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Built-in `sqrt` on float primitives (typed in expr_method_call.rs):
         // `x.sqrt() -> Self`, IEEE `f64::sqrt` (NaN for negative input, as in
         // codegen's `llvm.sqrt`). Float-only; integer receivers fall through.

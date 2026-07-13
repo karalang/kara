@@ -4154,6 +4154,51 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(args_close_span, &receiver_for_lookup);
             return receiver_for_lookup.clone();
         }
+        // `clamp` on a numeric scalar — `v.clamp(lo, hi)` pins `v` into the
+        // inclusive range `[lo, hi]`, the method sibling of the `clamp[T: Ord]`
+        // free fn (ordering.kara). Same nested-bound semantics: `v < lo → lo`,
+        // else `v > hi → hi`, else `v` (so `lo` wins on an inverted range).
+        // Both bounds must be the receiver type (bare literals coerce). Gated
+        // on a scalar receiver so it never shadows a user/collection `clamp`.
+        if method == "clamp"
+            && matches!(
+                &receiver_for_lookup,
+                Type::Int(_) | Type::UInt(_) | Type::Float(_)
+            )
+        {
+            if args.len() != 2 {
+                self.type_error(
+                    format!("`clamp` expects 2 arguments, got {}", args.len()),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Type::Error;
+            }
+            for arg in args.iter() {
+                let arg = &arg.value;
+                let arg_ty = self.infer_expr(arg);
+                let is_bare_num_lit = matches!(
+                    &arg.kind,
+                    ExprKind::Integer(_, None) | ExprKind::Float(_, None)
+                );
+                if is_bare_num_lit {
+                    self.record_expr_type(&arg.span, &receiver_for_lookup);
+                } else if arg_ty != Type::Error && arg_ty != receiver_for_lookup {
+                    self.type_error(
+                        format!(
+                            "`clamp` expects an argument of type `{}`, got `{}`",
+                            type_display(&receiver_for_lookup),
+                            type_display(&arg_ty)
+                        ),
+                        arg.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+            }
+            self.record_expr_type(args_close_span, &receiver_for_lookup);
+            return receiver_for_lookup.clone();
+        }
         // Bit intrinsics on integer scalars — `count_ones` / `leading_zeros` /
         // `trailing_zeros` -> u32 (Rust's `iN::{count_ones,leading_zeros,
         // trailing_zeros}`). All width-dependent: `leading_zeros` / `trailing_zeros`

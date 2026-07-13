@@ -441,6 +441,29 @@ fn test_int_float_min_max() {
 }
 
 #[test]
+fn test_int_float_clamp_method() {
+    // `v.clamp(lo, hi)` (method sibling of the `clamp` free fn): pins `v` into
+    // `[lo, hi]`, nested-bound form so `lo` wins on an inverted range. Defined
+    // on signed / unsigned / float widths. Line 4 (`7.clamp(10, 5)`) pins the
+    // inverted-range case, line 5–6 float, 7–8 unsigned.
+    let out = run("fn main() {\n\
+             println(15i64.clamp(0i64, 10i64));\n\
+             println((0 - 3i64).clamp(0i64, 10i64));\n\
+             println(5i64.clamp(0i64, 10i64));\n\
+             println(7i64.clamp(10i64, 5i64));\n\
+             let x: f64 = 1.5;\n\
+             println(x.clamp(2.0, 3.0));\n\
+             let y: f64 = 2.5;\n\
+             println(y.clamp(0.0, 2.0));\n\
+             let u: u8 = 200;\n\
+             println(u.clamp(0u8, 100u8));\n\
+             let w: u32 = 4000000000;\n\
+             println(w.clamp(1u32, 4294967295u32));\n\
+         }");
+    assert_eq!(out, "10\n0\n5\n10\n2\n2\n100\n4000000000\n");
+}
+
+#[test]
 fn test_bit_intrinsics_width_correct() {
     // count_ones / leading_zeros / trailing_zeros are width-dependent: they count
     // within the receiver's bit width. A signed `iN`'s sign-extended model value
