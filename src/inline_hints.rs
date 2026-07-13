@@ -231,7 +231,7 @@ fn walk_expr(
         // Interpolated string parts carry embedded expressions.
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
-                if let ParsedInterpolationPart::Expr(pe) = p {
+                if let ParsedInterpolationPart::Expr(pe, _) = p {
                     w!(pe);
                 }
             }
