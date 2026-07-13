@@ -1064,7 +1064,14 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(InlineHint::Default) => attrs.push("inlinehint"),
             Some(InlineHint::Always) => attrs.push("alwaysinline"),
             Some(InlineHint::Never) => attrs.push("noinline"),
-            None => {}
+            // No user hint — consult the compiler-driven heuristic pass
+            // (phase-11 Codegen Optimization). The user always wins, so this
+            // only fires when `inline_hint` is absent. Advisory either way.
+            None => match self.heuristic_inline_hints.get(&func.name) {
+                Some(crate::inline_hints::HeuristicHint::Inline) => attrs.push("inlinehint"),
+                Some(crate::inline_hints::HeuristicHint::NoInline) => attrs.push("noinline"),
+                None => {}
+            },
         }
         if func.is_cold {
             attrs.push("cold");

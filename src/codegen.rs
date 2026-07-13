@@ -2454,6 +2454,13 @@ pub(super) struct Codegen<'ctx> {
     /// ref-returning methods (`Map.or_insert`, `Vec.get`, …) are never in
     /// a user impl block and so keep their dedicated codegen. B-2026-06-07-5.
     pub(crate) user_ref_method_names: std::collections::HashSet<String>,
+    /// Compiler-driven inline hints (phase-11 Codegen Optimization). Maps a
+    /// concrete user function's name to a heuristic `inlinehint` / `noinline`
+    /// decision, computed once by `crate::inline_hints::compute` before the
+    /// declaration pass and consulted by `emit_codegen_hint_attrs` only when
+    /// the user wrote no explicit `#[inline]` hint (the user always wins).
+    pub(crate) heuristic_inline_hints:
+        std::collections::HashMap<String, crate::inline_hints::HeuristicHint>,
     /// Set of `(span.offset, span.length)` keys for every expression whose
     /// Kāra type is `String`. Populated from `Program.string_typed_exprs`
     /// (which the lowering pass derives from `TypeCheckResult.expr_types`).
@@ -6053,6 +6060,7 @@ impl<'ctx> Codegen<'ctx> {
             secret_inner_types: HashMap::new(),
             display_option_result_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
+            heuristic_inline_hints: std::collections::HashMap::new(),
             string_typed_exprs: HashSet::new(),
             iterator_typed_exprs: HashSet::new(),
             fn_value_typed_exprs: HashMap::new(),
@@ -7279,6 +7287,13 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
         }
+
+        // Compiler-driven inline hints (phase-11 Codegen Optimization): decide,
+        // per concrete user function with no explicit `#[inline]`, whether to
+        // attach a heuristic `inlinehint` / `noinline`. Computed once here (a
+        // whole-program size + call-site census) so `emit_codegen_hint_attrs`
+        // can consult it during the per-function declaration pass below.
+        self.heuristic_inline_hints = crate::inline_hints::compute(program);
 
         // First pass: register generic functions for on-demand monomorphization;
         // declare concrete (non-generic) functions for forward-call support.

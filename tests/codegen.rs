@@ -3587,6 +3587,33 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_heuristic_inline_hint_on_small_helper() {
+        // A small leaf helper with no user `#[inline]` gets a compiler-driven
+        // `inlinehint` (phase-11 Codegen Optimization) — proves the
+        // `inline_hints::compute` decision reaches the LLVM attribute.
+        let ir = ir_for(
+            "fn helper(a: i64, b: i64) -> i64 { a + b }\nfn main() { let _ = helper(1, 2); }",
+        );
+        assert!(
+            ir.contains("inlinehint"),
+            "expected a heuristic `inlinehint` attribute; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_user_inline_always_still_emitted() {
+        // Regression guard on the user-hint path (the heuristic composes with
+        // it, user wins): `#[inline(always)]` still lowers to `alwaysinline`.
+        let ir = ir_for(
+            "#[inline(always)]\nfn helper(a: i64, b: i64) -> i64 { a + b }\nfn main() { let _ = helper(1, 2); }",
+        );
+        assert!(
+            ir.contains("alwaysinline"),
+            "expected user `#[inline(always)]` → `alwaysinline`; IR:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_e2e_ptr_const_mut_place_shapes_roundtrip() {
         // `ptr.const(place)` / `ptr.mut(place)` over the full place grammar the
         // typechecker's place-validator accepts — field access, a nested field
