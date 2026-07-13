@@ -1789,6 +1789,11 @@ impl<'a> super::Interpreter<'a> {
                             "exp2" => x.exp2(),
                             "log10" => x.log10(),
                             "trunc" => x.trunc(),
+                            "asinh" => x.asinh(),
+                            "acosh" => x.acosh(),
+                            "atanh" => x.atanh(),
+                            "exp_m1" => x.exp_m1(),
+                            "ln_1p" => x.ln_1p(),
                             _ => unreachable!("float_math unary classify/match drift"),
                         };
                         return Value::Float(r);
@@ -1798,6 +1803,7 @@ impl<'a> super::Interpreter<'a> {
                             let r = match method {
                                 "pow" => x.powf(y),
                                 "atan2" => x.atan2(y),
+                                "hypot" => x.hypot(y),
                                 _ => unreachable!("float_math binary classify/match drift"),
                             };
                             return Value::Float(r);

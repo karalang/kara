@@ -326,6 +326,27 @@ fn test_float_math_inverse_hyperbolic_and_extras() {
 }
 
 #[test]
+fn test_float_math_hypot_inverse_hyperbolic_exp1p() {
+    // Third wave of the `crate::float_math` surface: `hypot` (binary) plus the
+    // inverse hyperbolics (`asinh`/`acosh`/`atanh`) and `exp_m1`/`ln_1p`. All
+    // lower to direct libm calls in codegen (no LLVM intrinsic; `exp_m1`/`ln_1p`
+    // map to libm's `expm1`/`log1p`). Exact-result inputs for a
+    // platform-independent assertion; NB `cbrt` is intentionally excluded —
+    // Rust's in-Rust `f64::cbrt` disagrees with libm's, breaking run == build.
+    assert_eq!(run("fn main() { println((3.0f64).hypot(4.0f64)); }"), "5\n");
+    assert_eq!(run("fn main() { println((0.0f64).asinh()); }"), "0\n");
+    assert_eq!(run("fn main() { println((1.0f64).acosh()); }"), "0\n");
+    assert_eq!(run("fn main() { println((0.0f64).atanh()); }"), "0\n");
+    assert_eq!(run("fn main() { println((0.0f64).exp_m1()); }"), "0\n");
+    assert_eq!(run("fn main() { println((0.0f64).ln_1p()); }"), "0\n");
+    // Irrational check — the interpreter is the f64 reference oracle.
+    assert_eq!(
+        run("fn main() { println((0.7f64).asinh()); }"),
+        "0.6526665660823557\n"
+    );
+}
+
+#[test]
 fn test_signum_signed_int_and_float() {
     // `x.signum()`: signed ints → -1 / 0 / 1 (`iN::signum`), floats →
     // -1.0 / +1.0 / NaN (`f64::signum`). The float form carries the sign of a

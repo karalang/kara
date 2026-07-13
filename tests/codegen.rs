@@ -6679,6 +6679,28 @@ fn main() {
         }
     }
 
+    /// Third wave of `crate::float_math`: `hypot` (binary libm call) plus the
+    /// inverse hyperbolics (`asinh`/`acosh`/`atanh`) and `exp_m1`/`ln_1p`
+    /// (libm's `expm1`/`log1p`). Exact-result inputs so the assertion is
+    /// platform-independent and matches the interpreter twin
+    /// (`tests/interpreter.rs::test_float_math_hypot_inverse_hyperbolic_exp1p`).
+    #[test]
+    fn e2e_float_math_hypot_inverse_hyperbolic_exp1p() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println(f\"{(3.0f64).hypot(4.0f64)}\");\n\
+                 println(f\"{(0.0f64).asinh()}\");\n\
+                 println(f\"{(1.0f64).acosh()}\");\n\
+                 println(f\"{(0.0f64).atanh()}\");\n\
+                 println(f\"{(0.0f64).exp_m1()}\");\n\
+                 println(f\"{(0.0f64).ln_1p()}\");\n\
+                 println(f\"{(0.7f64).asinh()}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n0\n0\n0\n0\n0\n0.6526665660823557\n");
+        }
+    }
+
     /// `f32` receivers lower through the same path — the LLVM intrinsics are
     /// width-overloaded and the libm fallbacks pick the `f`-suffixed symbol
     /// (`tanf`/`atan2f`). Exact-result inputs.

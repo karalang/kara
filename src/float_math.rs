@@ -35,14 +35,17 @@ pub enum FloatMathKind {
 /// Classify `method` as a built-in float-math method, returning its arity.
 /// Returns `None` for any other name (callers fall through to normal method
 /// dispatch). Intentionally excludes `sqrt`/`abs`, which predate this table
-/// and stay inline at each site.
+/// and stay inline at each site. `cbrt` is deliberately absent: Rust's
+/// `f64::cbrt` is an in-Rust implementation, not a libm call, and it disagrees
+/// with the system libm `cbrt` this table would lower to (e.g. `27.0.cbrt()`
+/// is `3.0000000000000004` in the interpreter but `3.0` from libm), which
+/// would break `run == build`.
 pub fn classify(method: &str) -> Option<FloatMathKind> {
     Some(match method {
         "sin" | "cos" | "tan" | "exp" | "ln" | "log2" | "floor" | "ceil" | "round" | "asin"
-        | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "exp2" | "log10" | "trunc" => {
-            FloatMathKind::Unary
-        }
-        "pow" | "atan2" => FloatMathKind::Binary,
+        | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "exp2" | "log10" | "trunc" | "asinh"
+        | "acosh" | "atanh" | "exp_m1" | "ln_1p" => FloatMathKind::Unary,
+        "pow" | "atan2" | "hypot" => FloatMathKind::Binary,
         _ => return None,
     })
 }

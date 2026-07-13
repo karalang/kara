@@ -2237,6 +2237,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     ("cosh", true) => Some("coshf"),
                     ("tanh", false) => Some("tanh"),
                     ("tanh", true) => Some("tanhf"),
+                    ("asinh", false) => Some("asinh"),
+                    ("asinh", true) => Some("asinhf"),
+                    ("acosh", false) => Some("acosh"),
+                    ("acosh", true) => Some("acoshf"),
+                    ("atanh", false) => Some("atanh"),
+                    ("atanh", true) => Some("atanhf"),
+                    ("hypot", false) => Some("hypot"),
+                    ("hypot", true) => Some("hypotf"),
+                    // Rust's `exp_m1` / `ln_1p` are libm's `expm1` / `log1p`.
+                    ("exp_m1", false) => Some("expm1"),
+                    ("exp_m1", true) => Some("expm1f"),
+                    ("ln_1p", false) => Some("log1p"),
+                    ("ln_1p", true) => Some("log1pf"),
                     _ => None,
                 };
                 if let Some(sym) = libm_sym {
