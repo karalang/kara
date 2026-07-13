@@ -46,6 +46,18 @@ pub fn align_of[T]() -> usize { 0 }
 #[compiler_builtin]
 pub fn forget[T](value: T) {}
 
+// `ref_eq[T](a: ref T, b: ref T) -> bool` — REFERENCE-IDENTITY comparison for
+// `shared` types (design.md § Equality Semantics / roadmap `Core Types`). Two
+// `shared struct` / `shared enum` handles are `ref_eq` iff they point at the
+// SAME heap allocation — the intentional reference-semantics escape hatch that
+// `==` (always structural) does not provide. Only meaningful for `shared`
+// types; a call on an implicitly-RC'd or owned value is a typecheck error
+// (`infer_ref_eq_intrinsic`). The interpreter intercepts the call
+// (`Arc::ptr_eq`) and codegen intercepts it (`icmp eq` on the two heap
+// pointers); the placeholder body is never lowered.
+#[compiler_builtin]
+pub fn ref_eq[T](a: ref T, b: ref T) -> bool { false }
+
 // ── Volatile memory access (MMIO) ─────────────────────────────────
 //
 // `volatile_read[T](src)` / `volatile_write[T](dst, value)` — the

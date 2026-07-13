@@ -1214,6 +1214,29 @@ impl<'a> super::Interpreter<'a> {
                     }
                     return Value::Unit;
                 }
+                "ref_eq" => {
+                    // Reference-identity comparison for `shared` handles
+                    // (design.md § Equality Semantics). Two shared values are
+                    // `ref_eq` iff they share one `Arc` allocation. Typecheck
+                    // (`infer_ref_eq_intrinsic`) requires `shared` args, so the
+                    // non-shared arms below are unreachable for a well-formed
+                    // program — they keep eval total.
+                    let a = args.first().map(|x| self.eval_expr_inner(&x.value));
+                    if self.pending_cf.is_some() {
+                        return a.unwrap_or(Value::Unit);
+                    }
+                    let b = args.get(1).map(|x| self.eval_expr_inner(&x.value));
+                    if self.pending_cf.is_some() {
+                        return b.unwrap_or(Value::Unit);
+                    }
+                    let same = match (a, b) {
+                        (Some(Value::SharedStruct(x)), Some(Value::SharedStruct(y))) => {
+                            std::sync::Arc::ptr_eq(&x, &y)
+                        }
+                        _ => false,
+                    };
+                    return Value::Bool(same);
+                }
                 "fence" | "compiler_fence" => {
                     // Standalone memory barriers (`runtime/stdlib/intrinsics.kara`).
                     // A single-threaded tree-walk interpreter observes no memory

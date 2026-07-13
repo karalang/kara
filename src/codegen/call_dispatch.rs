@@ -583,6 +583,32 @@ impl<'ctx> super::Codegen<'ctx> {
         // below matches that (belt-and-suspenders for the caller-side
         // cleanup queues the arg loop would otherwise register). The
         // value simply leaks — that IS the handoff.
+        // `ref_eq(a, b) -> bool` — reference-identity for `shared` handles
+        // (design.md § Equality Semantics). A shared value is a pointer to its
+        // RC heap object, so identity is `icmp eq` on the two pointers.
+        // Intercepted before the generic-fn path so the `#[compiler_builtin]`
+        // stub never lowers; the reads are non-consuming (no rc bump, no drop).
+        if name == "ref_eq" && args.len() == 2 {
+            let a = self.compile_expr(&args[0].value)?;
+            let b = self.compile_expr(&args[1].value)?;
+            let (Ok(ap), Ok(bp)) = (
+                inkwell::values::BasicValueEnum::try_into(a),
+                inkwell::values::BasicValueEnum::try_into(b),
+            ) else {
+                return Err(
+                    "ref_eq expects two `shared` handles (reference-identity comparison)"
+                        .to_string(),
+                );
+            };
+            let ap: inkwell::values::PointerValue<'ctx> = ap;
+            let bp: inkwell::values::PointerValue<'ctx> = bp;
+            let eq = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::EQ, ap, bp, "ref_eq")
+                .unwrap();
+            return Ok(eq.into());
+        }
+
         if name == "forget" && args.len() == 1 {
             if let ExprKind::Identifier(var_name) = &args[0].value.kind {
                 self.suppress_user_drop_for_var(var_name);

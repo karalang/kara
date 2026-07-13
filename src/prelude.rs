@@ -1480,6 +1480,14 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // nothing — the value is handed off (leaked from Kāra's view), the
     // FFI ownership-handoff primitive.
     "forget",
+    // `ref_eq[T](a: ref T, b: ref T) -> bool` — reference-identity comparison
+    // for `shared struct` / `shared enum` handles (design.md § Equality
+    // Semantics). Declared `#[compiler_builtin]` in
+    // `runtime/stdlib/intrinsics.kara`; the typechecker intercepts the call
+    // (`infer_ref_eq_intrinsic`) to require a `shared` argument type, the
+    // interpreter compares `Arc` identity, and codegen emits an `icmp eq` on
+    // the two heap pointers. Registered here so the bare identifier resolves.
+    "ref_eq",
     // `volatile_read[T](src: *const T) -> T with reads(Hardware)` /
     // `volatile_write[T](dst: *mut T, value: T) with writes(Hardware)` —
     // the MMIO intrinsics (`unsafe`), declared `#[compiler_builtin]` in

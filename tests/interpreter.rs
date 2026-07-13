@@ -3289,6 +3289,42 @@ fn test_shared_struct_structural_equality() {
 }
 
 #[test]
+fn test_ref_eq_shared_struct_identity() {
+    // `ref_eq` is REFERENCE identity (design.md § Equality Semantics): true iff
+    // two shared handles point at the same allocation. `b = a` aliases the Arc
+    // (true); a separately-built `c` with equal fields is a distinct alloc
+    // (false) even though `==` would call it structurally equal. Parity with
+    // codegen::test_e2e_ref_eq_shared_identity.
+    let out = run("shared struct N { v: i64 }\n\
+         fn main() {\n\
+             let a = N { v: 1 };\n\
+             let b = a;\n\
+             let c = N { v: 1 };\n\
+             println(ref_eq(a, b));\n\
+             println(ref_eq(a, c));\n\
+         }");
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn test_ref_eq_non_shared_is_type_error() {
+    fn errs(src: &str) -> Vec<String> {
+        let parsed = karac::parse(src);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        typed.errors.iter().map(|e| e.message.clone()).collect()
+    }
+    // Owned struct / primitive: reference identity is not meaningful — error,
+    // pointing at `==`.
+    assert!(errs("struct P { v: i64 }\nfn main() { let a = P { v: 1 }; let b = P { v: 1 }; println(ref_eq(a, b)); }")
+        .iter()
+        .any(|e| e.contains("not a `shared` type")));
+    assert!(errs("fn main() { println(ref_eq(1, 2)); }")
+        .iter()
+        .any(|e| e.contains("not a `shared` type")));
+}
+
+#[test]
 fn test_user_drop_shared_struct_fires_once() {
     let (output, _drops) = run_program_with_drops(
         "shared struct Res { id: i64 }\n\

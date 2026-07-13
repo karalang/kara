@@ -141,6 +141,54 @@ impl<'a> super::TypeChecker<'a> {
     /// because the caller will check it explicitly"), but reusing the
     /// existing flag keeps `lower_type_expr_inner` from sprouting a
     /// second control parameter.
+    /// Type `ref_eq(a, b) -> bool` (design.md § Equality Semantics): both args
+    /// must be the SAME `shared` type — reference identity is only meaningful
+    /// for explicit reference-semantics values. A non-shared arg is a type
+    /// error pointing the user at `==` (structural equality).
+    pub(super) fn infer_ref_eq_intrinsic(&mut self, args: &[CallArg], span: &Span) -> Type {
+        if args.len() != 2 {
+            self.type_error(
+                format!("`ref_eq` takes exactly two arguments, got {}", args.len()),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Bool;
+        }
+        let ta = self.infer_expr(&args[0].value);
+        let tb = self.infer_expr(&args[1].value);
+        for (t, a) in [(&ta, &args[0]), (&tb, &args[1])] {
+            if !matches!(t, Type::Shared(_) | Type::Error) {
+                self.type_error(
+                    format!(
+                        "`ref_eq` compares reference identity of `shared` values only; \
+                         `{}` is not a `shared` type — use `==` for structural equality",
+                        type_display(t)
+                    ),
+                    a.value.span.clone(),
+                    TypeErrorKind::TraitBoundNotSatisfied,
+                );
+            }
+        }
+        // Both shared but of different types: reference identity across distinct
+        // types can never hold and is almost certainly a mistake.
+        if let (Type::Shared(na), Type::Shared(nb)) = (&ta, &tb) {
+            if na != nb {
+                self.type_error(
+                    format!(
+                        "`ref_eq` compares two values of the SAME `shared` type; \
+                         got `shared {na}` and `shared {nb}`"
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+        Type::Bool
+    }
+
     pub(super) fn infer_layout_query_intrinsic(
         &mut self,
         name: &str,
@@ -453,6 +501,14 @@ impl<'a> super::TypeChecker<'a> {
         if let ExprKind::Identifier(name) = &callee.kind {
             if name == "spawn" && args.len() == 1 && self.local_scope.lookup("spawn").is_none() {
                 self.check_cross_task_safe_captures(&args[0].value, span, "spawn");
+            }
+            // `ref_eq` reference-identity intrinsic (design.md § Equality
+            // Semantics): only meaningful for `shared` types. Intercept here to
+            // require `shared` args and yield `bool`, rather than resolving the
+            // `#[compiler_builtin]` stub's generic `[T](ref T, ref T)` signature
+            // (which would accept any type and then miscompile a non-shared arg).
+            if name == "ref_eq" && self.local_scope.lookup("ref_eq").is_none() {
+                return self.infer_ref_eq_intrinsic(args, span);
             }
         }
 

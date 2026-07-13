@@ -2304,6 +2304,27 @@ mod codegen_tests {
     }
 
     #[test]
+    fn test_e2e_ref_eq_shared_identity() {
+        // `ref_eq` (design.md § Equality Semantics): reference identity of two
+        // `shared` handles → `icmp eq` on the heap pointers. `b = a` aliases the
+        // same allocation (true); a separately-built `c` is a distinct alloc
+        // (false). Parity with interpreter::test_ref_eq_shared_struct_identity.
+        let out = run_program(
+            "shared struct N { v: i64 }\n\
+             fn main() {\n\
+                 let a = N { v: 1 };\n\
+                 let b = a;\n\
+                 let c = N { v: 1 };\n\
+                 println(ref_eq(a, b));\n\
+                 println(ref_eq(a, c));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "true\nfalse");
+        }
+    }
+
+    #[test]
     fn e2e_tuple_with_shared_struct_element_destructured_from_option() {
         // B-2026-07-08-16: destructuring a tuple whose first element is a shared
         // struct (pointer-repr) out of an `Option` — `Some((current, d))` from
