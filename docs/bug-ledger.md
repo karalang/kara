@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **419 surfaced · 4 open · 411 fixed** (2026-05-20 → 2026-07-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **420 surfaced · 5 open · 411 fixed** (2026-05-20 → 2026-07-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -99,6 +99,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **419 surfaced 
 | B-2026-07-13-2 | 2026-07-13 | codegen | high | A bare generic param `x: T` bound to a builtin COLLECTION (String/Vec/VecDeque) misses its owned-param return DEEP-COPY in the monomorph body under two conditions, each a silent double-free (JIT/native `free(): double free detected in tcache 2`; interpreter correct, no diagnostic). LEG A (String, nested): a generic fn forwarding its owned param to another generic call — `fn twice[T](x: T) -> T { id(x) }` — instantiates the callee as the TYPE-ERASED `id$struct` (no `$T_ct_String` axis) which does not deep-copy. LEG B (Vec, even DIRECT): `let w = id(v)` for a `Vec[i64]` local hits the correctly-named `id$struct$T_ct_Vec_i64` symbol, but its BODY still returns the param by alias — a bare-`T` param bound to `Vec[E]` loses the element `E` (subst_names is head-only `"Vec"`) so the body never registers `vec_elem_types[x]`, so `owned_vecstr_params` never gets `x`, so the tail deep-copy is skipped. | — |
 | B-2026-07-13-3 | 2026-07-13 | codegen | medium | A GENERIC function whose body is a `match` expression evaluating to a HEAP type `T` (String/Vec), monomorphized, lowers the match VALUE to the i64 const-0 placeholder — emitting `ret i64 0` against the `{ptr,i64,i64}` return type, which fails LLVM module verification (`Function return type does not match operand type of return inst`). LOUD: `karac build`/JIT refuse with the `--interp` hint; the interpreter is correct. The `if`-body sibling COMPILES (a generic `-> T` fn with an `if` returning String is fine), a SCALAR-return match (`-> i64`) compiles, and the NON-generic match-returns-String compiles — only GENERIC + `match`-body + HEAP return trips it. | — |
 | B-2026-07-13-4 | 2026-07-13 | interpreter+codegen | low | Calling a method directly on an enum UNIT-VARIANT LITERAL receiver — `Dir.North.code()` — fails on BOTH surfaces (the typechecker ACCEPTS it, but neither the interpreter nor codegen handles it). Interp: `internal: path 'Dir.North.code' has no interpreter evaluation rule (accepted by the typechecker but not wired in the tree-walk interpreter) — please report this`. Codegen: `no handler for method '<m>' on non-identifier receiver (method dispatch fell through; this is a codegen bug — add a dispatcher arm in compile_method_call...)`. Binding to a variable first is a clean workaround, so LOW severity. | — |
+| B-2026-07-13-7 | 2026-07-13 | codegen | high | Reading the row sub-tensors returned by `Tensor.iter_axis(n)` double-frees under JIT/native (`free(): double free detected in tcache 2`); the interpreter is correct. The `Vec[Tensor[T,S]]` row views returned by iter_axis appear to ALIAS the parent tensor's data buffer, so dropping both a row view and the parent frees the same allocation twice. `iter_axis(0)` followed only by `.len()` on the result is CLEAN (the count needs no element access) — the abort requires actually reading a row sub-tensor (`let r0 = rows[0]; r0.sum()`). | — |
 
 ### Fixed (411)
 
