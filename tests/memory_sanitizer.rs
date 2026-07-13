@@ -664,6 +664,42 @@ fn main() {
     }
 
     #[test]
+    fn asan_string_from_owned_source_copies_no_double_free() {
+        // B-2026-07-13-8: `String.from(<String>)` returned the source aggregate
+        // UNCHANGED (an alias of its `{ptr,len,cap}` buffer), so a fresh owned
+        // source — an f-string temp `String.from(f"x")` or an owned String
+        // binding `String.from(s)` — was freed BOTH by its own scope-exit
+        // cleanup and by the result binding (`free(): double free detected in
+        // tcache 2` under JIT/native; interpreter's value-copy was correct). The
+        // fix builds a fresh owned copy (the `From` owning contract), so each
+        // buffer frees exactly once. 300 iters over all three source shapes
+        // (f-string temp, owned binding, string literal): a missed copy
+        // double-frees (ASAN); a copy that failed to free the source leaks
+        // (LSan).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 300 {
+        let a: String = String.from(f"fstr{i}");
+        total = total + a.len();
+        let s: String = f"owned{i}";
+        let b: String = String.from(s);
+        total = total + b.len();
+        let c: String = String.from("literal");
+        total = total + c.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            &["6380"],
+            "string_from_owned_source_copies_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_owned_string_param_if_branch_return_no_leak_or_double_free() {
         // B-2026-07-13-1: an owned String param returned from an `if` branch
         // tail deep-copies (the caller retains the arg buffer). 200 iterations:

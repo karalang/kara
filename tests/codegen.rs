@@ -9866,6 +9866,30 @@ fn main() {
     /// preserved empty middle line, and empty string (zero lines). Leak-freedom
     /// is gated in `tests/memory_sanitizer.rs::asan_string_lines_no_leak_no_double_free`.
     #[test]
+    fn test_e2e_string_from_owned_source_copies() {
+        // B-2026-07-13-8: `String.from(<String>)` builds a fresh owned copy
+        // (the `From` owning contract), so a fresh owned source — f-string temp
+        // or owned binding — is not double-freed by both its origin and the
+        // result. Was: `free(): double free detected in tcache 2` under
+        // JIT/native for the f-string/owned-binding sources; the string-literal
+        // source stayed clean by luck (cap == 0).
+        let out = run_program(
+            "fn main() {\n\
+             \x20   let a: String = String.from(f\"fs{1}\");\n\
+             \x20   println(a);\n\
+             \x20   let s: String = f\"own{2}\";\n\
+             \x20   let b: String = String.from(s);\n\
+             \x20   println(b);\n\
+             \x20   let c: String = String.from(\"lit\");\n\
+             \x20   println(c);\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "fs1\nown2\nlit");
+        }
+    }
+
+    #[test]
     fn test_e2e_string_lines() {
         if let Some(out) = run_program(
             "fn main() {\n\

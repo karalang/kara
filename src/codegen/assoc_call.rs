@@ -1981,7 +1981,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     let (ptr, len) = self.emit_codepoint_to_utf8(v.into_int_value());
                     return Ok(self.build_owned_string_from_parts(ptr, len));
                 }
-                return self.compile_expr(&arg.value);
+                // `String.from(<String>)` returns an OWNED String built by COPYING
+                // the source's bytes (the same fresh-buffer path `.to_string()`
+                // uses), matching the interpreter's value-copy passthrough. The
+                // prior code returned the source aggregate UNCHANGED — an alias of
+                // its `{ptr,len,cap}` buffer — so a fresh owned source (an
+                // f-string temp `String.from(f"x")` or an owned String binding
+                // `String.from(s)`) was freed BOTH by its own scope-exit cleanup
+                // and by the result binding: `free(): double free detected in
+                // tcache 2` (B-2026-07-13-8). A string-literal / StringSlice
+                // source stayed clean by luck (`cap == 0`, its free is a no-op);
+                // copying keeps those correct and independent too. The copy is the
+                // owning contract of `From` — the result outlives the argument.
+                let v = self.compile_expr(&arg.value)?.into_struct_value();
+                let data = self
+                    .builder
+                    .build_extract_value(v, 0, "sf.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_extract_value(v, 1, "sf.len")
+                    .unwrap()
+                    .into_int_value();
+                return Ok(self.build_owned_string_from_parts(data, len));
             }
         }
         // `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]` —
