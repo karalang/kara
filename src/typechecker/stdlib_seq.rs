@@ -438,6 +438,16 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Str],
                 }
             }
+            "split_whitespace" => {
+                // split_whitespace() -> Vec[String]. Splits on runs of Unicode
+                // whitespace with no leading/trailing/repeated empty pieces
+                // (Rust `str::split_whitespace`). No argument.
+                self.expect_no_args("String.split_whitespace", args, span);
+                Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![Type::Str],
+                }
+            }
             "starts_with" | "ends_with" => {
                 // starts_with(prefix: String) / ends_with(suffix: String) -> bool.
                 // True iff the receiver's bytes begin / end with the argument's.

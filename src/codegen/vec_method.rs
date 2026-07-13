@@ -820,35 +820,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(result)
             }
-            "lines" => {
-                // `String.lines() -> Vec[String]`. No separator argument — the
-                // `karac_runtime_string_lines` helper splits at `\n` / strips a
-                // trailing `\r` / drops a final empty line via Rust's own
-                // `str::lines`, so the pieces are byte-identical to the
-                // interpreter. Each line is a fresh malloc'd String the result
-                // Vec owns; the result is registered as `Vec[String]` by the
-                // typechecker, so its element drop + buffer free run at scope
-                // exit (same ownership path as `split`).
+            "lines" | "split_whitespace" => {
+                // `String.lines()` / `.split_whitespace() -> Vec[String]`. No
+                // separator argument — the runtime helper splits via Rust's own
+                // `str::lines` / `str::split_whitespace`, so the pieces are
+                // byte-identical to the interpreter. Each piece is a fresh
+                // malloc'd String the result Vec owns; the result is registered
+                // as `Vec[String]` by the typechecker, so its element drop +
+                // buffer free run at scope exit (same ownership path as `split`).
+                let sym = if method == "lines" {
+                    "karac_runtime_string_lines"
+                } else {
+                    "karac_runtime_string_split_whitespace"
+                };
                 let recv_data_ptr = self
                     .builder
-                    .build_struct_gep(vec_ty, data_ptr, 0, "lines.recv.ptr.p")
+                    .build_struct_gep(vec_ty, data_ptr, 0, "swss.recv.ptr.p")
                     .unwrap();
                 let recv_data = self
                     .builder
-                    .build_load(ptr_ty, recv_data_ptr, "lines.recv.ptr")
+                    .build_load(ptr_ty, recv_data_ptr, "swss.recv.ptr")
                     .unwrap()
                     .into_pointer_value();
                 let recv_len_ptr = self
                     .builder
-                    .build_struct_gep(vec_ty, data_ptr, 1, "lines.recv.len.p")
+                    .build_struct_gep(vec_ty, data_ptr, 1, "swss.recv.len.p")
                     .unwrap();
                 let recv_len = self
                     .builder
-                    .build_load(i64_t, recv_len_ptr, "lines.recv.len")
+                    .build_load(i64_t, recv_len_ptr, "swss.recv.len")
                     .unwrap()
                     .into_int_value();
 
-                let lines_fn = match self.module.get_function("karac_runtime_string_lines") {
+                let split_fn = match self.module.get_function(sym) {
                     Some(f) => f,
                     None => {
                         let ft = self.context.void_type().fn_type(
@@ -861,31 +865,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             ],
                             false,
                         );
-                        self.module.add_function(
-                            "karac_runtime_string_lines",
-                            ft,
-                            Some(Linkage::External),
-                        )
+                        self.module.add_function(sym, ft, Some(Linkage::External))
                     }
                 };
 
                 let fn_val = self.current_fn.unwrap();
-                let result_slot = self.create_entry_alloca(fn_val, "lines.result", vec_ty.into());
+                let result_slot = self.create_entry_alloca(fn_val, "swss.result", vec_ty.into());
                 let out_data = self
                     .builder
-                    .build_struct_gep(vec_ty, result_slot, 0, "lines.out.data")
+                    .build_struct_gep(vec_ty, result_slot, 0, "swss.out.data")
                     .unwrap();
                 let out_len = self
                     .builder
-                    .build_struct_gep(vec_ty, result_slot, 1, "lines.out.len")
+                    .build_struct_gep(vec_ty, result_slot, 1, "swss.out.len")
                     .unwrap();
                 let out_cap = self
                     .builder
-                    .build_struct_gep(vec_ty, result_slot, 2, "lines.out.cap")
+                    .build_struct_gep(vec_ty, result_slot, 2, "swss.out.cap")
                     .unwrap();
                 self.builder
                     .build_call(
-                        lines_fn,
+                        split_fn,
                         &[
                             recv_data.into(),
                             recv_len.into(),
@@ -899,7 +899,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 let result = self
                     .builder
-                    .build_load(vec_ty, result_slot, "lines.load")
+                    .build_load(vec_ty, result_slot, "swss.load")
                     .unwrap();
                 Ok(result)
             }

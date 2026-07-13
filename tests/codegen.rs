@@ -9875,7 +9875,8 @@ fn main() {
                  println(v[0]);\n\
                  println(v[2]);\n\
                  let t: String = \"trailing\\n\";\n\
-                 println(f\"{t.lines().len()}\");\n\
+                 let tv = t.lines();\n\
+                 println(f\"{tv.len()}\");\n\
                  let c: String = \"crlf\\r\\nhandling\\r\\n\";\n\
                  let w = c.lines();\n\
                  println(f\"{w.len()}\");\n\
@@ -9884,10 +9885,41 @@ fn main() {
                  let x = d.lines();\n\
                  println(f\"{x.len()} {x[1].len()}\");\n\
                  let e: String = \"\";\n\
-                 println(f\"{e.lines().len()}\");\n\
+                 let ev = e.lines();\n\
+                 println(f\"{ev.len()}\");\n\
              }",
         ) {
             assert_eq!(out, "3\none\nthree\n1\n2\nhandling\n3 0\n0\n");
+        }
+    }
+
+    /// `String.split_whitespace() -> Vec[String]` via
+    /// `karac_runtime_string_split_whitespace` — must match the interpreter
+    /// oracle (`test_string_split_whitespace_interpreter`): whitespace-run
+    /// collapsing, tab/newline handling, and single/all-whitespace/empty →
+    /// 1 / 0 / 0. Leak-freedom gated in `tests/memory_sanitizer.rs`.
+    #[test]
+    fn test_e2e_string_split_whitespace() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: String = \"  the  quick   brown fox  \";\n\
+                 let v = a.split_whitespace();\n\
+                 println(f\"{v.len()}\");\n\
+                 println(v[0]);\n\
+                 println(v[3]);\n\
+                 let e: String = \"tab\\tand\\nnewline\";\n\
+                 let w = e.split_whitespace();\n\
+                 println(f\"{w.len()}\");\n\
+                 println(w[1]);\n\
+                 let one = \"single\".split_whitespace();\n\
+                 println(f\"{one.len()}\");\n\
+                 let ws = \"   \".split_whitespace();\n\
+                 println(f\"{ws.len()}\");\n\
+                 let empty = \"\".split_whitespace();\n\
+                 println(f\"{empty.len()}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "4\nthe\nfox\n3\nand\n1\n0\n0\n");
         }
     }
 

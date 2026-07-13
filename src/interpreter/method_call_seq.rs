@@ -180,6 +180,21 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
+            "split_whitespace" => {
+                // `String.split_whitespace() -> Vec[String]` — split on runs of
+                // Unicode whitespace, no empty pieces (Rust
+                // `str::split_whitespace`). Codegen's
+                // `karac_runtime_string_split_whitespace` calls the same method,
+                // so the backends are byte-identical.
+                if let Value::String(s) = &obj {
+                    let pieces: Vec<Value> = s
+                        .split_whitespace()
+                        .map(|w| Value::String(w.to_string()))
+                        .collect();
+                    return Some(Value::Array(Arc::new(std::sync::RwLock::new(pieces))));
+                }
+                return None;
+            }
             "substring" => {
                 // `String.substring(start) -> String` — bytes from `start` to end.
                 // `String.substring(start, end) -> String` — bytes in `[start, end)`.

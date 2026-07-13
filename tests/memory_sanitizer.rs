@@ -5858,6 +5858,35 @@ fn main() {
         );
     }
 
+    // `String.split_whitespace()` → Vec[String], same per-piece heap ownership
+    // as `lines` (every piece is a fresh malloc'd buffer — split_whitespace
+    // never yields an empty `{null,0,0}`). Each freed exactly once at scope
+    // exit; a missed drop leaks (LSan), a stray alias double-frees (ASAN).
+    // Looped 1000× with ≥36-byte tokens past any short-String fast path; the
+    // leading / trailing / repeated whitespace exercises the run-collapsing.
+    #[test]
+    fn asan_string_split_whitespace_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let text = "   alpha-token-payload-aaaaaaaaaaaaaa   beta-token-payload-bbbbbbbbbbbbbb   ";
+        let ws = text.split_whitespace();
+        total = total + ws.len();
+        for w in ws { total = total + w.len(); }
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            // Tokens 34 + 33 bytes/iter → (2 + 67) × 1000 = 69000.
+            &["69000"],
+            "string_split_whitespace_loop",
+        );
+    }
+
     // ── `Vec[String].binary_search(fresh_needle)` — needle-temp ownership ──
     //
     // `binary_search` itself allocates nothing (the `Option[i64]` result is

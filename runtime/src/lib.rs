@@ -5112,6 +5112,65 @@ mod string_split_ffi {
         *out_len = n as i64;
         *out_cap = n as i64;
     }
+
+    /// `String.split_whitespace() -> Vec[String]`. Split on runs of Unicode
+    /// whitespace using Rust's own `str::split_whitespace` (no leading /
+    /// trailing / repeated empty pieces), so the result is byte-identical to
+    /// the interpreter's `s.split_whitespace()`. Each piece is a fresh malloc'd
+    /// `{data, len, cap}` — same ownership convention as
+    /// `karac_runtime_string_split` (split_whitespace never yields an empty
+    /// piece, so every element is heap-owning).
+    ///
+    /// # Safety
+    /// `s` must point to `s_len` valid UTF-8 bytes (or be null with
+    /// `s_len == 0`); the three out-params must be valid writable pointers.
+    #[no_mangle]
+    pub unsafe extern "C" fn karac_runtime_string_split_whitespace(
+        s: *const u8,
+        s_len: u64,
+        out_data: *mut *mut u8,
+        out_len: *mut i64,
+        out_cap: *mut i64,
+    ) {
+        let s_len = usize::try_from(s_len).unwrap_or(usize::MAX);
+        let hay: &[u8] = if s.is_null() || s_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(s, s_len)
+        };
+        let text = std::str::from_utf8(hay).unwrap_or("");
+        let pieces: Vec<&[u8]> = text.split_whitespace().map(str::as_bytes).collect();
+
+        let n = pieces.len();
+        if n == 0 {
+            *out_data = std::ptr::null_mut();
+            *out_len = 0;
+            *out_cap = 0;
+            return;
+        }
+        let elem_size = std::mem::size_of::<KHeader>();
+        let arr = malloc(n * elem_size) as *mut KHeader;
+        if arr.is_null() {
+            *out_data = std::ptr::null_mut();
+            *out_len = 0;
+            *out_cap = 0;
+            return;
+        }
+        for (k, p) in pieces.iter().enumerate() {
+            // `split_whitespace` never yields an empty piece, so every element
+            // owns a fresh buffer.
+            let buf = malloc(p.len());
+            std::ptr::copy_nonoverlapping(p.as_ptr(), buf, p.len());
+            arr.add(k).write(KHeader {
+                data: buf,
+                len: p.len() as i64,
+                cap: p.len() as i64,
+            });
+        }
+        *out_data = arr as *mut u8;
+        *out_len = n as i64;
+        *out_cap = n as i64;
+    }
 }
 
 // ── std.http client codegen path (phase-8 line 17 slice 1) ────────────

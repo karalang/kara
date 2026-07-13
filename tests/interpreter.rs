@@ -12073,6 +12073,36 @@ fn test_string_lines_interpreter() {
 }
 
 #[test]
+fn test_string_split_whitespace_interpreter() {
+    // `String.split_whitespace() -> Vec[String]` (Rust `str::split_whitespace`):
+    // split on runs of Unicode whitespace, collapsing leading / trailing /
+    // repeated whitespace (no empty pieces). Codegen's
+    // `karac_runtime_string_split_whitespace` calls the same method, so the
+    // backends are byte-identical (`tests/codegen.rs::test_e2e_string_split_whitespace`;
+    // leak-checked in `tests/memory_sanitizer.rs`).
+    let output = run(r#"fn main() {
+            let a = "  the  quick   brown fox  ";
+            let v = a.split_whitespace();
+            println(f"{v.len()}");
+            println(v[0]);
+            println(v[3]);
+            // Tab and newline are whitespace too.
+            let e = "tab\tand\nnewline";
+            let w = e.split_whitespace();
+            println(f"{w.len()}");
+            println(w[1]);
+            // Single token, all-whitespace, and empty → 1 / 0 / 0.
+            let one = "single".split_whitespace();
+            println(f"{one.len()}");
+            let ws = "   ".split_whitespace();
+            println(f"{ws.len()}");
+            let empty = "".split_whitespace();
+            println(f"{empty.len()}");
+        }"#);
+    assert_eq!(output, "4\nthe\nfox\n3\nand\n1\n0\n0\n");
+}
+
+#[test]
 fn test_string_substring_interpreter() {
     // Mirrors `/tmp/kara-probes/substring_probe.kara`:
     // in-range / start-zero / out-of-range / negative / empty-receiver.
