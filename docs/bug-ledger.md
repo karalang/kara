@@ -520,8 +520,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **424 surfaced 
 | B-2026-07-13-7 | codegen | high | Reading the row sub-tensors returned by `Tensor.iter_axis(n)` double-frees under JIT/native (`free(): double free detected in tcache 2`); the interpr… | 0de5fc8 |
 | B-2026-07-13-8 | codegen | high | `String.from(<String>)` returned the source's `{ptr,len,cap}` aggregate UNCHANGED (an ALIAS of its heap buffer) instead of an owned copy | 257059b |
 | B-2026-07-13-9 | codegen | high | A generic `shared`/`par` struct with a BARE type-parameter field (`shared struct Box[T] { mut v: T }`) instantiated at a HEAP type (`Box[String]`, `B… | 07678e8 |
-| B-2026-07-13-10 | codegen | high | A chained field read/store through a Vec that is itself a FIELD of a shared struct (`root.kids[i].val`) returned the const-0 placeholder on the READ… | PENDING |
-| B-2026-07-13-11 | codegen | high | A `shared struct` (or `par struct`) with a `Vec[shared T]` FIELD leaked every element's RC box on drop | PENDING |
+| B-2026-07-13-10 | codegen | high | A chained field read/store through a Vec that is itself a FIELD of a shared struct (`root.kids[i].val`) returned the const-0 placeholder on the READ… | 26bb968 |
+| B-2026-07-13-11 | codegen | high | A `shared struct` (or `par struct`) with a `Vec[shared T]` FIELD leaked every element's RC box on drop | 26bb968 |
 
 </details>
 
