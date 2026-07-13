@@ -64340,6 +64340,70 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_embeddings_cosine_similarity_matrix() {
+        // `std.embeddings.cosine_similarity_matrix` (phase-11): the Q×N
+        // bulk-scoring path — a `[Q, D]` query block vs a `[N, D]` corpus →
+        // `[Q, N]` matrix, generic in Q, N, and D. Builds its `[?, ?]` result
+        // tensor from the runtime shape headers and index-writes each cell.
+        // Oracle uses vectors [3,4]/[4,-3]/[6,8] (norms 5, 5, 10) so every
+        // cosine is an exact 0 or 1 while genuinely exercising the sqrt +
+        // division path (not just unit vectors). Rows queries {[3,4],[4,-3]}
+        // vs corpus {[3,4],[4,-3],[6,8]}:
+        //   [1,0,1]  ([3,4]·{itself, orthogonal, colinear})
+        //   [0,1,0]  ([4,-3]·{orthogonal, itself, orthogonal})
+        if let Some(out) = run_program(
+            r#"
+import std.embeddings.{cosine_similarity_matrix};
+fn main() {
+    let queries: Tensor[f32, [2, 2]] = Tensor.from([[3.0f32, 4.0f32], [4.0f32, -3.0f32]]);
+    let corpus: Tensor[f32, [3, 2]] = Tensor.from([[3.0f32, 4.0f32], [4.0f32, -3.0f32], [6.0f32, 8.0f32]]);
+    let m = cosine_similarity_matrix(queries, corpus);
+    println(m[0, 0]); println(m[0, 1]); println(m[0, 2]);
+    println(m[1, 0]); println(m[1, 1]); println(m[1, 2]);
+}
+"#,
+        ) {
+            assert_eq!(out, "1\n0\n1\n0\n1\n0\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_embeddings_top_k() {
+        // `std.embeddings.top_k` (phase-11): the ranking step after a
+        // similarity scan — the k highest scores as `(index, score)` pairs,
+        // descending, ties left-biased. Partial-selection O(n·k), no full
+        // sort. Scores are exact-f32 powers of two [0.125, 0.5, 0.25, 0.75]
+        // so the printed scores are byte-clean. Descending order is
+        // 0.75(idx 3), 0.5(idx 1), 0.25(idx 2), 0.125(idx 0):
+        //   top_k(·, 3) → [(3,0.75), (1,0.5), (2,0.25)] (index+score printed);
+        //   the k-cap top_k(·, 10) returns all four descending, indices
+        //   [3, 1, 2, 0].
+        if let Some(out) = run_program(
+            r#"
+import std.embeddings.{top_k};
+fn main() {
+    let mut s: Vec[f32] = Vec.new();
+    s.push(0.125f32); s.push(0.5f32); s.push(0.25f32); s.push(0.75f32);
+    let a = top_k(s, 3);
+    for pair in a.iter() {
+        let (idx, score) = pair;
+        println(idx);
+        println(score);
+    }
+    println(-1);
+    let b = top_k(s, 10);
+    for pair in b.iter() {
+        let (idx, _) = pair;
+        println(idx);
+    }
+}
+"#,
+        ) {
+            assert_eq!(out, "3\n0.75\n1\n0.5\n2\n0.25\n-1\n3\n1\n2\n0\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_secret_field_redacted_in_display() {
         // A struct containing a `Secret[T]` field renders the field as
         // `<redacted>` in the derived Display (build_struct_display_parts

@@ -13,10 +13,13 @@
 // subset can be `import`ed on its own — a gated stdlib module only splices the
 // names you name, not their internal callees.
 //
-// v1 scope: the scalar single-pair surface (`dot`, `l2_norm`,
-// `cosine_similarity`, `l2_normalize`). The batched single-query
-// (`… vs Tensor[f32, [N, D]]`) and Q×N-matrix forms are a follow-on slice
-// (they need 2-D row iteration).
+// Full v1 surface, in three tiers:
+//   * scalar single-pair: `dot`, `l2_norm`, `cosine_similarity`, `l2_normalize`.
+//   * batched single-query (one query vs a `[N, D]` corpus): `dot_batched`,
+//     `cosine_similarity_batched`.
+//   * Q×N matrix (a `[Q, D]` query block vs a `[N, D]` corpus):
+//     `cosine_similarity_matrix`.
+//   * ranking: `top_k` (the k highest scores as `(index, score)` pairs).
 
 /// Dot product of two same-width embedding vectors: `Σ aᵢ·bᵢ`.
 #[must_use = "the dot product is the whole result — discarding it wastes the traversal"]
@@ -96,6 +99,84 @@ pub fn cosine_similarity_batched[N, D](
         let pr = row.zip_with(row, |x, y| x * y);
         let nr = pr.sum().sqrt();
         out.push(d / (nq * nr));
+    }
+    out
+}
+
+/// Q×N cosine-similarity matrix: `cosine(queryᵢ, corpusⱼ)` for every pair of a
+/// `[Q, D]` query block and a `[N, D]` corpus, returning a `[Q, N]` tensor
+/// (`out[i, j]` is query `i`'s similarity to corpus row `j`). This is the
+/// SGEMM-shaped bulk-scoring path — a whole batch of queries against the whole
+/// corpus in one call. Both inputs are borrowed; the result is a fresh tensor.
+#[must_use = "the similarity matrix is the whole result — discarding it wastes the Q×N computation"]
+pub fn cosine_similarity_matrix[Q, N, D](
+    queries: ref Tensor[f32, [Q, D]],
+    corpus: ref Tensor[f32, [N, D]],
+) -> Tensor[f32, [Q, N]] with panics {
+    // Dims come from the runtime headers so the result tensor can be built
+    // without naming the shape params in a body annotation (kept as `?`).
+    let q = queries.shape()[0];
+    let n = corpus.shape()[0];
+    let out: Tensor[f32, [?, ?]] = Tensor.zeros([q, n]);
+    let qrows = queries.iter_axis(0);
+    let crows = corpus.iter_axis(0);
+    let mut i = 0;
+    while i < q {
+        let qrow = qrows[i];
+        let pqq = qrow.zip_with(qrow, |x, y| x * y);
+        let nq = pqq.sum().sqrt();
+        let mut j = 0;
+        while j < n {
+            let crow = crows[j];
+            let pd = qrow.zip_with(crow, |x, y| x * y);
+            let d = pd.sum();
+            let pr = crow.zip_with(crow, |x, y| x * y);
+            let nr = pr.sum().sqrt();
+            out[i, j] = d / (nq * nr);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// Return the `k` highest scores as `(index, score)` pairs, in descending
+/// order (best first) — the retrieval step after a batched similarity scan.
+/// Each pair carries both the corpus index and its score, so the caller can
+/// display or threshold on the similarity without re-indexing `scores`. `k` is
+/// a cap: if `scores` has fewer than `k` entries, every entry is returned. A
+/// non-positive `k` (or an empty `scores`) yields an empty result. Ties keep
+/// the lower index first (a stable, left-biased selection).
+///
+/// Cost is `O(n·k)` — a partial selection, the right shape for `k ≪ n` (the
+/// usual "top-10 of a million" case); it does not sort the whole vector.
+#[must_use = "the ranked results are the whole point — discarding them wastes the scan"]
+pub fn top_k(scores: ref Vec[f32], k: i64) -> Vec[(i64, f32)] with panics {
+    let n = scores.len();
+    // `used[i]` marks an index already claimed by an earlier round.
+    let mut used: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        used.push(false);
+    }
+    let mut out: Vec[(i64, f32)] = Vec.new();
+    let mut picked = 0;
+    while picked < k and picked < n {
+        // Scan for the largest score not yet claimed. `best < 0` means the
+        // round hasn't seen a candidate; strict `>` keeps the earlier index on
+        // ties (left-biased, stable).
+        let mut best = -1;
+        let mut best_val = 0.0f32;
+        for j in 0..n {
+            if not used[j] {
+                if best < 0 or scores[j] > best_val {
+                    best = j;
+                    best_val = scores[j];
+                }
+            }
+        }
+        used[best] = true;
+        out.push((best, best_val));
+        picked = picked + 1;
     }
     out
 }
