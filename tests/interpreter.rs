@@ -326,6 +326,33 @@ fn test_float_math_inverse_hyperbolic_and_extras() {
 }
 
 #[test]
+fn test_signum_signed_int_and_float() {
+    // `x.signum()`: signed ints → -1 / 0 / 1 (`iN::signum`), floats →
+    // -1.0 / +1.0 / NaN (`f64::signum`). The float form carries the sign of a
+    // signed zero (`(-0.0).signum() == -1.0`) and preserves NaN — codegen
+    // mirrors this with `copysign` + a NaN guard.
+    assert_eq!(run("fn main() { println((42i64).signum()); }"), "1\n");
+    assert_eq!(run("fn main() { println((-42i64).signum()); }"), "-1\n");
+    assert_eq!(run("fn main() { println((0i64).signum()); }"), "0\n");
+    assert_eq!(
+        run("fn main() { println((0i32 - 7i32).signum()); }"),
+        "-1\n"
+    );
+    assert_eq!(run("fn main() { println((3.5f64).signum()); }"), "1\n");
+    assert_eq!(run("fn main() { println((-3.5f64).signum()); }"), "-1\n");
+    // +0.0 → 1.0; -0.0 (built as `0.0 * -1.0`) → -1.0; NaN → NaN.
+    assert_eq!(run("fn main() { println((0.0f64).signum()); }"), "1\n");
+    assert_eq!(
+        run("fn main() { let z: f64 = 0.0 * (0.0 - 1.0); println(z.signum()); }"),
+        "-1\n"
+    );
+    assert_eq!(
+        run("fn main() { let n: f64 = (0.0 - 1.0).sqrt(); println(n.signum()); }"),
+        "NaN\n"
+    );
+}
+
+#[test]
 fn test_float_bit_reinterpret_roundtrip() {
     // IEEE-754 bit reinterpretation: `to_bits`/`to_bits32` and the inverse
     // `bits_as_f64`/`bits_as_f32` round-trip a float through its integer bits.

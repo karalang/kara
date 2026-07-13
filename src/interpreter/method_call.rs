@@ -1640,6 +1640,18 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Built-in `signum` (typed in expr_method_call.rs, signed-int / float
+        // only): `iN::signum` → -1 / 0 / 1; `f64::signum` → -1.0 / +1.0 (sign of
+        // a signed zero preserved) or NaN. Codegen mirrors this with a nested
+        // `select` (int) / `copysign` + NaN guard (float).
+        if method == "signum" && args.is_empty() {
+            match &obj {
+                Value::Int(n) => return Value::Int(n.signum()),
+                Value::Float(f) => return Value::Float(f.signum()),
+                _ => {}
+            }
+        }
+
         // `min` / `max` on a numeric scalar (typed in expr_method_call.rs):
         // `a.min(b)` / `a.max(b)` → the smaller / larger. Handles both `Int` and
         // `Float` shapes; codegen lowers to a `select` on `icmp`/`fcmp`.

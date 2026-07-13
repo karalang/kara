@@ -1854,6 +1854,67 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `signum` (typed in expr_method_call.rs, signed-int / float only).
+        // Int → nested `select(x > 0, 1, select(x < 0, -1, 0))` at the receiver
+        // width (signed `icmp`). Float → `select(isnan, x, copysign(1.0, x))`:
+        // the `llvm.copysign` intrinsic carries `x`'s sign onto 1.0 (so ±0.0
+        // yield ±1.0, matching Rust `f64::signum`), and a NaN receiver returns
+        // itself via the ordered-vs-unordered guard.
+        if method == "signum" && args.is_empty() {
+            let v = self.compile_expr(object)?;
+            match v {
+                BasicValueEnum::IntValue(iv) => {
+                    let ity = iv.get_type();
+                    let zero = ity.const_zero();
+                    let one = ity.const_int(1, false);
+                    let neg_one = ity.const_all_ones();
+                    let is_pos = self
+                        .builder
+                        .build_int_compare(IntPredicate::SGT, iv, zero, "sgn.pos")
+                        .unwrap();
+                    let is_neg = self
+                        .builder
+                        .build_int_compare(IntPredicate::SLT, iv, zero, "sgn.neg")
+                        .unwrap();
+                    let neg_or_zero = self
+                        .builder
+                        .build_select(is_neg, neg_one, zero, "sgn.lo")
+                        .unwrap();
+                    let r = self
+                        .builder
+                        .build_select(is_pos, one.into(), neg_or_zero, "signum")
+                        .unwrap();
+                    return Ok(r);
+                }
+                BasicValueEnum::FloatValue(fv) => {
+                    let fty = fv.get_type();
+                    let one = fty.const_float(1.0);
+                    let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.copysign")
+                        .unwrap_or_else(|| panic!("llvm.copysign intrinsic must exist"));
+                    let decl = intrinsic
+                        .get_declaration(&self.module, &[fty.into()])
+                        .unwrap_or_else(|| panic!("llvm.copysign declaration for float type"));
+                    let signed_one = self
+                        .builder
+                        .build_call(decl, &[one.into(), fv.into()], "sgn.cs")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic();
+                    // `fcmp uno x, x` is true iff `x` is NaN — return `x` then.
+                    let is_nan = self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::UNO, fv, fv, "sgn.nan")
+                        .unwrap();
+                    let r = self
+                        .builder
+                        .build_select(is_nan, fv.into(), signed_one, "signum")
+                        .unwrap();
+                    return Ok(r);
+                }
+                _ => {}
+            }
+        }
+
         // `min` / `max` on a numeric scalar (typed in expr_method_call.rs):
         // ints → `select` on a signed/unsigned `icmp`; floats → the overloaded
         // `llvm.minnum`/`llvm.maxnum` intrinsics (NaN-quieting, matching Rust

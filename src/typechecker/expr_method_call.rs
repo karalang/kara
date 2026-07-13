@@ -3803,6 +3803,18 @@ impl<'a> super::TypeChecker<'a> {
         {
             return receiver_for_lookup.clone();
         }
+        // Built-in `signum` — `x.signum() -> Self`. Signed-int receivers yield
+        // -1 / 0 / 1 (Rust `iN::signum`); float receivers yield -1.0 / +1.0 /
+        // NaN, with `signum` carrying the sign of a signed zero (Rust
+        // `f64::signum` = `copysign(1.0, x)`, NaN-preserving). Unsigned integers
+        // have no `signum` in Rust, so `UInt` falls through to `NoMethodFound`.
+        // Backends: interpreter `method_call.rs`, codegen `method_call.rs`.
+        if method == "signum"
+            && args.is_empty()
+            && matches!(&receiver_for_lookup, Type::Int(_) | Type::Float(_))
+        {
+            return receiver_for_lookup.clone();
+        }
         // Built-in `sqrt` on float primitives — `x.sqrt() -> Self`. Float-only
         // (no integer square root); lowers to the `llvm.sqrt` intrinsic in
         // codegen (a single `f64.sqrt` instruction on wasm — no libm) and

@@ -22799,6 +22799,33 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_signum_signed_int_and_float() {
+        // `x.signum()`: ints lower to a nested `select` (signed `icmp`), floats
+        // to `copysign(1.0, x)` guarded by a NaN check. AOT output must match
+        // the interpreter oracle (`test_signum_signed_int_and_float`),
+        // including the signed-zero and NaN edges.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    println((42i64).signum());
+    println((-42i64).signum());
+    println((0i64).signum());
+    println((0i32 - 7i32).signum());
+    println((3.5f64).signum());
+    println((-3.5f64).signum());
+    println((0.0f64).signum());
+    let z: f64 = 0.0 * (0.0 - 1.0);
+    println(z.signum());
+    let n: f64 = (0.0 - 1.0).sqrt();
+    println(n.signum());
+}
+"#,
+        ) {
+            assert_eq!(out, "1\n-1\n0\n-1\n1\n-1\n1\n-1\nNaN\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_int_float_min_max() {
         // `a.min(b)` / `a.max(b)` on numeric scalars: ints lower to `select` on
         // signed/unsigned `icmp`, floats to `llvm.minnum`/`llvm.maxnum`. The AOT
