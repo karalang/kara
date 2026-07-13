@@ -239,6 +239,33 @@ fn test_generic_shared_struct_heap_field_aliases() {
 }
 
 #[test]
+fn test_shared_vec_field_index_field_read_store_aliasing() {
+    // B-2026-07-13-10 oracle pin. A chained read/store through a Vec that is a
+    // FIELD of a shared struct (`root.kids[i].val`) is reference-semantics: the
+    // pushed element is the SAME RC object as the original handle, so a write
+    // through the Vec-field chain is observable via that handle (`a`/`b`). The
+    // codegen backends returned the const-0 placeholder for the read and
+    // silently dropped the store until fixed; the interpreter has always been
+    // correct and is the oracle this locks.
+    let src = "shared struct Node { mut val: i64, mut kids: Vec[Node] }
+        fn main() {
+            let root = Node { val: 1, kids: Vec.new() };
+            let a = Node { val: 10, kids: Vec.new() };
+            let b = Node { val: 20, kids: Vec.new() };
+            root.kids.push(a);
+            root.kids.push(b);
+            println(f\"{root.kids[0].val}\");
+            root.kids[0].val = root.kids[0].val + 5;
+            root.kids[1].val = 99;
+            println(f\"{root.kids[0].val}\");
+            println(f\"{root.kids[1].val}\");
+            println(f\"{a.val}\");
+            println(f\"{b.val}\");
+        }";
+    assert_eq!(run_no_errors(src), "10\n15\n99\n15\n99\n");
+}
+
+#[test]
 fn test_user_impl_display_dispatches_through_to_string() {
     // A user `impl Display { fn to_string(ref self) -> String }` must win over
     // the built-in renderer across all three Display positions — `.to_string()`,

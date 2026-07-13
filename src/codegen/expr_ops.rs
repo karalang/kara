@@ -474,6 +474,60 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // Indexed-shared-element receiver whose index root is NOT a plain
+        // identifier — most importantly a Vec/Slice FIELD of a shared struct
+        // (`root.kids[i].val`, `self.nodes[i].field`). The identifier-rooted
+        // form (`nodes[i].field`) is handled by the branch just above; this
+        // generalizes it to ANY indexed receiver whose ELEMENT type resolves
+        // to a `shared struct`. `type_name_of_expr` already unwraps the field's
+        // `Vec[E]`/`Slice[E]` to the element name `E`, and `compile_index`
+        // yields that element's 8-byte RC handle WITHOUT an inc (a field-access-
+        // rooted index mints a synth Vec identifier and recurses — a pure
+        // read), so we load the handle and GEP the heap field. Without this,
+        // `root.kids[i].val` fell to the generic struct-value tail below: the
+        // Index compiles to a `PointerValue`, the `StructValue` guard misses,
+        // and the access returned the const-0 placeholder — a SILENT wrong
+        // value (interp reads the field correctly). B-2026-07-13-10. Restricted
+        // to a non-identifier index root so the identifier branch above stays
+        // byte-identical (it returns before reaching here for the shapes it
+        // covers).
+        if let ExprKind::Index { object: inner, .. } = &object.kind {
+            if !matches!(inner.kind, ExprKind::Identifier(_)) {
+                if let Some(type_name) = self.type_name_of_expr(object) {
+                    if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
+                        if !info.is_enum {
+                            if let Some(idx) = self
+                                .struct_field_names
+                                .get(&type_name)
+                                .and_then(|names| names.iter().position(|n| n == field))
+                            {
+                                let ptr = self.compile_expr(object)?.into_pointer_value();
+                                let (gep_ty, base) =
+                                    self.shared_gep_layout(&type_name, info.heap_type);
+                                let field_ptr = self
+                                    .builder
+                                    .build_struct_gep(
+                                        gep_ty,
+                                        ptr,
+                                        idx as u32 + base,
+                                        &format!("sh_idx_fld_{}", field),
+                                    )
+                                    .unwrap();
+                                if self.niche_field_inner_heap_type(&type_name, idx).is_some() {
+                                    return Ok(self.niche_load_option_field(field_ptr, field));
+                                }
+                                let field_ty =
+                                    gep_ty.get_field_type_at_index(idx as u32 + base).unwrap();
+                                return Ok(self
+                                    .builder
+                                    .build_load(field_ty, field_ptr, field)
+                                    .unwrap());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // SoA-laid-out Vec element field read: `entities[i].field`. The
         // generic struct-field path returns the `i64 0` placeholder for an
         // Index receiver (it never recurses into `compile_index`), so the
@@ -1024,6 +1078,58 @@ impl<'ctx> super::Codegen<'ctx> {
                                     }
                                     return Ok(());
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Indexed-shared-element field store where the index root is NOT a
+        // plain identifier — the store-side sibling of the read fix in
+        // `compile_field_access` (B-2026-07-13-10): `root.kids[i].val = X`,
+        // `self.nodes[i].field = X` where the Vec/Slice element is a `shared
+        // struct`. `compile_expr` on the Index yields the element's 8-byte RC
+        // handle (the field-access-rooted index mints a synth Vec identifier
+        // and recurses — a pure read, no inc), then GEP the heap field and
+        // store. The identifier-rooted form (`nodes[i].field = X`) is handled
+        // just above; the nested-plain-struct branch below only covers
+        // NON-shared elements (`struct_types`), so without this a shared-element
+        // chained store fell through to the no-op tail and was SILENTLY dropped
+        // — a subsequent read returned the stale value (the interpreter applied
+        // the write). Restricted to a non-identifier index root so the
+        // identifier branch above stays byte-identical.
+        if let ExprKind::Index { object: inner, .. } = &object.kind {
+            if !matches!(inner.kind, ExprKind::Identifier(_)) {
+                if let Some(type_name) = self.type_name_of_expr(object) {
+                    if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
+                        if !info.is_enum {
+                            if let Some(idx) = self
+                                .struct_field_names
+                                .get(&type_name)
+                                .and_then(|names| names.iter().position(|n| n == field))
+                            {
+                                let heap_ptr = self.compile_expr(object)?.into_pointer_value();
+                                let (gep_ty, base) =
+                                    self.shared_gep_layout(&type_name, info.heap_type);
+                                let field_ptr = self
+                                    .builder
+                                    .build_struct_gep(
+                                        gep_ty,
+                                        heap_ptr,
+                                        idx as u32 + base,
+                                        &format!("sh_idx_fld_{}_ptr", field),
+                                    )
+                                    .unwrap();
+                                // Field-store width coercion — see
+                                // `coerce_to_struct_field_ty`.
+                                let new_val = self.coerce_to_struct_field_ty(
+                                    gep_ty,
+                                    idx as u32 + base,
+                                    new_val,
+                                );
+                                self.builder.build_store(field_ptr, new_val).unwrap();
+                                return Ok(());
                             }
                         }
                     }

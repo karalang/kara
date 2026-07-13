@@ -17728,6 +17728,46 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_shared_vec_field_index_field_mutation_no_leak() {
+        // B-2026-07-13-10 leak/UAF gate. The read/store fixes GEP a shared
+        // element's heap field through a Vec that is itself a FIELD of a shared
+        // struct (`root.kids[i].val`). Both paths reach the element handle via
+        // `compile_expr(Index)`, which is a PURE read (the field-access-rooted
+        // index mints a synth Vec identifier and recurses — no rc_inc), so
+        // neither adds an owned ref that would need a matching dec. This churns
+        // the shape 300× — each iter builds a shared root + two shared children,
+        // pushes the children into the `kids` Vec field (RC co-ownership),
+        // mutates them through the chained store, and reads them back — so a
+        // stray inc on the chain (leak) or a missed dec of the pushed children
+        // at Vec-drop (leak) is caught by LSan on Linux, and a double-free of a
+        // child box would trip ASAN.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { mut val: i64, mut kids: Vec[Node] }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 300 {
+        let root = Node { val: 1, kids: Vec.new() };
+        let a = Node { val: 10, kids: Vec.new() };
+        let b = Node { val: 20, kids: Vec.new() };
+        root.kids.push(a);
+        root.kids.push(b);
+        root.kids[0].val = root.kids[0].val + 5;
+        root.kids[1].val = 99;
+        total = total + root.kids[0].val + root.kids[1].val;
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // Each iter: kids[0]=15, kids[1]=99 → 114. 300*114 = 34200.
+            &["34200"],
+            "shared_vec_field_index_field_mutation_no_leak",
+        );
+    }
+
     /// Column heap lifecycle (phase-11 data-science stdlib, Arrow codegen
     /// core slice): each `Column[T]` is a control block + a separate data
     /// buffer + a separate validity bitmap, all freed once at scope exit

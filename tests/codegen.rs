@@ -8807,6 +8807,61 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_shared_vec_field_index_field_read_and_store() {
+        // B-2026-07-13-10 — a chained field access/store through a Vec that is
+        // itself a FIELD of a shared struct: `root.kids[i].val`. The
+        // identifier-rooted form (`nodes[i].field`) had dedicated read/store
+        // branches, but a FieldAccess-rooted index fell to the generic tails:
+        // the READ returned the const-0 placeholder (`root.kids[0].val` → 0
+        // instead of 2), and the STORE was silently dropped (`root.kids[0].val
+        // = 99` compiled clean but never persisted, so the next read saw the
+        // stale value). Both are reference-semantics-visible: the pushed element
+        // is the SAME RC object as the original handle, so a write through the
+        // Vec-field chain is observable via that handle. This pins read, store,
+        // compound `x = x + k` store, and cross-handle aliasing on all backends.
+        if let Some(out) = run_program(
+            "shared struct Node { mut val: i64, mut kids: Vec[Node] }\n\
+             fn main() {\n\
+                 let root = Node { val: 1, kids: Vec.new() };\n\
+                 let a = Node { val: 10, kids: Vec.new() };\n\
+                 let b = Node { val: 20, kids: Vec.new() };\n\
+                 root.kids.push(a);\n\
+                 root.kids.push(b);\n\
+                 println(f\"{root.kids[0].val}\");\n\
+                 root.kids[0].val = root.kids[0].val + 5;\n\
+                 root.kids[1].val = 99i64;\n\
+                 println(f\"{root.kids[0].val}\");\n\
+                 println(f\"{root.kids[1].val}\");\n\
+                 println(f\"{a.val}\");\n\
+                 println(f\"{b.val}\");\n\
+             }",
+        ) {
+            // read=10; after +5 → 15; b set to 99; aliases a/b see the writes.
+            assert_eq!(out.trim(), "10\n15\n99\n15\n99");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shared_vec_field_index_heap_field_read() {
+        // B-2026-07-13-10 sibling — the element carries a heap (String) field
+        // read through the Vec-field chain (`t.members[i].name`). Exercises the
+        // shared GEP-deref against a 3-word field slot, not just a scalar.
+        if let Some(out) = run_program(
+            "shared struct Person { name: String, age: i64 }\n\
+             shared struct Team { mut members: Vec[Person] }\n\
+             fn main() {\n\
+                 let t = Team { members: Vec.new() };\n\
+                 t.members.push(Person { name: \"Ana\", age: 30 });\n\
+                 t.members.push(Person { name: \"Bob\", age: 25 });\n\
+                 println(t.members[0].name);\n\
+                 println(f\"{t.members[1].age}\");\n\
+             }",
+        ) {
+            assert_eq!(out.trim(), "Ana\n25");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_over_iter_chain() {
         // B-2026-07-11-18 — `for x in <src>.iter().{map|filter}+ { .. }`. Before
         // the fix a map/filter adaptor iterable had no `compile_for` arm and fell

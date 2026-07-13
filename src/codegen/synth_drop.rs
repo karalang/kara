@@ -2634,8 +2634,43 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 SharedFieldKind::VecOrString => {
                     // GEP to the Vec/String struct field, check cap
-                    // > 0, free data. Mirrors
-                    // `emit_struct_drop_synthesis`'s VecOrString arm.
+                    // > 0, DRAIN each live element's heap payload, then free
+                    // the buffer. Mirrors `emit_struct_drop_synthesis`'s
+                    // VecOrString arm (#35).
+                    //
+                    // B-2026-07-13-11: a `Vec[shared T]` FIELD (`shared struct
+                    // Node { kids: Vec[Node] }`) previously froze only the
+                    // `{ptr,len,cap}` buffer here — it never dec'd the shared
+                    // ELEMENTS, so every child box pushed into the Vec leaked
+                    // one ref (LSan: 40-byte Node boxes accumulating). The
+                    // non-shared struct-drop peer already drains via
+                    // `vec_elem_agg_drop_for_type_expr` (→ the element's
+                    // `emit_vec_elem_rc_dec_fn` for a shared element: load the
+                    // slot's RC pointer, null-check, rc-dec). Resolve that
+                    // per-element drop FIRST — the sub-emitter may synthesize a
+                    // fn and move the builder's insert block (it save/restores,
+                    // so the field GEP below still lands in this drop_fn) —
+                    // before opening the cap-guard blocks. `None` for a bare
+                    // `String` / `Vec[primitive]` field (buffer-free alone
+                    // suffices); a self-recursive `Vec[Self]` resolves to this
+                    // fn's own in-progress cache entry (RC cycles stay
+                    // RC-managed, i.e. leak by design — the acyclic case frees).
+                    let vec_elem_drop = self
+                        .struct_field_type_exprs
+                        .get(struct_name)
+                        .and_then(|v| v.get(field_idx))
+                        .cloned()
+                        .and_then(|fte| crate::codegen::helpers::vec_inner_type_expr(&fte))
+                        .and_then(|elem_te| {
+                            let f = self.vec_elem_agg_drop_for_type_expr(&elem_te).or_else(|| {
+                                if Self::elem_te_needs_direct_recursive_drain(&elem_te) {
+                                    Some(self.emit_drop_fn_for_type_expr(&elem_te))
+                                } else {
+                                    None
+                                }
+                            });
+                            f.map(|f| (f, elem_te))
+                        });
                     let field_ptr = self
                         .builder
                         .build_struct_gep(
@@ -2693,6 +2728,81 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_load(ptr_ty, data_ptr_ptr, &format!("rcdrop.vec{field_idx}.data"))
                         .unwrap()
                         .into_pointer_value();
+                    // Drain each live element's payload BEFORE the buffer free
+                    // (loop `0..len`, calling the per-element drop on `data + i`).
+                    // `cap > 0` here implies a heap buffer; `len == 0` runs zero
+                    // iterations. Skipped for `String` / `Vec[primitive]`
+                    // (`vec_elem_drop` is `None`).
+                    if let Some((elem_drop, elem_te)) = &vec_elem_drop {
+                        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+                        let len_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                vec_ty,
+                                field_ptr,
+                                1,
+                                &format!("rcdrop.vec{field_idx}.len.p"),
+                            )
+                            .unwrap();
+                        let len = self
+                            .builder
+                            .build_load(i64_t, len_ptr, &format!("rcdrop.vec{field_idx}.len"))
+                            .unwrap()
+                            .into_int_value();
+                        let cond_bb = self.context.append_basic_block(
+                            drop_fn,
+                            &format!("rcdrop.vec{field_idx}.elem.cond"),
+                        );
+                        let body_bb = self.context.append_basic_block(
+                            drop_fn,
+                            &format!("rcdrop.vec{field_idx}.elem.body"),
+                        );
+                        let incr_bb = self.context.append_basic_block(
+                            drop_fn,
+                            &format!("rcdrop.vec{field_idx}.elem.incr"),
+                        );
+                        let after_bb = self.context.append_basic_block(
+                            drop_fn,
+                            &format!("rcdrop.vec{field_idx}.elem.after"),
+                        );
+                        let counter =
+                            self.create_entry_alloca(drop_fn, "rcdrop.elem.i", i64_t.into());
+                        self.builder
+                            .build_store(counter, i64_t.const_zero())
+                            .unwrap();
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+                        self.builder.position_at_end(cond_bb);
+                        let cur = self
+                            .builder
+                            .build_load(i64_t, counter, "rcdrop.elem.i.cur")
+                            .unwrap()
+                            .into_int_value();
+                        let lt = self
+                            .builder
+                            .build_int_compare(IntPredicate::ULT, cur, len, "rcdrop.elem.i.lt")
+                            .unwrap();
+                        self.builder
+                            .build_conditional_branch(lt, body_bb, after_bb)
+                            .unwrap();
+                        self.builder.position_at_end(body_bb);
+                        let elem_ptr = unsafe {
+                            self.builder
+                                .build_gep(elem_ty, data, &[cur], "rcdrop.elem.p")
+                                .unwrap()
+                        };
+                        self.builder
+                            .build_call(*elem_drop, &[elem_ptr.into()], "")
+                            .unwrap();
+                        self.builder.build_unconditional_branch(incr_bb).unwrap();
+                        self.builder.position_at_end(incr_bb);
+                        let next = self
+                            .builder
+                            .build_int_add(cur, i64_t.const_int(1, false), "rcdrop.elem.i.next")
+                            .unwrap();
+                        self.builder.build_store(counter, next).unwrap();
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+                        self.builder.position_at_end(after_bb);
+                    }
                     self.builder
                         .build_call(self.free_fn, &[data.into()], "")
                         .unwrap();
