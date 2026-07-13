@@ -419,6 +419,28 @@ fn test_int_pow_overflow_traps_at_receiver_width() {
 }
 
 #[test]
+fn test_int_float_min_max() {
+    // `a.min(b)` / `a.max(b)` on numeric scalars pick the smaller / larger,
+    // like Rust's `Ord::min`/`max` (ints) and `f64::min`/`max` (floats). The
+    // arg is the same numeric type (a bare literal coerces). Defined on signed,
+    // unsigned, and float widths.
+    let out = run("fn main() {\n\
+             println(7i64.min(3i64));\n\
+             println(7i64.max(3i64));\n\
+             println((0 - 5i64).max(0i64));\n\
+             let x: f64 = 1.5;\n\
+             let y: f64 = 2.5;\n\
+             println(x.min(y));\n\
+             println(x.max(y));\n\
+             let u: u8 = 200;\n\
+             println(u.min(100u8));\n\
+             let w: u32 = 4000000000;\n\
+             println(w.max(1u32));\n\
+         }");
+    assert_eq!(out, "3\n7\n0\n1.5\n2.5\n100\n4000000000\n");
+}
+
+#[test]
 fn test_bit_intrinsics_width_correct() {
     // count_ones / leading_zeros / trailing_zeros are width-dependent: they count
     // within the receiver's bit width. A signed `iN`'s sign-extended model value

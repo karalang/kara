@@ -4112,6 +4112,48 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(args_close_span, &receiver_for_lookup);
             return receiver_for_lookup.clone();
         }
+        // `min` / `max` on a numeric scalar — `a.min(b)` / `a.max(b)` return the
+        // smaller / larger of the two (Rust's `Ord::min`/`max`, and `f64::min`/
+        // `max` for floats, which are NaN-propagating-free like Rust). The arg
+        // must be the same numeric type (a bare literal coerces to it). Gated on
+        // a scalar receiver so it never shadows `Vec`/iterator `min`/`max`.
+        if matches!(method, "min" | "max")
+            && matches!(
+                &receiver_for_lookup,
+                Type::Int(_) | Type::UInt(_) | Type::Float(_)
+            )
+        {
+            if args.len() != 1 {
+                self.type_error(
+                    format!("`{method}` expects 1 argument, got {}", args.len()),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Type::Error;
+            }
+            let arg = &args[0].value;
+            let arg_ty = self.infer_expr(arg);
+            let is_bare_num_lit = matches!(
+                &arg.kind,
+                ExprKind::Integer(_, None) | ExprKind::Float(_, None)
+            );
+            if is_bare_num_lit {
+                self.record_expr_type(&arg.span, &receiver_for_lookup);
+            } else if arg_ty != Type::Error && arg_ty != receiver_for_lookup {
+                self.type_error(
+                    format!(
+                        "`{method}` expects an argument of type `{}`, got `{}`",
+                        type_display(&receiver_for_lookup),
+                        type_display(&arg_ty)
+                    ),
+                    arg.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+            self.record_expr_type(args_close_span, &receiver_for_lookup);
+            return receiver_for_lookup.clone();
+        }
         // Bit intrinsics on integer scalars — `count_ones` / `leading_zeros` /
         // `trailing_zeros` -> u32 (Rust's `iN::{count_ones,leading_zeros,
         // trailing_zeros}`). All width-dependent: `leading_zeros` / `trailing_zeros`

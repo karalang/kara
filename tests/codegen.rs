@@ -22724,6 +22724,33 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_int_float_min_max() {
+        // `a.min(b)` / `a.max(b)` on numeric scalars: ints lower to `select` on
+        // signed/unsigned `icmp`, floats to `llvm.minnum`/`llvm.maxnum`. The AOT
+        // output must match the interpreter oracle
+        // (`test_int_float_min_max`).
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    println(7i64.min(3i64));
+    println(7i64.max(3i64));
+    println((0 - 5i64).max(0i64));
+    let x: f64 = 1.5;
+    let y: f64 = 2.5;
+    println(x.min(y));
+    println(x.max(y));
+    let u: u8 = 200;
+    println(u.min(100u8));
+    let w: u32 = 4000000000;
+    println(w.max(1u32));
+}
+"#,
+        ) {
+            assert_eq!(out, "3\n7\n0\n1.5\n2.5\n100\n4000000000\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_abs_float() {
         if let Some(out) = run_program(
             r#"

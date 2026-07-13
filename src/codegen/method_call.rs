@@ -1854,6 +1854,71 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `min` / `max` on a numeric scalar (typed in expr_method_call.rs):
+        // ints → `select` on a signed/unsigned `icmp`; floats → the overloaded
+        // `llvm.minnum`/`llvm.maxnum` intrinsics (NaN-quieting, matching Rust
+        // `f64::min`/`max` and the interpreter's `f64::min`/`max`).
+        if matches!(method, "min" | "max") && args.len() == 1 {
+            let a = self.compile_expr(object)?;
+            let b = self.compile_expr(&args[0].value)?;
+            match (a, b) {
+                (BasicValueEnum::IntValue(av), BasicValueEnum::IntValue(mut bv)) => {
+                    // Harmonize a bare-literal arg (default i64) down/up to the
+                    // receiver width so the `icmp` operands match.
+                    let aw = av.get_type().get_bit_width();
+                    let bw = bv.get_type().get_bit_width();
+                    if bw != aw {
+                        bv = if bw > aw {
+                            self.builder
+                                .build_int_truncate(bv, av.get_type(), "mm.tr")
+                                .unwrap()
+                        } else if self.expr_is_unsigned_int(object) {
+                            self.builder
+                                .build_int_z_extend(bv, av.get_type(), "mm.zx")
+                                .unwrap()
+                        } else {
+                            self.builder
+                                .build_int_s_extend(bv, av.get_type(), "mm.sx")
+                                .unwrap()
+                        };
+                    }
+                    let unsigned = self.expr_is_unsigned_int(object);
+                    let pred = match (method, unsigned) {
+                        ("min", false) => IntPredicate::SLT,
+                        ("max", false) => IntPredicate::SGT,
+                        ("min", true) => IntPredicate::ULT,
+                        _ => IntPredicate::UGT,
+                    };
+                    let cmp = self
+                        .builder
+                        .build_int_compare(pred, av, bv, "mm.cmp")
+                        .unwrap();
+                    let r = self.builder.build_select(cmp, av, bv, method).unwrap();
+                    return Ok(r);
+                }
+                (BasicValueEnum::FloatValue(av), BasicValueEnum::FloatValue(bv)) => {
+                    let iname = if method == "min" {
+                        "llvm.minnum"
+                    } else {
+                        "llvm.maxnum"
+                    };
+                    let intrinsic = inkwell::intrinsics::Intrinsic::find(iname)
+                        .unwrap_or_else(|| panic!("{iname} intrinsic must exist"));
+                    let decl = intrinsic
+                        .get_declaration(&self.module, &[av.get_type().into()])
+                        .unwrap_or_else(|| panic!("{iname} declaration for float type"));
+                    let r = self
+                        .builder
+                        .build_call(decl, &[av.into(), bv.into()], "fmm")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic();
+                    return Ok(r);
+                }
+                _ => {}
+            }
+        }
+
         // Built-in `sqrt` on float primitives (typed in expr_method_call.rs):
         // `x.sqrt() -> Self`, lowered to the overloaded `llvm.sqrt` intrinsic —
         // a single `f64.sqrt` instruction on wasm (and `sqrtsd` on x86), no

@@ -1640,6 +1640,35 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `min` / `max` on a numeric scalar (typed in expr_method_call.rs):
+        // `a.min(b)` / `a.max(b)` → the smaller / larger. Handles both `Int` and
+        // `Float` shapes; codegen lowers to a `select` on `icmp`/`fcmp`.
+        if matches!(method, "min" | "max") && args.len() == 1 {
+            match &obj {
+                Value::Int(n) => {
+                    let n = *n;
+                    let other = self.eval_expr_inner(&args[0].value);
+                    if self.pending_cf.is_some() {
+                        return other;
+                    }
+                    if let Value::Int(m) = other {
+                        return Value::Int(if method == "min" { n.min(m) } else { n.max(m) });
+                    }
+                }
+                Value::Float(f) => {
+                    let f = *f;
+                    let other = self.eval_expr_inner(&args[0].value);
+                    if self.pending_cf.is_some() {
+                        return other;
+                    }
+                    if let Value::Float(g) = other {
+                        return Value::Float(if method == "min" { f.min(g) } else { f.max(g) });
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Built-in `sqrt` on float primitives (typed in expr_method_call.rs):
         // `x.sqrt() -> Self`, IEEE `f64::sqrt` (NaN for negative input, as in
         // codegen's `llvm.sqrt`). Float-only; integer receivers fall through.
