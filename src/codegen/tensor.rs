@@ -39,7 +39,7 @@
 //! on dim 0).
 
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
 
 use crate::ast::{
@@ -1858,6 +1858,169 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(bh).unwrap();
         self.builder.position_at_end(be);
         Ok(self.build_vec_value(result_buf, n_buckets, n_buckets))
+    }
+
+    /// B-2026-07-13-7: deep-clone a whole tensor heap block. A tensor value is
+    /// a single pointer to a `[i64 rank][i64 dims…][data]` block; a `Vec[Tensor]`
+    /// (the `iter_axis` result) stores those pointers, so a `let r = rows[i]`
+    /// element move-out shallow-copies the 8-byte pointer and the binding's drop
+    /// races the container's per-element drop (`track_vec_of_tensors_var`) on the
+    /// SAME block — a double-free. This emits a
+    /// `karac_clone_<mangled>(src: *ptr-slot, dst: *ptr-slot)` clone fn (the shape
+    /// the `emit_clone_fn_for_type_expr` dispatcher expects) that reads the source
+    /// block pointer, allocates a byte-identical copy — rank and dims read from
+    /// the header, so any rank / dynamic dims work — and stores the fresh pointer
+    /// into `dst`. `None` when the element type can't be resolved (a splice-shape
+    /// element, never an `iter_axis` sub-tensor, whose dims are concrete).
+    pub(super) fn emit_tensor_clone_fn(&mut self, te: &TypeExpr) -> Option<FunctionValue<'ctx>> {
+        // Element size from the tensor's element type (first type arg).
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let elem_te = p.generic_args.as_ref()?.iter().find_map(|a| match a {
+            GenericArg::Type(t) => Some(t.clone()),
+            _ => None,
+        })?;
+        let elem_ll = self.llvm_type_for_type_expr(&elem_te);
+        let elem_size = self.tensor_elem_size(elem_ll).ok()?;
+
+        let type_name = Self::display_mangle_te(te);
+        let fn_name = format!("karac_clone_{type_name}");
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let fn_val = self.module.add_function(
+            &fn_name,
+            clone_fn_ty,
+            Some(inkwell::module::Linkage::Internal),
+        );
+
+        let entry = self.context.append_basic_block(fn_val, "entry");
+        let null_bb = self.context.append_basic_block(fn_val, "t.cl.null");
+        let work_bb = self.context.append_basic_block(fn_val, "t.cl.work");
+        let ph = self.context.append_basic_block(fn_val, "t.cl.ph");
+        let pb = self.context.append_basic_block(fn_val, "t.cl.pb");
+        let pe = self.context.append_basic_block(fn_val, "t.cl.pe");
+
+        self.builder.position_at_end(entry);
+        let src = fn_val.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = fn_val.get_nth_param(1).unwrap().into_pointer_value();
+        let t = self
+            .builder
+            .build_load(ptr_ty, src, "t.cl.t")
+            .unwrap()
+            .into_pointer_value();
+        let is_null = self.builder.build_is_null(t, "t.cl.isnull").unwrap();
+        self.builder
+            .build_conditional_branch(is_null, null_bb, work_bb)
+            .unwrap();
+
+        // Null source (move-out sentinel) → store null, done.
+        self.builder.position_at_end(null_bb);
+        self.builder.build_store(dst, ptr_ty.const_null()).unwrap();
+        self.builder.build_return(None).unwrap();
+
+        // rank = header[0]; product of dims via a runtime loop over 0..rank.
+        self.builder.position_at_end(work_bb);
+        let rank = self
+            .builder
+            .build_load(i64_t, t, "t.cl.rank")
+            .unwrap()
+            .into_int_value();
+        let prod_slot = self.create_entry_alloca(fn_val, "t.cl.prod", i64_t.into());
+        let idx_slot = self.create_entry_alloca(fn_val, "t.cl.i", i64_t.into());
+        self.builder
+            .build_store(prod_slot, i64_t.const_int(1, false))
+            .unwrap();
+        self.builder
+            .build_store(idx_slot, i64_t.const_zero())
+            .unwrap();
+        self.builder.build_unconditional_branch(ph).unwrap();
+
+        self.builder.position_at_end(ph);
+        let i = self
+            .builder
+            .build_load(i64_t, idx_slot, "t.cl.iv")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, rank, "t.cl.cont")
+            .unwrap();
+        self.builder.build_conditional_branch(cont, pb, pe).unwrap();
+
+        self.builder.position_at_end(pb);
+        let slot_idx = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "t.cl.si")
+            .unwrap();
+        let dim_p = unsafe {
+            self.builder
+                .build_gep(i64_t, t, &[slot_idx], "t.cl.dimp")
+                .unwrap()
+        };
+        let dim = self
+            .builder
+            .build_load(i64_t, dim_p, "t.cl.dim")
+            .unwrap()
+            .into_int_value();
+        let prod = self
+            .builder
+            .build_load(i64_t, prod_slot, "t.cl.pv")
+            .unwrap()
+            .into_int_value();
+        let prod2 = self.builder.build_int_mul(prod, dim, "t.cl.pm").unwrap();
+        self.builder.build_store(prod_slot, prod2).unwrap();
+        let ni = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "t.cl.ni")
+            .unwrap();
+        self.builder.build_store(idx_slot, ni).unwrap();
+        self.builder.build_unconditional_branch(ph).unwrap();
+
+        self.builder.position_at_end(pe);
+        let prod = self
+            .builder
+            .build_load(i64_t, prod_slot, "t.cl.prodf")
+            .unwrap()
+            .into_int_value();
+        // total = 8*(1 + rank) header + elem_size*prod data.
+        let hdr_words = self
+            .builder
+            .build_int_add(rank, i64_t.const_int(1, false), "t.cl.hw")
+            .unwrap();
+        let hdr_bytes = self
+            .builder
+            .build_int_mul(hdr_words, i64_t.const_int(8, false), "t.cl.hb")
+            .unwrap();
+        let data_bytes = self
+            .builder
+            .build_int_mul(prod, i64_t.const_int(elem_size, false), "t.cl.db")
+            .unwrap();
+        let total = self
+            .builder
+            .build_int_add(hdr_bytes, data_bytes, "t.cl.tot")
+            .unwrap();
+        let new = self
+            .builder
+            .build_call(self.malloc_fn, &[total.into()], "t.cl.new")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_memcpy(new, 8, t, 8, total).unwrap();
+        self.builder.build_store(dst, new).unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(fn_val)
     }
 
     /// Build a `{ptr, len, cap}` Vec value from a buffer pointer + len +

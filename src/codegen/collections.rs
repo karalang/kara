@@ -2407,7 +2407,26 @@ impl<'ctx> super::Codegen<'ctx> {
         let src = self.create_entry_alloca(fn_val, "vidx.elem.src", elem_ll);
         self.builder.build_store(src, val).unwrap();
         let dst = self.create_entry_alloca(fn_val, "vidx.elem.clone", elem_ll);
-        let clone_fn = self.emit_clone_fn_for_type_expr(&elem_te);
+        // B-2026-07-13-7: a `Vec[Tensor]` element (`iter_axis` result) is a heap
+        // block referenced by an 8-byte pointer; a `let r = rows[i]` move-out
+        // must deep-clone the whole block or the binding and the container's
+        // per-element drop free the same block (double-free). Route it through
+        // the tensor block clone DIRECTLY rather than the general dispatcher —
+        // scoping the deep clone to this index-move site keeps every OTHER
+        // clone-dispatcher caller (struct-field clones, borrowed `ref Tensor`
+        // materialization) on its existing behaviour, so a borrowed tensor is
+        // never spuriously copied into a leak.
+        let clone_fn = if matches!(
+            &elem_te.kind,
+            TypeKind::Path(p) if p.segments.last().map(String::as_str) == Some("Tensor")
+        ) {
+            match self.emit_tensor_clone_fn(&elem_te) {
+                Some(f) => f,
+                None => return Ok(val),
+            }
+        } else {
+            self.emit_clone_fn_for_type_expr(&elem_te)
+        };
         self.builder
             .build_call(clone_fn, &[src.into(), dst.into()], "")
             .unwrap();

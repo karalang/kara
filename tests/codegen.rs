@@ -54700,6 +54700,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_axis_row_view_bind() {
+        // B-2026-07-13-7: `let r = rows[i]` binding a sub-tensor out of a
+        // `Vec[Tensor]` (`iter_axis` result) deep-clones the whole tensor block
+        // — a shallow pointer copy aliased the container's element and both
+        // freed the same block (`free(): double free detected in tcache 2`
+        // under JIT/native; interpreter correct). Covers axis 0 and 1, a
+        // rank-3→rank-2 reduction, and multiple bound row views.
+        let src = r#"
+fn main() {
+    let m: Tensor[f32, [2, 3]] = Tensor.from([[1.0f32, 2.0f32, 3.0f32], [4.0f32, 5.0f32, 6.0f32]]);
+    let rows = m.iter_axis(0);
+    let r0 = rows[0];
+    let r1 = rows[1];
+    println(r0.sum());
+    println(r1.sum());
+    let cols = m.iter_axis(1);
+    let c0 = cols[0];
+    println(c0.sum());
+    let t: Tensor[i64, [2, 2, 2]] = Tensor.from([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]);
+    let planes = t.iter_axis(0);
+    let p1 = planes[1];
+    println(p1.sum().to_string());
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "6\n15\n5\n26\n");
+    }
+
+    #[test]
     fn test_e2e_tensor_from_narrow_element_width_stores_at_declared_width() {
         // B-2026-07-03-35: `Tensor.from([...])` stored its leaves at the leaf
         // literals' DEFAULT width (i64/f64) rather than the binding's declared

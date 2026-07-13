@@ -17599,6 +17599,40 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_iter_axis_row_view_bind_no_double_free() {
+        // B-2026-07-13-7: `t.iter_axis(n)` returns a `Vec[Tensor]` of freshly
+        // malloc'd sub-tensor blocks, freed per-element by
+        // `track_vec_of_tensors_var`. Binding an element out — `let r = rows[i]`
+        // — shallow-copied the 8-byte tensor pointer (no Tensor arm in the
+        // clone dispatcher), so the binding's `FreeTensor` and the container's
+        // per-element free hit the SAME block: `free(): double free detected in
+        // tcache 2` under JIT/native (interpreter was correct). The fix
+        // deep-clones the whole tensor block so the binding owns an independent
+        // copy. 300 iters, two row views bound per iter: a missed clone
+        // double-frees (ASAN), a leaked clone accumulates (LSan on Linux).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: f32 = 0.0f32;
+    while i < 300 {
+        let m: Tensor[f32, [2, 3]] = Tensor.from([[1.0f32, 2.0f32, 3.0f32], [4.0f32, 5.0f32, 6.0f32]]);
+        let rows = m.iter_axis(0);
+        let r0 = rows[0];
+        let r1 = rows[1];
+        total = total + r0.sum() + r1.sum();
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // Each iter: r0.sum()=1+2+3=6, r1.sum()=4+5+6=15 → 21. 300*21 = 6300.
+            &["6300"],
+            "iter_axis_row_view_bind_no_double_free",
+        );
+    }
+
     /// Column heap lifecycle (phase-11 data-science stdlib, Arrow codegen
     /// core slice): each `Column[T]` is a control block + a separate data
     /// buffer + a separate validity bitmap, all freed once at scope exit
