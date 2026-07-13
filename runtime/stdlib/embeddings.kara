@@ -62,3 +62,40 @@ pub fn l2_normalize[D](v: ref Tensor[f32, [D]]) -> Tensor[f32, [D]] with panics 
         v.map(|x| x / n)
     }
 }
+
+/// Batched dot product: `query · corpusᵢ` for each of the `N` rows of a
+/// `[N, D]` corpus, returning an `N`-length `Vec[f32]`. The single query is
+/// borrowed and reused across every row (no per-row copy).
+#[must_use = "the scores vector is the whole result — discarding it wastes the batch traversal"]
+pub fn dot_batched[N, D](query: ref Tensor[f32, [D]], corpus: ref Tensor[f32, [N, D]]) -> Vec[f32] {
+    let rows = corpus.iter_axis(0);
+    let mut out: Vec[f32] = Vec.new();
+    for row in rows {
+        let products = query.zip_with(row, |x, y| x * y);
+        out.push(products.sum());
+    }
+    out
+}
+
+/// Batched cosine similarity: `cosine(query, corpusᵢ)` for each of the `N` rows
+/// of a `[N, D]` corpus, returning an `N`-length `Vec[f32]`. The query norm is
+/// computed once and reused; each row's norm is computed per row. This is the
+/// single-query semantic-search / nearest-neighbour scan.
+#[must_use = "the scores vector is the whole result — discarding it wastes the batch traversal"]
+pub fn cosine_similarity_batched[N, D](
+    query: ref Tensor[f32, [D]],
+    corpus: ref Tensor[f32, [N, D]],
+) -> Vec[f32] with panics {
+    let pq = query.zip_with(query, |x, y| x * y);
+    let nq = pq.sum().sqrt();
+    let rows = corpus.iter_axis(0);
+    let mut out: Vec[f32] = Vec.new();
+    for row in rows {
+        let pd = query.zip_with(row, |x, y| x * y);
+        let d = pd.sum();
+        let pr = row.zip_with(row, |x, y| x * y);
+        let nr = pr.sum().sqrt();
+        out.push(d / (nq * nr));
+    }
+    out
+}

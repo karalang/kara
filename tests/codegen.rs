@@ -64225,6 +64225,32 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_embeddings_batched() {
+        // `std.embeddings` batched single-query forms (phase-11): score one
+        // query against every row of an `[N, D]` corpus via `iter_axis` (the
+        // B-2026-07-13-7 row-view fix unblocks this). Generic in BOTH N and D.
+        // Exact oracles: query [1,0] vs rows {[1,0], [0,1]} → cosine [1, 0],
+        // dot [1, 0].
+        if let Some(out) = run_program(
+            r#"
+import std.embeddings.{cosine_similarity_batched, dot_batched};
+fn main() {
+    let q: Tensor[f32, [2]] = Tensor.from([1.0f32, 0.0f32]);
+    let corpus: Tensor[f32, [2, 2]] = Tensor.from([[1.0f32, 0.0f32], [0.0f32, 1.0f32]]);
+    let cs = cosine_similarity_batched(q, corpus);
+    println(cs[0]);
+    println(cs[1]);
+    let db = dot_batched(q, corpus);
+    println(db[0]);
+    println(db[1]);
+}
+"#,
+        ) {
+            assert_eq!(out, "1\n0\n1\n0\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_secret_field_redacted_in_display() {
         // A struct containing a `Secret[T]` field renders the field as
         // `<redacted>` in the derived Display (build_struct_display_parts
