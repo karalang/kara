@@ -283,6 +283,14 @@ const CORPUS: &[&str] = &[
     "fn f(n: i64, c: char) -> bool { n >= c }",
     // A distinct-type comparison feeding a condition still types the result BOOL.
     "fn f(n: i64, c: char) { if n < c { } }",
+    // ── Slice 15: StringNotIndexable ──
+    // Indexing a String (`s[i]`) is StringNotIndexable at the object span;
+    // non-String indexing (`v[0]`) is clean. The index sub-expression is still
+    // walked. (Range slicing `s[a..b]` — the seed's exemption — does not parse in
+    // the selfhost parser yet, so it is not exercised here.)
+    "fn f(s: String) -> char { s[0] }",
+    "fn f(s: String, i: i64) -> char { s[i] }",
+    "fn f(v: Vec[i64]) -> i64 { v[0] }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
@@ -327,6 +335,7 @@ fn rust_render(src: &str) -> String {
             "WrongNumberOfArgs" => "wrong-arg-count",
             "InvalidUnaryOp" => "invalid-unary-op",
             "InvalidBinaryOp" => "invalid-binary-op",
+            "StringNotIndexable" => "string-not-indexable",
             other => panic!(
                 "corpus entry {src:?} produced an out-of-Slice-1 type-error kind {other} \
                  (message: {}); trim the corpus or extend the slice",

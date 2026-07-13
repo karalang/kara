@@ -981,6 +981,24 @@ impl Checker {
                 }
                 ExprInfo { category: 4, span: span }
             }
+            Index(n) => {
+                // Indexing a `String` (`s[i]`) is StringNotIndexable (kind 10) —
+                // UTF-8 is variable-width, so `[]` would hide an O(n) scan
+                // (design.md § Character type). The seed exempts a RANGE slice
+                // `s[a..b]`, but the selfhost parser has no range operator (a `..`
+                // in index position mis-parses), so every String index that
+                // parses here is scalar — flag them all. The anchor is the object
+                // span (both parsers set `Index.span == object.span`); the index
+                // sub-expression is still walked. Result category is UNKNOWN
+                // (element typing is not tracked in the coarse scheme).
+                let IndexExpr { object, index, span } = n;
+                let oi = self.check_expr(object);
+                let ii = self.check_expr(index);
+                if oi.category == 3 {
+                    self.push_err(10, span.offset, span.length);
+                }
+                ExprInfo { category: 4, span: span }
+            }
             _ => ExprInfo { category: 4, span: zero_span() },
         }
     }
@@ -1349,7 +1367,10 @@ fn kind_tag(kind: i64) -> String {
     if kind == 8 {
         return "invalid-unary-op".to_string();
     }
-    "invalid-binary-op".to_string()
+    if kind == 9 {
+        return "invalid-binary-op".to_string();
+    }
+    "string-not-indexable".to_string()
 }
 
 pub fn render_errors(errs: Vec[TypeError]) -> String {
