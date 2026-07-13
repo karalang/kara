@@ -293,7 +293,7 @@ fn walk_expr_children(expr: &Expr, level: LintLevel, diags: &mut Vec<LintDiagnos
         }
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
-                if let crate::ast::ParsedInterpolationPart::Expr(e) = p {
+                if let crate::ast::ParsedInterpolationPart::Expr(e, _) = p {
                     walk_expr(e, level, diags);
                 }
             }

@@ -254,7 +254,7 @@ fn walk_children(kind: &ExprKind, f: &mut dyn FnMut(&Expr)) {
         | ExprKind::Error => {}
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
-                if let ParsedInterpolationPart::Expr(e) = p {
+                if let ParsedInterpolationPart::Expr(e, _) = p {
                     f(e);
                 }
             }

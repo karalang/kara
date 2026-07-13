@@ -713,7 +713,7 @@ impl<'a> super::Resolver<'a> {
 
             ExprKind::InterpolatedStringLit(parts) => {
                 for part in parts {
-                    if let crate::ast::ParsedInterpolationPart::Expr(e) = part {
+                    if let crate::ast::ParsedInterpolationPart::Expr(e, _) = part {
                         self.resolve_expr(e);
                     }
                 }

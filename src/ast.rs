@@ -888,7 +888,7 @@ pub fn collect_assigned_roots_expr(expr: &Expr, out: &mut std::collections::Hash
         | ExprKind::Error => {}
         ExprKind::InterpolatedStringLit(parts) => {
             for part in parts {
-                if let ParsedInterpolationPart::Expr(e) = part {
+                if let ParsedInterpolationPart::Expr(e, _) = part {
                     collect_assigned_roots_expr(e, out);
                 }
             }

@@ -211,7 +211,7 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         | ExprKind::Error => {}
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
-                if let ParsedInterpolationPart::Expr(inner) = p {
+                if let ParsedInterpolationPart::Expr(inner, _) = p {
                     walk_expr(inner, acc);
                 }
             }

@@ -244,7 +244,7 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::InterpolatedStringLit(parts) => {
                 if parts
                     .iter()
-                    .any(|p| matches!(p, ParsedInterpolationPart::Expr(_)))
+                    .any(|p| matches!(p, ParsedInterpolationPart::Expr(_, _)))
                 {
                     out.push(AllocSite {
                         span: e.span.clone(),
@@ -253,7 +253,7 @@ impl<'a> super::TypeChecker<'a> {
                     });
                 }
                 for p in parts {
-                    if let ParsedInterpolationPart::Expr(inner) = p {
+                    if let ParsedInterpolationPart::Expr(inner, _) = p {
                         self.collect_in_expr(inner, out);
                     }
                 }

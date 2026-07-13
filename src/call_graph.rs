@@ -402,7 +402,7 @@ fn collect_callees_in_expr(
         }
         ExprKind::InterpolatedStringLit(parts) => {
             for part in parts {
-                if let ParsedInterpolationPart::Expr(e) = part {
+                if let ParsedInterpolationPart::Expr(e, _) = part {
                     collect_callees_in_expr(e, known, methods, out);
                 }
             }

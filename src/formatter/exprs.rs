@@ -74,9 +74,13 @@ impl super::Formatter {
                         crate::ast::ParsedInterpolationPart::Text(s) => {
                             self.write_str(&escape_string(s))
                         }
-                        crate::ast::ParsedInterpolationPart::Expr(e) => {
+                        crate::ast::ParsedInterpolationPart::Expr(e, spec) => {
                             self.write_str("{");
                             self.format_expr(e);
+                            if let Some(spec) = spec {
+                                self.write_str(":");
+                                self.write_str(spec);
+                            }
                             self.write_str("}");
                         }
                     }

@@ -183,7 +183,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // each render site owns a distinct alloca.
                 let presize_ok = parts.iter().all(|p| match p {
                     ParsedInterpolationPart::Text(_) => true,
-                    ParsedInterpolationPart::Expr(e) => Self::fstr_part_is_side_effect_free(e),
+                    ParsedInterpolationPart::Expr(e, _) => Self::fstr_part_is_side_effect_free(e),
                 });
                 if presize_ok {
                     // Pass 1: render every part (left-to-right, same
@@ -205,8 +205,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                     rendered.push((gptr, text_len));
                                 }
                             }
-                            ParsedInterpolationPart::Expr(e) => {
-                                let pair = self.fstr_render_part(e)?;
+                            ParsedInterpolationPart::Expr(e, spec) => {
+                                let pair = self.fstr_render_part(e, spec.as_deref())?;
                                 rendered.push(pair);
                             }
                         }
@@ -269,8 +269,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.emit_string_append_raw(acc, gptr, text_len);
                                 }
                             }
-                            ParsedInterpolationPart::Expr(e) => {
-                                let (src_ptr, src_len) = self.fstr_render_part(e)?;
+                            ParsedInterpolationPart::Expr(e, spec) => {
+                                let (src_ptr, src_len) =
+                                    self.fstr_render_part(e, spec.as_deref())?;
                                 self.emit_string_append_raw(acc, src_ptr, src_len);
                             }
                         }

@@ -306,7 +306,7 @@ fn visit_expr(e: &Expr, visit: &mut impl FnMut(&Span)) {
         | ExprKind::Error => {}
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
-                if let ParsedInterpolationPart::Expr(inner) = p {
+                if let ParsedInterpolationPart::Expr(inner, _) = p {
                     visit_expr(inner, visit);
                 }
             }
@@ -632,7 +632,7 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
         | ExprKind::Error => {}
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
-                if let ParsedInterpolationPart::Expr(inner) = p {
+                if let ParsedInterpolationPart::Expr(inner, _) = p {
                     visit_expr_spans_mut(inner, visit);
                 }
             }

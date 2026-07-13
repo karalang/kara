@@ -1065,7 +1065,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::InterpolatedStringLit(parts) => parts
                 .iter()
-                .any(|p| matches!(p, ParsedInterpolationPart::Expr(inner) if mis(inner))),
+                .any(|p| matches!(p, ParsedInterpolationPart::Expr(inner, _) if mis(inner))),
             ExprKind::If {
                 condition,
                 then_block,
@@ -1271,7 +1271,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::InterpolatedStringLit(parts) => parts
                 .iter()
-                .any(|p| matches!(p, ParsedInterpolationPart::Expr(inner) if esc(inner))),
+                .any(|p| matches!(p, ParsedInterpolationPart::Expr(inner, _) if esc(inner))),
             ExprKind::If {
                 condition,
                 then_block,
@@ -3922,7 +3922,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::InterpolatedStringLit(parts) => {
                 for part in parts {
-                    if let ParsedInterpolationPart::Expr(inner) = part {
+                    if let ParsedInterpolationPart::Expr(inner, _) = part {
                         self.refs_in_expr(inner, refs, defs);
                     }
                 }

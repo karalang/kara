@@ -468,7 +468,7 @@ fn subst_expr(expr: &mut Expr, subst: &std::collections::HashMap<String, TypeExp
         }
         ExprKind::InterpolatedStringLit(parts) => {
             for part in parts.iter_mut() {
-                if let ParsedInterpolationPart::Expr(e) = part {
+                if let ParsedInterpolationPart::Expr(e, _) = part {
                     subst_expr(e, subst);
                 }
             }
@@ -1182,7 +1182,7 @@ fn walk_expr(expr: &mut Expr) {
 
         ExprKind::InterpolatedStringLit(parts) => {
             for part in parts.iter_mut() {
-                if let ParsedInterpolationPart::Expr(e) = part {
+                if let ParsedInterpolationPart::Expr(e, _) = part {
                     walk_expr(e);
                 }
             }

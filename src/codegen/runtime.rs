@@ -6812,7 +6812,17 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn fstr_render_part(
         &mut self,
         e: &Expr,
+        spec: Option<&str>,
     ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        // A format specifier `{e:spec}` routes to the spec-aware scalar renderer
+        // (typecheck restricts specs to int / float / string, so the user-Display
+        // / struct / enum / collection early-returns below never apply). Same
+        // `crate::format_spec` result as the interpreter, so run == build.
+        if let Some(spec_raw) = spec {
+            if let Ok(fs) = crate::format_spec::FormatSpec::parse(spec_raw) {
+                return self.compile_fstr_part_spec(e, &fs);
+            }
+        }
         // A user `impl Display` (a compiled `<Type>.to_string`) wins over the
         // built-in renderers below: render via the user method through the
         // unified method-call path (the `to_string` arm there falls through to
@@ -7101,6 +7111,193 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_int_z_extend(written, i64_t, "fst.len")
                     .unwrap();
                 (buf_ptr, len)
+            }
+        }
+    }
+
+    /// Spec-aware sibling of [`Self::compile_fstr_part_to_cstr`]: render `e`
+    /// applying the format specifier `fs`. Typecheck restricts specs to int /
+    /// float / string holes, and to the printf-expressible subset, so every arm
+    /// maps to a `snprintf` conversion that matches `crate::format_spec`'s
+    /// `apply_*` (the interpreter path) byte-for-byte. Returns `(ptr, len)`.
+    fn compile_fstr_part_spec(
+        &mut self,
+        e: &Expr,
+        fs: &crate::format_spec::FormatSpec,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let is_wasm = crate::target::active_target_is_wasm();
+        let size_of = |cg: &Self, n: u64| -> BasicValueEnum<'ctx> {
+            if is_wasm {
+                cg.context.i32_type().const_int(n, false).into()
+            } else {
+                cg.context.i64_type().const_int(n, false).into()
+            }
+        };
+
+        let val = self.compile_expr(e)?;
+        match val {
+            // String hole → width + alignment padding only (typecheck bars
+            // radix / precision / zero-pad). No width, or a value already at
+            // least `width` wide, needs no work — return the source (ptr, len).
+            BasicValueEnum::StructValue(sv) if self.llvm_ty_is_vec_struct(sv.get_type().into()) => {
+                let sptr = self
+                    .builder
+                    .build_extract_value(sv, 0, "fss.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let slen = self
+                    .builder
+                    .build_extract_value(sv, 1, "fss.len")
+                    .unwrap()
+                    .into_int_value();
+                let Some(width) = fs.width else {
+                    return Ok((sptr, slen));
+                };
+                let wconst = i64_t.const_int(width as u64, false);
+                let need_pad = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, slen, wconst, "fss.needpad")
+                    .unwrap();
+                let pad_bb = self.context.append_basic_block(fn_val, "fss.pad");
+                let nopad_bb = self.context.append_basic_block(fn_val, "fss.nopad");
+                let merge_bb = self.context.append_basic_block(fn_val, "fss.merge");
+                // Buffer sized to the constant width (+1 NUL); only the pad
+                // branch (len < width) writes into it.
+                let buf = self.create_entry_alloca(
+                    fn_val,
+                    "fss.buf",
+                    self.context.i8_type().array_type(width as u32 + 1).into(),
+                );
+                let buf_ptr = self
+                    .builder
+                    .build_pointer_cast(buf, ptr_ty, "fss.bufp")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(need_pad, pad_bb, nopad_bb)
+                    .unwrap();
+                // pad: snprintf("%[-]W.*s", (i32)len, ptr) → exactly W bytes.
+                // The `.*s` (precision = len) bounds the copy to `len` bytes so
+                // the source String need not be NUL-terminated; `to_printf`
+                // can't express `.*`, so build the conversion directly.
+                self.builder.position_at_end(pad_bb);
+                let mut fmt = String::from("%");
+                if fs.align == Some(crate::format_spec::Align::Left) {
+                    fmt.push('-');
+                }
+                fmt.push_str(&width.to_string());
+                fmt.push_str(".*s");
+                let fmt_g = self
+                    .builder
+                    .build_global_string_ptr(&fmt, "fss.fmt")
+                    .unwrap()
+                    .as_pointer_value();
+                let len_i32 = self
+                    .builder
+                    .build_int_truncate(slen, i32_t, "fss.leni32")
+                    .unwrap();
+                self.builder
+                    .build_call(
+                        self.snprintf_fn,
+                        &[
+                            buf_ptr.into(),
+                            size_of(self, width as u64 + 1).into(),
+                            fmt_g.into(),
+                            len_i32.into(),
+                            sptr.into(),
+                        ],
+                        "fss.w",
+                    )
+                    .unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                let pad_end = self.builder.get_insert_block().unwrap();
+                self.builder.position_at_end(nopad_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                let nopad_end = self.builder.get_insert_block().unwrap();
+                self.builder.position_at_end(merge_bb);
+                let ptr_phi = self.builder.build_phi(ptr_ty, "fss.ptr.phi").unwrap();
+                ptr_phi.add_incoming(&[(&buf_ptr, pad_end), (&sptr, nopad_end)]);
+                let len_phi = self.builder.build_phi(i64_t, "fss.len.phi").unwrap();
+                len_phi.add_incoming(&[(&wconst, pad_end), (&slen, nopad_end)]);
+                Ok((
+                    ptr_phi.as_basic_value().into_pointer_value(),
+                    len_phi.as_basic_value().into_int_value(),
+                ))
+            }
+            // Numeric holes → one snprintf with the mapped conversion.
+            _ => {
+                let is_float = matches!(val, BasicValueEnum::FloatValue(_));
+                let width = fs.width.unwrap_or(0);
+                let cap = std::cmp::max(64u64, width as u64 + 2);
+                let buf = self.create_entry_alloca(
+                    fn_val,
+                    "fss.nbuf",
+                    self.context.i8_type().array_type(cap as u32).into(),
+                );
+                let buf_ptr = self
+                    .builder
+                    .build_pointer_cast(buf, ptr_ty, "fss.nbufp")
+                    .unwrap();
+                let (fmt, arg): (String, BasicValueEnum<'ctx>) = if is_float {
+                    (fs.to_printf("", 'f', true), val)
+                } else {
+                    let iv = val.into_int_value();
+                    let unsigned = self.expr_is_unsigned_int(e);
+                    // Widen to i64 for the varargs slot (sext signed / zext
+                    // unsigned) — same as the no-spec path.
+                    let widened = if iv.get_type().get_bit_width() < 64 {
+                        if unsigned {
+                            self.builder
+                                .build_int_z_extend(iv, i64_t, "fss.zx")
+                                .unwrap()
+                        } else {
+                            self.builder
+                                .build_int_s_extend(iv, i64_t, "fss.sx")
+                                .unwrap()
+                        }
+                    } else {
+                        iv
+                    };
+                    let conv = if fs.radix == crate::format_spec::Radix::Dec {
+                        if unsigned {
+                            'u'
+                        } else {
+                            'd'
+                        }
+                    } else {
+                        fs.int_conv()
+                    };
+                    (fs.to_printf("ll", conv, true), widened.into())
+                };
+                let fmt_g = self
+                    .builder
+                    .build_global_string_ptr(&fmt, "fss.nfmt")
+                    .unwrap()
+                    .as_pointer_value();
+                let written = self
+                    .builder
+                    .build_call(
+                        self.snprintf_fn,
+                        &[
+                            buf_ptr.into(),
+                            size_of(self, cap).into(),
+                            fmt_g.into(),
+                            arg.into(),
+                        ],
+                        "fss.nw",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let len = self
+                    .builder
+                    .build_int_z_extend(written, i64_t, "fss.nlen")
+                    .unwrap();
+                Ok((buf_ptr, len))
             }
         }
     }

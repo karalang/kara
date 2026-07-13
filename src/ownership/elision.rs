@@ -735,7 +735,7 @@ impl<'a> OwnershipChecker<'a> {
             // ── generic recursion ──
             ExprKind::InterpolatedStringLit(parts) => {
                 for p in parts {
-                    if let ParsedInterpolationPart::Expr(e) = p {
+                    if let ParsedInterpolationPart::Expr(e, _) = p {
                         self.scan_expr(e, ctx, scan);
                     }
                 }
@@ -2219,7 +2219,7 @@ impl<'a> OwnershipChecker<'a> {
             // Generic recursion (same enumeration as phase A).
             ExprKind::InterpolatedStringLit(parts) => {
                 for p in parts {
-                    if let ParsedInterpolationPart::Expr(e) = p {
+                    if let ParsedInterpolationPart::Expr(e, _) = p {
                         self.cluster_verify_expr(e, ctx, scan);
                     }
                 }
@@ -2703,7 +2703,7 @@ fn walk_fn_exprs(block: &Block, f: &mut impl FnMut(&Expr, bool)) {
             | ExprKind::Error => {}
             ExprKind::InterpolatedStringLit(parts) => {
                 for p in parts {
-                    if let ParsedInterpolationPart::Expr(inner) = p {
+                    if let ParsedInterpolationPart::Expr(inner, _) = p {
                         walk(inner, false, f);
                     }
                 }

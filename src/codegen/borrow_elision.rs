@@ -373,7 +373,7 @@ impl ScanCtx<'_> {
             | ExprKind::Closure { .. } => self.scan_expr(expr),
             ExprKind::InterpolatedStringLit(parts) => {
                 for p in parts {
-                    if let crate::ast::ParsedInterpolationPart::Expr(e) = p {
+                    if let crate::ast::ParsedInterpolationPart::Expr(e, _) = p {
                         self.scan_expr(e);
                     }
                 }

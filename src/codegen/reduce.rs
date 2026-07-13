@@ -3018,7 +3018,7 @@ impl<'a> CostEstimator<'a> {
             ExprKind::InterpolatedStringLit(parts) => {
                 let mut c: u64 = 1;
                 for part in parts {
-                    if let crate::ast::ParsedInterpolationPart::Expr(inner) = part {
+                    if let crate::ast::ParsedInterpolationPart::Expr(inner, _) = part {
                         c = c.saturating_add(self.estimate_expr(inner));
                     }
                 }

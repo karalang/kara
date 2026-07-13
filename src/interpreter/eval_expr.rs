@@ -44,7 +44,39 @@ impl<'a> super::Interpreter<'a> {
                 for part in parts {
                     match part {
                         crate::ast::ParsedInterpolationPart::Text(t) => result.push_str(t),
-                        crate::ast::ParsedInterpolationPart::Expr(e) => {
+                        crate::ast::ParsedInterpolationPart::Expr(e, spec) => {
+                            // With a format specifier `{e:spec}`, format the
+                            // evaluated VALUE per the spec (width/align/precision/
+                            // radix) — the numeric paths need the raw value, so
+                            // this reads it directly rather than through
+                            // `to_string`. Same `crate::format_spec` logic codegen
+                            // uses, so `karac run` == `karac build`.
+                            if let Some(spec_raw) = spec {
+                                let v = self.eval_expr_inner(e);
+                                if self.pending_cf.is_some() {
+                                    return v;
+                                }
+                                // The spec was validated at parse time; a parse
+                                // error here is unreachable for a well-formed
+                                // program, so fall back to the plain render.
+                                // Spec/value compatibility (spec on int/float/
+                                // string only, no string precision) is enforced
+                                // at typecheck, so a well-formed program reaches
+                                // here with a valid combination; the non-scalar
+                                // fallback keeps eval total.
+                                if let Ok(fs) = crate::format_spec::FormatSpec::parse(spec_raw) {
+                                    let formatted = match &v {
+                                        Value::Int(i) => fs.apply_int(*i),
+                                        Value::Float(f) => fs.apply_float(*f),
+                                        Value::String(s) => fs.apply_str(s),
+                                        other => fs.apply_str(&self.display_render(other)),
+                                    };
+                                    result.push_str(&formatted);
+                                } else {
+                                    result.push_str(&self.display_render(&v));
+                                }
+                                continue;
+                            }
                             // Render each interpolation through the unified
                             // `to_string` dispatch (one evaluation of `e`,
                             // matching codegen's `f"{e}"` → `e.to_string()`

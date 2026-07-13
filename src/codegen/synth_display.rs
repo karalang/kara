@@ -1276,7 +1276,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 None => {
                     if te.map(|t| self.display_field_is_leaf(t)).unwrap_or(false) {
-                        parts.push(P::Expr(Box::new(field_expr)));
+                        parts.push(P::Expr(Box::new(field_expr), None));
                     } else {
                         let tdesc = te
                             .map(|t| format!("{:?}", t.kind))

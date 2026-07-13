@@ -739,7 +739,7 @@ pub(crate) fn collect_free_idents_expr(
         | ExprKind::Error => {}
         ExprKind::InterpolatedStringLit(parts) => {
             for part in parts {
-                if let crate::ast::ParsedInterpolationPart::Expr(e) = part {
+                if let crate::ast::ParsedInterpolationPart::Expr(e, _) = part {
                     collect_free_idents_expr(e, bound, out);
                 }
             }

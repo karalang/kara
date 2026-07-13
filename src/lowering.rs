@@ -903,7 +903,7 @@ impl<'a> Lowerer<'a> {
             // B-2026-07-04-8.
             ExprKind::InterpolatedStringLit(parts) => {
                 for part in parts.iter_mut() {
-                    if let ParsedInterpolationPart::Expr(e) = part {
+                    if let ParsedInterpolationPart::Expr(e, _) = part {
                         self.lower_expr(e);
                     }
                 }

@@ -838,7 +838,7 @@ fn collect_expr_bindings(e: &Expr, rb: &mut RegionBindings) {
         | ExprKind::Error => {}
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
-                if let ParsedInterpolationPart::Expr(inner) = p {
+                if let ParsedInterpolationPart::Expr(inner, _) = p {
                     collect_expr_bindings(inner, rb);
                 }
             }
@@ -1087,7 +1087,7 @@ fn for_each_block_in_expr<'a>(e: &'a Expr, f: &mut impl FnMut(&'a Block)) {
         | ExprKind::Error => {}
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
-                if let ParsedInterpolationPart::Expr(inner) = p {
+                if let ParsedInterpolationPart::Expr(inner, _) = p {
                     for_each_block_in_expr(inner, f);
                 }
             }
@@ -1446,7 +1446,7 @@ fn expr_children_all<F: Fn(&Expr) -> bool + Copy>(e: &Expr, pred: F) -> bool {
         | ExprKind::OffsetOf { .. }
         | ExprKind::Error => true,
         ExprKind::InterpolatedStringLit(parts) => parts.iter().all(|p| match p {
-            ParsedInterpolationPart::Expr(inner) => pred(inner),
+            ParsedInterpolationPart::Expr(inner, _) => pred(inner),
             _ => true,
         }),
         ExprKind::Binary { left, right, .. } => pred(left) && pred(right),

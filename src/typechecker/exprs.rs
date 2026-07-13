@@ -30,6 +30,65 @@ use super::types::{
 };
 use super::TypeErrorKind;
 
+/// Validate an f-string format specifier `{expr:spec}` against the hole's
+/// inferred type (Phase 8 format specifiers). Runs at typecheck so `karac run`
+/// and `karac build` reject the same programs at compile time. v1 supports
+/// specifiers on int / float / string values only; the rules mirror what the
+/// interpreter's `crate::format_spec::apply_*` and codegen's printf mapping can
+/// render identically.
+fn check_format_spec_for_type(spec_raw: &str, ty: &Type) -> Result<(), String> {
+    let fs = crate::format_spec::FormatSpec::parse(spec_raw)?;
+    let is_int = matches!(ty, Type::Int(_) | Type::UInt(_));
+    let is_float = matches!(ty, Type::Float(_));
+    let is_str = matches!(ty, Type::Str);
+    if is_int {
+        if fs.precision.is_some() {
+            return Err(format!(
+                "format spec `{spec_raw}`: precision (`.N`) is not valid for an integer"
+            ));
+        }
+        return Ok(());
+    }
+    if is_float {
+        if fs.radix != crate::format_spec::Radix::Dec {
+            return Err(format!(
+                "format spec `{spec_raw}`: a radix type (x/X/o) is not valid for a float"
+            ));
+        }
+        if fs.precision.is_none() {
+            return Err(format!(
+                "format spec `{spec_raw}`: a float format spec needs a precision \
+                 (e.g. `{{x:.2}}` or `{{x:8.2}}`)"
+            ));
+        }
+        return Ok(());
+    }
+    if is_str {
+        if fs.radix != crate::format_spec::Radix::Dec {
+            return Err(format!(
+                "format spec `{spec_raw}`: a radix type (x/X/o) is not valid for a string"
+            ));
+        }
+        if fs.precision.is_some() {
+            return Err(format!(
+                "format spec `{spec_raw}`: precision (`.N`) on a string is not yet supported \
+                 (planned follow-up); width and alignment are available"
+            ));
+        }
+        if fs.zero_pad {
+            return Err(format!(
+                "format spec `{spec_raw}`: zero-pad (`0`) is not valid for a string"
+            ));
+        }
+        return Ok(());
+    }
+    Err(format!(
+        "format spec `{spec_raw}`: format specifiers apply to int, float, and string values \
+         only (got `{}`)",
+        type_display(ty)
+    ))
+}
+
 /// The component exprs of a (possibly tuple-desugared) index expression —
 /// `t[i, j]` arrives as `Tuple([i, j])`; a single index yields one slot.
 fn tuple_index_parts(index: &Expr) -> Vec<Option<&Expr>> {
@@ -2412,7 +2471,7 @@ impl<'a> super::TypeChecker<'a> {
             })),
             ExprKind::InterpolatedStringLit(parts) => {
                 for part in parts {
-                    if let ParsedInterpolationPart::Expr(inner_expr) = part {
+                    if let ParsedInterpolationPart::Expr(inner_expr, spec) = part {
                         let ty = self.infer_expr(inner_expr);
                         if ty != Type::Error && !self.type_supports_display(&ty) {
                             self.type_error(
@@ -2424,6 +2483,20 @@ impl<'a> super::TypeChecker<'a> {
                                 inner_expr.span.clone(),
                                 TypeErrorKind::TraitBoundNotSatisfied,
                             );
+                        }
+                        // Format specifier / value-type compatibility (Phase 8).
+                        // Checked here so `karac run` and `karac build` reject the
+                        // same programs at compile time.
+                        if let Some(spec_raw) = spec {
+                            if ty != Type::Error {
+                                if let Err(msg) = check_format_spec_for_type(spec_raw, &ty) {
+                                    self.type_error(
+                                        msg,
+                                        inner_expr.span.clone(),
+                                        TypeErrorKind::TraitBoundNotSatisfied,
+                                    );
+                                }
+                            }
                         }
                     }
                 }

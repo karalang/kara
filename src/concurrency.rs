@@ -3172,7 +3172,7 @@ impl<'a> ConcurrencyChecker<'a> {
             }
             ExprKind::InterpolatedStringLit(parts) => {
                 for part in parts {
-                    if let ParsedInterpolationPart::Expr(inner) = part {
+                    if let ParsedInterpolationPart::Expr(inner, _) = part {
                         self.collect_expr_reads(inner, reads);
                     }
                 }
@@ -3355,7 +3355,7 @@ impl<'a> ConcurrencyChecker<'a> {
             // ever ADDS serialization — it can never introduce a race.
             ExprKind::InterpolatedStringLit(parts) => {
                 for part in parts {
-                    if let crate::ast::ParsedInterpolationPart::Expr(e) = part {
+                    if let crate::ast::ParsedInterpolationPart::Expr(e, _) = part {
                         self.collect_expr_inner_writes(e, writes);
                     }
                 }
@@ -3754,7 +3754,7 @@ impl<'a> ConcurrencyChecker<'a> {
             }
             ExprKind::InterpolatedStringLit(parts) => {
                 for part in parts {
-                    if let ParsedInterpolationPart::Expr(inner) = part {
+                    if let ParsedInterpolationPart::Expr(inner, _) = part {
                         self.collect_expr_effects(inner, info);
                     }
                 }

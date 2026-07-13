@@ -30268,6 +30268,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_fstring_format_specifiers() {
+        // Phase 8 format specifiers `{expr:spec}` — width, zero-pad, align,
+        // radix (int), precision (float), width/align (string). Codegen maps to
+        // snprintf conversions matching the interpreter's `format_spec::apply_*`,
+        // so this exact output is also asserted for the interpreter in
+        // tests/interpreter.rs::test_fstring_format_specifiers (build==run).
+        let out = run_program(
+            r#"
+fn main() {
+    let n = 7;
+    let big = 255;
+    let neg = 0 - 42;
+    let pi = 1.23456;
+    let s = "hi";
+    println(f"{n:04}|{n:x}|{big:08X}|{big:o}");
+    println(f"{neg:6}|{neg:06}|{neg:<6}");
+    println(f"{pi:.2}|{pi:8.2}|{pi:08.2}|{pi:<8.2}");
+    println(f"{s:6}|{s:<6}|{s:>6}|{s}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "0007|7|000000FF|377\n   -42|-00042|-42   \n1.23|    1.23|00001.23|1.23    \n    hi|hi    |    hi|hi"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_fstring_multiple_parts() {
         let out = run_program(
             r#"

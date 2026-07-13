@@ -45,6 +45,7 @@ pub mod fallible_alloc;
 pub mod ffi_lint;
 pub mod float_math;
 pub mod fork_threshold_queries;
+pub mod format_spec;
 pub mod formatter;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod git_fetch;

@@ -16,7 +16,12 @@ use super::{Attribute, Block, GenericArg, MatchArm, Pattern, TypeExpr};
 #[derive(Debug, Clone)]
 pub enum ParsedInterpolationPart {
     Text(String),
-    Expr(Box<Expr>),
+    /// An interpolation hole `{expr[:spec]}`. The optional `spec` is the raw
+    /// format-specifier source after the first depth-0 `:` (e.g. `"04"`,
+    /// `".2"`, `">10"`, `"x"`); `None` when the hole is a bare `{expr}`. The
+    /// spec is parsed + applied at format time (interpreter + codegen) via
+    /// `crate::format_spec::FormatSpec::parse`.
+    Expr(Box<Expr>, Option<String>),
 }
 
 #[derive(Debug, Clone)]

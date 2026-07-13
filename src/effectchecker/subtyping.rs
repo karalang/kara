@@ -392,7 +392,7 @@ impl<'a> super::EffectChecker<'a> {
             }
             ExprKind::InterpolatedStringLit(parts) => {
                 for p in parts {
-                    if let ParsedInterpolationPart::Expr(e) = p {
+                    if let ParsedInterpolationPart::Expr(e, _) = p {
                         self.check_subtyping_in_expr_owned(*e);
                     }
                 }

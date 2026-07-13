@@ -501,7 +501,7 @@ fn mono_scan_expr(e: &Expr, s: &mut MonotoneScan) {
         | ExprKind::Error => {}
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
-                if let ParsedInterpolationPart::Expr(inner) = p {
+                if let ParsedInterpolationPart::Expr(inner, _) = p {
                     mono_scan_expr(inner, s);
                 }
             }

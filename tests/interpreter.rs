@@ -4222,6 +4222,69 @@ fn test_string_interpolation_basic() {
     );
 }
 
+#[test]
+fn test_fstring_format_specifiers() {
+    // Phase 8 format specifiers — same output codegen asserts in
+    // tests/codegen.rs::test_e2e_fstring_format_specifiers (build==run parity).
+    assert_eq!(
+        run("fn main() {\n\
+                 let n = 7;\n\
+                 let big = 255;\n\
+                 let neg = 0 - 42;\n\
+                 let pi = 1.23456;\n\
+                 let s = \"hi\";\n\
+                 println(f\"{n:04}|{n:x}|{big:08X}|{big:o}\");\n\
+                 println(f\"{neg:6}|{neg:06}|{neg:<6}\");\n\
+                 println(f\"{pi:.2}|{pi:8.2}|{pi:08.2}|{pi:<8.2}\");\n\
+                 println(f\"{s:6}|{s:<6}|{s:>6}|{s}\");\n\
+             }"),
+        "0007|7|000000FF|377\n\
+         \x20  -42|-00042|-42   \n\
+         1.23|    1.23|00001.23|1.23    \n\
+         \x20   hi|hi    |    hi|hi\n"
+    );
+}
+
+#[test]
+fn test_fstring_format_specifier_errors() {
+    // Malformed / type-incompatible specifiers are COMPILE errors (parse or
+    // typecheck) — never silently dropped, which is the whole point.
+    fn compile_errors(src: &str) -> Vec<String> {
+        let parsed = karac::parse(src);
+        if !parsed.errors.is_empty() {
+            return parsed.errors.iter().map(|e| e.message.clone()).collect();
+        }
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        typed.errors.iter().map(|e| e.message.clone()).collect()
+    }
+    for (src, needle) in [
+        ("fn main() { let f = 1.0; println(f\"{f:x}\"); }", "radix"),
+        (
+            "fn main() { let b = true; println(f\"{b:04}\"); }",
+            "int, float, and string",
+        ),
+        (
+            "fn main() { let n = 1; println(f\"{n:0q}\"); }",
+            "unsupported type",
+        ),
+        (
+            "fn main() { let f = 1.0; println(f\"{f:8}\"); }",
+            "needs a precision",
+        ),
+        (
+            "fn main() { let n = 1; println(f\"{n:^5}\"); }",
+            "center align",
+        ),
+    ] {
+        let errs = compile_errors(src);
+        assert!(
+            errs.iter().any(|e| e.contains(needle)),
+            "expected an error containing {needle:?} for {src:?}, got: {errs:?}"
+        );
+    }
+}
+
 // ── E2E: Complete Programs ─────────────────────────────────────
 
 #[test]

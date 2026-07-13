@@ -1419,7 +1419,7 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::Error => false,
             ExprKind::InterpolatedStringLit(parts) => parts.iter().any(|p| match p {
                 ParsedInterpolationPart::Text(_) => false,
-                ParsedInterpolationPart::Expr(x) => borrow_pos(self, x),
+                ParsedInterpolationPart::Expr(x, _) => borrow_pos(self, x),
             }),
             ExprKind::Binary { left, right, .. } => {
                 borrow_pos(self, left) || borrow_pos(self, right)

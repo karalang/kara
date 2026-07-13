@@ -11534,7 +11534,7 @@ fn collect_interp_hole_exprs(prog: &Program) -> Vec<&Expr> {
     fn from_expr<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
         if let ExprKind::InterpolatedStringLit(parts) = &e.kind {
             for p in parts {
-                if let ParsedInterpolationPart::Expr(inner) = p {
+                if let ParsedInterpolationPart::Expr(inner, _) = p {
                     out.push(inner);
                     from_expr(inner, out);
                 }

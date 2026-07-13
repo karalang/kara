@@ -14,6 +14,51 @@
 use crate::ast::*;
 use crate::token::{Span, Token};
 
+/// Split an f-string interpolation hole `raw` into `(expr_src, spec)` at the
+/// first *depth-0 single* `:` — the format-specifier delimiter (`{x:04}` →
+/// `("x", Some("04"))`). A `:` is NOT a delimiter when it is inside `()`, `[]`,
+/// or `{}`, inside a string / char literal, or part of a `::` path separator; so
+/// `{Foo::bar()}`, `{m["a:b"]}`, and `{P { x: 1 }.x}` split correctly (or not at
+/// all). No delimiter → `(raw, None)`, the bare `{expr}` case.
+fn split_format_spec(raw: &str) -> (String, Option<String>) {
+    let bytes = raw.as_bytes();
+    let mut depth = 0i32;
+    let mut in_str: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(q) = in_str {
+            if c == b'\\' {
+                i += 2; // skip the escaped char
+                continue;
+            }
+            if c == q {
+                in_str = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => in_str = Some(c),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b':' if depth == 0 => {
+                // `::` is a path separator, not a spec delimiter — skip both.
+                if bytes.get(i + 1) == Some(&b':') {
+                    i += 2;
+                    continue;
+                }
+                let expr_src = raw[..i].to_string();
+                let spec = raw[i + 1..].to_string();
+                return (expr_src, Some(spec));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (raw.to_string(), None)
+}
+
 use super::{starts_upper, ParseError};
 
 impl super::Parser {
@@ -551,6 +596,20 @@ impl super::Parser {
                             line,
                             column,
                         } => {
+                            // Split a trailing format specifier `{expr:spec}` off
+                            // the hole at the first depth-0 single `:` (Phase 8
+                            // format specifiers). `expr` stays the PREFIX of
+                            // `raw`, so its bytes still start at `offset` and the
+                            // span rebasing below is unaffected; `spec` is carried
+                            // on the parsed part and applied at format time.
+                            let (expr_src, spec) = split_format_spec(&raw);
+                            // Validate the specifier now so a malformed spec is a
+                            // COMPILE error, not a silently-dropped surprise.
+                            if let Some(s) = &spec {
+                                if let Err(msg) = crate::format_spec::FormatSpec::parse(s) {
+                                    self.error(&msg);
+                                }
+                            }
                             // Re-parse the interpolation hole as a standalone
                             // expression by wrapping it in a synthetic fn. The
                             // re-parse produces spans relative to that wrapper;
@@ -561,7 +620,7 @@ impl super::Parser {
                             // SpanKey unique across f-strings (B-2026-06-09-1)
                             // and the line/column correct for diagnostics that
                             // point into the hole (B-2026-06-09-1a).
-                            let wrapper = format!("fn __interp__() {{ {}; }}", raw);
+                            let wrapper = format!("fn __interp__() {{ {}; }}", expr_src);
                             let result = crate::parse(&wrapper);
                             let expr = result.program.items.into_iter().find_map(|item| {
                                 if let crate::ast::Item::Function(f) = item {
@@ -578,8 +637,10 @@ impl super::Parser {
                             });
                             if let Some(mut e) = expr {
                                 crate::span_visitor::shift_expr_spans(&mut e, offset, line, column);
-                                parsed_parts
-                                    .push(crate::ast::ParsedInterpolationPart::Expr(Box::new(e)));
+                                parsed_parts.push(crate::ast::ParsedInterpolationPart::Expr(
+                                    Box::new(e),
+                                    spec,
+                                ));
                             } else {
                                 parsed_parts.push(crate::ast::ParsedInterpolationPart::Text(
                                     format!("{{{}}}", raw),

@@ -2492,7 +2492,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let lit = Expr {
             kind: ExprKind::InterpolatedStringLit(vec![
                 P::Text("Error: ".to_string()),
-                P::Expr(Box::new(id_expr)),
+                P::Expr(Box::new(id_expr), None),
                 P::Text("\n".to_string()),
             ]),
             span: crate::token::Span::default(),

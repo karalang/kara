@@ -515,7 +515,7 @@ fn collect_captures_expr(
         }
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
-                if let ParsedInterpolationPart::Expr(e) = p {
+                if let ParsedInterpolationPart::Expr(e, _) = p {
                     collect_captures_expr(e, outer, shadows, out, seen);
                 }
             }

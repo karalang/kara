@@ -522,7 +522,7 @@ fn collect_edges_expr(
         }
         ExprKind::InterpolatedStringLit(parts) => {
             for part in parts {
-                if let ParsedInterpolationPart::Expr(e) = part {
+                if let ParsedInterpolationPart::Expr(e, _) = part {
                     collect_edges_expr(e, known, method_callee, out);
                 }
             }

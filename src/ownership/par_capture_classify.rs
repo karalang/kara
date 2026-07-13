@@ -359,7 +359,7 @@ fn classify_par_in_expr(
         }
         ExprKind::InterpolatedStringLit(parts) => {
             for part in parts {
-                if let ParsedInterpolationPart::Expr(inner) = part {
+                if let ParsedInterpolationPart::Expr(inner, _) = part {
                     classify_par_in_expr(inner, binding_types, fn_key, tcr, out, arc_values);
                 }
             }
@@ -502,7 +502,7 @@ fn refs_in_expr(expr: &Expr, refs: &mut HashSet<String>, defs: &mut HashSet<Stri
         }
         ExprKind::InterpolatedStringLit(parts) => {
             for part in parts {
-                if let ParsedInterpolationPart::Expr(inner) = part {
+                if let ParsedInterpolationPart::Expr(inner, _) = part {
                     refs_in_expr(inner, refs, defs);
                 }
             }
