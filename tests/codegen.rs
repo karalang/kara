@@ -59166,6 +59166,74 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vector_shift_signed_unsigned() {
+        // `std.simd.math` (phase-11): `<<` lowers to `shl <N x iX>`; `>>` is
+        // `lshr` (logical) on an unsigned-lane vector and `ashr` (arithmetic)
+        // on a signed-lane vector — matching the scalar shift semantics.
+        let ir_u = ir_for(
+            r#"
+fn f(a: u32) -> u32 {
+    let v: Vector[u32, 4] = Vector[u32, 4](a, a, a, a);
+    let amt: Vector[u32, 4] = Vector[u32, 4](1u32, 1u32, 1u32, 1u32);
+    let l = v << amt;
+    let r = l >> amt;
+    r[0]
+}
+fn main() { println(f(8u32)); }
+"#,
+        );
+        assert!(
+            ir_u.contains("shl <4 x i32>") && ir_u.contains("lshr <4 x i32>"),
+            "unsigned vector shift should emit shl + lshr; got:\n{ir_u}"
+        );
+        let ir_s = ir_for(
+            r#"
+fn f(a: i32) -> i32 {
+    let v: Vector[i32, 4] = Vector[i32, 4](a, a, a, a);
+    let amt: Vector[i32, 4] = Vector[i32, 4](1, 1, 1, 1);
+    let r = v >> amt;
+    r[0]
+}
+fn main() { println(f(-8)); }
+"#,
+        );
+        assert!(
+            ir_s.contains("ashr <4 x i32>"),
+            "signed vector >> should emit ashr; got:\n{ir_s}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_vector_integer_shift() {
+        // Element-wise `<<` / `>>` on integer vectors (std.simd.math). `>>` is
+        // logical on unsigned lanes, arithmetic on signed. The last line
+        // exercises the Sleef 2^n idiom: bits_as_f32((n + 127) << 23), n=3 →
+        // 8.0. Byte-identical to the interpreter twin
+        // tests/interpreter.rs::test_vector_integer_shift.
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[u32, 4].from_array([1u32, 2u32, 3u32, 4u32]);
+    let l = v << Vector[u32, 4].splat(3u32);
+    println(l[0]);
+    println(l[3]);
+    let r = Vector[u32, 4].splat(2147483648u32) >> Vector[u32, 4].splat(4u32);
+    println(r[0]);
+    let ar = Vector[i32, 4].splat(-16) >> Vector[i32, 4].splat(2);
+    println(ar[0]);
+    let expo = (Vector[u32, 4].splat(3u32) + Vector[u32, 4].splat(127u32))
+        << Vector[u32, 4].splat(23u32);
+    let pow = expo.bits_as_f32();
+    println(pow[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "8\n32\n134217728\n-4\n8\n");
+        }
+    }
+
+    #[test]
     fn test_vector_dot_i64() {
         let out = run_program(
             r#"

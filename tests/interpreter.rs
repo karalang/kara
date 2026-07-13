@@ -17865,6 +17865,34 @@ fn main() {
 }
 
 #[test]
+fn test_vector_integer_shift() {
+    // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors
+    // (the last Sleef building block). `>>` is logical on unsigned lanes and
+    // arithmetic on signed lanes. The final line exercises the Sleef 2^n
+    // idiom: bits_as_f32((n + 127) << 23) with n=3 → 8.0. Matches
+    // tests/codegen.rs::test_e2e_vector_integer_shift.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let v = Vector[u32, 4].from_array([1u32, 2u32, 3u32, 4u32]);
+    let l = v << Vector[u32, 4].splat(3u32);
+    println(l[0]);
+    println(l[3]);
+    let r = Vector[u32, 4].splat(2147483648u32) >> Vector[u32, 4].splat(4u32);
+    println(r[0]);
+    let ar = Vector[i32, 4].splat(-16) >> Vector[i32, 4].splat(2);
+    println(ar[0]);
+    let expo = (Vector[u32, 4].splat(3u32) + Vector[u32, 4].splat(127u32))
+        << Vector[u32, 4].splat(23u32);
+    let pow = expo.bits_as_f32();
+    println(pow[0]);
+}
+"#,
+    );
+    assert_eq!(out, "8\n32\n134217728\n-4\n8\n");
+}
+
+#[test]
 fn test_vector_i64_construct_add_index() {
     let out = run_no_errors(
         r#"

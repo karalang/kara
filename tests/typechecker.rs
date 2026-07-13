@@ -26948,6 +26948,31 @@ fn vector_simd_math_bits_reinterpret() {
 }
 
 #[test]
+fn vector_integer_shift() {
+    // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors,
+    // yielding the same vector (the shift-amount operand is a same-width
+    // vector — splat a scalar to broadcast).
+    typecheck_ok(
+        "fn main() { let v = Vector[u32, 4].splat(1u32); \
+         let _a = v << Vector[u32, 4].splat(3u32); \
+         let _b = v >> Vector[u32, 4].splat(1u32); }",
+    );
+    typecheck_ok(
+        "fn main() { let v = Vector[i32, 4].splat(-8); \
+         let _a = v >> Vector[i32, 4].splat(1); }",
+    );
+    // Shifts require integer lanes — a float vector is rejected.
+    let errs = typecheck_errors(
+        "fn main() { let v = Vector[f32, 4].splat(1.0f32); \
+         let _a = v << Vector[f32, 4].splat(1.0f32); }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("integer lanes")),
+        "shift on a float vector must be rejected, got: {errs:?}"
+    );
+}
+
+#[test]
 fn vector_from_slice_ok() {
     // Vector[T, N].from_slice of a Slice[T] type-checks; the runtime len==N
     // check is deferred to codegen / interpreter (length is a runtime value).

@@ -3002,6 +3002,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 BinOp::BitAnd => self.builder.build_and(lv, rv, "vand").unwrap().into(),
                 BinOp::BitOr => self.builder.build_or(lv, rv, "vor").unwrap().into(),
                 BinOp::BitXor => self.builder.build_xor(lv, rv, "vxor").unwrap().into(),
+                // Per-lane shifts — integer lanes only (typechecker-enforced).
+                // `<<` is `shl`; `>>` is arithmetic (`ashr`) on signed lanes and
+                // logical (`lshr`) on unsigned lanes (`is_unsigned` from the
+                // operand's `unsigned_vector_exprs` span), matching the scalar
+                // shift semantics. The shift-amount operand is the same-width
+                // vector.
+                BinOp::Shl => self
+                    .builder
+                    .build_left_shift(lv, rv, "vshl")
+                    .unwrap()
+                    .into(),
+                BinOp::Shr => self
+                    .builder
+                    .build_right_shift(lv, rv, !is_unsigned, "vshr")
+                    .unwrap()
+                    .into(),
                 // Comparisons → per-lane mask `<N x i1>`. `is_unsigned` (from the
                 // operand's `unsigned_vector_exprs` span) picks `ult`/`ugt` over
                 // `slt`/`sgt`, matching the scalar integer compares.

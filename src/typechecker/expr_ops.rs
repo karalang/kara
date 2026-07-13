@@ -800,15 +800,16 @@ impl<'a> super::TypeChecker<'a> {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
         );
         let is_bitwise = matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor);
+        let is_shift = matches!(op, BinOp::Shl | BinOp::Shr);
         let is_compare = matches!(
             op,
             BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq | BinOp::Eq | BinOp::NotEq
         );
-        if !is_arith && !is_bitwise && !is_compare {
+        if !is_arith && !is_bitwise && !is_shift && !is_compare {
             self.type_error(
                 format!(
                     "this operator is not yet supported on Vector[T, N] \
-                     (element-wise + - * / % and & | ^ on lanes, comparisons \
+                     (element-wise + - * / % and & | ^ << >> on lanes, comparisons \
                      < <= > >= == != yielding a mask); found operands '{}' and '{}'",
                     type_display(left_ty),
                     type_display(right_ty)
@@ -842,14 +843,16 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
-                // Bitwise `& | ^` are integer-lane only — float vectors have no
-                // meaningful bit-and/or/xor. Arithmetic / comparisons stay open
-                // to all numeric lanes.
-                if is_bitwise && !matches!(**le, Type::Int(_) | Type::UInt(_)) {
+                // Bitwise `& | ^` and shifts `<< >>` are integer-lane only —
+                // float vectors have no meaningful bit ops. Arithmetic /
+                // comparisons stay open to all numeric lanes. (Shift lowers to a
+                // per-lane `shl`/`ashr`/`lshr`, so the shift-amount operand is a
+                // same-width vector — splat a scalar amount to broadcast it.)
+                if (is_bitwise || is_shift) && !matches!(**le, Type::Int(_) | Type::UInt(_)) {
                     self.type_error(
                         format!(
-                            "bitwise vector operators (& | ^) require integer lanes; \
-                             Vector element is '{}'",
+                            "bitwise / shift vector operators (& | ^ << >>) require integer \
+                             lanes; Vector element is '{}'",
                             type_display(le)
                         ),
                         left.span.clone(),
