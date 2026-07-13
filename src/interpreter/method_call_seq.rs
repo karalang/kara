@@ -1339,6 +1339,57 @@ impl<'a> super::Interpreter<'a> {
                     .collect();
                 Some(Value::Vector(out))
             }
+            // `std.simd.math` bit-reinterpretation (phase-11): element-wise
+            // IEEE-754 bitcast between a float vector and a same-width integer
+            // vector. `to_bits` needs the receiver's float width (f32 → u32,
+            // f64 → u64) — read from the collision-proof `vector_method_receivers`
+            // table (keyed by the call span) since the tree-walk is untyped
+            // (all float lanes are `Value::Float(f64)`). `bits_as_f32` /
+            // `bits_as_f64` take the width from the method name.
+            "to_bits" => {
+                let recv_is_f32 = self
+                    .typecheck_result
+                    .vector_method_receivers
+                    .get(&crate::resolver::SpanKey::from_span(span))
+                    .is_some_and(|(elem, _)| {
+                        matches!(
+                            elem,
+                            crate::typechecker::Type::Float(crate::typechecker::FloatSize::F32)
+                        )
+                    });
+                let out: Vec<Value> = lanes
+                    .into_iter()
+                    .map(|lane| match lane {
+                        Value::Float(x) => {
+                            let bits = if recv_is_f32 {
+                                (x as f32).to_bits() as i64
+                            } else {
+                                x.to_bits() as i64
+                            };
+                            Value::Int(bits)
+                        }
+                        other => other,
+                    })
+                    .collect();
+                Some(Value::Vector(out))
+            }
+            "bits_as_f32" | "bits_as_f64" => {
+                let want_f32 = method == "bits_as_f32";
+                let out: Vec<Value> = lanes
+                    .into_iter()
+                    .map(|lane| match lane {
+                        Value::Int(b) => {
+                            if want_f32 {
+                                Value::Float(f32::from_bits(b as u32) as f64)
+                            } else {
+                                Value::Float(f64::from_bits(b as u64))
+                            }
+                        }
+                        other => other,
+                    })
+                    .collect();
+                Some(Value::Vector(out))
+            }
             // Horizontal folds: combine all lanes with the matching scalar op.
             // The typechecker guarantees N >= 1 (and an integer element for the
             // bitwise folds), so `lanes` is non-empty.

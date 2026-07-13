@@ -59085,6 +59085,55 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vector_to_bits_uses_bitcast() {
+        // `std.simd.math` bit-reinterpretation (phase-11): `v.to_bits()` on a
+        // `Vector[f32, 4]` lowers to a single LLVM vector `bitcast`
+        // `<4 x float>` → `<4 x i32>` (no per-lane scalarization).
+        let ir = ir_for(
+            r#"
+fn f(a: f32, b: f32, c: f32, d: f32) -> i32 {
+    let v: Vector[f32, 4] = Vector[f32, 4](a, b, c, d);
+    let bits = v.to_bits();
+    bits[0]
+}
+fn main() { println(f(1.0f32, 2.0f32, 3.0f32, 4.0f32)); }
+"#,
+        );
+        assert!(
+            ir.contains("bitcast <4 x float>") && ir.contains("to <4 x i32>"),
+            "v.to_bits() should lower to a <4 x float> -> <4 x i32> bitcast; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_vector_simd_math_bits() {
+        // Element-wise IEEE-754 bitcast round-trip on float vectors
+        // (std.simd.math). Known patterns: 1.0f32 = 0x3F800000 = 1065353216;
+        // 1.0f64 = 0x3FF0000000000000 = 4607182418800017408. to_bits ->
+        // bits_as_f* recovers the original. Byte-identical to the interpreter
+        // twin tests/interpreter.rs::test_vector_simd_math_bits_roundtrip.
+        let out = run_program(
+            r#"
+fn main() {
+    let v = Vector[f32, 4].from_array([1.0f32, 2.0f32, 0.0f32, -1.0f32]);
+    let b = v.to_bits();
+    println(b[0]);
+    let r = b.bits_as_f32();
+    println(r[3]);
+    let w = Vector[f64, 2].from_array([1.0, 2.0]);
+    let wb = w.to_bits();
+    println(wb[0]);
+    let wr = wb.bits_as_f64();
+    println(wr[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1065353216\n-1\n4607182418800017408\n2\n");
+        }
+    }
+
+    #[test]
     fn test_vector_dot_i64() {
         let out = run_program(
             r#"

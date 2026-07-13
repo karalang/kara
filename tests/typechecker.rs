@@ -26916,6 +26916,38 @@ fn vector_simd_math_rounding_float_only() {
 }
 
 #[test]
+fn vector_simd_math_bits_reinterpret() {
+    // std.simd.math (phase-11): `to_bits` on a float vector yields the
+    // same-width unsigned-int vector (f32→u32, f64→u64); `bits_as_f32` /
+    // `bits_as_f64` are the inverses, requiring a matching-width int element.
+    typecheck_ok(
+        "fn main() { let v = Vector[f32, 4].splat(1.0f32); let b = v.to_bits(); \
+         let _r = b.bits_as_f32(); }",
+    );
+    typecheck_ok(
+        "fn main() { let v = Vector[f64, 2].splat(1.0); let b = v.to_bits(); \
+         let _r = b.bits_as_f64(); }",
+    );
+    // `to_bits` requires a float element.
+    let e1 =
+        typecheck_errors("fn main() { let v = Vector[i32, 4](1, 2, 3, 4); let _b = v.to_bits(); }");
+    assert!(
+        e1.iter().any(|e| e.message.contains("f32 / f64")),
+        "to_bits on an integer vector must be rejected, got: {e1:?}"
+    );
+    // `bits_as_f32` needs a 32-bit int element — a u64 vector (from an f64
+    // `to_bits`) is a width mismatch.
+    let e2 = typecheck_errors(
+        "fn main() { let v = Vector[f64, 2].splat(1.0); let b = v.to_bits(); \
+         let _r = b.bits_as_f32(); }",
+    );
+    assert!(
+        e2.iter().any(|e| e.message.contains("32-bit integer")),
+        "bits_as_f32 on a 64-bit int vector must be rejected, got: {e2:?}"
+    );
+}
+
+#[test]
 fn vector_from_slice_ok() {
     // Vector[T, N].from_slice of a Slice[T] type-checks; the runtime len==N
     // check is deferred to codegen / interpreter (length is a runtime value).

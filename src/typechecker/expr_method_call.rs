@@ -5652,6 +5652,90 @@ impl<'a> super::TypeChecker<'a> {
                     lanes: lanes.clone(),
                 }
             }
+            // `std.simd.math` bit-reinterpretation (phase-11): element-wise
+            // IEEE-754 bitcast between a float vector and a same-width integer
+            // vector — the vector siblings of the scalar `to_bits` /
+            // `bits_as_f*` surface, and the primitive the Sleef range-reduction
+            // uses to build `2^n` from an integer exponent. No arguments;
+            // codegen lowers each to a single LLVM vector `bitcast`.
+            // `to_bits` on a float vector → the same-width UNSIGNED-int vector
+            // (f32 → u32, f64 → u64); `bits_as_f32` / `bits_as_f64` are the
+            // inverses, requiring a 32- / 64-bit integer element.
+            "to_bits" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'{}' takes no arguments", method),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                }
+                let out_elem = match &elem {
+                    Type::Float(FloatSize::F32) => Type::UInt(UIntSize::U32),
+                    Type::Float(FloatSize::F64) => Type::UInt(UIntSize::U64),
+                    _ => {
+                        self.type_error(
+                            format!(
+                                "'to_bits' requires an f32 / f64 Vector element; \
+                                 Vector element is '{}'",
+                                type_display(&elem)
+                            ),
+                            span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return Type::Error;
+                    }
+                };
+                Type::Vector {
+                    element: Box::new(out_elem),
+                    lanes: lanes.clone(),
+                }
+            }
+            "bits_as_f32" | "bits_as_f64" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'{}' takes no arguments", method),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for a in args {
+                        self.infer_expr(&a.value);
+                    }
+                }
+                let want_bits = if method == "bits_as_f32" { 32 } else { 64 };
+                let elem_bits = match &elem {
+                    Type::UInt(UIntSize::U32) | Type::Int(IntSize::I32) => 32,
+                    Type::UInt(UIntSize::U64) | Type::Int(IntSize::I64) => 64,
+                    _ => 0,
+                };
+                if elem_bits != want_bits {
+                    self.type_error(
+                        format!(
+                            "'{}' requires a {}-bit integer Vector element (i{} / u{}); \
+                             Vector element is '{}'",
+                            method,
+                            want_bits,
+                            want_bits,
+                            want_bits,
+                            type_display(&elem)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                let out = if method == "bits_as_f32" {
+                    FloatSize::F32
+                } else {
+                    FloatSize::F64
+                };
+                Type::Vector {
+                    element: Box::new(Type::Float(out)),
+                    lanes: lanes.clone(),
+                }
+            }
             "cross" => {
                 let vec_ty = Type::Vector {
                     element: Box::new(elem.clone()),

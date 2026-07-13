@@ -788,6 +788,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "Vector.ceil"
                     | "Vector.round"
                     | "Vector.trunc"
+                    | "Vector.to_bits"
+                    | "Vector.bits_as_f32"
+                    | "Vector.bits_as_f64"
             ) {
                 return self.compile_vector_method(object, method, args);
             }
@@ -12480,6 +12483,42 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 };
                 Ok(out.into())
+            }
+            // `std.simd.math` bit-reinterpretation (phase-11): element-wise
+            // IEEE-754 bitcast between a float vector and a same-width integer
+            // vector, each a single LLVM vector `bitcast` (no data movement —
+            // the same `<N x 32-or-64>` bits reinterpreted). `to_bits` picks
+            // the int width from the receiver's float element (f32 → i32,
+            // f64 → i64; the result is typed unsigned upstream); `bits_as_f32`
+            // / `bits_as_f64` pick the float width from the method name. The
+            // typechecker guarantees the receiver element width matches.
+            "to_bits" => {
+                let int_elem = if recv.get_type().get_element_type().into_float_type()
+                    == self.context.f32_type()
+                {
+                    self.context.i32_type()
+                } else {
+                    self.context.i64_type()
+                };
+                let target = int_elem.vec_type(n);
+                let out = self
+                    .builder
+                    .build_bit_cast(recv, target, "to_bits")
+                    .map_err(|e| format!("vector to_bits bitcast failed: {e}"))?;
+                Ok(out)
+            }
+            "bits_as_f32" | "bits_as_f64" => {
+                let float_elem = if method == "bits_as_f32" {
+                    self.context.f32_type()
+                } else {
+                    self.context.f64_type()
+                };
+                let target = float_elem.vec_type(n);
+                let out = self
+                    .builder
+                    .build_bit_cast(recv, target, method)
+                    .map_err(|e| format!("vector {method} bitcast failed: {e}"))?;
+                Ok(out)
             }
             "reduce_sum" | "reduce_product" | "reduce_and" | "reduce_or" | "reduce_xor" => {
                 let fold_op = match method {
