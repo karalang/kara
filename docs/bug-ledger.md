@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **419 surfaced · 6 open · 410 fixed** (2026-05-20 → 2026-07-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **419 surfaced · 5 open · 411 fixed** (2026-05-20 → 2026-07-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -100,11 +100,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **419 surfaced 
 | B-2026-07-13-3 | 2026-07-13 | codegen | medium | A GENERIC function whose body is a `match` expression evaluating to a HEAP type `T` (String/Vec), monomorphized, lowers the match VALUE to the i64 const-0 placeholder — emitting `ret i64 0` against the `{ptr,i64,i64}` return type, which fails LLVM module verification (`Function return type does not match operand type of return inst`). LOUD: `karac build`/JIT refuse with the `--interp` hint; the interpreter is correct. The `if`-body sibling COMPILES (a generic `-> T` fn with an `if` returning String is fine), a SCALAR-return match (`-> i64`) compiles, and the NON-generic match-returns-String compiles — only GENERIC + `match`-body + HEAP return trips it. | — |
 | B-2026-07-13-4 | 2026-07-13 | interpreter+codegen | low | Calling a method directly on an enum UNIT-VARIANT LITERAL receiver — `Dir.North.code()` — fails on BOTH surfaces (the typechecker ACCEPTS it, but neither the interpreter nor codegen handles it). Interp: `internal: path 'Dir.North.code' has no interpreter evaluation rule (accepted by the typechecker but not wired in the tree-walk interpreter) — please report this`. Codegen: `no handler for method '<m>' on non-identifier receiver (method dispatch fell through; this is a codegen bug — add a dispatcher arm in compile_method_call...)`. Binding to a variable first is a clean workaround, so LOW severity. | — |
 | B-2026-07-13-5 | 2026-07-13 | codegen / typecheck | medium | Three composable Tensor limitations block idiomatic numerical-stdlib .kara over generic-dim tensors: (A) a tensor reduction/transform on a NON-IDENTIFIER receiver (method chain, e.g. `a.zip_with(b, f).sum()`) fails codegen with 'no handler for method sum on non-identifier receiver' — try_compile_tensor_reduce (tensor.rs:2794) only matches Identifier/SelfValue receivers, returning None for a MethodCall receiver so dispatch falls through; (B) a generic shape parameter `D` (declared `fn f[D](t: Tensor[f32,[D]])`) is usable in the SIGNATURE but NOT in a function-BODY type annotation — `let p: Tensor[f32,[D]] = ...` fails typecheck with "const expression: 'D' is not a known const"; (C) a `ref Tensor[f32,[D]]` PARAM passed to a tensor method taking `other: ref Tensor` (zip_with) fails typecheck with 'expected Tensor, found ref Tensor'. Each is loud (compile error / --interp hint), interp-correct where reachable. | — |
-| B-2026-07-13-6 | 2026-07-13 | codegen | high | A `let` that SHADOWS an outer variable inside ANY nested scope (plain block, `if`/`else` block, `while` body, `for` body, `match` arm, nested block) LEAKS the shadowed value PAST the scope under codegen — the inner `let` overwrites the outer variable's `variables`-map slot (and per-var metadata) and NOTHING restores the outer binding at scope exit. Silent wrong result (exit 0, no diagnostic): after the scope, reads of the name return the INNER shadow's value instead of the restored outer value. The tree-walk interpreter scopes correctly, so this is a run/build divergence on one of the most common constructs in the language. | — |
 
-### Fixed (410)
+### Fixed (411)
 
-<details><summary>410 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>411 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -518,6 +517,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **419 surfaced 
 | B-2026-07-12-28 | codegen | low | A match arm that RETURNS the bound generic-struct payload directly as the function's return value fails LLVM module verification: fn pick() -> Wrap[S… | 8c327a4 |
 | B-2026-07-12-29 | codegen | med | ARM64-ONLY leak: `work[i] = <place>` on `Vec[Option[shared]]`/`Vec[shared]` (e.g | 63d618e |
 | B-2026-07-13-1 | codegen | high | An owned Vec/String PARAM returned from an `if`/`match`/nested-block BRANCH TAIL double-frees under codegen (AOT/JIT `free(): double free detected in… | 78a9a4a |
+| B-2026-07-13-6 | codegen | high | A `let` that SHADOWS an outer variable inside ANY nested scope (plain block, `if`/`else` block, `while` body, `for` body, `match` arm, nested block)… | 07fe865 |
 
 </details>
 
