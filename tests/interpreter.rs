@@ -353,6 +353,26 @@ fn test_signum_signed_int_and_float() {
 }
 
 #[test]
+fn test_float_recip_and_angle_conversions() {
+    // `recip` = `1.0 / x`; `to_degrees` / `to_radians` scale by Rust's exact
+    // constants. Codegen replicates the same `fdiv`/`fmul` + constants, so the
+    // irrational results below are bit-exact between `karac run` and
+    // `karac build` (the interpreter is the f64 reference oracle).
+    assert_eq!(run("fn main() { println((4.0f64).recip()); }"), "0.25\n");
+    assert_eq!(run("fn main() { println((0.5f64).recip()); }"), "2\n");
+    assert_eq!(run("fn main() { println((0.0f64).to_degrees()); }"), "0\n");
+    assert_eq!(run("fn main() { println((0.0f64).to_radians()); }"), "0\n");
+    assert_eq!(
+        run("fn main() { println((1.0f64).to_radians()); }"),
+        "0.017453292519943295\n"
+    );
+    assert_eq!(
+        run("fn main() { println((1.0f64).to_degrees()); }"),
+        "57.29577951308232\n"
+    );
+}
+
+#[test]
 fn test_float_bit_reinterpret_roundtrip() {
     // IEEE-754 bit reinterpretation: `to_bits`/`to_bits32` and the inverse
     // `bits_as_f64`/`bits_as_f32` round-trip a float through its integer bits.

@@ -3827,6 +3827,17 @@ impl<'a> super::TypeChecker<'a> {
         if method == "sqrt" && args.is_empty() && matches!(&receiver_for_lookup, Type::Float(_)) {
             return receiver_for_lookup.clone();
         }
+        // Built-in float arithmetic helpers — `x.recip() -> Self` (`1.0 / x`),
+        // `x.to_degrees() -> Self`, `x.to_radians() -> Self`. Pure IEEE
+        // arithmetic (no libm, no intrinsic): `recip` is a single `fdiv`, the
+        // angle conversions a single `fmul` by the same constant the
+        // interpreter uses, so `run == build` is bit-exact. Float-only.
+        if matches!(method, "recip" | "to_degrees" | "to_radians")
+            && args.is_empty()
+            && matches!(&receiver_for_lookup, Type::Float(_))
+        {
+            return receiver_for_lookup.clone();
+        }
         // Built-in scalar transcendental + rounding math on float primitives —
         // `x.sin()` / `x.cos()` / `x.tan()` / `x.exp()` / `x.ln()` / `x.log2()`
         // / `x.floor()` / `x.ceil()` / `x.round()` (unary, `-> Self`) and

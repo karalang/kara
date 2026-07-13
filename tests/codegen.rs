@@ -22799,6 +22799,31 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_float_recip_and_angle_conversions() {
+        // `recip` → `fdiv`, `to_degrees`/`to_radians` → `fmul` by Rust's exact
+        // constants. AOT output must match the interpreter oracle
+        // (`test_float_recip_and_angle_conversions`) bit-for-bit, including the
+        // irrational conversions.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    println((4.0f64).recip());
+    println((0.5f64).recip());
+    println((0.0f64).to_degrees());
+    println((0.0f64).to_radians());
+    println((1.0f64).to_radians());
+    println((1.0f64).to_degrees());
+}
+"#,
+        ) {
+            assert_eq!(
+                out,
+                "0.25\n2\n0\n0\n0.017453292519943295\n57.29577951308232\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_signum_signed_int_and_float() {
         // `x.signum()`: ints lower to a nested `select` (signed `icmp`), floats
         // to `copysign(1.0, x)` guarded by a NaN check. AOT output must match

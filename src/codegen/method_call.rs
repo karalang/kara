@@ -1915,6 +1915,38 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Built-in float arithmetic helpers (typed in expr_method_call.rs,
+        // float-only): `recip` → `fdiv 1.0, x`; `to_degrees` / `to_radians` →
+        // `fmul x, C` with the SAME constants Rust `f64::to_degrees`/
+        // `to_radians` use, so the result is bit-exact with the interpreter's
+        // `f64::*`. `const_float` rounds the f64 constant to the receiver width.
+        if matches!(method, "recip" | "to_degrees" | "to_radians") && args.is_empty() {
+            let v = self.compile_expr(object)?;
+            if let BasicValueEnum::FloatValue(fv) = v {
+                let fty = fv.get_type();
+                let r = match method {
+                    "recip" => {
+                        let one = fty.const_float(1.0);
+                        self.builder.build_float_div(one, fv, "recip").unwrap()
+                    }
+                    "to_degrees" => {
+                        // Rust's `PIS_IN_180` (180/π) — the f64 nearest to the
+                        // `57.2957795130823208767981548141051703` literal that
+                        // `f64::to_degrees` multiplies by. `const_float` rounds
+                        // it to the receiver width.
+                        let c = fty.const_float(57.29577951308232);
+                        self.builder.build_float_mul(fv, c, "to_deg").unwrap()
+                    }
+                    _ => {
+                        // Rust's `RADS_PER_DEG` = π / 180.
+                        let c = fty.const_float(std::f64::consts::PI / 180.0);
+                        self.builder.build_float_mul(fv, c, "to_rad").unwrap()
+                    }
+                };
+                return Ok(r.into());
+            }
+        }
+
         // `min` / `max` on a numeric scalar (typed in expr_method_call.rs):
         // ints → `select` on a signed/unsigned `icmp`; floats → the overloaded
         // `llvm.minnum`/`llvm.maxnum` intrinsics (NaN-quieting, matching Rust

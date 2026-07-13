@@ -1652,6 +1652,22 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Built-in float arithmetic helpers (typed in expr_method_call.rs,
+        // float-only): `recip` = `1.0 / x`; `to_degrees` / `to_radians` scale
+        // by Rust's exact constants. Codegen replicates the same `fdiv`/`fmul`
+        // and constants, so `run == build` is bit-exact.
+        if matches!(method, "recip" | "to_degrees" | "to_radians") && args.is_empty() {
+            if let Value::Float(f) = &obj {
+                let r = match method {
+                    "recip" => f.recip(),
+                    "to_degrees" => f.to_degrees(),
+                    "to_radians" => f.to_radians(),
+                    _ => unreachable!(),
+                };
+                return Value::Float(r);
+            }
+        }
+
         // `min` / `max` on a numeric scalar (typed in expr_method_call.rs):
         // `a.min(b)` / `a.max(b)` → the smaller / larger. Handles both `Int` and
         // `Float` shapes; codegen lowers to a `select` on `icmp`/`fcmp`.
