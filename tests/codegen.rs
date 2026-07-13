@@ -31325,6 +31325,95 @@ fn main() {
         }
     }
 
+    // ── B-2026-07-13-2: a bare generic param bound WHOLE to a collection
+    // (String/Vec/VecDeque) must get its owned-param return deep-copy. Two
+    // legs: (A) a nested generic FORWARD (`twice[T]{ id(x) }`) resolved to the
+    // element-ERASED `id$struct` mono (the typechecker drops the self-ref
+    // `T→T` binding); (B) a `Vec[E]` param lost its element (head-only subst
+    // name) so the body registered elementless and skipped the copy. Fixed by
+    // `type_subst_type_exprs` + `subst_names`/mangle-token threading. Pre-fix:
+    // interp correct, JIT/native double-freed.
+
+    #[test]
+    fn test_e2e_generic_forward_owned_string_param_no_double_free() {
+        // Leg A: forward a generic owned String param through a nested generic
+        // call. `twice`/`pick`/`id(id(x))` shapes.
+        let out = run_program(
+            "fn id[T](x: T) -> T { x }\n\
+             fn twice[T](x: T) -> T { id(x) }\n\
+             fn pick[T](a: T, b: T) -> T { id(a) }\n\
+             fn nest[T](x: T) -> T { id(id(x)) }\n\
+             fn main() {\n\
+             \x20   println(twice(f\"deep\"));\n\
+             \x20   println(pick(f\"aa\", f\"bb\"));\n\
+             \x20   println(nest(f\"chain\"));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "deep\naa\nchain");
+        }
+    }
+
+    #[test]
+    fn test_e2e_generic_owned_vec_param_return_no_double_free() {
+        // Leg B: a `Vec[i64]` bound to a bare generic param, direct AND through
+        // a nested forward — the element must be threaded so the body deep-copies
+        // with the correct stride.
+        let out = run_program(
+            "fn id[T](x: T) -> T { x }\n\
+             fn twice[T](x: T) -> T { id(x) }\n\
+             fn main() {\n\
+             \x20   let mut v: Vec[i64] = Vec.new(); v.push(5); v.push(9);\n\
+             \x20   let w = id(v);\n\
+             \x20   println(w[1].to_string());\n\
+             \x20   let mut u: Vec[i64] = Vec.new(); u.push(7);\n\
+             \x20   let r = twice(u);\n\
+             \x20   println(r[0].to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "9\n7");
+        }
+    }
+
+    #[test]
+    fn test_e2e_generic_owned_vec_string_param_return_no_double_free() {
+        // Leg B with a nested-heap element (`Vec[String]`): the deep-copy must
+        // recurse per String element.
+        let out = run_program(
+            "fn id[T](x: T) -> T { x }\n\
+             fn main() {\n\
+             \x20   let mut v: Vec[String] = Vec.new(); v.push(f\"aa\"); v.push(f\"bb\");\n\
+             \x20   let w = id(v);\n\
+             \x20   println(w[1]);\n\
+             \x20   println(w.len().to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "bb\n2");
+        }
+    }
+
+    #[test]
+    fn test_e2e_generic_collection_param_distinct_elements_no_symbol_collision() {
+        // The same generic forwarder instantiated at String AND Vec[i64] must
+        // produce DISTINCT element-aware symbols (not one erased `$struct` body
+        // with the wrong stride) — the nested-call mangle token disambiguates.
+        let out = run_program(
+            "fn id[T](x: T) -> T { x }\n\
+             fn fwd[T](x: T) -> T { id(x) }\n\
+             fn main() {\n\
+             \x20   println(fwd(f\"str\"));\n\
+             \x20   let mut v: Vec[i64] = Vec.new(); v.push(42);\n\
+             \x20   let w = fwd(v);\n\
+             \x20   println(w[0].to_string());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "str\n42");
+        }
+    }
+
     // ── B follow-up #3: owned struct-destructure dispatch + cleanup ──
     //
     // `let Point { items, count } = make()` used to register neither method

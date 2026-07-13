@@ -1532,6 +1532,23 @@ pub(super) struct Codegen<'ctx> {
     /// (`x.tag()` → `C.tag`; B-2026-07-03-11). LLVM types can't be reverse-mapped
     /// to a name safely — same-shape structs collide — so this is a distinct map.
     pub(crate) type_subst_names: HashMap<String, String>,
+    /// Element-aware twin of `type_subst_names` (B-2026-07-13-2/-3): a generic
+    /// param name → its FULL concrete `TypeExpr` at the active monomorphization
+    /// (`"T"` → `Vec[i64]`, `Vec[String]`, …). `type_subst_names` is head-ONLY
+    /// (`"Vec"`), which suffices for a scalar/String param (String carries no
+    /// element) but DROPS a `Vec`/`VecDeque` element, so a bare-`T` param bound
+    /// to a whole collection lost its element in the mono body: the param
+    /// prologue's `register_var_from_type_expr(x, subst_monomorph_type_params(T))`
+    /// reconstructed a bare `Vec` (no `[E]`) and never populated `vec_elem_types`
+    /// → `owned_vecstr_params` missed `x` → the owned-param return deep-copy was
+    /// skipped (double-free), and a generic-enum payload bind sized the payload
+    /// at the erased scalar width (match-arm-type mismatch → invalid IR).
+    /// Populated at the mono call site from the argument's registered element
+    /// type, saved/restored around `compile_mono_function` exactly like
+    /// `type_subst_names`, and consulted FIRST by `subst_monomorph_type_params`.
+    /// Empty entry ⇒ fall back to the `type_subst_names` head-name path
+    /// (unchanged for every non-collection param).
+    pub(crate) type_subst_type_exprs: HashMap<String, crate::ast::TypeExpr>,
     /// Per-layout-monomorphization axis: callee param NAME → the `LayoutId`
     /// of the caller's argument at the active call site
     /// (`docs/spikes/per-layout-monomorphization.md`). Saved/restored around
@@ -5952,6 +5969,7 @@ impl<'ctx> Codegen<'ctx> {
             generated_monos: HashSet::new(),
             type_subst: HashMap::new(),
             type_subst_names: HashMap::new(),
+            type_subst_type_exprs: HashMap::new(),
             const_subst: HashMap::new(),
             layout_subst: HashMap::new(),
             return_layout: LayoutId::Aos,

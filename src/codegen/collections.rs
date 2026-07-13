@@ -2308,10 +2308,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// / String / plain-struct concretes that drive element stride and the
     /// non-Copy clone decision, which is all the callers need.
     pub(super) fn subst_monomorph_type_params(&self, te: &TypeExpr) -> TypeExpr {
-        if self.type_subst_names.is_empty() {
+        if self.type_subst_names.is_empty() && self.type_subst_type_exprs.is_empty() {
             return te.clone();
         }
-        let subst: std::collections::HashMap<String, TypeExpr> = self
+        let mut subst: std::collections::HashMap<String, TypeExpr> = self
             .type_subst_names
             .iter()
             .map(|(param, concrete)| {
@@ -2328,6 +2328,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
             })
             .collect();
+        // B-2026-07-13-2/-3: prefer the ELEMENT-AWARE full `TypeExpr` for a
+        // Vec/VecDeque whole-collection param — `type_subst_names` gives only the
+        // head `"Vec"`, dropping `[E]`, so a bare-`T` collection param would
+        // register elementless and miss its owned-param deep-copy / size its
+        // enum payload at the erased scalar width. Overrides the head-only entry.
+        for (param, full_te) in &self.type_subst_type_exprs {
+            subst.insert(param.clone(), full_te.clone());
+        }
         super::helpers::subst_type_params_in_type_expr(te, &subst)
     }
 

@@ -262,6 +262,154 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// A bare-`T` argument's concrete collection identity in the CURRENT
+    /// (caller / enclosing-mono) scope: `("String", None)` for a String var,
+    /// `("Vec"|"VecDeque", Some(elem_te))` for a Vec/VecDeque var. Read from the
+    /// caller's live var side-tables (`string_vars` / `var_elem_type_exprs` /
+    /// `var_type_names`). `None` for a scalar / struct / handle arg. MUST be
+    /// called before the mono's `take_var_side_tables` clears these maps.
+    fn arg_collection_head_elem(&self, arg_name: &str) -> Option<(String, Option<TypeExpr>)> {
+        if self.string_vars.contains(arg_name) {
+            return Some(("String".to_string(), None));
+        }
+        if let Some(elem) = self.var_elem_type_exprs.get(arg_name) {
+            let head = self
+                .var_type_names
+                .get(arg_name)
+                .filter(|h| h.as_str() == "Vec" || h.as_str() == "VecDeque")
+                .cloned()
+                .unwrap_or_else(|| "Vec".to_string());
+            return Some((head, Some(elem.clone())));
+        }
+        None
+    }
+
+    /// Resolve each bare generic type param `x: T` bound WHOLE to a builtin
+    /// collection ARGUMENT (String / Vec / VecDeque identifier) to its concrete
+    /// identity, filling BOTH the head-name `subst_names` (B-2026-07-13-2 leg A —
+    /// the nested-generic-call case the typechecker drops as a self-referential
+    /// `T -> T` binding, leaving `subst_names` empty so the mangle stayed the
+    /// element-erased `$struct` and the body registered no element) AND the
+    /// element-aware `type_subst_type_exprs` (leg B — `Vec`/`VecDeque` element
+    /// that the head-only name loses; `String` carries none). Only INSERTS a
+    /// `subst_names` entry when absent, so a concrete typechecker binding is
+    /// never overwritten; always records the Vec/VecDeque type-expr (the direct
+    /// call needs the element too). Reads the caller's live var side-tables via
+    /// `arg_collection_head_elem`, so it MUST run before `take_var_side_tables`.
+    /// Composes through nesting once the outer mono registers its own collection
+    /// param element-aware. Identifier collection args only.
+    fn resolve_collection_param_substs(
+        &self,
+        func: &Function,
+        args: &[CallArg],
+        subst_names: &mut HashMap<String, String>,
+    ) -> HashMap<String, TypeExpr> {
+        let mut out: HashMap<String, TypeExpr> = HashMap::new();
+        let Some(gp) = &func.generic_params else {
+            return out;
+        };
+        let is_param = |n: &str| gp.params.iter().any(|p| !p.is_const && p.name == n);
+        for (param, arg) in func.params.iter().zip(args.iter()) {
+            let peeled = match &param.ty.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                _ => &param.ty,
+            };
+            let TypeKind::Path(path) = &peeled.kind else {
+                continue;
+            };
+            // A BARE generic type param: single segment, no generic args of its
+            // own, declared in `func`'s generic list. A container param like
+            // `Vec[T]` is NOT this — `augment_subst_from_arg_elem_types` binds
+            // ITS element instead.
+            if path.segments.len() != 1 || path.generic_args.is_some() {
+                continue;
+            }
+            let pname = &path.segments[0];
+            if !is_param(pname) {
+                continue;
+            }
+            let ExprKind::Identifier(arg_name) = &arg.value.kind else {
+                continue;
+            };
+            let Some((head, elem)) = self.arg_collection_head_elem(arg_name.as_str()) else {
+                continue;
+            };
+            // Fill the head name only if the typechecker didn't (leg A).
+            subst_names.entry(pname.clone()).or_insert(head.clone());
+            // Record the element-aware full type for Vec/VecDeque (leg B).
+            if let Some(elem_te) = elem {
+                let sp = param.ty.span.clone();
+                out.insert(
+                    pname.clone(),
+                    TypeExpr {
+                        kind: TypeKind::Path(PathExpr {
+                            segments: vec![head],
+                            generic_args: Some(vec![GenericArg::Type(elem_te)]),
+                            span: sp.clone(),
+                        }),
+                        span: sp,
+                    },
+                );
+            }
+        }
+        out
+    }
+
+    /// Element-aware mangle token for a generic param whose concrete binding is a
+    /// builtin collection, mirroring the typechecker's `type_to_mono_mangle_token`
+    /// (`String`, `Vec_i64`, `Vec_String`, `VecDeque_i64`, …). Built from the
+    /// resolved `type_subst_type_exprs` (Vec/VecDeque, element-aware) or the
+    /// head-only `subst_names` (String). `None` for a non-collection param. Used
+    /// to disambiguate a nested-generic-call mono symbol when the typechecker
+    /// recorded no per-call token (the dropped self-referential binding).
+    fn collection_param_mangle_token(
+        &self,
+        pname: &str,
+        subst_names: &HashMap<String, String>,
+        subst_type_exprs: &HashMap<String, TypeExpr>,
+    ) -> Option<String> {
+        if let Some(te) = subst_type_exprs.get(pname) {
+            return Some(Self::mono_mangle_token_for_type_expr(te));
+        }
+        match subst_names.get(pname).map(String::as_str) {
+            Some("String") => Some("String".to_string()),
+            _ => None,
+        }
+    }
+
+    /// Codegen-side sibling of the typechecker's `type_to_mono_mangle_token`,
+    /// over a `TypeExpr` instead of a `Type`. Recurses into generic args so
+    /// `Vec[i64]` → `Vec_i64`, `Vec[String]` → `Vec_String`, `Vec[Vec[i64]]` →
+    /// `Vec_Vec_i64`. A bare path segment maps to its name (`String`, `i64`).
+    fn mono_mangle_token_for_type_expr(te: &TypeExpr) -> String {
+        match &te.kind {
+            TypeKind::Path(p) => {
+                let head = p
+                    .segments
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| "e".to_string());
+                match &p.generic_args {
+                    Some(gargs) if !gargs.is_empty() => {
+                        let parts: Vec<String> = gargs
+                            .iter()
+                            .map(|g| match g {
+                                GenericArg::Type(t) => Self::mono_mangle_token_for_type_expr(t),
+                                _ => "x".to_string(),
+                            })
+                            .collect();
+                        format!("{head}_{}", parts.join("_"))
+                    }
+                    _ => head,
+                }
+            }
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner) => {
+                Self::mono_mangle_token_for_type_expr(inner)
+            }
+            _ => "e".to_string(),
+        }
+    }
+
     /// Append the builtin-collection element-disambiguation axis to a mangled
     /// mono name (B-2026-07-11-35). For every generic param whose concrete
     /// binding is a `{ptr,i64,i64}`-shaped builtin collection (`String` / `Vec`
@@ -283,18 +431,22 @@ impl<'ctx> super::Codegen<'ctx> {
         mut mangled: String,
         func: &Function,
         subst_names: &HashMap<String, String>,
+        subst_type_exprs: &HashMap<String, TypeExpr>,
         call_span: &crate::token::Span,
     ) -> String {
         use std::fmt::Write as _;
         let Some(gp) = &func.generic_params else {
             return mangled;
         };
-        let Some(tokens) = self
+        // Typechecker-recorded per-call tokens (direct calls). Absent for a
+        // nested generic call whose self-referential `T -> T` binding the
+        // typechecker dropped (B-2026-07-13-2 leg A) — that param falls back to
+        // `collection_param_mangle_token`, derived codegen-side from the resolved
+        // head/element, so the nested call reaches the SAME element-aware symbol
+        // as a direct call (correctly-strided body) instead of the erased one.
+        let tokens = self
             .call_type_subs_mangle
-            .get(&(call_span.offset, call_span.length))
-        else {
-            return mangled;
-        };
+            .get(&(call_span.offset, call_span.length));
         for param in &gp.params {
             if param.is_const {
                 continue;
@@ -313,7 +465,12 @@ impl<'ctx> super::Codegen<'ctx> {
             if !is_collision_class {
                 continue;
             }
-            if let Some(token) = tokens.get(&param.name) {
+            let token = tokens
+                .and_then(|t| t.get(&param.name).cloned())
+                .or_else(|| {
+                    self.collection_param_mangle_token(&param.name, subst_names, subst_type_exprs)
+                });
+            if let Some(token) = token {
                 let _ = write!(mangled, "${}_ct_{}", param.name, token);
             }
         }
@@ -585,6 +742,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // single pointer, so this consults no variable slots.
         self.emit_tensor_crossarg_dim_asserts(&generic_fn, args, &arg_vals)?;
 
+        // B-2026-07-13-2/-3: resolve each bare-`T` param bound WHOLE to a
+        // collection argument to its concrete head (fills `subst_names` for the
+        // nested-generic-call case the typechecker drops — leg A) and its
+        // element-aware `TypeExpr` (`Vec`/`VecDeque` — leg B). Reads the
+        // caller's LIVE var side-tables, so it MUST run before the mangle (which
+        // needs the head + token) AND before `take_var_side_tables` clears them.
+        let subst_type_exprs =
+            self.resolve_collection_param_substs(&generic_fn, args, &mut subst_names);
+
         // Per-layout-monomorphization axis — forward layout-flow inference
         // (`docs/spikes/per-layout-monomorphization.md`). The layout half of
         // the monomorph key: each layout-carrying param's active `LayoutId`,
@@ -626,8 +792,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // copy ran String's i8 stride → 3-byte under-copy → UB read). Append the
         // full mono-mangle token (`Vec_i64` / `Vec_String` / `String`) so each is
         // a distinct symbol with its own correctly-strided body.
-        let mangled =
-            self.append_collection_type_param_mangle(mangled, &generic_fn, &subst_names, call_span);
+        let mangled = self.append_collection_type_param_mangle(
+            mangled,
+            &generic_fn,
+            &subst_names,
+            &subst_type_exprs,
+            call_span,
+        );
         // Bind handle-backed-container type params (`C` bound to a Column/Tensor
         // arg) to `ptr` so a bare-`C` RETURN (`map`/`zip_with` → `Self`) or a
         // `let d: C` local lowers to the pointer shape, not the `i64` default
@@ -716,6 +887,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // bound-generic receiver under its concrete type for trait dispatch.
             let saved_subst_names =
                 std::mem::replace(&mut self.type_subst_names, subst_names.clone());
+            // Element-aware twin (B-2026-07-13-2/-3): thread each Vec/VecDeque
+            // whole-collection param's FULL concrete `TypeExpr` so the body
+            // registers its element (see `type_subst_type_exprs`). Built above,
+            // before the side-table swap cleared the caller's element map.
+            let saved_subst_type_exprs =
+                std::mem::replace(&mut self.type_subst_type_exprs, subst_type_exprs);
             // Const generics slice 4: thread the const-arg substitution
             // into the body-lowering pass so `compile_expr Identifier`
             // can resolve const-param refs against it. Parallel to
@@ -771,6 +948,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.const_subst = saved_const_subst;
             self.type_subst = saved_subst;
             self.type_subst_names = saved_subst_names;
+            self.type_subst_type_exprs = saved_subst_type_exprs;
             self.loop_stack = saved_loop_stack;
             self.branch_cancel_ptr = saved_cancel_ptr;
             self.scope_cleanup_actions = saved_cleanup;
@@ -1257,6 +1435,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // Name-subst twin (B-2026-07-03-11): isolate the layout-mono body from a
         // stale outer name-subst, mirroring `type_subst`.
         let saved_subst_names = std::mem::take(&mut self.type_subst_names);
+        // Element-aware twin (B-2026-07-13-2/-3): a layout mono is non-generic,
+        // so clear any stale outer type-expr subst too; restored below.
+        let saved_subst_type_exprs = std::mem::take(&mut self.type_subst_type_exprs);
         let saved_const_subst = std::mem::take(&mut self.const_subst);
         let saved_layout_subst = std::mem::replace(&mut self.layout_subst, layout_subst);
         let saved_return_layout = std::mem::replace(&mut self.return_layout, return_layout);
@@ -1293,6 +1474,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.const_subst = saved_const_subst;
         self.type_subst = saved_subst;
         self.type_subst_names = saved_subst_names;
+        self.type_subst_type_exprs = saved_subst_type_exprs;
         self.loop_stack = saved_loop_stack;
         self.branch_cancel_ptr = saved_cancel_ptr;
         self.scope_cleanup_actions = saved_cleanup;

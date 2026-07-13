@@ -548,6 +548,42 @@ fn main() {
     }
 
     #[test]
+    fn asan_generic_forward_owned_collection_param_no_leak_or_double_free() {
+        // B-2026-07-13-2: a bare generic param bound to a String/Vec forwarded
+        // through a nested generic call (leg A) and a `Vec[i64]` bound to a
+        // generic param (leg B) must deep-copy on return. 200 iterations: each
+        // call frees the arg buffer + an independent returned copy; a missed
+        // copy double-frees (ASAN) and a leaked copy accumulates (LSan). Was:
+        // aborted with double-free before the fix.
+        assert_clean_asan_run(
+            r#"
+fn id[T](x: T) -> T { x }
+fn twice[T](x: T) -> T { id(x) }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 200i64 {
+        let s = twice(f"str{i}");
+        total = total + s.len();
+        let mut v: Vec[i64] = Vec.new();
+        v.push(i);
+        v.push(i);
+        let w = twice(v);
+        total = total + w.len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // len("str{i}")=3+digits: i 0..9 -> 4 (*10=40), 10..99 -> 5 (*90=450),
+            // 100..199 -> 6 (*100=600). String total = 40+450+600 = 1090.
+            // Each Vec has len 2 -> 200*2 = 400. Grand total = 1090 + 400 = 1490.
+            &["1490"],
+            "generic_forward_owned_collection_param_no_leak_or_double_free",
+        );
+    }
+
+    #[test]
     fn asan_owned_string_param_if_branch_return_no_leak_or_double_free() {
         // B-2026-07-13-1: an owned String param returned from an `if` branch
         // tail deep-copies (the caller retains the arg buffer). 200 iterations:
