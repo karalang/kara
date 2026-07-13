@@ -346,6 +346,8 @@ fn int_suffix_lex(s: Option<IntSuffix>) -> &'static str {
 fn float_suffix_lex(s: Option<FloatSuffix>) -> &'static str {
     match s {
         None => "",
+        Some(FloatSuffix::F16) => "f16",
+        Some(FloatSuffix::BF16) => "bf16",
         Some(FloatSuffix::F32) => "f32",
         Some(FloatSuffix::F64) => "f64",
     }

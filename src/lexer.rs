@@ -408,7 +408,8 @@ impl<'a> Lexer<'a> {
     fn try_float_suffix(&mut self) -> Option<FloatSuffix> {
         use FloatSuffix::*;
         let remaining = &self.source[self.current..];
-        let candidates: &[(&[u8], FloatSuffix)] = &[(b"f64", F64), (b"f32", F32)];
+        let candidates: &[(&[u8], FloatSuffix)] =
+            &[(b"f64", F64), (b"f32", F32), (b"bf16", BF16), (b"f16", F16)];
         for &(pat, suffix) in candidates {
             if remaining.len() >= pat.len()
                 && &remaining[..pat.len()] == pat
@@ -1369,15 +1370,10 @@ impl<'a> Lexer<'a> {
             "Self" => Token::SelfType,
             // Underscore as identifier
             "_" => Token::Underscore,
-            // Reserved future numeric type keywords — not available until Phase 7.
-            // Emit a lexer error so the compiler rejects these as identifiers now,
-            // preventing a source-breaking rename when the types ship.
-            "f16" => Token::Error(
-                "'f16' is a reserved keyword for a future numeric type; not available until Phase 7".to_string(),
-            ),
-            "bf16" => Token::Error(
-                "'bf16' is a reserved keyword for a future numeric type; not available until Phase 7".to_string(),
-            ),
+            // `f16` / `bf16` are ordinary type-name identifiers (like `f32` /
+            // `f64`), resolved to `Type::Float(FloatSize::{F16,BF16})` by the
+            // typechecker's builtin-type lowering. They fall through to the
+            // identifier arm below.
             // Reserved-for-future-use keywords — see design.md § Reserved-for-Future-Use Keywords.
             "gen" | "become" | "do" | "final" | "override" | "priv" | "typeof" | "virtual"
             | "async" | "await" | "pure" | "box" => Token::Error(format!(

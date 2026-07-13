@@ -344,8 +344,8 @@ impl<'a> super::Resolver<'a> {
             "Shl", "Shr", "Not", "Index", "IndexMut", "Display",
         ];
         const STDLIB_ALLOWLIST: &[&str] = &[
-            "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "f32", "f64", "bool",
-            "char", "String", "F32", "F64",
+            "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "f16", "bf16", "f32",
+            "f64", "bool", "char", "String", "F32", "F64",
         ];
 
         let trait_name = match trait_path.segments.last() {

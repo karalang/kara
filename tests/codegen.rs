@@ -3608,6 +3608,55 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_f16_bf16_arithmetic_lowers_to_half_and_bfloat() {
+        // `f16` lowers to LLVM `half`, `bf16` to `bfloat` (phase-11).
+        let ir = ir_for(
+            "fn f(a: f16, b: f16) -> f16 { a + b }\nfn g(a: bf16, b: bf16) -> bf16 { a * b }\nfn main() { let _ = f(1.0f16, 2.0f16); let _ = g(1.0bf16, 2.0bf16); }",
+        );
+        assert!(
+            ir.contains("fadd half"),
+            "expected an `fadd half` for f16 add; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("fmul bfloat"),
+            "expected an `fmul bfloat` for bf16 mul; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_f16_arithmetic_roundtrip() {
+        // Values exactly representable in f16 (halves/quarters) so the printed
+        // result is exact. 1.5 + 2.25 = 3.75; 3.0 * 4.0 = 12.
+        let out = run_program(
+            "fn main() {\n\
+                 let x: f16 = 1.5f16;\n\
+                 let y: f16 = 2.25f16;\n\
+                 println(x + y);\n\
+                 println(3.0f16 * 4.0f16);\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3.75\n12");
+        }
+    }
+
+    #[test]
+    fn test_e2e_f16_widens_to_f32_in_mixed_add() {
+        // `f16 + f32` widens the half up to f32 (fpext) before the add — the
+        // module-verifier regression this guards (was `fadd half, float`).
+        let out = run_program(
+            "fn main() {\n\
+                 let a: f16 = 2.0f16;\n\
+                 let b: f32 = 3.0f32;\n\
+                 println(a + b);\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5");
+        }
+    }
+
+    #[test]
     fn test_ir_heuristic_inline_hint_on_small_helper() {
         // A small leaf helper with no user `#[inline]` gets a compiler-driven
         // `inlinehint` (phase-11 Codegen Optimization) — proves the

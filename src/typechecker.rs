@@ -3214,6 +3214,8 @@ impl<'a> TypeChecker<'a> {
         match sfx {
             None | Some(FloatSuffix::F64) => Type::Float(FloatSize::F64),
             Some(FloatSuffix::F32) => Type::Float(FloatSize::F32),
+            Some(FloatSuffix::F16) => Type::Float(FloatSize::F16),
+            Some(FloatSuffix::BF16) => Type::Float(FloatSize::BF16),
         }
     }
 

@@ -27,6 +27,10 @@ pub enum IntSuffix {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum FloatSuffix {
+    /// `1.0f16` — IEEE 754-2008 half precision.
+    F16,
+    /// `1.0bf16` — bfloat16 (truncated-mantissa half).
+    BF16,
     F32,
     F64,
 }

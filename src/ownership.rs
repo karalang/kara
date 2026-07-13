@@ -1809,6 +1809,8 @@ impl<'a> OwnershipChecker<'a> {
                     "u32" => Type::UInt(UIntSize::U32),
                     "u64" => Type::UInt(UIntSize::U64),
                     "usize" => Type::UInt(UIntSize::Usize),
+                    "f16" => Type::Float(FloatSize::F16),
+                    "bf16" => Type::Float(FloatSize::BF16),
                     "f32" => Type::Float(FloatSize::F32),
                     "f64" => Type::Float(FloatSize::F64),
                     "bool" => Type::Bool,

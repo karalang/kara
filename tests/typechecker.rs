@@ -3894,6 +3894,51 @@ fn volatile_read_pointee_type_mismatch_errors() {
     assert!(!errs.is_empty(), "expected a pointee type-mismatch error");
 }
 
+// ── f16 / bf16 primitive numeric types (phase-11) ─────────────────
+//
+// `f16` (IEEE half) and `bf16` (bfloat16) are primitive float types with the
+// same arithmetic/compare/Copy surface as `f32`/`f64` but NOT `Eq`/`Ord`/`Hash`.
+// Implicit widening `f16`/`bf16` → `f32` (lossless).
+
+#[test]
+fn f16_bf16_types_and_literals_typecheck() {
+    typecheck_ok("fn main() { let _x: f16 = 1.5f16; let _y: bf16 = 2.5bf16; }");
+    // Untyped float literal coerces into an f16/bf16 annotation.
+    typecheck_ok("fn main() { let _x: f16 = 1.5; let _y: bf16 = 2.5; }");
+    // Arithmetic + comparison on same-width halves.
+    typecheck_ok("fn f(a: f16, b: f16) -> f16 { a * b - b }");
+    typecheck_ok("fn f(a: bf16, b: bf16) -> bool { a < b }");
+}
+
+#[test]
+fn f16_widens_to_f32_in_mixed_arithmetic() {
+    // `f16 + f32` widens the half to f32; result is f32.
+    typecheck_ok("fn f(a: f16, b: f32) -> f32 { a + b }");
+    typecheck_ok("fn f(a: bf16, b: f32) -> f32 { a + b }");
+    // Direct assignment widening.
+    typecheck_ok("fn f(a: f16) -> f32 { a }");
+}
+
+#[test]
+fn f16_is_not_hashable_or_eq() {
+    // f16 lacks Hash + Eq (NaN semantics), so it cannot be a Map key —
+    // exactly like f32/f64.
+    let errs = typecheck_errors(
+        "fn main() { let mut m: Map[f16, i64] = Map.new(); m.insert(1.0f16, 5); }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("Hash")),
+        "expected f16 to be rejected as a Map key (no Hash + Eq), got: {errs:?}"
+    );
+    let errs = typecheck_errors(
+        "fn main() { let mut m: Map[bf16, i64] = Map.new(); m.insert(1.0bf16, 5); }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("Hash")),
+        "expected bf16 rejected as a Map key, got: {errs:?}"
+    );
+}
+
 // ── critical_section.acquire() — RAII interrupt-mask guard ─────────
 //
 // `critical_section.acquire()` (design.md § Critical sections) is a

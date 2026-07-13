@@ -1304,6 +1304,8 @@ fn infer_stub_arg_type(expr: &Expr) -> Option<String> {
             None => "i64",
         },
         ExprKind::Float(_, suffix) => match suffix {
+            Some(FloatSuffix::F16) => "f16",
+            Some(FloatSuffix::BF16) => "bf16",
             Some(FloatSuffix::F32) => "f32",
             Some(FloatSuffix::F64) => "f64",
             None => "f64",

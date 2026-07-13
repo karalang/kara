@@ -59,8 +59,8 @@ pub fn prelude_path() -> Vec<String> {
 /// subsets for their own purposes (numeric widths, etc.); this list is the
 /// canonical surface every module sees.
 pub const PRELUDE_PRIMITIVES: &[&str] = &[
-    "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "usize", "f32", "f64",
-    "bool", "char", "String",
+    "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "usize", "f16", "bf16",
+    "f32", "f64", "bool", "char", "String",
 ];
 
 /// Stdlib type names visible without import. These are the placeholder

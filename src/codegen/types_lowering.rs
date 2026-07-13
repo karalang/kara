@@ -613,6 +613,8 @@ impl<'ctx> super::Codegen<'ctx> {
         match sfx {
             None | Some(FloatSuffix::F64) => self.context.f64_type(),
             Some(FloatSuffix::F32) => self.context.f32_type(),
+            Some(FloatSuffix::F16) => self.context.f16_type(),
+            Some(FloatSuffix::BF16) => self.context.bf16_type(),
         }
     }
 
@@ -1789,6 +1791,8 @@ impl<'ctx> super::Codegen<'ctx> {
             "i16" | "u16" => self.context.i16_type().into(),
             "i32" | "u32" => self.context.i32_type().into(),
             "i64" | "u64" | "isize" | "usize" => self.context.i64_type().into(),
+            "f16" => self.context.f16_type().into(),
+            "bf16" => self.context.bf16_type().into(),
             "f32" => self.context.f32_type().into(),
             "f64" => self.context.f64_type().into(),
             "bool" => self.context.bool_type().into(),

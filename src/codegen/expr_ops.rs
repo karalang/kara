@@ -4661,7 +4661,41 @@ impl<'ctx> super::Codegen<'ctx> {
         // back down at the ret/arg boundary).
         let f32_t = self.context.f32_type();
         let f64_t = self.context.f64_type();
-        let (lf, rf) = if lf.get_type() == f64_t && rf.get_type() == f32_t {
+        // Rank a float type by bit width so the harmonization can pick a
+        // direction. f16 / bf16 are both 16-bit (they never mix in one op —
+        // neither widens to the other, so the typechecker rejects `f16 + bf16`
+        // — hence at most one side is 16-bit here).
+        let rank = |ft: inkwell::types::FloatType<'ctx>| -> u32 {
+            if ft == self.context.f16_type() || ft == self.context.bf16_type() {
+                16
+            } else if ft == f32_t {
+                32
+            } else {
+                64
+            }
+        };
+        let (lw, rw) = (rank(lf.get_type()), rank(rf.get_type()));
+        let (lf, rf) = if lw == 16 && rw > 16 {
+            // Implicit f16/bf16 → f32/f64 promotion (design.md § f16/bf16):
+            // widen the half operand UP to the wider operand's type. The
+            // widening is lossless, and the typechecker typed the op at the
+            // wider type, so computing there matches source semantics.
+            (
+                self.builder
+                    .build_float_cast(lf, rf.get_type(), "fop.l.ext")
+                    .unwrap(),
+                rf,
+            )
+        } else if rw == 16 && lw > 16 {
+            (
+                lf,
+                self.builder
+                    .build_float_cast(rf, lf.get_type(), "fop.r.ext")
+                    .unwrap(),
+            )
+        } else if lf.get_type() == f64_t && rf.get_type() == f32_t {
+            // Real f32 operand × default-f64 float literal: cast the wide
+            // literal side DOWN to f32 (the typechecker typed the op at f32).
             (
                 self.builder
                     .build_float_cast(lf, f32_t, "fop.l.tr")

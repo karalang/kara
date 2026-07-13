@@ -21477,6 +21477,28 @@ fn test_volatile_cell_rejected_under_tree_walk_interpreter() {
     );
 }
 
+// ── f16 / bf16 primitives ───────────────────────────────────────
+
+#[test]
+fn test_f16_bf16_arithmetic_tree_walk() {
+    // f16 / bf16 run under the tree-walk interpreter (promoted to f64 for
+    // computation). Uses values exactly representable in f16/bf16 (halves) so
+    // the result matches the compiled backends bit-for-bit. Non-exact values
+    // (e.g. 0.1f16) compute at f64 precision here vs. exact half precision
+    // under `karac build` / the default JIT — a documented approximation.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let x: f16 = 1.5f16;\n\
+             let y: f16 = 2.25f16;\n\
+             println(x + y);\n\
+             let a: bf16 = 3.0bf16;\n\
+             let b: bf16 = 0.5bf16;\n\
+             println(a * b);\n\
+         }\n",
+    );
+    assert_eq!(out, "3.75\n1.5\n");
+}
+
 // ── critical_section (interrupt-mask RAII guard) ────────────────
 
 #[test]

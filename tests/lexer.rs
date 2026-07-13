@@ -1088,30 +1088,48 @@ fn test_float_exponent_negative_exponent() {
 }
 
 #[test]
-fn test_f16_is_reserved_keyword() {
+fn test_f16_lexes_as_type_identifier() {
+    // `f16` / `bf16` are now real primitive types (phase-11), lexed as
+    // ordinary type-name identifiers like `f32` / `f64` — no longer reserved.
     let tokens = tokens_only("f16");
     assert_eq!(
         tokens,
         vec![
-            Token::Error(
-                "'f16' is a reserved keyword for a future numeric type; not available until Phase 7".to_string()
-            ),
+            Token::Identifier {
+                name: "f16".to_string(),
+                raw: false,
+            },
             Token::EOF,
         ]
     );
 }
 
 #[test]
-fn test_bf16_is_reserved_keyword() {
+fn test_bf16_lexes_as_type_identifier() {
     let tokens = tokens_only("bf16");
     assert_eq!(
         tokens,
         vec![
-            Token::Error(
-                "'bf16' is a reserved keyword for a future numeric type; not available until Phase 7".to_string()
-            ),
+            Token::Identifier {
+                name: "bf16".to_string(),
+                raw: false,
+            },
             Token::EOF,
         ]
+    );
+}
+
+#[test]
+fn test_f16_bf16_float_literal_suffixes() {
+    // `1.0f16` / `2.5bf16` lex as float literals with the new suffixes.
+    use karac::token::FloatSuffix;
+    assert_eq!(
+        tokens_only("1.0f16"),
+        vec![Token::Float(1.0, Some(FloatSuffix::F16)), Token::EOF]
+    );
+    assert_eq!(
+        tokens_only("2.5bf16"),
+        vec![Token::Float(2.5, Some(FloatSuffix::BF16)), Token::EOF]
     );
 }
 

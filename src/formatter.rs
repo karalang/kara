@@ -326,6 +326,8 @@ pub(super) fn int_suffix_str(s: IntSuffix) -> &'static str {
 
 pub(super) fn float_suffix_str(s: FloatSuffix) -> &'static str {
     match s {
+        FloatSuffix::F16 => "f16",
+        FloatSuffix::BF16 => "bf16",
         FloatSuffix::F32 => "f32",
         FloatSuffix::F64 => "f64",
     }

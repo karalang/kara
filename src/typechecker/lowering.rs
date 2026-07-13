@@ -897,6 +897,8 @@ impl<'a> super::TypeChecker<'a> {
             "u64" => Some(Type::UInt(UIntSize::U64)),
             "u128" => Some(Type::UInt(UIntSize::U128)),
             "usize" => Some(Type::UInt(UIntSize::Usize)),
+            "f16" => Some(Type::Float(FloatSize::F16)),
+            "bf16" => Some(Type::Float(FloatSize::BF16)),
             "f32" => Some(Type::Float(FloatSize::F32)),
             "f64" => Some(Type::Float(FloatSize::F64)),
             "bool" => Some(Type::Bool),

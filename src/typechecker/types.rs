@@ -241,6 +241,10 @@ pub enum UIntSize {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FloatSize {
+    /// IEEE 754-2008 half precision (LLVM `half`).
+    F16,
+    /// bfloat16 — 8-bit exponent, 7-bit mantissa (LLVM `bfloat`).
+    BF16,
     F32,
     F64,
 }
@@ -525,6 +529,8 @@ pub(super) fn impl_table_key(ty: &Type) -> Option<(String, Vec<Type>)> {
         )),
         Type::Float(s) => Some((
             match s {
+                FloatSize::F16 => "f16",
+                FloatSize::BF16 => "bf16",
                 FloatSize::F32 => "f32",
                 FloatSize::F64 => "f64",
             }
@@ -661,6 +667,8 @@ pub fn type_display(ty: &Type) -> String {
         }
         .to_string(),
         Type::Float(s) => match s {
+            FloatSize::F16 => "f16",
+            FloatSize::BF16 => "bf16",
             FloatSize::F32 => "f32",
             FloatSize::F64 => "f64",
         }
