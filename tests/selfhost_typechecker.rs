@@ -291,6 +291,16 @@ const CORPUS: &[&str] = &[
     "fn f(s: String) -> char { s[0] }",
     "fn f(s: String, i: i64) -> char { s[i] }",
     "fn f(v: Vec[i64]) -> i64 { v[0] }",
+    // ── Slice 16: NotCallable ──
+    // Calling a non-function value — a local binding of a concrete category
+    // (primitive / struct / enum) — is NotCallable at the callee span. A real
+    // function call is arg-count-checked instead; an unknown name is skipped.
+    "fn f(n: i64) -> i64 { n() }",
+    "fn f(b: bool) -> i64 { b() }",
+    "fn f(s: String) -> i64 { s() }",
+    "fn f(p: Point) -> i64 { p() }\nstruct Point { x: i64 }",
+    // A binding introduced by `let` is also flagged.
+    "fn f() -> i64 { let x = 1; x() }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
@@ -336,6 +346,7 @@ fn rust_render(src: &str) -> String {
             "InvalidUnaryOp" => "invalid-unary-op",
             "InvalidBinaryOp" => "invalid-binary-op",
             "StringNotIndexable" => "string-not-indexable",
+            "NotCallable" => "not-callable",
             other => panic!(
                 "corpus entry {src:?} produced an out-of-Slice-1 type-error kind {other} \
                  (message: {}); trim the corpus or extend the slice",

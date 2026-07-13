@@ -801,6 +801,7 @@ impl Checker {
                 let argc = args.len();
                 let mut rc = 4;
                 let mut expected = -1;
+                let mut notcallable = false;
                 match callee {
                     Ident(ie) => {
                         let IdentExpr { name, span: isp } = ie;
@@ -809,6 +810,17 @@ impl Checker {
                         // value-parameter count, or -1 if it is not a known
                         // top-level free function (then never checked).
                         expected = self.lookup_fn_arity(name);
+                        // NotCallable (Slice 16): the callee names a known LOCAL
+                        // binding of a concrete category (a value — primitive /
+                        // struct / enum — not a function). A stored closure / fn
+                        // value binds to UNKNOWN, so it is never falsely flagged;
+                        // an unknown name (stdlib / import) is skipped too.
+                        if expected < 0 {
+                            let bc = self.lookup_cat(name);
+                            if bc != 4 {
+                                notcallable = true;
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -816,10 +828,16 @@ impl Checker {
                     let CallArg { label, mut_marker, value, span: asp } = a;
                     let ai = self.check_expr(value);
                 }
-                // A call to a KNOWN callee with the wrong number of arguments is
-                // WrongNumberOfArgs (kind 7) at the callee span, matching the seed.
-                if expected >= 0 and expected != argc {
-                    self.push_err(7, span.offset, span.length);
+                // A call to a non-function value is NotCallable (kind 11);
+                // otherwise a call to a KNOWN function with the wrong number of
+                // arguments is WrongNumberOfArgs (kind 7). Both anchor on the
+                // callee span, matching the seed.
+                if notcallable {
+                    self.push_err(11, span.offset, span.length);
+                } else {
+                    if expected >= 0 and expected != argc {
+                        self.push_err(7, span.offset, span.length);
+                    }
                 }
                 ExprInfo { category: rc, span: span }
             }
@@ -1370,7 +1388,10 @@ fn kind_tag(kind: i64) -> String {
     if kind == 9 {
         return "invalid-binary-op".to_string();
     }
-    "string-not-indexable".to_string()
+    if kind == 10 {
+        return "string-not-indexable".to_string();
+    }
+    "not-callable".to_string()
 }
 
 pub fn render_errors(errs: Vec[TypeError]) -> String {
