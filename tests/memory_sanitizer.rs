@@ -17839,6 +17839,47 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_match_move_vec_shared_enum_payload_no_leak() {
+        // B-2026-07-13-14. Matching a shared enum and binding a `Vec[shared T]`
+        // payload OUT (`match t { Branch(xs) => … }`) leaked the shared elements.
+        // The move-out suppression zeros the box's Vec `cap` so the enum's own
+        // rc-drop skips the payload (the binding is the sole owner), but the
+        // binding was tracked buffer-only (`track_vec_var`) — it freed the Vec
+        // buffer and left every element's RC box unreferenced (LSan: 16-byte Node
+        // boxes). `bind_pattern_values` now upgrades a `Vec[shared]` payload
+        // binding to the element-draining tracker (`track_vec_of_aggs_var` → the
+        // shared element's `emit_vec_elem_rc_dec_fn`) at the same single-owner
+        // point, so no double-free (the source's drain is suppressed exactly as
+        // its buffer-free already is — verified against move-further shapes:
+        // return-out, re-move to another local, and a String payload which stays
+        // buffer-only). 50 iters × 2 elements.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { mut val: i64 }
+shared enum Tree { Leaf, Branch(Vec[Node]) }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        let mut v: Vec[Node] = Vec.new();
+        v.push(Node { val: 1 });
+        v.push(Node { val: 2 });
+        let t = Tree.Branch(v);
+        match t {
+            Tree.Leaf => {}
+            Tree.Branch(xs) => { total = total + xs.len(); }
+        }
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            &["100"],
+            "match_move_vec_shared_enum_payload_no_leak",
+        );
+    }
+
     /// Column heap lifecycle (phase-11 data-science stdlib, Arrow codegen
     /// core slice): each `Column[T]` is a control block + a separate data
     /// buffer + a separate validity bitmap, all freed once at scope exit

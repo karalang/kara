@@ -497,7 +497,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 // since the container retains ownership.
                 if let Some(elem_ty) = bound_vec_elem {
                     if !self.pattern_binding_is_borrow {
-                        self.track_vec_var(alloca, Some(elem_ty));
+                        // B-2026-07-13-14: a `Vec[shared T]` (or heap-agg element)
+                        // payload MOVED out of an enum must DRAIN its elements at
+                        // scope exit, not just free the buffer. Every move-out path
+                        // zeros the SOURCE so its drop no-ops (for a shared-enum box,
+                        // `suppress_shared_enum_payload_move_out` zeros the box's Vec
+                        // `cap`; for a value enum, the destructure suppressors do) —
+                        // so this binding is the SOLE owner. Buffer-only
+                        // `track_vec_var` freed the buffer but left every shared
+                        // element's RC box unreferenced → one ref leaked per element
+                        // (`match t { Branch(xs) => … }`, `Node` shared). Resolve the
+                        // per-element drop (a shared element → `emit_vec_elem_rc_dec_fn`)
+                        // and use the element-draining tracker; `None` for `String` /
+                        // `Vec[scalar]` keeps the buffer-only path unchanged. Same
+                        // `!is_borrow` gate and single-owner guarantee as the
+                        // buffer-free, so no double-free (the source's drain is
+                        // suppressed exactly as its buffer-free already is).
+                        let agg = self
+                            .var_elem_type_exprs
+                            .get(name.as_str())
+                            .cloned()
+                            .and_then(|te| self.vec_elem_agg_drop_for_type_expr(&te));
+                        match agg {
+                            Some(agg_drop) => self.track_vec_of_aggs_var(alloca, elem_ty, agg_drop),
+                            None => self.track_vec_var(alloca, Some(elem_ty)),
+                        }
                     }
                 }
                 // Register scope-exit Drop for a pattern-bound owned user
