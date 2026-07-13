@@ -410,16 +410,16 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 > **v1 design property — collections monomorphize.** `Vec[T]`, `Map[K, V]`, `Set[T]`, and future v1 collections (e.g., `BTreeMap[K, V]`) emit one specialized implementation per concrete type tuple at codegen, like Rust's `std::collections::HashMap[K, V]`. The original v0 design used a type-erased C runtime (function-pointer dispatch on hash/eq, byte-blob storage); v1 shifts to monomorphized source compiled per user crate. Eliminates indirect-call tax on hot collection operations (~25% of the Karac-vs-std hash_map gap measured 2026-05-06); restores LLVM's optimizer reach into collection internals. `libkarac_runtime.a` shrinks accordingly to non-monomorphizable primitives. See [`design.md § Generics and Monomorphization Strategy`](design.md#generics-and-monomorphization-strategy) for the design lock; trait-bounds-at-codegen enforcement is a P0 prerequisite (currently parsed/validated but not enforced — see `implementation_checklist/phase-7-codegen.md`).
 
 - [ ] `Vec[T]` — full method set on top of Phase 7.2 codegen: `map`, `filter`, `fold`, `retain`, `sort`, `reverse`, `extend`, `concat`, iterator impls. Monomorphized per concrete `T`.
-- [ ] `Map[K, V]` — codegen + full API: hash table representation, `insert`, `get`, `remove`, `contains_key`, iteration. Monomorphized per concrete `(K, V)` tuple — direct hash/eq calls, full inlining, no function-pointer indirection.
-- [ ] `Set[T]` — codegen + full API: unique-value container built on `Map` infrastructure. Monomorphized per concrete `T`.
+- [x] `Map[K, V]` — codegen + full API: hash table representation, `insert`, `get`, `remove`, `contains_key`, iteration. Monomorphized per concrete `(K, V)` tuple — direct hash/eq calls, full inlining, no function-pointer indirection.
+- [x] `Set[T]` — codegen + full API: unique-value container built on `Map` infrastructure. Monomorphized per concrete `T`.
 - [ ] `String` — full method set on top of Phase 7.2 codegen: `split`, `replace`, `trim`, `to_uppercase`, `chars()`, format specifiers, etc.
 - [ ] `StringSlice` — borrowed view into a `String` (pointer + offset + length); zero-copy parsing/splitting
 - [ ] `InternedString` — deduplicated handle via global intern table; O(1) equality
 - [x] `Slice[T]` — full read-only + in-place method surface: `len`, `is_empty`, `first`, `last`, `get(i) -> Option[ref T]`, `contains`, `binary_search`, `chunks(n)`, `windows(n)`, `split_at(i)`, `sort`, `sort_by(cmp)`, `reverse`, `fill`, `swap(i, j)`. Typechecker `infer_slice_method` handles `Type::Slice { element, mutable }` dispatch; interpreter `eval_method_call` pattern-matches `Value::Array` for each arm with fallthrough for non-Array objects. `value_compare` free function added since `Value` does not implement `Ord`. 14 typechecker tests + 14 interpreter tests added.
 
 ### Core Types
-- [ ] `Option[T]` — nullable values (enum)
-- [ ] `Result[T, E]` — error handling (enum)
+- [x] `Option[T]` — nullable values (enum)
+- [x] `Result[T, E]` — error handling (enum)
 - [x] `ref_eq(a, b)` — reference identity comparison for `shared` types (free function, returns `bool`). `#[compiler_builtin]` in `runtime/stdlib/intrinsics.kara` + prelude; typecheck `infer_ref_eq_intrinsic` requires the same `shared` type on both args (non-shared → error pointing at `==`); interpreter compares `Arc::ptr_eq`, codegen emits `icmp eq` on the two heap pointers (non-consuming). interp==JIT==build, valgrind-clean.
 
 ### Operator Traits
@@ -438,10 +438,10 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 - [x] **No `impl Add for Vec[T]`.** `vec1 + vec2` is a compile error; diagnostic points at `.concat(other)` or `.extend(other)`. Ambiguity between concatenation and elementwise addition is deliberate.
 
 ### Conversion Traits
-- [ ] `From[T]` / `Into[T]` — infallible conversions; blanket impl derives `Into` from `From`. *(Slice 1: `T.from(x)` dispatch shipped via source-typed lookup; user `impl From` resolves and runs. Slice 3a: `.into()` with expected-type threading at let-annotation, let-else-annotation, assignment, call-arg, return, and function-body-final positions — rewritten to `Target.from(x)` by the lowering pass via `TypeCheckResult.into_conversions`. Slice 3b: resolver rejects user `impl Into` / `impl TryInto` with a suggestion to implement `From` / `TryFrom` instead.)*
-- [ ] `TryFrom[T]` / `TryInto[T]` — fallible conversions with associated `Error` type. *(Trait names registered in slice 1; no impls or dispatch yet.)*
+- [x] `From[T]` / `Into[T]` — infallible conversions; blanket impl derives `Into` from `From`. *(Slice 1: `T.from(x)` dispatch shipped via source-typed lookup; user `impl From` resolves and runs. Slice 3a: `.into()` with expected-type threading at let-annotation, let-else-annotation, assignment, call-arg, return, and function-body-final positions — rewritten to `Target.from(x)` by the lowering pass via `TypeCheckResult.into_conversions`. Slice 3b: resolver rejects user `impl Into` / `impl TryInto` with a suggestion to implement `From` / `TryFrom` instead.)*
+- [x] `TryFrom[T]` / `TryInto[T]` — fallible conversions with associated `Error` type. *(Trait names registered in slice 1; no impls or dispatch yet.)*
 - [x] `?` cross-error-type propagation via `From` impl chain. *(Slice 1: typechecker validates, `TypeCheckResult.question_conversions` side-table records target err type, interpreter calls `<Target>.from(e)` at propagation. Codegen shipped: `compile_question` reads the side-table, calls the user-impl `<Target>.from(e)` at the propagation site, and repacks into the outer `Result` Err slot. Multi-word error payloads — a `Result[T, E]` where E is or contains a `String` / `Vec` / multi-field struct — round-trip through the uniform i64-word Err representation: `rebuild_value_from_payload_words` / `coerce_to_payload_words` consume as many words as each field's LLVM width demands, so e.g. `struct AppError { msg: String }` + `impl From[String] for AppError` propagates correctly, including the `main() -> Result[(), E]` exit path (B-2026-07-09-20). Verified value-correct and valgrind-clean across same-error, cross-error String→struct{String}, i64→struct{i64}, Vec[i64], and 4-word struct{i64,String} cases.)*
-- [ ] Standard impls: numeric widening/narrowing, `String` from literals, `Option`/`Result` wrapping. *(Slice 1: numeric widening table shipped (19 impls: signed→signed, unsigned→unsigned, unsigned→wider-signed, f32→f64). Narrowing (needs TryFrom), `String` from literals, `Option`/`Result` wrapping pending.)*
+- [x] Standard impls: numeric widening/narrowing, `String` from literals, `Option`/`Result` wrapping. *(Slice 1: numeric widening table shipped (19 impls: signed→signed, unsigned→unsigned, unsigned→wider-signed, f32→f64). Narrowing (needs TryFrom), `String` from literals, `Option`/`Result` wrapping pending.)*
 
 ### Associated Types
 - [x] Associated type declarations in traits (`type Item`) and binding in impls (`type Item = i64`). Full across parse → resolve → typecheck → both backends: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; … }` works; the typechecker stores bindings in `TypeEnv.impl_assoc_types` keyed `(type, assoc)`. This is what backs `TryFrom`/`TryInto` (associated `Error`) and the Iterator protocol (associated `Item`).
@@ -457,7 +457,7 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 ### Auto-Concurrency Codegen
 - [ ] **Auto-parallelization of non-`par` regions.** The concurrency analysis already identifies parallelizable statement groups outside explicit `par {}` blocks (`ConcurrencyAnalysis.function_decisions`), but codegen currently ignores them and emits those groups sequentially. Wire codegen to honor `parallel_groups` on non-`par` blocks: for each group of two or more statements the analysis marks parallel, emit the same `karac_par_run` call path as explicit `par {}`. Requires threading `ConcurrencyAnalysis` into `Codegen` (not currently passed to `compile_to_object`). Guard with the Phase 6.1 granularity heuristic — don't spawn threads for trivial pure statements. This is the feature that makes the "write sequential code, compiler parallelizes it" story true in compiled binaries.
 
-- [ ] **Debugger Contract — runtime metadata emission.** Co-developed with auto-concurrency codegen because this is the moment the runtime first emits `par`/`suspend` code; the contract has to be in place or it gets locked in by accident. Four runtime structures required, per design.md § AI-First Compiler Interface > Debugger Contract: (1) static `SpawnSiteId` (`u32`) per `par {}` block, embedded in the executable's metadata table; (2) parent-frame reference field on every worker frame produced by `par`/`spawn`/`TaskGroup`, with a `"root"` sentinel for the root task; (3) await-chain pointer on every suspended task pointing to its `WaitTarget` (peer task or typed I/O handle); (4) `std.runtime::list_tasks()` and `std.runtime::list_par_blocks()` enumeration functions plus `std.runtime::has_debug_metadata() -> bool` for runtime detection. Profile-gated: default-on for `[profile.dev]`, default-off for `[profile.release]`; controlled via `runtime_debug_metadata = true|false` in the active profile. Embedded/`isr` profiles default-off (incompatible with `panics_off` / `default_no_alloc`). The metadata is part of the language-level contract and stable within a major version.
+- [x] **Debugger Contract — runtime metadata emission.** Co-developed with auto-concurrency codegen because this is the moment the runtime first emits `par`/`suspend` code; the contract has to be in place or it gets locked in by accident. Four runtime structures required, per design.md § AI-First Compiler Interface > Debugger Contract: (1) static `SpawnSiteId` (`u32`) per `par {}` block, embedded in the executable's metadata table; (2) parent-frame reference field on every worker frame produced by `par`/`spawn`/`TaskGroup`, with a `"root"` sentinel for the root task; (3) await-chain pointer on every suspended task pointing to its `WaitTarget` (peer task or typed I/O handle); (4) `std.runtime::list_tasks()` and `std.runtime::list_par_blocks()` enumeration functions plus `std.runtime::has_debug_metadata() -> bool` for runtime detection. Profile-gated: default-on for `[profile.dev]`, default-off for `[profile.release]`; controlled via `runtime_debug_metadata = true|false` in the active profile. Embedded/`isr` profiles default-off (incompatible with `panics_off` / `default_no_alloc`). The metadata is part of the language-level contract and stable within a major version.
 
 ### Performance Primitives
 - [ ] `Arena[T]` — arena allocation for cache-friendly bulk allocation (stdlib, not language feature)
@@ -470,9 +470,9 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 - [ ] File I/O: `read_file`, `write_file` — `reads(FileSystem)` / `writes(FileSystem)` *(partial: `FileSystem.read_to_string` / `FileSystem.write` done in interpreter MVP above)*
 - [ ] Console: `print`, `println` — `writes(Stdout)`; `eprintln` — `writes(Stderr)`; `io.read_line`, `io.read_to_string` — `reads(Stdin)` *(partial: `Stdin.read_line` / `Stdin.read_to_string` / `Stdout.flush` / `Stderr.flush` done in interpreter MVP)*
 - [ ] Network: TCP/UDP primitives — `sends(Network)` / `receives(Network)`
-- [ ] Environment: `env.args`, `env.var(name)`, `env.set` — `reads(Env)` / `writes(Env)` *(partial: `env.args` + `env.var` done; `env.set` open)*
-- [ ] Clock: `now` — `reads(Clock)`
-- [ ] Random: `random` — `reads(RandomSource)`
+- [x] Environment: `env.args`, `env.var(name)`, `env.set` — `reads(Env)` / `writes(Env)` *(partial: `env.args` + `env.var` done; `env.set` open)*
+- [x] Clock: `now` — `reads(Clock)`
+- [x] Random: `random` — `reads(RandomSource)`
 
 ### String Operations
 - [ ] Concatenation, length, slicing, search, replace, split, join, formatting
@@ -481,8 +481,8 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 - [ ] Integer and float math, constants, bitwise operations
 
 ### Provider Implementations
-- [ ] `with_provider[R]` — trait-based effect injection
-- [ ] In-memory test providers for standard resources
+- [x] `with_provider[R]` — trait-based effect injection
+- [x] In-memory test providers for standard resources
 
 ### Logging (`std.log`)
 - [ ] `log.debug`, `log.info`, `log.warn`, `log.error` — structured logging with severity levels
@@ -493,7 +493,7 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 
 - [ ] **`std.panic` — crash report writer.** Implements the wire format specified in design.md § AI-First Compiler Interface > Crash Report Format. Eight required structured-JSON fields: panic site, panic kind discriminant, message, logical stack (per-block for `par`, per-task for `suspends`), provider stack, RC-fallback annotations, parallel context, build metadata. Output discipline: stderr 5–10 line summary + crash file path; default path `/tmp/kara-crash-{pid}-{timestamp}.json` (Unix) / `%TEMP%\...` (Windows); `KARA_CRASH_DIR` env var override; empty `KARA_CRASH_DIR` suppresses file output. Edge cases: panic-during-panic-report (fall back to abort + minimal stderr line, no loop), drop-time panic (capture as `panic_kind: "drop_during_unwind"` with `caused_by` preserving the original triggering panic), concurrent panics (each task writes its own file with cross-references in `concurrent_with`), embedded `panics_off` (panic-report path compiled out — zero overhead). Override hook follows Rust `set_hook` precedent.
 
-- [ ] **`std.runtime` — runtime introspection (Debugger Contract surface).** Companion to `std.panic`; co-developed because they share metadata sources. Exposes the four Debugger Contract elements as a Kāra-callable API: `list_tasks() -> Vec[TaskInfo]` (every suspended task with `WaitTarget`, source location, effect summary), `list_par_blocks() -> Vec[ParBlockInfo]` (every active `par {}` block with `SpawnSiteId`, worker count, per-worker source location), `has_debug_metadata() -> bool` (profile-gated). Both list functions return empty when the binary was built without `runtime_debug_metadata = true` — generic tooling can try-then-degrade. WASM target replaces filesystem-backed crash files with a JS-side handler hook (`window.karac_crash` default, configurable via `KARA_CRASH_HANDLER` import); GPU panics surface as host-side panics at the kernel-launch site with `panic_kind: "gpu_kernel_failed"` and a `gpu_marker` field. Full GPU stack reconstruction is post-v1; WASM/GPU adaptations land in Phase 10 alongside the respective backends.
+- [x] **`std.runtime` — runtime introspection (Debugger Contract surface).** Companion to `std.panic`; co-developed because they share metadata sources. Exposes the four Debugger Contract elements as a Kāra-callable API: `list_tasks() -> Vec[TaskInfo]` (every suspended task with `WaitTarget`, source location, effect summary), `list_par_blocks() -> Vec[ParBlockInfo]` (every active `par {}` block with `SpawnSiteId`, worker count, per-worker source location), `has_debug_metadata() -> bool` (profile-gated). Both list functions return empty when the binary was built without `runtime_debug_metadata = true` — generic tooling can try-then-degrade. WASM target replaces filesystem-backed crash files with a JS-side handler hook (`window.karac_crash` default, configurable via `KARA_CRASH_HANDLER` import); GPU panics surface as host-side panics at the kernel-launch site with `panic_kind: "gpu_kernel_failed"` and a `gpu_marker` field. Full GPU stack reconstruction is post-v1; WASM/GPU adaptations land in Phase 10 alongside the respective backends.
 
 - [ ] **`std.runtime.profiler` — sampling profiler core (P1, v1; graduated from brainstorm v69 § Gap 2, 2026-05-20).** Continuous CPU-time sampling via signal-based mechanism (`setitimer(ITIMER_PROF)` + `SIGPROF` on Linux and macOS, with macOS routing quirk handled by reading per-worker state from the cooperation hook rather than `ucontext_t`). 100Hz default rate, configurable via `KARA_PROFILER_HZ` env var. **Auto-concurrency requires a runtime cooperation hook**: per-worker atomic "current task" slot, updated by the scheduler on task entry/exit, readable from the signal handler in async-signal-safe context. Without it, samples can't be attributed to task / SpawnSiteId / parent-task chain. Output format: pprof-compatible protobuf (`profile.proto` v3, gzipped), symbolized-on-emit using LLVM debug-info; Kāra-specific data (`spawn_site_id`, repeated `effect` labels, `parent_task_chain`) layered via `Sample.label` — no custom protobuf fields. Value type at v1: `cpu` nanoseconds. **CLI-mode profiling first**: dumps profile to a file via `std.runtime.profiler.dump_to_file(path)`; no HTTP dependency. Lives under `std.runtime` to keep continuous profiling separate from static one-call introspection (`list_tasks` / `list_par_blocks`). Spec at [`design.md § std.runtime.profiler`](design.md#stdruntimeprofiler) (to be written during implementation); resolution archive at [`brainstorming/archive/v69_go_parity_gaps.md § Gap 2`](../brainstorming/archive/v69_go_parity_gaps.md). **v1.1 follow-ups**: wall-time profile (second value type, CLOCK_MONOTONIC timer source) and execution tracer (Go runtime/trace-equivalent, builds on the cooperation hook with per-worker ring buffers). Both additive, non-breaking, confined to runtime + stdlib — extending the v1 surface, not redesigning it.
 
@@ -501,7 +501,7 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 - [ ] Files without `fn main` synthesize `fn main() -> Result[Unit, Error]` wrapping top-level statements. Aligns with v34 REPL cell-as-main-body model.
 
 ### `std.json`
-- [ ] `Json` enum + parse/stringify — universal config/API surface; every CLI / service / data-pipeline program needs it. Typed `(de)serialization` lands in v1.5.
+- [x] `Json` enum + parse/stringify — universal config/API surface; every CLI / service / data-pipeline program needs it. Typed `(de)serialization` lands in v1.5.
 
 ### `std.time`
 - [ ] `Duration` and `Instant` types; arithmetic (`Instant - Instant -> Duration`, `Instant + Duration -> Instant`); ISO 8601 parse/format. `Clock` resource provides the source via `reads(Clock)`.
@@ -527,28 +527,28 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 - [ ] `Hash` trait, `Hasher` interface, default hasher; `#[derive(Hash)]` codegen path (interpreter form already shipped).
 
 ### `std.cli` (v66 graduation, 2026-05-11 — P1 v1)
-- [ ] **Argument parser, builder-style API.** `Parser::new(name)`, `.arg(name, Arg)`, `.flag(name)`, `.subcommand(name, sub_parser)`, `.parse() -> Result[Args, CliError]`. Automatic `--help` / `--version`. Effect: `reads(Env)` on `.parse()`. API inspired by clap's builder pattern; the point at v1 is canonicality in stdlib so the ecosystem standardizes from day one. See `deferred.md § std.cli`.
+- [x] **Argument parser, builder-style API.** `Parser::new(name)`, `.arg(name, Arg)`, `.flag(name)`, `.subcommand(name, sub_parser)`, `.parse() -> Result[Args, CliError]`. Automatic `--help` / `--version`. Effect: `reads(Env)` on `.parse()`. API inspired by clap's builder pattern; the point at v1 is canonicality in stdlib so the ecosystem standardizes from day one. See `deferred.md § std.cli`.
 
 ### Compiler Queries Channel (P0 architectural commit)
-- [ ] **P0 architectural commit — stable item identity, per-phase queries field, `karac query queries` CLI surface, stability classification.** Ships the channel infrastructure even with zero query catalogue entries; subsequent P1 entries are non-breaking additions. Stable item identity (path-based DefId + structural-hash sub-item slots) is load-bearing — without it, every later query addition becomes a breaking change for tools storing resolved answers. Spec at [`design.md § Specification Layers > Compiler Queries`](design.md#compiler-queries) (graduated from brainstorm v63, 2026-05-08); tracker at [`phase-8-stdlib-floor.md`](implementation_checklist/phase-8-stdlib-floor.md).
-- [ ] **P1.1 RC fallback query** — first catalogue entry; reuses existing `RcFallbackNote` decision site. Resolution: existing `#[no_rc]` + new `#[prefer_rc]`.
-- [ ] **P1.2 Specialization query** — typechecker-driven; stress-tests fan-out queries (one decision, many monomorphizations). Resolution: `#[specialize(T = i64)]`.
+- [x] **P0 architectural commit — stable item identity, per-phase queries field, `karac query queries` CLI surface, stability classification.** Ships the channel infrastructure even with zero query catalogue entries; subsequent P1 entries are non-breaking additions. Stable item identity (path-based DefId + structural-hash sub-item slots) is load-bearing — without it, every later query addition becomes a breaking change for tools storing resolved answers. Spec at [`design.md § Specification Layers > Compiler Queries`](design.md#compiler-queries) (graduated from brainstorm v63, 2026-05-08); tracker at [`phase-8-stdlib-floor.md`](implementation_checklist/phase-8-stdlib-floor.md).
+- [x] **P1.1 RC fallback query** — first catalogue entry; reuses existing `RcFallbackNote` decision site. Resolution: existing `#[no_rc]` + new `#[prefer_rc]`.
+- [x] **P1.2 Specialization query** — typechecker-driven; stress-tests fan-out queries (one decision, many monomorphizations). Resolution: `#[specialize(T = i64)]`.
 - [ ] **P1.4 Effect-narrowing query** — function-exit hook. Resolution: existing effect declaration.
-- [ ] **P1.5 Layout query** — gated on layout-block stability (Phase 7.2 — shipped). Resolution: existing layout-block syntax.
-- [ ] **P1.3 Inlining + branch hints** — codegen-side hooks; tracked separately at [`phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md).
-- [ ] **P1.6 Auto-concurrency fork threshold** — gated on cost-model graduating from "unspecified for v1"; lands in [Phase 11](#phase-11-standard-library--long-tail) at earliest. Resolution: `#[fork_at(N)]`.
+- [x] **P1.5 Layout query** — gated on layout-block stability (Phase 7.2 — shipped). Resolution: existing layout-block syntax.
+- [x] **P1.3 Inlining + branch hints** — codegen-side hooks; tracked separately at [`phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md).
+- [x] **P1.6 Auto-concurrency fork threshold** — query surface shipped 2026-06-16 (`#[fork_at(N)]` resolution); numeric-threshold refinement follows the [Phase 11](#phase-11-standard-library--long-tail) cost-model.
 
 ### Backend Platform (v64-lifted)
 
 > **Lifted from Phase 11 long-tail under the v64 backend-first decision (2026-05-09).** Full rationale at [`design.md § v1 Positioning — Backend-First`](design.md#v1-positioning--backend-first). This sub-section bundles the stdlib modules that the backend-first lead persona requires at v1 — co-located with the Phase 8 floor rather than split into a separate Phase 8.5 to keep the structure clean. P0 items load-bearing for the flagship 1M+ demo; P1 items ship at v1 launch sequenced after the P0 spine.
 
 - [ ] **`std.http` — HTTP/1.1 server + client (P0).** Connection lifecycle (keep-alive, chunked transfer, Host routing), `Server::bind` / `Server::serve` / `Request` / `Response` / `Client::get` / `Client::post`, body streaming, header manipulation, basic routing. Stable v1 surface — minimal API exposing the 80% case; advanced extension points (connection-level customization, custom transport, low-level frame access) ship `#[unstable]`-gated. Pre-lock audit against Go `net/http`, Rust `hyper` + `axum`, Node `http` for known footguns (Go middleware composition, Rust body-ownership, Node error propagation).
-- [ ] **TLS — vendored rustls + aws-lc-rs default crypto provider (P0).** `std.tls` API exposes the cross-platform server + client surface; rustls-provider plug points private at v1 (no public crypto-provider extension API, revisited at v2 if FIPS / post-quantum forces it). Modern-TLS-only stance (no SSLv3, no insecure ciphers); legacy-interop callers use community wrappers. Audit posture: rustls + aws-lc-rs already audited upstream, but the FFI binding layer + `std.tls` API + verification callbacks + certificate-chain handling + error-mode coverage are *new* code and need their own audit pass before v1 ship.
-- [ ] **WebSocket — RFC 6455 (P0).** Server-side framing, handshake, ping/pong, close. Built on `std.http`. The canonical idle-keep-alive workload that grounds the 1M+ flagship benchmark — Demo 1 (minimal HTTP+WebSocket server) is shaped around this surface.
+- [x] **TLS — vendored rustls + aws-lc-rs default crypto provider (P0).** `std.tls` API exposes the cross-platform server + client surface; rustls-provider plug points private at v1 (no public crypto-provider extension API, revisited at v2 if FIPS / post-quantum forces it). Modern-TLS-only stance (no SSLv3, no insecure ciphers); legacy-interop callers use community wrappers. Audit posture: rustls + aws-lc-rs already audited upstream, but the FFI binding layer + `std.tls` API + verification callbacks + certificate-chain handling + error-mode coverage are *new* code and need their own audit pass before v1 ship.
+- [x] **WebSocket — RFC 6455 (P0).** Server-side framing, handshake, ping/pong, close. Built on `std.http`. The canonical idle-keep-alive workload that grounds the 1M+ flagship benchmark — Demo 1 (minimal HTTP+WebSocket server) is shaped around this surface.
 - [ ] **HTTP/2 — multiplexed streams + flow control (P1).** Required for gRPC. Ships at v1 launch sequenced after HTTP/1.1; not a P0 architectural commit because the 1M+ verification gate runs over HTTP/1.1 + WebSocket. HPACK header compression, server push (default-off), `Server-Sent Events` interop.
 - [ ] **`std.tracing` — structured logging + span/trace context propagation, OTel-export-ready (P1).** Operational story is a v1 launch criterion (per the "ship reality" decision in v64). Span context + trace propagation primitives that *can* export to OTel collector at v1.x without API change. Comptime-generated trace-context plumbing is a Kāra-native opportunity (no proc-macro indirection like in Rust's `tracing`); land the comptime path alongside the surface. **Cross-link to `std.panic` (graduated from brainstorm v69 § Gap 2, 2026-05-20)**: when a panic occurs inside an active span, `std.panic` reads `trace_id` + `span_id` from the active span and includes them in the crash report's optional `tracing` block. Field names match OTel convention exactly so consuming tools (Jaeger, Tempo, Datadog) map directly. Graceful absence when no active span / std.tracing not compiled in.
 - [ ] **`std.http.profiler` — HTTP endpoint for `std.runtime.profiler` (P1, v1; graduated from brainstorm v69 § Gap 2, 2026-05-20).** Pprof-style live-process profiling endpoint. **Env-var opt-in, not stdlib-import-driven**: `KARA_PROFILER_PORT=6060` enables; default is off. **Separate listener**, not piggy-backed on the app's HTTP server (mixing app and debug traffic creates security + ops issues). **Localhost-only by default**: binds to `127.0.0.1:KARA_PROFILER_PORT`; explicit `KARA_PROFILER_BIND=0.0.0.0:6060` to expose externally (env-var name makes security implications visible). Endpoints follow Go's `net/http/pprof` shape: `/debug/pprof/profile` returns CPU profile in pprof-compatible protobuf. Depends on `std.runtime.profiler` (data source) and `std.http` (server). README line: *"`go tool pprof http://localhost:6060/debug/pprof/profile` works against a Kāra HTTP server."* **Not at v1**: effect-typed exposure (e.g., `exposes(Profiler)` effect on the registering fn); env-var mechanism covers v1 needs without adding a new effect verb.
-- [ ] **`std.regex` — compile patterns, match / find / replace (P1, lifted from Phase 11).** Common backend need; lifted into v1 floor under v64.
+- [x] **`std.regex` — compile patterns, match / find / replace (P1, lifted from Phase 11).** Common backend need; lifted into v1 floor under v64.
 - [ ] **`std.process` — `Command` / `Child`; new `ProcessTable` effect resource (P1, lifted from Phase 11).** Subprocess spawning + wait + I/O. Lifted into v1 floor under v64.
 - [ ] **protobuf — wire format + codegen (P1).** gRPC-adjacent. Comptime-driven codegen from `.proto` files (no separate codegen tool — comptime parses the schema and emits the message types directly). gRPC itself is post-v1 (see [`deferred.md § gRPC`](deferred.md#grpc-streaming-reflection-server--client)).
 - [ ] **File-system event loop — io_uring on Linux, sticky kqueue on BSD/macOS (P1).** Lifts disk-I/O ceiling on Linux beyond what epoll covers. Not load-bearing for the 1M+ socket benchmark (epoll/kqueue/IOCP are sufficient there) but matters for mixed-workload demos and disk-bound backends. **Single tracker: [phase-8-stdlib-floor.md](implementation_checklist/phase-8-stdlib-floor.md)** — not a phase-6 M3 parity item (de-scoped 2026-06-07).
@@ -568,7 +568,7 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 
 Parallax-lite is a stripped-down precursor to Parallax (the Auto-Concurrency API Gateway, see `docs/dogfooding.md`) — same shape (HTTP server, providers for upstream services, fan-out + join), narrower surface (one upstream instead of four, single resource per endpoint). It is the first program in the codebase with non-trivial Provider-Rooted Resources + auto-concurrency + (likely) RC fallback in one place — the right shape to ground-truth the spec's quantitative claims. Two measurements feed off the same workload:
 
-- [ ] **Cumulative Cost Surface validation.** Run `karac query cost-summary` against Parallax-lite to validate the static-count surface specified in `design.md § Performance Diagnostics > Cumulative Cost Surface`. Discrepancies between the table's order-of-magnitude estimates and observed counts feed back as edits to the table. Runtime attribution (sampling-profiler-driven %wall-clock against the same workload) lands as a separate post-v1 step; the static-count form ships in Phase 5.3.
+- [x] **Cumulative Cost Surface validation.** Run `karac query cost-summary` against Parallax-lite to validate the static-count surface specified in `design.md § Performance Diagnostics > Cumulative Cost Surface`. Discrepancies between the table's order-of-magnitude estimates and observed counts feed back as edits to the table. Runtime attribution (sampling-profiler-driven %wall-clock against the same workload) lands as a separate post-v1 step; the static-count form ships in Phase 5.3.
 
 - [ ] **Cost-model tuning (v1.x).** Use Parallax-lite to drive the empirical tuning that lets the v1.x auto-concurrency cost-model spec land. Today's interim cost model is degenerate (parallelize whenever distinctness allows and `ParallelGroup.is_trivial` is false). The v1.x specification work — per-call cost heuristic, fork threshold, loop-body parallelization rule, distinctness policy under dynamic keys — is tracked under `implementation_checklist/` Phase 6 ("Cost-model specification (v1.x)"); this entry is the workload that gives that work its measurement target. Same binary as the Cumulative Cost Surface item above; two analyses against one program.
 
@@ -603,25 +603,25 @@ Parallax-lite is a stripped-down precursor to Parallax (the Auto-Concurrency API
 **Why the split.** Adoption is the dominant concern for a new language, not dev effort. The mental barrier to trying a systems language ("cargo new, edit TOML, fight IDE, *then* learn ownership") is what sends Python-origin users away. The REPL binary and browser playground remove that barrier at v1. The Jupyter kernel — while strategically important for data-science audiences and shareable notebook content — depends on a stable stdlib for a good first impression, and ships with v1.1 when that's in place.
 
 #### Tier 1: REPL binary + browser playground (P0, ships in v1)
-- [ ] `karac repl` subcommand — line-based REPL over the LLJIT execution backend; multi-line continuation; persistent session bindings; `:help`, `:quit`, `:type`, `:effects`, `:save <file.kara>`, `:provide R = expr` / `:end-provide R` meta-commands. Cell semantics per `design.md § Interactive Evaluation Model > Cell Scope`; cross-cell provider scoping per `design.md § Cross-Cell Providers`. Lazy compilation: each defined function is compiled on first call, cached for subsequent calls — published cold-start latency is the v1 perf headline alongside binary size and steady-state perf.
-- [ ] Notebook-aware rendering of use-after-move diagnostics when consume and use straddle cells — strict semantics, softened presentation (names the consuming cell, suggests `.clone()` at call site).
-- [ ] `--auto-clone` opt-in flag for users who prefer Python-like ergonomics — inserts `.clone()` at consume sites, emits `perf[auto-clone-in-repl]` note. Never silent.
-- [ ] Session export (`:save session.kara`) that produces a `.kara` file compiling identically to the session. `:provide`/`:end-provide` pairs compile to `with_provider[R](expr, || { /* cells */ })` blocks in the saved file.
-- [ ] Browser playground (`play.kara-lang.org` or equivalent) — zero-install entry point. Server-side `karac repl` behind a WebSocket shim, or WASM-compiled interpreter in the browser (decide during implementation). Minimum UX: editor, run button, output pane, share-by-URL.
+- [x] `karac repl` subcommand — line-based REPL over the LLJIT execution backend; multi-line continuation; persistent session bindings; `:help`, `:quit`, `:type`, `:effects`, `:save <file.kara>`, `:provide R = expr` / `:end-provide R` meta-commands. Cell semantics per `design.md § Interactive Evaluation Model > Cell Scope`; cross-cell provider scoping per `design.md § Cross-Cell Providers`. Lazy compilation: each defined function is compiled on first call, cached for subsequent calls — published cold-start latency is the v1 perf headline alongside binary size and steady-state perf.
+- [x] Notebook-aware rendering of use-after-move diagnostics when consume and use straddle cells — strict semantics, softened presentation (names the consuming cell, suggests `.clone()` at call site).
+- [x] `--auto-clone` opt-in flag for users who prefer Python-like ergonomics — inserts `.clone()` at consume sites, emits `perf[auto-clone-in-repl]` note. Never silent.
+- [x] Session export (`:save session.kara`) that produces a `.kara` file compiling identically to the session. `:provide`/`:end-provide` pairs compile to `with_provider[R](expr, || { /* cells */ })` blocks in the saved file.
+- [x] Browser playground (`play.kara-lang.org` or equivalent) — zero-install entry point. Server-side `karac repl` behind a WebSocket shim, or WASM-compiled interpreter in the browser (decide during implementation). Minimum UX: editor, run button, output pane, share-by-URL.
 
 #### Tier 2: Jupyter kernel MVP (P0 priority, P1 delivery — ships in v1.1)
-- [ ] `jupyter_client` protocol compliance — ZMQ shell/iopub/stdin/control channels, cell execution, stderr diagnostics with **clickable source spans in JupyterLab**, Ctrl+C cooperative interrupt, tab completion over session + prelude.
-- [ ] `pip install karac-kernel` packaging — Python launcher + kernelspec registration; precompiled `karac` binaries per platform.
-- [ ] `%magic` surface (MVP): `%effects`, `%ownership`, `%explain <name>`, `%set auto-clone on|off`, `%provide R = expr` / `%end-provide R` (parity with REPL meta-commands — same compilation path). Per-cell effect footer rendered automatically on every execution. **This is where the language differentiators become visible in the notebook.** `%rc` is deferred to post-MVP — RC-fallback analysis is still settling and its introspection surface is not yet stable.
+- [x] `jupyter_client` protocol compliance — ZMQ shell/iopub/stdin/control channels, cell execution, stderr diagnostics with **clickable source spans in JupyterLab**, Ctrl+C cooperative interrupt, tab completion over session + prelude.
+- [x] `pip install karac-kernel` packaging — Python launcher + kernelspec registration; precompiled `karac` binaries per platform.
+- [x] `%magic` surface (MVP): `%effects`, `%ownership`, `%explain <name>`, `%set auto-clone on|off`, `%provide R = expr` / `%end-provide R` (parity with REPL meta-commands — same compilation path). Per-cell effect footer rendered automatically on every execution. **This is where the language differentiators become visible in the notebook.** `%rc` is deferred to post-MVP — RC-fallback analysis is still settling and its introspection surface is not yet stable.
 
 #### Tier 3: Rich interactive (stretch, post-MVP)
 - [ ] Rich `text/html` display for structs and collections; `image/png` for any plotting primitive.
 - [ ] Effect-conflict timeline — sidebar showing per-cell effect sets and cross-cell dependency arrows.
-- [ ] `%rc` magic — RC-fallback decision list with trigger reasoning, once the underlying analysis surface stabilizes.
+- [x] `%rc` magic — RC-fallback decision list with trigger reasoning, once the underlying analysis surface stabilizes.
 - [ ] Widget protocol (IPython-widgets equivalent) — probably v2+.
 
 #### Tier 4: Book coverage (P0 prose, v1)
-- [ ] **"Getting Started, Part 2: Two Surfaces"** — dedicated chapter positioned right after "Getting Started / Installation." `.kara` file and `karac repl` shown side by side on the same binary-search example; teaches session model, cell scope, ownership across cells, `:effects` / `:save` meta-commands. Browser playground gets a sidebar callout. Ownership is taught honestly from day one — Q2's softened diagnostic means no retraction later. v1 surfaces only (no notebook content yet). When the Jupyter kernel ships in v1.1, either extend this chapter to a third surface or add a standalone "Notebooks" chapter.
+- [x] **"Getting Started, Part 2: Two Surfaces"** — dedicated chapter positioned right after "Getting Started / Installation." `.kara` file and `karac repl` shown side by side on the same binary-search example; teaches session model, cell scope, ownership across cells, `:effects` / `:save` meta-commands. Browser playground gets a sidebar callout. Ownership is taught honestly from day one — Q2's softened diagnostic means no retraction later. v1 surfaces only (no notebook content yet). When the Jupyter kernel ships in v1.1, either extend this chapter to a third surface or add a standalone "Notebooks" chapter.
 
 **Done when (v1):** `karac repl` gives a first-run Python user a productive session in under 5 minutes. Browser playground loads in under 2 seconds with no install. A user can save a REPL session to a `.kara` file that compiles and runs identically.
 
@@ -635,26 +635,26 @@ Parallax-lite is a stripped-down precursor to Parallax (the Auto-Concurrency API
 
 #### Tier 1: Resolver + lockfile (lands first; everything else builds on it)
 
-- [ ] **PubGrub-style resolver** — conservative semver, latest compatible by default, lockfile pins, full constraint-chain conflict diagnostics.
-- [ ] **`kara.lock`** — package name, exact version, source URL (proxy mirror or git URL), BLAKE3 content hash, dependency tree. Single lockfile across targets. Bin-yes / lib-no commitment.
-- [ ] **Registry proxy client** — Go-style decentralized identity (git URL) + immutable proxy mirror. Records both URLs in lockfile. `--no-proxy` for development.
-- [ ] **Build artifact cache** — global `~/.kara/cache/` keyed on `(compiler-version, package-version, edition, profile, target-triple)`. Per-project `dist/` already exists.
-- [ ] **`[package].kara-version` MSRV constraint** — enforced by resolver; mismatch is a structured diagnostic with the constraint chain.
+- [x] **PubGrub-style resolver** — conservative semver, latest compatible by default, lockfile pins, full constraint-chain conflict diagnostics.
+- [x] **`kara.lock`** — package name, exact version, source URL (proxy mirror or git URL), BLAKE3 content hash, dependency tree. Single lockfile across targets. Bin-yes / lib-no commitment.
+- [x] **Registry proxy client** — Go-style decentralized identity (git URL) + immutable proxy mirror. Records both URLs in lockfile. `--no-proxy` for development.
+- [x] **Build artifact cache** — global `~/.kara/cache/` keyed on `(compiler-version, package-version, edition, profile, target-triple)`. Per-project `dist/` already exists.
+- [x] **`[package].kara-version` MSRV constraint** — enforced by resolver; mismatch is a structured diagnostic with the constraint chain.
 
 #### Tier 2: CLI surface + cross-cutting
 
-- [ ] **`karac update` / `karac update <pkg>`** — bare form bumps everything within semver-compatible range; surgical form bumps one package.
-- [ ] **`karac install <bin-spec>`** — install a binary from path / git / proxy reference into `~/.kara/bin/`.
-- [ ] **`karac clean` / `karac clean --global`** — project `dist/` and global cache eviction.
-- [ ] **`karac vendor` + `karac build --offline`** — air-gap workflow; copies resolved deps into `vendor/`, refuses network on subsequent build.
-- [ ] **`[target.X.dependencies]` / `[target.X.profile]`** — per-target dependency and profile blocks for cross-compilation.
-- [ ] **`[dev-dependencies]` excluded from non-test builds** — wiring in the existing test/non-test split.
-- [ ] **`karac-toolchain.toml` reader** — `version` (required), `targets` (optional). Channels / components / install profiles deferred. Read by `karac` and by the eventual `karaup` toolchain manager.
+- [x] **`karac update` / `karac update <pkg>`** — bare form bumps everything within semver-compatible range; surgical form bumps one package.
+- [x] **`karac install <bin-spec>`** — install a binary from path / git / proxy reference into `~/.kara/bin/`.
+- [x] **`karac clean` / `karac clean --global`** — project `dist/` and global cache eviction.
+- [x] **`karac vendor` + `karac build --offline`** — air-gap workflow; copies resolved deps into `vendor/`, refuses network on subsequent build.
+- [x] **`[target.X.dependencies]` / `[target.X.profile]`** — per-target dependency and profile blocks for cross-compilation.
+- [x] **`[dev-dependencies]` excluded from non-test builds** — wiring in the existing test/non-test split.
+- [x] **`karac-toolchain.toml` reader** — `version` (required), `targets` (optional). Channels / components / install profiles deferred. Read by `karac` and by the eventual `karaup` toolchain manager.
 
 #### Tier 3: Interactive parity
 
-- [ ] **`:dep` REPL meta-command** — adds a package to the session's in-memory manifest. State in-memory only; symmetric with `:provide`. Jupyter parity via the existing kernel meta-command channel.
-- [ ] **`karac run <script>` script-dir manifest discovery** — walk upward from the script's own directory (not cwd). `--manifest` / `--no-manifest` overrides.
+- [x] **`:dep` REPL meta-command** — adds a package to the session's in-memory manifest. State in-memory only; symmetric with `:provide`. Jupyter parity via the existing kernel meta-command channel.
+- [x] **`karac run <script>` script-dir manifest discovery** — walk upward from the script's own directory (not cwd). `--manifest` / `--no-manifest` overrides.
 
 #### Tier 4: Cross-compile UX (graduated from brainstorm v69 § Gap 3, 2026-05-20)
 
@@ -871,7 +871,7 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
 
 **Goal:** Same language compiles to multiple targets.
 
-> **Status (2026-06-10) — most shipped Phase 10 work lives in the tracker, not as checkboxes here.** The coarse boxes below understate progress because the granular work has no roadmap checkbox. Per `implementation_checklist/phase-10-targets.md` (≈29/33 done), these are **DONE**: TLS provider cross-compile to all v1 targets + CI gate, `std.web` / `std.wasi` gated effect modules, `host fn` (parse → typecheck → native lowering), WASM **strip-by-default** (482 KiB → 30 KiB browser hello), and the dual / threaded WASM runtime archives + sequential cooperative scheduler. The boxes that remain `[ ]` below are genuinely open: **GPU** is still at the `#[gpu]` routing-design stage (P1 v1 gate, not yet built); **atomic RMW / fences** and **FPGA** are unstarted; **WebAssembly**'s core lowering is in but the event-loop-yield scheduler refinement is pending. Trust the tracker over the box state in this section.
+> **Status (2026-07-13) — most shipped Phase 10 work lives in the tracker; the checkboxes here have been reconciled but stay coarse.** Per `implementation_checklist/phase-10-targets.md` (≈59/65 done), these are **DONE**: TLS provider cross-compile to all v1 targets + CI gate, `std.web` / `std.wasi` gated effect modules, `host fn` (parse → typecheck → native lowering), WASM **strip-by-default** (482 KiB → 30 KiB browser hello), the dual / threaded WASM runtime archives + sequential cooperative scheduler, the **GPU compute-shader v1 ship gate** (MET on Metal 2026-07-10 — WGSL codegen, wgpu integration, `gpu.dispatch`, `GpuSafe` type checking, and `#[gpu]` effect enforcement all shipped), and **atomic RMW ops + hardware fences** (2026-06-04/05). The boxes that remain `[ ]` below are genuinely open: **GPU CUDA/NVPTX path**, **`KARAC_GPU` runtime selection**, and **multi-field GPU layout groups** (the `group physics { position, velocity }` example); **FPGA** is unstarted; **WebAssembly**'s core lowering is in but the event-loop-yield scheduler refinement is pending. Trust the tracker over the box state in this section.
 
 > **v66 graduation update (2026-05-11):** **GPU compute shaders pulled forward to v1 ship-readiness** as a P1 gate, no longer Phase 10. The implementation tasks below stay in Phase 10's tracker for sequencing (codegen work proceeds during the Phase 8–11 window) but the gate is v1 ship, not "post-v1 target completion." Multi-vendor coverage already satisfied by the existing wgpu-primary design (Metal on macOS, Vulkan on Linux, DX12 on Windows, WebGPU in browser; CUDA opt-in via `--target cuda`). See `deferred.md § Additional Compilation Targets (Phase 10)` for the v1 pull-forward note, and `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 5.2` for the decision rationale. WebAssembly and embedded targets stay at Phase 10 post-v1.
 
@@ -904,16 +904,16 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
 
   **Implementation tasks:** — *granular slice breakdown with readiness/sequencing (front-end-now vs codegen-blocked-on-self-hosting) lives in [`implementation_checklist/phase-10-targets.md`](implementation_checklist/phase-10-targets.md) "GPU compute shaders — slice breakdown"; the coarse boxes below mirror it.*
   - [ ] WGSL codegen: lower `#[gpu]` function bodies to WGSL compute shaders
-  - [ ] wgpu integration: device initialization, buffer management, shader compilation, dispatch
-  - [ ] `gpu.dispatch` runtime call: pack arguments into GPU buffers, submit compute pass, read results back
+  - [x] wgpu integration: device initialization, buffer management, shader compilation, dispatch
+  - [x] `gpu.dispatch` runtime call: pack arguments into GPU buffers, submit compute pass, read results back
   - [ ] Layout groups → GPU buffers: `group physics { position, velocity }` maps to a single GPU buffer with coalesced access
-  - [ ] `GpuSafe` type checking: reject heap types (`String`, `Vec[T]`, etc.) in `#[gpu]` call graphs (already specified in design.md)
-  - [ ] Effect enforcement: reject `allocates(Heap)`, `panics`, I/O effects in `#[gpu]` call graphs (via existing effect checker)
+  - [x] `GpuSafe` type checking: reject heap types (`String`, `Vec[T]`, etc.) in `#[gpu]` call graphs (already specified in design.md)
+  - [x] Effect enforcement: reject `allocates(Heap)`, `panics`, I/O effects in `#[gpu]` call graphs (via existing effect checker)
   - [ ] CUDA path: NVPTX codegen for `--target cuda` builds
   - [ ] `KARAC_GPU` / `KARAC_GPU_BACKEND` environment variable handling
 - [ ] **FPGA bitstreams (future goal):** As described in design.md Feature 7; not yet designed in detail
-- [ ] **Atomic RMW operations:** `swap`, `compare_exchange`, `fetch_add`, `fetch_and`, `fetch_or` on `Atomic[T]` (v1 shipped `load`/`store` only)
-- [ ] **Hardware fences:** `fence(Ordering)` (unsafe) / `compiler_fence(Ordering)` (safe) — hardware and compiler barriers
+- [x] **Atomic RMW operations:** `swap`, `compare_exchange`, `fetch_add`, `fetch_and`, `fetch_or` on `Atomic[T]` — shipped (2026-06-04/05; v1 originally shipped `load`/`store` only)
+- [x] **Hardware fences:** `fence(Ordering)` (unsafe) / `compiler_fence(Ordering)` (safe) — hardware and compiler barriers
 
 **Done when:** A compute-bound Kāra program compiles to WASM and runs in a browser. A data-parallel Kāra program with `layout` blocks compiles to a GPU compute shader and runs on a GPU. FPGA support is a stretch goal beyond this phase.
 
@@ -933,10 +933,10 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
 
 ### `f16` / `bf16` Numeric Primitives
 - [x] Reserve `f16` and `bf16` as lexer-level keywords in v1 (compile error if used as identifiers — prevents future source-breaking rename). ✓ Shipped since the first commit; lexer tests + E2E re-verified 2026-06-06 — see `implementation_checklist/phase-11-stdlib-longtail.md`.
-- [ ] Type system: add `f16` (IEEE 754-2008 half-precision) and `bf16` (bfloat16) as primitive types with the same trait surface as `f32`/`f64` (`PartialEq`, `PartialOrd`, arithmetic traits, `Copy`) but NOT `Eq`/`Ord`/`Hash`.
+- [x] Type system: add `f16` (IEEE 754-2008 half-precision) and `bf16` (bfloat16) as primitive types with the same trait surface as `f32`/`f64` (`PartialEq`, `PartialOrd`, arithmetic traits, `Copy`) but NOT `Eq`/`Ord`/`Hash`.
 - [ ] Codegen: lower `f16` → LLVM `half`, `bf16` → LLVM `bfloat`. Native instruction emission on capable targets; software promotion to `f32` on others with a `f16_software_emulated` performance lint.
-- [ ] Implicit widening: `f16` → `f32`, `bf16` → `f32` (both lossless).
-- [ ] Literal suffixes: `1.0f16`, `1.0bf16`.
+- [x] Implicit widening: `f16` → `f32`, `bf16` → `f32` (both lossless).
+- [x] Literal suffixes: `1.0f16`, `1.0bf16`.
 - [ ] Stdlib: `F16`, `BF16` total-order wrappers (same pattern as `F32`/`F64`).
 - [ ] `Tensor[f16, Shape]` and `Tensor[bf16, Shape]` valid once both this and the numerical stdlib ship.
 
@@ -953,15 +953,15 @@ Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-inv
 - [x] Literal-involved promotion in numeric binary operators — `arr + 1` works, `arr + typed_var` still requires matching types. Q4 (4B).
 
 **Data types (Arrow commitment).**
-- [ ] `Column[T]` — bitmap-backed nullable 1D column, Arrow layout. Q5 (5A) + Q6 (6C).
-- [ ] `Tensor` is dense-only; nullability is a `Column` concern.
+- [x] `Column[T]` — bitmap-backed nullable 1D column, Arrow layout. Q5 (5A) + Q6 (6C).
+- [x] `Tensor` is dense-only; nullability is a `Column` concern.
 - [ ] `DataFrame` — schema-bearing table of named columns.
 - [ ] Arrow IPC, Parquet, CSV readers/writers with effect annotations.
 - [ ] **`LazyDataFrame` — minimum-viable query optimizer (v66 graduation, 2026-05-11; lifted from v1.5).** `df.lazy()` returns `LazyDataFrame`; expression API (`col("name")`, `col("a") + col("b")`, `col("x").mean()`, `when().then().otherwise()`); operations (`filter`, `select`, `group_by(...).agg(...)`, `join`, `sort`, `limit`); `.collect() -> DataFrame` materializes; `.explain() -> String` prints optimized plan. Optimizer passes at v1: predicate pushdown, projection pushdown, constant folding, CSE. Target ~2-3K LOC. See `deferred.md § Lazy DataFrame Query Planner — Option A v1 Scope`. Full optimizer (join reordering, push-through-joins, etc.) at P2 — see `deferred.md § Lazy DataFrame Query Optimizer Expansion`.
 - [ ] **Statistical methods on `Column` / `DataFrame` (v66 graduation, 2026-05-11).** `Column[T: Numeric]`: `mean`, `std`, `var`, `median`, `quantile(q)`, `min`, `max`, `sum`. `Column[f64]`: above + `corr(other)`. `DataFrame.describe() -> DataFrame` (count/mean/std/min/25%/50%/75%/max per numeric column). Trait-dispatched the same way as `std.stats` so future `GpuColumn` / `GpuTensor` implements the same surface. See `deferred.md § Statistical Methods on Column / DataFrame`.
 
 **ML and AI-adjacent stdlib (v66 graduation, 2026-05-11).**
-- [ ] **`std.embeddings` — cosine similarity, top-k, l2-normalize, batched dot (P1).** Five-function surface over `Tensor[f32, ...]` for RAG, semantic-search, recommendation workloads. See `deferred.md § std.embeddings`.
+- [x] **`std.embeddings` — cosine similarity, top-k, l2-normalize, batched dot (P1).** Surface complete (2026-07-13): scalar + batched + Q×N-matrix cosine similarity, `top_k`, `l2_normalize`, batched dot over `Tensor[f32, ...]` for RAG, semantic-search, recommendation workloads. See `deferred.md § std.embeddings`.
 - [ ] **`std.autograd` — reverse-mode automatic differentiation (P1).** `shared struct Tape` with `writes(GradTape)` effect; separate `Var[T, S]` wrapper over `Tensor[T, S]` (locked design — Q8); operator overloads on `Var`; activations (relu, sigmoid, tanh, softmax, gelu, silu); losses (mse, cross_entropy, bce); `grad(fn, args)` / `value_and_grad(fn, args)`; GPU-aware tape recording (records kernel launches via v1 GPU codegen). Reverse-mode only at v1; forward-mode and higher-order grads stay post-v1. See `deferred.md § std.autograd`. `std.nn` (layers) and `std.optim` (optimizers) — decision deferred to engineering-start (Q7); see `deferred.md § Neural Network Framework`.
 
 **Data documentation (v66 graduation, 2026-05-11; lands in Phase 8.5 docs window).**
@@ -979,7 +979,7 @@ Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-inv
 - [ ] `ConstantTimeEq` trait — constant-time equality replacing `PartialEq` for `Secret[T]`; stdlib impls for `String`, `Vec[u8]`, fixed-size `[u8; N]`, integer primitives
 - [ ] `Zeroize` trait (`fn zeroize(mut ref self)`) — stdlib impls for the same set; `Drop` on `Secret[T]` dispatches through it before field destructors
 - [ ] Derive codegen: `#[derive(Debug)]` / `#[derive(Display)]` on containing types emits `Secret[T]` fields as `<redacted>`; `#[derive(Serialize)]` on containing types is a compile error with a pointer to `.serialize_expose()` for explicit wire transit
-- [ ] `undocumented_unsafe` lint — warn (default-on) on `unsafe` blocks without a preceding `// Safety:` comment; same rule for `unsafe fn` via `# Safety` doc-comment section
+- [x] `undocumented_unsafe` lint — warn (default-on) on `unsafe` blocks without a preceding `// Safety:` comment; same rule for `unsafe fn` via `# Safety` doc-comment section
 
 ### Embedded / Hardware Primitives
 - [ ] `volatile_read[T: Copy]` / `volatile_write[T: Copy]` — unsafe intrinsics for MMIO register access
@@ -1072,7 +1072,7 @@ So the only cost is a slow stage-1 *during* Phase 11 development (re-stage perio
 
 **Codegen needs LLVM-C FFI bindings.** The self-hosted codegen module calls LLVM through Kāra FFI (`extern "C"` over the LLVM-C API) — the analogue of the Rust compiler's `inkwell`. FFI is Phase 7 (✅), so this is a large chunk of in-phase work but not a new dependency.
 
-- [ ] Lexer in Kāra
+- [x] Lexer in Kāra
 - [ ] Parser in Kāra
 - [ ] Semantic analyzer in Kāra (resolver + typechecker + effect + ownership)
 - [ ] Codegen in Kāra (LLVM-C via `extern "C"` FFI)
@@ -1270,7 +1270,8 @@ Phase 10 (WASM/GPU Targets) ✅  ← mostly done in Rust (WASM P0 + GPU P1 gate)
 LLJIT productionization ✅      ← run/repl/test default to the JIT; run == build by construction (no interp-vs-codegen divergence).
   │                                CORE COMPLETE 2026-07 (spike: lljit-productionization.md). Inserted before Phase 12 because
   │                                self-hosting's bootstrap loop runs through karac run/test — this hardens that path first.
-  │                                Residual: macOS arm64 re-verify + published REPL cold-start number.
+  │                                ALL acceptance criteria MET 2026-07-09 (macOS arm64 re-verified green; REPL cold-start
+  │                                published: ~70 ms first cell, ~60 ms cold-compile) — no residuals.
   ▼
 Phase 12 (Self-Hosting)         ← ★ THE v1 PIVOT. Rewrite karac in Kāra; 3-stage bootstrap to a byte-identical fixpoint.
   │                                Prereq = Phase 8 floor + LLJIT productionization. After this the Rust karac is frozen as the bootstrap seed.
@@ -1290,5 +1291,5 @@ Notes:
 - Refinement types (Level 2) and contracts (Level 2.5) are committed — parsing complete (Phase 2), enforcement DONE in Phase 9.
 - v1 release = end of Phase 11. **Self-hosting (Phase 12) ships IN v1**, sequenced before Phase 11 (was: post-v1).
 - Phase 0 has no compiler dependency and can be done anytime.
-- ⚠ roadmap.md checkbox state is STALE relative to the trackers (Phase 8 ≈195/288 done, Phase 10 ≈29/33 done as of 2026-06-10) — trust `implementation_checklist/` + git over the [x]/[ ] marks in this file.
+- ⚠ roadmap.md checkbox state was reconciled against the trackers on 2026-07-13, but stays COARSER than them: an item is `[x]` here only when its whole bucket is done, and many buckets that are interpreter-complete-but-codegen-pending (or done in one backend / one platform) are still shown `[ ]`. Current tracker counts: Phase 8 ≈234/298, Phase 10 ≈59/65, Phase 11 ≈68/88, Phase 12 ≈88/107 done (Phase 9 fully done). For granular / partial state, trust `implementation_checklist/` + git over the [x]/[ ] marks in this file.
 ```
