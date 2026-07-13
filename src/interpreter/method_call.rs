@@ -1656,12 +1656,13 @@ impl<'a> super::Interpreter<'a> {
         // float-only): `recip` = `1.0 / x`; `to_degrees` / `to_radians` scale
         // by Rust's exact constants. Codegen replicates the same `fdiv`/`fmul`
         // and constants, so `run == build` is bit-exact.
-        if matches!(method, "recip" | "to_degrees" | "to_radians") && args.is_empty() {
+        if matches!(method, "recip" | "to_degrees" | "to_radians" | "fract") && args.is_empty() {
             if let Value::Float(f) = &obj {
                 let r = match method {
                     "recip" => f.recip(),
                     "to_degrees" => f.to_degrees(),
                     "to_radians" => f.to_radians(),
+                    "fract" => f.fract(),
                     _ => unreachable!(),
                 };
                 return Value::Float(r);
@@ -1804,6 +1805,7 @@ impl<'a> super::Interpreter<'a> {
                                 "pow" => x.powf(y),
                                 "atan2" => x.atan2(y),
                                 "hypot" => x.hypot(y),
+                                "copysign" => x.copysign(y),
                                 _ => unreachable!("float_math binary classify/match drift"),
                             };
                             return Value::Float(r);

@@ -3828,11 +3828,12 @@ impl<'a> super::TypeChecker<'a> {
             return receiver_for_lookup.clone();
         }
         // Built-in float arithmetic helpers — `x.recip() -> Self` (`1.0 / x`),
-        // `x.to_degrees() -> Self`, `x.to_radians() -> Self`. Pure IEEE
-        // arithmetic (no libm, no intrinsic): `recip` is a single `fdiv`, the
-        // angle conversions a single `fmul` by the same constant the
-        // interpreter uses, so `run == build` is bit-exact. Float-only.
-        if matches!(method, "recip" | "to_degrees" | "to_radians")
+        // `x.to_degrees() -> Self`, `x.to_radians() -> Self`, `x.fract() -> Self`
+        // (`x - x.trunc()`). Pure IEEE arithmetic (no libm, no intrinsic):
+        // `recip` is a single `fdiv`, the angle conversions a single `fmul` by
+        // the same constant the interpreter uses, and `fract` an `fsub` against
+        // `llvm.trunc`, so `run == build` is bit-exact. Float-only.
+        if matches!(method, "recip" | "to_degrees" | "to_radians" | "fract")
             && args.is_empty()
             && matches!(&receiver_for_lookup, Type::Float(_))
         {

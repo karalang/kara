@@ -45,7 +45,7 @@ pub fn classify(method: &str) -> Option<FloatMathKind> {
         "sin" | "cos" | "tan" | "exp" | "ln" | "log2" | "floor" | "ceil" | "round" | "asin"
         | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "exp2" | "log10" | "trunc" | "asinh"
         | "acosh" | "atanh" | "exp_m1" | "ln_1p" => FloatMathKind::Unary,
-        "pow" | "atan2" | "hypot" => FloatMathKind::Binary,
+        "pow" | "atan2" | "hypot" | "copysign" => FloatMathKind::Binary,
         _ => return None,
     })
 }

@@ -22983,6 +22983,28 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_float_copysign_and_fract() {
+        // `copysign` → `llvm.copysign`, `fract` → `fsub x, llvm.trunc(x)`. Both
+        // are exact IEEE ops, so AOT output matches the interpreter oracle
+        // (`test_float_copysign_and_fract`) bit-for-bit, including negative
+        // `fract` (sign-preserving) and the irrational `0.1.fract()`.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    println((3.5f64).copysign(-1.0f64));
+    println((-3.5f64).copysign(1.0f64));
+    println((2.75f64).fract());
+    println((-2.75f64).fract());
+    println((5.0f64).fract());
+    println((0.1f64).fract());
+}
+"#,
+        ) {
+            assert_eq!(out, "-3.5\n3.5\n0.75\n-0.75\n0\n0.1\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_signum_signed_int_and_float() {
         // `x.signum()`: ints lower to a nested `select` (signed `icmp`), floats
         // to `copysign(1.0, x)` guarded by a NaN check. AOT output must match

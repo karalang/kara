@@ -1918,9 +1918,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // Built-in float arithmetic helpers (typed in expr_method_call.rs,
         // float-only): `recip` → `fdiv 1.0, x`; `to_degrees` / `to_radians` →
         // `fmul x, C` with the SAME constants Rust `f64::to_degrees`/
-        // `to_radians` use, so the result is bit-exact with the interpreter's
-        // `f64::*`. `const_float` rounds the f64 constant to the receiver width.
-        if matches!(method, "recip" | "to_degrees" | "to_radians") && args.is_empty() {
+        // `to_radians` use; `fract` → `fsub x, trunc(x)` (Rust `f64::fract` =
+        // `self - self.trunc()`). All bit-exact with the interpreter's `f64::*`;
+        // `const_float` rounds the f64 constant to the receiver width.
+        if matches!(method, "recip" | "to_degrees" | "to_radians" | "fract") && args.is_empty() {
             let v = self.compile_expr(object)?;
             if let BasicValueEnum::FloatValue(fv) = v {
                 let fty = fv.get_type();
@@ -1937,10 +1938,28 @@ impl<'ctx> super::Codegen<'ctx> {
                         let c = fty.const_float(57.29577951308232);
                         self.builder.build_float_mul(fv, c, "to_deg").unwrap()
                     }
-                    _ => {
+                    "to_radians" => {
                         // Rust's `RADS_PER_DEG` = π / 180.
                         let c = fty.const_float(std::f64::consts::PI / 180.0);
                         self.builder.build_float_mul(fv, c, "to_rad").unwrap()
+                    }
+                    _ => {
+                        // `fract` = `x - trunc(x)` (round toward zero).
+                        let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.trunc")
+                            .unwrap_or_else(|| panic!("llvm.trunc intrinsic must exist"));
+                        let decl = intrinsic
+                            .get_declaration(&self.module, &[fty.into()])
+                            .unwrap_or_else(|| panic!("llvm.trunc declaration for float type"));
+                        let truncated = self
+                            .builder
+                            .build_call(decl, &[fv.into()], "fract.tr")
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                            .into_float_value();
+                        self.builder
+                            .build_float_sub(fv, truncated, "fract")
+                            .unwrap()
                     }
                 };
                 return Ok(r.into());
@@ -2293,6 +2312,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     "exp2" => "llvm.exp2",
                     "log10" => "llvm.log10",
                     "trunc" => "llvm.trunc",
+                    "copysign" => "llvm.copysign",
                     _ => unreachable!("float_math codegen classify/match drift"),
                 };
                 let intrinsic = inkwell::intrinsics::Intrinsic::find(intrinsic_name)

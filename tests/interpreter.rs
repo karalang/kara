@@ -394,6 +394,27 @@ fn test_float_recip_and_angle_conversions() {
 }
 
 #[test]
+fn test_float_copysign_and_fract() {
+    // `copysign(x, y)` carries `y`'s sign onto `|x|` (a single sign-bit op);
+    // `fract` = `x - x.trunc()`, sign-preserving. Both are exact IEEE
+    // operations, so codegen (`llvm.copysign`, `fsub` against `llvm.trunc`)
+    // matches the interpreter's `f64::*` bit-for-bit.
+    assert_eq!(
+        run("fn main() { println((3.5f64).copysign(-1.0f64)); }"),
+        "-3.5\n"
+    );
+    assert_eq!(
+        run("fn main() { println((-3.5f64).copysign(1.0f64)); }"),
+        "3.5\n"
+    );
+    assert_eq!(run("fn main() { println((2.75f64).fract()); }"), "0.75\n");
+    assert_eq!(run("fn main() { println((-2.75f64).fract()); }"), "-0.75\n");
+    assert_eq!(run("fn main() { println((5.0f64).fract()); }"), "0\n");
+    // Irrational fraction round-trips exactly (both sides do `x - trunc(x)`).
+    assert_eq!(run("fn main() { println((0.1f64).fract()); }"), "0.1\n");
+}
+
+#[test]
 fn test_float_bit_reinterpret_roundtrip() {
     // IEEE-754 bit reinterpretation: `to_bits`/`to_bits32` and the inverse
     // `bits_as_f64`/`bits_as_f32` round-trip a float through its integer bits.
