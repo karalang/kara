@@ -3894,6 +3894,47 @@ fn volatile_read_pointee_type_mismatch_errors() {
     assert!(!errs.is_empty(), "expected a pointee type-mismatch error");
 }
 
+// ── critical_section.acquire() — RAII interrupt-mask guard ─────────
+//
+// `critical_section.acquire()` (design.md § Critical sections) is a
+// lowercase-namespace intrinsic returning a `CriticalSectionGuard`. Takes
+// no arguments; the guard re-enables interrupts on Drop.
+
+#[test]
+fn critical_section_acquire_typechecks_and_returns_guard() {
+    // Bind the guard to a `let`; the fn declares the `writes(Hardware)` the
+    // acquire performs. The annotation proves the return type is the guard.
+    typecheck_ok(
+        "fn f() writes(Hardware) { let _g: CriticalSectionGuard = critical_section.acquire(); }",
+    );
+}
+
+#[test]
+fn critical_section_acquire_rejects_arguments() {
+    // `acquire` takes no arguments.
+    let errs =
+        typecheck_errors("fn f() writes(Hardware) { let _g = critical_section.acquire(1); }");
+    assert!(
+        !errs.is_empty(),
+        "expected an arity error for critical_section.acquire(1)"
+    );
+}
+
+#[test]
+fn critical_section_acquire_shadowed_by_local_binding() {
+    // A local named `critical_section` shadows the prelude module (the
+    // prelude-shadow rule), so `.acquire()` dispatches as a value method —
+    // which the i64 local does not have, so it errors rather than resolving
+    // the intrinsic.
+    let errs = typecheck_errors(
+        "fn f() { let critical_section = 5; let _g = critical_section.acquire(); }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "expected an error: `.acquire()` on an i64 local, not the intrinsic"
+    );
+}
+
 #[test]
 fn raw_pointer_unannotated_offset_chain_typechecks() {
     // The core fix: `p.offset(..)` returns `*const u8`, so an un-annotated
@@ -22181,6 +22222,8 @@ fn drop_method_keys_empty_when_no_drop_impl() {
     //     close-on-drop fd + config free for TlsListener)
     //   - `PooledConnection` (phase 8 line 200 — Pool[T] auto-release
     //     back to the pool on drop, abc9c714)
+    //   - `CriticalSectionGuard` (phase 11 — re-enable interrupts on drop;
+    //     the first prelude-visible stdlib type carrying `impl Drop`)
     // Those entries are always present regardless of user code, so
     // the test asserts no USER-defined impl was added (Point's
     // entry is absent) and the only entries are the stdlib ones.
@@ -22193,6 +22236,7 @@ fn drop_method_keys_empty_when_no_drop_impl() {
         "TlsStream",
         "PooledConnection",
         "BoundedChannel",
+        "CriticalSectionGuard",
     ];
     let user_keys: Vec<&String> = result
         .drop_method_keys

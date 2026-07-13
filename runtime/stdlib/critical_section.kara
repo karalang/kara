@@ -1,0 +1,54 @@
+// `critical_section` — temporarily disable interrupts via an RAII guard.
+//
+// The canonical embedded pattern for guarding state shared between an
+// interrupt service routine and main-line code (design.md § Critical
+// sections). Acquiring the section disables interrupts; the returned
+// `CriticalSectionGuard` re-enables them when it drops at end of scope:
+//
+//     fn update_shared_state() with writes(Hardware) {
+//         let _guard = critical_section.acquire();  // disables interrupts
+//         // ... access ISR-shared state exclusively ...
+//     }                                             // _guard drop re-enables
+//
+// `critical_section.acquire()` is a lowercase-namespace intrinsic (like
+// `ptr.*` / `gpu.dispatch`) intercepted by the compiler — it is NOT a value
+// method on a struct. It lowers to the runtime's interrupt-mask primitive
+// (`karac_critical_section_acquire`), which on a hosted target maintains a
+// balanced nesting depth (no real ISRs to mask) and on an MCU target masks
+// interrupts (`cpsid i` / PRIMASK save). The `i64` the guard carries is the
+// restore token returned by acquire, handed back to
+// `karac_critical_section_release` on drop so nested sections restore the
+// prior mask state rather than blindly re-enabling.
+//
+// Effect: `acquire()` performs `writes(Hardware)` — disabling interrupts
+// mutates hardware interrupt-enable state — so a public function that opens a
+// critical section surfaces it in its declared effect set and two such
+// functions conflict under auto-concurrency analysis (the same `Hardware`
+// conflict resource the MMIO `volatile_*` surface uses).
+//
+// Compiled-mode aware. Under `karac build` (AOT) and the default `karac run`
+// (JIT) the acquire/release lower to the runtime mask calls. The pure
+// tree-walk interpreter (`karac run --interp`) is single-threaded with no
+// real interrupts, so acquire is inert (returns the guard) and its drop is a
+// no-op — the same posture the memory `fence` intrinsics take under the
+// interpreter.
+
+/// RAII guard returned by `critical_section.acquire()`. Interrupts stay
+/// disabled for the guard's lifetime and are re-enabled (to their prior mask
+/// state) when it drops.
+///
+/// `#[must_use]`: discarding the guard immediately re-enables interrupts,
+/// collapsing the critical section to nothing — almost never intended. Bind
+/// it to a `let` so it lives across the guarded region.
+#[must_use = "discarding the guard immediately re-enables interrupts, collapsing the critical section to nothing — bind it to a variable (`let _guard = critical_section.acquire();`) so interrupts stay disabled across the guarded region"]
+pub struct CriticalSectionGuard {
+    restore_token: i64,
+}
+
+impl Drop for CriticalSectionGuard {
+    /// Re-enable interrupts, restoring the mask state captured at acquire.
+    /// Body is hand-rolled by codegen (`emit_critical_section_drop_body`):
+    /// it loads `restore_token` and calls `karac_critical_section_release`.
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}

@@ -821,6 +821,27 @@ impl<'a> EffectChecker<'a> {
             self.inferred_effects
                 .insert("volatile_write".to_string(), set);
         }
+        // `critical_section.acquire()` — disabling interrupts mutates hardware
+        // interrupt-enable state, so it performs `writes(Hardware)` (design.md
+        // § Critical sections). Like the `volatile_*` seeds above, this is the
+        // propagation mechanism that surfaces the effect to callers' inferred
+        // sets (the baked `with writes(Hardware)` note in
+        // `critical_section.kara` is documentation). Keyed by the dotted
+        // namespace form the `MethodCall` walker emits (inference.rs), so a
+        // public fn opening a critical section must declare `writes(Hardware)`
+        // and two such fns conflict under auto-concurrency analysis.
+        {
+            let mut set = EffectSet::new();
+            set.add(
+                Effect {
+                    verb: EffectVerbKind::Writes,
+                    resource: "Hardware".to_string(),
+                },
+                EffectOrigin::Direct(builtin_span.clone()),
+            );
+            self.inferred_effects
+                .insert("critical_section.acquire".to_string(), set);
+        }
         // Network surface (`std.http` + `std.tcp` + `std.tls` + WebSocket):
         // every method that performs network I/O carries sends(Network) +
         // receives(Network). Seeding the qualified key is the only path that

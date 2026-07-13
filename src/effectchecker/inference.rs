@@ -806,6 +806,13 @@ impl<'a> super::EffectChecker<'a> {
                 if let ExprKind::Identifier(mod_name) = &object.kind {
                     if mod_name == "env" {
                         calls.push((format!("Env.{}", method), expr.span.clone()));
+                    } else if mod_name == "critical_section" {
+                        // `critical_section.acquire()` → the dotted seed key
+                        // (`writes(Hardware)`, seeded in
+                        // `effectchecker.rs::seed_builtin_effects`). Receiver-
+                        // keyed like `env`/`stdin` so the `Hardware` effect
+                        // reaches the caller's inferred set.
+                        calls.push((format!("critical_section.{}", method), expr.span.clone()));
                     } else if mod_name == "stdin" {
                         // `stdin.<method>()` → the capitalized `Stdin.<method>`
                         // seed key (phase-8 `Stdin.lines()` slice). Receiver-keyed,

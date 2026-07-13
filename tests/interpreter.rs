@@ -21332,3 +21332,27 @@ fn test_volatile_cell_rejected_under_tree_walk_interpreter() {
         errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
     );
 }
+
+// ── critical_section (interrupt-mask RAII guard) ────────────────
+
+#[test]
+fn test_critical_section_inert_under_tree_walk_interpreter() {
+    // Unlike the raw MMIO surface, `critical_section.acquire()` runs under the
+    // tree-walk interpreter: a single-threaded tree-walk has no real
+    // interrupts, so acquire is inert (returns the guard) and the guard's Drop
+    // is a no-op (`try_eval_builtin_drop`) — the same posture the memory
+    // `fence` intrinsics take. The program runs to completion, guard-drop and
+    // all, with no runtime error. (AOT/JIT lower it to the runtime mask calls;
+    // see `test_e2e_critical_section_run`.)
+    let out = run_no_errors(
+        "fn work() writes(Hardware) {\n\
+             let _guard = critical_section.acquire();\n\
+             println(42);\n\
+         }\n\
+         fn main() {\n\
+             work();\n\
+             println(99);\n\
+         }\n",
+    );
+    assert_eq!(out, "42\n99\n");
+}

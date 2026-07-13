@@ -483,6 +483,29 @@ impl<'a> super::Interpreter<'a> {
     /// build` agree on the result (the run == build parity the kata/book A/B
     /// checks rely on). Runs past typecheck errors, so every malformed shape is
     /// a recorded runtime error rather than a panic.
+    /// Evaluate `critical_section.acquire()` in the tree-walk interpreter.
+    /// Inert: returns a `CriticalSectionGuard` value (restore token 0). The
+    /// guard's Drop is a no-op (`try_eval_builtin_drop`), so the single-threaded
+    /// interpreter observes no interrupt-mask semantics — mirroring the memory
+    /// `fence` intrinsics' inert posture.
+    fn eval_critical_section_acquire(&mut self, args: &[CallArg], span: &Span) -> Value {
+        if !args.is_empty() {
+            return self.record_runtime_error(
+                format!(
+                    "critical_section.acquire takes no arguments (found {})",
+                    args.len()
+                ),
+                span,
+            );
+        }
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("restore_token".to_string(), Value::Int(0));
+        Value::Struct {
+            name: "CriticalSectionGuard".to_string(),
+            fields,
+        }
+    }
+
     fn eval_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Value {
         if args.len() < 2 {
             return self.record_runtime_error(
@@ -573,6 +596,16 @@ impl<'a> super::Interpreter<'a> {
                 ("ast", "item") => return self.eval_ast_item_builder(args, span),
                 ("compiler", "error") => return self.eval_compiler_error(args, span),
                 ("gpu", "dispatch") => return self.eval_gpu_dispatch(args, span),
+                // Critical sections (design.md § Critical sections). The
+                // tree-walk interpreter is single-threaded with no real
+                // interrupts, so acquiring is inert — return the guard value;
+                // its Drop is a no-op (`try_eval_builtin_drop`). Same posture
+                // the memory `fence` intrinsics take under the interpreter.
+                // Guarded on `critical_section` not being a user binding so a
+                // local of that name still dispatches its own methods.
+                ("critical_section", "acquire") if self.env.get("critical_section").is_none() => {
+                    return self.eval_critical_section_acquire(args, span)
+                }
                 _ => {}
             }
             // Raw-pointer / MMIO intrinsics (`ptr.const`/`ptr.mut`/`ptr.addr`/

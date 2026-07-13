@@ -3579,6 +3579,75 @@ impl<'ctx> super::Codegen<'ctx> {
         if program.drop_method_keys.contains_key("BoundedChannel") {
             self.emit_bounded_channel_drop_body();
         }
+
+        // `CriticalSectionGuard.drop` (design.md § Critical sections). Loads
+        // `self.restore_token` (`{i64}` field 0) and calls
+        // `karac_critical_section_release(token)` to re-enable interrupts to
+        // their prior mask state. The stdlib declares `impl Drop for
+        // CriticalSectionGuard` so `drop_method_keys` contains the type when
+        // the prelude is in scope.
+        if program
+            .drop_method_keys
+            .contains_key("CriticalSectionGuard")
+        {
+            self.emit_critical_section_drop_body();
+        }
+    }
+
+    /// Hand-roll `@CriticalSectionGuard.drop(ptr) -> void`. Body:
+    ///
+    /// ```text
+    /// %tok_ptr = getelementptr {i64}, ptr %self, i32 0, i32 0
+    /// %tok     = load i64, ptr %tok_ptr
+    /// call void @karac_critical_section_release(i64 %tok)
+    /// ret void
+    /// ```
+    ///
+    /// Mirrors `emit_tcp_drop_body_for` (single-`i64`-field struct → load the
+    /// word, hand it to a runtime call), but calls `release` rather than a
+    /// close.
+    fn emit_critical_section_drop_body(&mut self) {
+        let fn_name = "CriticalSectionGuard.drop";
+        if self.module.get_function(fn_name).is_some() {
+            return;
+        }
+        let release_fn = match self.module.get_function("karac_critical_section_release") {
+            Some(f) => f,
+            None => return,
+        };
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let void_ty = self.context.void_type();
+        let struct_ty = self.context.struct_type(&[i64_ty.into()], false);
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(fn_name, drop_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let tok_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, self_ptr, 0, "restore_token_ptr")
+            .unwrap();
+        let token = self
+            .builder
+            .build_load(i64_ty, tok_ptr, "restore_token")
+            .unwrap()
+            .into_int_value();
+        self.builder
+            .build_call(release_fn, &[token.into()], "")
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
     }
 
     /// Hand-roll `@BoundedChannel.drop(ptr) -> void`. Mirrors

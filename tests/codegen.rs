@@ -3533,6 +3533,60 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_critical_section_acquire_emits_acquire_and_scope_exit_release() {
+        // `critical_section.acquire()` lowers to a call to the runtime
+        // `karac_critical_section_acquire`, and the guard's scope-exit Drop
+        // (hand-rolled `@CriticalSectionGuard.drop`) calls
+        // `karac_critical_section_release` — both appear in module IR.
+        let ir = ir_for(
+            r#"
+fn f() with writes(Hardware) {
+    let _guard = critical_section.acquire();
+    println(7);
+}
+fn main() { f(); }
+"#,
+        );
+        assert!(
+            ir.contains("call i64 @karac_critical_section_acquire()"),
+            "expected an acquire call; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("@karac_critical_section_release"),
+            "expected a scope-exit release call (guard Drop); IR:\n{ir}"
+        );
+        // The Drop wrapper the RAII machinery routes through must exist.
+        assert!(
+            ir.contains("@\"CriticalSectionGuard.drop\"")
+                || ir.contains("@CriticalSectionGuard.drop"),
+            "expected the hand-rolled CriticalSectionGuard.drop body; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_critical_section_run() {
+        // End-to-end: acquire a critical section, do work, drop the guard at
+        // scope exit (re-enabling interrupts via the runtime). Single-threaded
+        // hosted target, so it simply runs and prints — witnesses lowering +
+        // link of the acquire/release runtime pair.
+        let out = run_program(
+            r#"
+fn work() with writes(Hardware) {
+    let _guard = critical_section.acquire();
+    println(42);
+}
+fn main() {
+    work();
+    println(99);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42\n99");
+        }
+    }
+
+    #[test]
     fn test_e2e_ptr_const_mut_place_shapes_roundtrip() {
         // `ptr.const(place)` / `ptr.mut(place)` over the full place grammar the
         // typechecker's place-validator accepts — field access, a nested field

@@ -572,6 +572,38 @@ pub extern "C" fn karac_runtime_exit_predicate() {
     CONTRACT_PREDICATE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
 }
 
+// Critical sections (design.md § Critical sections). Backs
+// `critical_section.acquire()` / the `CriticalSectionGuard` Drop. On a hosted
+// target there are no interrupts to mask, so the pair maintains a balanced
+// nesting depth: `acquire` returns the prior depth as the restore token and
+// `release` decrements back to it. This keeps nested `acquire`/`release` pairs
+// well-formed and gives the primitive an observable, testable invariant on
+// hosted platforms; an MCU target replaces these bodies with PRIMASK
+// save/restore (`cpsid i` / restore). Thread-local because Kāra tasks run on
+// multiple scheduler threads, each with its own (stubbed) mask state.
+thread_local! {
+    static CRITICAL_SECTION_DEPTH: Cell<i64> = const { Cell::new(0) };
+}
+
+/// Open a critical section (disable interrupts). Returns the prior nesting
+/// depth as the restore token handed back to `karac_critical_section_release`.
+#[no_mangle]
+pub extern "C" fn karac_critical_section_acquire() -> i64 {
+    CRITICAL_SECTION_DEPTH.with(|d| {
+        let prev = d.get();
+        d.set(prev.saturating_add(1));
+        prev
+    })
+}
+
+/// Close a critical section (re-enable interrupts to the prior mask state).
+/// `_token` is the depth captured at acquire; the hosted stub simply
+/// decrements, saturating so an unbalanced release can never underflow.
+#[no_mangle]
+pub extern "C" fn karac_critical_section_release(_token: i64) {
+    CRITICAL_SECTION_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+}
+
 /// The panic-message infix for the current predicate context, as a
 /// null-terminated C string: `"contract predicate panicked: "` while a
 /// predicate is on the stack, else `""`. Codegen's panic path printfs

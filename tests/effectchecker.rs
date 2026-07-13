@@ -8892,6 +8892,28 @@ fn test_volatile_write_undeclared_hardware_effect_errors() {
     );
 }
 
+// ── critical_section.acquire() → writes(Hardware) ─────────────────
+//
+// Opening a critical section disables interrupts — a `writes(Hardware)`
+// hardware-state mutation (design.md § Critical sections). Seeded on the
+// `critical_section.acquire` key and routed through the lowercase-namespace
+// MethodCall walker, like the `volatile_*` seeds. A public function opening
+// a critical section must declare `writes(Hardware)`.
+
+#[test]
+fn test_critical_section_acquire_declared_hardware_effect_ok() {
+    effectcheck_ok("pub fn guard() writes(Hardware) { let _g = critical_section.acquire(); }");
+}
+
+#[test]
+fn test_critical_section_acquire_undeclared_hardware_effect_errors() {
+    let errs = effectcheck_errors("pub fn guard() { let _g = critical_section.acquire(); }");
+    assert!(
+        errs.iter().any(|e| e.message.contains("writes(Hardware)")),
+        "expected an undeclared writes(Hardware) effect error, got: {errs:?}"
+    );
+}
+
 // ── fence / compiler_fence → zero effects ─────────────────────────
 //
 // A memory barrier orders accesses but performs no resource operation of

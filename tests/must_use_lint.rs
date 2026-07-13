@@ -1035,3 +1035,35 @@ fn test_discarded_user_insert_method_still_warns() {
     assert_eq!(diags.len(), 1, "expected one warning, got: {diags:?}");
     assert_must_use_warning(&diags, "discarded `Option` value");
 }
+
+// ── Critical sections — `CriticalSectionGuard` is `#[must_use]` ──────
+
+#[test]
+fn test_discarded_critical_section_guard_warns() {
+    // `critical_section.acquire()` returns a `#[must_use]`
+    // `CriticalSectionGuard`; discarding it immediately re-enables
+    // interrupts, collapsing the section. Source-2 (type-level) warning.
+    let diags = lint(
+        "fn f() with writes(Hardware) {\n\
+             critical_section.acquire();\n\
+         }",
+    );
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.lint_name == "must_use" && d.message.contains("CriticalSectionGuard")),
+        "expected a type-level must_use warning naming CriticalSectionGuard, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_bound_critical_section_guard_does_not_warn() {
+    // Binding the guard to a `let` (the intended use) does not warn.
+    let diags = lint(
+        "fn f() with writes(Hardware) {\n\
+             let _guard = critical_section.acquire();\n\
+             println(\"work\");\n\
+         }",
+    );
+    assert!(diags.is_empty(), "expected no warnings, got: {diags:?}");
+}

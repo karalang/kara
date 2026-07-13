@@ -4876,6 +4876,25 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // Critical sections (design.md § Critical sections). `acquire()`
+        // returns an i64 restore token (`compile_critical_section_acquire`);
+        // the hand-rolled `@CriticalSectionGuard.drop` body
+        // (`emit_critical_section_drop_body`) hands that token back to
+        // `release`. On a hosted target the runtime maintains a balanced
+        // nesting depth; on an MCU it masks/restores interrupts.
+        let cs_acquire_ty = i64_type.fn_type(&[], false);
+        module.add_function(
+            "karac_critical_section_acquire",
+            cs_acquire_ty,
+            Some(Linkage::External),
+        );
+        let cs_release_ty = context.void_type().fn_type(&[i64_type.into()], false);
+        module.add_function(
+            "karac_critical_section_release",
+            cs_release_ty,
+            Some(Linkage::External),
+        );
+
         // ── Phase 6 line 236 slice 2 — TLS / HTTPS server-side stdlib FFI.
         //
         // Six external symbols mirroring slice 1's `runtime/src/tls.rs`

@@ -1429,6 +1429,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `critical_section.acquire()` (design.md § Critical sections) — call
+        // the runtime interrupt-mask primitive and yield the restore token as
+        // the guard value. The `CriticalSectionGuard` is a single-`i64`-field
+        // stdlib struct represented as its bare `i64` word (like the socket
+        // structs — see tcp.rs): the token IS the guard, stored in an i64
+        // slot the hand-rolled `@CriticalSectionGuard.drop` GEPs back as
+        // `{i64}` field 0 at scope exit. Guarded on no local `critical_section`
+        // shadow, matching the typechecker/resolver.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if name == "critical_section"
+                && method == "acquire"
+                && !self.variables.contains_key("critical_section")
+            {
+                return self.compile_critical_section_acquire();
+            }
+        }
+
         // Slice OR (2026-05-16): Option/Result `unwrap`/`expect`/`is_*`
         // dispatch is receiver-shape-agnostic — the receiver may be any
         // Option-/Result-valued expression (identifier, method chain,
@@ -11201,6 +11218,32 @@ impl<'ctx> super::Codegen<'ctx> {
     /// raw-pointer-typed LLVM slots end-to-end — that uplift is
     /// tracked as a follow-up. Tests in `tests/codegen.rs` pin the
     /// runtime round-trip; the IR-shape pins live alongside.
+    /// Lower `critical_section.acquire()` to a call to
+    /// `karac_critical_section_acquire() -> i64` (declared in `Codegen::new`)
+    /// and return the i64 restore token as the guard value. `CriticalSectionGuard`
+    /// is a single-`i64`-field stdlib struct represented as its bare word, so
+    /// the token IS the guard: the let-binding stores it in an i64 slot that
+    /// the scope-exit `@CriticalSectionGuard.drop` (`emit_critical_section_drop_body`)
+    /// GEPs back as `{i64}` field 0 to hand to `release`. RAII drop fires
+    /// because the typechecker labels the binding `CriticalSectionGuard`
+    /// (`pattern_binding_types` → `var_type_names`) and `drop_method_keys`
+    /// carries the type — no per-site drop wiring needed here.
+    pub(super) fn compile_critical_section_acquire(
+        &mut self,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let acquire_fn = self
+            .module
+            .get_function("karac_critical_section_acquire")
+            .expect("karac_critical_section_acquire declared in Codegen::new");
+        let token = self
+            .builder
+            .build_call(acquire_fn, &[], "critical_section.acquire")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        Ok(token)
+    }
+
     pub(super) fn compile_ptr_module_call(
         &mut self,
         method: &str,

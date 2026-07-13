@@ -603,6 +603,11 @@ impl<'a> super::Interpreter<'a> {
                 self.drop_pooled_connection(name);
                 true
             }
+            // `CriticalSectionGuard` (design.md § Critical sections): re-enabling
+            // interrupts has no observable effect in a single-threaded tree-walk,
+            // so its Drop is inert. Handled here (returning `true`) so the empty
+            // `#[compiler_builtin]` drop body is never drained as a user body.
+            "CriticalSectionGuard" => true,
             _ => false,
         }
     }

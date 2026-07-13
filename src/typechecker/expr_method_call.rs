@@ -768,6 +768,23 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Critical sections (design.md § Critical sections):
+        // `critical_section.acquire()` parses as a method call on the
+        // lowercase magic module `critical_section` (registered by the
+        // resolver alongside `ptr` / `gpu`). Type it as the RAII guard
+        // constructor it is — zero args, returns `CriticalSectionGuard` —
+        // before the receiver is typed as a value. Skipped when a local
+        // binding shadows `critical_section` (prelude-shadow rule, mirroring
+        // the `ptr` guard below).
+        if let ExprKind::Identifier(module) = &object.kind {
+            if module == "critical_section"
+                && method == "acquire"
+                && self.local_scope.lookup("critical_section").is_none()
+            {
+                return self.infer_critical_section_acquire(args, span);
+            }
+        }
+
         // Fallible-allocation companions (phase-8-stdlib-floor item 2). A
         // `try_<base>` instance method on a builtin collection types
         // identically to its panicking `<base>` counterpart but returns
@@ -5933,6 +5950,34 @@ impl<'a> super::TypeChecker<'a> {
     /// `codegen.rs`). Every rejection is a focused `E_GPU_DISPATCH_*`
     /// diagnostic; the return type stays `Vec[f32]` so downstream inference has
     /// something concrete to work with even on error.
+    /// Type `critical_section.acquire()` (design.md § Critical sections). Takes
+    /// no arguments and returns the RAII `CriticalSectionGuard`. The guard's
+    /// Drop (hand-rolled in codegen) re-enables interrupts at end of scope; the
+    /// `writes(Hardware)` effect is contributed by the effectchecker's
+    /// `critical_section.acquire` seed (mirroring the `volatile_*` MMIO seeds).
+    fn infer_critical_section_acquire(&mut self, args: &[CallArg], span: &Span) -> Type {
+        let guard = Type::Named {
+            name: "CriticalSectionGuard".to_string(),
+            args: vec![],
+        };
+        if !args.is_empty() {
+            self.type_error(
+                format!(
+                    "`critical_section.acquire` takes no arguments, found {}",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            // Still type the args so downstream diagnostics don't cascade.
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+        }
+        self.record_expr_type(span, &guard);
+        guard
+    }
+
     fn infer_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Type {
         // The WGSL-native 4-byte scalar element types slice-0 supports, and
         // their shared Kāra/WGSL spelling. `None` for any other type.

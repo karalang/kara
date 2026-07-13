@@ -89,6 +89,10 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // sibling hardware/concurrency primitives; its `.read()` / `.write(v)`
     // lower to the `volatile_read` / `volatile_write` prelude intrinsics.
     "VolatileCell",
+    // `CriticalSectionGuard` — RAII guard returned by `critical_section.acquire()`
+    // (`runtime/stdlib/critical_section.kara`); its Drop re-enables interrupts.
+    // Prelude-visible like its sibling hardware primitives.
+    "CriticalSectionGuard",
     "Ordering",
     "MemoryOrdering",
     "IoError",
@@ -685,6 +689,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "volatile_cell.kara",
         include_str!("../runtime/stdlib/volatile_cell.kara"),
+    ),
+    (
+        "critical_section.kara",
+        include_str!("../runtime/stdlib/critical_section.kara"),
     ),
     ("f32.kara", include_str!("../runtime/stdlib/f32.kara")),
     ("f64.kara", include_str!("../runtime/stdlib/f64.kara")),

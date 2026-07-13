@@ -312,6 +312,14 @@ impl SymbolTable {
         // in `env.functions` rather than living in baked `.kara` source —
         // function names cannot syntactically contain a `.`.
         push(self, "ptr", SymbolKind::Module);
+
+        // `critical_section` is a built-in module hosting the RAII
+        // interrupt-mask primitive (`critical_section.acquire()`, design.md §
+        // Critical sections). Registered as a module symbol like `ptr` / `gpu`
+        // so the lowercase receiver resolves (a local binding still shadows it
+        // by name); the typechecker + codegen + interpreter intercept
+        // `critical_section.acquire` before it is treated as a value method.
+        push(self, "critical_section", SymbolKind::Module);
     }
 
     pub fn push_scope(&mut self, kind: ScopeKind) -> ScopeId {
