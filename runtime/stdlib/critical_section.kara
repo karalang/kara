@@ -45,6 +45,11 @@ pub struct CriticalSectionGuard {
     restore_token: i64,
 }
 
+// Drop-skip-sound: if this Drop never runs, interrupts simply stay disabled
+// for longer than intended (a liveness/latency concern) — nothing becomes
+// unsafe: no UB, no type-system violation, no memory unsafety. The guard owns
+// no heap or OS resource; the restore token is a plain integer. Per design.md
+// § Drop, destructors are not soundness mechanisms.
 impl Drop for CriticalSectionGuard {
     /// Re-enable interrupts, restoring the mask state captured at acquire.
     /// Body is hand-rolled by codegen (`emit_critical_section_drop_body`):

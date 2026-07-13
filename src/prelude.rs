@@ -2422,6 +2422,7 @@ mod tests {
         // `Drop-skip-sound:` comment above each impl.
         const AUDITED: &[&str] = &[
             "BoundedChannel",
+            "CriticalSectionGuard",
             "PooledConnection",
             "TaskGroup",
             "TcpListener",
