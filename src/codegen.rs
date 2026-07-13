@@ -3336,6 +3336,11 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) karac_string_to_lowercase_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_to_uppercase_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_trim_fn: FunctionValue<'ctx>,
+    /// `String.trim_start()` / `.trim_end()` — strip only leading / trailing
+    /// Unicode whitespace. Same `(data, len, *mut out_len) -> ptr` xform shape
+    /// as `trim`.
+    pub(crate) karac_string_trim_start_fn: FunctionValue<'ctx>,
+    pub(crate) karac_string_trim_end_fn: FunctionValue<'ctx>,
     /// `String.sorted()` — chars sorted ascending into a fresh String (the
     /// anagram key). Same `(data, len, *mut out_len) -> ptr` xform shape.
     pub(crate) karac_string_sorted_fn: FunctionValue<'ctx>,
@@ -5853,6 +5858,16 @@ impl<'ctx> Codegen<'ctx> {
             string_xform_ty,
             Some(Linkage::External),
         );
+        let karac_string_trim_start_fn = module.add_function(
+            "karac_string_trim_start",
+            string_xform_ty,
+            Some(Linkage::External),
+        );
+        let karac_string_trim_end_fn = module.add_function(
+            "karac_string_trim_end",
+            string_xform_ty,
+            Some(Linkage::External),
+        );
         let karac_string_sorted_fn = module.add_function(
             "karac_string_sorted",
             string_xform_ty,
@@ -6232,6 +6247,8 @@ impl<'ctx> Codegen<'ctx> {
             karac_string_to_lowercase_fn,
             karac_string_to_uppercase_fn,
             karac_string_trim_fn,
+            karac_string_trim_start_fn,
+            karac_string_trim_end_fn,
             karac_string_sorted_fn,
             karac_string_replace_fn,
             clone_fn_cache: HashMap::new(),

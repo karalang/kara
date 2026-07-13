@@ -5932,6 +5932,36 @@ fn main() {
         );
     }
 
+    // `String.trim_start()` / `.trim_end()` return FRESH heap buffers
+    // (`karac_string_trim_{start,end}`), the same allocate-and-hand-back shape
+    // as `trim` — scope cleanup must free each exactly once and never alias the
+    // receiver (the literal's rodata must not be freed). Looped 1000× so LSan
+    // catches a per-iter leak and local ASAN a double-free; the ≥36-byte inner
+    // payload keeps every result heap-allocated past any short-buffer fast path.
+    #[test]
+    fn asan_string_trim_start_end_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let s: String = "   abcdefghijklmnopqrstuvwxyz0123456789   ";
+        let a = s.trim_start();
+        let b = s.trim_end();
+        total = total + a.len() + b.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            // trim_start → 39 (drops 3 leading), trim_end → 39 (drops 3 trailing);
+            // 78/iter × 1000 = 78000.
+            &["78000"],
+            "string_trim_start_end_loop",
+        );
+    }
+
     // `String.sorted()` returns a FRESH heap buffer (`karac_string_sorted`), the
     // same allocate-and-hand-back shape as trim / to_uppercase — the scope-cleanup
     // machinery must free it exactly once, and it must never alias the receiver's

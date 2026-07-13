@@ -301,6 +301,38 @@ pub unsafe extern "C" fn karac_string_trim(
     alloc_string_result(trimmed.as_bytes(), out_len)
 }
 
+/// `String.trim_start()` — strip only LEADING Unicode whitespace (Rust
+/// `str::trim_start`), returning a fresh owned copy. Sibling of
+/// [`karac_string_trim`].
+///
+/// # Safety
+/// See [`karac_string_to_lowercase`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_trim_start(
+    data: *const u8,
+    len: i64,
+    out_len: *mut i64,
+) -> *mut u8 {
+    let trimmed = str_from_raw(data, len).trim_start();
+    alloc_string_result(trimmed.as_bytes(), out_len)
+}
+
+/// `String.trim_end()` — strip only TRAILING Unicode whitespace (Rust
+/// `str::trim_end`), returning a fresh owned copy. Sibling of
+/// [`karac_string_trim`].
+///
+/// # Safety
+/// See [`karac_string_to_lowercase`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_trim_end(
+    data: *const u8,
+    len: i64,
+    out_len: *mut i64,
+) -> *mut u8 {
+    let trimmed = str_from_raw(data, len).trim_end();
+    alloc_string_result(trimmed.as_bytes(), out_len)
+}
+
 /// `String.replace(from, to)` — replace every non-overlapping occurrence of
 /// `from` with `to` (Rust `str::replace`). Returns a fresh owned buffer.
 ///

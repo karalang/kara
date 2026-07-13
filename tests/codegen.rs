@@ -9920,6 +9920,31 @@ fn main() {
         }
     }
 
+    /// `String.trim_start()` / `.trim_end()` via `karac_string_trim_{start,end}`
+    /// — strip only leading / trailing whitespace, byte-identical to the
+    /// interpreter (`test_string_trim_start_end_interpreter`). Leak-freedom is
+    /// gated in `tests/memory_sanitizer.rs`.
+    #[test]
+    fn e2e_string_trim_start_end_codegen() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s: String = \"  Hello  \";\n\
+                 println(f\"[{s.trim_start()}]\");\n\
+                 println(f\"[{s.trim_end()}]\");\n\
+                 println(f\"[{s}]\");\n\
+                 println(f\"[{\"\\t x \\n\".trim_start()}]\");\n\
+                 println(f\"[{\"\\t x \\n\".trim_end()}]\");\n\
+                 println(f\"[{\"none\".trim_start()}]\");\n\
+                 println(f\"[{\"   \".trim_end()}]\");\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "[Hello  ]\n[  Hello]\n[  Hello  ]\n[x \n]\n[\t x]\n[none]\n[]\n"
+            );
+        }
+    }
+
     /// `String.sorted()` — characters sorted ascending into a fresh String, the
     /// canonical anagram key (LeetCode #49). Lowered through the
     /// `karac_string_sorted` runtime helper, so codegen computes the

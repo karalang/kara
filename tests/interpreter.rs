@@ -12090,6 +12090,32 @@ fn test_string_trim_replace_case_interpreter() {
 }
 
 #[test]
+fn test_string_trim_start_end_interpreter() {
+    // `trim_start` / `trim_end` strip only the leading / trailing Unicode
+    // whitespace (Rust `str::trim_{start,end}`), returning a fresh owned copy.
+    // Codegen routes through `karac_string_trim_{start,end}` so the backends
+    // are byte-identical (tests/codegen.rs::e2e_string_trim_start_end_codegen;
+    // leak-checked in tests/memory_sanitizer.rs).
+    let output = run(r#"fn main() {
+            let s: String = "  Hello  ";
+            println(f"[{s.trim_start()}]");
+            println(f"[{s.trim_end()}]");
+            // Receiver untouched (fresh owned copy).
+            println(f"[{s}]");
+            // Tabs / newlines are whitespace too.
+            println(f"[{"\t x \n".trim_start()}]");
+            println(f"[{"\t x \n".trim_end()}]");
+            // No whitespace → identity; all-whitespace → empty.
+            println(f"[{"none".trim_start()}]");
+            println(f"[{"   ".trim_end()}]");
+        }"#);
+    assert_eq!(
+        output,
+        "[Hello  ]\n[  Hello]\n[  Hello  ]\n[x \n]\n[\t x]\n[none]\n[]\n"
+    );
+}
+
+#[test]
 fn test_string_substring_two_arg_interpreter() {
     // Two-arg `substring(start, end)` (byte range `[start, end)`): prefix /
     // suffix / empty-when-equal / inverted-bounds (end<start) / end-clamped /

@@ -327,16 +327,18 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
-            "trim" | "to_lowercase" | "to_uppercase" => {
+            "trim" | "trim_start" | "trim_end" | "to_lowercase" | "to_uppercase" => {
                 // Allocating String→String (typed in stdlib_seq.rs). Direct Rust
                 // stdlib so the interpreter and the codegen runtime helpers
-                // (`karac_string_{trim,to_lowercase,to_uppercase}`) compute the
-                // identical full-Unicode result. Only a String receiver reaches
-                // here (the SIMD vector path runs earlier; non-String falls
-                // through to None).
+                // (`karac_string_{trim,trim_start,trim_end,to_lowercase,
+                // to_uppercase}`) compute the identical full-Unicode result.
+                // Only a String receiver reaches here (the SIMD vector path runs
+                // earlier; non-String falls through to None).
                 if let Value::String(s) = &obj {
                     let r = match method {
                         "trim" => s.trim().to_string(),
+                        "trim_start" => s.trim_start().to_string(),
+                        "trim_end" => s.trim_end().to_string(),
                         "to_lowercase" => s.to_lowercase(),
                         "to_uppercase" => s.to_uppercase(),
                         _ => unreachable!(),

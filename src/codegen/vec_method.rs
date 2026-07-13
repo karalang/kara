@@ -1510,10 +1510,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // mapping / whitespace without shipping Unicode tables into codegen.
             // Each returns a fresh `{ptr, out_len, out_len}` String (null + 0 for
             // an empty result, which becomes `{null, 0, 0}`).
-            "trim" | "to_lowercase" | "to_uppercase" => {
+            "trim" | "trim_start" | "trim_end" | "to_lowercase" | "to_uppercase" => {
                 let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "sx");
                 let func = match method {
                     "trim" => self.karac_string_trim_fn,
+                    "trim_start" => self.karac_string_trim_start_fn,
+                    "trim_end" => self.karac_string_trim_end_fn,
                     "to_lowercase" => self.karac_string_to_lowercase_fn,
                     "to_uppercase" => self.karac_string_to_uppercase_fn,
                     _ => unreachable!(),

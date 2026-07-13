@@ -531,15 +531,17 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
-            "trim" | "to_lowercase" | "to_uppercase" => {
+            "trim" | "trim_start" | "trim_end" | "to_lowercase" | "to_uppercase" => {
                 // trim() -> String: a fresh owned copy with leading/trailing
                 // Unicode whitespace removed (Rust `str::trim`, owned rather
-                // than a borrowed view). to_lowercase()/to_uppercase() -> String:
-                // full Unicode case mapping (Rust `str::to_{lower,upper}case`,
-                // which can change byte length — `ß`→`SS`). All three allocate a
-                // new String and match the interpreter's Rust-stdlib semantics
-                // exactly (codegen routes through `karac_string_{trim,
-                // to_lowercase,to_uppercase}` so the two backends never diverge).
+                // than a borrowed view). trim_start()/trim_end() strip only the
+                // leading / trailing whitespace. to_lowercase()/to_uppercase()
+                // -> String: full Unicode case mapping (Rust
+                // `str::to_{lower,upper}case`, which can change byte length —
+                // `ß`→`SS`). All allocate a new String and match the
+                // interpreter's Rust-stdlib semantics exactly (codegen routes
+                // through `karac_string_{trim,trim_start,trim_end,to_lowercase,
+                // to_uppercase}` so the two backends never diverge).
                 if !args.is_empty() {
                     self.type_error(
                         format!("'{method}' takes no arguments, found {}", args.len()),
