@@ -9,10 +9,15 @@
 #   scripts/lsan-local.sh <name-filter>         # only tests matching the filter
 #   scripts/lsan-local.sh --shell               # interactive shell in the container
 #
-# Leaks are architecture-independent (a missing free in the emitted drop logic),
-# so this runs a NATIVE arm64 Linux container on Apple Silicon — same leaks as
-# CI's x86_64, at native speed (no qemu). Reach for an x86 image only for a
-# suspected arch-specific codegen bug.
+# MOSTLY leaks are architecture-independent (a missing free in the emitted drop
+# logic), so this runs a NATIVE arm64 Linux container on Apple Silicon — usually
+# the same leaks as CI's x86_64, at native speed (no qemu). But this is NOT a
+# universal invariant: B-2026-07-12-29 is an arm64-ONLY RC leak (a compound
+# index-assign of a shared/Option[shared] Vec element balances on x86 and leaks
+# on arm64), so this arm64 harness can flag a leak that x86 CI's `memory-sanitizer`
+# does NOT — and vice-versa. CI now has an arm64 leg (`memory-sanitizer-arm64`)
+# to cover the arm64-only class. Reach for an x86 image (or trust x86 CI) to
+# confirm whether a leak this harness reports is arch-specific.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

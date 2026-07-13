@@ -534,6 +534,49 @@ jobs:
       - name: Memory sanitizer (UAF / double-free + Linux leaks)
         run: cargo test --features llvm --test memory_sanitizer
 
+  # ARM64 sibling of `memory-sanitizer` (B-2026-07-12-29). The premise that
+  # "leaks are architecture-independent" is FALSE for at least one RC codegen
+  # bug: a compound index-assign of a shared/`Option[shared]` Vec element
+  # (`work[i] = work[j]`) leaks the overwritten node on arm64 but balances on
+  # x86 — so the x86 leg above structurally cannot catch that class. This leg
+  # runs the same LSan suite on an arm64 Linux runner. Also a SEPARATE,
+  # NON-required job (not in branch protection). The one known arm64-only
+  # failure (`asan_owned_vec_param_let_move_interval_merge`) is
+  # `#[cfg_attr(target_arch = "aarch64", ignore)]` against B-2026-07-12-29, so
+  # this leg is green except for NEW arm64-only leaks; un-ignore that test when
+  # the bug is fixed. NOTE: needs GitHub arm64 Linux runners (`ubuntu-24.04-arm`)
+  # enabled for the repo — verify on first run.
+  memory-sanitizer-arm64:
+    name: Memory sanitizer arm64 (ASAN + LeakSanitizer)
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: memsan-arm64
+
+      - name: Build runtime staticlib archives (lean → full)
+        run: |
+          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+
+      - name: Memory sanitizer arm64 (UAF / double-free + Linux leaks)
+        run: cargo test --features llvm --test memory_sanitizer
+
   # ── Phase 6.3 Slice 7: flagship-demo benchmark regression gate ──────────
   # Builds the `ws_idle_holder` flagship demo (Demo 1) with `karac build`,
   # runs the Rust bench harness against it at a CI-appropriate load tier
