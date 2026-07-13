@@ -628,6 +628,42 @@ fn main() {
     }
 
     #[test]
+    fn asan_generic_enum_struct_heap_payload_bind_no_leak_or_double_free() {
+        // B-2026-07-13-3, user-struct payload sibling: a generic enum's bare-`T`
+        // payload resolved to a USER STRUCT with a heap field (`enum Opt[T] {
+        // Yes(T) }` at `T = struct Box { s: String }`) is also stored BOXED (the
+        // 1-word erased area can't hold the 1-field `{ {ptr,i64,i64} }` struct).
+        // The debox must rebuild at the struct's exact aggregate (not the 3-word
+        // vec heuristic) and the moved-out struct's inner String must be freed
+        // exactly once. 500 iters, both arms. Before the extension this rebuilt
+        // as `{ptr,i64,i64}` and failed module verification (`ret i64 0`).
+        assert_clean_asan_run(
+            r#"
+struct Box { s: String }
+enum Opt[T] { Yes(T), No }
+fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 500 {
+        let b: Box = Box { s: f"inside-{i}" };
+        let db: Box = Box { s: f"default" };
+        let r: Box = get(Opt.Yes(b), db);
+        total = total + r.s.len();
+        let db2: Box = Box { s: f"fallback-{i}" };
+        let r2: Box = get(Opt.No, db2);
+        total = total + r2.s.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            &["10780"],
+            "generic_enum_struct_heap_payload_bind_no_leak_or_double_free",
+        );
+    }
+
+    #[test]
     fn asan_owned_string_param_if_branch_return_no_leak_or_double_free() {
         // B-2026-07-13-1: an owned String param returned from an `if` branch
         // tail deep-copies (the caller retains the arg buffer). 200 iterations:

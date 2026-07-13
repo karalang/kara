@@ -2771,31 +2771,43 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(&key)
             .filter(|te| self.is_generic_named_struct_type_expr(te))
             .map(|te| self.llvm_type_for_type_expr(te));
-        let target_ty: Option<BasicTypeEnum<'ctx>> = mono_struct_target.or_else(|| {
-            type_name.as_ref().and_then(|n| match n.as_str() {
-                "String" | "str" | "Vec" | "VecDeque" | "StringSlice" | "CString" => {
-                    Some(self.vec_struct_type().into())
-                }
-                "Slice" => Some(self.slice_struct_type().into()),
-                _ => self
-                    .struct_types
-                    .get(n.as_str())
-                    .map(|st| (*st).into())
-                    // Enum-typed binding (e.g. `Ok(j)` where j: Json):
-                    // return the enum's tagged-union LLVM struct so the
-                    // multi-word destructure rebuilds a `{tag, w0..wN}`
-                    // value the downstream method-call dispatcher can
-                    // operate on. Without this, the heuristic fallback
-                    // below picks `vec_struct_type` (`{ptr, i64, i64}`)
-                    // and downstream `.method()` calls explode when
-                    // they extract the tag from field 0 as a pointer.
-                    .or_else(|| {
-                        self.enum_layouts
-                            .get(n.as_str())
-                            .map(|layout| layout.llvm_type.into())
-                    }),
-            })
-        });
+        // B-2026-07-13-3: a generic enum's bare-`T` payload resolved to a
+        // concrete heap type by the monomorph substitution (String/Vec, OR a
+        // user struct / enum wider than the erased 1-word area). Rebuild at that
+        // exact aggregate — the `field_words.len()`-based heuristic below only
+        // knows the 3-word→vec / 2-word→slice shapes, so a user-struct payload
+        // (`enum Opt[T] { Yes(T) }` at `T = struct Box { s: String }`) would
+        // otherwise rebuild as `{ptr,i64,i64}` instead of `{ {ptr,i64,i64} }`
+        // and the arm value would disagree with the return type (`ret i64 0`).
+        let mono_target: Option<BasicTypeEnum<'ctx>> = self
+            .mono_payload_binding_type_expr_for(&key)
+            .map(|te| self.llvm_type_for_type_expr(&te));
+        let target_ty: Option<BasicTypeEnum<'ctx>> =
+            mono_struct_target.or(mono_target).or_else(|| {
+                type_name.as_ref().and_then(|n| match n.as_str() {
+                    "String" | "str" | "Vec" | "VecDeque" | "StringSlice" | "CString" => {
+                        Some(self.vec_struct_type().into())
+                    }
+                    "Slice" => Some(self.slice_struct_type().into()),
+                    _ => self
+                        .struct_types
+                        .get(n.as_str())
+                        .map(|st| (*st).into())
+                        // Enum-typed binding (e.g. `Ok(j)` where j: Json):
+                        // return the enum's tagged-union LLVM struct so the
+                        // multi-word destructure rebuilds a `{tag, w0..wN}`
+                        // value the downstream method-call dispatcher can
+                        // operate on. Without this, the heuristic fallback
+                        // below picks `vec_struct_type` (`{ptr, i64, i64}`)
+                        // and downstream `.method()` calls explode when
+                        // they extract the tag from field 0 as a pointer.
+                        .or_else(|| {
+                            self.enum_layouts
+                                .get(n.as_str())
+                                .map(|layout| layout.llvm_type.into())
+                        }),
+                })
+            });
         // Heuristic fallback when the typechecker didn't record a name:
         // 3 words → vec/string shape; 2 words → slice shape.
         let target_ty: BasicTypeEnum<'ctx> = target_ty.unwrap_or_else(|| match field_words.len() {

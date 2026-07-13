@@ -31459,6 +31459,32 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_enum_struct_heap_payload_match_return() {
+        // B-2026-07-13-3, user-struct payload: `enum Opt[T] { Yes(T) }` at
+        // `T = struct Box { s: String }` boxes the wider-than-erased-area
+        // payload; the debox must rebuild at the struct's exact aggregate
+        // `{ {ptr,i64,i64} }`, not the 3-word vec heuristic, or the arm value
+        // disagrees with the `-> Box` return (`ret i64 0`).
+        let out = run_program(
+            "struct Box { s: String }\n\
+             enum Opt[T] { Yes(T), No }\n\
+             fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }\n\
+             fn main() {\n\
+             \x20   let b: Box = Box { s: f\"inside\" };\n\
+             \x20   let db: Box = Box { s: f\"dflt\" };\n\
+             \x20   let r: Box = get(Opt.Yes(b), db);\n\
+             \x20   println(r.s);\n\
+             \x20   let db2: Box = Box { s: f\"fb\" };\n\
+             \x20   let r2: Box = get(Opt.No, db2);\n\
+             \x20   println(r2.s);\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "inside\nfb");
+        }
+    }
+
+    #[test]
     fn test_e2e_generic_enum_scalar_payload_unchanged() {
         // B-2026-07-13-3 regression guard: a SCALAR `T` (1 word) fits the erased
         // payload area inline (no boxing), so the mono-payload path must NOT
