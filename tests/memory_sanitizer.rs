@@ -736,6 +736,32 @@ fn main() {
     }
 
     #[test]
+    fn asan_oncelock_get_or_init_heapfree_aggregate_no_leak() {
+        // B-2026-07-12-2 follow-on: `get_or_init` with a heap-FREE aggregate `T`
+        // (`Point { x, y }`). No element heap to leak, but the per-iteration
+        // once-handle + closure env must be reclaimed cleanly across the loop.
+        assert_clean_asan_run(
+            r#"
+struct Point { x: i64, y: i64 }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Point] = OnceLock.new();
+        let p = cell.get_or_init(|| Point { x: 3i64, y: 4i64 });
+        total = total + p.x + p.y;
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // 7 * 40 = 280
+            &["280"],
+            "oncelock_get_or_init_heapfree_aggregate_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_result_discard_struct_with_heap_no_leak() {
         // B-2026-07-12-2 gap 3 (general, NOT once-specific) — a discarded
         // fresh-temp `Result[i64, Rec]` whose `Err` payload is a multi-field

@@ -3501,6 +3501,31 @@ impl<'ctx> super::Codegen<'ctx> {
             // closure marking in `compile_closure`) so distinct instances
             // (`make(5)` / `make(10)`) don't alias one reused stack env.
             ExprKind::Closure { .. } => self.closure_value_type().into(),
+            // A struct-literal body (`|| Point { x, y }`) evaluates to the
+            // struct's LLVM aggregate, NOT the `i64` default — without this the
+            // closure fn is declared `-> i64` while its body returns the struct
+            // (LLVM verifier "return type does not match operand type of return
+            // inst"), which blocked an aggregate `OnceLock.get_or_init(|| S {..})`
+            // (B-2026-07-12-2). Prefer the concrete mono instantiation (a
+            // generic `Wrap { .. }` literal) recorded by the lowering pass, then
+            // the base `struct_types` shape, then the enum-layout for a struct-
+            // VARIANT literal; fall back to `i64` only when nothing resolves.
+            ExprKind::StructLiteral { path, .. } => self
+                .struct_inst_mono_type_for_expr(expr)
+                .map(Into::into)
+                .or_else(|| {
+                    path.last().and_then(|n| {
+                        self.struct_types
+                            .get(n.as_str())
+                            .map(|st| (*st).into())
+                            .or_else(|| {
+                                self.enum_layouts
+                                    .get(n.as_str())
+                                    .map(|l| l.llvm_type.into())
+                            })
+                    })
+                })
+                .unwrap_or_else(|| self.context.i64_type().into()),
             _ => self.context.i64_type().into(),
         }
     }

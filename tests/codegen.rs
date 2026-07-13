@@ -4274,44 +4274,66 @@ fn main() {
     }
 
     #[test]
-    fn test_oncelock_get_or_init_aggregate_rejected_under_build() {
-        // `get_or_init` with a non-scalar `T` is loud-gated: the closure returns
-        // the aggregate via sret (a deferred ABI, B-2026-07-12-2). `set`/`get`
-        // handle small structs, but `get_or_init` invokes a closure, so it needs
-        // the narrower scalar gate. Codegen MUST reject (not panic on the
-        // return-type mismatch).
+    fn test_oncelock_get_or_init_heapfree_aggregate_ok_heap_gated() {
+        // B-2026-07-12-2 follow-on: `get_or_init` now accepts a heap-FREE
+        // aggregate `T` (a struct/tuple of scalars) — the closure's direct
+        // aggregate return is inferred (`infer_closure_return_type`'s
+        // struct-literal arm; previously the closure fn was declared `-> i64`
+        // and the body's struct `ret` tripped the LLVM verifier). A HEAP-OWNING
+        // `T` (a struct with a `String`/`Vec` field) stays gated: the returned
+        // `ref T` value-copy would double-free the sealed heap.
         use karac::codegen::compile_to_object_with_options;
-        let src = "struct P { x: i64, y: i64 }\n\
-                   fn main() {\n\
-                   let d: OnceLock[P] = OnceLock.new();\n\
-                   let _p = d.get_or_init(|| P { x: 7, y: 8 });\n\
-                   }";
-        let mut parsed = karac::parse(src);
-        assert!(parsed.errors.is_empty(), "source must parse");
-        let resolved = karac::resolve(&parsed.program);
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        assert!(
-            typed.errors.is_empty(),
-            "OnceLock[P].get_or_init must typecheck clean (interpreter supports it): {:?}",
-            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        let compile_err = |src: &str, tag: &str| -> Option<String> {
+            let mut parsed = karac::parse(src);
+            assert!(parsed.errors.is_empty(), "{tag}: source must parse");
+            let resolved = karac::resolve(&parsed.program);
+            let typed = karac::typecheck(&parsed.program, &resolved);
+            assert!(
+                typed.errors.is_empty(),
+                "{tag}: must typecheck clean: {:?}",
+                typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+            );
+            karac::lower(&mut parsed.program, &typed);
+            let ownership = karac::ownershipcheck(&parsed.program, &typed);
+            let obj_path = format!("/tmp/karac_goi_gate_{}_{}.o", tag, std::process::id());
+            let err = compile_to_object_with_options(
+                &parsed.program,
+                &obj_path,
+                Some(&ownership),
+                None,
+                None,
+                None,
+            )
+            .err();
+            let _ = std::fs::remove_file(&obj_path);
+            err
+        };
+        // (a) heap-FREE aggregate now compiles.
+        let ok = compile_err(
+            "struct P { x: i64, y: i64 }\n\
+             fn main() {\n\
+             let d: OnceLock[P] = OnceLock.new();\n\
+             let _p = d.get_or_init(|| P { x: 7i64, y: 8i64 });\n\
+             }",
+            "heapfree",
         );
-        karac::lower(&mut parsed.program, &typed);
-        let ownership = karac::ownershipcheck(&parsed.program, &typed);
-        let obj_path = format!("/tmp/karac_goi_agg_gate_{}.o", std::process::id());
-        let err = compile_to_object_with_options(
-            &parsed.program,
-            &obj_path,
-            Some(&ownership),
-            None,
-            None,
-            None,
-        )
-        .err();
-        let _ = std::fs::remove_file(&obj_path);
-        let msg = err.expect("aggregate get_or_init must be rejected under karac build");
         assert!(
-            msg.contains("get_or_init") && msg.contains("non-scalar"),
-            "gate error should name the non-scalar get_or_init limitation; got: {msg}"
+            ok.is_none(),
+            "heap-free aggregate get_or_init must now compile; got: {ok:?}"
+        );
+        // (b) heap-owning aggregate stays loud-gated.
+        let heap = compile_err(
+            "struct Rec { id: i64, name: String }\n\
+             fn main() {\n\
+             let c: OnceLock[Rec] = OnceLock.new();\n\
+             let _r = c.get_or_init(|| Rec { id: 7i64, name: \"hi\".to_string() });\n\
+             }",
+            "heap",
+        );
+        let msg = heap.expect("heap-owning get_or_init must be rejected under karac build");
+        assert!(
+            msg.contains("get_or_init") && msg.contains("heap-owning element type"),
+            "gate error should name the heap-owning get_or_init limitation; got: {msg}"
         );
     }
 
@@ -4380,19 +4402,21 @@ fn main() {
             wide.is_none(),
             "WIDE-T OnceLock.set/get must now compile under karac build (gap 3); got: {wide:?}"
         );
-        // (c) `get_or_init` with a NON-SCALAR element stays loud-gated.
+        // (c) `get_or_init` with a HEAP-OWNING element stays loud-gated (a
+        // heap-free aggregate like `P { a, b }` now compiles — see
+        // `test_oncelock_get_or_init_heapfree_aggregate_ok_heap_gated`).
         let goi = compile_err(
-            "struct P { a: i64, b: i64 }\n\
+            "struct Rec { id: i64, name: String }\n\
              fn main() {\n\
-             let c: OnceLock[P] = OnceLock.new();\n\
-             let p = c.get_or_init(|| P { a: 1i64, b: 2i64 });\n\
+             let c: OnceLock[Rec] = OnceLock.new();\n\
+             let r = c.get_or_init(|| Rec { id: 1i64, name: \"hi\".to_string() });\n\
              }",
-            "get_or_init_nonscalar",
+            "get_or_init_heap",
         );
-        let msg = goi.expect("get_or_init with a non-scalar element must be rejected");
+        let msg = goi.expect("get_or_init with a heap-owning element must be rejected");
         assert!(
-            msg.contains("non-scalar element type"),
-            "gate error should name the get_or_init non-scalar limitation; got: {msg}"
+            msg.contains("heap-owning element type"),
+            "gate error should name the get_or_init heap-owning limitation; got: {msg}"
         );
     }
 
@@ -4474,6 +4498,47 @@ fn main() {
              }",
         ) {
             assert_eq!(out, "7\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_oncelock_get_or_init_heapfree_aggregate() {
+        // B-2026-07-12-2 follow-on: `get_or_init` with a heap-FREE aggregate `T`
+        // — the closure returns the struct by value (direct aggregate return,
+        // inferred by `infer_closure_return_type`'s struct-literal arm). First
+        // call seals the cell; the second returns the existing value without
+        // re-running the closure. Build must match the interpreter.
+        if let Some(out) = run_program(
+            "struct Point { x: i64, y: i64 }\n\
+             fn main() {\n\
+                 let c: OnceLock[Point] = OnceLock.new();\n\
+                 let p = c.get_or_init(|| Point { x: 3i64, y: 4i64 });\n\
+                 println((p.x + p.y).to_string());\n\
+                 let q = c.get_or_init(|| Point { x: 99i64, y: 99i64 });\n\
+                 println((q.x + q.y).to_string());\n\
+             }",
+        ) {
+            // first call wins (7); second returns the sealed value, not 198.
+            assert_eq!(out, "7\n7\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_closure_returns_struct_literal_direct() {
+        // General closure fix (drives the get_or_init aggregate case): a closure
+        // whose body is a struct literal is compiled with the struct as its
+        // return type (was: `-> i64`, tripping the LLVM verifier). Exercised via
+        // a stored closure value invoked twice.
+        if let Some(out) = run_program(
+            "struct V { a: i64, b: i64 }\n\
+             fn main() {\n\
+                 let make = || V { a: 10i64, b: 20i64 };\n\
+                 let v = make();\n\
+                 let w = make();\n\
+                 println((v.a + v.b + w.a).to_string());\n\
+             }",
+        ) {
+            assert_eq!(out, "40\n");
         }
     }
 

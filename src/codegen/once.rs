@@ -18,7 +18,8 @@
 //! - `is_set()` returns `bool`.
 //! - `get_or_init(|| ...)` runs the closure once when unset, seals the cell,
 //!   and returns the borrow — the closure fires only on the `unset` branch.
-//!   Scalar `T` only (an aggregate closure return uses the deferred sret ABI).
+//!   Scalar OR heap-FREE aggregate `T` (a struct/tuple of scalars); a
+//!   heap-owning `T` stays gated (the `ref T` value-copy would double-free).
 //!
 //! Element-type support (B-2026-07-12-2): `set`/`get`/`is_set` handle ANY `T` —
 //! scalar, `String`/`Vec` (heap-fitting, 3 words), and WIDE `T` (> 3 words: a
@@ -29,8 +30,9 @@
 //! `set`'s `Err(AlreadySetError { rejected })` payload boxes past the 5-word
 //! `Result` area; a discarded wide/struct-with-heap rejected value is freed by
 //! the `FreeInlineResultPayload` struct-drop arm. `get_or_init` still requires a
-//! SCALAR `T` (its closure returns an aggregate via the deferred sret ABI) and
-//! loud-gates a non-scalar `T` with a `--interp` hint.
+//! a scalar OR heap-FREE aggregate `T` (its closure's direct aggregate return
+//! is inferred); a HEAP-OWNING `T` stays loud-gated with a `--interp` hint (the
+//! returned `ref T` value-copy would double-free the sealed heap).
 
 use crate::ast::*;
 
@@ -285,10 +287,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// borrow; if already set, return the existing value without invoking the
     /// closure. The closure fires at most once (only on the `unset` branch).
     /// The returned `ref T` is represented as the loaded `T` value (the `get`
-    /// precedent — the borrow is a no-op auto-deref for the heap-free `T` this
-    /// lowering supports). A NON-SCALAR `T` is loud-gated here (the aggregate
-    /// closure-return sret ABI is a separate deferred slice — B-2026-07-12-2);
-    /// `set`/`get` accept any `T`, but `get_or_init` invokes the closure.
+    /// precedent). `T` may be a scalar OR a heap-FREE aggregate (a struct/tuple
+    /// of scalars) — the closure's direct aggregate return is now inferred
+    /// (`infer_closure_return_type`'s struct-literal arm). A HEAP-OWNING `T` (a
+    /// struct with a `String`/`Vec` field) stays loud-gated: the returned
+    /// `ref T` value-copy aliases the cell's sealed heap, and the caller's
+    /// binding would drop it — a double-free against the cell's element drop.
+    /// That needs a by-pointer borrow representation (a follow-on to
+    /// B-2026-07-12-2); `set`/`get` accept any `T` because they don't return a
+    /// value-copy the caller owns.
     fn compile_once_get_or_init(
         &mut self,
         recv: &str,
@@ -300,24 +307,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 args.len()
             ));
         }
-        let (elem_ty, size) = self.once_elem_ty_and_size(recv)?;
-        // The closure ABI returns a multi-word AGGREGATE via sret (a hidden
-        // out-pointer), not the direct-return this lowering assumes — so
-        // `get_or_init` supports only a single-scalar `T` (`i64`/`f64`/`bool`/…)
-        // at v1, the common lazy-compute-a-number/handle case. An aggregate `T`
-        // (even a heap-free struct that `set`/`get` handle) is loud-gated here;
-        // the sret closure-return path is part of the deferred heap-/wide-`T`
-        // slice (B-2026-07-12-2). `set`/`get` don't invoke a closure, so they
-        // accept small structs; only `get_or_init` needs this narrower gate.
-        if !elem_ty.is_int_type() && !elem_ty.is_float_type() && !elem_ty.is_pointer_type() {
+        let elem_te = self
+            .once_var_types
+            .get(recv)
+            .map(|(te, _)| te.clone())
+            .ok_or_else(|| format!("OnceLock/OnceCell binding '{recv}' missing element type"))?;
+        // A HEAP-OWNING element (`String`/`Vec`, or a struct/enum with a heap
+        // field) is loud-gated: `get_or_init` returns a `ref T` value-copy that
+        // ALIASES the cell's sealed heap, and the caller's binding drops it —
+        // double-freeing the cell's element drop. A heap-FREE `T` (scalar or a
+        // struct/tuple of scalars) is safe (no drop, no aliasing). The
+        // by-pointer borrow that would unblock heap `T` is a deferred follow-on.
+        if self.type_expr_has_drop_heap(&elem_te) {
             return Err(
-                "codegen: `OnceLock`/`OnceCell`.get_or_init(...) with a non-scalar element type \
-                 is not yet supported under `karac build` (the closure returns the value by \
-                 aggregate/sret, a deferred ABI — B-2026-07-12-2). Use a scalar `T`, or `if not \
-                 c.is_set() { c.set(init()); } c.get()`, or run with `karac run --interp`."
+                "codegen: `OnceLock`/`OnceCell`.get_or_init(...) with a heap-owning element type \
+                 (a `String`/`Vec`, or a struct/enum with a heap field) is not yet supported under \
+                 `karac build` — the returned `ref T` value-copy would double-free the sealed \
+                 value's heap. Use a scalar or heap-free-aggregate `T`, or `if not c.is_set() { \
+                 c.set(init()); } c.get()`, or run with `karac run --interp`."
                     .to_string(),
             );
         }
+        let (elem_ty, size) = self.once_elem_ty_and_size(recv)?;
         let handle = self.load_once_handle(recv)?;
         let fn_val = self.current_fn.unwrap();
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
