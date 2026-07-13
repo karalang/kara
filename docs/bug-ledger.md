@@ -524,7 +524,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **427 surfaced 
 | B-2026-07-13-11 | codegen | high | A `shared struct` (or `par struct`) with a `Vec[shared T]` FIELD leaked every element's RC box on drop | 26bb968 |
 | B-2026-07-13-12 | codegen | high | A `shared struct` (or `par struct`) with a `Map[K, shared V]` (or `shared K`) FIELD leaked the shared K/V boxes on drop | 5070066 |
 | B-2026-07-13-13 | codegen | high | A `shared enum` with a `Vec[shared T]` PAYLOAD (`shared enum Tree { Branch(Vec[Node]) }`) leaked the element boxes when the enum was dropped with its… | 5070066 |
-| B-2026-07-13-14 | codegen | high | Matching a `shared enum` and binding a `Vec[shared T]` PAYLOAD out (`match t { Branch(xs) => … }`) leaks the shared elements | PENDING |
+| B-2026-07-13-14 | codegen | high | Matching a `shared enum` and binding a `Vec[shared T]` PAYLOAD out (`match t { Branch(xs) => … }`) leaks the shared elements | 05c1383 |
 
 </details>
 
