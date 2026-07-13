@@ -2958,6 +2958,71 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // ASCII `char` methods (typed in expr_method_call.rs, char receiver
+        // lowered to i32): `is_ascii` → `cp <= 0x7F`; `to_ascii_uppercase` /
+        // `to_ascii_lowercase` → char, mapping only the ASCII letter ranges.
+        // Inlined codepoint arithmetic — pure ASCII, no Unicode tables and no
+        // runtime extern (unlike the Unicode `is_*` predicates above).
+        if args.is_empty()
+            && matches!(
+                method,
+                "is_ascii" | "to_ascii_uppercase" | "to_ascii_lowercase"
+            )
+        {
+            let v = self.compile_expr(object)?;
+            if let BasicValueEnum::IntValue(iv) = v {
+                let i32_t = self.context.i32_type();
+                let cp = match iv.get_type().get_bit_width() {
+                    32 => iv,
+                    w if w < 32 => self
+                        .builder
+                        .build_int_z_extend(iv, i32_t, "char.cp.z")
+                        .unwrap(),
+                    _ => self
+                        .builder
+                        .build_int_truncate(iv, i32_t, "char.cp.t")
+                        .unwrap(),
+                };
+                if method == "is_ascii" {
+                    let r = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::ULE,
+                            cp,
+                            i32_t.const_int(0x7F, false),
+                            "char.is_ascii",
+                        )
+                        .unwrap();
+                    return Ok(r.into());
+                }
+                // Case fold: in_range(lo, hi) & then add `delta` (±32).
+                let (lo, hi, delta): (u64, u64, i64) = if method == "to_ascii_uppercase" {
+                    (b'a' as u64, b'z' as u64, -32)
+                } else {
+                    (b'A' as u64, b'Z' as u64, 32)
+                };
+                let ge = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGE, cp, i32_t.const_int(lo, false), "case.ge")
+                    .unwrap();
+                let le = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULE, cp, i32_t.const_int(hi, false), "case.le")
+                    .unwrap();
+                let in_range = self.builder.build_and(ge, le, "case.in").unwrap();
+                let delta_c = i32_t.const_int(delta as u64, true);
+                let shifted = self
+                    .builder
+                    .build_int_add(cp, delta_c, "case.shift")
+                    .unwrap();
+                let r = self
+                    .builder
+                    .build_select(in_range, shifted, cp, "case.fold")
+                    .unwrap();
+                return Ok(r);
+            }
+        }
+
         if method == "cmp" && args.len() == 1 {
             let lhs = self.compile_expr(object)?;
             let rhs = self.compile_expr(&args[0].value)?;

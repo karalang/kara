@@ -28339,6 +28339,29 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_char_ascii_case_and_is_ascii() {
+        // `char.to_ascii_uppercase()` / `to_ascii_lowercase()` → char (inline
+        // codepoint arithmetic — only ASCII letters fold; digits/punctuation/
+        // non-ASCII pass through) and `is_ascii()` → bool. Must match the
+        // interpreter oracle (`test_char_ascii_case_and_is_ascii_interpreter`),
+        // and the char result must render as a glyph (the `expr_is_char`
+        // method-call arm), not the integer codepoint.
+        let out = run_program(
+            r#"
+fn main() {
+    println(f"{'a'.to_ascii_uppercase()} {'Z'.to_ascii_lowercase()}");
+    println(f"{'5'.to_ascii_uppercase()} {'!'.to_ascii_lowercase()}");
+    println(f"{'a'.is_ascii()} {'é'.is_ascii()}");
+    println('é'.to_ascii_uppercase());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "A z\n5 !\ntrue false\né\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_string_char_at_and_count() {
         // B-2026-06-18-3: `s.char_at(i) -> Option[char]` and `s.char_count() ->
         // i64` were unimplemented end-to-end (typecheck rejected them, interp

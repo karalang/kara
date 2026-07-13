@@ -4323,9 +4323,23 @@ impl<'a> super::TypeChecker<'a> {
                     | "is_whitespace"
                     | "is_uppercase"
                     | "is_lowercase"
+                    | "is_ascii"
             )
         {
             return Type::Bool;
+        }
+        // ASCII case folding on a `char` — `to_ascii_uppercase` /
+        // `to_ascii_lowercase` -> char (Rust's `char::to_ascii_*case`): only the
+        // ASCII letters `a`..`z` / `A`..`Z` are mapped, every other codepoint
+        // (incl. non-ASCII) is returned unchanged. Unlike the Unicode
+        // `to_uppercase` (which yields an *iterator* — `ß` → `SS`), the ASCII
+        // form is a pure char→char map, so it lowers to inline codepoint
+        // arithmetic in codegen (no Unicode tables). Char-only.
+        if args.is_empty()
+            && matches!(&receiver_for_lookup, Type::Char)
+            && matches!(method, "to_ascii_uppercase" | "to_ascii_lowercase")
+        {
+            return Type::Char;
         }
         // `char.to_digit(radix) -> Option[u32]` (Rust's `char::to_digit`): the
         // numeric value of `self` as a digit in `radix`, `None` if `self` is not

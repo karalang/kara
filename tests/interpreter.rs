@@ -12123,6 +12123,28 @@ fn test_char_case_predicates_interpreter() {
 }
 
 #[test]
+fn test_char_ascii_case_and_is_ascii_interpreter() {
+    // `char.to_ascii_uppercase()` / `to_ascii_lowercase()` → char (only the
+    // ASCII letters are mapped; digits, punctuation, and non-ASCII pass
+    // through), and `char.is_ascii()` → bool. Codegen inlines the same
+    // codepoint arithmetic (`test_e2e_char_ascii_case_and_is_ascii`). `é`
+    // (U+00E9) is left unchanged by the ASCII fold and is not ASCII.
+    let output = run(r#"fn main() {
+            println(f"{'a'.to_ascii_uppercase()} {'Z'.to_ascii_lowercase()}");
+            println(f"{'5'.to_ascii_uppercase()} {'!'.to_ascii_lowercase()}");
+            println(f"{'a'.is_ascii()} {'é'.is_ascii()}");
+            println('é'.to_ascii_uppercase());
+        }"#);
+    assert_eq!(
+        output,
+        "A z\n\
+         5 !\n\
+         true false\n\
+         é\n"
+    );
+}
+
+#[test]
 fn test_string_char_at_and_count_interpreter() {
     // B-2026-06-18-3 — `s.char_at(i) -> Option[char]` / `s.char_count() -> i64`,
     // the O(n) Unicode-aware access pair. The interpreter must agree with

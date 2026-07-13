@@ -2130,6 +2130,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 if method == "clone" && args.is_empty() {
                     return self.expr_is_char(object);
                 }
+                // Builtin ASCII case-fold methods (`to_ascii_uppercase` /
+                // `to_ascii_lowercase`) are char→char on a char receiver, so
+                // their result renders as a glyph too. Typed in
+                // `typechecker/expr_method_call.rs`; lowered inline in
+                // `compile_method_call`.
+                if matches!(method.as_str(), "to_ascii_uppercase" | "to_ascii_lowercase")
+                    && args.is_empty()
+                    && self.expr_is_char(object)
+                {
+                    return true;
+                }
                 let recv_ty = match &object.kind {
                     ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
                     ExprKind::SelfValue => self.var_type_names.get("self"),

@@ -1994,10 +1994,28 @@ impl<'a> super::Interpreter<'a> {
                     "is_whitespace" => Some(c.is_whitespace()),
                     "is_uppercase" => Some(c.is_uppercase()),
                     "is_lowercase" => Some(c.is_lowercase()),
+                    "is_ascii" => Some(c.is_ascii()),
                     _ => None,
                 };
                 if let Some(r) = r {
                     return Value::Bool(r);
+                }
+            }
+        }
+
+        // ASCII case folding on a `char` (typed in expr_method_call.rs):
+        // `to_ascii_uppercase` / `to_ascii_lowercase` → char, mapping only the
+        // ASCII letters (Rust's `char::to_ascii_*case`). Codegen inlines the
+        // same codepoint arithmetic.
+        if args.is_empty() {
+            if let Value::Char(c) = &obj {
+                let r = match method {
+                    "to_ascii_uppercase" => Some(c.to_ascii_uppercase()),
+                    "to_ascii_lowercase" => Some(c.to_ascii_lowercase()),
+                    _ => None,
+                };
+                if let Some(r) = r {
+                    return Value::Char(r);
                 }
             }
         }
