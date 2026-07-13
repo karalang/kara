@@ -911,10 +911,26 @@ impl Checker {
                 if ci.category != 4 and ci.category != 1 {
                     self.push_err(1, ci.span.offset, ci.span.length);
                 }
-                self.check_block(then_block);
+                // Branch-type consistency (Slice 19): when BOTH the then-tail and
+                // the else value infer to KNOWN but DIFFERENT categories, the
+                // branches are incompatible — BranchTypeMismatch (rendered
+                // "type-mismatch", kind 0) at the whole `if` span. A branch that
+                // is UNKNOWN (a `panic`/`return` never-type, a call, …) is never
+                // flagged, so only a genuine two-known-type disagreement fires.
+                // The `if` result stays UNKNOWN even when the branches agree: in
+                // an EXPECTED-type context the seed checks each branch against the
+                // expected type individually (not the unified `if` type), so
+                // flowing a common category would diverge — UNKNOWN under-reports
+                // safely instead.
+                let ti = self.check_block(then_block);
                 match else_branch {
                     Some(eb) => {
-                        let ebi = self.check_expr(eb);
+                        let ei = self.check_expr(eb);
+                        if ti.category != 4 and ei.category != 4 {
+                            if ti.category != ei.category {
+                                self.push_err(0, span.offset, span.length);
+                            }
+                        }
                     }
                     None => {}
                 }

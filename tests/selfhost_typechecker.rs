@@ -326,6 +326,16 @@ const CORPUS: &[&str] = &[
     // Valid arithmetic (NUM+NUM) and String concat are clean.
     "fn f(n: i64, m: i64) -> i64 { n + m }",
     "fn f(s: String, t: String) -> String { s + t }",
+    // ── Slice 19: if/else branch-type consistency (BranchTypeMismatch) ──
+    // When both branches infer to KNOWN but DIFFERENT categories, the `if` is a
+    // BranchTypeMismatch (rendered "type-mismatch") at the whole `if` span.
+    // Agreeing branches — and a return-position `if` whose branches match — are
+    // clean (the result stays UNKNOWN, so no phantom downstream mismatch).
+    "fn f(c: bool) { let x = if c { 1 } else { true }; }",
+    "fn f() { let x = if true { 1 } else { \"s\" }; }",
+    "fn f(c: bool) { let x = if c { 1 } else { 2 }; }",
+    "fn f(a: bool, b: bool) { let x = if a { true } else { b }; }",
+    "fn f(c: bool) -> i64 { if c { 1 } else { 2 } }",
     // ── UNKNOWN carve-outs — must NOT flag (the seed agrees on these) ──
     // A call to a fn whose return matches the declared type is clean.
     "fn okcall() -> i64 { helper() }\nfn helper() -> i64 { 0 }",
