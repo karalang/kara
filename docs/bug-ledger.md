@@ -523,8 +523,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **427 surfaced 
 | B-2026-07-13-9 | codegen | high | A generic `shared`/`par` struct with a BARE type-parameter field (`shared struct Box[T] { mut v: T }`) instantiated at a HEAP type (`Box[String]`, `B… | 07678e8 |
 | B-2026-07-13-10 | codegen | high | A chained field read/store through a Vec that is itself a FIELD of a shared struct (`root.kids[i].val`) returned the const-0 placeholder on the READ… | 26bb968 |
 | B-2026-07-13-11 | codegen | high | A `shared struct` (or `par struct`) with a `Vec[shared T]` FIELD leaked every element's RC box on drop | 26bb968 |
-| B-2026-07-13-12 | codegen | high | A `shared struct` (or `par struct`) with a `Map[K, shared V]` (or `shared K`) FIELD leaked the shared K/V boxes on drop | PENDING |
-| B-2026-07-13-13 | codegen | high | A `shared enum` with a `Vec[shared T]` PAYLOAD (`shared enum Tree { Branch(Vec[Node]) }`) leaked the element boxes when the enum was dropped with its… | PENDING |
+| B-2026-07-13-12 | codegen | high | A `shared struct` (or `par struct`) with a `Map[K, shared V]` (or `shared K`) FIELD leaked the shared K/V boxes on drop | 5070066 |
+| B-2026-07-13-13 | codegen | high | A `shared enum` with a `Vec[shared T]` PAYLOAD (`shared enum Tree { Branch(Vec[Node]) }`) leaked the element boxes when the enum was dropped with its… | 5070066 |
 
 </details>
 
