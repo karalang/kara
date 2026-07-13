@@ -9,8 +9,10 @@
 //! ~30% wall-time win). This module computes exactly which `ref` params are
 //! **sound** to elide.
 //!
-//! Two independent conditions must both hold, or the balanced pair is NOT a
-//! no-op and eliding it leaks (or double-frees):
+//! Four conditions must all hold, or the balanced pair is NOT a no-op and
+//! eliding it leaks (or double-frees). Conditions 3–4 are summarized here and
+//! detailed at their code (`is_scalar_return` / `has_mut_out_param`; the
+//! "Condition 4" section):
 //!
 //! 1. **Caller side — the arg is a borrow, and its referent outlives the call.**
 //!    Every call must pass the param a *projection of a named binding* —
@@ -38,16 +40,27 @@
 //!    used only as `match a` / `match b`) qualifies; `merge_two` / `merge_k`
 //!    (their params appear as a `let mut a = l1` RHS) do not.
 //!
+//! 3. **No escape via return / output param.** A scalar (or unit) return type
+//!    and no `mut ref` / `mut Slice` params — so a match-binding cannot leave
+//!    via `return` (`insert`'s `Some(n)`) or a store into an outliving location.
+//!
+//! 4. **No escape via a payload moved out by value.** A match-*payload* of the
+//!    param (its referent) may be read through a projection (`n.left`) or
+//!    destructured further, but may not appear as a bare-identifier value —
+//!    which could move the referent into a consuming callee. Sound by
+//!    construction (`payloads_never_move_out`), independent of codegen re-share.
+//!
 //! The analysis is deliberately **conservative and fail-closed**: the caller
-//! scan is an exhaustive `match` with no `_` arm (a new AST node breaks the
-//! build rather than silently admitting an escape), and the callee check treats
-//! every param use other than a scrutinee as escaping. The worst case is a
-//! missed optimization, never a leak. Codegen consumes the result via
-//! `borrowed_arg_skip` / `borrowed_param_dec_skip`.
+//! scan and the condition-4 pattern-binding collector are exhaustive `match`es
+//! with no `_` arm (a new AST node breaks the build rather than silently
+//! admitting an escape), and every param/payload use other than a scrutinee or
+//! projection is treated as escaping. The worst case is a missed optimization,
+//! never a leak. Codegen consumes the result via `borrowed_arg_skip` /
+//! `borrowed_param_dec_skip`.
 
 use crate::ast::{
-    Block, Expr, ExprKind, Function, ImplItem, Item, ParsedInterpolationPart, Program, Stmt,
-    StmtKind, TraitItem, TypeExpr, TypeKind,
+    Block, Expr, ExprKind, Function, ImplItem, Item, ParsedInterpolationPart, Pattern, PatternKind,
+    Program, RestPattern, Stmt, StmtKind, TraitItem, TypeExpr, TypeKind,
 };
 use crate::ownership::OwnershipMode;
 use std::collections::{HashMap, HashSet};
@@ -432,6 +445,323 @@ fn walk_stmt_children(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
 }
 
 // ────────────────────────────────────────────────────────────────────────
+// Condition 4 — payload-escape guard (syntactic; callee-consume-independent)
+// ────────────────────────────────────────────────────────────────────────
+//
+// Conditions 1–3 leave one route open (docs/spikes/rc-elide-ref-params.md,
+// "Known residual"): a match-binding of the elided param passed BY VALUE to a
+// consuming callee — `match p { Some(n) => consume(n) }`. Linux LSan shows that
+// route is *balanced today* (codegen re-shares the borrowed payload, so the
+// consumer's dec pairs with its own inc, never touching `p`'s elided retain) —
+// but that safety rests on the re-share codegen invariant, not on this analysis.
+//
+// This condition makes elision sound BY CONSTRUCTION, independent of any
+// callee's or codegen's behavior: a param's match-payload (its referent) may be
+// READ through a projection (`n.left` — a borrow of a *sub*-node) or
+// destructured further (a nested `match`/`if let` scrutinee), but it may NOT
+// appear as a **bare-identifier value** — the only shape that could move the
+// referent itself into a consuming position. So eliding `p`'s retain/release can
+// never be unbalanced by what happens to its payload.
+//
+// `is_mirror` / `is_symmetric` (the #101 win) qualify: their payloads `an` /
+// `bn` / `n` appear ONLY as `an.left` / `n.right` projection roots, never bare.
+// `probe`-style consumers (`Some(n) => sink(n)`) are rejected. Conservative and
+// fail-closed: uncertain positions count as an escape (a missed optimization,
+// never a leak); the pattern-binding collector is an exhaustive `match`.
+
+/// Names a pattern binds into arm scope. Exhaustive over `PatternKind` — a new
+/// pattern node breaks the build rather than silently dropping a payload binding.
+fn collect_pattern_bindings(pat: &Pattern, out: &mut HashSet<String>) {
+    match &pat.kind {
+        PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {}
+        PatternKind::Binding(name) => {
+            out.insert(name.clone());
+        }
+        PatternKind::AtBinding { name, pattern, .. } => {
+            out.insert(name.clone());
+            collect_pattern_bindings(pattern, out);
+        }
+        PatternKind::Struct { fields, .. } => {
+            for f in fields {
+                match &f.pattern {
+                    Some(p) => collect_pattern_bindings(p, out),
+                    // `S { x }` field shorthand binds `x`.
+                    None => {
+                        out.insert(f.name.clone());
+                    }
+                }
+            }
+        }
+        PatternKind::TupleVariant { patterns, .. } => {
+            for p in patterns {
+                collect_pattern_bindings(p, out);
+            }
+        }
+        PatternKind::Tuple(patterns) | PatternKind::Or(patterns) => {
+            for p in patterns {
+                collect_pattern_bindings(p, out);
+            }
+        }
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            for p in prefix {
+                collect_pattern_bindings(p, out);
+            }
+            if let Some(RestPattern::Bound(name)) = rest {
+                out.insert(name.clone());
+            }
+            for p in suffix {
+                collect_pattern_bindings(p, out);
+            }
+        }
+    }
+}
+
+/// Single pre-order walk that BOTH grows the payload-lineage set of `param` and
+/// flags any bare-identifier use of a member of it. Pre-order is what makes one
+/// pass sufficient: a payload binding is added when its `match`/`if let`
+/// scrutinee is entered, strictly before the arm body (where its uses live) is
+/// walked, so nested destructuring extends the lineage before its own uses are
+/// checked. All blocks are routed through [`Self::block`] so statement-level
+/// constructs (esp. a refutable `let … else`) are never skipped.
+struct PayloadScan<'a> {
+    param: &'a str,
+    derived: HashSet<String>,
+    /// Set once a bare-identifier move of a lineage member is seen.
+    bad: bool,
+    /// Inside a closure body, referencing a lineage member is a CAPTURE (an
+    /// escape into an env that can outlive the borrow) — so even a projection
+    /// read or a nested scrutinee counts as an escape there.
+    in_closure: bool,
+}
+
+impl PayloadScan<'_> {
+    /// `true` if `e` is a bare identifier naming the param or an existing
+    /// lineage member — a consume-in-place scrutinee that extends the lineage.
+    fn tracked_scrutinee(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Identifier(n) => {
+                n.as_str() == self.param || self.derived.contains(n.as_str())
+            }
+            _ => false,
+        }
+    }
+
+    /// Record a lineage scrutinee: collect its pattern's bindings; a capture
+    /// (inside a closure) is an escape.
+    fn note_lineage_scrutinee(&mut self, pat: &Pattern) {
+        if self.in_closure {
+            self.bad = true;
+        }
+        collect_pattern_bindings(pat, &mut self.derived);
+    }
+
+    fn block(&mut self, b: &Block) {
+        for s in &b.stmts {
+            self.stmt(s);
+        }
+        if let Some(e) = &b.final_expr {
+            self.expr(e);
+        }
+    }
+
+    fn stmt(&mut self, s: &Stmt) {
+        match &s.kind {
+            StmtKind::Let { value, .. } | StmtKind::Expr(value) => self.expr(value),
+            StmtKind::LetElse {
+                pattern,
+                value,
+                else_block,
+                ..
+            } => {
+                // Refutable `let Pat = <scrutinee> else` is match-sugar: a
+                // lineage scrutinee is consumed in place (not a bare move).
+                if self.tracked_scrutinee(value) {
+                    self.note_lineage_scrutinee(pattern);
+                } else {
+                    self.expr(value);
+                }
+                self.block(else_block);
+            }
+            StmtKind::LetUninit { .. } => {}
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => self.block(body),
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                self.expr(target);
+                self.expr(value);
+            }
+            StmtKind::MultiAssign { targets, values } => {
+                for t in targets {
+                    self.expr(t);
+                }
+                for v in values {
+                    self.expr(v);
+                }
+            }
+        }
+    }
+
+    /// Walk the object side of a projection chain (`a.b.c`, `v[i]`). A named root
+    /// being READ is a borrow of a sub-value — allowed (outside a closure). Only
+    /// the non-root pieces (an index expr, a non-place root like `f(x).bar`) are
+    /// ordinary use positions.
+    fn proj_object(&mut self, obj: &Expr) {
+        match &obj.kind {
+            ExprKind::Identifier(n) => {
+                if self.in_closure && self.derived.contains(n.as_str()) {
+                    self.bad = true;
+                }
+            }
+            ExprKind::SelfValue => {}
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.proj_object(object);
+            }
+            ExprKind::Index { object, index } => {
+                self.proj_object(object);
+                self.expr(index);
+            }
+            // A non-place root (call result, block-expr, literal, …) is not a
+            // borrow projection; recurse so any buried lineage member is caught.
+            _ => self.expr(obj),
+        }
+    }
+
+    fn expr(&mut self, e: &Expr) {
+        if self.bad {
+            return;
+        }
+        match &e.kind {
+            // A bare-identifier value use of a lineage member is the move-out we
+            // reject (the residual). Projection roots / scrutinees are intercepted
+            // before reaching here, so anything landing here is a bare value.
+            ExprKind::Identifier(n) => {
+                if self.derived.contains(n.as_str()) {
+                    self.bad = true;
+                }
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.proj_object(object);
+            }
+            ExprKind::Index { object, index } => {
+                self.proj_object(object);
+                self.expr(index);
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                if self.tracked_scrutinee(scrutinee) {
+                    for arm in arms {
+                        self.note_lineage_scrutinee(&arm.pattern);
+                    }
+                } else {
+                    self.expr(scrutinee);
+                }
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        self.expr(g);
+                    }
+                    self.expr(&arm.body);
+                }
+            }
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                else_branch,
+            } => {
+                if self.tracked_scrutinee(value) {
+                    self.note_lineage_scrutinee(pattern);
+                } else {
+                    self.expr(value);
+                }
+                self.block(then_block);
+                if let Some(el) = else_branch {
+                    self.expr(el);
+                }
+            }
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } => {
+                if self.tracked_scrutinee(value) {
+                    self.note_lineage_scrutinee(pattern);
+                } else {
+                    self.expr(value);
+                }
+                self.block(body);
+            }
+            // Block-containing exprs: route blocks through `self.block` so
+            // stmt-level constructs (refutable let-else) are always seen.
+            ExprKind::Block(b)
+            | ExprKind::Comptime(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => self.block(b),
+            ExprKind::LabeledBlock { body, .. } | ExprKind::Loop { body, .. } => self.block(body),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.expr(condition);
+                self.block(then_block);
+                if let Some(el) = else_branch {
+                    self.expr(el);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.expr(condition);
+                self.block(body);
+            }
+            ExprKind::For { iterable, body, .. } => {
+                self.expr(iterable);
+                self.block(body);
+            }
+            ExprKind::Lock { mutex, body, .. } => {
+                self.expr(mutex);
+                self.block(body);
+            }
+            ExprKind::Providers { bindings, body } => {
+                for b in bindings {
+                    self.expr(&b.value);
+                }
+                self.block(body);
+            }
+            ExprKind::Closure { body, .. } => {
+                let prev = self.in_closure;
+                self.in_closure = true;
+                self.expr(body);
+                self.in_closure = prev;
+            }
+            // No blocks, no special positions — recurse into sub-exprs, treating
+            // each bare identifier reached as an ordinary use.
+            other => {
+                walk_children(other, &mut |e| self.expr(e));
+            }
+        }
+    }
+}
+
+/// Condition 4: every match-payload of `param` is used only as a projection root
+/// or a nested scrutinee — never moved out as a bare-identifier value. See the
+/// section header for the soundness argument.
+fn payloads_never_move_out(func: &Function, param: &str) -> bool {
+    let mut scan = PayloadScan {
+        param,
+        derived: HashSet::new(),
+        bad: false,
+        in_closure: false,
+    };
+    scan.block(&func.body);
+    !scan.bad
+}
+
+// ────────────────────────────────────────────────────────────────────────
 // Driver
 // ────────────────────────────────────────────────────────────────────────
 
@@ -505,6 +835,9 @@ pub fn safe_elidable_ref_params(
                 matches!(m, OwnershipMode::Ref)
                     && !bad.is_some_and(|s| s.contains(i))
                     && nonescaping.contains(name)
+                    // Condition 4 — the param's match-payloads never move out as a
+                    // bare-identifier value (sound by construction; see section).
+                    && payloads_never_move_out(func, name)
             })
             .map(|(i, (n, _))| (n.clone(), i))
             .collect();
@@ -517,4 +850,140 @@ pub fn safe_elidable_ref_params(
         eprintln!("[rc-elide] elidable set: {out:?}");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Run the analysis over `src` with hand-supplied param modes (decoupling the
+    /// test from the ownership pass). Returns fn-name → elided (param, position).
+    fn elidable(
+        src: &str,
+        modes: &[(&str, &[(&str, OwnershipMode)])],
+    ) -> HashMap<String, Vec<(String, usize)>> {
+        let parsed = crate::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let pm: HashMap<String, Vec<(String, OwnershipMode)>> = modes
+            .iter()
+            .map(|(f, ps)| {
+                (
+                    f.to_string(),
+                    ps.iter().map(|(n, m)| (n.to_string(), m.clone())).collect(),
+                )
+            })
+            .collect();
+        safe_elidable_ref_params(&parsed.program, &pm)
+    }
+
+    const NODE: &str =
+        "shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }\n";
+
+    /// Condition 4 keeps the #101 walkers: payloads used ONLY via field
+    /// projections (`an.left`, `n.right`) into `ref` positions — never moved out.
+    #[test]
+    fn guard_keeps_projection_only_walk() {
+        let src = format!(
+            "{NODE}\
+fn is_mirror(a: Option[Node], b: Option[Node]) -> bool {{ match a {{ None => match b {{ None => true, Some(_) => false }}, Some(an) => match b {{ None => false, Some(bn) => an.val == bn.val and is_mirror(an.left, bn.right) and is_mirror(an.right, bn.left) }} }} }}
+fn is_symmetric(root: Option[Node]) -> bool {{ match root {{ None => true, Some(n) => is_mirror(n.left, n.right) }} }}
+fn caller(pool: Vec[Option[Node]]) -> bool {{ is_symmetric(pool[0i64]) }}
+"
+        );
+        let out = elidable(
+            &src,
+            &[
+                (
+                    "is_mirror",
+                    &[("a", OwnershipMode::Ref), ("b", OwnershipMode::Ref)],
+                ),
+                ("is_symmetric", &[("root", OwnershipMode::Ref)]),
+            ],
+        );
+        assert_eq!(
+            out.get("is_mirror"),
+            Some(&vec![("a".to_string(), 0), ("b".to_string(), 1)]),
+            "is_mirror's projection-only params must stay elidable"
+        );
+        assert_eq!(
+            out.get("is_symmetric"),
+            Some(&vec![("root".to_string(), 0)]),
+            "is_symmetric's projection-only param must stay elidable"
+        );
+    }
+
+    /// Condition 4 rejects a payload moved by value into a consuming callee —
+    /// `match p { Some(n) => sink(n) }` — even though conditions 1–3 all hold.
+    #[test]
+    fn guard_rejects_bare_payload_consume() {
+        let src = format!(
+            "{NODE}\
+fn sink(x: Node) -> i64 {{ x.val }}
+fn probe(p: Option[Node]) -> i64 {{ match p {{ None => 0i64, Some(n) => sink(n) }} }}
+fn caller(pool: Vec[Option[Node]]) -> i64 {{ probe(pool[0i64]) }}
+"
+        );
+        let out = elidable(&src, &[("probe", &[("p", OwnershipMode::Ref)])]);
+        assert!(
+            !out.contains_key("probe"),
+            "probe moves its payload into a consuming call — must NOT elide, got {out:?}"
+        );
+    }
+
+    /// Forwarding a payload through a second call is still a bare move.
+    #[test]
+    fn guard_rejects_forwarded_payload() {
+        let src = format!(
+            "{NODE}\
+fn sink(x: Node) -> i64 {{ x.val }}
+fn forward(y: Node) -> i64 {{ sink(y) }}
+fn probe2(p: Option[Node]) -> i64 {{ match p {{ None => 0i64, Some(n) => forward(n) }} }}
+fn caller(pool: Vec[Option[Node]]) -> i64 {{ probe2(pool[0i64]) }}
+"
+        );
+        let out = elidable(&src, &[("probe2", &[("p", OwnershipMode::Ref)])]);
+        assert!(
+            !out.contains_key("probe2"),
+            "forwarded payload, got {out:?}"
+        );
+    }
+
+    /// The if-let sugar route is closed too.
+    #[test]
+    fn guard_rejects_if_let_payload_consume() {
+        let src = format!(
+            "{NODE}\
+fn sink(x: Node) -> i64 {{ x.val }}
+fn probe3(p: Option[Node]) -> i64 {{ let mut r = 0i64; if let Some(n) = p {{ r = sink(n); }} r }}
+fn caller(pool: Vec[Option[Node]]) -> i64 {{ probe3(pool[0i64]) }}
+"
+        );
+        let out = elidable(&src, &[("probe3", &[("p", OwnershipMode::Ref)])]);
+        assert!(
+            !out.contains_key("probe3"),
+            "if-let payload move, got {out:?}"
+        );
+    }
+
+    /// An `@`-binding that aliases the whole scrutinee is a bare move of the
+    /// referent, not a projection — rejected.
+    #[test]
+    fn guard_rejects_at_binding_alias() {
+        let src = format!(
+            "{NODE}\
+fn hold(x: Option[Node]) -> i64 {{ match x {{ None => 0i64, Some(_) => 1i64 }} }}
+fn probe4(p: Option[Node]) -> i64 {{ match p {{ whole @ Some(_) => hold(whole), None => 0i64 }} }}
+fn caller(pool: Vec[Option[Node]]) -> i64 {{ probe4(pool[0i64]) }}
+"
+        );
+        let out = elidable(&src, &[("probe4", &[("p", OwnershipMode::Ref)])]);
+        assert!(
+            !out.contains_key("probe4"),
+            "@-binding aliases the referent — must NOT elide, got {out:?}"
+        );
+    }
 }

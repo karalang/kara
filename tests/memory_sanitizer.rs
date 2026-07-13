@@ -24832,4 +24832,132 @@ fn main() {
             "recursive_shared_enum_arg_no_leak",
         );
     }
+
+    // ── RC-elision payload-escape guard (KARAC_RC_ELIDE_REF_PARAMS) ───────
+    // Condition 4 (src/rc_elide.rs) closes the "known residual" from
+    // docs/spikes/rc-elide-ref-params.md: a match-binding of the candidate
+    // param passed BY VALUE to a consuming callee (`match p { Some(n) =>
+    // consume(n) }`). The guard makes elision sound BY CONSTRUCTION — it
+    // DECLINES to elide any param whose payload is moved out as a bare value, so
+    // `probe`/`probe2`/`probe3` below run on the normal balanced-RC path (the
+    // elidable set is empty for them, verified in src/rc_elide.rs unit tests).
+    // The positive control (is_mirror/is_symmetric — payloads used only via
+    // projections) IS elided. Run the whole suite with
+    // `KARAC_RC_ELIDE_REF_PARAMS=1`: all must be byte-for-byte as clean as
+    // flag-off (Linux LSan). Together with the unit tests these pin both halves:
+    // the guard declines the escaping shapes, and the elided walkers stay
+    // leak-free. (Runtime was already balanced even pre-guard — the guard
+    // removes the reliance on codegen's payload re-share, not a live leak.)
+
+    #[test]
+    fn asan_rc_elide_consumed_payload_projection_caller_no_double_free() {
+        // Residual shape, direct consume: `match p { Some(n) => sink(n) }` moves
+        // payload `n` by value into owned `sink`. Condition 4 declines to elide
+        // `probe`, so it runs balanced. Alternating idx over a 2-node pool, 200
+        // reps: 100*5 + 100*9.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn sink(x: Node) -> i64 { x.val }
+fn probe(p: Option[Node]) -> i64 { match p { None => 0i64, Some(n) => sink(n) } }
+fn main() {
+    let mut pool: Vec[Option[Node]] = Vec.new();
+    pool.push(Some(Node { val: 5i64, left: None, right: None }));
+    pool.push(Some(Node { val: 9i64, left: None, right: None }));
+    let mut t: i64 = 0i64;
+    let mut rep: i64 = 0i64;
+    while rep < 200i64 { let idx = rep % 2i64; t = t + probe(pool[idx]); rep = rep + 1i64; }
+    println(f"{t}")
+}
+"#,
+            &["1400"],
+            "rc_elide_consumed_payload_projection_caller_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_rc_elide_forwarded_payload_no_double_free() {
+        // Residual shape, two-level consume chain: payload `n` forwarded through
+        // `forward` into `sink`. Condition 4 declines to elide `probe2` (payload
+        // moved out), so it runs on the balanced-RC path. Prints 1400.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn sink(x: Node) -> i64 { x.val }
+fn forward(y: Node) -> i64 { sink(y) }
+fn probe2(p: Option[Node]) -> i64 { match p { None => 0i64, Some(n) => forward(n) } }
+fn main() {
+    let mut pool: Vec[Option[Node]] = Vec.new();
+    pool.push(Some(Node { val: 5i64, left: None, right: None }));
+    pool.push(Some(Node { val: 9i64, left: None, right: None }));
+    let mut t: i64 = 0i64;
+    let mut rep: i64 = 0i64;
+    while rep < 200i64 { let idx = rep % 2i64; t = t + probe2(pool[idx]); rep = rep + 1i64; }
+    println(f"{t}")
+}
+"#,
+            &["1400"],
+            "rc_elide_forwarded_payload_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_rc_elide_if_let_consumed_payload_no_leak() {
+        // Residual shape via if-let: `if let Some(n) = p { r = sink(n); }`. `p`
+        // is scrutinee-only (condition 2 holds) but its payload is moved out, so
+        // condition 4 declines to elide `probe3`; runs balanced. Prints 1400.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn sink(x: Node) -> i64 { x.val }
+fn probe3(p: Option[Node]) -> i64 { let mut r = 0i64; if let Some(n) = p { r = sink(n); } r }
+fn main() {
+    let mut pool: Vec[Option[Node]] = Vec.new();
+    pool.push(Some(Node { val: 5i64, left: None, right: None }));
+    pool.push(Some(Node { val: 9i64, left: None, right: None }));
+    let mut t: i64 = 0i64;
+    let mut rep: i64 = 0i64;
+    while rep < 200i64 { let idx = rep % 2i64; t = t + probe3(pool[idx]); rep = rep + 1i64; }
+    println(f"{t}")
+}
+"#,
+            &["1400"],
+            "rc_elide_if_let_consumed_payload_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_rc_elide_is_mirror_symmetric_walk_preserved_no_leak() {
+        // Positive control — the #101 win. With the flag on, `is_symmetric[root]`
+        // and `is_mirror[a,b]` are BOTH elided (verified via KARAC_RC_ELIDE_DEBUG):
+        // the two hot, bool-returning, scrutinee-only walkers whose payloads are
+        // used ONLY via field projections (`an.left`, `n.right`) into `ref`
+        // positions — never moved out. Must stay leak-free: a hand-built
+        // symmetric tree, is_symmetric 200x → 200 trues.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn is_mirror(a: Option[Node], b: Option[Node]) -> bool {
+    match a {
+        None => { match b { None => true, Some(_) => false } }
+        Some(an) => { match b { None => false, Some(bn) => an.val == bn.val and is_mirror(an.left, bn.right) and is_mirror(an.right, bn.left) } }
+    }
+}
+fn is_symmetric(root: Option[Node]) -> bool { match root { None => true, Some(n) => is_mirror(n.left, n.right) } }
+fn main() {
+    let leftsub = Some(Node { val: 2i64, left: Some(Node { val: 3i64, left: None, right: None }), right: None });
+    let rightsub = Some(Node { val: 2i64, left: None, right: Some(Node { val: 3i64, left: None, right: None }) });
+    let root = Some(Node { val: 1i64, left: leftsub, right: rightsub });
+    let mut pool: Vec[Option[Node]] = Vec.new();
+    pool.push(root);
+    let mut t: i64 = 0i64;
+    let mut rep: i64 = 0i64;
+    while rep < 200i64 { let sym = is_symmetric(pool[0i64]); t = t + (if sym { 1i64 } else { 0i64 }); rep = rep + 1i64; }
+    println(f"{t}")
+}
+"#,
+            &["200"],
+            "rc_elide_is_mirror_symmetric_walk_preserved_no_leak",
+        );
+    }
 }

@@ -42,8 +42,9 @@ is a provable no-op.
 
 ## What makes a `ref` param *actually* safe to elide (`src/rc_elide.rs`)
 
-`OwnershipMode::Ref` is necessary but **far from sufficient** — three distinct
-ways it lies, each of which Linux LSan caught during development:
+`OwnershipMode::Ref` is necessary but **far from sufficient** — four distinct
+ways it lies; conditions 1–3 were each caught by Linux LSan during development,
+condition 4 makes the last route sound by construction:
 
 1. **Fresh-rvalue / bare-name args are moves, not borrows.** `let d = take();
    eat(d)` passes `d` *by value* — a transfer of its `+1`, whose exit dec is
@@ -67,6 +68,21 @@ ways it lies, each of which Linux LSan caught during development:
    **scalar return type** (no handle can leave via `return`) and **no `mut ref`
    / `mut Slice` params** (no store into an outliving location).
 
+4. **A match-*payload* can move the referent out by value.** `match p { Some(n)
+   => consume(n) }` passes conditions 1–3 (the param `p` is a scrutinee), yet the
+   payload `n` — `p`'s referent — is handed by value to a consuming callee.
+   Empirically this is *already balanced* (Linux LSan, flag on: codegen re-shares
+   the borrowed payload, so `consume`'s dec pairs with its own inc and never
+   touches `p`'s elided retain — see "Residual"). Condition 4 removes the
+   reliance on that codegen invariant and makes elision sound **by
+   construction**: a payload may be read through a **projection** (`n.left` — a
+   borrow of a *sub*-node) or destructured further (a nested scrutinee), but it
+   may **not appear as a bare-identifier value**. `is_mirror`/`is_symmetric`
+   qualify (payloads only ever `an.left`/`n.right`); `probe`-style consumers are
+   rejected. A single pre-order walk (`PayloadScan`) grows the param's payload
+   lineage and flags any bare use; a closure capture of a payload counts as an
+   escape. Unit-tested in `src/rc_elide.rs`.
+
 Plus the caller-visibility filters: the function is **directly called** at least
 once (arg shapes observed), never used as a **value** (indirect calls invisible),
 and not **`pub`** (external callers invisible).
@@ -89,30 +105,49 @@ the codegen-containment invariant.
 
 ## Verification (flag ON)
 
-- macOS `codegen` (2240), `memory_sanitizer` (647), `par_codegen` (159) — all 0
-  failed. `leaks`/guardmalloc on #101: 0 leaks. #101 win preserved (3.74 B).
+- `src/rc_elide.rs` unit tests (5): the guard keeps `is_mirror`/`is_symmetric`
+  elidable and rejects the consumed-payload shapes (direct, forwarded, if-let,
+  `@`-alias). `#101` win preserved — `is_symmetric[root]` + `is_mirror[a,b]`
+  still elided on the real bench kata.
+- macOS full `memory_sanitizer` (654 passed / 0 failed / 1 ignored) — no
+  UAF/double-free. `leaks`/guardmalloc on the residual shapes + #101: 0 leaks.
 - **Full Linux LSan** (`scripts/lsan-local.sh` `memory_sanitizer`, the
-  authoritative leak gate): flag-on **646 passed / 1 failed** — identical to
-  flag-off. The single failure, `owned_vec_param_let_move_interval_merge`, is a
-  **pre-existing baseline leak on `main`** (fails with the flag off too; my
-  elision gives it an empty set), i.e. NOT introduced here — flagged separately.
+  authoritative leak gate): flag-on **653 passed / 1 failed**, byte-for-byte
+  **identical to flag-off** (also 653 / 1). The single failure,
+  `owned_vec_param_let_move_interval_merge`, is a **pre-existing baseline leak on
+  `main`** (fails flag-off too; `merge_k` is never elided — empty set), i.e. NOT
+  introduced here — flagged separately. The four `asan_rc_elide_*` residual pins
+  are among the 653 that pass under LSan with the flag on.
 
-## Known residual (before default-ON)
+## Residual — closed by condition 4
 
-A match-binding passed **by value to a consuming callee** — `match a { Some(n) =>
-consume(n) }` where `consume` owns and frees `n` — would move `a`'s node out
-without tripping conditions 1–3. It does not occur in the LSan corpus (flag-on ==
-flag-off), and the flag is off by default, but it is the one route not closed by
-the current syntactic guards. Closing it needs a callee-consume-aware
-borrowed-set analysis (type + method/callee mode info) — the next slice, required
-before flipping the default.
+The match-payload-by-value route (`match a { Some(n) => consume(n) }`) was the
+one hole conditions 1–3 left open. Investigating it produced two findings:
+
+1. **It never actually faults.** Reproduced as three shapes (direct consume,
+   two-level forward, if-let) with the payload genuinely elided; all are clean
+   under macOS `leaks`/guardmalloc *and* full Linux LSan with the flag on. The
+   reason: condition 2 keeps `p` a scrutinee, so its payload is a *borrow*, and
+   codegen re-shares a borrow passed to a consuming position — an independent
+   balanced inc/dec that never touches `p`'s elided retain. Pinned by
+   `asan_rc_elide_*` in `tests/memory_sanitizer.rs`.
+
+2. **Condition 4 removes the dependence on that codegen invariant.** Rather than
+   rely on re-share staying correct, the guard declines to elide any param whose
+   payload is moved out as a bare value (see condition 4 above). So the elided
+   set now contains *only* params whose payloads are provably projection-only —
+   `is_mirror`/`is_symmetric` stay in, `probe`-style shapes drop out — and
+   soundness no longer couples to codegen behavior. `src/rc_elide.rs` unit tests
+   assert both directions.
 
 ## Flip criteria (default-ON)
 
-1. Close the known residual above (callee-consume-aware check).
+1. ~~Close the known residual (callee-consume-aware check).~~ **Done** —
+   condition 4 (`payloads_never_move_out`), unit-tested + LSan-verified.
 2. A corpus-wide re-bench confirming the win generalizes with no compile-time
    regression from the whole-program analysis.
-3. CI `memory-sanitizer` green with the flag forced on.
+3. CI `memory-sanitizer` green with the flag forced on (would make the
+   `asan_rc_elide_*` pins load-bearing on every change).
 4. Affirm the design shift: codegen consuming a `param_modes`-derived hint widens
    the current "modes are a checking aid, not a codegen input" scoping
    (CLAUDE.md, Architecture). Sound and contained here, but a direction to own.
