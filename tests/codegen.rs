@@ -12423,6 +12423,37 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_insert() {
+        // `Vec[T].insert(idx, value)` — grow if full, memmove the [idx..len]
+        // tail right by one, store at idx, len++. `idx == len` appends. Covers
+        // front/middle/end inserts on a scalar Vec, and a heap (String) element
+        // whose buffer MOVES into the container (the `insert` arm carries push's
+        // ownership-suppression set — a leak-clean churn is
+        // tests/memory_sanitizer.rs::asan_vec_insert_heap_no_double_free).
+        // Interpreter parity: tests/interpreter.rs::test_vec_insert_scalar_and_heap.
+        let Some(output) = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = [1, 2, 4, 5];\n\
+                 v.insert(2, 3i64);\n\
+                 v.insert(0, 0i64);\n\
+                 v.insert(6, 6i64);\n\
+                 let mut i = 0;\n\
+                 while i < v.len() { print(f\"{v[i]}\"); i = i + 1; }\n\
+                 println(\"\");\n\
+                 let mut s: Vec[String] = Vec.new();\n\
+                 s.push(f\"a\");\n\
+                 s.push(f\"c\");\n\
+                 let mid = f\"b-{1}\";\n\
+                 s.insert(1, mid);\n\
+                 println(s[1]);\n\
+             }",
+        ) else {
+            return;
+        };
+        assert_eq!(output, "0123456\nb-1\n");
+    }
+
+    #[test]
     fn test_e2e_vec_repeat_literal() {
         // `Vec[v; n]` / `vec![v; n]` build a heap Vec[T] of n copies of v via
         // the shared `build_vec_filled` (malloc + runtime fill loop) — the same

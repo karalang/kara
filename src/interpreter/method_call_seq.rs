@@ -594,6 +594,38 @@ impl<'a> super::Interpreter<'a> {
                     return Some(guard.remove(idx));
                 }
             }
+            // `Vec[T].insert(idx: i64, value: T) -> ()` — shift the tail up by
+            // one and place `value` at `idx`. `idx == len` appends (Rust's
+            // `Vec::insert` contract). Mirrors codegen's `vec_method.rs` insert
+            // arm (grow + memmove-right + store + len++); out-of-bounds
+            // (`idx > len`) surfaces a clean runtime error at the call site,
+            // matching the `remove` arm's shape.
+            "insert" => {
+                if let Value::Array(rc) = &obj {
+                    let idx = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Int(i)) => i as usize,
+                        _ => return Some(Value::Unit),
+                    };
+                    let val = args
+                        .get(1)
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    let mut guard = try_write_or_panic(rc, &label);
+                    let len = guard.len();
+                    if idx > len {
+                        return Some(self.record_runtime_error(
+                            format!("Vec.insert: index {} out of bounds (len {})", idx, len),
+                            span,
+                        ));
+                    }
+                    guard.insert(idx, val);
+                    return Some(Value::Unit);
+                }
+            }
             // ── Slice[T] / Vec[T] / Array[T,N] shared read-only methods ──────────
             // The interpreter uses Value::Array for all sequence types (Vec,
             // Array, Slice). Each arm only returns when `obj` IS a

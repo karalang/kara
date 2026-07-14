@@ -3137,6 +3137,61 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Unit;
             }
         }
+        // `Vec[T].insert(idx: i64, value: T) -> ()` — shift the tail up and
+        // place `value` at `idx` (`idx == len` appends). Sibling of `push`
+        // (same element-var unification so `let mut v = Vec.new(); v.insert(0,
+        // x)` pins the element type) and `remove` (arg 0 is the i64 index).
+        if method == "insert" && args.len() == 2 {
+            let element_ty = match &obj_ty {
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                {
+                    Some(args[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args }
+                        if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                    {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = element_ty {
+                let idx_ty = self.infer_expr(&args[0].value);
+                self.check_assignable(
+                    &Type::Int(IntSize::I64),
+                    &idx_ty,
+                    args[0].value.span.clone(),
+                );
+                let val_ty = self.infer_expr(&args[1].value);
+                unify_types(
+                    &elem,
+                    &val_ty,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                );
+                let no_names = HashMap::new();
+                let no_const_names = HashMap::new();
+                let resolved_elem = resolve_type_vars(
+                    &elem,
+                    &self.env.substitutions,
+                    &no_names,
+                    &self.env.const_substitutions,
+                    &no_const_names,
+                );
+                let resolved_arg = resolve_type_vars(
+                    &val_ty,
+                    &self.env.substitutions,
+                    &no_names,
+                    &self.env.const_substitutions,
+                    &no_const_names,
+                );
+                self.check_assignable(&resolved_elem, &resolved_arg, args[1].value.span.clone());
+                return Type::Unit;
+            }
+        }
 
         // `Vec[T].extend_from_slice(other)` — `other` may be
         // `Slice[T]`, `Vec[T]`, or `Array[T, N]`. We unify the

@@ -18147,6 +18147,33 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_vec_insert_heap_no_double_free() {
+        // `Vec[String].insert(idx, value)` MOVES the heap value into the
+        // container (the `insert` codegen arm carries push's ownership-
+        // suppression set), so the source binding must not also free the buffer.
+        // Churns 100× — each iter builds a fresh owned String and inserts it at
+        // the front (forcing a full memmove of the growing tail) — so a missed
+        // source-cleanup suppression double-frees (ASAN) and a stray extra owner
+        // leaks (LSan). The tail memmove also exercises the grow/realloc path.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 100 {
+        let s = f"item-{i}";
+        v.insert(0, s);
+        i = i + 1;
+    }
+    println(v.len().to_string());
+}
+"#,
+            &["100"],
+            "vec_insert_heap_no_double_free",
+        );
+    }
+
     /// Column heap lifecycle (phase-11 data-science stdlib, Arrow codegen
     /// core slice): each `Column[T]` is a control block + a separate data
     /// buffer + a separate validity bitmap, all freed once at scope exit

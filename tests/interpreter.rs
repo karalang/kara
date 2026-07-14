@@ -1320,6 +1320,32 @@ fn test_vec_deque_pop_empty_returns_none() {
     assert_eq!(out, "None\nNone\n");
 }
 
+#[test]
+fn test_vec_insert_scalar_and_heap() {
+    // `Vec[T].insert(idx, value)` — shift the tail up, place value at idx
+    // (`idx == len` appends). Exercises front/middle/end for scalars and a
+    // heap (String) element (move semantics). Interpreter is the oracle for the
+    // codegen twin in tests/codegen.rs::test_e2e_vec_insert.
+    let out = run(r#"
+        fn main() {
+            let mut v: Vec[i64] = [1, 2, 4, 5];
+            v.insert(2, 3);
+            v.insert(0, 0);
+            v.insert(6, 6);
+            let mut i = 0;
+            while i < v.len() { print(f"{v[i]}"); i = i + 1; }
+            println("");
+            let mut s: Vec[String] = Vec.new();
+            s.push(f"a");
+            s.push(f"c");
+            let mid = f"b-{1}";
+            s.insert(1, mid);
+            println(s[1]);
+        }
+    "#);
+    assert_eq!(out, "0123456\nb-1\n");
+}
+
 // `Vec[T].pop()` — the bare form, alias for `pop_back`. Both the
 // typechecker (`src/typechecker/expr_method_call.rs:1156`) and codegen
 // (`src/codegen/vec_method.rs:300` collapses `pop | pop_back |

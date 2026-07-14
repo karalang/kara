@@ -2323,6 +2323,162 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
+            // `Vec[T].insert(idx, value) -> ()` — grow if full, memmove the
+            // `[idx..len]` tail RIGHT by one, store `value` at `idx`, `len++`.
+            // The value MOVES into the container exactly like `push`, so it
+            // carries the identical ownership-suppression set (a heap
+            // String/Vec/Map/Option source has its scope-exit cleanup disarmed
+            // — else the source and the container's element-drop both free the
+            // same buffer). `idx == len` appends (the memmove count is 0). The
+            // interpreter twin is in method_call_seq.rs; the typechecker signs
+            // it `(i64, T) -> ()` in expr_method_call.rs.
+            "insert" => {
+                if args.len() != 2 {
+                    return Err("Vec.insert requires (index, value) arguments".to_string());
+                }
+                let idx_val = self.compile_expr(&args[0].value)?.into_int_value();
+                let elem_val = self.compile_expr(&args[1].value)?;
+                // Move-in ownership suppressions — identical to the `push` arm
+                // (the value at arg 1 is the one that moves into the buffer).
+                self.suppress_fstr_acc_if_moved_out(&args[1].value);
+                let elem_val = self.maybe_defensive_copy_param_arg(&args[1].value, elem_val);
+                self.suppress_source_vec_cleanup_for_arg(&args[1].value);
+                if let ExprKind::Identifier(n) = &args[1].value.kind {
+                    let n = n.clone();
+                    self.suppress_map_cleanup_for_tail_identifier(&n);
+                }
+                self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[1].value);
+                self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[1].value);
+                self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[1].value);
+
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "insert.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "insert.len.ptr")
+                    .unwrap();
+                let cap_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "insert.cap.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "insert.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "insert.len")
+                    .unwrap()
+                    .into_int_value();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_ptr, "insert.cap")
+                    .unwrap()
+                    .into_int_value();
+
+                // Growth check (`len == cap`) → realloc to max(4, cap*2), same
+                // amortized-doubling strategy as `push`.
+                let fn_val = self.current_fn.unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "insert.grow");
+                let shift_bb = self.context.append_basic_block(fn_val, "insert.shift");
+                let needs_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, len, cap, "insert.needs_grow")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(needs_grow, grow_bb, shift_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(grow_bb);
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self
+                    .builder
+                    .build_int_mul(cap, two, "insert.doubled")
+                    .unwrap();
+                let cmp = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "insert.cmp")
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(cmp, doubled, four, "insert.new_cap")
+                    .unwrap()
+                    .into_int_value();
+                let elem_size = elem_ty.size_of().unwrap();
+                let alloc_bytes = self
+                    .builder
+                    .build_int_mul(new_cap, elem_size, "insert.alloc_bytes")
+                    .unwrap();
+                let realloc_fn = self.realloc_or_panic_fn_decl();
+                let new_data = self
+                    .builder
+                    .build_call(
+                        realloc_fn,
+                        &[data.into(), alloc_bytes.into()],
+                        "insert.new_data",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                self.builder.build_store(data_ptr_ptr, new_data).unwrap();
+                self.builder.build_store(cap_ptr, new_cap).unwrap();
+                self.builder.build_unconditional_branch(shift_bb).unwrap();
+
+                // Shift `[idx..len]` right by one (overlapping → memmove), then
+                // store `value` at `idx` and bump `len`.
+                self.builder.position_at_end(shift_bb);
+                let cur_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "insert.cur_data")
+                    .unwrap()
+                    .into_pointer_value();
+                let one = i64_t.const_int(1, false);
+                let dst_idx = self
+                    .builder
+                    .build_int_add(idx_val, one, "insert.dst_idx")
+                    .unwrap();
+                let dst = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, cur_data, &[dst_idx], "insert.shift.dst")
+                        .unwrap()
+                };
+                let src = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, cur_data, &[idx_val], "insert.shift.src")
+                        .unwrap()
+                };
+                let move_count = self
+                    .builder
+                    .build_int_sub(len, idx_val, "insert.move_count")
+                    .unwrap();
+                let move_bytes = self
+                    .builder
+                    .build_int_mul(move_count, elem_ty.size_of().unwrap(), "insert.move_bytes")
+                    .unwrap();
+                self.builder
+                    .build_memmove(dst, 8, src, 8, move_bytes)
+                    .unwrap();
+
+                let slot = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, cur_data, &[idx_val], "insert.slot")
+                        .unwrap()
+                };
+                let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
+                self.builder.build_store(slot, elem_val).unwrap();
+                let new_len = self
+                    .builder
+                    .build_int_add(len, one, "insert.new_len")
+                    .unwrap();
+                self.builder.build_store(len_ptr, new_len).unwrap();
+
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
             // `Vec.try_push(x)` / `VecDeque.try_push_back(x)` — fallible append
             // (phase-8-stdlib-floor item 8). Identical to `push`/`push_back`
             // except the grow allocation uses `karac_alloc_fallible`; a null
