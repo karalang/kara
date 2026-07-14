@@ -13,6 +13,26 @@ fn run(source: &str) -> String {
     output.join("")
 }
 
+/// Assert a program that prints a single f64 produces a value within a tiny
+/// tolerance of `expected`. Irrational transcendentals (`asin`, `asinh`, …)
+/// lower to libm, whose last-ULP result differs across platforms (macOS vs
+/// Linux) — a bit-exact string assertion is NOT portable and spuriously fails
+/// the macOS CI leg. The interpreter and codegen still share one platform's
+/// libm within a run, so run==build holds; only the cross-platform string pin
+/// was wrong. 1e-12 is far looser than one ULP yet far tighter than any real
+/// regression (a wrong function is off by orders of magnitude).
+fn assert_prints_float_near(source: &str, expected: f64) {
+    let out = run(source);
+    let got: f64 = out
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("expected a float, got {out:?}"));
+    assert!(
+        (got - expected).abs() <= 1e-12,
+        "expected ~{expected}, got {got} (raw {out:?})"
+    );
+}
+
 fn runtime_errors(source: &str) -> Vec<karac::interpreter::RuntimeError> {
     let (_out, errors, _trace, _trunc) = run_program_full(source);
     errors
@@ -392,10 +412,12 @@ fn test_float_math_inverse_hyperbolic_and_extras() {
     assert_eq!(run("fn main() { println((1000.0f64).log10()); }"), "3\n");
     assert_eq!(run("fn main() { println((2.7f64).trunc()); }"), "2\n");
     assert_eq!(run("fn main() { println((-2.7f64).trunc()); }"), "-2\n");
-    // Irrational check — the interpreter is the f64 reference oracle.
-    assert_eq!(
-        run("fn main() { println((0.5f64).asin()); }"),
-        "0.5235987755982989\n"
+    // Irrational check — the interpreter is the f64 reference oracle. Compared
+    // numerically (not by exact string) because asin lowers to libm, whose
+    // last ULP differs macOS vs Linux (see `assert_prints_float_near`).
+    assert_prints_float_near(
+        "fn main() { println((0.5f64).asin()); }",
+        0.5235987755982989,
     );
 }
 
@@ -413,10 +435,12 @@ fn test_float_math_hypot_inverse_hyperbolic_exp1p() {
     assert_eq!(run("fn main() { println((0.0f64).atanh()); }"), "0\n");
     assert_eq!(run("fn main() { println((0.0f64).exp_m1()); }"), "0\n");
     assert_eq!(run("fn main() { println((0.0f64).ln_1p()); }"), "0\n");
-    // Irrational check — the interpreter is the f64 reference oracle.
-    assert_eq!(
-        run("fn main() { println((0.7f64).asinh()); }"),
-        "0.6526665660823557\n"
+    // Irrational check — the interpreter is the f64 reference oracle. Compared
+    // numerically (not by exact string): asinh lowers to libm, whose last ULP
+    // differs macOS vs Linux (see `assert_prints_float_near`).
+    assert_prints_float_near(
+        "fn main() { println((0.7f64).asinh()); }",
+        0.6526665660823557,
     );
 }
 
