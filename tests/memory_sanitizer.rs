@@ -26303,6 +26303,65 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_shared_whole_variable_reassign_no_leak() {
+        // B-2026-07-12-30: overwriting a `Vec[shared]` local (`current = next`,
+        // the BFS-worklist idiom) freed the OLD buffer but skipped its
+        // per-element rc-release, stranding every shared node the overwritten Vec
+        // held. The Assign overwrite now runs the same element-releasing walk the
+        // scope-exit `FreeVecBuffer` cleanup does. A single `current = next` over a
+        // `Vec[Node]` holding one shared node must be leak-clean.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn main() {
+    let root = Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None });
+    let mut current: Vec[Node] = Vec.new();
+    match root { None => {} Some(n) => { current.push(n); } }
+    let mut next: Vec[Node] = Vec.new();
+    match current[0].left { None => {} Some(l) => { next.push(l); } }
+    current = next;
+    println(f"len: {current.len()}");
+}
+"#,
+            &["len: 1"],
+            "vec_shared_whole_variable_reassign_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_vec_shared_bfs_level_order_loop_no_leak() {
+        // The real kata #102 shape: a `while` BFS that rebuilds `next` each level
+        // and does `current = next`. Every level's overwrite must release the
+        // prior level's shared nodes. A 3-node tree traversed to completion,
+        // leak-clean, summing all values.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn main() {
+    let root = Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: Some(Node { val: 3, left: None, right: None }) };
+    let mut current: Vec[Node] = Vec.new();
+    current.push(root);
+    let mut total = 0;
+    while current.len() > 0 {
+        let mut next: Vec[Node] = Vec.new();
+        let mut i = 0;
+        while i < current.len() {
+            total = total + current[i].val;
+            match current[i].left { None => {} Some(l) => { next.push(l); } }
+            match current[i].right { None => {} Some(r) => { next.push(r); } }
+            i = i + 1;
+        }
+        current = next;
+    }
+    println(f"total: {total}");
+}
+"#,
+            &["total: 6"],
+            "vec_shared_bfs_level_order_loop_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_question_nested_option_string_payload_no_leak() {
         // B-2026-07-13-19: `?` on `Result[Option[String], E]` rebuilds the
         // extracted `Option[String]` from the Result's payload words. A wrong

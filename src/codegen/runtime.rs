@@ -3283,6 +3283,48 @@ impl<'ctx> super::Codegen<'ctx> {
     /// {ptr,len,cap} array per BFS step). Workloads that move-overwrite
     /// without per-element aliases keep their existing scope-exit
     /// recursive drop unchanged.
+    /// Before an `Identifier`-target overwrite of a `Vec[shared]` /
+    /// `Vec[Option[shared]]` (or any Vec whose element carries a non-trivial
+    /// per-element drop) local, release the OLD value's ELEMENTS and free its
+    /// buffer — the same element-releasing walk the binding's scope-exit
+    /// `FreeVecBuffer` cleanup performs. `emit_free_vec_buffer_if_owned` frees
+    /// ONLY the outer buffer, so a `current = next` overwrite of a
+    /// `Vec[shared]`/`Vec[Option[shared]]` stranded every shared box the old Vec
+    /// still held (B-2026-07-12-30, the BFS-worklist idiom). Returns `true` when
+    /// it emitted the full release (the caller then SKIPS the buffer-only free);
+    /// `false` when the element needs no per-element drop (scalar / String / Vec
+    /// element — the caller's plain buffer free is correct and cheaper). Reuses
+    /// the exact per-element drop `vec_elem_agg_drop_for_type_expr` derives for
+    /// the scope-exit path, so a fixed overwrite and a scope-exit drop release a
+    /// shared element identically (never twice — the moved-in source's own
+    /// cleanup is cap-zeroed by the move-suppression that pairs with the store).
+    pub(super) fn emit_owned_vec_element_release_on_overwrite(
+        &mut self,
+        slot_ptr: PointerValue<'ctx>,
+        elem_te: &crate::ast::TypeExpr,
+    ) -> bool {
+        let Some(agg_drop) = self.vec_elem_agg_drop_for_type_expr(elem_te) else {
+            return false;
+        };
+        let fn_val = match self.current_fn {
+            Some(f) => f,
+            None => return false,
+        };
+        let elem_llvm = self.llvm_type_for_type_expr(elem_te);
+        let action = crate::codegen::state::CleanupAction::FreeVecBuffer {
+            vec_alloca: slot_ptr,
+            elem_ty: Some(elem_llvm),
+            elem_is_tensor: false,
+            elem_map_drop: None,
+            elem_agg_drop: Some(agg_drop),
+        };
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        self.emit_cleanup_action(&action, fn_val, vec_ty, ptr_ty, i64_t);
+        true
+    }
+
     pub(super) fn emit_free_vec_buffer_if_owned(&mut self, vec_alloca: PointerValue<'ctx>) {
         let vec_ty = self.vec_struct_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());

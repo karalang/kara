@@ -5143,7 +5143,23 @@ impl<'ctx> super::Codegen<'ctx> {
                             || rhs_is_heap_vec_index);
                     if trigger_eager_free {
                         if let Some(slot) = self.variables.get(name).copied() {
-                            self.emit_free_vec_buffer_if_owned(slot.ptr);
+                            // B-2026-07-12-30: for a `Vec[shared]` /
+                            // `Vec[Option[shared]]` (any Vec whose element carries
+                            // a per-element drop), release the OLD value's ELEMENTS
+                            // before freeing its buffer — else `current = next`
+                            // strands every shared box the overwritten Vec held.
+                            // The plain buffer-free below stays for scalar/String/
+                            // Vec elements (no per-element drop → the helper returns
+                            // false).
+                            let released = match self.var_elem_type_exprs.get(name).cloned() {
+                                Some(elem_te) => self.emit_owned_vec_element_release_on_overwrite(
+                                    slot.ptr, &elem_te,
+                                ),
+                                None => false,
+                            };
+                            if !released {
+                                self.emit_free_vec_buffer_if_owned(slot.ptr);
+                            }
                         }
                     }
                     if let Some(slot) = self.variables.get(name).copied() {
