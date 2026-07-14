@@ -533,7 +533,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **436 surfaced 
 | B-2026-07-13-15 | codegen | high | A `shared enum` with a `Map[K, shared V]` (or shared K) PAYLOAD (`shared enum Store { Full(Map[i64, Node]) }`) leaked the shared K/V boxes when dropp… | 9f59f09 |
 | B-2026-07-13-16 | codegen | high | Sending an OWNED heap payload (`Vec`/`String`) through a `Channel` and then `recv`-ing it DOUBLE-FREED on native/JIT | eb8db8d |
 | B-2026-07-13-20 | codegen | high | A closure with a BLOCK body whose tail is a local built by a collection/String constructor (`\|\| { let mut v = Vec.new(); v.push(1); v }`) had its ret… | be02fd6 |
-| B-2026-07-13-21 | codegen | high | `infer_closure_return_type` had further gaps for heap-typed closure tails, each declaring the closure fn `-> i64` against a heap body → LLVM verifier… | PENDING |
+| B-2026-07-13-21 | codegen | high | `infer_closure_return_type` had further gaps for heap-typed closure tails, each declaring the closure fn `-> i64` against a heap body → LLVM verifier… | 1a621fe |
 
 </details>
 
