@@ -513,7 +513,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **438 surfaced 
 | B-2026-07-12-27 | codegen | high | Moving a heap field OUT of a concretely-instantiated GENERIC user-struct payload bound from an `Option`/`Result` (or user enum) match arm SILENTLY MI… | a6469627 |
 | B-2026-07-12-28 | codegen | low | A match arm that RETURNS the bound generic-struct payload directly as the function's return value fails LLVM module verification: fn pick() -> Wrap[S… | 8c327a4 |
 | B-2026-07-12-29 | codegen | med | ARM64-ONLY leak: `work[i] = <place>` on `Vec[Option[shared]]`/`Vec[shared]` (e.g | 63d618e |
-| B-2026-07-12-30 | codegen | medium | Reassigning a `Vec[shared]` / `Vec[Option[shared]]` local variable (`current = next`) LEAKS the shared elements of the OVERWRITTEN old Vec (x86-visib… | 20ed5e7 |
+| B-2026-07-12-30 | codegen | medium | Reassigning a `Vec[shared]` / `Vec[Option[shared]]` local variable (`current = next`) LEAKS the shared elements of the OVERWRITTEN old Vec (x86-visib… | 924cd05 |
 | B-2026-07-13-1 | codegen | high | An owned Vec/String PARAM returned from an `if`/`match`/nested-block BRANCH TAIL double-frees under codegen (AOT/JIT `free(): double free detected in… | 78a9a4a |
 | B-2026-07-13-2 | codegen | high | A bare generic param `x: T` bound to a builtin COLLECTION (String/Vec/VecDeque) misses its owned-param return DEEP-COPY in the monomorph body under t… | d20a515 |
 | B-2026-07-13-3 | codegen | medium | A GENERIC function whose body is a `match` expression evaluating to a HEAP type `T` (String/Vec), monomorphized, lowers the match VALUE to the i64 co… | 0e7face,0d680d7 |
