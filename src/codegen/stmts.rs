@@ -7175,12 +7175,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// receive-inc into each tail block; deferred to a future slice.
     pub(super) fn rhs_yields_fresh_ref(&self, expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::MethodCall {
-                method, object, ..
-            } if matches!(method.as_str(), "unwrap" | "expect")
-                && self
-                    .method_unwrap_inner_types
-                    .contains_key(&(expr.span.offset, expr.span.length)) =>
+            ExprKind::MethodCall { method, object, .. }
+                if matches!(method.as_str(), "unwrap" | "expect")
+                    && self
+                        .method_unwrap_inner_types
+                        .contains_key(&(expr.span.offset, expr.span.length)) =>
             {
                 // A borrowed-Option `.unwrap()` extracts an ALIAS of the
                 // receiver's payload, so the let-site must rc_inc to own it —

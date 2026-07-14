@@ -9962,7 +9962,6 @@ fn main() {
         );
     }
 
-
     // Regression for the inline `m.get(k).unwrap().val` chain
     // returning literal zero instead of the heap struct's val
     // field. Pre-fix, `shared_type_for_call_like` only handled
