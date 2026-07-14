@@ -11893,6 +11893,18 @@ fn main() {
                  println(f\"{s}\");",
             ),
             (
+                // B-2026-07-14-21: `map`/`filter` ARE lowered, but a chain the
+                // fused peel REJECTS (here: a destructuring closure param over
+                // tuple elements) used to fall through to the silent
+                // zero-iteration skip — interp 10, JIT 0. Must bail loud like
+                // every other adaptor shape.
+                "map (peel-rejected shape)",
+                "let ps: Vec[(i64, i64)] = Vec[(1i64, 2i64), (3i64, 4i64)];\n\
+                 let mut s = 0i64;\n\
+                 for x in ps.iter().map(|(a, b)| a + b) { s = s + x; }\n\
+                 println(f\"{s}\");",
+            ),
+            (
                 // The scalar two-Vec chain shape is now LOWERED
                 // (test_e2e_for_chain_two_vecs); the bail contract covers the
                 // heap-element chain shape.

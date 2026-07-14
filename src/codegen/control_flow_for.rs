@@ -577,7 +577,17 @@ impl<'ctx> super::Codegen<'ctx> {
                              `for i in 0..xs.len() { xs[i] = … }` (B-2026-07-14-10)."
                             .to_string());
                     }
+                    // `map` and `filter` ARE lowered (the fused desugar above)
+                    // — but the peel fails closed for shapes it can't prove
+                    // (destructuring closure param, 2-param closure, non-source
+                    // base), and before B-2026-07-14-21 those REJECTED chains
+                    // fell through to the silent `_ =>` unit below and the body
+                    // ran ZERO times (interp 10 / JIT 0 on
+                    // `for x in ps.iter().map(|(a, b)| a + b)`). They belong in
+                    // this loud backstop like every other adaptor.
                     const UNLOWERED_FOR_ADAPTORS: &[&str] = &[
+                        "map",
+                        "filter",
                         "enumerate",
                         "zip",
                         "skip",
@@ -603,6 +613,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             " (`zip` IS supported for `for (a, b) in \
                              xs.iter().zip(ys.iter())` over two named Vecs with \
                              scalar elements)"
+                        } else if method == "map" || method == "filter" {
+                            " (most `map`/`filter` chains ARE lowered — this \
+                             specific shape defeated the fused desugar, e.g. a \
+                             destructuring closure parameter)"
                         } else {
                             ""
                         };
