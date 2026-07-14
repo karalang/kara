@@ -7175,13 +7175,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// receive-inc into each tail block; deferred to a future slice.
     pub(super) fn rhs_yields_fresh_ref(&self, expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::MethodCall { method, .. }
-                if matches!(method.as_str(), "unwrap" | "expect")
-                    && self
-                        .method_unwrap_inner_types
-                        .contains_key(&(expr.span.offset, expr.span.length)) =>
+            ExprKind::MethodCall {
+                method, object, ..
+            } if matches!(method.as_str(), "unwrap" | "expect")
+                && self
+                    .method_unwrap_inner_types
+                    .contains_key(&(expr.span.offset, expr.span.length)) =>
             {
-                false
+                // A borrowed-Option `.unwrap()` extracts an ALIAS of the
+                // receiver's payload, so the let-site must rc_inc to own it —
+                // hence `false` in the general case. EXCEPTION: `map.get(k)` on a
+                // Map with a SHARED value already rc_inc's the aliased bucket
+                // pointer (the `get` arm, src/codegen/maps.rs "Shared-struct V"),
+                // handing the caller a fresh +1 ref that flows through the
+                // consuming `.unwrap()`. Treating that as non-fresh made the
+                // let-site rc_inc a SECOND time — `let a = m.get(k).unwrap()` then
+                // netted +2 per bind against a single per-iter/scope dec, an
+                // over-retain that leaks the whole map on arm64
+                // (B-2026-07-14-3; x86 masked it via an LSan reachability
+                // false-negative). So this shape IS fresh — skip the receive-inc.
+                self.unwrap_receiver_is_shared_value_map_get(object)
             }
             ExprKind::StructLiteral { .. }
             | ExprKind::Call { .. }
@@ -7215,5 +7228,42 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => false,
         }
+    }
+
+    /// True when `expr` is `<map>.get(k)` on a Map (or SortedMap) whose VALUE
+    /// type is a `shared` struct/enum — the accessor that rc_inc's the aliased
+    /// bucket pointer before wrapping it in `Some` (src/codegen/maps.rs, the
+    /// "get" arm's "Shared-struct V" inc). Used by [`Self::rhs_yields_fresh_ref`]
+    /// to recognise that a consuming `.unwrap()`/`.expect()` on such a get result
+    /// already carries a fresh +1 ref, so the let-site must NOT rc_inc again.
+    /// Bare-identifier map receiver only (`m.get(k)`) — the shape the reader
+    /// bindings take; a field/index-rooted map get keeps the conservative
+    /// receive-inc (never the over-retain, at worst a status-quo alias).
+    fn unwrap_receiver_is_shared_value_map_get(&self, object: &Expr) -> bool {
+        let ExprKind::MethodCall {
+            method,
+            object: map_recv,
+            ..
+        } = &object.kind
+        else {
+            return false;
+        };
+        if method != "get" {
+            return false;
+        }
+        let ExprKind::Identifier(map_var) = &map_recv.kind else {
+            return false;
+        };
+        // `var_elem_type_exprs` records a Map var's VALUE type (same lookup the
+        // maps.rs get arm uses to decide the inc).
+        let Some(te) = self.var_elem_type_exprs.get(map_var) else {
+            return false;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        p.segments
+            .last()
+            .is_some_and(|seg| self.shared_types.contains_key(seg.as_str()))
     }
 }

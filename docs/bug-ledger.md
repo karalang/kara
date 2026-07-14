@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **437 surfaced · 3 open · 430 fixed** (2026-05-20 → 2026-07-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **438 surfaced · 3 open · 431 fixed** (2026-05-20 → 2026-07-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -99,9 +99,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **437 surfaced 
 | B-2026-07-12-30 | 2026-07-12 | codegen | medium | Reassigning a `Vec[shared]` / `Vec[Option[shared]]` local variable (`current = next`) LEAKS the shared elements of the OVERWRITTEN old Vec (x86-visible; the BFS-worklist `current = next` idiom) | kata #102 |
 | B-2026-07-13-17 | 2026-07-13 | codegen | medium | A heap payload (`Vec`/`String`/…) SENT on a `Channel` but never RECEIVED leaks its buffer when the channel is dropped. The runtime channel is a type-erased byte queue (`runtime/src/channel.rs`) — it memcpy's element bytes and cannot know a slot holds a heap `{ptr,len,cap}`, so its drop frees the queue storage but not the payload buffers still queued. Before B-2026-07-13-16 this was masked (the un-suppressed source freed the buffer, leaving the queue a dangling alias); correct move-ownership now surfaces it as a genuine leak. | — |
 
-### Fixed (430)
+### Fixed (431)
 
-<details><summary>430 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>431 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -535,6 +535,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **437 surfaced 
 | B-2026-07-13-21 | codegen | high | `infer_closure_return_type` had further gaps for heap-typed closure tails, each declaring the closure fn `-> i64` against a heap body → LLVM verifier… | 1a621fe |
 | B-2026-07-14-1 | codegen (for-loop element drop x match-arm payload move) | high | DOUBLE-FREE: a heap payload MOVED out of a for-loop-over-owned-Vec element (via a match arm, into a function-call argument) is freed twice — once by… | this commit |
 | B-2026-07-14-2 | lexer (Rust seed vs self-host) / design.md spec inconsistency | medium | SPEC CONTRADICTION on bare `f16`/`bf16`: the Rust seed lexer (src/lexer.rs, keyword_or_ident, explicit comment ~L1373) treats bare `f16`/`bf16` as OR… | this commit |
+| B-2026-07-14-3 | codegen | high | ARM64 LEAK: `let a = m.get(k).unwrap()` where m is `Map[_, shared T]` DOUBLE rc-inc's the fetched node | this commit |
 
 </details>
 

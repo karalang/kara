@@ -9899,6 +9899,24 @@ fn main() {
     // 40 bytes, putting it in a freelist bucket the next alloc reuses
     // deterministically; with no Vec field the 16-byte Node lands in
     // a sparser bucket and the corruption pattern doesn't surface.
+    //
+    // B-2026-07-14-3: the neighbor edges form a CHAIN (`node0->..->node4`),
+    // NOT a ring. The original `(i + 1) % k` wrap built a reference CYCLE
+    // (`node4 -> node0`); a `Vec[shared Node]` element is an OWNING ref (its
+    // drop rc-dec's each element), so a cycle is uncollectable under RC and
+    // leaks by construction — the whole map. That leak surfaced only on arm64
+    // (LSan) once the reader-binding over-retain below was fixed; on x86 the
+    // ring stayed reachable through a stale stack slot (an LSan false-negative),
+    // which is why the ring "passed" there. The chain still exercises the exact
+    // reader shape this test targets (`let a/b = m.get(k).unwrap()` + a
+    // `neighbors.push(b)` consume) without conflating it with the separate,
+    // known RC-cannot-collect-cycles limitation. The reader-binding over-retain
+    // itself was a codegen double-inc: `m.get(k)` on a shared value rc-inc's the
+    // aliased bucket ptr (get arm, maps.rs), and the consuming `.unwrap()`
+    // let-site rc-inc'd it a SECOND time (`rhs_yields_fresh_ref` classed the
+    // unwrap as non-fresh) — +2 per bind vs one per-iter dec, leaking every
+    // node. Fixed in `rhs_yields_fresh_ref` (a shared-map-get `.unwrap()` IS
+    // fresh — get already delivered the +1).
     #[test]
     fn asan_map_get_shared_value_in_loop_no_alias_collapse() {
         assert_clean_asan_run(
@@ -9922,8 +9940,10 @@ fn main() {
     // `suppress_source_vec_cleanup_for_arg` rc_inc.
     for i in 0..k {
         let a = visited.get(i).unwrap();
-        let b = visited.get((i + 1) % k).unwrap();
-        a.neighbors.push(b);
+        if i + 1 < k {
+            let b = visited.get(i + 1).unwrap();
+            a.neighbors.push(b);
+        }
     }
     // Read with let-bindings (not inline chains). The inline
     // `Map.get(k).unwrap().val` shape is covered separately in
@@ -9941,6 +9961,7 @@ fn main() {
             "map_get_shared_value_in_loop_no_alias_collapse",
         );
     }
+
 
     // Regression for the inline `m.get(k).unwrap().val` chain
     // returning literal zero instead of the heap struct's val
