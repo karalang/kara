@@ -969,10 +969,22 @@ impl<'a> super::TypeChecker<'a> {
                         VariantKind::Tuple(tys) => tys.iter().collect(),
                         VariantKind::Struct(fields) => fields.iter().map(|f| &f.ty).collect(),
                     };
+                    // Dedup by the nested-enum head name within a variant. A
+                    // variant with two payload fields of the same enum type
+                    // (`Add(Expr, Expr)`) is one offending relationship, not
+                    // two — the diagnostic names only `(variant, head)`, and
+                    // its span is `variant.span` for every field, so firing
+                    // per-field emits byte-identical duplicate diagnostics.
+                    // Distinct nested-enum types in one variant (`Add(Expr,
+                    // Stmt)`) still each report once.
+                    let mut flagged_heads: std::collections::HashSet<&str> =
+                        std::collections::HashSet::new();
                     for ty in field_tys {
                         if let TypeKind::Path(path) = &ty.kind {
                             if let Some(head) = path.segments.first() {
-                                if value_enum_names.contains(head) {
+                                if value_enum_names.contains(head)
+                                    && flagged_heads.insert(head.as_str())
+                                {
                                     self.type_error(
                                         format!(
                                             "error[E_ENUM_NESTED_ENUM_PAYLOAD]: enum variant \

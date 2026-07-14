@@ -16112,6 +16112,54 @@ fn test_compound_enum_nested_enum_payload_diagnostic() {
 }
 
 #[test]
+fn test_compound_enum_nested_enum_payload_deduped_per_variant() {
+    // A variant with TWO payload fields of the same nested enum type
+    // (`Add(Expr, Expr)`) is one offending relationship, not two — the
+    // diagnostic names only `(variant, head)` and anchors at
+    // `variant.span`, so firing per-field would emit byte-identical
+    // duplicate diagnostics. Exactly one E_ENUM_NESTED_ENUM_PAYLOAD must
+    // surface for `Add`.
+    let errors = typecheck_errors(
+        "enum Expr { Num(i64), Add(Expr, Expr) }\n\
+         fn main() {}",
+    );
+    let n = errors
+        .iter()
+        .filter(|e| e.message.contains("E_ENUM_NESTED_ENUM_PAYLOAD"))
+        .count();
+    assert_eq!(
+        n, 1,
+        "expected exactly one deduped E_ENUM_NESTED_ENUM_PAYLOAD, got {n}: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_compound_enum_nested_enum_payload_distinct_types_both_report() {
+    // Dedup is per distinct nested-enum head. A variant carrying two
+    // *different* nested enum types (`Add(Expr, Stmt)`) is two genuinely
+    // distinct offending relationships and must report both — the dedup
+    // must not collapse them.
+    let errors = typecheck_errors(
+        "enum Stmt { Skip }\n\
+         enum Expr { Num(i64), Add(Expr, Stmt) }\n\
+         fn main() {}",
+    );
+    let msgs: Vec<&String> = errors
+        .iter()
+        .filter(|e| e.message.contains("E_ENUM_NESTED_ENUM_PAYLOAD"))
+        .map(|e| &e.message)
+        .collect();
+    assert_eq!(
+        msgs.len(),
+        2,
+        "expected both distinct nested-enum diagnostics, got: {msgs:?}"
+    );
+    assert!(msgs.iter().any(|m| m.contains("'Expr'")));
+    assert!(msgs.iter().any(|m| m.contains("'Stmt'")));
+}
+
+#[test]
 fn test_compound_enum_nested_enum_payload_via_vec_is_allowed() {
     // CP5's carve-out is direct enum-in-enum nesting only. Wrapping
     // the inner enum in a `Vec` (or any other heap-indirected

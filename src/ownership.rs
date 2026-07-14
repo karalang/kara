@@ -1254,6 +1254,20 @@ impl<'a> OwnershipChecker<'a> {
         // Build ownership graph: type name → owned field type names
         let mut graph: HashMap<String, Vec<String>> = HashMap::new();
 
+        // Dedup a node's outgoing edges by target type NAME, preserving
+        // first-occurrence order. A cycle through type `X` is one cycle
+        // regardless of how many fields realize the `self → X` edge
+        // (`Add(Expr, Expr)` has two `Expr` fields but one back-edge), so
+        // without this the DFS below detects — and reports — the same cycle
+        // once per realizing field, emitting byte-identical duplicate
+        // `ownership cycle detected` diagnostics (same span, same message).
+        // Distinct neighbor names (genuinely distinct cycles) are preserved.
+        let dedup_edges = |mut edges: Vec<String>| -> Vec<String> {
+            let mut seen = HashSet::new();
+            edges.retain(|e| seen.insert(e.clone()));
+            edges
+        };
+
         for (name, info) in &self.typecheck_result.struct_info {
             let mut edges = Vec::new();
             for (_, field_ty, _) in &info.fields {
@@ -1261,7 +1275,7 @@ impl<'a> OwnershipChecker<'a> {
                     edges.push(target);
                 }
             }
-            graph.insert(name.clone(), edges);
+            graph.insert(name.clone(), dedup_edges(edges));
         }
 
         for (name, info) in &self.typecheck_result.enum_info {
@@ -1285,7 +1299,7 @@ impl<'a> OwnershipChecker<'a> {
                     crate::typechecker::VariantTypeInfo::Unit => {}
                 }
             }
-            graph.insert(name.clone(), edges);
+            graph.insert(name.clone(), dedup_edges(edges));
         }
 
         // DFS for cycles

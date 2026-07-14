@@ -451,6 +451,36 @@ fn test_self_referential_cycle() {
 }
 
 #[test]
+fn test_cycle_reported_once_per_back_edge() {
+    // A type that realizes the same `self → X` back-edge through multiple
+    // fields (`Add(Expr, Expr)` has two `Expr` fields, `struct Pair { a:
+    // Pair, b: Pair }` has two `Pair` fields) forms ONE cycle, not one per
+    // field. The adjacency list is deduped by target type name, so exactly
+    // one `OwnershipCycle` diagnostic surfaces — no byte-identical dupes.
+    let enum_errs = ownership_errors("enum Expr { Num(i64), Add(Expr, Expr) }");
+    let enum_cycles = enum_errs
+        .iter()
+        .filter(|e| e.kind == OwnershipErrorKind::OwnershipCycle)
+        .count();
+    assert_eq!(
+        enum_cycles, 1,
+        "expected one deduped ownership cycle for the enum, got {enum_cycles}: {:?}",
+        enum_errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    let struct_errs = ownership_errors("struct Pair { a: Pair, b: Pair }");
+    let struct_cycles = struct_errs
+        .iter()
+        .filter(|e| e.kind == OwnershipErrorKind::OwnershipCycle)
+        .count();
+    assert_eq!(
+        struct_cycles, 1,
+        "expected one deduped ownership cycle for the struct, got {struct_cycles}: {:?}",
+        struct_errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_weak_breaks_cycle() {
     ownership_ok(
         "struct Parent { child: Child }\n\
