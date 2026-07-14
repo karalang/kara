@@ -111,6 +111,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 "chan.send",
             )
             .unwrap();
+        // B-2026-07-13-16: `send` MOVES its argument into the queue — the
+        // runtime memcpy'd the value's bytes (for a heap payload, the
+        // `{ptr,len,cap}` header, so the queue slot now ALIASES the source's
+        // buffer). Without neutralizing the source's scope-exit cleanup, the
+        // source binding frees the buffer AND the eventual `recv`'d binding
+        // frees the same buffer → `free(): double free detected` (JIT/native;
+        // the interpreter moves `v` into the channel, so it's correct and this
+        // matches its ownership). A string LITERAL source stayed clean by luck
+        // (`cap == 0`, its free is a no-op), masking the bug until an OWNED
+        // String / any Vec is sent. Mirror the struct-literal field-capture
+        // suppressor set (`exprs.rs`): a named Vec/String source, a moved-in
+        // Map/Set handle, an inline Option/Result binding, and an f-string
+        // temporary all hand their buffer to the queue here.
+        self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+        self.suppress_inline_option_result_binding_move(&args[0].value);
+        if let ExprKind::Identifier(n) = &args[0].value.kind {
+            let n = n.clone();
+            self.suppress_map_cleanup_for_tail_identifier(&n);
+        }
+        self.suppress_fstr_acc_if_moved_out(&args[0].value);
         // Unit return (the i64-zero unit value).
         Ok(self.context.i64_type().const_zero().into())
     }

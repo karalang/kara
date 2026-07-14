@@ -18028,6 +18028,50 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_channel_send_recv_heap_payload_no_double_free() {
+        // B-2026-07-13-16. `tx.send(v)` for an owned heap payload (`Vec`/`String`)
+        // memcpy'd the value's `{ptr,len,cap}` header into the type-erased queue
+        // but never neutralized the SOURCE binding's scope-exit free — so the
+        // source `v` freed the buffer AND the `recv`'d binding freed the same
+        // (aliased) buffer: `free(): double free detected in tcache 2` under
+        // JIT/native (the interpreter moves the value into the channel, so it was
+        // correct). A string LITERAL source stayed clean by luck (`cap == 0`).
+        // `send` is now a MOVE — the source's Vec/String/Map/fstr cleanup is
+        // suppressed, so the queue is the sole owner until `recv` transfers to the
+        // receiver. This churns balanced send→recv→use of both a `Vec[i64]` and an
+        // owned `String` (100 iters each): a missed suppression double-frees
+        // (ASAN), a stray extra owner leaks (LSan).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let (vtx, vrx): (Sender[Vec[i64]], Receiver[Vec[i64]]) = Channel.new();
+        let mut v: Vec[i64] = Vec.new();
+        v.push(i);
+        v.push(i + 1);
+        vtx.send(v);
+        let gv = vrx.recv();
+        total = total + gv.len();
+        let (stx, srx): (Sender[String], Receiver[String]) = Channel.new();
+        let s = f"msg-{i}";
+        stx.send(s);
+        let gs = srx.recv();
+        total = total + gs.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // Vec len 2 × 100 = 200; String "msg-{i}" lengths: i=0..9 → 5 (×10=50),
+            // i=10..99 → 6 (×90=540) = 590. Total = 790.
+            &["790"],
+            "channel_send_recv_heap_payload_no_double_free",
+        );
+    }
+
     /// Column heap lifecycle (phase-11 data-science stdlib, Arrow codegen
     /// core slice): each `Column[T]` is a control block + a separate data
     /// buffer + a separate validity bitmap, all freed once at scope exit
