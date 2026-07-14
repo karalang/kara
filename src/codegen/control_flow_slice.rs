@@ -62,12 +62,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     mutable: false,
                 });
             }
+            // For a `ref Vec[T]` / `ref Slice[T]` PARAM the alloca holds a
+            // POINTER to the caller's `{ptr,len,cap}` struct, not the struct
+            // itself — so deref once before GEPing the data/len fields (mirrors
+            // the SoA-param deref in `collections.rs`). Without this, the
+            // struct-GEP read the borrow pointer's own bits as `{ptr,len,cap}`,
+            // so the slice-pattern LENGTH came out garbage and every arm's
+            // length check took the wrong branch (`match (v: ref Vec[i64]) {
+            // [] => …, [a,b] => … }` silently mis-dispatched — B-2026-07-14-13).
+            // A by-value/`let` binding's slot already IS the struct.
+            let base_ptr = if self.ref_params.contains_key(name.as_str()) {
+                self.builder
+                    .build_load(ptr_ty, slot.ptr, "sp.ref.deref")
+                    .unwrap()
+                    .into_pointer_value()
+            } else {
+                slot.ptr
+            };
             // Slice[T] source.
             if let Some(&elem_ty) = self.slice_elem_types.get(name.as_str()) {
                 let slice_ty = self.slice_struct_type();
                 let data_pp = self
                     .builder
-                    .build_struct_gep(slice_ty, slot.ptr, 0, "sp.sl.dpp")
+                    .build_struct_gep(slice_ty, base_ptr, 0, "sp.sl.dpp")
                     .unwrap();
                 let data_ptr = self
                     .builder
@@ -76,7 +93,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_pointer_value();
                 let len_p = self
                     .builder
-                    .build_struct_gep(slice_ty, slot.ptr, 1, "sp.sl.lp")
+                    .build_struct_gep(slice_ty, base_ptr, 1, "sp.sl.lp")
                     .unwrap();
                 let len = self
                     .builder
@@ -95,7 +112,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let vec_ty = self.vec_struct_type();
                 let data_pp = self
                     .builder
-                    .build_struct_gep(vec_ty, slot.ptr, 0, "sp.v.dpp")
+                    .build_struct_gep(vec_ty, base_ptr, 0, "sp.v.dpp")
                     .unwrap();
                 let data_ptr = self
                     .builder
@@ -104,7 +121,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_pointer_value();
                 let len_p = self
                     .builder
-                    .build_struct_gep(vec_ty, slot.ptr, 1, "sp.v.lp")
+                    .build_struct_gep(vec_ty, base_ptr, 1, "sp.v.lp")
                     .unwrap();
                 let len = self
                     .builder

@@ -41975,6 +41975,52 @@ fn main() {
         }
     }
 
+    /// B-2026-07-14-13: a slice pattern matched on a `ref Vec[T]` PARAM
+    /// mis-dispatched — the `ref` param's alloca holds a POINTER to the
+    /// caller's `{ptr,len,cap}`, but `resolve_slice_source` GEP'd the borrow
+    /// pointer's own bits as the struct, so the slice LENGTH came out garbage
+    /// and every arm's length check took the wrong branch (JIT/native gave
+    /// wrong answers; the interpreter was correct). Fixed by dereferencing the
+    /// borrow before reading data/len. The owned-param case above already
+    /// worked (slot IS the struct); this pins the `ref`-param case.
+    #[test]
+    fn test_e2e_slice_pattern_on_ref_vec_param() {
+        let out = run_program(
+            r#"
+fn label(v: ref Vec[i64]) -> String {
+    match v {
+        [] => "empty",
+        [a, b] => "pair",
+        _ => "other",
+    }
+}
+fn sum2(v: ref Vec[i64]) -> i64 {
+    match v {
+        [a, b] => a + b,
+        _ => -1,
+    }
+}
+fn main() {
+    let e: Vec[i64] = Vec.new();
+    let mut p: Vec[i64] = Vec.new();
+    p.push(3);
+    p.push(4);
+    let mut t: Vec[i64] = Vec.new();
+    t.push(1);
+    t.push(2);
+    t.push(3);
+    println(label(e));
+    println(label(p));
+    println(label(t));
+    println(f"{sum2(p)}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "empty\npair\nother\n7\n");
+        }
+    }
+
     #[test]
     fn test_e2e_slice_pattern_single_element_fixed_arity_array() {
         let out = run_program(
