@@ -110,6 +110,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // container drops). The parser's `self.tokens[self.pos].token` shape.
         let (scrut, did_clone_borrowed_index_field) =
             self.clone_borrowed_index_field_enum_scrutinee(scrutinee, scrut)?;
+        // B-2026-07-14-1: a bare `for`-loop element (`for p in v { match p { … } }`)
+        // over a heap-bearing non-shared user ENUM whose arm MOVES a payload out.
+        // The element bit-copy-aliases the container slot, so the moved payload
+        // must come from an independent deep copy — the loop-element sibling of
+        // the `v[i]` clone above. `did_clone` forces the clone through the
+        // fresh-temp drop-tracking below (identical to the FieldAccess-index case).
+        let (scrut, did_clone_loop_elem) =
+            self.clone_escaping_owned_agg_loop_var_enum(scrutinee, scrut, arms);
+        let did_clone_borrowed_index_field = did_clone_borrowed_index_field || did_clone_loop_elem;
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
         // that leaves a heap payload field unbound leaks it. Materialize +
@@ -1018,6 +1027,70 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         self.no_arm_payload_escapes(arms)
+    }
+
+    /// `for p in items { match p { A(x) => <MOVE x> … } }` where `items: Vec[E]`
+    /// is a heap-bearing non-shared user ENUM: the loop element `p` is a bit-copy
+    /// alias of the container's slot (registered in `for_loop_owned_agg_vars`
+    /// under the deep-copy-on-whole-move model). A match arm that MOVES a payload
+    /// out of `p` raw-moves it off that alias, so the consumer frees the buffer
+    /// AND the container's per-element drop frees it again → double-free
+    /// (B-2026-07-14-1; the f-string `render` loop in the self-hosted lexer). The
+    /// whole-move deep-copy model (`deep_copy_for_loop_agg_element_move`) only
+    /// fires on a `let x = p` / struct-literal whole-element move, NOT on a match
+    /// arm's PARTIAL payload move, so the escape falls through uncovered — the
+    /// gap `scrutinee_is_readonly_owned_agg_loop_var` explicitly punts to "the
+    /// owned path", whose source-cap suppression is a no-op against a bit-copy
+    /// alias. Deep-copy the element's payload into an INDEPENDENT buffer here
+    /// (the loop-element sibling of `clone_owned_vec_index_element` for `v[i]`),
+    /// so the arm extracts from the clone and the container's original element is
+    /// freed exactly once. Returns `(value, did_clone)`; `did_clone` forces the
+    /// clone through `materialize_freshtemp_enum_scrutinee` so a no-bind arm or
+    /// an unbound heap field frees the clone (no leak), and each arm's per-field
+    /// suppression zeroes the CLONE's moved-out caps. Gated to the ESCAPING case
+    /// — a read-only match is already handled as a borrow by
+    /// `scrutinee_is_readonly_owned_agg_loop_var`, and cloning there would leak.
+    pub(super) fn clone_escaping_owned_agg_loop_var_enum(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        arms: &[MatchArm],
+    ) -> (BasicValueEnum<'ctx>, bool) {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return (val, false);
+        };
+        if !self.for_loop_owned_agg_vars.contains(name.as_str()) {
+            return (val, false);
+        }
+        // Only an ESCAPING payload needs the independent buffer; a read-only
+        // match is the borrow path (drop already suppressed) — cloning would leak.
+        if self.no_arm_payload_escapes(arms) {
+            return (val, false);
+        }
+        let Some(enum_name) = self.type_name_of_expr(scrutinee) else {
+            return (val, false);
+        };
+        let Some(layout) = self.enum_layouts.get(&enum_name).cloned() else {
+            return (val, false);
+        };
+        // Shared enums are RC-boxed — no value `EnumDrop` to race, leave untouched.
+        if layout.is_shared {
+            return (val, false);
+        }
+        let fn_val = self.current_fn.unwrap();
+        let ll = val.get_type();
+        let slot = self.create_entry_alloca(fn_val, "loopelem.enum.clone", ll);
+        self.builder.build_store(slot, val).unwrap();
+        // In-place payload deep-copy — the same duplication the `let x = p`
+        // whole-move path uses (copy-depth == drop-depth), so `slot` now owns an
+        // independent copy of exactly the payloads `emit_enum_drop_switch` frees.
+        self.deep_copy_enum_heap_payload_in_place(&enum_name, slot, &layout);
+        (
+            self.builder
+                .build_load(ll, slot, "loopelem.enum.cloned")
+                .unwrap(),
+            true,
+        )
     }
 
     /// No arm moves any of its pattern's leaf bindings out of the arm body or

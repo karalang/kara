@@ -4753,6 +4753,42 @@ fn main() {
     }
 
     #[test]
+    fn e2e_for_loop_enum_element_match_move_payload_no_double_free() {
+        // B-2026-07-14-1: `for p in <owned Vec[enum]> { match p { V(t) => <move t> } }`.
+        // The loop element bit-copy-aliases the container's slot, so moving a heap
+        // payload out of it (into a call / a `let`) raw-moved it off that alias —
+        // the consumer freed the buffer AND the container's per-element drop freed
+        // it again (double-free abort). This is the f-string `render` loop in the
+        // self-hosted lexer (`for p in parts { match p { Text(t) => …(t) } }` over
+        // `Vec[InterpPart]`). Fixed by deep-copying the element's payload into an
+        // INDEPENDENT buffer at the match (`clone_escaping_owned_agg_loop_var_enum`,
+        // the loop-element sibling of the `v[i]` clone). A double-free aborts the
+        // process, so a clean run with the correct sum IS the check. Mixed variants
+        // + multiple heap elements exercise the tag switch and >1 free.
+        let out = run_program(
+            "enum Part { Text(String), Empty }\n\
+             fn use_str(s: String) -> i64 { s.len() }\n\
+             fn main() {\n\
+                 let mut parts: Vec[Part] = Vec.new();\n\
+                 let mut a = \"\".to_string(); a.push_str(\"hello\");\n\
+                 let mut b = \"\".to_string(); b.push_str(\"world!!\");\n\
+                 parts.push(Part.Text(a)); parts.push(Part.Empty); parts.push(Part.Text(b));\n\
+                 let mut n = 0;\n\
+                 for p in parts {\n\
+                     match p {\n\
+                         Part.Text(t) => { n = n + use_str(t); }\n\
+                         Part.Empty => { n = n + 1; }\n\
+                     }\n\
+                 }\n\
+                 println(n);\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "13\n");
+        }
+    }
+
+    #[test]
     fn test_ir_module_global_oncelock_static_init() {
         // A module-scope `OnceLock.new()` takes the placeholder-null-ptr-global
         // + static-init path: `__karac_static_init` builds the cell via
