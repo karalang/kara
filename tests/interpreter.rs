@@ -14414,10 +14414,20 @@ fn main() {
     println(f"{s6.filter(|x: i64| x > 3i64).unwrap_or(0i64)}");
     let s7: Option[i64] = Some(2i64);
     println(f"{s7.filter(|x: i64| x > 3i64).unwrap_or(0i64 - 1i64)}");
+    let mut tk: Option[i64] = Some(5i64);
+    let t = tk.take();
+    println(f"{t.unwrap_or(0i64)}");
+    println(f"{tk.unwrap_or(0i64 - 1i64)}");
+    let mut gi: Option[i64] = None;
+    println(f"{gi.get_or_insert(9i64)}");
+    println(f"{gi.unwrap_or(0i64 - 1i64)}");
 }
 "#,
     );
-    assert_eq!(output, "5\n7\n9\n3\n9\n42\n42\n6\n10\n30\n6\n9\n5\n-1\n");
+    assert_eq!(
+        output,
+        "5\n7\n9\n3\n9\n42\n42\n6\n10\n30\n6\n9\n5\n-1\n5\n-1\n9\n9\n"
+    );
 }
 
 #[test]

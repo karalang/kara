@@ -698,6 +698,14 @@ impl<'a> EffectChecker<'a> {
             "Vec.fill",
             "Vec.swap",
             "Vec.swap_remove",
+            // `Option.take()` / `Option.get_or_insert(v)` (B-2026-07-14-6) —
+            // both write back into the receiver's place (`take` nulls it,
+            // `get_or_insert` fills a `None`). Same conservative non-pure
+            // mutation-marker seed as the in-place Vec mutators above (the
+            // B-2026-07-14-17 standing rule: every builtin in-place mutator
+            // must be seeded or the auto-par gate silently races it).
+            "Option.take",
+            "Option.get_or_insert",
             // `VecDeque[T]`'s mutating method surface — seeded as
             // `allocates(Heap)` so the auto-parallelizer's
             // `method_effects_imply_receiver_mutation` lookup

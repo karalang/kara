@@ -1493,6 +1493,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "and"
                 | "ok_or"
                 | "flatten"
+                | "take"
+                | "get_or_insert"
                 // Option/Result combinators, closure batch (B-2026-07-14-6).
                 | "unwrap_or_else"
                 | "map_or"

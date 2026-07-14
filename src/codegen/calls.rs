@@ -1813,7 +1813,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Option/Result.map` above — so no heap payload's ownership (which the
         // consuming combinator would need to thread) can be mishandled under
         // `karac build`; the interpreter covers heap payloads and is the oracle.
-        if matches!(method, "ok" | "err" | "or" | "and" | "ok_or" | "flatten") {
+        if matches!(
+            method,
+            "ok" | "err" | "or" | "and" | "ok_or" | "flatten" | "take" | "get_or_insert"
+        ) {
             // Heap-safety gate (see the block comment). For every method except
             // `flatten`, `inner_te` IS the scalar payload to check. For
             // `flatten`, `inner_te` is the inner `Option[T]`, so check its `T`.
@@ -1945,6 +1948,132 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_select(is_present, inner_val, none_bv, "flat.sel")
                         .unwrap();
                     return Ok(Some(sel));
+                }
+                "take" => {
+                    // MUTATING: yield the receiver's current value and store a
+                    // zeroed `None` (tag 0) back into the receiver's slot. The
+                    // loaded `recv_struct` IS the taken value. Identifier
+                    // receiver only — the shape a mutating take makes sense on;
+                    // a fresh-temp receiver has no slot to null and gets a loud
+                    // error rather than a silent no-op mutation.
+                    let ExprKind::Identifier(recv_name) = &object.kind else {
+                        return Err("codegen: Option.take requires a named Option binding \
+                             as its receiver (a temporary has no slot to clear)"
+                            .to_string());
+                    };
+                    let slot = self
+                        .variables
+                        .get(recv_name.as_str())
+                        .map(|s| s.ptr)
+                        .ok_or_else(|| {
+                            format!("codegen: Option.take receiver '{recv_name}' has no slot")
+                        })?;
+                    let none_val = struct_ty.const_zero();
+                    self.builder.build_store(slot, none_val).unwrap();
+                    return Ok(Some(recv_struct.into()));
+                }
+                "get_or_insert" => {
+                    // MUTATING: `Some(x)` yields `x`; `None` stores `Some(v)`
+                    // into the receiver's slot and yields `v`. Result is the
+                    // payload BY VALUE (matches the typechecker's modeling).
+                    // Identifier receiver only, like `take`.
+                    let ExprKind::Identifier(recv_name) = &object.kind else {
+                        return Err("codegen: Option.get_or_insert requires a named Option \
+                             binding as its receiver"
+                            .to_string());
+                    };
+                    let slot = self
+                        .variables
+                        .get(recv_name.as_str())
+                        .map(|s| s.ptr)
+                        .ok_or_else(|| {
+                            format!(
+                                "codegen: Option.get_or_insert receiver '{recv_name}' \
+                                 has no slot"
+                            )
+                        })?;
+                    let inner_ll = self.llvm_type_for_type_expr(&inner_te);
+                    let fn_val = self.current_fn.unwrap();
+                    let some_bb = self.context.append_basic_block(fn_val, "goi.some");
+                    let none_bb = self.context.append_basic_block(fn_val, "goi.none");
+                    let merge_bb = self.context.append_basic_block(fn_val, "goi.merge");
+                    self.builder
+                        .build_conditional_branch(is_present, some_bb, none_bb)
+                        .unwrap();
+
+                    // Some(x): reconstruct and yield the payload.
+                    self.builder.position_at_end(some_bb);
+                    let w0 = self
+                        .builder
+                        .build_extract_value(recv_struct, 1, "goi.w0")
+                        .map_err(|e| format!("codegen: get_or_insert w0: {:?}", e))?
+                        .into_int_value();
+                    let w1 = self
+                        .builder
+                        .build_extract_value(recv_struct, 2, "goi.w1")
+                        .map_err(|e| format!("codegen: get_or_insert w1: {:?}", e))?
+                        .into_int_value();
+                    let w2 = self
+                        .builder
+                        .build_extract_value(recv_struct, 3, "goi.w2")
+                        .map_err(|e| format!("codegen: get_or_insert w2: {:?}", e))?
+                        .into_int_value();
+                    let existing = self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?;
+                    let some_end = self.builder.get_insert_block().unwrap();
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                    // None: compile v, store Some(v) into the slot, yield v.
+                    self.builder.position_at_end(none_bb);
+                    let v_arg = args.first().ok_or_else(|| {
+                        "codegen: Option.get_or_insert expects 1 argument".to_string()
+                    })?;
+                    let mut v_val = self.compile_expr(&v_arg.value)?;
+                    // Width-coerce an int literal default to T (the unwrap_or
+                    // precedent) so `get_or_insert(0)` feeds a narrow T cleanly.
+                    if let (BasicValueEnum::IntValue(dv), BasicTypeEnum::IntType(it)) =
+                        (v_val, inner_ll)
+                    {
+                        let dw = dv.get_type().get_bit_width();
+                        let tw = it.get_bit_width();
+                        if dw != tw {
+                            v_val = if dw > tw {
+                                self.builder
+                                    .build_int_truncate(dv, it, "goi.v.tr")
+                                    .unwrap()
+                                    .into()
+                            } else {
+                                self.builder
+                                    .build_int_z_extend(dv, it, "goi.v.zx")
+                                    .unwrap()
+                                    .into()
+                            };
+                        }
+                    }
+                    let words = self.coerce_to_payload_words(v_val, 3)?;
+                    let mut some_agg = struct_ty.get_undef();
+                    some_agg = self
+                        .builder
+                        .build_insert_value(some_agg, one, 0, "goi.tag")
+                        .unwrap()
+                        .into_struct_value();
+                    for (i, w) in words.iter().enumerate() {
+                        some_agg = self
+                            .builder
+                            .build_insert_value(some_agg, *w, (i + 1) as u32, "goi.w")
+                            .unwrap()
+                            .into_struct_value();
+                    }
+                    self.builder.build_store(slot, some_agg).unwrap();
+                    let none_end = self.builder.get_insert_block().unwrap();
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                    self.builder.position_at_end(merge_bb);
+                    let phi = self
+                        .builder
+                        .build_phi(existing.get_type(), "goi.result")
+                        .map_err(|e| format!("codegen: get_or_insert phi: {:?}", e))?;
+                    phi.add_incoming(&[(&existing, some_end), (&v_val, none_end)]);
+                    return Ok(Some(phi.as_basic_value()));
                 }
                 _ => {}
             }

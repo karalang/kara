@@ -11,10 +11,10 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_option_result_method(
         &mut self,
         method: &str,
-        // The receiver place-expr. No longer needed for atomic mutation —
-        // `Value::Atomic` is now an `Arc<Mutex<…>>` shared cell mutated in
-        // place under lock, so there is no write-back to the env slot/field.
-        _object: &Expr,
+        // The receiver place-expr. Not needed for atomic mutation
+        // (`Value::Atomic` is an `Arc<Mutex<…>>` shared cell mutated in place
+        // under lock), but `Option.take` writes `None` back through it.
+        object: &Expr,
         obj: &Value,
         args: &[CallArg],
         span: &Span,
@@ -236,6 +236,50 @@ impl<'a> super::Interpreter<'a> {
                             variant: "Err".to_string(),
                             data: EnumData::Tuple(vec![e]),
                         });
+                    }
+                }
+            }
+            "take" => {
+                // `Option[T].take() -> Option[T]` — MUTATING: yields the
+                // receiver's current value and writes `None` back into the
+                // receiver's PLACE (`assign_to_place` handles identifier /
+                // field / index / deref roots). Gated on the receiver being an
+                // Option variant so a user type's `take` still routes normally.
+                if let Value::EnumVariant { variant, .. } = obj {
+                    if variant == "Some" || variant == "None" {
+                        let taken = obj.clone();
+                        let none = Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "None".to_string(),
+                            data: EnumData::Unit,
+                        };
+                        self.assign_to_place(object, none);
+                        return Some(taken);
+                    }
+                }
+            }
+            "get_or_insert" => {
+                // `Option[T].get_or_insert(v) -> T` — MUTATING: `Some(x)` yields
+                // `x`; `None` writes `Some(v)` back into the receiver's place
+                // and yields `v`. Result modeled BY VALUE (see the typechecker
+                // arm). Gated on the receiver being an Option variant.
+                if let Value::EnumVariant { variant, data, .. } = obj {
+                    if variant == "Some" {
+                        if let EnumData::Tuple(vals) = data {
+                            return Some(vals.first().cloned().unwrap_or(Value::Unit));
+                        }
+                    } else if variant == "None" {
+                        let v = args
+                            .first()
+                            .map(|a| self.eval_expr_inner(&a.value))
+                            .unwrap_or(Value::Unit);
+                        let some = Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![v.clone()]),
+                        };
+                        self.assign_to_place(object, some);
+                        return Some(v);
                     }
                 }
             }

@@ -2503,7 +2503,10 @@ impl<'a> super::TypeChecker<'a> {
         // This batch is the CLOSURE-FREE subset: `ok`/`err` (Result→Option),
         // `or` (passthrough), `ok_or` (Option→Result), `flatten` (Option
         // un-nest). The closure-taking combinators are a separate arm below.
-        if matches!(method, "ok" | "err" | "or" | "and" | "ok_or" | "flatten") {
+        if matches!(
+            method,
+            "ok" | "err" | "or" | "and" | "ok_or" | "flatten" | "take" | "get_or_insert"
+        ) {
             let optres = |ty: &Type| -> Option<(bool, Type, Option<Type>)> {
                 match ty {
                     Type::Named { name, args } if name == "Option" && args.len() == 1 => {
@@ -2608,6 +2611,44 @@ impl<'a> super::TypeChecker<'a> {
                                 Some(Type::Error)
                             }
                         }
+                    }
+                    // `Option[T].take() -> Option[T]` — MUTATING: returns the
+                    // receiver's current value and leaves `None` in its place.
+                    // Receiver-mutation is seeded in the effectchecker builtin
+                    // table (`Option.take`) so the auto-par write-dependency
+                    // gate serializes it against sibling reads (the
+                    // B-2026-07-14-17 standing rule for in-place mutators).
+                    "take" if !is_result => {
+                        if !args.is_empty() {
+                            self.type_error(
+                                "Option.take takes no arguments".to_string(),
+                                span.clone(),
+                                TypeErrorKind::WrongNumberOfArgs,
+                            );
+                        }
+                        record_src(self, &t_ty);
+                        Some(opt(resolve_type_var_top(&t_ty, &self.env.substitutions)))
+                    }
+                    // `Option[T].get_or_insert(v: T) -> T` — MUTATING: inserts
+                    // `Some(v)` when the receiver is `None`, then yields the
+                    // (now guaranteed-present) payload. Kāra models the result
+                    // BY VALUE (a copy of the payload), not Rust's `&mut T` —
+                    // a mut-ref result needs place-ref machinery deferred with
+                    // the rest of that surface. Mutation is seeded in the
+                    // effectchecker table (`Option.get_or_insert`).
+                    "get_or_insert" if !is_result => {
+                        if let Some(a) = args.first() {
+                            let at = self.infer_expr(&a.value);
+                            self.check_assignable(&t_ty, &at, a.value.span.clone());
+                        } else {
+                            self.type_error(
+                                "Option.get_or_insert expects 1 argument".to_string(),
+                                span.clone(),
+                                TypeErrorKind::WrongNumberOfArgs,
+                            );
+                        }
+                        record_src(self, &t_ty);
+                        Some(resolve_type_var_top(&t_ty, &self.env.substitutions))
                     }
                     _ => None,
                 };

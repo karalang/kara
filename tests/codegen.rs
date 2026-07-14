@@ -8762,6 +8762,37 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_option_take_get_or_insert() {
+        // B-2026-07-14-6 (mutating combinators): `take()` yields the receiver's
+        // current value and leaves `None` in its slot (a second take yields
+        // None); `get_or_insert(v)` fills a `None` with `Some(v)` and yields the
+        // now-present payload BY VALUE. Both mutate the receiver's slot and are
+        // seeded receiver-mutating in the effectchecker so the auto-par gate
+        // serializes them. Must match the interpreter oracle.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut o: Option[i64] = Some(5);\n\
+                 let t = o.take();\n\
+                 println(t.unwrap_or(0));\n\
+                 println(o.unwrap_or(0 - 1));\n\
+                 let mut p: Option[i64] = Some(9);\n\
+                 let a = p.take();\n\
+                 let b = p.take();\n\
+                 println(a.unwrap_or(0));\n\
+                 println(b.unwrap_or(0 - 3));\n\
+                 let mut s: Option[i64] = Some(5);\n\
+                 println(s.get_or_insert(9));\n\
+                 println(s.unwrap_or(0 - 1));\n\
+                 let mut n: Option[i64] = None;\n\
+                 println(n.get_or_insert(9));\n\
+                 println(n.unwrap_or(0 - 1));\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n-1\n9\n-3\n5\n5\n9\n9\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_result_combinators_nonclosure() {
         // B-2026-07-14-6: `ok`/`err` (Result→Option), `or`/`and` (select),
         // `ok_or` (Option→Result), `flatten` (Option un-nest) — the closure-free
