@@ -599,6 +599,41 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
+            "strip_prefix" | "strip_suffix" => {
+                // strip_prefix(p: String) -> Option[String] / strip_suffix(s) →
+                // Option[String] (Rust `str::strip_{prefix,suffix}`, but owning
+                // the remainder copy rather than borrowing a `&str`). `Some(rest)`
+                // when the receiver starts/ends with the argument (rest is the
+                // remaining bytes, possibly empty), else `None`. Completes the
+                // `starts_with`/`ends_with` family. Codegen routes through
+                // `karac_string_strip_{prefix,suffix}` + an `Option[String]` wrap.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'{method}' expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !is_str_like(&arg_ty) && arg_ty != Type::Error {
+                        self.type_error(
+                            format!(
+                                "'{method}' expects a String argument, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![Type::Str],
+                }
+            }
             "push_str" => {
                 // push_str(other: String) -> (). Mutating append; receiver
                 // must be a mutable binding (ownership.rs classifies this
@@ -759,6 +794,8 @@ impl<'a> super::TypeChecker<'a> {
                     "sorted_by",
                     "split",
                     "starts_with",
+                    "strip_prefix",
+                    "strip_suffix",
                     "substring",
                 ],
                 args,

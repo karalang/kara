@@ -1587,6 +1587,116 @@ impl<'ctx> super::Codegen<'ctx> {
                     "str.replace",
                 ))
             }
+            // `String.strip_{prefix,suffix}(p) -> Option[String]` via
+            // `karac_string_strip_{prefix,suffix}`, which allocates the owned
+            // remainder copy and writes a `matched` flag through an out-slot.
+            // The flag (not the null/0-len result) distinguishes a matched empty
+            // remainder — `Some("")` = `{null,0,0}` — from a `None`. Wrapped into
+            // `Option[String]` via `find`'s phi-merge shape, but with a 3-word
+            // String payload (`ptr,len,cap`) instead of `find`'s single i64.
+            "strip_prefix" | "strip_suffix" => {
+                if args.len() != 1 {
+                    return Err(
+                        "String.strip_prefix/strip_suffix requires one argument".to_string()
+                    );
+                }
+                let i32_t = self.context.i32_type();
+                let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "strip");
+                let arg_val = self.compile_expr(&args[0].value)?;
+                let arg_sv = arg_val.into_struct_value();
+                let pfx_data = self
+                    .builder
+                    .build_extract_value(arg_sv, 0, "strip.p.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let pfx_len = self
+                    .builder
+                    .build_extract_value(arg_sv, 1, "strip.p.len")
+                    .unwrap()
+                    .into_int_value();
+                let fn_val = self.current_fn.unwrap();
+                let out_len_slot = self.create_entry_alloca(fn_val, "strip.outlen", i64_t.into());
+                let out_matched_slot =
+                    self.create_entry_alloca(fn_val, "strip.matched", i32_t.into());
+                let func_name = if method == "strip_suffix" {
+                    "karac_string_strip_suffix"
+                } else {
+                    "karac_string_strip_prefix"
+                };
+                let func = self
+                    .module
+                    .get_function(func_name)
+                    .expect("strip extern declared in Codegen::new");
+                let ret_ptr = self
+                    .builder
+                    .build_call(
+                        func,
+                        &[
+                            recv_data.into(),
+                            recv_len.into(),
+                            pfx_data.into(),
+                            pfx_len.into(),
+                            out_len_slot.into(),
+                            out_matched_slot.into(),
+                        ],
+                        "strip.call",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let out_len = self
+                    .builder
+                    .build_load(i64_t, out_len_slot, "strip.len")
+                    .unwrap()
+                    .into_int_value();
+                let matched = self
+                    .builder
+                    .build_load(i32_t, out_matched_slot, "strip.m")
+                    .unwrap()
+                    .into_int_value();
+                // Free a fresh-owned String arg temp (`s.strip_prefix(make())`);
+                // a borrowed var / static literal arg is left untouched.
+                self.free_fresh_owned_str_arg(&args[0].value, arg_val);
+
+                let some_bb = self.context.append_basic_block(fn_val, "strip.some");
+                let none_bb = self.context.append_basic_block(fn_val, "strip.none");
+                let merge_bb = self.context.append_basic_block(fn_val, "strip.merge");
+                let is_matched = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::NE,
+                        matched,
+                        i32_t.const_zero(),
+                        "strip.is_m",
+                    )
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_matched, some_bb, none_bb)
+                    .unwrap();
+
+                // some: String payload words {ptr (as i64), len, cap = len}.
+                self.builder.position_at_end(some_bb);
+                let ptr_word = self
+                    .builder
+                    .build_ptr_to_int(ret_ptr, i64_t, "strip.ptrw")
+                    .unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // none.
+                self.builder.position_at_end(none_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // merge: Some({ptr, len, cap}) from `some_bb`, None from `none_bb`.
+                self.builder.position_at_end(merge_bb);
+                let agg = self.build_option_some_via_phis(
+                    &[ptr_word, out_len, out_len],
+                    some_bb,
+                    none_bb,
+                    "strip.opt",
+                );
+                Ok(agg)
+            }
             // `String.repeat(n) -> String` — receiver bytes concatenated `n`
             // times into one fresh allocation; `n <= 0` yields the empty String
             // `{null, 0, 0}`. Single `malloc(n*len)` + an `n`-iteration memcpy

@@ -12203,6 +12203,25 @@ fn test_string_starts_with_interpreter() {
 }
 
 #[test]
+fn test_string_strip_prefix_suffix_interpreter() {
+    // `String.strip_{prefix,suffix}(p) -> Option[String]`: Some(remainder) when
+    // the receiver starts/ends with `p`, else None. Covers match (non-empty
+    // remainder), no-match, matched-empty remainder (`Some("")`), and the
+    // empty-argument case (matches, remainder is the whole string). Codegen
+    // mirrors this (`tests/codegen.rs::e2e_string_strip_prefix_suffix`).
+    let output = run(r#"fn main() {
+            let s = "hello world";
+            match s.strip_prefix("hello ") { Some(r) => println(f"p:{r}"), None => println("pn") }
+            match s.strip_prefix("xyz")    { Some(r) => println(f"p:{r}"), None => println("pn") }
+            match s.strip_suffix(" world") { Some(r) => println(f"s:{r}"), None => println("sn") }
+            match s.strip_suffix("xyz")    { Some(r) => println(f"s:{r}"), None => println("sn") }
+            match s.strip_prefix("hello world") { Some(r) => println(f"e:{r}"), None => println("en") }
+            match s.strip_prefix("")       { Some(r) => println(f"a:{r}"), None => println("an") }
+        }"#);
+    assert_eq!(output, "p:world\npn\ns:hello\nsn\ne:\na:hello world\n");
+}
+
+#[test]
 fn test_string_split_interpreter() {
     // `String.split(sep) -> Vec[String]`. Surfaced by examples/weave (CSV
     // ETL). Covers: char separator, String separator, leading/trailing empty

@@ -2217,6 +2217,29 @@ mod codegen_tests {
         }
     }
 
+    /// `String.strip_{prefix,suffix}(p) -> Option[String]` via
+    /// `karac_string_strip_{prefix,suffix}` + an `Option[String]` phi-merge.
+    /// Must match the interpreter oracle
+    /// (`test_string_strip_prefix_suffix_interpreter`): match / no-match /
+    /// matched-empty (`Some("")`) / empty-arg. Leak-safety is covered by
+    /// `tests/memory_sanitizer.rs::asan_string_strip_prefix_suffix_heap_no_leak`.
+    #[test]
+    fn e2e_string_strip_prefix_suffix() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s = \"hello world\";\n\
+                 match s.strip_prefix(\"hello \") { Some(r) => println(f\"p:{r}\"), None => println(\"pn\") }\n\
+                 match s.strip_prefix(\"xyz\")    { Some(r) => println(f\"p:{r}\"), None => println(\"pn\") }\n\
+                 match s.strip_suffix(\" world\") { Some(r) => println(f\"s:{r}\"), None => println(\"sn\") }\n\
+                 match s.strip_suffix(\"xyz\")    { Some(r) => println(f\"s:{r}\"), None => println(\"sn\") }\n\
+                 match s.strip_prefix(\"hello world\") { Some(r) => println(f\"e:{r}\"), None => println(\"en\") }\n\
+                 match s.strip_prefix(\"\")       { Some(r) => println(f\"a:{r}\"), None => println(\"an\") }\n\
+             }",
+        ) {
+            assert_eq!(out, "p:world\npn\ns:hello\nsn\ne:\na:hello world\n");
+        }
+    }
+
     #[test]
     fn e2e_borrowed_string_slice_map_key_counts() {
         // A counter over length-2 windows of `s`, keyed on `s[i..i+2]` slices.

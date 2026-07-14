@@ -301,6 +301,36 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
+            "strip_prefix" | "strip_suffix" => {
+                // `String.strip_{prefix,suffix}(p) -> Option[String]` — the
+                // remainder after removing `p` from the start/end (`Some(rest)`,
+                // possibly empty) if the receiver starts/ends with `p`, else
+                // `None` (Rust `str::strip_{prefix,suffix}`, owning the copy).
+                // Typechecker arm in `stdlib_seq.rs::infer_str_method`; codegen
+                // arm in `vec_method.rs` via `karac_string_strip_{prefix,suffix}`.
+                if let (Value::String(s), [arg]) = (&obj, args) {
+                    if let Value::String(p) = self.eval_expr_inner(&arg.value) {
+                        let stripped = if method == "strip_suffix" {
+                            s.strip_suffix(p.as_str())
+                        } else {
+                            s.strip_prefix(p.as_str())
+                        };
+                        return Some(match stripped {
+                            Some(rest) => Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "Some".to_string(),
+                                data: EnumData::Tuple(vec![Value::String(rest.to_string())]),
+                            },
+                            None => Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "None".to_string(),
+                                data: EnumData::Unit,
+                            },
+                        });
+                    }
+                }
+                return None;
+            }
             "slice" => {
                 // `String.slice(start, end) -> StringSlice` — a borrowed view
                 // over the half-open byte range `[start, end)`. In the

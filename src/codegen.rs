@@ -5883,6 +5883,22 @@ impl<'ctx> Codegen<'ctx> {
             string_replace_ty,
             Some(Linkage::External),
         );
+        // karac_string_strip_{prefix,suffix}(data, len, p, p_len, out_len,
+        // out_matched: *mut i32) -> ptr. Fetched by name at the use site
+        // (vec_method.rs) — no cached field. `out_matched` distinguishes a
+        // matched empty remainder (Some("")) from a no-match (None).
+        let string_strip_ty =
+            ptr_type.fn_type(&[ptr_md, i64_ty, ptr_md, i64_ty, ptr_md, ptr_md], false);
+        module.add_function(
+            "karac_string_strip_prefix",
+            string_strip_ty,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_string_strip_suffix",
+            string_strip_ty,
+            Some(Linkage::External),
+        );
 
         // ── Error return trace runtime ────────────────────────────────
         // karac_error_trace_push(file_ptr: ptr, file_len: i64, line: i32, col: i32) -> void

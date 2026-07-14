@@ -2252,6 +2252,60 @@ fn main() {
     }
 
     #[test]
+    fn asan_string_strip_prefix_suffix_heap_no_leak() {
+        // Phase 8 § String — `strip_{prefix,suffix}(p) -> Option[String]`
+        // ALLOCATES the owned remainder copy for the matched case
+        // (`karac_string_strip_*` → `alloc_string_result`). The memory contract:
+        // the `Some(rest)` String drops exactly once, the receiver drops exactly
+        // once, and a FRESH-OWNED f-string argument (`strip_prefix(f"exact-{i}")`)
+        // is freed by `free_fresh_owned_str_arg` (else it leaks). Covers matched
+        // (heap remainder), no-match (None, no alloc), and matched-empty
+        // (`Some("")` = `{null,0,0}`, no alloc). Looped so any per-iteration
+        // imbalance accumulates for LSan.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 2i64 {
+        let s: String = f"prefix-{i}-tail-padding";
+        match s.strip_prefix("prefix-") {
+            Some(rest) => println(rest),
+            None => println("none"),
+        }
+        let t: String = f"head-{i}-suffix-padding";
+        match t.strip_suffix("-suffix-padding") {
+            Some(head) => println(head),
+            None => println("none"),
+        }
+        let u: String = f"zzz-{i}-padding";
+        match u.strip_prefix("nope") {
+            Some(r) => println(r),
+            None => println("none"),
+        }
+        let v: String = f"exact-{i}-padding";
+        match v.strip_prefix(f"exact-{i}-padding") {
+            Some(r) => println(f"empty:{r}"),
+            None => println("none"),
+        }
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "0-tail-padding",
+                "head-0",
+                "none",
+                "empty:",
+                "1-tail-padding",
+                "head-1",
+                "none",
+                "empty:",
+            ],
+            "asan_string_strip_prefix_suffix_heap_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_std_mem_take_heap_no_leak_no_double_free() {
         // roadmap Phase 8 § std.mem — `take[T: Default](dest: mut ref T) -> T`
         // over a heap-owning type. `take` monomorphizes `replace(dest,

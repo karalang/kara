@@ -356,6 +356,72 @@ pub unsafe extern "C" fn karac_string_replace(
     alloc_string_result(replaced.as_bytes(), out_len)
 }
 
+/// `String.strip_prefix(prefix)` — if the string starts with `prefix`, return a
+/// fresh OWNED copy of the remainder and set `*out_matched = 1`; otherwise set
+/// `*out_matched = 0` and return null (Rust `str::strip_prefix`, but allocating
+/// an owned copy rather than borrowing a `&str`). A matched empty remainder
+/// (`"ab".strip_prefix("ab")`) sets matched=1 with a null/0-len result — the
+/// empty String `{null, 0, 0}`, which codegen wraps as `Some("")`, distinct
+/// from the no-match `None`.
+///
+/// # Safety
+/// `data`/`prefix` are Kāra String bodies (their `*_len` byte counts);
+/// `out_len` and `out_matched` must be writable. See [`alloc_string_result`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_strip_prefix(
+    data: *const u8,
+    len: i64,
+    prefix: *const u8,
+    prefix_len: i64,
+    out_len: *mut i64,
+    out_matched: *mut i32,
+) -> *mut u8 {
+    let s = str_from_raw(data, len);
+    let p = str_from_raw(prefix, prefix_len);
+    match s.strip_prefix(p) {
+        Some(rest) => {
+            *out_matched = 1;
+            alloc_string_result(rest.as_bytes(), out_len)
+        }
+        None => {
+            *out_matched = 0;
+            *out_len = 0;
+            ptr::null_mut()
+        }
+    }
+}
+
+/// `String.strip_suffix(suffix)` — the trailing-edge sibling of
+/// [`karac_string_strip_prefix`] (Rust `str::strip_suffix`): if the string ends
+/// with `suffix`, return a fresh owned copy of the leading remainder with
+/// `*out_matched = 1`; otherwise `*out_matched = 0` and null.
+///
+/// # Safety
+/// See [`karac_string_strip_prefix`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_strip_suffix(
+    data: *const u8,
+    len: i64,
+    suffix: *const u8,
+    suffix_len: i64,
+    out_len: *mut i64,
+    out_matched: *mut i32,
+) -> *mut u8 {
+    let s = str_from_raw(data, len);
+    let p = str_from_raw(suffix, suffix_len);
+    match s.strip_suffix(p) {
+        Some(rest) => {
+            *out_matched = 1;
+            alloc_string_result(rest.as_bytes(), out_len)
+        }
+        None => {
+            *out_matched = 0;
+            *out_len = 0;
+            ptr::null_mut()
+        }
+    }
+}
+
 /// Borrowed (non-allocating) sibling of `karac_string_slice`: validates the
 /// `start..end` range against `(data, len)` with the *identical* bounds and
 /// UTF-8 char-boundary checks (same fatal `exit(1)` messages), then returns a
