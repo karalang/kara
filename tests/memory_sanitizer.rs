@@ -26451,6 +26451,40 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_get_unwrap_heap_element_no_double_free() {
+        // B-2026-07-14-11: `let row = g.get(i).unwrap()` / `.first()`/`.last()`
+        // on a `Vec[Vec[T]]` / `Vec[String]`. `Vec.get` returns `Option[ref elem]`
+        // (a borrow that packs the element VALUE), so the unwrapped binding
+        // shallow-aliases the container's element buffer. It is now registered
+        // for method dispatch AND treated as borrow-elided (no owned scope-exit
+        // drop) — the container stays the sole owner. Without the elision both
+        // the binding's drop and the container's per-element drain would free the
+        // same buffer. Covers `Vec` and `String` elements across get/first/last;
+        // must be double-free-clean.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let g: Vec[Vec[i64]] = [[1, 2, 3], [4, 5, 6], [7, 8]];
+    let row = g.get(1).unwrap();
+    println(row.len());
+    let f = g.first().unwrap();
+    println(f.len());
+    let l = g.last().unwrap();
+    println(l.len());
+
+    let words: Vec[String] = ["hello", "world", "kara"];
+    let w = words.get(2).unwrap();
+    println(w.len());
+    let fw = words.first().unwrap();
+    println(fw.len());
+}
+"#,
+            &["3", "3", "2", "4", "5"],
+            "vec_get_unwrap_heap_element_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_generic_fn_string_temp_arg_no_leak() {
         // B-2026-07-14-12: a fresh-heap `String` TEMP arg (a fn-return, not a
         // named binding) passed to a GENERIC fn leaked the temp's buffer — the

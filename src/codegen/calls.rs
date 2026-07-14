@@ -1655,26 +1655,45 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
 
         // Reconstruct based on the inner type's LLVM shape.
-        // B-2026-07-14-16 (scalar crash leg): `v.get(i)` / `.first()` / `.last()`
-        // return `Option[ref T]` but PACK the element VALUE into the payload
-        // words (`get.valid` loads `*elem` and coerces its words). For a SCALAR
-        // element the payload w0 is the value itself, yet `ref T` lowers to `ptr`
-        // (types_lowering.rs) so the reconstruction `inttoptr`s w0 — turning a
-        // value like `10` into pointer `0xA`, which crashes with an `Invalid
-        // read` the moment the binding is used. Peel a leading `ref`/`mut ref`
-        // ONLY when the pointee is a SCALAR (int/float/bool/char): no producer
-        // ever packs a scalar's ADDRESS in an `Option[ref scalar]` (you store the
-        // value), so rebuilding at the scalar type is always correct and can't
-        // misread a genuine pointer payload. Heap/struct pointees are LEFT
-        // UNCHANGED here (their value-vs-ref reconstruction + binding registration
-        // is the broader B-11/B-16 coupling, tracked separately) so this leg is a
-        // pure, regression-free fix for the memory-unsafe scalar case.
+        // B-2026-07-14-16 (scalar crash leg) + B-2026-07-14-11 (Vec/String leg):
+        // `v.get(i)` / `.first()` / `.last()` return `Option[ref T]` but PACK the
+        // element VALUE into the payload words (`get.valid` loads `*elem` and
+        // coerces its words). The `ref` is a lifetime marker, NOT a stored
+        // address — yet `ref T` lowers to `ptr` (types_lowering.rs), so the
+        // default reconstruction `inttoptr`s w0: a scalar `10` becomes pointer
+        // `0xA` (crashes with an `Invalid read` on use), and a `Vec`/`String`'s
+        // `{ptr,len,cap}` collapses to just its data pointer (len/cap lost, so
+        // `row.len()` reads garbage). Peel the leading `ref`/`mut ref` so the
+        // rebuild uses the pointee's VALUE shape.
+        //
+        // Producer-aware gate: peeling is correct ONLY because these builtin
+        // accessors pack the VALUE. A GENUINE address-packing `Option[ref T]`
+        // (a user `Some(some_ref)`) stores the pointer in w0 and MUST keep the
+        // `inttoptr` reconstruction — peeling it would misread 3 words off a
+        // single pointer. So the Vec/String leg peels ONLY when the `.unwrap()`
+        // receiver is one of the value-packing borrow accessors
+        // (`get`/`first`/`last`, whose `Option[ref _]` return shape is what put
+        // a `ref` in `inner_te` here) AND the pointee is the 3-word
+        // `{ptr,len,cap}` Vec/String/VecDeque shape. The SCALAR peel stays
+        // unconditional (no producer ever packs a scalar's address). USER
+        // STRUCT pointees are deliberately LEFT UNCHANGED — their ≤3-word
+        // value-vs-ref reconstruction has a separate open gap (the B-16 struct
+        // leg), so this fix does not touch them.
+        let recv_is_value_packing_borrow_accessor = matches!(
+            &object.kind,
+            ExprKind::MethodCall { method: m, .. }
+                if matches!(m.as_str(), "get" | "first" | "last")
+        );
         let recon_te = match &inner_te.kind {
             TypeKind::Ref(inner) | TypeKind::MutRef(inner)
                 if matches!(
                     self.llvm_type_for_type_expr(inner),
                     BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)
-                ) =>
+                ) || (recv_is_value_packing_borrow_accessor
+                    && matches!(
+                        self.llvm_type_for_type_expr(inner),
+                        BasicTypeEnum::StructType(st) if st == self.vec_struct_type()
+                    )) =>
             {
                 inner.as_ref()
             }

@@ -2396,6 +2396,25 @@ impl<'ctx> super::Codegen<'ctx> {
                             .insert(var_name.clone(), self.context.i8_type().into());
                         self.string_vars.insert(var_name.clone());
                     }
+                    // B-2026-07-14-11: `let row = v.get(i).unwrap()` /
+                    // `.first()`/`.last()` on a Vec/Slice whose element is a heap
+                    // collection (`Vec`/`String`). The accessor returns
+                    // `Option[ref elem]`, and `bind_pattern_types` does NOT peel
+                    // that `ref` (the Vec-accessor asymmetry vs Map.get's
+                    // by-value `Option[V]`), so the binding is otherwise never
+                    // registered and a later `row.len()`/`row.get(j)` fails
+                    // codegen dispatch ("no handler for method"). Register the
+                    // binding's collection type from the typechecker's PEELED
+                    // element type. The scope-exit drop is separately suppressed
+                    // as borrow-elided (`borrowed_vec_get_unwrap_heap_inner` is
+                    // ORed into `borrow_elided` below), so the container stays the
+                    // sole owner — no double-free.
+                    if !detected {
+                        if let Some(inner_te) = self.borrowed_vec_get_unwrap_heap_inner(value) {
+                            self.register_var_from_type_expr(var_name, &inner_te);
+                            detected = true;
+                        }
+                    }
                     // Infer `ref CStr` from a `let s = c"..."` RHS — the
                     // unannotated mirror of the `is_cstr_type_expr` arm
                     // above (same split as StringLit ↔ `: String`).
@@ -2798,8 +2817,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // drop — the map stays the sole owner. `map.get` returns a borrow
                 // whose lifetime the ownership checker ties to the map, so the
                 // alias can't outlive the buffer.
-                let borrow_elided =
-                    borrow_elided || self.is_nonshared_heap_value_map_get_unwrap(value);
+                let borrow_elided = borrow_elided
+                    || self.is_nonshared_heap_value_map_get_unwrap(value)
+                    || self.borrowed_vec_get_unwrap_heap_inner(value).is_some();
                 let val = if borrow_elided {
                     val
                 } else {
@@ -7344,5 +7364,62 @@ impl<'ctx> super::Codegen<'ctx> {
         // Vec / String value — the shapes that get registered as a tracked
         // Vec/String (hence an owned drop) at the unwrapped binding.
         self.is_string_type_expr(&te) || self.extract_vec_elem_type(&te).is_some()
+    }
+
+    /// B-2026-07-14-11: `let row = v.get(i).unwrap()` / `.first()`/`.last()`
+    /// on a Vec/Slice whose ELEMENT is itself a heap collection (`Vec`/`String`
+    /// /`VecDeque`). These builtin accessors return `Option[ref elem]` — a
+    /// BORROW that packs the element VALUE — so the unwrapped binding's
+    /// `{ptr,len,cap}` shallow-aliases the container's element buffer.
+    ///
+    /// Two consequences the let-site must handle, both keyed off the PEELED
+    /// element type this returns:
+    ///  1. Registration — `Vec.get` types as `ref elem`, which `bind_pattern_types`
+    ///     does NOT peel (unlike the match-arm path), so the typechecker records
+    ///     no `pattern_binding_types` entry and the binding never lands in
+    ///     `vec_elem_types`; a later `row.len()` then fails codegen dispatch with
+    ///     "no handler for method 'len'". Registering from the peeled `elem`
+    ///     restores dispatch. (Map.get returns `Option[V]` BY VALUE — no `ref` —
+    ///     so its unwrap binding already registers through the annotation path;
+    ///     this is the Vec-accessor asymmetry.)
+    ///  2. Borrow-elision — the binding aliases the container's buffer, so it must
+    ///     take NO scope-exit drop (the container stays the sole owner), exactly
+    ///     like the Map sibling `is_nonshared_heap_value_map_get_unwrap`.
+    ///
+    /// Returns `None` for any other RHS shape (incl. a scalar element, whose
+    /// value the scalar leg already reconstructs and which owns no buffer).
+    pub(super) fn borrowed_vec_get_unwrap_heap_inner(&self, value: &Expr) -> Option<TypeExpr> {
+        let ExprKind::MethodCall { method, object, .. } = &value.kind else {
+            return None;
+        };
+        if !matches!(method.as_str(), "unwrap" | "expect") {
+            return None;
+        }
+        let ExprKind::MethodCall {
+            method: get_method, ..
+        } = &object.kind
+        else {
+            return None;
+        };
+        if !matches!(get_method.as_str(), "get" | "first" | "last") {
+            return None;
+        }
+        let te = self
+            .method_unwrap_inner_types
+            .get(&(value.span.offset, value.span.length))?;
+        // Only the Vec/Slice borrow accessors put a `ref` in the recorded inner
+        // type (Map.get is `Option[V]` by value). Peel it to the element value.
+        let inner = match &te.kind {
+            TypeKind::Ref(i) | TypeKind::MutRef(i) => i.as_ref(),
+            _ => return None,
+        };
+        // Only a heap collection element takes an owned drop that must be
+        // suppressed; a scalar element owns no buffer, so leave it to the
+        // scalar reconstruction leg (no registration / elision needed).
+        if self.is_string_type_expr(inner) || self.extract_vec_elem_type(inner).is_some() {
+            Some(inner.clone())
+        } else {
+            None
+        }
     }
 }

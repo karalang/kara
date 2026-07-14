@@ -8619,6 +8619,37 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_get_first_last_unwrap_heap_element() {
+        // B-2026-07-14-11: `let row = g.get(i).unwrap()` / `.first()`/`.last()`
+        // on a `Vec[Vec[T]]` (or `Vec[String]`) failed codegen dispatch LOUD
+        // ("no handler for method 'len' on variable 'row'"): `Vec.get` returns
+        // `Option[ref elem]` and the `ref` was neither peeled at reconstruction
+        // (so the 3-word `{ptr,len,cap}` collapsed to its data pointer) nor at
+        // binding registration (so `row` never landed in `vec_elem_types`). The
+        // fix reconstructs at the element VALUE shape and registers the peeled
+        // element type, treating the alias as borrow-elided (no double-free).
+        // Interpreter is the oracle.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let g: Vec[Vec[i64]] = [[1, 2, 3], [4, 5, 6], [7, 8]];\n\
+                 let row = g.get(1).unwrap();\n\
+                 println(row.len());\n\
+                 println(row.get(2).unwrap());\n\
+                 let f = g.first().unwrap();\n\
+                 println(f.len());\n\
+                 let l = g.last().unwrap();\n\
+                 println(l.len());\n\
+                 let words: Vec[String] = [\"hello\", \"world\"];\n\
+                 let w = words.get(1).unwrap();\n\
+                 println(w.len());\n\
+                 println(w);\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n6\n3\n2\n5\nworld\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_question_on_result_nested_option_payload() {
         // B-2026-07-13-19: `?` on `Result[Option[T], E]` — the Ok payload is
         // itself an `Option[T]`. `reconstruct_question_ok_payload`'s wrapper
