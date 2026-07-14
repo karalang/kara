@@ -5680,6 +5680,77 @@ fn test_distinct_bogus_method_is_no_method_found() {
 }
 
 #[test]
+fn test_unknown_method_on_option_is_rejected() {
+    // `Option` / `Result` have an exhaustively-modelled method surface, so a
+    // method that isn't one of theirs is a real NoMethodFound — NOT the
+    // historical silent `Type::Error` poison that let `opt.len()` typecheck
+    // clean and then panic at runtime ("the typechecker accepted .len() on a
+    // type without one"). The classic trigger is forgetting to unwrap:
+    // `Vec.get` returns `Option[T]`, so `grid.get(i).len()` calls a Vec
+    // method on an Option. Poison hid it; this now rejects it at compile time.
+    for src in [
+        "fn main() { let o: Option[i64] = Some(5); let _ = o.len(); }",
+        "fn main() { let mut o: Option[i64] = Some(5); o.push(9); }",
+        "fn main() { let o: Option[i64] = Some(5); o.totally_bogus(); }",
+        "fn main() { let r: Result[i64, i64] = Ok(5); r.push(9); }",
+        "fn main() { let r: Result[i64, i64] = Ok(5); r.totally_bogus(); }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+            "expected NoMethodFound for unknown Option/Result method in `{src}`, got: {}",
+            errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+    }
+}
+
+#[test]
+fn test_valid_option_result_methods_still_resolve() {
+    // The tightening must not regress the modelled surface: every valid
+    // Option/Result method resolves via a dedicated arm or baked impl BEFORE
+    // the not-found fall-through, so none of these emit NoMethodFound.
+    for src in [
+        "fn main() { let o: Option[i64] = Some(5); let _ = o.unwrap(); }",
+        "fn main() { let o: Option[i64] = Some(5); let _ = o.is_some(); }",
+        "fn main() { let o: Option[i64] = Some(5); let _ = o.is_none(); }",
+        "fn main() { let o: Option[i64] = Some(5); let _ = o.unwrap_or(0); }",
+        "fn main() { let o: Option[i64] = Some(5); let _ = o.expect(\"m\"); }",
+        "fn main() { let o: Option[i64] = Some(5); let _ = o.map(|x| x + 1); }",
+        "fn main() { let r: Result[i64, i64] = Ok(5); let _ = r.unwrap(); }",
+        "fn main() { let r: Result[i64, i64] = Ok(5); let _ = r.is_ok(); }",
+        "fn main() { let r: Result[i64, i64] = Ok(5); let _ = r.is_err(); }",
+        "fn main() { let r: Result[i64, i64] = Ok(5); let _ = r.unwrap_or(0); }",
+    ] {
+        // These are error-free programs, so use the raw pipeline rather than
+        // `typecheck_errors` (which asserts errors exist).
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "parse errors in `{src}`");
+        let resolved = resolve(&parsed.program);
+        assert!(resolved.errors.is_empty(), "resolve errors in `{src}`");
+        let result = typecheck(&parsed.program, &resolved);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+            "valid Option/Result method wrongly rejected in `{src}`: {}",
+            result
+                .errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+    }
+}
+
+#[test]
 fn test_distinct_inherent_impl_method_resolves() {
     // Inherent impls on a distinct type DO resolve (the no-deref rule only
     // blocks *base* methods, not the distinct type's own).
@@ -9079,13 +9150,20 @@ fn test_method_resolution_specialized_impl_correct_args_resolves() {
 
 #[test]
 fn test_method_resolution_prelude_silent_fallthrough_preserved_when_method_absent() {
-    // No impl declares `truly_nonexistent_method` anywhere on Option —
-    // the silent fall-through must be preserved (the args-specialization
+    // No impl declares `truly_nonexistent_method` anywhere on `Vec` — the
+    // silent fall-through is preserved for prelude types whose method surface
+    // is only partially modelled in the impl table (the args-specialization
     // tightening only fires when the method exists on a *different*
     // specialization). This is the regression gate for the historical
     // partially-implicit prelude method surface comment in
-    // `src/typechecker.rs` (around line 10082).
-    typecheck_ok("fn main() { let o: Option[i64] = Some(5); o.truly_nonexistent_method(); }");
+    // `src/typechecker/expr_method_call.rs`.
+    //
+    // NOTE: `Option`/`Result` are deliberately EXEMPT from this leniency
+    // (B-2026-07-14-5) — their surface is exhaustively modelled, so an unknown
+    // method on one is a real NoMethodFound (see
+    // `test_unknown_method_on_option_is_rejected`). This gate therefore uses
+    // `Vec`, which remains on the silent path.
+    typecheck_ok("fn main() { let mut v: Vec[i64] = Vec.new(); v.truly_nonexistent_method(); }");
 }
 
 // ── Method resolution: stdlib typo suggestions ──────────────────
@@ -16128,7 +16206,8 @@ fn test_compound_enum_nested_enum_payload_deduped_per_variant() {
         .filter(|e| e.message.contains("E_ENUM_NESTED_ENUM_PAYLOAD"))
         .count();
     assert_eq!(
-        n, 1,
+        n,
+        1,
         "expected exactly one deduped E_ENUM_NESTED_ENUM_PAYLOAD, got {n}: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );

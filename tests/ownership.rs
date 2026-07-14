@@ -463,7 +463,8 @@ fn test_cycle_reported_once_per_back_edge() {
         .filter(|e| e.kind == OwnershipErrorKind::OwnershipCycle)
         .count();
     assert_eq!(
-        enum_cycles, 1,
+        enum_cycles,
+        1,
         "expected one deduped ownership cycle for the enum, got {enum_cycles}: {:?}",
         enum_errs.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
@@ -474,7 +475,8 @@ fn test_cycle_reported_once_per_back_edge() {
         .filter(|e| e.kind == OwnershipErrorKind::OwnershipCycle)
         .count();
     assert_eq!(
-        struct_cycles, 1,
+        struct_cycles,
+        1,
         "expected one deduped ownership cycle for the struct, got {struct_cycles}: {:?}",
         struct_errs.iter().map(|e| &e.message).collect::<Vec<_>>()
     );

@@ -4934,6 +4934,26 @@ impl<'a> super::TypeChecker<'a> {
                     // historical silent prelude fall-through.
                     || self.env.distinct_bases.contains_key(&type_name))
                     && !crate::prelude::PRELUDE_TYPES.contains(&type_name.as_str());
+                // `Option` / `Result` are the exception among prelude types:
+                // their method surface is small and EXHAUSTIVELY modelled —
+                // every valid method (`unwrap`, `map`, `is_some`, `ok_or`,
+                // `map_err`, …) resolves via a dedicated arm above or a baked
+                // stdlib impl and returns/short-circuits BEFORE this
+                // fall-through, so a method that reaches here is genuinely
+                // absent (verified: the full valid-method set resolves without
+                // hitting None). The overwhelmingly common way to reach here is
+                // a wrong-container call — invoking an inner-type method on an
+                // un-unwrapped optional (`opt.len()`, `res.push(x)`,
+                // `grid.get(i).len()` where `get` returns `Option[Vec[_]]`).
+                // The silent fall-through poisoned those to `Type::Error`
+                // (universally assignable), so they typechecked clean and then
+                // detonated at runtime — an interpreter `unreachable!` (“the
+                // typechecker accepted .len() on a type without one”) or a
+                // codegen “no handler for method”. Reject them here like a
+                // user-defined type, the same silent-poison tightening applied
+                // to numeric receivers (B-2026-07-03-5) and user types.
+                const EXHAUSTIVE_PRELUDE: &[&str] = &["Option", "Result"];
+                let is_exhaustive_prelude = EXHAUSTIVE_PRELUDE.contains(&type_name.as_str());
                 // Args-specialization tightening: even on prelude types, fire
                 // NoMethodFound when the method exists on a *different*
                 // args-specialization of this type-name (e.g.,
@@ -4990,7 +5010,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
                     return Type::Error;
                 }
-                if (is_user_defined || method_on_other_specialization)
+                if (is_user_defined || is_exhaustive_prelude || method_on_other_specialization)
                     && !self.type_has_comptime_derive(&type_name)
                 {
                     let candidates = self.env.collect_method_names(&type_name, &[]);
