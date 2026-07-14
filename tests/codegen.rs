@@ -8857,6 +8857,44 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_scan() {
+        // B-2026-07-14-8 (scan leg): `for out in src.scan(init, |acc, x|
+        // Some((new, out)))` lowers to a single accumulator loop (the
+        // scan-collect desugar with the user body as the sink). One loop →
+        // user break/continue/labels work naturally; the accumulator
+        // advances BEFORE the body, so `continue` doesn't desync state.
+        // Direct-Some bodies only (the early-stop conditional-None form
+        // bails loud); the source may be a fused chain. Must match the
+        // interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4];\n\
+                 for s in v.iter().scan(0, |acc, x| Some((acc + x, acc + x))) { println(s); }\n\
+                 let mut t: i64 = 0;\n\
+                 for y in v.iter().scan(1, |acc, x| Some((acc * 2, acc * x))) { t = t + y; }\n\
+                 println(t);\n\
+                 let mut u: i64 = 0;\n\
+                 for s in v.iter().scan(0, |acc, x| Some((acc + x, acc + x))) {\n\
+                     if s > 5 { break; }\n\
+                     u = u + s;\n\
+                 }\n\
+                 println(u);\n\
+                 let mut w: i64 = 0;\n\
+                 for s in v.iter().scan(0, |acc, x| Some((acc + x, acc + x))) {\n\
+                     if s % 2 == 1 { continue; }\n\
+                     w = w + s;\n\
+                 }\n\
+                 println(w);\n\
+                 let mut z: i64 = 0;\n\
+                 for s in v.iter().filter(|q| q % 2 == 0).scan(0, |acc, x| Some((acc + x, acc + x))) { z = z + s; }\n\
+                 println(z);\n\
+             }",
+        ) {
+            assert_eq!(out, "1\n3\n6\n10\n49\n4\n16\n8\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_flat_map_terminals() {
         // B-2026-07-14-8 (flat_map terminals): the fused terminals treat a
         // peel-rejected flat_map receiver as a zero-step base — the

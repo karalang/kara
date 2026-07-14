@@ -188,6 +188,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(v);
                 }
             }
+            // `for x in <src>.scan(init, |acc, x| Some((new, out))) { … }` —
+            // single accumulator-loop desugar (B-2026-07-14-8, scan leg).
+            // Fails closed to the loud `.scan()` bail below for the
+            // conditional-`None` early-stop body form or a peel-rejected
+            // source.
+            if args.len() == 2 && method == "scan" {
+                if let Some(v) = self.try_compile_for_scan(
+                    label,
+                    pattern,
+                    object,
+                    &args[0].value,
+                    &args[1].value,
+                    body,
+                    &iterable.span,
+                )? {
+                    return Ok(v);
+                }
+            }
             if args.is_empty() && (method == "iter" || method == "into_iter") {
                 // Indexed receiver (`coll[i].iter()`): synthesize a
                 // temp identifier pointing into `coll`'s storage and
@@ -3717,5 +3735,170 @@ impl<'ctx> super::Codegen<'ctx> {
             span: span.clone(),
         };
         Ok(Some(self.compile_expr(&cycle_loop)?))
+    }
+}
+
+impl<'ctx> super::Codegen<'ctx> {
+    /// Lower `for <pat> in <src>.scan(init, |acc, x| Some((new, out))) {
+    /// <body> }` (B-2026-07-14-8, scan leg) into a single accumulator loop:
+    ///
+    /// ```text
+    /// { let mut __sacc_N = <init>;
+    ///   [label:] for <x> in <src> {
+    ///       let <acc> = __sacc_N;
+    ///       let __st_N = (<new>, <out>);
+    ///       __sacc_N = __st_N.0;
+    ///       let <pat> = __st_N.1;
+    ///       <body>
+    ///   } }
+    /// ```
+    ///
+    /// This is the scan-collect desugar (`try_compile_scan_collect`) with the
+    /// user's body as the sink instead of a `push`. Because the result is ONE
+    /// loop, the user's `break`/`continue`/label semantics need no rewriting —
+    /// the user label rides on the `for` directly. The accumulator advances
+    /// BEFORE the user body runs, so a body `continue` does not desync state.
+    ///
+    /// Same body-shape restriction as the collect desugar: only a DIRECT
+    /// `Some((new, out))` closure body (which never stops early — no break
+    /// machinery needed). A conditional-`None` body (`scan`'s early-stop form)
+    /// has no `.is_none()`/`.unwrap()` dispatch on synthetic AST and fails
+    /// closed to the loud `.scan()` adaptor bail; the interpreter handles it.
+    /// The source may be any fused-peel-accepted chain (broader than the
+    /// collect desugar's identity-source gate — the inner `for` re-runs the
+    /// full fusion).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn try_compile_for_scan(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        src: &Expr,
+        init: &Expr,
+        closure_arg: &Expr,
+        body: &Block,
+        span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let ExprKind::Closure {
+            params,
+            body: cbody,
+            ..
+        } = &closure_arg.kind
+        else {
+            return Ok(None);
+        };
+        if params.len() != 2 {
+            return Ok(None);
+        }
+        let (PatternKind::Binding(acc_p), PatternKind::Binding(x_p)) =
+            (&params[0].pattern.kind, &params[1].pattern.kind)
+        else {
+            return Ok(None);
+        };
+        if Self::peel_fused_map_filter_chain(src).is_none() {
+            return Ok(None);
+        }
+        // Direct `Some(<tuple>)` body only (see doc comment).
+        let callee_is_some = |callee: &Expr| -> bool {
+            match &callee.kind {
+                ExprKind::Identifier(n) => n == "Some",
+                ExprKind::Path { segments, .. } => {
+                    segments.last().map(|s| s.as_str()) == Some("Some")
+                }
+                _ => false,
+            }
+        };
+        let inner_tuple = match &cbody.kind {
+            ExprKind::Call { callee, args } if args.len() == 1 && callee_is_some(callee) => {
+                args[0].value.clone()
+            }
+            _ => return Ok(None),
+        };
+
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let accname = format!("__sacc_{uid}");
+        let tname = format!("__st_{uid}");
+        let sp = span.clone();
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let let_stmt = |is_mut: bool, name: &str, value: Expr| Stmt {
+            kind: StmtKind::Let {
+                is_mut,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name.to_string()),
+                    span: sp.clone(),
+                },
+                ty: None,
+                value,
+            },
+            span: sp.clone(),
+        };
+        let tuple_idx = |recv: Expr, idx: u64| Expr {
+            kind: ExprKind::TupleIndex {
+                object: Box::new(recv),
+                index: idx,
+            },
+            span: sp.clone(),
+        };
+
+        let mut for_body = vec![
+            let_stmt(false, acc_p, ident(&accname)),
+            let_stmt(false, &tname, inner_tuple),
+            Stmt {
+                kind: StmtKind::Assign {
+                    target: ident(&accname),
+                    value: tuple_idx(ident(&tname), 0),
+                },
+                span: sp.clone(),
+            },
+            Stmt {
+                kind: StmtKind::Let {
+                    is_mut: false,
+                    pattern: pattern.clone(),
+                    ty: None,
+                    value: tuple_idx(ident(&tname), 1),
+                },
+                span: sp.clone(),
+            },
+        ];
+        for_body.extend(body.stmts.iter().cloned());
+        if let Some(fe) = &body.final_expr {
+            for_body.push(Stmt {
+                kind: StmtKind::Expr((**fe).clone()),
+                span: sp.clone(),
+            });
+        }
+
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: label.map(str::to_string),
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(x_p.clone()),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(src.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: for_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_stmt(true, &accname, init.clone()), for_loop],
+                final_expr: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
     }
 }
