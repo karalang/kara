@@ -2668,6 +2668,77 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(r.into());
         }
 
+        // `next_power_of_two` on unsigned integer scalars -> Self (typed in
+        // expr_method_call.rs). The smallest power of two ≥ self (0 and 1 → 1),
+        // on the receiver's iN. Clamp m to ≥ 1 (so the `ctlz` shift is always
+        // defined — 0 and 1 both map to 1), trap `integer overflow` when
+        // `m > 2^(bits-1)` (the result would be the unrepresentable 2^bits),
+        // else `1 << (bits - ctlz(m - 1))`. Zero-extended to the i64-backed
+        // unsigned result; matches the interpreter's `next_power_of_two`.
+        if args.is_empty() && method == "next_power_of_two" {
+            let (bits, unsigned) = self.receiver_int_kind(object, call_span, method);
+            let int_ty = self.int_type_for_bits(bits);
+            let m_raw = self.compile_expr(object)?.into_int_value();
+            let m0 = self.coerce_int_to(m_raw, int_ty, unsigned);
+            let one = int_ty.const_int(1, false);
+            // Clamp 0 → 1 so `m - 1` is never all-ones and the shift stays in
+            // range; `next_power_of_two(0) == 1` anyway.
+            let is_zero = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, m0, int_ty.const_zero(), "npot.z")
+                .unwrap();
+            let m = self
+                .builder
+                .build_select(is_zero, one, m0, "npot.m")
+                .unwrap()
+                .into_int_value();
+            // Overflow iff m > 2^(bits-1): the next power of two would be 2^bits.
+            // The threshold's bit pattern (0x80…0 at bits==64) compares unsigned.
+            let half = int_ty.const_int(1u64 << (bits - 1), false);
+            let is_ovf = self
+                .builder
+                .build_int_compare(IntPredicate::UGT, m, half, "npot.ovf")
+                .unwrap();
+            let fn_val = self.current_fn.unwrap();
+            let trap_bb = self.context.append_basic_block(fn_val, "npot.ovf.trap");
+            let ok_bb = self.context.append_basic_block(fn_val, "npot.ovf.ok");
+            self.builder
+                .build_conditional_branch(is_ovf, trap_bb, ok_bb)
+                .unwrap();
+            self.builder.position_at_end(trap_bb);
+            self.emit_panic("integer overflow");
+            self.builder.build_unreachable().unwrap();
+            self.builder.position_at_end(ok_bb);
+            // t = m - 1 (in [0, 2^(bits-1)-1]); shift = bits - ctlz(t) ∈ [0, bits-1].
+            let t = self.builder.build_int_sub(m, one, "npot.t").unwrap();
+            let ctlz = inkwell::intrinsics::Intrinsic::find("llvm.ctlz")
+                .ok_or("llvm.ctlz intrinsic must exist in LLVM")?;
+            let decl = ctlz
+                .get_declaration(&self.module, &[int_ty.into()])
+                .ok_or_else(|| format!("llvm.ctlz has no declaration for width {bits}"))?;
+            let no_poison = self.context.bool_type().const_zero();
+            let lz = self
+                .builder
+                .build_call(decl, &[t.into(), no_poison.into()], "npot.lz")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let bits_c = int_ty.const_int(u64::from(bits), false);
+            let shift = self
+                .builder
+                .build_int_sub(bits_c, lz, "npot.shift")
+                .unwrap();
+            let pw = self
+                .builder
+                .build_left_shift(one, shift, "npot.pw")
+                .unwrap();
+            let i64_t = self.context.i64_type();
+            // The result is a non-negative power of two in iN → zero-extend.
+            let res = self.coerce_int_to(pw, i64_t, true);
+            return Ok(res.into());
+        }
+
         // `abs_diff(self, other) -> unsigned sibling` (typed in
         // expr_method_call.rs). |a - b| at the receiver's iN, which never
         // overflows: pick the larger by the receiver's signedness, subtract (the

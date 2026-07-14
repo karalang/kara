@@ -7306,6 +7306,53 @@ fn main() {
         }
     }
 
+    /// `uN::next_power_of_two` lowered via `llvm.ctlz` + shift. Must match the
+    /// interpreter oracle (`test_next_power_of_two_unsigned`), including the u64
+    /// 2^63 case that MUST print unsigned.
+    #[test]
+    fn e2e_next_power_of_two_unsigned() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println((0u32).next_power_of_two());\n\
+                 println((1u32).next_power_of_two());\n\
+                 println((2u32).next_power_of_two());\n\
+                 println((3u32).next_power_of_two());\n\
+                 println((5u32).next_power_of_two());\n\
+                 println((100u32).next_power_of_two());\n\
+                 println((128u8).next_power_of_two());\n\
+                 let h: u32 = 1u32 << 31;\n\
+                 println(h.next_power_of_two());\n\
+                 let i: u64 = 1u64 << 63;\n\
+                 println(i.next_power_of_two());\n\
+                 let j: u64 = (1u64 << 63) - 1;\n\
+                 println(j.next_power_of_two());\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "1\n1\n2\n4\n8\n128\n128\n2147483648\n9223372036854775808\n9223372036854775808\n"
+            );
+        }
+    }
+
+    /// `next_power_of_two` traps `integer overflow` when the result would exceed
+    /// the width (`u8 129` → 256): exit 1, matching the interpreter trap
+    /// (`test_next_power_of_two_overflow_traps`).
+    #[test]
+    fn e2e_next_power_of_two_overflow_traps() {
+        if let Some(cap) =
+            run_program_capturing("fn main() { let g: u8 = 129; println(g.next_power_of_two()); }")
+        {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains("integer overflow"),
+                "expected integer-overflow trap, got stdout={:?} stderr={:?}",
+                cap.stdout,
+                cap.stderr
+            );
+        }
+    }
+
     /// B-2026-06-19-13 codegen follow-on: `char.to_digit(radix) -> Option[u32]`
     /// now LOWERS under `karac build` (was an honest "not yet supported"
     /// diagnostic). Covers a decimal digit, lowercase + uppercase hex-ish digits

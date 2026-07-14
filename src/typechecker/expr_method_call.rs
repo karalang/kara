@@ -4313,6 +4313,20 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(args_close_span, &receiver_for_lookup);
             return Type::Bool;
         }
+        // `next_power_of_two` on unsigned integer scalars -> Self (Rust's
+        // `uN::next_power_of_two`; unsigned-only). The smallest power of two ≥
+        // self (0 and 1 both → 1). TRAPS `integer overflow` when the result
+        // would exceed the width (`self > 2^(bits-1)`), matching the `*`/`pow`
+        // trap policy. The Self result keeps the receiver span's type; the
+        // interpreter recovers the width from `args_close_span`. Effect-free;
+        // codegen lowers via `llvm.ctlz` + a shift with an overflow-trap branch.
+        if args.is_empty()
+            && matches!(&receiver_for_lookup, Type::UInt(_))
+            && method == "next_power_of_two"
+        {
+            self.record_expr_type(args_close_span, &receiver_for_lookup);
+            return receiver_for_lookup.clone();
+        }
         // `abs_diff(self, other) -> unsigned sibling` (Rust `iN/uN::abs_diff`):
         // the absolute difference of two same-type integers ALWAYS fits the
         // unsigned type of the same width (`i8::MIN.abs_diff(i8::MAX) == 255u8`),

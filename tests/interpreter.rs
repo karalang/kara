@@ -827,6 +827,47 @@ fn test_abs_diff_unsigned_result() {
 }
 
 #[test]
+fn test_next_power_of_two_unsigned() {
+    // `uN::next_power_of_two`: smallest power of two ≥ self (0 and 1 → 1), at
+    // the receiver width. Includes u8 128 (2^7, fits — no trap), u32 2^31, and
+    // u64 2^63 / 2^63-1 (both → 2^63, which MUST print unsigned). Codegen
+    // mirrors this (`tests/codegen.rs::e2e_next_power_of_two_unsigned`).
+    let out = run("fn main() {\n\
+             println((0u32).next_power_of_two());\n\
+             println((1u32).next_power_of_two());\n\
+             println((2u32).next_power_of_two());\n\
+             println((3u32).next_power_of_two());\n\
+             println((5u32).next_power_of_two());\n\
+             println((100u32).next_power_of_two());\n\
+             println((128u8).next_power_of_two());\n\
+             let h: u32 = 1u32 << 31;\n\
+             println(h.next_power_of_two());\n\
+             let i: u64 = 1u64 << 63;\n\
+             println(i.next_power_of_two());\n\
+             let j: u64 = (1u64 << 63) - 1;\n\
+             println(j.next_power_of_two());\n\
+         }");
+    assert_eq!(
+        out,
+        "1\n1\n2\n4\n8\n128\n128\n2147483648\n9223372036854775808\n9223372036854775808\n"
+    );
+}
+
+#[test]
+fn test_next_power_of_two_overflow_traps() {
+    // The result would exceed the width (`u8 129` → 256 doesn't fit u8), so it
+    // traps `integer overflow` — the same trap policy as `*`/`pow`.
+    let errors = runtime_errors("fn main() { let g: u8 = 129; println(g.next_power_of_two()); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("integer overflow")),
+        "expected an integer-overflow trap, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_char_to_digit_some_none_and_radix() {
     // `c.to_digit(radix) -> Option[u32]`: digit value in the given radix, None
     // when not a digit. Radix is u32 (suffix-free literal promotes); 'a'/'z'

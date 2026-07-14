@@ -2416,6 +2416,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         | "swap_bytes"
                         | "rotate_left"
                         | "rotate_right"
+                        | "next_power_of_two"
                         | "min"
                         | "max"
                         | "clamp"

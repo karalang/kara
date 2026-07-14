@@ -1962,6 +1962,36 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `next_power_of_two` on unsigned integer scalars -> Self (typed in
+        // expr_method_call.rs). The smallest power of two ≥ self (0 and 1 → 1),
+        // at the receiver width recovered from `args_close_span`. Traps
+        // `integer overflow` when the result would exceed the width
+        // (`self > 2^(bits-1)`), matching the `*`/`pow` trap policy.
+        if args.is_empty() && method == "next_power_of_two" {
+            if let Value::Int(n) = &obj {
+                let w = self.int_width_at(args_close_span);
+                let bits = match w {
+                    IntW::S(b) | IntW::U(b) => b,
+                };
+                let m: u64 = if bits >= 64 {
+                    *n as u64
+                } else {
+                    (*n as u64) & ((1u64 << bits) - 1)
+                };
+                // Overflow iff the smallest power of two ≥ m would be 2^bits.
+                if m > (1u64 << (bits - 1)) {
+                    return self.record_runtime_error("integer overflow".to_string(), span);
+                }
+                let result: u64 = if m <= 1 {
+                    1
+                } else {
+                    // m ≤ 2^(bits-1), so the u128 next-power-of-two fits the width.
+                    (m as u128).next_power_of_two() as u64
+                };
+                return Value::Int(result as i64);
+            }
+        }
+
         // `abs_diff(self, other) -> unsigned sibling` (typed in
         // expr_method_call.rs): |self - other| at the receiver width, always
         // non-negative, never traps. Computed in i128 (so a signed MIN/MAX diff
