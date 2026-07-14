@@ -1076,6 +1076,15 @@ pub struct TypeCheckResult {
     /// this side-table to know whether to call `<target>.from(err)` on the
     /// propagated Err value.
     pub question_conversions: HashMap<SpanKey, String>,
+    /// For each `?` expression, the UNWRAPPED Ok/Some payload `TypeExpr` (what
+    /// the `?` evaluates to). Written exactly once per `?`, by `resolve_question`
+    /// — unambiguously the payload, never the `Result`/`Option` wrapper. Codegen's
+    /// `reconstruct_question_ok_payload` reads it to rebuild a multi-word Ok
+    /// payload of ANY shape, including a genuine nested `Option[T]`/`Result[T,E]`
+    /// payload (`Result[Option[String], E]?`) that the span-colliding
+    /// `enum_inst_type_exprs` recording can't distinguish from a mistakenly
+    /// recorded wrapper (B-2026-07-13-19).
+    pub question_ok_payload_types: HashMap<SpanKey, TypeExpr>,
     /// `(trait_name, target_type_name)` pairs for every impl registered at
     /// typecheck time. The lowering pass consults this to decide whether a
     /// non-primitive operand has an applicable trait impl (e.g. user
@@ -1516,6 +1525,9 @@ pub struct TypeChecker<'a> {
     pub(super) neg_validated_suffixed_literal: Option<(usize, usize)>,
     /// `?` cross-error From conversions (span → target error type name).
     pub(super) question_conversions: HashMap<SpanKey, String>,
+    /// `?` unwrapped Ok/Some payload type (span → payload `TypeExpr`). See the
+    /// public copy on `TypeCheckResult`. B-2026-07-13-19.
+    pub(super) question_ok_payload_types: HashMap<SpanKey, TypeExpr>,
     /// `x.into()` conversions (span of the MethodCall → target type name).
     pub(super) into_conversions: HashMap<SpanKey, String>,
     /// `x.try_into()` conversions (span of the MethodCall → target type name,
@@ -1778,6 +1790,7 @@ impl<'a> TypeChecker<'a> {
             in_defer: false,
             neg_validated_suffixed_literal: None,
             question_conversions: HashMap::new(),
+            question_ok_payload_types: HashMap::new(),
             into_conversions: HashMap::new(),
             try_into_conversions: HashMap::new(),
             display_snake_case_enums: HashSet::new(),
@@ -1965,6 +1978,7 @@ impl<'a> TypeChecker<'a> {
             union_info: self.env.unions,
             distinct_type_traits,
             question_conversions: self.question_conversions,
+            question_ok_payload_types: self.question_ok_payload_types,
             trait_impls,
             drop_method_keys,
             into_conversions: self.into_conversions,

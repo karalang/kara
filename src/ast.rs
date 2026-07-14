@@ -54,6 +54,15 @@ impl Visibility {
 /// return; see `src/codegen.rs:compile_question`.
 pub type QuestionConversionTable = std::collections::HashMap<(usize, usize), String>;
 
+/// Side-table populated by `lowering::lower_program` from the typechecker's
+/// `TypeCheckResult.question_ok_payload_types`. Maps each `?` expression's span
+/// to the UNWRAPPED Ok/Some payload `TypeExpr`. Codegen's
+/// `reconstruct_question_ok_payload` reads it to rebuild a multi-word Ok payload
+/// of any shape — including a genuine nested `Option[T]`/`Result[T,E]` payload
+/// that the span-colliding `enum_inst_type_exprs` recording can't distinguish
+/// from a mistakenly recorded wrapper (B-2026-07-13-19).
+pub type QuestionOkPayloadTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
 /// Side-table populated by the cli pipeline from `EffectCheckResult`. Maps
 /// each callable's canonical name (free fn `name`, assoc/method `Type.method`)
 /// to whether its inferred or declared effects include any of the four
@@ -589,6 +598,10 @@ pub struct Program {
     pub inner_attrs: Vec<Attribute>,
     /// Set by the lowering pass; empty before lowering runs.
     pub question_conversions: QuestionConversionTable,
+    /// Set by the lowering pass from `TypeCheckResult.question_ok_payload_types`;
+    /// empty otherwise. `?` span → unwrapped Ok/Some payload `TypeExpr`
+    /// (B-2026-07-13-19).
+    pub question_ok_payload_types: QuestionOkPayloadTypesTable,
     /// Set by the cli pipeline after effectcheck; empty otherwise.
     pub callee_effectful: CalleeEffectfulTable,
     /// Set by the cli pipeline after effectcheck; empty otherwise. Identifies

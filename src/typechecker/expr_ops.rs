@@ -2038,6 +2038,19 @@ impl<'a> super::TypeChecker<'a> {
             }
         };
 
+        // Record the unwrapped Ok/Some payload type for codegen (B-2026-07-13-19).
+        // Every success arm below returns `inner_args[0]` — the payload — for both
+        // `Result[T, E]` and `Option[T]`, so a single recording here is the `?`
+        // result type. Written under a DEDICATED key so codegen never confuses a
+        // genuine nested `Option[T]`/`Result[T,E]` payload with a mistakenly
+        // recorded wrapper (the span-collision `enum_inst_type_exprs` hazard).
+        if !inner_args.is_empty() {
+            self.question_ok_payload_types.insert(
+                SpanKey::from_span(span),
+                Self::type_to_type_expr(&inner_args[0]),
+            );
+        }
+
         let return_ty = match self.current_return_type.clone() {
             Some(t) => t,
             None => {

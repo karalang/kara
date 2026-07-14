@@ -26256,6 +26256,34 @@ fn main() {
     }
 
     #[test]
+    fn asan_question_nested_option_string_payload_no_leak() {
+        // B-2026-07-13-19: `?` on `Result[Option[String], E]` rebuilds the
+        // extracted `Option[String]` from the Result's payload words. A wrong
+        // reconstruction (dropped `cap` word, or truncation to `w0`) would leave
+        // the String with a garbage cap → invalid free / leak. Must round-trip
+        // the heap String through `?`, the `match`, and the returned `Ok(s)`
+        // leak-clean.
+        assert_clean_asan_run(
+            r#"
+enum E { X }
+fn inner(n: i64) -> Result[Option[String], E] {
+    if n < 0 { return Err(E.X); }
+    Ok(Some(f"got-{n}"))
+}
+fn outer(n: i64) -> Result[String, E] {
+    let opt = inner(n)?;
+    match opt { Some(s) => Ok(s), None => Ok(f"empty") }
+}
+fn main() {
+    match outer(7) { Ok(v) => println(v), Err(_) => println("e") }
+}
+"#,
+            &["got-7"],
+            "question_nested_option_string_payload_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_fold_string_accumulator_over_map_no_leak() {
         // Sibling of the above with a fused `map` adaptor ahead of the fold, so
         // the loop var is the adaptor's param (`y`) and the accumulator is the

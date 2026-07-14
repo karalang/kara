@@ -70,6 +70,14 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // `?` unwrapped Ok/Some payload types — codegen rebuilds a multi-word Ok
+    // payload of any shape from these, including a genuine nested Option/Result
+    // payload the wrapper-guard can't distinguish. B-2026-07-13-19.
+    program.question_ok_payload_types = tc
+        .question_ok_payload_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Forward the method-call → `Type.method` callee key table so codegen
     // can narrow the par-branch cancel check at instance method sites.
     // The typechecker populates this directly because the parser sets

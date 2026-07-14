@@ -8546,6 +8546,41 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_question_on_result_nested_option_payload() {
+        // B-2026-07-13-19: `?` on `Result[Option[T], E]` — the Ok payload is
+        // itself an `Option[T]`. `reconstruct_question_ok_payload`'s wrapper
+        // guard (B-2026-07-11-7) matched any `Option`/`Result`-headed recorded
+        // type at the `?` span and truncated it to `w0`, so the extracted
+        // `Option[T]` lost its payload words and the subsequent `match` could not
+        // type the `Some` binding (`Undefined variable 's'` on the value form;
+        // `no handler for method 'len'` on the method form). The typechecker now
+        // records the unwrapped payload type under a dedicated key, so codegen
+        // rebuilds the genuine multi-word `Option[T]`. Exercises a String payload
+        // returned from the arm AND consumed by a method.
+        if let Some(out) = run_program(
+            "enum E { X }\n\
+             fn inner(n: i64) -> Result[Option[String], E] {\n\
+                 if n < 0 { return Err(E.X); }\n\
+                 Ok(Some(f\"got-{n}\"))\n\
+             }\n\
+             fn outer(n: i64) -> Result[String, E] {\n\
+                 let opt = inner(n)?;\n\
+                 match opt { Some(s) => Ok(s), None => Ok(f\"empty\") }\n\
+             }\n\
+             fn olen(n: i64) -> Result[i64, E] {\n\
+                 let opt = inner(n)?;\n\
+                 match opt { Some(s) => Ok(s.len()), None => Ok(0) }\n\
+             }\n\
+             fn main() {\n\
+                 match outer(7) { Ok(v) => println(v), Err(_) => println(\"e\") }\n\
+                 match olen(7) { Ok(v) => println(v), Err(_) => println(\"e\") }\n\
+             }",
+        ) {
+            assert_eq!(out, "got-7\n5\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_bytecode_vm_example() {
         // examples/vm.kara — a stack-based bytecode VM. Validates the enum +
         // `match` dispatch HOT PATH (every instruction is an `Op` variant decoded

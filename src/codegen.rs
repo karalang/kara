@@ -2360,6 +2360,13 @@ pub(super) struct Codegen<'ctx> {
     /// `"AppError"`). When present, `compile_question` emits `Target.from(e)`
     /// against the inner err payload before the propagation early-return.
     pub(crate) question_conversions: HashMap<(usize, usize), String>,
+    /// `?` span → unwrapped Ok/Some payload `TypeExpr` — populated from
+    /// `Program.question_ok_payload_types`. `reconstruct_question_ok_payload`
+    /// reads it to rebuild a multi-word Ok payload of any shape (including a
+    /// genuine nested `Option[T]`/`Result[T,E]` payload) without the
+    /// span-collision wrapper ambiguity of `enum_inst_type_exprs`
+    /// (B-2026-07-13-19).
+    pub(crate) question_ok_payload_types: HashMap<(usize, usize), TypeExpr>,
     /// Per-callee effectfulness side-table — populated from
     /// `Program.callee_effectful` (set by the cli pipeline after effectcheck).
     /// Key: callable's canonical name (free fn `name`, assoc/method
@@ -6117,6 +6124,7 @@ impl<'ctx> Codegen<'ctx> {
             user_drop_wrapper_fns: HashMap::new(),
             rc_drop_fns: HashMap::new(),
             question_conversions: HashMap::new(),
+            question_ok_payload_types: HashMap::new(),
             callee_effectful: HashMap::new(),
             method_callee_types: HashMap::new(),
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
@@ -7133,6 +7141,10 @@ impl<'ctx> Codegen<'ctx> {
         // recorded so `compile_question` can emit `Target.from(e)` ahead of
         // the early-return.
         self.question_conversions = program.question_conversions.clone();
+        // Side-table set by `lowering::lower_program`: each `?` site's unwrapped
+        // Ok/Some payload type, so `reconstruct_question_ok_payload` rebuilds a
+        // multi-word payload of any shape (B-2026-07-13-19).
+        self.question_ok_payload_types = program.question_ok_payload_types.clone();
 
         // Side-table set by the cli pipeline after effectcheck: per-callee
         // boolean indicating whether the callee carries any observable
@@ -8274,6 +8286,7 @@ impl<'ctx> Codegen<'ctx> {
         // tracing-side clones into owned locals, `swap_all!` to install
         // them, emit the bodies, then `swap_all!` again to restore.
         let mut t_question_conversions = tp.question_conversions.clone();
+        let mut t_question_ok_payload_types = tp.question_ok_payload_types.clone();
         let mut t_callee_effectful = tp.callee_effectful.clone();
         let mut t_method_callee_types = tp.method_callee_types.clone();
         let mut t_string_typed_exprs = tp.string_typed_exprs.clone();
@@ -8297,6 +8310,10 @@ impl<'ctx> Codegen<'ctx> {
         macro_rules! swap_all {
             () => {{
                 std::mem::swap(&mut self.question_conversions, &mut t_question_conversions);
+                std::mem::swap(
+                    &mut self.question_ok_payload_types,
+                    &mut t_question_ok_payload_types,
+                );
                 std::mem::swap(&mut self.callee_effectful, &mut t_callee_effectful);
                 std::mem::swap(&mut self.method_callee_types, &mut t_method_callee_types);
                 std::mem::swap(&mut self.string_typed_exprs, &mut t_string_typed_exprs);
