@@ -11342,6 +11342,27 @@ fn main() {
         }
     }
 
+    /// B-2026-07-14-9: `for x in xs.iter_mut()` (mutable iteration) is not yet
+    /// lowered in codegen and was SILENTLY skipping the loop body — `for x in
+    /// v.iter_mut() { *x = *x * 10 }` left `v` unmutated with no error (a
+    /// silent wrong answer; `karac run`/interp fails loudly). Now bails loud in
+    /// codegen too, pointing at the index-loop workaround.
+    #[test]
+    fn e2e_for_iter_mut_bails_loud() {
+        let err = ir_result(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = Vec[1i64, 2i64, 3i64];\n\
+                 for x in v.iter_mut() { *x = *x * 10i64; }\n\
+                 println(f\"{v[0]}\");\n\
+             }\n",
+        )
+        .expect_err("iter_mut for-loop must bail loud, not silently skip");
+        assert!(
+            err.contains("iter_mut") && err.contains("not yet supported"),
+            "expected iter_mut loud-bail message, got: {err}"
+        );
+    }
+
     /// Companion to the above using `expect_err` so the actual bail message is
     /// asserted (names the adaptor + points at `--interp`).
     #[test]

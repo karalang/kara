@@ -461,7 +461,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 // iterable. The interpreter handles all of these, so the
                 // message points there. Full lowering is tracked as
                 // B-2026-07-14-8.
+                // `for x in xs.iter_mut()` — mutable iteration is explicitly
+                // deferred (typechecker/lowering.rs "the future `.iter_mut()`";
+                // the interpreter has no dispatch arm and errors at runtime).
+                // Codegen has no for-loop path for it either, so it reached
+                // this catch-all and SILENTLY SKIPPED the body — `for x in
+                // v.iter_mut() { *x = *x * 10 }` left `v` unchanged with no
+                // error (a silent wrong answer, whereas `karac run`/interp
+                // fails loudly). Bail loud to match, and point at the
+                // supported in-place-mutation form. B-2026-07-14-9.
                 if let ExprKind::MethodCall { method, .. } = &iterable.kind {
+                    if method == "iter_mut" {
+                        return Err(
+                            "codegen: `for x in …iter_mut()` (mutable iteration) is not yet \
+                             supported — the loop body would be silently skipped and the \
+                             collection left unmutated. For in-place mutation use an index \
+                             loop: `for i in 0..xs.len() { xs[i] = … }`. (The interpreter \
+                             also does not yet implement `iter_mut`.)"
+                                .to_string(),
+                        );
+                    }
                     const UNLOWERED_FOR_ADAPTORS: &[&str] = &[
                         "enumerate",
                         "zip",
