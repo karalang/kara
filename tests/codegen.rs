@@ -8857,6 +8857,60 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_windows_chunks() {
+        // B-2026-07-14-8 (windows/chunks legs): both adaptors yield a FRESH
+        // `Vec[T]` per group (matching the interpreter's per-pull allocation),
+        // materialized by an index push-loop over a named scalar-element Vec.
+        // Clamp parity: chunks(k<1) clamps to 1; windows' ITERATOR variant
+        // clamps k to >= 1 too (windows(0) == windows(1) — the interp clamps
+        // n.max(1) at dispatch), and k > len yields nothing. User
+        // break/continue/labels bind the outer loop naturally. Must match the
+        // interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4, 5];\n\
+                 for w in v.iter().windows(2) { println(w[0] + w[1]); }\n\
+                 let mut n: i64 = 0;\n\
+                 let mut t: i64 = 0;\n\
+                 for w in v.iter().windows(3) {\n\
+                     n = n + 1;\n\
+                     for y in w { t = t + y; }\n\
+                 }\n\
+                 println(n);\n\
+                 println(t);\n\
+                 let mut a: i64 = 0;\n\
+                 for w in v.iter().windows(9) { a = a + 1; }\n\
+                 println(a);\n\
+                 let mut b: i64 = 0;\n\
+                 for w in v.iter().windows(0) { b = b + 1; }\n\
+                 println(b);\n\
+                 for c in v.iter().chunks(2) {\n\
+                     let mut s: i64 = 0;\n\
+                     for y in c { s = s + y; }\n\
+                     println(f\"{c.len()}:{s}\");\n\
+                 }\n\
+                 let mut d: i64 = 0;\n\
+                 for c in v.iter().chunks(0) { d = d + c.len(); }\n\
+                 println(d);\n\
+                 let mut e: i64 = 0;\n\
+                 for w in v.iter().windows(2) {\n\
+                     if w[0] == 3 { break; }\n\
+                     e = e + w[1];\n\
+                 }\n\
+                 println(e);\n\
+                 let mut f2: i64 = 0;\n\
+                 for c in v.iter().chunks(2) {\n\
+                     if c.len() == 1 { continue; }\n\
+                     f2 = f2 + c[0];\n\
+                 }\n\
+                 println(f2);\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n5\n7\n9\n3\n27\n0\n5\n2:3\n2:7\n1:5\n5\n5\n4\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_scan() {
         // B-2026-07-14-8 (scan leg): `for out in src.scan(init, |acc, x|
         // Some((new, out)))` lowers to a single accumulator loop (the

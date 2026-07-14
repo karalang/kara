@@ -188,6 +188,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(v);
                 }
             }
+            // `for w in xs.iter().windows(k)` / `.chunks(k)` — per-group
+            // materializing desugar over a named scalar-element Vec
+            // (B-2026-07-14-8, windows/chunks legs). Fails closed to the
+            // loud adaptor bail below for heap elements or non-identity
+            // sources.
+            if args.len() == 1 && (method == "windows" || method == "chunks") {
+                if let Some(v) = self.try_compile_for_windows_chunks(
+                    label,
+                    pattern,
+                    object,
+                    &args[0].value,
+                    method == "windows",
+                    body,
+                    &iterable.span,
+                )? {
+                    return Ok(v);
+                }
+            }
             // `for x in <src>.scan(init, |acc, x| Some((new, out))) { … }` —
             // single accumulator-loop desugar (B-2026-07-14-8, scan leg).
             // Fails closed to the loud `.scan()` bail below for the
@@ -3894,6 +3912,331 @@ impl<'ctx> super::Codegen<'ctx> {
         let block = Expr {
             kind: ExprKind::Block(Block {
                 stmts: vec![let_stmt(true, &accname, init.clone()), for_loop],
+                final_expr: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+}
+
+impl<'ctx> super::Codegen<'ctx> {
+    /// Lower `for w in xs.iter().windows(k)` / `for w in xs.iter().chunks(k)`
+    /// over a NAMED SCALAR-element Vec (B-2026-07-14-8, windows/chunks legs).
+    /// Both adaptors yield a FRESHLY ALLOCATED `Vec[T]` per group (the
+    /// typechecker types the element `Vec[T]`, the interpreter allocates per
+    /// pull — method_call_seq.rs), so each iteration materializes the group
+    /// with an index push-loop and binds it to the user pattern:
+    ///
+    /// ```text
+    /// windows: { let __wn: i64 = <k>; let __wl: i64 = xs.len();
+    ///            let __we: i64 = if __wn < 1 { 0 }
+    ///                            else { if __wn > __wl { 0 } else { __wl - __wn + 1 } };
+    ///            [label:] for __wi in 0..__we {
+    ///                let mut __wv: Vec[T] = Vec.new();
+    ///                for __wj in __wi..(__wi + __wn) { __wv.push(xs[__wj]); }
+    ///                let <pat> = __wv;  <body>
+    ///            } }
+    /// chunks:  same shape with `for __wi in (0..__wl).step_by(__wn_clamped)`
+    ///          and the group end clamped to `min(__wi + __wn, __wl)`.
+    /// ```
+    ///
+    /// Clamp parity with the interpreter: `chunks` clamps k to ≥ 1
+    /// (`n.max(1)`); `windows` with k ≤ 0 or k > len yields NOTHING (the
+    /// zero end-bound). The user body's statements are direct children of
+    /// the outer loop (the push-loop finishes before them), so user
+    /// `break`/`continue`/labels bind naturally with no rewriting — the
+    /// label rides on the outer `for`. Scalar elements only (the group push
+    /// copies elements); heap shapes fail closed to the loud adaptor bail.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn try_compile_for_windows_chunks(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        src: &Expr,
+        count: &Expr,
+        is_windows: bool,
+        body: &Block,
+        span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        if matches!(&count.kind, ExprKind::Closure { .. }) {
+            return Ok(None);
+        }
+        let Some(var_name) = self.peel_iter_to_scalar_vec_ident(src) else {
+            return Ok(None);
+        };
+        let Some(elem_te) = self.var_elem_type_exprs.get(var_name.as_str()).cloned() else {
+            return Ok(None);
+        };
+        let vec_te = Self::vec_type_expr_from_element(&elem_te);
+
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let sp = span.clone();
+        let n_name = format!("__wcn_{uid}");
+        let len_name = format!("__wcl_{uid}");
+        let end_name = format!("__wce_{uid}");
+        let i_name = format!("__wci_{uid}");
+        let j_name = format!("__wcj_{uid}");
+        let v_name = format!("__wcv_{uid}");
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let i64_lit = |n: i64| Expr {
+            kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
+            span: sp.clone(),
+        };
+        let i64_ty = || TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["i64".to_string()],
+                generic_args: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
+            kind: StmtKind::Let {
+                is_mut,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name.to_string()),
+                    span: sp.clone(),
+                },
+                ty,
+                value,
+            },
+            span: sp.clone(),
+        };
+        let bin = |op: BinOp, l: Expr, r: Expr| Expr {
+            kind: ExprKind::Binary {
+                op,
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            span: sp.clone(),
+        };
+        let if_expr = |cond: Expr, then_e: Expr, else_e: Expr| Expr {
+            kind: ExprKind::If {
+                condition: Box::new(cond),
+                then_block: Block {
+                    stmts: Vec::new(),
+                    final_expr: Some(Box::new(then_e)),
+                    span: sp.clone(),
+                },
+                else_branch: Some(Box::new(Expr {
+                    kind: ExprKind::Block(Block {
+                        stmts: Vec::new(),
+                        final_expr: Some(Box::new(else_e)),
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                })),
+            },
+            span: sp.clone(),
+        };
+        let range = |start: Expr, end: Expr| Expr {
+            kind: ExprKind::Range {
+                start: Some(Box::new(start)),
+                end: Some(Box::new(end)),
+                inclusive: false,
+            },
+            span: sp.clone(),
+        };
+        let len_call = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(ident(&var_name)),
+                method: "len".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+        let vec_new = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+        let push_elem = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(ident(&v_name)),
+                    method: "push".to_string(),
+                    turbofish: None,
+                    args: vec![CallArg {
+                        label: None,
+                        mut_marker: false,
+                        value: Expr {
+                            kind: ExprKind::Index {
+                                object: Box::new(ident(&var_name)),
+                                index: Box::new(ident(&j_name)),
+                            },
+                            span: sp.clone(),
+                        },
+                        span: sp.clone(),
+                    }],
+                    args_close_span: sp.clone(),
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+
+        // Pre-loop bindings + the outer position iterable + the group end.
+        let mut prelude: Vec<Stmt> = Vec::new();
+        let (outer_iterable, group_end): (Expr, Expr) = if is_windows {
+            // k clamped to >= 1 (the interpreter's ITERATOR-variant windows
+            // clamps `n.max(1)` at the dispatch site — windows(0) behaves as
+            // windows(1); method_call_seq.rs), then the window-count
+            // end-bound: 0 when k > len (no window fits), else len - k + 1.
+            let raw = format!("__wcr_{uid}");
+            prelude.push(let_stmt(false, &raw, Some(i64_ty()), count.clone()));
+            prelude.push(let_stmt(
+                false,
+                &n_name,
+                Some(i64_ty()),
+                if_expr(
+                    bin(BinOp::Lt, ident(&raw), i64_lit(1)),
+                    i64_lit(1),
+                    ident(&raw),
+                ),
+            ));
+            prelude.push(let_stmt(false, &len_name, Some(i64_ty()), len_call));
+            let end_val = if_expr(
+                bin(BinOp::Gt, ident(&n_name), ident(&len_name)),
+                i64_lit(0),
+                bin(
+                    BinOp::Add,
+                    bin(BinOp::Sub, ident(&len_name), ident(&n_name)),
+                    i64_lit(1),
+                ),
+            );
+            prelude.push(let_stmt(false, &end_name, Some(i64_ty()), end_val));
+            (
+                range(i64_lit(0), ident(&end_name)),
+                bin(BinOp::Add, ident(&i_name), ident(&n_name)),
+            )
+        } else {
+            // Clamped k (>= 1), len; positions stride by k; group end clamped
+            // to len (the final chunk may be short).
+            let raw = format!("__wcr_{uid}");
+            prelude.push(let_stmt(false, &raw, Some(i64_ty()), count.clone()));
+            prelude.push(let_stmt(
+                false,
+                &n_name,
+                Some(i64_ty()),
+                if_expr(
+                    bin(BinOp::Lt, ident(&raw), i64_lit(1)),
+                    i64_lit(1),
+                    ident(&raw),
+                ),
+            ));
+            prelude.push(let_stmt(false, &len_name, Some(i64_ty()), len_call));
+            let stride_positions = Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(range(i64_lit(0), ident(&len_name))),
+                    method: "step_by".to_string(),
+                    turbofish: None,
+                    args: vec![CallArg {
+                        label: None,
+                        mut_marker: false,
+                        value: ident(&n_name),
+                        span: sp.clone(),
+                    }],
+                    args_close_span: sp.clone(),
+                },
+                span: sp.clone(),
+            };
+            let raw_end = bin(BinOp::Add, ident(&i_name), ident(&n_name));
+            (
+                stride_positions,
+                if_expr(
+                    bin(BinOp::Gt, raw_end.clone(), ident(&len_name)),
+                    ident(&len_name),
+                    raw_end,
+                ),
+            )
+        };
+
+        // Outer loop body: materialize the group, bind, run the user body.
+        let mut outer_body = vec![
+            let_stmt(false, &end_name.replace("__wce", "__wcge"), None, group_end),
+            let_stmt(true, &v_name, Some(vec_te), vec_new),
+            Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::For {
+                        label: None,
+                        pattern: Pattern {
+                            kind: PatternKind::Binding(j_name.clone()),
+                            span: sp.clone(),
+                        },
+                        iterable: Box::new(range(
+                            ident(&i_name),
+                            ident(&end_name.replace("__wce", "__wcge")),
+                        )),
+                        attributes: Vec::new(),
+                        body: Block {
+                            stmts: vec![push_elem],
+                            final_expr: None,
+                            span: sp.clone(),
+                        },
+                    },
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            },
+            Stmt {
+                kind: StmtKind::Let {
+                    is_mut: false,
+                    pattern: pattern.clone(),
+                    ty: None,
+                    value: ident(&v_name),
+                },
+                span: sp.clone(),
+            },
+        ];
+        outer_body.extend(body.stmts.iter().cloned());
+        if let Some(fe) = &body.final_expr {
+            outer_body.push(Stmt {
+                kind: StmtKind::Expr((**fe).clone()),
+                span: sp.clone(),
+            });
+        }
+
+        let outer_for = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: label.map(str::to_string),
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(i_name.clone()),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(outer_iterable),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: outer_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let mut block_stmts = prelude;
+        block_stmts.push(outer_for);
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: block_stmts,
                 final_expr: None,
                 span: sp.clone(),
             }),
