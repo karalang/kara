@@ -49,7 +49,7 @@ fn atomic_alignment_for(ty: BasicTypeEnum<'_>) -> u32 {
 /// engine's `IterAdaptor` stage shapes exactly (same counter/latch
 /// arithmetic), so both fused surfaces stay behaviorally identical.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum FusedStepKind {
+pub(super) enum FusedStepKind {
     Map,
     Filter,
     TakeWhile,
@@ -63,7 +63,7 @@ enum FusedStepKind {
 /// One peeled fused-chain step: `(kind, closure_param, body_or_pred)`.
 /// For the count kinds (`Take`/`Skip`/`StepBy`) the param is `""` (no
 /// closure) and the expr slot holds the count expression.
-type FusedChainStep = (FusedStepKind, String, Expr);
+pub(super) type FusedChainStep = (FusedStepKind, String, Expr);
 
 impl<'ctx> super::Codegen<'ctx> {
     /// `char.try_from(n) -> Result[char, i64]` (#10). Widen the codepoint arg
@@ -7631,7 +7631,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// args and breaks the walk; a 1-arg `take` on a user type leaves a base
     /// that fails the source check).
     #[allow(clippy::type_complexity)]
-    fn peel_fused_map_filter_chain(recv: &Expr) -> Option<(&Expr, Vec<FusedChainStep>)> {
+    pub(super) fn peel_fused_map_filter_chain(recv: &Expr) -> Option<(&Expr, Vec<FusedChainStep>)> {
         let mut steps: Vec<FusedChainStep> = Vec::new();
         let mut base = recv;
         while let ExprKind::MethodCall {

@@ -8747,6 +8747,63 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_flat_map() {
+        // B-2026-07-14-8 (flat_map leg): `for x in recv.flat_map(|p| inner)`
+        // lowers to a nested pair of loops — the closure param is the outer
+        // loop var, the user pattern binds each inner element. Unlabeled
+        // `break` in the body is retargeted onto the synthesized outer label
+        // (exits the WHOLE flat sequence); unlabeled `continue` needs no
+        // rewrite (next flat element IS the inner loop's next iteration); a
+        // `break` inside a nested user loop stays local to it. Inner and
+        // outer may each carry their own fused adaptor chains; heap (String)
+        // inner elements work. Must match the interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let vv: Vec[Vec[i64]] = [[1, 2], [3], [4, 5]];\n\
+                 let mut c: i64 = 0;\n\
+                 for y in vv.iter().flat_map(|row| row.iter()) { c = c + y; }\n\
+                 println(c);\n\
+                 let mut d: i64 = 0;\n\
+                 for y in vv.iter().flat_map(|row| row.iter()) {\n\
+                     if y == 3 { break; }\n\
+                     d = d + y;\n\
+                 }\n\
+                 println(d);\n\
+                 let mut e: i64 = 0;\n\
+                 for y in vv.iter().flat_map(|row| row.iter()) {\n\
+                     if y % 2 == 1 { continue; }\n\
+                     e = e + y;\n\
+                 }\n\
+                 println(e);\n\
+                 let mut f: i64 = 0;\n\
+                 for y in vv.iter().flat_map(|row| row.iter()) {\n\
+                     for k in 0..5 {\n\
+                         if k == 2 { break; }\n\
+                         f = f + 1;\n\
+                     }\n\
+                     f = f + y;\n\
+                 }\n\
+                 println(f);\n\
+                 let mut g: i64 = 0;\n\
+                 for y in vv.iter().flat_map(|row| row.iter().map(|v| v * 2)) { g = g + y; }\n\
+                 println(g);\n\
+                 let words: Vec[Vec[String]] = [[f\"a\", f\"bb\"], [f\"ccc\"]];\n\
+                 let mut h: i64 = 0;\n\
+                 for w in words.iter().flat_map(|ws| ws.iter()) { h = h + w.len(); }\n\
+                 println(h);\n\
+                 let mut i2: i64 = 0;\n\
+                 for y in vv.iter().filter(|row| row.len() > 1).flat_map(|row| row.iter()) { i2 = i2 + y; }\n\
+                 println(i2);\n\
+                 let mut j: i64 = 0;\n\
+                 for y in vv.iter().flat_map(|row| row.iter().take_while(|v| v < 5)) { j = j + y; }\n\
+                 println(j);\n\
+             }",
+        ) {
+            assert_eq!(out, "15\n3\n6\n25\n30\n6\n12\n10\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_step_by_inspect_take_skip_fused() {
         // B-2026-07-14-8 (count + inspect legs): `take`/`skip`/`step_by`/
         // `inspect` are fused-chain steps in the SHARED peel, so for-loops and
@@ -11882,14 +11939,19 @@ fn main() {
                  println(f\"{s}\");",
             ),
             (
-                // The predicate siblings `take_while`/`skip_while` are now
-                // LOWERED via the fused-chain desugar
-                // (test_e2e_for_take_while_skip_while), so the bail contract
-                // covers `flat_map` — a still-unlowered closure adaptor.
-                "flat_map",
-                "let v: Vec[i64] = Vec[1i64, 2i64];\n\
+                // `flat_map` for-loops are now LOWERED via the nested-loop
+                // desugar (test_e2e_for_flat_map), so the bail contract covers
+                // a shape the desugar declines: a USER LABEL on the loop (a
+                // labeled `continue` means "next flat element", which the
+                // nested shape cannot express without rewriting the user's own
+                // labels). The interpreter handles it.
+                "flat_map (labeled loop)",
+                "let vv: Vec[Vec[i64]] = Vec[Vec[1i64, 2i64], Vec[3i64]];\n\
                  let mut s = 0i64;\n\
-                 for x in v.iter().flat_map(|x: i64| Vec[x, x * 10i64]) { s = s + x; }\n\
+                 out: for y in vv.iter().flat_map(|row| row.iter()) {\n\
+                     s = s + y;\n\
+                     if y == 2i64 { break out (); }\n\
+                 }\n\
                  println(f\"{s}\");",
             ),
             (

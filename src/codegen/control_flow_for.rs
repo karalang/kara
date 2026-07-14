@@ -160,6 +160,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(v);
                 }
             }
+            // `for x in <recv>.flat_map(|p| <inner>) { … }` — nested-loop
+            // desugar (B-2026-07-14-8, flat_map leg). Fails closed to the
+            // loud `.flat_map()` adaptor bail below for shapes it can't
+            // prove (user label, complex closure param, unproven inner
+            // iterable).
+            if args.len() == 1 && method == "flat_map" {
+                if let Some(v) = self.try_compile_for_flat_map(
+                    label,
+                    pattern,
+                    object,
+                    &args[0].value,
+                    body,
+                    &iterable.span,
+                )? {
+                    return Ok(v);
+                }
+            }
             if args.is_empty() && (method == "iter" || method == "into_iter") {
                 // Indexed receiver (`coll[i].iter()`): synthesize a
                 // temp identifier pointing into `coll`'s storage and
@@ -3140,5 +3157,360 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+}
+
+// ── flat_map for-loop desugar (B-2026-07-14-8, flat_map leg) ──────────
+
+/// Retarget every UNLABELED `break` in `block` that would bind to the
+/// for-loop this block is the body of, onto the label `target` instead.
+/// Used by the flat_map nested-loop desugar: the user's body ends up inside
+/// the synthesized INNER loop, so an unlabeled `break` (which the user wrote
+/// to exit the whole flat_map loop) would only exit the current inner batch
+/// — retargeting it to the labeled OUTER loop restores the flat-sequence
+/// semantics. Unlabeled `continue` is left untouched on purpose: the next
+/// flat element IS the inner loop's next iteration.
+///
+/// Walk rules: do NOT descend into nested loop BODIES (an unlabeled break
+/// there binds that loop) — but DO descend their header expressions
+/// (iterable / condition), which evaluate in the outer context. Do NOT
+/// descend into closures (`break` cannot cross a closure boundary), comptime
+/// blocks (compile-time evaluation), or defer/errdefer bodies (scope-exit
+/// context; a break there is illegal upstream). Labeled blocks are NOT
+/// unlabeled-break targets, so they are descended. The matches are
+/// deliberately EXHAUSTIVE (no `_` arm) so a future ExprKind/StmtKind
+/// variant fails the build here instead of silently escaping the walk.
+fn retarget_unlabeled_breaks_block(block: &mut Block, target: &str) {
+    for stmt in &mut block.stmts {
+        retarget_unlabeled_breaks_stmt(stmt, target);
+    }
+    if let Some(fe) = &mut block.final_expr {
+        retarget_unlabeled_breaks_expr(fe, target);
+    }
+}
+
+fn retarget_unlabeled_breaks_stmt(stmt: &mut Stmt, target: &str) {
+    match &mut stmt.kind {
+        StmtKind::Let { value, .. } => retarget_unlabeled_breaks_expr(value, target),
+        StmtKind::LetUninit { .. } => {}
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            retarget_unlabeled_breaks_expr(value, target);
+            retarget_unlabeled_breaks_block(else_block, target);
+        }
+        StmtKind::Defer { .. } | StmtKind::ErrDefer { .. } => {}
+        StmtKind::Assign {
+            target: t, value, ..
+        } => {
+            retarget_unlabeled_breaks_expr(t, target);
+            retarget_unlabeled_breaks_expr(value, target);
+        }
+        StmtKind::MultiAssign { targets, values } => {
+            for e in targets.iter_mut().chain(values.iter_mut()) {
+                retarget_unlabeled_breaks_expr(e, target);
+            }
+        }
+        StmtKind::CompoundAssign {
+            target: t, value, ..
+        } => {
+            retarget_unlabeled_breaks_expr(t, target);
+            retarget_unlabeled_breaks_expr(value, target);
+        }
+        StmtKind::Expr(e) => retarget_unlabeled_breaks_expr(e, target),
+    }
+}
+
+fn retarget_unlabeled_breaks_expr(e: &mut Expr, target: &str) {
+    let walk = retarget_unlabeled_breaks_expr;
+    match &mut e.kind {
+        // ── the point of the walk ──
+        ExprKind::Break { label, value } => {
+            if label.is_none() {
+                *label = Some(target.to_string());
+            }
+            if let Some(v) = value {
+                walk(v, target);
+            }
+        }
+        ExprKind::Continue { .. } => {}
+        // ── loop boundaries: headers evaluate in the outer context, bodies
+        //    own their unlabeled breaks ──
+        ExprKind::For { iterable, .. } => walk(iterable, target),
+        ExprKind::While { condition, .. } => walk(condition, target),
+        ExprKind::WhileLet { value, .. } => walk(value, target),
+        ExprKind::Loop { .. } => {}
+        // ── opaque boundaries ──
+        ExprKind::Closure { .. } | ExprKind::Comptime(_) => {}
+        // ── leaves ──
+        ExprKind::Integer(..)
+        | ExprKind::Float(..)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Error => {}
+        // ── plain descents ──
+        ExprKind::InterpolatedStringLit(parts) => {
+            for p in parts {
+                if let ParsedInterpolationPart::Expr(inner, _) = p {
+                    walk(inner, target);
+                }
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            walk(left, target);
+            walk(right, target);
+        }
+        ExprKind::Unary { operand, .. } => walk(operand, target),
+        ExprKind::Question(inner) => walk(inner, target),
+        ExprKind::OptionalChain { object, args, .. } => {
+            walk(object, target);
+            if let Some(args) = args {
+                for a in args {
+                    walk(&mut a.value, target);
+                }
+            }
+        }
+        ExprKind::NilCoalesce { left, right } => {
+            walk(left, target);
+            walk(right, target);
+        }
+        ExprKind::Call { callee, args } => {
+            walk(callee, target);
+            for a in args {
+                walk(&mut a.value, target);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            walk(object, target);
+            for a in args {
+                walk(&mut a.value, target);
+            }
+        }
+        ExprKind::FieldAccess { object, .. } => walk(object, target),
+        ExprKind::TupleIndex { object, .. } => walk(object, target),
+        ExprKind::Index { object, index } => {
+            walk(object, target);
+            walk(index, target);
+        }
+        ExprKind::Block(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Try(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Par(b) => retarget_unlabeled_breaks_block(b, target),
+        ExprKind::LabeledBlock { body, .. } => retarget_unlabeled_breaks_block(body, target),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            walk(condition, target);
+            retarget_unlabeled_breaks_block(then_block, target);
+            if let Some(eb) = else_branch {
+                walk(eb, target);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            walk(value, target);
+            retarget_unlabeled_breaks_block(then_block, target);
+            if let Some(eb) = else_branch {
+                walk(eb, target);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            walk(scrutinee, target);
+            for arm in arms {
+                if let Some(g) = &mut arm.guard {
+                    walk(g, target);
+                }
+                walk(&mut arm.body, target);
+            }
+        }
+        ExprKind::Return(v) => {
+            if let Some(v) = v {
+                walk(v, target);
+            }
+        }
+        ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
+            for it in items {
+                walk(it, target);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for it in items {
+                walk(it, target);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            walk(value, target);
+            walk(count, target);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                walk(k, target);
+                walk(v, target);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                walk(&mut f.value, target);
+            }
+            if let Some(s) = spread {
+                walk(s, target);
+            }
+        }
+        ExprKind::Pipe { left, right } => {
+            walk(left, target);
+            walk(right, target);
+        }
+        ExprKind::Cast { expr, .. } => walk(expr, target),
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                walk(s, target);
+            }
+            if let Some(en) = end {
+                walk(en, target);
+            }
+        }
+        ExprKind::Lock { mutex, body, .. } => {
+            walk(mutex, target);
+            retarget_unlabeled_breaks_block(body, target);
+        }
+        ExprKind::Providers { bindings, body } => {
+            for b in bindings {
+                walk(&mut b.value, target);
+            }
+            retarget_unlabeled_breaks_block(body, target);
+        }
+    }
+}
+
+impl<'ctx> super::Codegen<'ctx> {
+    /// Lower `for <pat> in <recv>.flat_map(|p| <inner>) { <body> }` into a
+    /// nested pair of loops (B-2026-07-14-8, flat_map leg):
+    ///
+    /// ```text
+    /// __fml_N: for <p> in <recv> {
+    ///     for <pat> in <inner> {
+    ///         <body, unlabeled breaks retargeted to __fml_N>
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// The closure param IS the outer loop var, so `<inner>` (which references
+    /// it) resolves; the user pattern binds each inner element — the flat
+    /// sequence order is exactly outer-then-inner. Unlabeled `continue` in the
+    /// body needs no rewrite (the next flat element IS the inner loop's next
+    /// iteration); unlabeled `break` is retargeted onto the synthesized outer
+    /// label so it exits the WHOLE flat sequence, not just the current batch
+    /// (`retarget_unlabeled_breaks_block`).
+    ///
+    /// Fails closed (`Ok(None)` → the loud `.flat_map()` adaptor bail) for:
+    /// a user LABEL on the loop (a labeled `continue` means "next flat
+    /// element", which the nested shape cannot express without rewriting the
+    /// user's own labels — rare; `--interp` handles it), a non-single-Binding
+    /// closure param, and an inner iterable outside the proven-to-iterate
+    /// whitelist (array/Vec literal, bounded range, named binding, or a chain
+    /// the fused peel accepts) — an unproven inner shape could hit
+    /// `compile_for`'s silent unknown-iterable arm and drop elements.
+    pub(super) fn try_compile_for_flat_map(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        recv: &Expr,
+        closure_arg: &Expr,
+        body: &Block,
+        span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        if label.is_some() {
+            return Ok(None);
+        }
+        let ExprKind::Closure {
+            params,
+            body: inner,
+            ..
+        } = &closure_arg.kind
+        else {
+            return Ok(None);
+        };
+        if params.len() != 1 {
+            return Ok(None);
+        }
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let p = match &params[0].pattern.kind {
+            PatternKind::Binding(n) => n.clone(),
+            PatternKind::Wildcard => format!("__fmp_{uid}"),
+            _ => return Ok(None),
+        };
+        // Inner-iterable whitelist: shapes `compile_for` provably iterates
+        // (verified against the JIT: array literal, `Vec[…]` prefix literal,
+        // bounded range, named binding incl. an outer Vec-of-Vec loop element,
+        // and fused-peel-accepted chains). Anything else fails closed.
+        let inner_ok = match &inner.kind {
+            ExprKind::ArrayLiteral(_) => true,
+            ExprKind::PrefixCollectionLiteral { type_name, .. } => type_name == "Vec",
+            ExprKind::Range {
+                start: Some(_),
+                end: Some(_),
+                ..
+            } => true,
+            ExprKind::Identifier(_) => true,
+            ExprKind::MethodCall { .. } => Self::peel_fused_map_filter_chain(inner).is_some(),
+            _ => false,
+        };
+        if !inner_ok {
+            return Ok(None);
+        }
+
+        let outer_label = format!("__fml_{uid}");
+        let mut user_body = body.clone();
+        retarget_unlabeled_breaks_block(&mut user_body, &outer_label);
+
+        let inner_for = Expr {
+            kind: ExprKind::For {
+                label: None,
+                pattern: pattern.clone(),
+                iterable: inner.clone(),
+                attributes: Vec::new(),
+                body: user_body,
+            },
+            span: span.clone(),
+        };
+        let outer_for = Expr {
+            kind: ExprKind::For {
+                label: Some(outer_label),
+                pattern: Pattern {
+                    kind: PatternKind::Binding(p),
+                    span: span.clone(),
+                },
+                iterable: Box::new(recv.clone()),
+                attributes: Vec::new(),
+                body: Block {
+                    stmts: vec![Stmt {
+                        kind: StmtKind::Expr(inner_for),
+                        span: span.clone(),
+                    }],
+                    final_expr: None,
+                    span: span.clone(),
+                },
+            },
+            span: span.clone(),
+        };
+        Ok(Some(self.compile_expr(&outer_for)?))
     }
 }
