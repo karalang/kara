@@ -461,26 +461,47 @@ impl<'ctx> super::Codegen<'ctx> {
                 // iterable. The interpreter handles all of these, so the
                 // message points there. Full lowering is tracked as
                 // B-2026-07-14-8.
-                // `for x in xs.iter_mut()` — mutable iteration is explicitly
-                // deferred (typechecker/lowering.rs "the future `.iter_mut()`";
-                // the interpreter has no dispatch arm and errors at runtime).
-                // Codegen has no for-loop path for it either, so it reached
-                // this catch-all and SILENTLY SKIPPED the body — `for x in
-                // v.iter_mut() { *x = *x * 10 }` left `v` unchanged with no
-                // error (a silent wrong answer, whereas `karac run`/interp
-                // fails loudly). Bail loud to match, and point at the
-                // supported in-place-mutation form. B-2026-07-14-9.
-                if let ExprKind::MethodCall { method, .. } = &iterable.kind {
-                    if method == "iter_mut" {
-                        return Err(
-                            "codegen: `for x in …iter_mut()` (mutable iteration) is not yet \
-                             supported under `karac build`/JIT — the loop body would be \
-                             silently skipped and the collection left unmutated. The \
-                             interpreter implements it, so re-run with `--interp` (or \
-                             `KARAC_RUN_JIT=0`); for a codegen build, use an index loop: \
+                // `for x in xs.iter_mut()` — mutable iteration (B-2026-07-14-10).
+                // The SUPPORTED shape lowers below: a named Vec receiver, a
+                // simple binding pattern, and a trivially-copyable (scalar)
+                // element — the loop binds `x` as a mut-ref slot pointer into
+                // the Vec's storage (`data + i*stride`), routed through the
+                // `entry_slot_ref_vars` deref machinery so `*x = …` / `*x += 1`
+                // write back in place. Anything else (heap element, destructure
+                // pattern, non-identifier receiver) bails LOUD — never the old
+                // silent zero-iteration skip (B-2026-07-14-9) — pointing at
+                // `--interp` (which handles all shapes) and the index-loop form.
+                if let ExprKind::MethodCall {
+                    method,
+                    object: im_recv,
+                    args: im_args,
+                    ..
+                } = &iterable.kind
+                {
+                    if method == "iter_mut" && im_args.is_empty() {
+                        if let ExprKind::Identifier(recv_name) = &im_recv.kind {
+                            let recv_name = recv_name.clone();
+                            if self.vec_elem_types.contains_key(recv_name.as_str())
+                                && matches!(&pattern.kind, PatternKind::Binding(_))
+                                && self
+                                    .var_elem_type_exprs
+                                    .get(recv_name.as_str())
+                                    .is_some_and(super::vec_method::is_trivially_copyable_te)
+                            {
+                                return self.compile_for_vec_var_iter_mut(
+                                    label, pattern, &recv_name, body,
+                                );
+                            }
+                        }
+                        return Err("codegen: this `for x in …iter_mut()` shape is not yet \
+                             supported under `karac build`/JIT (supported: a named \
+                             `Vec` binding with a scalar element and a simple loop \
+                             variable) — the loop body would otherwise be silently \
+                             skipped. The interpreter implements every shape, so \
+                             re-run with `--interp` (or `KARAC_RUN_JIT=0`); for a \
+                             codegen build, use an index loop: \
                              `for i in 0..xs.len() { xs[i] = … }` (B-2026-07-14-10)."
-                                .to_string(),
-                        );
+                            .to_string());
                     }
                     const UNLOWERED_FOR_ADAPTORS: &[&str] = &[
                         "enumerate",
@@ -1396,6 +1417,152 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// `for x in xs.iter_mut() { *x = … }` over a named Vec with a SCALAR
+    /// element (B-2026-07-14-10). Mirrors `compile_for_vec_var`'s index-loop
+    /// skeleton, but instead of loading the element BY VALUE, binds the loop
+    /// variable as a MUT-REF: a single ptr alloca holds `data + i*stride`
+    /// (restored each iteration), and the variable is registered in
+    /// `entry_slot_ref_vars` so the existing deref machinery routes `*x`
+    /// reads, `*x = v` stores, and `*x += 1` compound stores through the live
+    /// element pointer — writes land in the Vec's storage in place. The
+    /// element pointer stays valid across the body: the borrow forbids
+    /// mutating `xs` itself inside the loop (no push/realloc), so `data` is
+    /// loaded once up front like the by-value loop. Scalar elements only
+    /// (caller-gated): a heap element written through the ref would need the
+    /// old payload dropped first, which is the deferred heap leg.
+    fn compile_for_vec_var_iter_mut(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        var_name: &str,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use super::state::VarSlot;
+        let PatternKind::Binding(elem_name) = &pattern.kind else {
+            return Err(
+                "codegen: `for … in xs.iter_mut()` requires a simple binding pattern".to_string(),
+            );
+        };
+        let elem_name = elem_name.clone();
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+        let elem_ty = self.vec_elem_type_for_var(var_name);
+        let vec_ptr = self.get_data_ptr(var_name).unwrap();
+
+        let len_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, vec_ptr, 1, "form.len.ptr")
+            .unwrap();
+        let data_ptr_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, vec_ptr, 0, "form.data.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "form.len")
+            .unwrap()
+            .into_int_value();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_ptr_ptr, "form.data")
+            .unwrap()
+            .into_pointer_value();
+
+        let counter = self.create_entry_alloca(fn_val, "form.i", i64_t.into());
+        self.builder
+            .build_store(counter, i64_t.const_int(0, false))
+            .unwrap();
+        // The loop variable's slot holds the ELEMENT POINTER (mut ref), not
+        // the element value. Save any shadowed binding/tag and restore after.
+        let ref_alloca = self.create_entry_alloca(fn_val, &elem_name, ptr_ty.into());
+        let saved_var = self.variables.insert(
+            elem_name.clone(),
+            VarSlot {
+                ptr: ref_alloca,
+                ty: ptr_ty.into(),
+            },
+        );
+        let saved_slot_tag = self.entry_slot_ref_vars.insert(elem_name.clone(), elem_ty);
+
+        let cond_bb = self.context.append_basic_block(fn_val, "form.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "form.body");
+        let incr_bb = self.context.append_basic_block(fn_val, "form.incr");
+        let exit_bb = self.context.append_basic_block(fn_val, "form.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            label: label.map(str::to_string),
+            continue_bb: incr_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
+        });
+
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "form.i.cur")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, cur, len, "form.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        // Body: store the element's address into the loop var's ptr slot.
+        self.builder.position_at_end(body_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "form.i.body")
+            .unwrap()
+            .into_int_value();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, data, &[cur], "form.elem.ptr")
+                .unwrap()
+        };
+        self.builder.build_store(ref_alloca, elem_ptr).unwrap();
+        self.compile_loop_body_with_cleanup(body, incr_bb)?;
+
+        self.builder.position_at_end(incr_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "form.i.incr")
+            .unwrap()
+            .into_int_value();
+        let one = i64_t.const_int(1, false);
+        let next = self.builder.build_int_add(cur, one, "form.next").unwrap();
+        self.builder.build_store(counter, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        // Restore whatever the loop variable's name previously bound.
+        match saved_var {
+            Some(s) => {
+                self.variables.insert(elem_name.clone(), s);
+            }
+            None => {
+                self.variables.remove(&elem_name);
+            }
+        }
+        match saved_slot_tag {
+            Some(t) => {
+                self.entry_slot_ref_vars.insert(elem_name, t);
+            }
+            None => {
+                self.entry_slot_ref_vars.remove(&elem_name);
+            }
+        }
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 

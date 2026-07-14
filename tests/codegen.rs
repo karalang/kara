@@ -8681,6 +8681,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_iter_mut_scalar() {
+        // B-2026-07-14-10 (codegen leg): `for x in xs.iter_mut()` over a named
+        // Vec with a SCALAR element. The loop binds `x` as a mut-ref slot
+        // pointer into the Vec's storage (`entry_slot_ref_vars` deref
+        // machinery), so `*x = …` and `*x += …` write back in place. Covers
+        // i64 and f64 elements and two sequential mutation passes; must match
+        // the interpreter oracle. Heap elements / destructure patterns bail
+        // loud to `--interp`.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = [1, 2, 3, 4];\n\
+                 for x in v.iter_mut() { *x = *x * 2; }\n\
+                 for x in v.iter_mut() { *x += 1; }\n\
+                 let mut s = 0;\n\
+                 for y in v { s = s + y; }\n\
+                 println(s);\n\
+                 let mut f: Vec[f64] = [1.5, 2.5];\n\
+                 for z in f.iter_mut() { *z = *z + 0.5; }\n\
+                 let mut fs = 0.0;\n\
+                 for w in f { fs = fs + w; }\n\
+                 println(fs);\n\
+             }",
+        ) {
+            assert_eq!(out, "24\n5\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_get_unwrap_struct_element_loop() {
         // B-2026-07-14-16 (struct leg) regression: reading many `Vec[Struct]`
         // elements via `v.get(j).unwrap()` in a loop. An earlier version of the
@@ -11636,16 +11664,22 @@ fn main() {
     /// codegen too, pointing at the index-loop workaround.
     #[test]
     fn e2e_for_iter_mut_bails_loud() {
+        // B-2026-07-14-10: the SCALAR-element named-Vec shape is now LOWERED
+        // (see `test_e2e_for_iter_mut_scalar`), so the loud-bail contract only
+        // covers the still-unsupported shapes — here a HEAP (String) element,
+        // which a mut-ref write would need to drop-old-payload for. Must bail
+        // LOUD (never the silent zero-iteration skip of B-2026-07-14-9) and
+        // point at `--interp`, which handles every shape.
         let err = ir_result(
             "fn main() {\n\
-                 let mut v: Vec[i64] = Vec[1i64, 2i64, 3i64];\n\
-                 for x in v.iter_mut() { *x = *x * 10i64; }\n\
-                 println(f\"{v[0]}\");\n\
+                 let mut v: Vec[String] = Vec[f\"a\", f\"b\"];\n\
+                 for x in v.iter_mut() { *x = f\"z\"; }\n\
+                 println(f\"{v.len()}\");\n\
              }\n",
         )
-        .expect_err("iter_mut for-loop must bail loud, not silently skip");
+        .expect_err("heap-element iter_mut for-loop must bail loud, not silently skip");
         assert!(
-            err.contains("iter_mut") && err.contains("not yet supported"),
+            err.contains("iter_mut") && err.contains("not yet"),
             "expected iter_mut loud-bail message, got: {err}"
         );
     }
