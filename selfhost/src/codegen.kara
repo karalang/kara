@@ -1,0 +1,227 @@
+// codegen.kara — a self-hosted LLVM-IR emitter for the Kāra compiler
+// (Phase 12, Codegen port Slice 1). Depends on span + ast + (at the driver
+// level) parser.
+//
+// This is the FIRST slice of the backend port. The feasibility spike
+// (docs/spikes/selfhost-backend-feasibility.md) proved a Kāra program can emit
+// runnable LLVM IR text against the real runtime ABI — `println` lowers to libc
+// `fwrite` over the `@stdout` global. This module turns that from a hardcoded
+// string into an AST WALK: `emit_program(items)` consumes the parser's
+// `Vec[Item]`, finds `main`, and emits IR for its body.
+//
+// Slice 1 surface: a `main` whose body is a sequence of `println("literal")`
+// calls (statement or tail position). Everything else is skipped (emitted as
+// nothing) — the emitter grows construct-by-construct, each step verified
+// BEHAVIORALLY (compile the emitted IR + run it, diff its stdout against the
+// seed's `karac run` on the same source). Unlike the front-end oracles, IR text
+// is not byte-reproducible (SSA numbering / block labels are
+// construction-order artifacts), so the gate is program-output parity, not an
+// exact diff.
+//
+// The emitter is compiled by the REAL `karac` (not the self-hosted parser), so
+// it uses full Kāra — `as` casts, `String.bytes()`, `.to_string()` — none of
+// which the selfhost front-end parses yet.
+
+import span.Span;
+import ast.{
+    Item,
+    FnDefNode,
+    Block,
+    Stmt,
+    ExprStmt,
+    Expr,
+    CallExpr,
+    CallArg,
+    IdentExpr,
+    StrLit,
+};
+
+// Accumulates the module's string-literal GLOBALS and the `main` BODY
+// separately (globals must precede the function definition), plus monotonic
+// counters for unique string-global names (`@.strN`) and SSA temporaries
+// (`%tN`).
+struct Emitter {
+    globals: String,
+    body: String,
+    nstr: i64,
+    ntmp: i64,
+}
+
+// Emit a whole program as LLVM IR text. Walks the items, emits `main`'s body
+// (Slice 1: `println` of string literals), and assembles the module —
+// datalayout / triple / the `@stdout` extern / a shared `@.nl` newline / the
+// `@fwrite` declare / the collected string globals / `define i32 @main`.
+pub fn emit_program(items: Vec[Item]) -> String {
+    let mut e = Emitter {
+        globals: "".to_string(),
+        body: "".to_string(),
+        nstr: 0,
+        ntmp: 0,
+    };
+    for it in items {
+        match it {
+            Func(f) => {
+                let FnDefNode {
+                    is_pub,
+                    name,
+                    generics,
+                    self_mode,
+                    params,
+                    ret,
+                    body,
+                    attributes,
+                    doc,
+                    span,
+                } = f;
+                if name == "main" {
+                    e.emit_block(body);
+                }
+            }
+            _ => {}
+        }
+    }
+    let Emitter { globals, body, nstr, ntmp } = e;
+    let mut out = "".to_string();
+    out = out
+        + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    out = out + "target triple = \"x86_64-pc-linux-gnu\"\n";
+    out = out + "@stdout = external global ptr\n";
+    out = out + "@.nl = internal constant [2 x i8] c\"\\0A\\00\"\n";
+    out = out + "declare i64 @fwrite(ptr, i64, i64, ptr)\n";
+    out = out + globals;
+    out = out + "define i32 @main() {\nentry:\n";
+    out = out + body;
+    out = out + "  ret i32 0\n}\n";
+    out
+}
+
+impl Emitter {
+    // Walk a block: every statement, then the tail expression if present.
+    fn emit_block(mut ref self, b: Block) {
+        let Block { stmts, tail, span } = b;
+        for st in stmts {
+            self.emit_stmt(st);
+        }
+        match tail {
+            Some(e) => {
+                self.emit_expr(e);
+            }
+            None => {}
+        }
+    }
+
+    // Slice 1 handles only expression statements (a call).
+    fn emit_stmt(mut ref self, st: Stmt) {
+        match st {
+            Exp(es) => {
+                let ExprStmt { expr, span } = es;
+                self.emit_expr(expr);
+            }
+            _ => {}
+        }
+    }
+
+    // Slice 1 handles only `println(<string literal>)`. The callee is matched
+    // inline (an `Ident` named `println`); each string-literal argument is
+    // emitted, anything else is skipped.
+    fn emit_expr(mut ref self, e: Expr) {
+        match e {
+            Call(n) => {
+                let CallExpr { callee, args, span } = n;
+                let is_println = match callee {
+                    Ident(ie) => {
+                        let IdentExpr { name, span: isp } = ie;
+                        name == "println"
+                    }
+                    _ => false,
+                };
+                if is_println {
+                    for a in args {
+                        let CallArg { label, mut_marker, value, span: asp } = a;
+                        match value {
+                            Str(sl) => {
+                                let StrLit { value: sv, span: ssp } = sl;
+                                self.emit_println_str(sv);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Emit one `println(sv)`: a string global `@.strN` (byte-hex-escaped, with a
+    // trailing NUL) plus two `fwrite`s — the string (its byte length) then the
+    // shared `@.nl` newline. Matches the seed's lowering (fwrite over @stdout).
+    fn emit_println_str(mut ref self, sv: String) {
+        let sid = self.nstr;
+        self.nstr = self.nstr + 1;
+        let mut hex = "".to_string();
+        let mut len = 0;
+        for b in sv.bytes() {
+            hex = hex + "\\" + hex2(b as i64);
+            len = len + 1;
+        }
+        self.globals = self.globals
+            + "@.str"
+            + sid.to_string()
+            + " = internal constant ["
+            + (len + 1).to_string()
+            + " x i8] c\""
+            + hex
+            + "\\00\"\n";
+        self.emit_write("@.str" + sid.to_string(), len);
+        self.emit_write("@.nl".to_string(), 1);
+    }
+
+    // `%tA = load ptr @stdout; %tB = call fwrite(gname, 1, len, %tA)`.
+    fn emit_write(mut ref self, gname: String, len: i64) {
+        let t0 = self.ntmp;
+        self.ntmp = self.ntmp + 1;
+        let t1 = self.ntmp;
+        self.ntmp = self.ntmp + 1;
+        self.body = self.body
+            + "  %t"
+            + t0.to_string()
+            + " = load ptr, ptr @stdout, align 8\n";
+        self.body = self.body
+            + "  %t"
+            + t1.to_string()
+            + " = call i64 @fwrite(ptr "
+            + gname
+            + ", i64 1, i64 "
+            + len.to_string()
+            + ", ptr %t"
+            + t0.to_string()
+            + ")\n";
+    }
+}
+
+// A byte as two lowercase hex digits (LLVM `c"..."` `\NN` escape body).
+fn hex2(b: i64) -> String {
+    hex_digit(b / 16) + hex_digit(b % 16)
+}
+
+fn hex_digit(d: i64) -> String {
+    if d < 10 {
+        return d.to_string();
+    }
+    if d == 10 {
+        return "a".to_string();
+    }
+    if d == 11 {
+        return "b".to_string();
+    }
+    if d == 12 {
+        return "c".to_string();
+    }
+    if d == 13 {
+        return "d".to_string();
+    }
+    if d == 14 {
+        return "e".to_string();
+    }
+    "f".to_string()
+}
