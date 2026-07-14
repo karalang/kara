@@ -147,6 +147,12 @@ the compiler — the demo uses the natural shared-read fan-out, not a workaround
   `tests/cli.rs::wasm_threads_input_payload_recv_e2e`.
 - The native **CPU SDL2** edition and the **GPU** path described in the roster
   remain Phase-11 / Phase-10 work; this is the browser edition, which the
-  front-end spine already unblocks.
+  front-end spine already unblocks. The GPU path in particular has a deeper
+  blocker than "unbuilt codegen": this kernel is `f64`, and **WGSL has no
+  native `f64`**, so a GPU target needs a separate `f32` kernel variant — a
+  source fork that the "one source, byte-identical" checksum oracle can't span
+  (f32≠f64). The honest way to prove Kāra's CPU/GPU story is a purpose-built
+  `f32` kernel, not a retrofit of this f64 fluid solver. Tracked in
+  [`docs/dogfooding.md`](../../docs/dogfooding.md) (Slipstream GPU note).
 - `sin`/`cos`/`atan2` remain a tracked stdlib gap, so the wing is parameterised
   by slope rather than a true angle.
