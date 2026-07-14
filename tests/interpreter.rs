@@ -15181,11 +15181,12 @@ fn main() {
 "#,
     );
     // Predicate fires on 1, 2 (yield), 9 (stop). Never on 3 or 4.
-    // For-loop drains the iterator first, then iterates the body — so
-    // the order is predicate-prefix then yielded-prefix. The
+    // The for-loop pulls LAZILY (one element per iteration,
+    // B-2026-07-14-22), so predicate and body prints INTERLEAVE —
+    // matching the codegen backend's fused lowering and Rust. The
     // short-circuit guarantee is still proven by the absence of "p:3"
     // and "p:4".
-    assert_eq!(output, "p:1\np:2\np:9\ny:1\ny:2\n");
+    assert_eq!(output, "p:1\ny:1\np:2\ny:2\np:9\n");
 }
 
 #[test]
@@ -15712,6 +15713,31 @@ fn main() {
 }
 
 #[test]
+fn test_for_over_unbounded_cycle_breaks_from_body() {
+    // B-2026-07-14-22: the for-loop used to EAGERLY DRAIN `Value::Iterator`
+    // into a Vec before running the body, so an UNBOUNDED `.cycle()` (no
+    // `.take(n)` cap — the body's `break` is the only bound) hung forever
+    // before the first body execution. The lazy pull-loop runs the body per
+    // element, so the break lands after 7 pulls.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let mut n = 0;
+    let mut a = 0;
+    for x in v.iter().cycle() {
+        if n == 7 { break; }
+        n = n + 1;
+        a = a + x;
+    }
+    println(a);
+}
+"#,
+    );
+    assert_eq!(output, "13\n");
+}
+
+#[test]
 fn test_iter_cycle_preserves_pre_adaptors() {
     // Adaptors applied BEFORE cycle live in the template's own
     // step chain — they re-run on each restart. Here the filter
@@ -15951,8 +15977,9 @@ fn main() {
 "#,
     );
     // Closure fires on 1, 2, 100. None on 100 → stop. 3 and 4 are
-    // never visited. Yields: 1 (=0+1), 3 (=1+2).
-    assert_eq!(output, "c:1\nc:2\nc:100\ny:1\ny:3\n");
+    // never visited. Yields: 1 (=0+1), 3 (=1+2). The for-loop pulls
+    // LAZILY (B-2026-07-14-22), so closure and body prints INTERLEAVE.
+    assert_eq!(output, "c:1\ny:1\nc:2\ny:3\nc:100\n");
 }
 
 #[test]

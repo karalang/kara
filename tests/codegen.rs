@@ -8804,6 +8804,59 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_cycle() {
+        // B-2026-07-14-8 (cycle leg): `for x in src.cycle()` lowers to a
+        // restart loop around one full pass of the source chain, with a
+        // yielded-flag guard so a pass that yields NOTHING ends the loop
+        // (matching the interpreter's empty-template stop — an empty or
+        // fully-filtered source must not spin forever). Unlabeled `break`
+        // exits the whole cycle via the retargeted outer label; per-pass
+        // adaptor state (`take(2).cycle()`) resets each restart like the
+        // interpreter's fresh template clone. Must match the interpreter —
+        // which itself needed the LAZY for-loop pull (B-2026-07-14-22) to
+        // run these at all.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3];\n\
+                 let mut n: i64 = 0;\n\
+                 let mut a: i64 = 0;\n\
+                 for x in v.iter().cycle() {\n\
+                     if n == 7 { break; }\n\
+                     n = n + 1;\n\
+                     a = a + x;\n\
+                 }\n\
+                 println(a);\n\
+                 let es: Vec[i64] = [];\n\
+                 let mut b: i64 = 0;\n\
+                 for x in es.iter().cycle() { b = b + x; }\n\
+                 println(b);\n\
+                 let mut c: i64 = 0;\n\
+                 for x in v.iter().filter(|w| w > 100).cycle() { c = c + x; }\n\
+                 println(c);\n\
+                 let mut m: i64 = 0;\n\
+                 let mut d: i64 = 0;\n\
+                 for x in v.iter().take(2).cycle() {\n\
+                     if m == 5 { break; }\n\
+                     m = m + 1;\n\
+                     d = d + x;\n\
+                 }\n\
+                 println(d);\n\
+                 let ws: Vec[String] = [f\"ab\", f\"c\"];\n\
+                 let mut h: i64 = 0;\n\
+                 let mut cnt: i64 = 0;\n\
+                 for w in ws.iter().cycle() {\n\
+                     if cnt == 5 { break; }\n\
+                     cnt = cnt + 1;\n\
+                     h = h + w.len();\n\
+                 }\n\
+                 println(h);\n\
+             }",
+        ) {
+            assert_eq!(out, "13\n0\n0\n7\n8\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_flat_map_terminals() {
         // B-2026-07-14-8 (flat_map terminals): the fused terminals treat a
         // peel-rejected flat_map receiver as a zero-step base — the
@@ -12049,18 +12102,20 @@ fn main() {
     /// test_e2e_for_chain_two_vecs).
     #[test]
     fn e2e_for_unlowered_iter_adaptor_message() {
+        // `cycle` is now lowered (test_e2e_for_cycle) — `peekable` remains a
+        // genuinely-unlowered adaptor for the message contract.
         let err = ir_result(
             "fn main() {\n\
                  let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];\n\
                  let mut s = 0i64;\n\
-                 for x in v.iter().cycle() { s = s + x; if s > 100i64 { break; } }\n\
+                 for x in v.iter().peekable() { s = s + x; }\n\
                  println(f\"{s}\");\n\
              }\n",
         )
-        .expect_err("cycle for-loop must bail loud, not silently skip");
+        .expect_err("peekable for-loop must bail loud, not silently skip");
         assert!(
-            err.contains("`.cycle()`") && err.contains("not yet lowered"),
-            "expected cycle loud-bail message, got: {err}"
+            err.contains("`.peekable()`") && err.contains("not yet lowered"),
+            "expected peekable loud-bail message, got: {err}"
         );
     }
 

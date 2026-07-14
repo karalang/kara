@@ -910,6 +910,57 @@ impl<'a> super::Interpreter<'a> {
                     its
                 } else {
                     let iter_val = self.eval_expr_inner(iterable);
+                    // Iterator: pull LAZILY — one `iterator_step` per loop
+                    // iteration, interleaved with the body. The old eager
+                    // drain-to-Vec HUNG on any infinite iterator
+                    // (`xs.iter().cycle()` with a `break` in the body pulled
+                    // forever before the body ever ran — B-2026-07-14-22) and
+                    // ran all adaptor side effects (`inspect`, stateful
+                    // predicates) BEFORE the first body execution, the
+                    // opposite of the codegen backend's (and Rust's)
+                    // interleaved ordering. Same break/continue/label
+                    // handling as the materialized walk below.
+                    if matches!(iter_val, Value::Iterator { .. }) {
+                        let mut it = iter_val;
+                        loop {
+                            let Some(item) = self.iterator_step(&mut it) else {
+                                return Value::Unit;
+                            };
+                            self.env.push_scope();
+                            self.bind_pattern(pattern, item);
+                            match self.eval_block_inner(body) {
+                                Ok(_) => {}
+                                Err(ControlFlow::Break {
+                                    label: ref bl,
+                                    value: ref v,
+                                }) => {
+                                    self.env.pop_scope();
+                                    if bl.is_none() || bl.as_deref() == label.as_deref() {
+                                        return v.clone().unwrap_or(Value::Unit);
+                                    } else {
+                                        return self.set_cf(ControlFlow::Break {
+                                            label: bl.clone(),
+                                            value: v.clone(),
+                                        });
+                                    }
+                                }
+                                Err(ControlFlow::Continue { label: ref cl }) => {
+                                    self.env.pop_scope();
+                                    if cl.is_none() || cl.as_deref() == label.as_deref() {
+                                        continue;
+                                    } else {
+                                        return self
+                                            .set_cf(ControlFlow::Continue { label: cl.clone() });
+                                    }
+                                }
+                                Err(cf) => {
+                                    self.env.pop_scope();
+                                    return self.set_cf(cf);
+                                }
+                            }
+                            self.env.pop_scope();
+                        }
+                    }
                     match iter_val {
                         Value::Array(rc) => match Arc::try_unwrap(rc) {
                             Ok(cell) => cell.into_inner().unwrap(),
@@ -941,18 +992,8 @@ impl<'a> super::Interpreter<'a> {
                         // type (line 2299) pins `for c in s` and `s.chars()` as
                         // semantic peers.
                         Value::String(s) => s.chars().map(Value::Char).collect(),
-                        // Iterator: drain via repeated `iterator_step` so adaptor
-                        // closures (Map / Filter / future) fire per element. The
-                        // for-loop walks the resulting Vec uniformly with the
-                        // raw-collection arms above.
-                        iter @ Value::Iterator { .. } => {
-                            let mut it = iter;
-                            let mut drained = Vec::new();
-                            while let Some(v) = self.iterator_step(&mut it) {
-                                drained.push(v);
-                            }
-                            drained
-                        }
+                        // (`Value::Iterator` is handled by the LAZY pull-loop
+                        // above — it never reaches this materializing match.)
                         // `LinesIter[R]` (from `BufReader.lines()`) — drain the
                         // shared reader one line at a time, yielding
                         // `Result[String, IoError]` per line: `Ok(line)` with the

@@ -177,6 +177,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(v);
                 }
             }
+            // `for x in <src>.cycle() { … }` — restart-loop desugar
+            // (B-2026-07-14-8, cycle leg). Fails closed to the loud
+            // `.cycle()` bail below for a labeled loop or a source the
+            // fused peel rejects.
+            if args.is_empty() && method == "cycle" {
+                if let Some(v) =
+                    self.try_compile_for_cycle(label, pattern, object, body, &iterable.span)?
+                {
+                    return Ok(v);
+                }
+            }
             if args.is_empty() && (method == "iter" || method == "into_iter") {
                 // Indexed receiver (`coll[i].iter()`): synthesize a
                 // temp identifier pointing into `coll`'s storage and
@@ -3553,5 +3564,158 @@ impl<'ctx> super::Codegen<'ctx> {
             span: span.clone(),
         };
         Ok(Some(self.compile_expr(&outer_for)?))
+    }
+}
+
+impl<'ctx> super::Codegen<'ctx> {
+    /// Lower `for <pat> in <src>.cycle() { <body> }` (B-2026-07-14-8, cycle
+    /// leg) into a restart loop around one full pass of the source chain:
+    ///
+    /// ```text
+    /// __cyl_N: loop {
+    ///     let mut __cyp_N = false;
+    ///     for <pat> in <src> {
+    ///         __cyp_N = true;
+    ///         <body, unlabeled breaks retargeted to __cyl_N>
+    ///     }
+    ///     if !__cyp_N { break }
+    /// }
+    /// ```
+    ///
+    /// Semantics match the interpreter's `Cycle` source (iter_eval.rs): each
+    /// restart re-runs the chain from scratch — the fused desugar re-emits
+    /// its adaptor state prelude INSIDE the loop body, so per-pass counters
+    /// (`take(2).cycle()`) reset exactly like the interpreter's fresh
+    /// template clone — and a pass that yields NOTHING ends the loop (the
+    /// interpreter's empty-template stop; without it an empty source would
+    /// spin forever). The yielded flag is set first thing in the loop body,
+    /// so filtered chains count only elements that actually reach the body.
+    /// User `break` exits the WHOLE cycle via the retargeted label
+    /// (`retarget_unlabeled_breaks_block`); user `continue` is the inner
+    /// `for`'s continue — the next flat element, crossing the restart
+    /// boundary naturally when the pass ends. The trailing empty-pass
+    /// `break` is unlabeled and sits at loop-body level (outside the `for`),
+    /// so it binds the `loop` correctly without a label.
+    ///
+    /// Fails closed (`Ok(None)` → the loud `.cycle()` adaptor bail) for a
+    /// user LABEL on the loop (labeled `continue` means next-flat-element —
+    /// same rationale as flat_map) and for a source chain the fused peel
+    /// rejects.
+    pub(super) fn try_compile_for_cycle(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        src: &Expr,
+        body: &Block,
+        span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        if label.is_some() {
+            return Ok(None);
+        }
+        if Self::peel_fused_map_filter_chain(src).is_none() {
+            return Ok(None);
+        }
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let cyl = format!("__cyl_{uid}");
+        let cyp = format!("__cyp_{uid}");
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: span.clone(),
+        };
+
+        let mut user_body = body.clone();
+        retarget_unlabeled_breaks_block(&mut user_body, &cyl);
+
+        // `__cyp_N = true;` prepended to the user body.
+        let mut inner_stmts = vec![Stmt {
+            kind: StmtKind::Assign {
+                target: ident(&cyp),
+                value: Expr {
+                    kind: ExprKind::Bool(true),
+                    span: span.clone(),
+                },
+            },
+            span: span.clone(),
+        }];
+        inner_stmts.extend(user_body.stmts);
+        let inner_body = Block {
+            stmts: inner_stmts,
+            final_expr: user_body.final_expr,
+            span: span.clone(),
+        };
+
+        let pass_for = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: pattern.clone(),
+                    iterable: Box::new(src.clone()),
+                    attributes: Vec::new(),
+                    body: inner_body,
+                },
+                span: span.clone(),
+            }),
+            span: span.clone(),
+        };
+        // `if !__cyp_N { break }` — unlabeled: binds the enclosing loop.
+        let empty_guard = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(Expr {
+                        kind: ExprKind::Unary {
+                            op: UnaryOp::Not,
+                            operand: Box::new(ident(&cyp)),
+                        },
+                        span: span.clone(),
+                    }),
+                    then_block: Block {
+                        stmts: vec![Stmt {
+                            kind: StmtKind::Expr(Expr {
+                                kind: ExprKind::Break {
+                                    label: None,
+                                    value: None,
+                                },
+                                span: span.clone(),
+                            }),
+                            span: span.clone(),
+                        }],
+                        final_expr: None,
+                        span: span.clone(),
+                    },
+                    else_branch: None,
+                },
+                span: span.clone(),
+            }),
+            span: span.clone(),
+        };
+        let flag_let = Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(cyp.clone()),
+                    span: span.clone(),
+                },
+                ty: None,
+                value: Expr {
+                    kind: ExprKind::Bool(false),
+                    span: span.clone(),
+                },
+            },
+            span: span.clone(),
+        };
+        let cycle_loop = Expr {
+            kind: ExprKind::Loop {
+                label: Some(cyl),
+                body: Block {
+                    stmts: vec![flag_let, pass_for, empty_guard],
+                    final_expr: None,
+                    span: span.clone(),
+                },
+                attributes: Vec::new(),
+            },
+            span: span.clone(),
+        };
+        Ok(Some(self.compile_expr(&cycle_loop)?))
     }
 }
