@@ -26278,6 +26278,37 @@ fn main() {
     }
 
     #[test]
+    fn asan_map_get_unwrap_heap_value_no_double_free() {
+        // B-2026-07-14-15: `let r = m.get(k).unwrap()` on a Map whose VALUE is a
+        // NON-shared heap type (`Vec`/`String`) double-freed — `map.get` returns
+        // a BORROW, so `r` shallow-aliased the map's buffer while being registered
+        // as an owned Vec/String (scope-exit drop), and both `r`'s drop and the
+        // map's value-drop freed the same buffer. `r` is now treated as a
+        // borrow-elided alias (no owned drop; the map stays sole owner). Covers a
+        // `Vec` value and a `String` value; must be double-free-clean.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut mv: Map[String, Vec[i64]] = Map.new();
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    mv.insert("a", v);
+    let rv = mv.get("a").unwrap();
+    println(rv.len());
+
+    let mut ms: Map[String, String] = Map.new();
+    ms.insert("k", "hello world");
+    let rs = ms.get("k").unwrap();
+    println(rs.len());
+}
+"#,
+            &["2", "11"],
+            "map_get_unwrap_heap_value_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_generic_fn_string_temp_arg_no_leak() {
         // B-2026-07-14-12: a fresh-heap `String` TEMP arg (a fn-return, not a
         // named binding) passed to a GENERIC fn leaked the temp's buffer — the

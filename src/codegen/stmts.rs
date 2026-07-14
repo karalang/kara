@@ -2786,6 +2786,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     && self
                         .vec_index_borrow_spans
                         .contains(&crate::resolver::SpanKey::from_span(&value.span));
+                // B-2026-07-14-15: `let r = m.get(k).unwrap()` on a Map with a
+                // NON-shared heap value (`Vec`/`String`) — `map.get` returns a
+                // BORROW of the bucket's value, so `r`'s `{ptr,len,cap}` shallow-
+                // aliases the map's stored buffer while the binding is registered
+                // as an OWNED Vec/String (with a scope-exit drop). Both `r`'s drop
+                // and the map's value-drop then free the same buffer → double-free.
+                // Treat it as borrow-elided: the binding aliases the map's buffer
+                // (method dispatch on the alias still works via the
+                // `vec_elem_types` registration) and takes NO owned scope-exit
+                // drop — the map stays the sole owner. `map.get` returns a borrow
+                // whose lifetime the ownership checker ties to the map, so the
+                // alias can't outlive the buffer.
+                let borrow_elided =
+                    borrow_elided || self.is_nonshared_heap_value_map_get_unwrap(value);
                 let val = if borrow_elided {
                     val
                 } else {
@@ -7280,5 +7294,55 @@ impl<'ctx> super::Codegen<'ctx> {
         p.segments
             .last()
             .is_some_and(|seg| self.shared_types.contains_key(seg.as_str()))
+    }
+
+    /// True when `expr` is `<map>.get(k).unwrap()` / `.expect()` on a Map (or
+    /// SortedMap) whose VALUE is a NON-shared heap type (`Vec`/`String`).
+    /// `map.get(k)` returns `Option[ref V]` — a BORROW of the bucket's value —
+    /// so the unwrapped let-binding's `{ptr,len,cap}` is a SHALLOW ALIAS of the
+    /// map's stored buffer. Codegen otherwise registers that binding as an OWNED
+    /// Vec/String with a scope-exit buffer drop, which frees the same buffer the
+    /// map's own value-drop frees → double-free (B-2026-07-14-15). Recognising
+    /// the shape lets the let-site treat the binding as borrow-elided (no clone,
+    /// no drop — the map stays the sole owner; method dispatch on the alias still
+    /// works). A SHARED value is handled by the rc path
+    /// (`unwrap_receiver_is_shared_value_map_get`); a scalar value owns no buffer
+    /// so it never double-frees. Bare-identifier map receiver only, mirroring the
+    /// shared sibling.
+    pub(super) fn is_nonshared_heap_value_map_get_unwrap(&self, expr: &Expr) -> bool {
+        let ExprKind::MethodCall { method, object, .. } = &expr.kind else {
+            return false;
+        };
+        if !matches!(method.as_str(), "unwrap" | "expect") {
+            return false;
+        }
+        let ExprKind::MethodCall {
+            method: get_method,
+            object: map_recv,
+            ..
+        } = &object.kind
+        else {
+            return false;
+        };
+        if get_method != "get" {
+            return false;
+        }
+        let ExprKind::Identifier(map_var) = &map_recv.kind else {
+            return false;
+        };
+        // `var_elem_type_exprs` records a Map var's VALUE type (same lookup the
+        // shared sibling and the maps.rs get arm use).
+        let Some(te) = self.var_elem_type_exprs.get(map_var).cloned() else {
+            return false;
+        };
+        let is_shared = matches!(&te.kind,
+            TypeKind::Path(p)
+                if p.segments.last().is_some_and(|s| self.shared_types.contains_key(s.as_str())));
+        if is_shared {
+            return false;
+        }
+        // Vec / String value — the shapes that get registered as a tracked
+        // Vec/String (hence an owned drop) at the unwrapped binding.
+        self.is_string_type_expr(&te) || self.extract_vec_elem_type(&te).is_some()
     }
 }
