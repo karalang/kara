@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **433 surfaced · 5 open · 424 fixed** (2026-05-20 → 2026-07-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **434 surfaced · 5 open · 425 fixed** (2026-05-20 → 2026-07-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -101,9 +101,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **433 surfaced 
 | B-2026-07-13-18 | 2026-07-13 | codegen | high | `iter().fold(init, |acc, x| ...)` with a HEAP accumulator (`String`; a Vec accumulator hits a separate type-inference wall) double-frees the accumulator buffer on native/JIT. The idiomatic string-join fold is the headline shape. Scalar accumulators (`sum`, numeric fold) are unaffected; a 0-element fold (init returned, no iteration) is clean — the double-free is per-iteration, from the accumulator reassignment. | — |
 | B-2026-07-13-19 | 2026-07-13 | codegen | medium | The `?` operator applied to a `Result[Option[T], E]` (an Option NESTED inside the Result's Ok) loses the Option's payload type/value: the extracted `Option[T]` is truncated to its first word and left untyped, so a subsequent `match { Some(s) => … }` on it fails codegen — `Undefined variable 's'` when the arm returns the binding (`Ok(s)`), or `no handler for method 'len' on variable 's'` when it calls a method (`s.len()`). LOUD codegen failure (compile error, not a silent wrong answer or crash); the interpreter handles it. Plain `?` on a scalar-Ok Result, and matching an Option produced any OTHER way, both work — the trigger is `?` on a Result whose Ok payload is itself an Option. | — |
 
-### Fixed (424)
+### Fixed (425)
 
-<details><summary>424 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>425 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -531,6 +531,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **433 surfaced 
 | B-2026-07-13-14 | codegen | high | Matching a `shared enum` and binding a `Vec[shared T]` PAYLOAD out (`match t { Branch(xs) => … }`) leaks the shared elements | 05c1383 |
 | B-2026-07-13-15 | codegen | high | A `shared enum` with a `Map[K, shared V]` (or shared K) PAYLOAD (`shared enum Store { Full(Map[i64, Node]) }`) leaked the shared K/V boxes when dropp… | 9f59f09 |
 | B-2026-07-13-16 | codegen | high | Sending an OWNED heap payload (`Vec`/`String`) through a `Channel` and then `recv`-ing it DOUBLE-FREED on native/JIT | eb8db8d |
+| B-2026-07-13-20 | codegen | high | A closure with a BLOCK body whose tail is a local built by a collection/String constructor (`\|\| { let mut v = Vec.new(); v.push(1); v }`) had its ret… | PENDING |
 
 </details>
 

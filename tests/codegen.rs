@@ -4649,6 +4649,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_closure_block_body_returns_heap_collection() {
+        // B-2026-07-13-20 — a closure with a BLOCK body whose tail is a local
+        // built by a collection/String constructor (`let mut v = Vec.new(); …;
+        // v`). `infer_closure_return_type` resolved the tail `v` to its
+        // `let v = Vec.new()` value, then inferred `Vec.new()` as the `i64`
+        // fallback (the `Vec.new()` assoc call wasn't recognized), so the
+        // closure fn was declared `-> i64` while the body returned the
+        // `{ptr,len,cap}` Vec aggregate → LLVM verifier "return type does not
+        // match operand type of return inst". Now the Vec/String/Map/Set
+        // constructor arm returns the container's real heap type. Covers a Vec
+        // return (with a capture) and a String return; a single-EXPRESSION body
+        // (`|| make()`) already resolved via the module-fn return type and is
+        // unaffected. Interpreter parity: both print the same.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let base: Vec[i64] = [10, 20, 30];\n\
+                 let build = || {\n\
+                     let mut out = Vec.new();\n\
+                     let mut i = 0;\n\
+                     while i < base.len() { out.push(base[i] * 2); i = i + 1; }\n\
+                     out\n\
+                 };\n\
+                 let r = build();\n\
+                 println((r[0] + r[1] + r[2]).to_string());\n\
+                 let greet = || {\n\
+                     let s = String.from(\"hi\");\n\
+                     s\n\
+                 };\n\
+                 println(greet());\n\
+             }",
+        ) {
+            assert_eq!(out, "120\nhi\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_module_global_oncelock_config_pattern() {
         // The canonical late-bound global: `let CONFIG: OnceLock[T] =
         // OnceLock.new()` at module scope, `set` once in `main`, `get` from a

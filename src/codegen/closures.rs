@@ -3579,6 +3579,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     if segments.len() == 2 {
                         let target = segments[0].as_str();
                         let method = segments[1].as_str();
+                        // Collection / String constructor (`Vec.new()`,
+                        // `String.from(x)`, `Map.new()`, …) evaluates to the
+                        // container's own heap type — a `{ptr,len,cap}` aggregate
+                        // for Vec/String, an opaque handle `ptr` for Map/Set — NOT
+                        // the i64 fallback below. B-2026-07-13-20: a closure whose
+                        // BLOCK-body tail resolves to `let v = Vec.new(); …; v`
+                        // (no type annotation) inferred `i64` here, so the closure
+                        // fn was declared `-> i64` while its body returned the Vec
+                        // aggregate → LLVM verifier "return type does not match
+                        // operand type of return inst". A single-EXPRESSION body
+                        // (`|| make()`) already resolved via the module-fn return
+                        // type; only the block-body-tail-constructor path missed.
+                        if matches!(method, "new" | "with_capacity" | "from" | "from_vec") {
+                            match target {
+                                "Vec" | "VecDeque" | "String" | "CString" => {
+                                    return self.vec_struct_type().into();
+                                }
+                                "Map" | "HashMap" | "Set" | "HashSet" | "SortedMap"
+                                | "SortedSet" => {
+                                    return self.context.ptr_type(AddressSpace::default()).into();
+                                }
+                                _ => {}
+                            }
+                        }
                         // Enum-variant construction: `Enum.Variant(args)`
                         // (Result.Ok/Err, Option.Some, user enums) returns
                         // the enum's type-erased LLVM layout, NOT the
