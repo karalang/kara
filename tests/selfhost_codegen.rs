@@ -27,6 +27,14 @@ const CORPUS: &[&str] = &[
     "fn main() { println(\"unicode: \u{e9}\u{2192}\") }",
     "fn main() { }",
     "fn main() { println(\"one\"); println(\"two\"); println(\"three\") }",
+    // Slice 2: integer literals + arithmetic, formatted via `.to_string()`.
+    "fn main() { println((2 + 3).to_string()) }",
+    "fn main() { println(42.to_string()) }",
+    "fn main() { println((10 - 4).to_string()) }",
+    "fn main() { println((6 * 7).to_string()) }",
+    "fn main() { println((2 + 3 * 4).to_string()) }",
+    "fn main() { println((0 - 5).to_string()) }",
+    "fn main() { println(\"n = \"); println((1 + 1).to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

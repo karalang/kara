@@ -34,6 +34,10 @@ import ast.{
     CallArg,
     IdentExpr,
     StrLit,
+    IntLit,
+    BinaryExpr,
+    BinOp,
+    MethodCallExpr,
 };
 
 // Accumulates the module's string-literal GLOBALS and the `main` BODY
@@ -88,6 +92,8 @@ pub fn emit_program(items: Vec[Item]) -> String {
     out = out + "@stdout = external global ptr\n";
     out = out + "@.nl = internal constant [2 x i8] c\"\\0A\\00\"\n";
     out = out + "declare i64 @fwrite(ptr, i64, i64, ptr)\n";
+    out = out + "declare i32 @snprintf(ptr, i64, ptr, ...)\n";
+    out = out + "@.fmt_i = internal constant [5 x i8] c\"%lld\\00\"\n";
     out = out + globals;
     out = out + "define i32 @main() {\nentry:\n";
     out = out + body;
@@ -143,6 +149,15 @@ impl Emitter {
                                 let StrLit { value: sv, span: ssp } = sl;
                                 self.emit_println_str(sv);
                             }
+                            MethodCall(mc) => {
+                                // `println(<int-expr>.to_string())` (Slice 2):
+                                // emit the integer value, then format+print it.
+                                let MethodCallExpr { object, method, args: margs, span: msp } = mc;
+                                if method == "to_string" {
+                                    let val = self.emit_int_value(object);
+                                    self.emit_println_int(val);
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -196,6 +211,80 @@ impl Emitter {
             + ", ptr %t"
             + t0.to_string()
             + ")\n";
+    }
+
+    // A fresh SSA temporary name (`%tN`).
+    fn fresh(mut ref self) -> String {
+        let t = self.ntmp;
+        self.ntmp = self.ntmp + 1;
+        "%t" + t.to_string()
+    }
+
+    // Emit an INTEGER expression and return the LLVM operand holding its value —
+    // either a literal (constants are valid operands) or a `%tN` register (Slice
+    // 2). Handles integer literals and `+ - *`; sub-expressions are emitted
+    // before the combining instruction, so operands are always in scope.
+    fn emit_int_value(mut ref self, e: Expr) -> String {
+        match e {
+            Int(n) => {
+                let IntLit { value, suffix, span } = n;
+                value.to_string()
+            }
+            Binary(b) => {
+                let BinaryExpr { op, left, right, span } = b;
+                let lv = self.emit_int_value(left);
+                let rv = self.emit_int_value(right);
+                let oc = bin_opcode(op);
+                let r = self.fresh();
+                self.body = self.body + "  " + r.clone() + " = " + oc + " i64 " + lv + ", " + rv + "\n";
+                r
+            }
+            _ => "0".to_string(),
+        }
+    }
+
+    // Format an i64 operand with `snprintf` into a stack buffer and print it (the
+    // buffer is written directly — no heap String, since it is consumed
+    // immediately), then a newline. Output-equivalent to the seed's heap-String
+    // `to_string` + `write_console` path.
+    fn emit_println_int(mut ref self, val: String) {
+        let buf = self.fresh();
+        self.body = self.body + "  " + buf.clone() + " = alloca [64 x i8], align 1\n";
+        let w = self.fresh();
+        self.body = self.body
+            + "  "
+            + w.clone()
+            + " = call i32 (ptr, i64, ptr, ...) @snprintf(ptr "
+            + buf.clone()
+            + ", i64 64, ptr @.fmt_i, i64 "
+            + val
+            + ")\n";
+        let len = self.fresh();
+        self.body = self.body + "  " + len.clone() + " = zext i32 " + w + " to i64\n";
+        let s = self.fresh();
+        self.body = self.body + "  " + s.clone() + " = load ptr, ptr @stdout, align 8\n";
+        let r = self.fresh();
+        self.body = self.body
+            + "  "
+            + r
+            + " = call i64 @fwrite(ptr "
+            + buf
+            + ", i64 1, i64 "
+            + len
+            + ", ptr "
+            + s
+            + ")\n";
+        self.emit_write("@.nl".to_string(), 1);
+    }
+}
+
+// The LLVM integer opcode for a binary operator (Slice 2: `+ - *`).
+fn bin_opcode(op: BinOp) -> String {
+    match op {
+        Add => "add".to_string(),
+        Sub => "sub".to_string(),
+        Mul => "mul".to_string(),
+        _ => "add".to_string(),
     }
 }
 
