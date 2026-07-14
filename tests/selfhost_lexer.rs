@@ -144,6 +144,10 @@ const CORPUS: &[&str] = &[
     "1i16 2i128 3u16 4u128",
     "0xffu8 0b1010i32 0o17u64 0xdeadi128",
     "1_000i64 1.5e3f64 2e10f32",
+    // f16 / bf16 float suffixes (un-reserved in 09a2fc88 / B-2026-07-14-2); `bf16`
+    // must not be mis-munched as `f16`, and a `1.5e2f16` exponent+suffix stays one
+    // FLOAT — mirrors the seed's `try_float_suffix` candidate table.
+    "1.5f16 2.0bf16 3.14f16 1.5e2f16",
     "7 3.14",
     // Slice D: string / multi-string / char / byte literals (+ simple escapes).
     // Raw Rust strings so the entry IS the verbatim lexer input (incl. `"`/`\`).

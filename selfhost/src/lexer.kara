@@ -607,6 +607,16 @@ impl Lexer {
         if self.try_consume_suffix("f32") {
             return "f32".to_string();
         }
+        // `bf16` / `f16` reduced-precision float suffixes (un-reserved in the
+        // seed alongside the bare identifiers — B-2026-07-14-2). `bf16` before
+        // `f16` mirrors src/lexer.rs's candidate order; neither prefixes
+        // `f64`/`f32`, so the earlier arms are unaffected.
+        if self.try_consume_suffix("bf16") {
+            return "bf16".to_string();
+        }
+        if self.try_consume_suffix("f16") {
+            return "f16".to_string();
+        }
         "".to_string()
     }
 
