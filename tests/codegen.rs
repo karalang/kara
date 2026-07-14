@@ -11290,47 +11290,74 @@ fn main() {
         }
     }
 
-    /// B-2026-07-14-7: `for p in xs.iter().enumerate()` with a SINGLE-var
-    /// binding (not the `for (i, x)` destructure) has no codegen path, so the
-    /// loop body was silently SKIPPED (ran zero times) — a silent wrong answer.
-    /// It now bails LOUD instead (matching the codebase policy for unsupported
-    /// zip chains). The 2-tuple destructure form is unaffected (asserted by the
-    /// positive test below).
+    /// B-2026-07-14-7: for-loops over unlowered iterator adaptors silently
+    /// SKIPPED the loop body in codegen (ran zero times) — a silent wrong
+    /// answer. They now bail LOUD (matching the codebase policy for unsupported
+    /// zip chains). Covers `enumerate` (single-var binding), `zip`, and the
+    /// `skip`/`take`/`chain` family; the handled forms (`map`/`filter` fusion,
+    /// `enumerate` 2-tuple destructure, range `step_by`) are unaffected
+    /// (asserted by the positive tests below).
     #[test]
-    fn e2e_for_enumerate_single_var_binding_bails_loud() {
-        let err = ir_result(
-            "fn main() {\n\
-                 let a: Vec[i64] = Vec[10i64, 20i64, 30i64];\n\
+    fn e2e_for_unlowered_iter_adaptors_bail_loud() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "enumerate",
+                "let a: Vec[i64] = Vec[10i64, 20i64, 30i64];\n\
                  let mut s = 0i64;\n\
                  for p in a.iter().enumerate() { s = s + p.1; }\n\
-                 println(f\"{s}\");\n\
-             }\n",
-        )
-        .expect_err("single-var enumerate for-loop must bail loud, not silently skip");
-        assert!(
-            err.contains("for-loop over `.enumerate()`"),
-            "expected enumerate loud-bail, got: {err}"
-        );
-    }
-
-    /// B-2026-07-14-7: `for … in xs.iter().zip(ys.iter())` (ANY pattern) has no
-    /// codegen path — only `zip().collect()` does — so the loop body was
-    /// silently skipped. Now bails loud.
-    #[test]
-    fn e2e_for_zip_loop_bails_loud() {
-        let err = ir_result(
-            "fn main() {\n\
-                 let a: Vec[i64] = Vec[1i64, 2i64, 3i64];\n\
+                 println(f\"{s}\");",
+            ),
+            (
+                "zip",
+                "let a: Vec[i64] = Vec[1i64, 2i64, 3i64];\n\
                  let b: Vec[i64] = Vec[10i64, 20i64, 30i64];\n\
                  let mut s = 0i64;\n\
                  for (x, y) in a.iter().zip(b.iter()) { s = s + x * y; }\n\
+                 println(f\"{s}\");",
+            ),
+            (
+                "take",
+                "let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64, 5i64, 6i64];\n\
+                 let mut s = 0i64;\n\
+                 for x in v.iter().skip(2).take(3) { s = s + x; }\n\
+                 println(f\"{s}\");",
+            ),
+            (
+                "chain",
+                "let v: Vec[i64] = Vec[1i64, 2i64];\n\
+                 let w: Vec[i64] = Vec[10i64, 20i64];\n\
+                 let mut s = 0i64;\n\
+                 for x in v.iter().chain(w.iter()) { s = s + x; }\n\
+                 println(f\"{s}\");",
+            ),
+        ];
+        for (method, body) in cases {
+            let src = format!("fn main() {{\n{body}\n}}\n");
+            // `ir_result` returns Err on a loud bail, Ok if it compiled. A
+            // successful compile here is the silent-skip regression.
+            assert!(
+                ir_result(&src).is_err(),
+                "for-loop over `.{method}()` must bail loud (Err), not compile+silently-skip"
+            );
+        }
+    }
+
+    /// Companion to the above using `expect_err` so the actual bail message is
+    /// asserted (names the adaptor + points at `--interp`).
+    #[test]
+    fn e2e_for_unlowered_iter_adaptor_message() {
+        let err = ir_result(
+            "fn main() {\n\
+                 let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];\n\
+                 let mut s = 0i64;\n\
+                 for x in v.iter().chain(v.iter()) { s = s + x; }\n\
                  println(f\"{s}\");\n\
              }\n",
         )
-        .expect_err("zip for-loop must bail loud, not silently skip");
+        .expect_err("chain for-loop must bail loud, not silently skip");
         assert!(
-            err.contains("for-loop over `.zip()`"),
-            "expected zip loud-bail, got: {err}"
+            err.contains("`.chain()`") && err.contains("not yet lowered"),
+            "expected chain loud-bail message, got: {err}"
         );
     }
 

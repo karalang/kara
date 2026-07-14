@@ -443,28 +443,56 @@ impl<'ctx> super::Codegen<'ctx> {
                 // A for-loop over an iterator ADAPTOR that reached this
                 // fall-through was NOT handled by any peel/fusion path above,
                 // so the body would be silently skipped (loop runs zero times)
-                // — a silent wrong answer, the worst failure mode. The
-                // confirmed unhandled shapes (B-2026-07-14-7):
-                //   * `for p in xs.iter().enumerate()`  (SINGLE-var binding;
-                //     the 2-tuple destructure `for (i, x)` IS handled by the
-                //     enumerate peel above)
-                //   * `for … in xs.iter().zip(ys.iter())` (ANY pattern; zip
-                //     for-loops have no codegen path — only `zip().collect()`
-                //     does)
-                // Bail LOUD instead, matching the codebase's existing policy
-                // for unsupported zip chains (`zip().map()` bails; see
+                // — a silent wrong answer, the worst failure mode
+                // (B-2026-07-14-7). Adaptors that ARE lowered (`map`/`filter`
+                // via the fusion path; `enumerate` with a 2-tuple pattern via
+                // the peel) return BEFORE reaching here, so any lazy-adaptor
+                // method call that lands in this catch-all is genuinely
+                // unhandled. Confirmed silently-skipping shapes: `enumerate`
+                // (single-var binding), `zip` (any pattern), `skip`/`take`
+                // chains, `chain`, and the other lazy adaptors below. Bail
+                // LOUD instead — matching the codebase's existing policy for
+                // unsupported zip chains (`zip().map()` bails; see
                 // tests/codegen.rs `e2e_iter_adaptor_zip_identity_collect`).
-                // The interpreter handles all these, so the message points
-                // there. Full support is tracked as a feature gap.
+                // The set mirrors the typechecker's `Iterator` method list
+                // (typechecker/stdlib_iter.rs), minus the eager TERMINALS
+                // (`collect`/`sum`/`fold`/`count`/`reduce`/`all`/`any`/
+                // `for_each`/`next`/`peek`) which never type as a for-loop
+                // iterable. The interpreter handles all of these, so the
+                // message points there. Full lowering is tracked as
+                // B-2026-07-14-8.
                 if let ExprKind::MethodCall { method, .. } = &iterable.kind {
-                    if matches!(method.as_str(), "enumerate" | "zip") {
+                    const UNLOWERED_FOR_ADAPTORS: &[&str] = &[
+                        "enumerate",
+                        "zip",
+                        "skip",
+                        "skip_while",
+                        "take",
+                        "take_while",
+                        "chain",
+                        "step_by",
+                        "flat_map",
+                        "chunks",
+                        "chunk_by",
+                        "windows",
+                        "cycle",
+                        "scan",
+                        "peekable",
+                        "inspect",
+                    ];
+                    if UNLOWERED_FOR_ADAPTORS.contains(&method.as_str()) {
+                        let hint = if method == "enumerate" {
+                            " (`enumerate` IS supported with a 2-tuple pattern — \
+                             write `for (i, x) in …` instead of `for p in …`)"
+                        } else {
+                            ""
+                        };
                         return Err(format!(
-                            "codegen: for-loop over `.{method}()` is not supported here \
-                             (the loop body would be silently skipped). `enumerate` is \
-                             supported with a 2-tuple pattern — write `for (i, x) in …` \
-                             instead of `for p in …`; `zip` for-loops are not yet lowered. \
-                             Re-run with `--interp` (or `KARAC_RUN_JIT=0`) to use the \
-                             tree-walk interpreter, which handles both."
+                            "codegen: for-loop over the `.{method}()` iterator adaptor is \
+                             not yet lowered (the loop body would otherwise be silently \
+                             skipped, running zero times){hint}. Re-run with `--interp` \
+                             (or `KARAC_RUN_JIT=0`) to use the tree-walk interpreter, \
+                             which handles it."
                         ));
                     }
                 }
