@@ -8253,8 +8253,14 @@ impl<'ctx> super::Codegen<'ctx> {
         fold_body: &Expr,
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let Some((base, steps)) = Self::peel_fused_map_filter_chain(recv) else {
-            return Ok(None);
+        let (base, steps) = match Self::peel_fused_map_filter_chain(recv) {
+            Some(x) => x,
+            // A flat_map-terminated receiver is not a fused step, but the
+            // synthesized `for <elem> in <recv>` iterates it via the
+            // nested-loop desugar (compile_for's flat_map arm) — treat it as
+            // a zero-step base (B-2026-07-14-8, flat_map terminals).
+            None if Self::for_loop_iterates_flat_map(recv) => (recv, Vec::new()),
+            None => return Ok(None),
         };
 
         let uid = self.indexed_elem_counter;
@@ -8545,8 +8551,14 @@ impl<'ctx> super::Codegen<'ctx> {
         if !super::vec_method::is_trivially_copyable_te(&elem_te) {
             return Ok(None);
         }
-        let Some((base, steps)) = Self::peel_fused_map_filter_chain(recv) else {
-            return Ok(None);
+        let (base, steps) = match Self::peel_fused_map_filter_chain(recv) {
+            Some(x) => x,
+            // A flat_map-terminated receiver is not a fused step, but the
+            // synthesized `for <elem> in <recv>` iterates it via the
+            // nested-loop desugar (compile_for's flat_map arm) — treat it as
+            // a zero-step base (B-2026-07-14-8, flat_map terminals).
+            None if Self::for_loop_iterates_flat_map(recv) => (recv, Vec::new()),
+            None => return Ok(None),
         };
         self.indexed_elem_counter += 1;
         let uid = self.indexed_elem_counter;
@@ -8711,8 +8723,14 @@ impl<'ctx> super::Codegen<'ctx> {
         body: &Expr,
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let Some((base, steps)) = Self::peel_fused_map_filter_chain(recv) else {
-            return Ok(None);
+        let (base, steps) = match Self::peel_fused_map_filter_chain(recv) {
+            Some(x) => x,
+            // A flat_map-terminated receiver is not a fused step, but the
+            // synthesized `for <elem> in <recv>` iterates it via the
+            // nested-loop desugar (compile_for's flat_map arm) — treat it as
+            // a zero-step base (B-2026-07-14-8, flat_map terminals).
+            None if Self::for_loop_iterates_flat_map(recv) => (recv, Vec::new()),
+            None => return Ok(None),
         };
         self.indexed_elem_counter += 1;
         let uid = self.indexed_elem_counter;
@@ -8820,8 +8838,14 @@ impl<'ctx> super::Codegen<'ctx> {
         pred: &Expr,
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let Some((base, steps)) = Self::peel_fused_map_filter_chain(recv) else {
-            return Ok(None);
+        let (base, steps) = match Self::peel_fused_map_filter_chain(recv) {
+            Some(x) => x,
+            // A flat_map-terminated receiver is not a fused step, but the
+            // synthesized `for <elem> in <recv>` iterates it via the
+            // nested-loop desugar (compile_for's flat_map arm) — treat it as
+            // a zero-step base (B-2026-07-14-8, flat_map terminals).
+            None if Self::for_loop_iterates_flat_map(recv) => (recv, Vec::new()),
+            None => return Ok(None),
         };
 
         self.indexed_elem_counter += 1;

@@ -8804,6 +8804,33 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_flat_map_terminals() {
+        // B-2026-07-14-8 (flat_map terminals): the fused terminals treat a
+        // peel-rejected flat_map receiver as a zero-step base — the
+        // synthesized `for <elem> in <recv>` routes through compile_for's
+        // nested-loop flat_map desugar. Covers every terminal the shared
+        // peel serves. Must match the interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let vv: Vec[Vec[i64]] = [[1, 2], [3], [4, 5]];\n\
+                 println(vv.iter().flat_map(|row| row.iter()).sum());\n\
+                 println(vv.iter().flat_map(|row| row.iter()).count());\n\
+                 println(vv.iter().flat_map(|row| row.iter()).fold(1, |a, x| a * x));\n\
+                 println(vv.iter().flat_map(|row| row.iter().map(|v| v * 2)).sum());\n\
+                 println(vv.iter().flat_map(|row| row.iter()).any(|v| v == 4));\n\
+                 println(vv.iter().flat_map(|row| row.iter()).all(|v| v > 0));\n\
+                 let m = vv.iter().flat_map(|row| row.iter()).reduce(|p, q| if p > q { p } else { q });\n\
+                 println(m.unwrap_or(0 - 1));\n\
+                 let mut t: i64 = 0;\n\
+                 vv.iter().flat_map(|row| row.iter()).for_each(|v| { t = t + v; });\n\
+                 println(t);\n\
+             }",
+        ) {
+            assert_eq!(out, "15\n5\n120\n30\ntrue\ntrue\n5\n15\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_step_by_inspect_take_skip_fused() {
         // B-2026-07-14-8 (count + inspect legs): `take`/`skip`/`step_by`/
         // `inspect` are fused-chain steps in the SHARED peel, so for-loops and

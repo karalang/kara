@@ -3427,6 +3427,63 @@ impl<'ctx> super::Codegen<'ctx> {
     /// whitelist (array/Vec literal, bounded range, named binding, or a chain
     /// the fused peel accepts) — an unproven inner shape could hit
     /// `compile_for`'s silent unknown-iterable arm and drop elements.
+    /// True iff `e` is a `<recv>.flat_map(|p| <inner>)` call whose shape the
+    /// nested-loop desugar (`try_compile_for_flat_map`) accepts: a single
+    /// simple closure param, an inner iterable on the proven whitelist, and a
+    /// receiver the fused peel understands. Used by the fused TERMINALS
+    /// (fold/sum/count/reduce/for_each/any/all) to treat a peel-rejected
+    /// flat_map receiver as a zero-step base — the synthesized
+    /// `for <elem> in <e>` then routes through the flat_map desugar.
+    pub(super) fn for_loop_iterates_flat_map(e: &Expr) -> bool {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &e.kind
+        else {
+            return false;
+        };
+        if method != "flat_map" || args.len() != 1 {
+            return false;
+        }
+        let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
+            return false;
+        };
+        if params.len() != 1
+            || !matches!(
+                &params[0].pattern.kind,
+                PatternKind::Binding(_) | PatternKind::Wildcard
+            )
+        {
+            return false;
+        }
+        Self::flat_map_inner_iterable_ok(body)
+            && Self::peel_fused_map_filter_chain(object).is_some()
+    }
+
+    /// Inner-iterable whitelist for the flat_map desugar: shapes `compile_for`
+    /// provably iterates (verified against the JIT: array literal, `Vec[…]`
+    /// prefix literal, bounded range, named binding incl. an outer Vec-of-Vec
+    /// loop element, and fused-peel-accepted chains). The typechecker already
+    /// restricts flat_map inners to `Iterator[U]`-typed exprs (the MethodCall
+    /// arm); the literal/range/identifier arms defend against future
+    /// typechecker widening. Anything else fails closed.
+    fn flat_map_inner_iterable_ok(inner: &Expr) -> bool {
+        match &inner.kind {
+            ExprKind::ArrayLiteral(_) => true,
+            ExprKind::PrefixCollectionLiteral { type_name, .. } => type_name == "Vec",
+            ExprKind::Range {
+                start: Some(_),
+                end: Some(_),
+                ..
+            } => true,
+            ExprKind::Identifier(_) => true,
+            ExprKind::MethodCall { .. } => Self::peel_fused_map_filter_chain(inner).is_some(),
+            _ => false,
+        }
+    }
+
     pub(super) fn try_compile_for_flat_map(
         &mut self,
         label: Option<&str>,
@@ -3457,23 +3514,7 @@ impl<'ctx> super::Codegen<'ctx> {
             PatternKind::Wildcard => format!("__fmp_{uid}"),
             _ => return Ok(None),
         };
-        // Inner-iterable whitelist: shapes `compile_for` provably iterates
-        // (verified against the JIT: array literal, `Vec[…]` prefix literal,
-        // bounded range, named binding incl. an outer Vec-of-Vec loop element,
-        // and fused-peel-accepted chains). Anything else fails closed.
-        let inner_ok = match &inner.kind {
-            ExprKind::ArrayLiteral(_) => true,
-            ExprKind::PrefixCollectionLiteral { type_name, .. } => type_name == "Vec",
-            ExprKind::Range {
-                start: Some(_),
-                end: Some(_),
-                ..
-            } => true,
-            ExprKind::Identifier(_) => true,
-            ExprKind::MethodCall { .. } => Self::peel_fused_map_filter_chain(inner).is_some(),
-            _ => false,
-        };
-        if !inner_ok {
+        if !Self::flat_map_inner_iterable_ok(inner) {
             return Ok(None);
         }
 
