@@ -44,8 +44,7 @@ fn kara_str_lit(input: &str) -> String {
 /// for every corpus program, run it, and return the raw stdout — or `None` on a
 /// benign link skip.
 fn build_and_emit_all() -> Option<String> {
-    let tmp =
-        std::env::temp_dir().join(format!("karac-selfhost-codegen-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("karac-selfhost-codegen-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join("src")).unwrap();
     std::fs::write(
