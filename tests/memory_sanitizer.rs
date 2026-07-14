@@ -26303,6 +26303,57 @@ fn main() {
     }
 
     #[test]
+    fn asan_channel_sent_unreceived_heap_payload_no_leak() {
+        // B-2026-07-13-17: a heap payload SENT on a channel but never RECEIVED
+        // has no owner to free it (send moves it into the queue; the source's
+        // free is suppressed). The channel destructor now drains any still-queued
+        // payloads through the element's drop fn. A Vec sent and never recv'd,
+        // then the channel drops at scope exit — must be leak-clean.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let (tx, rx): (Sender[Vec[i64]], Receiver[Vec[i64]]) = Channel.new();
+    let mut v = Vec.new();
+    v.push(1);
+    v.push(2);
+    tx.send(v);
+    println("sent");
+}
+"#,
+            &["sent"],
+            "channel_sent_unreceived_heap_payload_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_channel_balanced_send_recv_no_double_free() {
+        // The dual guard: a RECEIVED payload is owned by its receiver binding and
+        // must NOT also be freed by the channel destructor (the received blob was
+        // dequeued, so it is not on the queue at drop). Balanced send→recv over a
+        // Vec payload, plus a second sent-but-unreceived Vec that the destructor
+        // drains — exercises both halves in one program, leak- and
+        // double-free-clean.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let (tx, rx): (Sender[Vec[i64]], Receiver[Vec[i64]]) = Channel.new();
+    let mut a = Vec.new();
+    a.push(1);
+    let mut b = Vec.new();
+    b.push(2);
+    b.push(3);
+    tx.send(a);
+    tx.send(b);
+    let got = rx.recv();
+    println(f"got len: {got.len()}");
+}
+"#,
+            &["got len: 1"],
+            "channel_balanced_send_recv_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_vec_shared_whole_variable_reassign_no_leak() {
         // B-2026-07-12-30: overwriting a `Vec[shared]` local (`current = next`,
         // the BFS-worklist idiom) freed the OLD buffer but skipped its

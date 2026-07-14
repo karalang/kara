@@ -5270,6 +5270,19 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // `karac_runtime_channel_set_elem_drop(ch: ptr, drop_fn: ptr)` — record
+        // the element's `karac_drop_<T>` fn so the channel destructor frees any
+        // heap payload SENT but never RECEIVED (B-2026-07-13-17). Emitted at
+        // each heap-payload `send`; a scalar-payload channel never calls it.
+        let channel_set_drop_ty = context
+            .void_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_channel_set_elem_drop",
+            channel_set_drop_ty,
+            Some(Linkage::External),
+        );
+
         // `karac_runtime_channel_recv(ch: ptr, out_ptr: ptr, elem_size: u64)
         // -> u8` — **blocking** receive (parks while empty + open on
         // threads-targets; non-blocking on sequential wasm). Returns 1 with a

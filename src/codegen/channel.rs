@@ -99,6 +99,36 @@ impl<'ctx> super::Codegen<'ctx> {
         let slot = self.create_entry_alloca(fn_val, "chan.send.val", elem_ty);
         self.builder.build_store(slot, arg_val).unwrap();
 
+        // B-2026-07-13-17: a HEAP payload sent but never received is owned by
+        // the channel (send MOVES it — B-2026-07-13-16 suppresses the source's
+        // free below), so the channel destructor must free it. Record the
+        // element's drop fn on the channel; its `Drop` drains any still-queued
+        // payloads through it. Scalar payloads own no heap → skip (the channel's
+        // `elem_drop` stays null and the destructor is a no-op). `set_elem_drop`
+        // is idempotent, so emitting it per-send is fine. `emit_drop_fn_for_type_expr`
+        // restores the builder position, so the send emission below is unaffected.
+        if let Some(elem_te) = self
+            .channel_elem_types
+            .get(&(call_span.offset, call_span.length))
+            .cloned()
+        {
+            if self.te_owns_heap_below_buffer(&elem_te) {
+                let drop_fn = self.emit_drop_fn_for_type_expr(&elem_te);
+                let set_drop_fn = self
+                    .module
+                    .get_function("karac_runtime_channel_set_elem_drop")
+                    .expect("karac_runtime_channel_set_elem_drop declared in Codegen::new");
+                let drop_ptr = drop_fn.as_global_value().as_pointer_value();
+                self.builder
+                    .build_call(
+                        set_drop_fn,
+                        &[ch.into(), drop_ptr.into()],
+                        "chan.set_elem_drop",
+                    )
+                    .unwrap();
+            }
+        }
+
         let size_const = self.context.i64_type().const_int(elem_size, false);
         let send_fn = self
             .module

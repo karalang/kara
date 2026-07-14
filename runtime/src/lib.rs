@@ -164,6 +164,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         channel::karac_runtime_channel_drop_sender,
         channel::karac_runtime_channel_drop_receiver,
         channel::karac_runtime_channel_send,
+        channel::karac_runtime_channel_set_elem_drop,
         channel::karac_runtime_channel_recv,
         channel::karac_runtime_channel_try_recv,
     );

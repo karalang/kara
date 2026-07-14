@@ -49,7 +49,7 @@
 //! each binding's `Sender`/`Receiver` surface type).
 
 use std::collections::VecDeque;
-use std::sync::atomic::{fence, AtomicUsize, Ordering};
+use std::sync::atomic::{fence, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 
 /// Queue + close flag, guarded by the channel's `Mutex`. `closed` is set
@@ -75,6 +75,42 @@ pub struct KaracChannel {
     /// Receivers park here when the queue is empty; `send` / last-sender-drop
     /// wake them. Unused on sequential wasm (recv never blocks there).
     not_empty: Condvar,
+    /// Element drop fn (`karac_drop_<T>`), or null. Set by codegen at each
+    /// `send` of a HEAP-payload channel (`karac_runtime_channel_set_elem_drop`).
+    /// A payload sent but never received has no owner to free it — the channel
+    /// is its last owner — so the destructor walks any still-queued blobs and
+    /// runs this fn on each to free the payload's heap (`Vec`/`String`/… buffer
+    /// or a shared box's refcount). Null for scalar payloads (they own no heap)
+    /// → the destructor is a no-op. B-2026-07-13-17.
+    elem_drop: AtomicPtr<()>,
+}
+
+impl Drop for KaracChannel {
+    fn drop(&mut self) {
+        // Free the heap owned by every UNRECEIVED payload still on the queue
+        // (B-2026-07-13-17). Received payloads were dequeued and are owned by
+        // their receiver binding — they are not here. The blob storage itself
+        // (`Box<[u8]>` of the element header) is freed by the default field
+        // drop that runs after this; `elem_drop` frees only the heap that
+        // header POINTS to, so there is no double-free.
+        let dropper = self.elem_drop.load(Ordering::Acquire);
+        if dropper.is_null() {
+            return;
+        }
+        // SAFETY: codegen sets this to a `karac_drop_<T>` fn for exactly the
+        // channel's element type `T`; it takes a pointer to `T`'s in-place
+        // bytes and frees any heap `T` owns.
+        let dropper: unsafe extern "C" fn(*mut u8) = unsafe { std::mem::transmute(dropper) };
+        // Exclusive access at drop time (no other end is live), so `get_mut`
+        // needs no lock; recover the queue even from a poisoned mutex so a
+        // panic-while-locked still drains rather than leaks.
+        let inner = self.inner.get_mut().unwrap_or_else(|e| e.into_inner());
+        for blob in inner.queue.iter_mut() {
+            if !blob.is_empty() {
+                unsafe { dropper(blob.as_mut_ptr()) };
+            }
+        }
+    }
 }
 
 // The whole point of a channel is cross-thread transfer; the native pool
@@ -95,6 +131,7 @@ impl KaracChannel {
                 closed: false,
             }),
             not_empty: Condvar::new(),
+            elem_drop: AtomicPtr::new(std::ptr::null_mut()),
         });
         Box::into_raw(ch)
     }
@@ -234,6 +271,28 @@ pub unsafe extern "C" fn karac_runtime_channel_send(
     // park predicate checks), then signal one waiter.
     (*ch).inner.lock().unwrap().queue.push_back(blob);
     (*ch).not_empty.notify_one();
+}
+
+/// `karac_runtime_channel_set_elem_drop(ch, drop_fn)` — record the element's
+/// drop fn (`karac_drop_<T>`) so the channel destructor can free any payloads
+/// that were SENT but never RECEIVED (B-2026-07-13-17). Codegen calls this at
+/// each `send` of a heap-payload channel; it is idempotent (every call stores
+/// the same fn for a given channel). `drop_fn` is a raw code pointer, passed as
+/// `*mut u8` for a stable FFI shape. A never-set (null) drop fn leaves the
+/// destructor a no-op, which is correct for a scalar payload (it owns no heap).
+///
+/// # Safety
+/// `ch` must be live; `drop_fn` must be a `karac_drop_<T>` code pointer for the
+/// channel's element type (or null).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_channel_set_elem_drop(
+    ch: *mut KaracChannel,
+    drop_fn: *mut u8,
+) {
+    if ch.is_null() {
+        return;
+    }
+    (*ch).elem_drop.store(drop_fn as *mut (), Ordering::Release);
 }
 
 /// `karac_runtime_channel_recv(ch, out_ptr, elem_size) -> u8` — **blocking**
@@ -500,6 +559,55 @@ mod tests {
             }
             assert_eq!(recv_i64(ch), (0, 0));
             karac_runtime_channel_drop_receiver(ch);
+        }
+    }
+
+    // Counts drop-fn invocations for the drop-drain test below. Serialized by
+    // `ELEM_DROP_LOCK` so the two-phase (send/recv, then free) assertions are
+    // race-free even if tests run concurrently.
+    static ELEM_DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static ELEM_DROP_LOCK: Mutex<()> = Mutex::new(());
+    unsafe extern "C" fn count_drop(_p: *mut u8) {
+        ELEM_DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn set_elem_drop_drains_only_unreceived_on_free() {
+        // B-2026-07-13-17: with an element drop fn set, the channel destructor
+        // must run it on every SENT-but-UNRECEIVED blob exactly once, and NEVER
+        // on a blob that was received (dequeued → owned by the receiver).
+        let _guard = ELEM_DROP_LOCK.lock().unwrap();
+        unsafe {
+            ELEM_DROP_CALLS.store(0, Ordering::SeqCst);
+            let ch = karac_runtime_channel_new();
+            karac_runtime_channel_set_elem_drop(ch, count_drop as *mut u8);
+            send_i64(ch, 1);
+            send_i64(ch, 2);
+            send_i64(ch, 3);
+            // Receive one — it leaves the queue and is the receiver's to free.
+            assert_eq!(recv_i64(ch), (1, 1));
+            // Two remain queued. Dropping both ends frees the channel, which must
+            // drain exactly those two through `count_drop`.
+            assert_eq!(ELEM_DROP_CALLS.load(Ordering::SeqCst), 0);
+            karac_runtime_channel_drop_sender(ch);
+            karac_runtime_channel_drop_receiver(ch); // total → 0, channel freed
+            assert_eq!(ELEM_DROP_CALLS.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn no_elem_drop_set_is_noop_on_free() {
+        // A channel that never had a drop fn set (scalar payload) frees cleanly
+        // with no drop-fn calls — the destructor early-returns on the null fn.
+        let _guard = ELEM_DROP_LOCK.lock().unwrap();
+        unsafe {
+            ELEM_DROP_CALLS.store(0, Ordering::SeqCst);
+            let ch = karac_runtime_channel_new();
+            send_i64(ch, 7);
+            send_i64(ch, 8);
+            karac_runtime_channel_drop_sender(ch);
+            karac_runtime_channel_drop_receiver(ch);
+            assert_eq!(ELEM_DROP_CALLS.load(Ordering::SeqCst), 0);
         }
     }
 }
