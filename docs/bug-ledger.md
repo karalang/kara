@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **435 surfaced · 6 open · 425 fixed** (2026-05-20 → 2026-07-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **436 surfaced · 6 open · 426 fixed** (2026-05-20 → 2026-07-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -102,9 +102,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **435 surfaced 
 | B-2026-07-13-19 | 2026-07-13 | codegen | medium | The `?` operator applied to a `Result[Option[T], E]` (an Option NESTED inside the Result's Ok) loses the Option's payload type/value: the extracted `Option[T]` is truncated to its first word and left untyped, so a subsequent `match { Some(s) => … }` on it fails codegen — `Undefined variable 's'` when the arm returns the binding (`Ok(s)`), or `no handler for method 'len' on variable 's'` when it calls a method (`s.len()`). LOUD codegen failure (compile error, not a silent wrong answer or crash); the interpreter handles it. Plain `?` on a scalar-Ok Result, and matching an Option produced any OTHER way, both work — the trigger is `?` on a Result whose Ok payload is itself an Option. | — |
 | B-2026-07-14-1 | 2026-07-14 | codegen (for-loop element drop x match-arm payload move) | high | DOUBLE-FREE: a heap payload MOVED out of a for-loop-over-owned-Vec element (via a match arm, into a function-call argument) is freed twice — once by the callee that took ownership, once by the loop element's per-iteration drop, which is NOT suppressed for the moved-out payload. Minimal repro (native + JIT, double free detected in tcache 2): `enum Part { Text(String), Empty }  fn use_str(s: String) -> i64 { s.len() }  fn main() { let mut parts: Vec[Part] = Vec.new(); let mut text = "".to_string(); text.push_str("hello"); parts.push(Part.Text(text)); let mut n = 0; for p in parts { match p { Part.Text(t) => { n = n + use_str(t); } Part.Empty => {} } } println(n); }`. NARROWING (all three isolate the trigger): (a) SINGLE enum value not from a Vec — `let p = Part.Text(text); match p { Text(t) => use_str(t) }` — is CLEAN (the match's `suppress_destructured_enum_payload_cleanup` correctly zeroes the source cap). (b) Vec iteration but the arm only BORROWS — `Text(t) => t.len()` — is CLEAN. (c) Vec iteration + move-into-call — the failing case. So the double-free needs BOTH the for-loop-owned element AND a move of the bound payload into a call: the match-arm cap-suppression that works for a plain `let`-bound scrutinee does not reach the for-loop ELEMENT's per-iteration drop (compile_for's vec-value path in src/codegen/control_flow_for.rs), so the element's `__karac_drop_<E>` re-frees the buffer the callee already freed. REAL-WORLD SHAPE: the self-hosted lexer's `render` (selfhost/src/main.rs) does exactly this — `for p in parts { match p { Text(t) => { line.push_str(escape_for_render(t)); } ... } }` over the `Vec[InterpPart]` of an f-string token — so any f-string with body text (`f"no holes"`, `f"a{x}"`) aborts, failing the selfhost_lexer oracle. Isolated cleanly: without the `render` call lexing is clean; `f""` (empty, no Text part pushed) is clean. FIX DIRECTION: in the match-statement suppression path (src/codegen/control_flow_match.rs, the `suppress_destructured_enum_payload_cleanup` site) OR the for-loop element drop registration (control_flow_for.rs vec-value path), ensure a payload consumed by an arm (moved into a call arg — not just into a `let`/return/constructor) zeroes the loop-element source's cap so the per-iteration EnumDrop skips it. Verifiable on x86 (reproduces natively). | tests/selfhost_lexer.rs::selfhost_lexer_matches_rust_lexer |
 
-### Fixed (425)
+### Fixed (426)
 
-<details><summary>425 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>426 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -533,6 +533,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **435 surfaced 
 | B-2026-07-13-15 | codegen | high | A `shared enum` with a `Map[K, shared V]` (or shared K) PAYLOAD (`shared enum Store { Full(Map[i64, Node]) }`) leaked the shared K/V boxes when dropp… | 9f59f09 |
 | B-2026-07-13-16 | codegen | high | Sending an OWNED heap payload (`Vec`/`String`) through a `Channel` and then `recv`-ing it DOUBLE-FREED on native/JIT | eb8db8d |
 | B-2026-07-13-20 | codegen | high | A closure with a BLOCK body whose tail is a local built by a collection/String constructor (`\|\| { let mut v = Vec.new(); v.push(1); v }`) had its ret… | be02fd6 |
+| B-2026-07-13-21 | codegen | high | `infer_closure_return_type` had further gaps for heap-typed closure tails, each declaring the closure fn `-> i64` against a heap body → LLVM verifier… | PENDING |
 
 </details>
 

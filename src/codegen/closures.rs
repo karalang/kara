@@ -3471,6 +3471,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // *literal*, a bare `ptr` into rodata above).
             ExprKind::InterpolatedStringLit(_) => self.vec_struct_type().into(),
             ExprKind::Identifier(name) => {
+                // B-2026-07-13-20 sibling: a bare `None` tail (`|n| if n>0 {
+                // Some(..) } else { None }`) evaluates to the `Option` enum's
+                // type-erased layout, NOT the `i64` fallback — else the closure
+                // fn is declared `-> i64` while the body returns the 4-word Option
+                // (LLVM verifier failure).
+                if name == "None" {
+                    if let Some(l) = self.enum_layouts.get("Option") {
+                        return l.llvm_type.into();
+                    }
+                }
                 if let Some(&ty) = param_types.get(name) {
                     return ty;
                 }
@@ -3511,34 +3521,33 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Cast { ty, .. } => self.llvm_type_for_type_expr(ty),
             ExprKind::Block(block) | ExprKind::Seq(block) => {
                 if let Some(final_expr) = &block.final_expr {
-                    // A bare-`Identifier` tail naming a body-local `let` is
-                    // not in `param_types`/`self.variables` at inference
-                    // time (the body hasn't been compiled), so resolve it
-                    // against the block's own `let` bindings: prefer the
-                    // let's type annotation, else infer from its value.
-                    if let ExprKind::Identifier(tail) = &final_expr.kind {
-                        if param_types.get(tail).is_none()
-                            && !self.variables.contains_key(tail.as_str())
+                    // Block-local `let` bindings aren't in
+                    // `param_types`/`self.variables` at inference time (the body
+                    // hasn't been compiled), so extend the inference scope with
+                    // them — prefer each let's type annotation, else infer from
+                    // its value (seeing earlier lets). The tail then resolves a
+                    // block-local whether it's a bare identifier (`… ; v`) OR a
+                    // nested position such as a tuple element (`… ; (v, 100)` —
+                    // B-2026-07-13-20 tuple sibling, where the old
+                    // bare-identifier-only special case left `v` at the i64
+                    // fallback and the closure fn was declared `{i64,i64}` against
+                    // a `{Vec,i64}` body → LLVM verifier failure).
+                    let mut extended = param_types.clone();
+                    for stmt in &block.stmts {
+                        if let StmtKind::Let {
+                            pattern, ty, value, ..
+                        } = &stmt.kind
                         {
-                            for stmt in &block.stmts {
-                                if let StmtKind::Let {
-                                    pattern, ty, value, ..
-                                } = &stmt.kind
-                                {
-                                    if matches!(&pattern.kind, PatternKind::Binding(n) if n == tail)
-                                    {
-                                        return match ty {
-                                            Some(te) => self.llvm_type_for_type_expr(te),
-                                            None => {
-                                                self.infer_closure_return_type(value, param_types)
-                                            }
-                                        };
-                                    }
-                                }
+                            if let PatternKind::Binding(n) = &pattern.kind {
+                                let t = match ty {
+                                    Some(te) => self.llvm_type_for_type_expr(te),
+                                    None => self.infer_closure_return_type(value, &extended),
+                                };
+                                extended.insert(n.clone(), t);
                             }
                         }
                     }
-                    self.infer_closure_return_type(final_expr, param_types)
+                    self.infer_closure_return_type(final_expr, &extended)
                 } else {
                     self.context.i64_type().into()
                 }
@@ -3556,6 +3565,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.context.i64_type().into()
                 }
             }
+            // B-2026-07-13-20 sibling: a `match` tail (`|d| match d { … => f"x", …
+            // }`) had NO arm here, so it fell to the `i64` default while the body
+            // returned the (heap) arm value → LLVM verifier "return type does not
+            // match operand type of return inst". All arms have the same type by
+            // typecheck, so infer from the first arm's body (a block-body arm
+            // recurses through the Block arm above).
+            ExprKind::Match { arms, .. } => arms
+                .first()
+                .map(|a| self.infer_closure_return_type(&a.body, param_types))
+                .unwrap_or_else(|| self.context.i64_type().into()),
             ExprKind::Tuple(elems) => {
                 let field_types: Vec<BasicTypeEnum<'ctx>> = elems
                     .iter()
@@ -3566,6 +3585,25 @@ impl<'ctx> super::Codegen<'ctx> {
             // Calls: look up in module or use i64 fallback.
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Identifier(fname) = &callee.kind {
+                    // B-2026-07-13-20 sibling: the bare `Option`/`Result`
+                    // constructors (`Some(x)` / `Ok(x)` / `Err(x)`) evaluate to
+                    // the wrapper enum's type-erased layout, not the payload type
+                    // and not the `i64` fallback — a closure tail `|n| if n>0 {
+                    // Some(f"..") } else { None }` otherwise declared `-> i64`
+                    // against a 4-word Option body (verifier failure).
+                    match fname.as_str() {
+                        "Some" | "None" => {
+                            if let Some(l) = self.enum_layouts.get("Option") {
+                                return l.llvm_type.into();
+                            }
+                        }
+                        "Ok" | "Err" => {
+                            if let Some(l) = self.enum_layouts.get("Result") {
+                                return l.llvm_type.into();
+                            }
+                        }
+                        _ => {}
+                    }
                     if let Some(f) = self.module.get_function(fname) {
                         return f
                             .get_type()

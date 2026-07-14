@@ -4685,6 +4685,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_closure_heap_return_type_siblings() {
+        // B-2026-07-13-20 siblings — `infer_closure_return_type` had further gaps
+        // for heap-typed closure tails, each declaring the closure fn `-> i64`
+        // against a heap body (LLVM verifier "return type does not match operand
+        // type of return inst"): (1) a `match` tail (no Match arm → i64 default);
+        // (2) an `if` returning `Some(String)`/`None` (bare Some/None constructors
+        // unrecognized); (3) a tuple tail with a block-local heap element (`(v,
+        // 100)` where `v = Vec.new()` — the bare-identifier-only tail resolution
+        // didn't reach a nested position). Fixed by a Match arm, Some/None/Ok/Err
+        // → Option/Result layout, and generalizing the Block arm to extend the
+        // inference scope with all block `let` bindings. Interpreter parity.
+        if let Some(out) = run_program(
+            "enum Dir { N, S }\n\
+             fn main() {\n\
+                 let m = |d: Dir| { match d { Dir.N => String.from(\"north\"), Dir.S => String.from(\"south\") } };\n\
+                 println(m(Dir.N));\n\
+                 let opt = |n: i64| { if n > 0 { Some(f\"pos-{n}\") } else { None } };\n\
+                 match opt(3) { Some(s) => println(s), None => println(\"none\") }\n\
+                 let pair = || { let mut v = Vec.new(); v.push(9); (v, 100) };\n\
+                 let (vv, k) = pair();\n\
+                 println((vv[0] + k).to_string());\n\
+             }",
+        ) {
+            assert_eq!(out, "north\npos-3\n109\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_module_global_oncelock_config_pattern() {
         // The canonical late-bound global: `let CONFIG: OnceLock[T] =
         // OnceLock.new()` at module scope, `set` once in `main`, `get` from a
