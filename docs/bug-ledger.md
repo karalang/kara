@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **437 surfaced · 6 open · 427 fixed** (2026-05-20 → 2026-07-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **437 surfaced · 5 open · 428 fixed** (2026-05-20 → 2026-07-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -100,11 +100,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **437 surfaced 
 | B-2026-07-13-17 | 2026-07-13 | codegen | medium | A heap payload (`Vec`/`String`/…) SENT on a `Channel` but never RECEIVED leaks its buffer when the channel is dropped. The runtime channel is a type-erased byte queue (`runtime/src/channel.rs`) — it memcpy's element bytes and cannot know a slot holds a heap `{ptr,len,cap}`, so its drop frees the queue storage but not the payload buffers still queued. Before B-2026-07-13-16 this was masked (the un-suppressed source freed the buffer, leaving the queue a dangling alias); correct move-ownership now surfaces it as a genuine leak. | — |
 | B-2026-07-13-18 | 2026-07-13 | codegen | high | `iter().fold(init, |acc, x| ...)` with a HEAP accumulator (`String`; a Vec accumulator hits a separate type-inference wall) double-frees the accumulator buffer on native/JIT. The idiomatic string-join fold is the headline shape. Scalar accumulators (`sum`, numeric fold) are unaffected; a 0-element fold (init returned, no iteration) is clean — the double-free is per-iteration, from the accumulator reassignment. | — |
 | B-2026-07-13-19 | 2026-07-13 | codegen | medium | The `?` operator applied to a `Result[Option[T], E]` (an Option NESTED inside the Result's Ok) loses the Option's payload type/value: the extracted `Option[T]` is truncated to its first word and left untyped, so a subsequent `match { Some(s) => … }` on it fails codegen — `Undefined variable 's'` when the arm returns the binding (`Ok(s)`), or `no handler for method 'len' on variable 's'` when it calls a method (`s.len()`). LOUD codegen failure (compile error, not a silent wrong answer or crash); the interpreter handles it. Plain `?` on a scalar-Ok Result, and matching an Option produced any OTHER way, both work — the trigger is `?` on a Result whose Ok payload is itself an Option. | — |
-| B-2026-07-14-2 | 2026-07-14 | lexer (Rust seed vs self-host) / design.md spec inconsistency | medium | SPEC CONTRADICTION on bare `f16`/`bf16`: the Rust seed lexer (src/lexer.rs, keyword_or_ident, explicit comment ~L1373) treats bare `f16`/`bf16` as ORDINARY TYPE-NAME identifiers (like `f32`/`f64`, resolved to `Type::Float` by the typechecker), emitting `IDENT f16`. The self-hosted lexer (selfhost/src/lexer.rs keyword_or_ident L1429-1430) RESERVES them, emitting `Token.Error('f16'/'bf16' is a reserved future numeric type)`. So `selfhost_lexer_matches_rust_lexer` diverges on the corpus entry `"f16 bf16"` (token line 646: Kāra `ERROR` vs Rust `IDENT f16`). design.md is internally inconsistent: L1025 (Reserved float keywords) says 'any identifier named f16 or bf16 is a compile error in v1', but L2296 writes `let w: Tensor[bf16, [768, 768]]` — using `bf16` as a TYPE NAME, which REQUIRES it to lex as an identifier (a reserved Error token can't be a type name). f32/f64 already lex as identifiers and become types via the typechecker; the Rust seed applies the same coherent, forward-compatible rule to f16/bf16, and it is the test's oracle. RESOLUTION (owner decision — NOT made here): most likely make the self-host lexer match the seed (drop the L1429-1430 reservation so f16/bf16 lex as identifiers) AND fix design.md L1025 to say the RESTRICTION is enforced at the type/binding layer in Phase 7, not the lexer — this keeps `Tensor[bf16,…]` lexable today. The alternative (reserve in BOTH lexers) breaks the L2296 type-usage example and the f32/f64 precedent. Not touched here because it is a language-design call in the F16/BF16 feature owner's domain. | tests/selfhost_lexer.rs::selfhost_lexer_matches_rust_lexer; docs/design.md L1025 vs L2296 |
 
-### Fixed (427)
+### Fixed (428)
 
-<details><summary>427 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>428 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -535,6 +534,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **437 surfaced 
 | B-2026-07-13-20 | codegen | high | A closure with a BLOCK body whose tail is a local built by a collection/String constructor (`\|\| { let mut v = Vec.new(); v.push(1); v }`) had its ret… | be02fd6 |
 | B-2026-07-13-21 | codegen | high | `infer_closure_return_type` had further gaps for heap-typed closure tails, each declaring the closure fn `-> i64` against a heap body → LLVM verifier… | 1a621fe |
 | B-2026-07-14-1 | codegen (for-loop element drop x match-arm payload move) | high | DOUBLE-FREE: a heap payload MOVED out of a for-loop-over-owned-Vec element (via a match arm, into a function-call argument) is freed twice — once by… | this commit |
+| B-2026-07-14-2 | lexer (Rust seed vs self-host) / design.md spec inconsistency | medium | SPEC CONTRADICTION on bare `f16`/`bf16`: the Rust seed lexer (src/lexer.rs, keyword_or_ident, explicit comment ~L1373) treats bare `f16`/`bf16` as OR… | this commit |
 
 </details>
 

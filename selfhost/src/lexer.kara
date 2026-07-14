@@ -1425,9 +1425,14 @@ fn keyword_or_ident(text: String) -> Token {
         "self" => Token.SelfValue,
         "Self" => Token.SelfType,
         "_" => Token.Underscore,
-        // Reserved future numeric type keywords — not available until Phase 7.
-        "f16" => Token.Error("'f16' is a reserved future numeric type".to_string()),
-        "bf16" => Token.Error("'bf16' is a reserved future numeric type".to_string()),
+        // `f16` / `bf16` are ordinary type-name identifiers (like `f32` / `f64`),
+        // resolved to the reduced-precision float types by the typechecker's
+        // builtin-type lowering; the type IMPLEMENTATION (arithmetic, casts,
+        // backend) ships in Phase 7. They are NOT lexer-reserved — a bare `f16`
+        // lexes as an identifier so `Tensor[bf16, …]` type annotations parse
+        // today. Mirrors `src/lexer.rs::keyword_or_ident` (they fall through to
+        // the identifier arm below); see B-2026-07-14-2 / design.md § Reserved
+        // float keywords.
         // Reserved-for-future-use keywords (design.md § Reserved-for-Future-Use).
         "gen" => Token.Error("reserved keyword".to_string()),
         "become" => Token.Error("reserved keyword".to_string()),
