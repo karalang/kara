@@ -8715,6 +8715,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_option_result_combinators_closure() {
+        // B-2026-07-14-6: the closure combinators whose codegen uses only the
+        // present payload `T` — `map_or`, `and_then`, `filter` — lowered like
+        // `map` (reconstruct payload → invoke closure → branch/phi). Scalar
+        // payload. Must match the interpreter oracle.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s: Option[i64] = Some(5);\n\
+                 println(s.map_or(0, |x: i64| x + 1));\n\
+                 let n: Option[i64] = None;\n\
+                 println(n.map_or(0, |x: i64| x + 1));\n\
+                 let s2: Option[i64] = Some(5);\n\
+                 println(s2.and_then(|x: i64| Some(x + 1)).unwrap_or(0));\n\
+                 let n2: Option[i64] = None;\n\
+                 println(n2.and_then(|x: i64| Some(x + 1)).unwrap_or(0 - 7));\n\
+                 let s3: Option[i64] = Some(5);\n\
+                 println(s3.filter(|x: i64| x > 3).unwrap_or(0));\n\
+                 let s4: Option[i64] = Some(2);\n\
+                 println(s4.filter(|x: i64| x > 3).unwrap_or(0 - 1));\n\
+                 let r: Result[i64, i64] = Ok(5);\n\
+                 println(r.and_then(|x: i64| Ok(x * 2)).unwrap_or(0));\n\
+             }",
+        ) {
+            assert_eq!(out, "6\n0\n6\n-7\n5\n-1\n10\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_result_combinators_nonclosure() {
         // B-2026-07-14-6: `ok`/`err` (Result→Option), `or`/`and` (select),
         // `ok_or` (Option→Result), `flatten` (Option un-nest) — the closure-free

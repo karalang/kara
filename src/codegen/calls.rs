@@ -1491,28 +1491,118 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // ── Option/Result combinators, CLOSURE batch (B-2026-07-14-6) ──
-        // `unwrap_or_else`/`map_or`/`map_or_else`/`map_err`/`and_then`/
-        // `or_else`/`filter` are fully implemented in the typechecker and the
-        // interpreter (the oracle). Their `karac build`/JIT lowering — closure
-        // invocation on the reconstructed payload, with per-method basic-block
-        // management like `Option/Result.map` — is a follow-up; until then emit
-        // a clear, actionable error (the same shape `map` uses for heap
-        // payloads) instead of a cryptic dispatch-fall-through.
+        // `map_or`/`and_then`/`filter` use ONLY the present payload `T` (which
+        // codegen has via `method_unwrap_inner_types`) and are lowered below,
+        // following `Option/Result.map`'s reconstruct-payload → invoke-closure →
+        // branch/phi shape. `unwrap_or_else`/`map_or_else`/`or_else` need the
+        // Result `Err` type `E` for their absent-branch closure, and `map_err`
+        // maps over `E`; `E` isn't threaded to codegen yet, so those stay a
+        // clear `--interp` error (the interpreter implements all of them).
         if matches!(
             method,
-            "unwrap_or_else"
-                | "map_or"
-                | "map_or_else"
-                | "map_err"
-                | "and_then"
-                | "or_else"
-                | "filter"
+            "unwrap_or_else" | "map_or_else" | "or_else" | "map_err"
         ) {
             return Err(format!(
                 "codegen: Option/Result.{method} is not yet supported under \
                  `karac build` (the interpreter implements it); re-run with \
                  `--interp` (or `KARAC_RUN_JIT=0`)"
             ));
+        }
+        if matches!(method, "map_or" | "and_then" | "filter") {
+            if !super::vec_method::is_trivially_copyable_te(&inner_te) {
+                return Err(format!(
+                    "codegen: Option/Result.{method} over a non-trivially-copyable \
+                     payload (String / Vec / struct) is not yet supported under \
+                     `karac build`; re-run with `--interp` (or `KARAC_RUN_JIT=0`)"
+                ));
+            }
+            let inner_ll = self.llvm_type_for_type_expr(&inner_te);
+            let fn_val = self.current_fn.unwrap();
+            let one = i64_t.const_int(1, false);
+            let present_bb = self.context.append_basic_block(fn_val, "combi.present");
+            let absent_bb = self.context.append_basic_block(fn_val, "combi.absent");
+            let merge_bb = self.context.append_basic_block(fn_val, "combi.merge");
+            let is_present = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, tag, one, "combi.present?")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(is_present, present_bb, absent_bb)
+                .unwrap();
+
+            // Present branch: reconstruct the scalar payload and invoke the
+            // closure on it.
+            self.builder.position_at_end(present_bb);
+            let w0 = self
+                .builder
+                .build_extract_value(recv_struct, 1, "combi.w0")
+                .map_err(|e| format!("codegen: combinator w0: {:?}", e))?
+                .into_int_value();
+            let w1 = self
+                .builder
+                .build_extract_value(recv_struct, 2, "combi.w1")
+                .map_err(|e| format!("codegen: combinator w1: {:?}", e))?
+                .into_int_value();
+            let w2 = self
+                .builder
+                .build_extract_value(recv_struct, 3, "combi.w2")
+                .map_err(|e| format!("codegen: combinator w2: {:?}", e))?
+                .into_int_value();
+            let payload = self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?;
+            // The closure arg: `map_or(default, f)` has it at index 1, the
+            // others at index 0.
+            let closure_idx = if method == "map_or" { 1 } else { 0 };
+            let closure = &args
+                .get(closure_idx)
+                .ok_or_else(|| format!("codegen: Option/Result.{method} missing closure arg"))?
+                .value
+                .clone();
+            let f_result = self.compile_optres_closure_on(closure, payload, call_span)?;
+            let present_result: BasicValueEnum<'ctx> = match method {
+                // `f(payload)` is the whole result (a scalar `U` for `map_or`,
+                // an Option/Result struct for `and_then`).
+                "map_or" | "and_then" => f_result,
+                // `filter`: keep `Some(x)` when the predicate holds, else `None`.
+                "filter" => {
+                    let keep = f_result.into_int_value();
+                    let mut none_agg = recv_struct.get_type().get_undef();
+                    none_agg = self
+                        .builder
+                        .build_insert_value(none_agg, i64_t.const_zero(), 0, "filt.none.tag")
+                        .unwrap()
+                        .into_struct_value();
+                    let some_bv: BasicValueEnum<'ctx> = recv_struct.into();
+                    let none_bv: BasicValueEnum<'ctx> = none_agg.into();
+                    self.builder
+                        .build_select(keep, some_bv, none_bv, "filt.sel")
+                        .unwrap()
+                }
+                _ => unreachable!(),
+            };
+            let present_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // Absent branch: `map_or` yields the eager default; `and_then` /
+            // `filter` pass the absent receiver (`None`/`Err`) through.
+            self.builder.position_at_end(absent_bb);
+            let absent_result: BasicValueEnum<'ctx> = if method == "map_or" {
+                let default_arg = args.first().ok_or_else(|| {
+                    "codegen: Option/Result.map_or missing default arg".to_string()
+                })?;
+                self.compile_expr(&default_arg.value)?
+            } else {
+                recv_struct.into()
+            };
+            let absent_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            self.builder.position_at_end(merge_bb);
+            let phi = self
+                .builder
+                .build_phi(present_result.get_type(), "combi.result")
+                .map_err(|e| format!("codegen: combinator phi: {:?}", e))?;
+            phi.add_incoming(&[(&present_result, present_end), (&absent_result, absent_end)]);
+            return Ok(Some(phi.as_basic_value()));
         }
 
         // ── Option/Result combinators, non-closure batch (B-2026-07-14-6) ──
@@ -1903,6 +1993,57 @@ impl<'ctx> super::Codegen<'ctx> {
         // a non-heap payload (not in the tracked sets).
         self.suppress_inline_option_result_binding_move(object);
         Ok(Some(value))
+    }
+
+    /// Bind `payload` to a synthetic local and compile `closure(x)` at the
+    /// builder's current insert block, restoring the synthetic binding after.
+    /// Used by the `map_or`/`and_then`/`filter` codegen (B-2026-07-14-6) to
+    /// invoke a combinator's closure on the reconstructed present payload —
+    /// the same mechanism `Option/Result.map` uses inline.
+    fn compile_optres_closure_on(
+        &mut self,
+        closure: &Expr,
+        payload: BasicValueEnum<'ctx>,
+        call_span: &crate::token::Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.expect("closure call inside a function");
+        let cur = self.builder.get_insert_block().unwrap();
+        let x_name = "__karac_optres_x";
+        let alloca = self.create_entry_alloca(fn_val, x_name, payload.get_type());
+        // `create_entry_alloca` repositions the builder to the entry block.
+        self.builder.position_at_end(cur);
+        self.builder.build_store(alloca, payload).unwrap();
+        let saved = self.variables.insert(
+            x_name.to_string(),
+            VarSlot {
+                ptr: alloca,
+                ty: payload.get_type(),
+            },
+        );
+        let mk = |kind: ExprKind| Expr {
+            kind,
+            span: call_span.clone(),
+        };
+        let arg = CallArg {
+            label: None,
+            mut_marker: false,
+            span: call_span.clone(),
+            value: mk(ExprKind::Identifier(x_name.to_string())),
+        };
+        let call = mk(ExprKind::Call {
+            callee: Box::new(closure.clone()),
+            args: vec![arg],
+        });
+        let result = self.compile_expr(&call);
+        match saved {
+            Some(s) => {
+                self.variables.insert(x_name.to_string(), s);
+            }
+            None => {
+                self.variables.remove(x_name);
+            }
+        }
+        result
     }
 
     /// Slice OR helper: reconstitute a value of the requested LLVM type
