@@ -614,6 +614,32 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.track_inline_owned_aggregate_arg(val, &a.value);
             }
+            // B-2026-07-14-12: a fresh-heap `String` TEMP arg to a generic fn
+            // (`dup(mk())`, `passthru(mk())`, where `mk() -> String`) is
+            // orphaned — the mono body CLONES a `String` generic param (both into
+            // an owned copy AND when forwarding it to the return; the non-generic
+            // path move-consumes instead), so the caller's temp buffer has no
+            // owner and leaks. `track_inline_owned_aggregate_arg` early-returns for
+            // the Vec/String struct shape, so the fresh-heap temp needs its own
+            // caller-scope materialization here — the same one `compile_call`
+            // emits. NOT under the `flows_into_return` passthrough guard: the mono
+            // clones rather than moves a `String` param, so the temp is orphaned
+            // even on the passthrough path, and the returned value is an
+            // independent copy the result-consumer frees separately (verified
+            // double-free-clean under valgrind). Gated to `String` (via
+            // `string_typed_exprs`): a `Vec[T]` param temp instead MOVES/aliases
+            // into the callee's sink (a distinct, pre-existing double-free shape),
+            // so materializing it would add a spurious second free. An
+            // `Identifier` arg (a named binding whose buffer its own let-drop
+            // retains) is excluded by `expr_yields_fresh_owned_temp`.
+            let arg_key = (a.value.span.offset, a.value.span.length);
+            let is_fresh_string_temp = self.expr_yields_fresh_owned_temp(&a.value)
+                && self.llvm_ty_is_vec_struct(val.get_type())
+                && self.string_typed_exprs.contains(&arg_key)
+                && !self.rhs_stages_fstr_acc(&a.value);
+            if is_fresh_string_temp {
+                self.materialize_owned_temp(val, arg_key);
+            }
         }
 
         // Infer type arguments from the argument value types.

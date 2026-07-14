@@ -26278,6 +26278,32 @@ fn main() {
     }
 
     #[test]
+    fn asan_generic_fn_string_temp_arg_no_leak() {
+        // B-2026-07-14-12: a fresh-heap `String` TEMP arg (a fn-return, not a
+        // named binding) passed to a GENERIC fn leaked the temp's buffer — the
+        // mono body clones the `String` param into its owned copy, orphaning the
+        // caller's temp, which the generic-call path (unlike the non-generic one)
+        // never materialized a drop for. Exercises the multi-use (`dup`) shape
+        // and the passthrough (`passthru`) shape, both with a temp arg. Must be
+        // leak-clean.
+        assert_clean_asan_run(
+            r#"
+fn mk() -> String { let mut s = String.from(""); s.push_str("abcdefghijklmno"); s }
+fn wrap[T](x: T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(x); v }
+fn passthru[T](x: T) -> T { x }
+fn main() {
+    let a = wrap(mk());
+    let b = passthru(mk());
+    println(a.len());
+    println(b.len());
+}
+"#,
+            &["1", "15"],
+            "generic_fn_string_temp_arg_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_fold_string_accumulator_no_double_free() {
         // B-2026-07-13-18: `iter().fold(String.from(""), |acc,x| f"{acc}-{x}")`
         // — a heap-accumulator string-join fold. Codegen desugars it AFTER
