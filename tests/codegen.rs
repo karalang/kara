@@ -8681,6 +8681,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_zip_two_vecs() {
+        // B-2026-07-14-8 (zip leg): `for (a, b) in xs.iter().zip(ys.iter())`
+        // lowers to a lockstep index loop over `0..min(lenA, lenB)` for two
+        // named scalar-element Vecs. Covers i64 and f64, and the shorter
+        // source on either side. Heap elements / other shapes still bail loud.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: Vec[i64] = [1, 2, 3, 4];\n\
+                 let b: Vec[i64] = [10, 20, 30];\n\
+                 let mut s: i64 = 0;\n\
+                 for (x, y) in a.iter().zip(b.iter()) {\n\
+                     s = s + x * y;\n\
+                 }\n\
+                 println(s);\n\
+                 let c: Vec[f64] = [0.5, 1.5];\n\
+                 let d: Vec[f64] = [2.0, 4.0, 8.0];\n\
+                 let mut fs = 0.0;\n\
+                 for (p, q) in c.iter().zip(d.iter()) {\n\
+                     fs = fs + p * q;\n\
+                 }\n\
+                 println(fs);\n\
+             }",
+        ) {
+            assert_eq!(out, "140\n7\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_iter_mut_scalar() {
         // B-2026-07-14-10 (codegen leg): `for x in xs.iter_mut()` over a named
         // Vec with a SCALAR element. The loop binds `x` as a mut-ref slot
@@ -11623,11 +11651,15 @@ fn main() {
                  println(f\"{s}\");",
             ),
             (
+                // The scalar two-Vec `for (a, b) in xs.iter().zip(ys.iter())`
+                // shape is now LOWERED (test_e2e_for_zip_two_vecs), so the bail
+                // contract covers a still-unsupported zip shape: HEAP (String)
+                // elements.
                 "zip",
-                "let a: Vec[i64] = Vec[1i64, 2i64, 3i64];\n\
-                 let b: Vec[i64] = Vec[10i64, 20i64, 30i64];\n\
+                "let a: Vec[String] = Vec[f\"x\", f\"y\"];\n\
+                 let b: Vec[String] = Vec[f\"p\", f\"q\"];\n\
                  let mut s = 0i64;\n\
-                 for (x, y) in a.iter().zip(b.iter()) { s = s + x * y; }\n\
+                 for (x, y) in a.iter().zip(b.iter()) { s = s + 1i64; }\n\
                  println(f\"{s}\");",
             ),
             (
