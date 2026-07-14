@@ -349,6 +349,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(v);
                 }
             }
+            // `for x in xs.iter().chain(ys.iter())` (B-2026-07-14-8, chain
+            // leg): two sequential by-value index loops over the two sources,
+            // sharing ONE exit block so `break` leaves BOTH (a break in the
+            // first source's body must not fall into the second). Named
+            // scalar-element Vec sources only; anything else bails loud below.
+            if args.len() == 1 && method == "chain" {
+                let lhs = self.peel_iter_to_scalar_vec_ident(object);
+                let rhs = self.peel_iter_to_scalar_vec_ident(&args[0].value);
+                if let (Some(va), Some(vb)) = (lhs, rhs) {
+                    return self.compile_for_chain_vec_vars(label, pattern, &va, &vb, body);
+                }
+            }
         }
         match &iterable.kind {
             ExprKind::Range {
@@ -1925,6 +1937,151 @@ impl<'ctx> super::Codegen<'ctx> {
         self.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(Some(self.context.i64_type().const_int(0, false).into()))
+    }
+
+    /// `for x in va.iter().chain(vb.iter())` over two named scalar-element
+    /// Vecs (B-2026-07-14-8, chain leg): two sequential by-value index loops
+    /// — all of `va`, then all of `vb` — binding each element to the same
+    /// pattern and compiling the body once per source. Both loops share ONE
+    /// exit block and each pushes its own `LoopFrame` with that shared
+    /// `break_bb`, so a `break` in the first source's body leaves the WHOLE
+    /// chain (it must not fall into the second source); `continue` targets
+    /// the current source's own increment. Scalar elements only
+    /// (caller-gated).
+    fn compile_for_chain_vec_vars(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        va: &str,
+        vb: &str,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+        let shared_exit = self.context.append_basic_block(fn_val, "chain.exit");
+
+        for (leg, name) in [(0usize, va), (1usize, vb)] {
+            let elem_ty = self.vec_elem_type_for_var(name);
+            let vptr = self
+                .get_data_ptr(name)
+                .ok_or_else(|| format!("codegen: chain source '{name}' has no storage"))?;
+            let len_ptr = self
+                .builder
+                .build_struct_gep(vec_ty, vptr, 1, &format!("chain{leg}.len.ptr"))
+                .unwrap();
+            let data_ptr_ptr = self
+                .builder
+                .build_struct_gep(vec_ty, vptr, 0, &format!("chain{leg}.data.ptr"))
+                .unwrap();
+            let len = self
+                .builder
+                .build_load(i64_t, len_ptr, &format!("chain{leg}.len"))
+                .unwrap()
+                .into_int_value();
+            let data = self
+                .builder
+                .build_load(ptr_ty, data_ptr_ptr, &format!("chain{leg}.data"))
+                .unwrap()
+                .into_pointer_value();
+
+            let counter = self.create_entry_alloca(fn_val, &format!("chain{leg}.i"), i64_t.into());
+            self.builder
+                .build_store(counter, i64_t.const_int(0, false))
+                .unwrap();
+
+            let cond_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("chain{leg}.cond"));
+            let body_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("chain{leg}.body"));
+            let incr_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("chain{leg}.incr"));
+            let next_bb = if leg == 0 {
+                self.context.append_basic_block(fn_val, "chain.between")
+            } else {
+                shared_exit
+            };
+
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.loop_stack.push(LoopFrame {
+                label: label.map(str::to_string),
+                continue_bb: incr_bb,
+                break_bb: shared_exit,
+                result_slot: None,
+                cleanup_depth: self.scope_cleanup_actions.len(),
+            });
+
+            self.builder.position_at_end(cond_bb);
+            let cur = self
+                .builder
+                .build_load::<BasicTypeEnum<'ctx>>(
+                    i64_t.into(),
+                    counter,
+                    &format!("chain{leg}.i.cur"),
+                )
+                .unwrap()
+                .into_int_value();
+            let cond = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, cur, len, &format!("chain{leg}.cond"))
+                .unwrap();
+            self.builder
+                .build_conditional_branch(cond, body_bb, next_bb)
+                .unwrap();
+
+            self.builder.position_at_end(body_bb);
+            let cur = self
+                .builder
+                .build_load::<BasicTypeEnum<'ctx>>(
+                    i64_t.into(),
+                    counter,
+                    &format!("chain{leg}.i.body"),
+                )
+                .unwrap()
+                .into_int_value();
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_gep(elem_ty, data, &[cur], &format!("chain{leg}.elem.ptr"))
+                    .unwrap()
+            };
+            let elem_val = self
+                .builder
+                .build_load(elem_ty, elem_ptr, &format!("chain{leg}.elem"))
+                .unwrap();
+            self.bind_pattern(pattern, elem_val)?;
+            self.compile_loop_body_with_cleanup(body, incr_bb)?;
+
+            self.builder.position_at_end(incr_bb);
+            let cur = self
+                .builder
+                .build_load::<BasicTypeEnum<'ctx>>(
+                    i64_t.into(),
+                    counter,
+                    &format!("chain{leg}.i.incr"),
+                )
+                .unwrap()
+                .into_int_value();
+            let one = i64_t.const_int(1, false);
+            let next = self
+                .builder
+                .build_int_add(cur, one, &format!("chain{leg}.next"))
+                .unwrap();
+            self.builder.build_store(counter, next).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.loop_stack.pop();
+            // Position at the between-block so the second leg's preamble
+            // (len/data loads, counter init) lands there; the final leg
+            // positions at the shared exit below.
+            self.builder.position_at_end(next_bb);
+        }
+        // Builder is already at `shared_exit` (the second leg's next_bb).
+        Ok(self.context.i64_type().const_int(0, false).into())
     }
 
     /// `for (a, b) in va.iter().zip(vb.iter())` over two named scalar-element

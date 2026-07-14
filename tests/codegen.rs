@@ -8681,6 +8681,38 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_chain_two_vecs() {
+        // B-2026-07-14-8 (chain leg): `for x in xs.iter().chain(ys.iter())`
+        // lowers to two sequential index loops sharing ONE exit block — a
+        // `break` in the FIRST source's body exits the whole chain (never
+        // falls into the second source), and `continue` targets the current
+        // source's own increment. Scalar elements; heap shapes bail loud.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2];\n\
+                 let w: Vec[i64] = [10, 20, 30];\n\
+                 let mut s: i64 = 0;\n\
+                 for x in v.iter().chain(w.iter()) { s = s + x; }\n\
+                 println(s);\n\
+                 let mut t: i64 = 0;\n\
+                 for x in v.iter().chain(w.iter()) {\n\
+                     if x == 2 { break; }\n\
+                     t = t + x;\n\
+                 }\n\
+                 println(t);\n\
+                 let mut u: i64 = 0;\n\
+                 for x in v.iter().chain(w.iter()) {\n\
+                     if x == 20 { continue; }\n\
+                     u = u + x;\n\
+                 }\n\
+                 println(u);\n\
+             }",
+        ) {
+            assert_eq!(out, "63\n1\n43\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_skip_take_window() {
         // B-2026-07-14-8 (skip/take leg): `skip`/`take` chains over a named
         // scalar Vec fold into a `[start, end)` index window (clamped to the
@@ -11738,11 +11770,14 @@ fn main() {
                  println(f\"{s}\");",
             ),
             (
+                // The scalar two-Vec chain shape is now LOWERED
+                // (test_e2e_for_chain_two_vecs); the bail contract covers the
+                // heap-element chain shape.
                 "chain",
-                "let v: Vec[i64] = Vec[1i64, 2i64];\n\
-                 let w: Vec[i64] = Vec[10i64, 20i64];\n\
+                "let v: Vec[String] = Vec[f\"a\"];\n\
+                 let w: Vec[String] = Vec[f\"b\"];\n\
                  let mut s = 0i64;\n\
-                 for x in v.iter().chain(w.iter()) { s = s + x; }\n\
+                 for x in v.iter().chain(w.iter()) { s = s + 1i64; }\n\
                  println(f\"{s}\");",
             ),
         ];
@@ -11785,21 +11820,23 @@ fn main() {
     }
 
     /// Companion to the above using `expect_err` so the actual bail message is
-    /// asserted (names the adaptor + points at `--interp`).
+    /// asserted (names the adaptor + points at `--interp`). Uses `cycle` — a
+    /// genuinely-unlowered adaptor (`chain` over scalar Vecs is now lowered,
+    /// test_e2e_for_chain_two_vecs).
     #[test]
     fn e2e_for_unlowered_iter_adaptor_message() {
         let err = ir_result(
             "fn main() {\n\
                  let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];\n\
                  let mut s = 0i64;\n\
-                 for x in v.iter().chain(v.iter()) { s = s + x; }\n\
+                 for x in v.iter().cycle() { s = s + x; if s > 100i64 { break; } }\n\
                  println(f\"{s}\");\n\
              }\n",
         )
-        .expect_err("chain for-loop must bail loud, not silently skip");
+        .expect_err("cycle for-loop must bail loud, not silently skip");
         assert!(
-            err.contains("`.chain()`") && err.contains("not yet lowered"),
-            "expected chain loud-bail message, got: {err}"
+            err.contains("`.cycle()`") && err.contains("not yet lowered"),
+            "expected cycle loud-bail message, got: {err}"
         );
     }
 
