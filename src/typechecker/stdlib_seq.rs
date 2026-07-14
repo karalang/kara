@@ -1352,6 +1352,37 @@ impl<'a> super::TypeChecker<'a> {
                 self.expect_no_args("Vec.clear", args, span);
                 Type::Unit
             }
+            "truncate" => {
+                // Shorten the Vec to at most `n` elements, dropping (and
+                // freeing, for heap-owning element types) the [n, len) tail;
+                // `n >= len` is a no-op and `n < 0` clamps to 0. In-place
+                // mutator (binding-layer mut-checked via the `Vec.truncate`
+                // entry in ownership.rs; seeded receiver-mutating in
+                // effectchecker.rs so the auto-parallelizer serializes it —
+                // B-2026-07-14-17). Codegen drops the tail via the element-drop
+                // fn (`vec_method.rs`).
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Vec.truncate expects 1 argument (new length), found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let at = self.infer_expr(&args[0].value);
+                    self.check_assignable(
+                        &Type::Int(IntSize::I64),
+                        &at,
+                        args[0].value.span.clone(),
+                    );
+                }
+                Type::Unit
+            }
             "sorted" => {
                 self.expect_no_args("Vec.sorted", args, span);
                 vec_elem

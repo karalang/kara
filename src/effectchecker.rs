@@ -694,6 +694,7 @@ impl<'a> EffectChecker<'a> {
             // claim), matching the over-approximate pop/remove seeds above. The
             // `.clear` suffix match also serializes `Map.clear` / `Set.clear`.
             "Vec.clear",
+            "Vec.truncate",
             "Vec.fill",
             "Vec.swap",
             "Vec.swap_remove",

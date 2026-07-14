@@ -1433,6 +1433,44 @@ fn test_vec_clear_and_extend() {
 }
 
 #[test]
+fn test_vec_truncate() {
+    // `Vec[T].truncate(n)` — shorten to at most `n` elements, dropping the tail;
+    // `n >= len` is a no-op, `n < 0` clamps to 0. Exercised on pod (`i64`) and
+    // heap (`String`) element types; heap-drop leak-safety is covered in
+    // `tests/memory_sanitizer.rs::asan_vec_truncate_heap_no_leak`. Codegen
+    // mirrors this (`tests/codegen.rs::e2e_vec_truncate`).
+    let out = run(r#"
+        fn main() {
+            let mut a: Vec[i64] = Vec.new();
+            a.push(1);
+            a.push(2);
+            a.push(3);
+            a.push(4);
+            a.truncate(2);
+            println(a.len());
+            println(a[0]);
+            println(a[1]);
+            a.truncate(5);
+            println(a.len());
+            a.truncate(0);
+            println(a.len());
+
+            let mut s: Vec[String] = Vec.new();
+            s.push("aa");
+            s.push("bb");
+            s.push("cc");
+            s.truncate(1);
+            println(s.len());
+            println(s[0]);
+            s.push("dd");
+            println(s.len());
+            println(s[1]);
+        }
+    "#);
+    assert_eq!(out, "2\n1\n2\n2\n0\n1\naa\n2\ndd\n");
+}
+
+#[test]
 fn test_vec_pop_string_elements() {
     // Non-Copy element type flows through the same dispatch — pins the
     // generic shape against future regressions where the arm might

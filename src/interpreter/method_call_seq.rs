@@ -1261,6 +1261,25 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Unit);
                 }
             }
+            "truncate" => {
+                // `Vec.truncate(n)` — shorten to at most `n` elements, dropping
+                // the tail (Rust `Vec::truncate` drops them naturally); `n >= len`
+                // is a no-op, `n < 0` clamps to 0. Typechecker arm in
+                // `stdlib_seq.rs::infer_vec_method`; codegen in `vec_method.rs`.
+                if let Value::Array(ref rc) = obj {
+                    if let Some(Value::Int(n)) =
+                        args.first().map(|a| self.eval_expr_inner(&a.value))
+                    {
+                        let label = match &object.kind {
+                            ExprKind::Identifier(name) => name.clone(),
+                            _ => "<value>".to_string(),
+                        };
+                        let clamped = if n < 0 { 0 } else { n as usize };
+                        try_write_or_panic(rc, &label).truncate(clamped);
+                        return Some(Value::Unit);
+                    }
+                }
+            }
             "fill" => {
                 let fill_val = args
                     .first()

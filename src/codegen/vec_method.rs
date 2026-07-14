@@ -5059,6 +5059,106 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(cap_p, i64_t.const_zero()).unwrap();
                 Ok(i64_t.const_zero().into())
             }
+            "truncate" => {
+                // `Vec.truncate(n)` — shorten to at most `n` elements, dropping
+                // (and freeing, for heap-owning element types) the [n, len) tail,
+                // then set `len = n` (the buffer + cap are unchanged, so a later
+                // push reuses the capacity). `n >= len` is a no-op; `n < 0`
+                // clamps to 0. Unlike `clear`, the buffer is NOT freed.
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Vec.truncate expects 1 argument (new length), got {}",
+                        args.len()
+                    ));
+                }
+                let fn_val = self.current_fn.unwrap();
+                let new_len_raw = self.compile_expr(&args[0].value)?.into_int_value();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "trunc.len.p")
+                    .unwrap();
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_p, "trunc.len")
+                    .unwrap()
+                    .into_int_value();
+                // Clamp n into [0, cur_len] (signed: negative → 0).
+                let zero = i64_t.const_zero();
+                let is_neg = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, new_len_raw, zero, "trunc.neg")
+                    .unwrap();
+                let n0 = self
+                    .builder
+                    .build_select(is_neg, zero, new_len_raw, "trunc.n0")
+                    .unwrap()
+                    .into_int_value();
+                let gt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, n0, cur_len, "trunc.gt")
+                    .unwrap();
+                let n = self
+                    .builder
+                    .build_select(gt, cur_len, n0, "trunc.n")
+                    .unwrap()
+                    .into_int_value();
+                // Drop the [n, cur_len) tail for heap-owning element types
+                // (primitives skip the loop — nothing to free).
+                let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+                if let Some(elem_te) = elem_te {
+                    if !is_trivially_copyable_te(&elem_te) {
+                        let elem_drop = self.emit_drop_fn_for_type_expr(&elem_te);
+                        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                        let data_pp = self
+                            .builder
+                            .build_struct_gep(vec_ty, data_ptr, 0, "trunc.data.p")
+                            .unwrap();
+                        let data = self
+                            .builder
+                            .build_load(ptr_ty, data_pp, "trunc.data")
+                            .unwrap()
+                            .into_pointer_value();
+                        let i_slot = self.create_entry_alloca(fn_val, "trunc.i", i64_t.into());
+                        self.builder.build_store(i_slot, n).unwrap();
+                        let cond_bb = self.context.append_basic_block(fn_val, "trunc.cond");
+                        let body_bb = self.context.append_basic_block(fn_val, "trunc.body");
+                        let done_bb = self.context.append_basic_block(fn_val, "trunc.done");
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+                        self.builder.position_at_end(cond_bb);
+                        let i = self
+                            .builder
+                            .build_load(i64_t, i_slot, "trunc.i.cur")
+                            .unwrap()
+                            .into_int_value();
+                        let lt = self
+                            .builder
+                            .build_int_compare(inkwell::IntPredicate::SLT, i, cur_len, "trunc.i.lt")
+                            .unwrap();
+                        self.builder
+                            .build_conditional_branch(lt, body_bb, done_bb)
+                            .unwrap();
+                        self.builder.position_at_end(body_bb);
+                        let elem_ptr = unsafe {
+                            self.builder
+                                .build_gep(elem_ty, data, &[i], "trunc.elem.ptr")
+                                .unwrap()
+                        };
+                        self.builder
+                            .build_call(elem_drop, &[elem_ptr.into()], "")
+                            .unwrap();
+                        let i_next = self
+                            .builder
+                            .build_int_add(i, i64_t.const_int(1, false), "trunc.i.next")
+                            .unwrap();
+                        self.builder.build_store(i_slot, i_next).unwrap();
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+                        self.builder.position_at_end(done_bb);
+                    }
+                }
+                // Set len = n; buffer + cap unchanged.
+                self.builder.build_store(len_p, n).unwrap();
+                Ok(i64_t.const_zero().into())
+            }
             "sort_by_key" => {
                 if args.len() != 1 {
                     return Err(format!(

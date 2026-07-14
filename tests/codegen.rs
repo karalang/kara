@@ -5606,6 +5606,33 @@ fn main() {
     /// suppressed the moved source's cleanup, so the source binding and the
     /// container both freed the buffer (double-free). The interpreter was always
     /// correct. This build+run test would crash pre-fix.
+    /// `Vec[T].truncate(n)` drops the [n, len) tail and sets len = n (buffer
+    /// kept). Must match the interpreter oracle (`test_vec_truncate`): pod
+    /// (`i64`) shorten / no-op (`n >= len`) / to-zero, plus a heap (`String`)
+    /// element case with a re-push after. Heap-drop leak-safety under auto-par
+    /// is covered by `tests/memory_sanitizer.rs::asan_vec_truncate_heap_no_leak`.
+    #[test]
+    fn e2e_vec_truncate() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut a: Vec[i64] = Vec.new();\n\
+                 a.push(1); a.push(2); a.push(3); a.push(4);\n\
+                 a.truncate(2);\n\
+                 println(a.len()); println(a[0]); println(a[1]);\n\
+                 a.truncate(5); println(a.len());\n\
+                 a.truncate(0); println(a.len());\n\
+                 let mut s: Vec[String] = Vec.new();\n\
+                 s.push(\"aa\".to_string()); s.push(\"bb\".to_string()); s.push(\"cc\".to_string());\n\
+                 s.truncate(1);\n\
+                 println(s.len()); println(s[0]);\n\
+                 s.push(\"dd\".to_string());\n\
+                 println(s.len()); println(s[1]);\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n1\n2\n2\n0\n1\naa\n2\ndd\n");
+        }
+    }
+
     #[test]
     fn e2e_index_store_heap_vec_element_no_double_free() {
         // Single overwrite: out[0] becomes [99]; read it back.

@@ -565,6 +565,54 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_truncate_heap_no_leak() {
+        // `Vec[String].truncate(n)` drops the [n, len) tail — each dropped
+        // String's buffer must be freed exactly once, the surviving prefix and
+        // the buffer stay owned, and a re-push after truncation reuses the
+        // capacity cleanly. A SECOND Vec keeps the auto-parallelizer's racing
+        // group present (truncate is seeded receiver-mutating, B-2026-07-14-17,
+        // so it serializes — no double-free). Looped over heap elements so any
+        // per-iteration imbalance accumulates for ASan/LSan.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let mut s: Vec[String] = Vec.new();
+        s.push(f"a-{i}-padding-padding");
+        s.push(f"b-{i}-padding-padding");
+        s.push(f"c-{i}-padding-padding");
+        s.truncate(1);
+        println(s.len());
+        println(s[0]);
+        s.push(f"d-{i}-padding-padding");
+        println(s[1]);
+        let mut t: Vec[String] = Vec.new();
+        t.push(f"t-{i}-padding-padding");
+        println(t.len());
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "1",
+                "a-0-padding-padding",
+                "d-0-padding-padding",
+                "1",
+                "1",
+                "a-1-padding-padding",
+                "d-1-padding-padding",
+                "1",
+                "1",
+                "a-2-padding-padding",
+                "d-2-padding-padding",
+                "1",
+            ],
+            "asan_vec_truncate_heap_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_oncelock_vec_set_get_no_leak() {
         // B-2026-07-12-2 heap-`T` ungate — `OnceLock[Vec[i64]]` (Vec is also a
         // 3-word `{ptr,len,cap}` fitting `T`): the moved-in Vec buffer must be
