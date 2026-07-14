@@ -440,6 +440,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return Ok(result);
                 }
+                // A for-loop over an iterator ADAPTOR that reached this
+                // fall-through was NOT handled by any peel/fusion path above,
+                // so the body would be silently skipped (loop runs zero times)
+                // — a silent wrong answer, the worst failure mode. The
+                // confirmed unhandled shapes (B-2026-07-14-7):
+                //   * `for p in xs.iter().enumerate()`  (SINGLE-var binding;
+                //     the 2-tuple destructure `for (i, x)` IS handled by the
+                //     enumerate peel above)
+                //   * `for … in xs.iter().zip(ys.iter())` (ANY pattern; zip
+                //     for-loops have no codegen path — only `zip().collect()`
+                //     does)
+                // Bail LOUD instead, matching the codebase's existing policy
+                // for unsupported zip chains (`zip().map()` bails; see
+                // tests/codegen.rs `e2e_iter_adaptor_zip_identity_collect`).
+                // The interpreter handles all these, so the message points
+                // there. Full support is tracked as a feature gap.
+                if let ExprKind::MethodCall { method, .. } = &iterable.kind {
+                    if matches!(method.as_str(), "enumerate" | "zip") {
+                        return Err(format!(
+                            "codegen: for-loop over `.{method}()` is not supported here \
+                             (the loop body would be silently skipped). `enumerate` is \
+                             supported with a 2-tuple pattern — write `for (i, x) in …` \
+                             instead of `for p in …`; `zip` for-loops are not yet lowered. \
+                             Re-run with `--interp` (or `KARAC_RUN_JIT=0`) to use the \
+                             tree-walk interpreter, which handles both."
+                        ));
+                    }
+                }
                 // Unknown iterable — skip body, return unit
                 Ok(self.context.i64_type().const_int(0, false).into())
             }

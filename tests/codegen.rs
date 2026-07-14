@@ -11290,6 +11290,68 @@ fn main() {
         }
     }
 
+    /// B-2026-07-14-7: `for p in xs.iter().enumerate()` with a SINGLE-var
+    /// binding (not the `for (i, x)` destructure) has no codegen path, so the
+    /// loop body was silently SKIPPED (ran zero times) — a silent wrong answer.
+    /// It now bails LOUD instead (matching the codebase policy for unsupported
+    /// zip chains). The 2-tuple destructure form is unaffected (asserted by the
+    /// positive test below).
+    #[test]
+    fn e2e_for_enumerate_single_var_binding_bails_loud() {
+        let err = ir_result(
+            "fn main() {\n\
+                 let a: Vec[i64] = Vec[10i64, 20i64, 30i64];\n\
+                 let mut s = 0i64;\n\
+                 for p in a.iter().enumerate() { s = s + p.1; }\n\
+                 println(f\"{s}\");\n\
+             }\n",
+        )
+        .expect_err("single-var enumerate for-loop must bail loud, not silently skip");
+        assert!(
+            err.contains("for-loop over `.enumerate()`"),
+            "expected enumerate loud-bail, got: {err}"
+        );
+    }
+
+    /// B-2026-07-14-7: `for … in xs.iter().zip(ys.iter())` (ANY pattern) has no
+    /// codegen path — only `zip().collect()` does — so the loop body was
+    /// silently skipped. Now bails loud.
+    #[test]
+    fn e2e_for_zip_loop_bails_loud() {
+        let err = ir_result(
+            "fn main() {\n\
+                 let a: Vec[i64] = Vec[1i64, 2i64, 3i64];\n\
+                 let b: Vec[i64] = Vec[10i64, 20i64, 30i64];\n\
+                 let mut s = 0i64;\n\
+                 for (x, y) in a.iter().zip(b.iter()) { s = s + x * y; }\n\
+                 println(f\"{s}\");\n\
+             }\n",
+        )
+        .expect_err("zip for-loop must bail loud, not silently skip");
+        assert!(
+            err.contains("for-loop over `.zip()`"),
+            "expected zip loud-bail, got: {err}"
+        );
+    }
+
+    /// Positive guard: the `for (i, x)` enumerate DESTRUCTURE path (the handled
+    /// case) must keep compiling and producing the right answer — the
+    /// B-2026-07-14-7 loud-bail must not regress it.
+    #[test]
+    fn e2e_for_enumerate_destructure_still_works() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: Vec[i64] = Vec[10i64, 20i64, 30i64];\n\
+                 let mut s = 0i64;\n\
+                 for (i, x) in a.iter().enumerate() { s = s + i * x; }\n\
+                 println(f\"{s}\");\n\
+             }\n",
+        ) {
+            // 0*10 + 1*20 + 2*30 = 80
+            assert_eq!(out, "80\n");
+        }
+    }
+
     /// General heap-index-read-into-owning-sink double-free (found while fixing
     /// the heap-zip leg, B-2026-07-04-2): reading a heap element by index from a
     /// named `Vec` (`v[i]`) and moving it into an OWNING sink — a tuple literal,
