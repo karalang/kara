@@ -542,7 +542,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **445 surfaced 
 | B-2026-07-14-4 | typechecker + ownership (diagnostics) | low | A recursive value enum whose variant carries the SAME nested/recursive type in TWO payload fields (`enum Expr { Num(i64), Add(Expr, Expr) }`) emitted… | d831ebe |
 | B-2026-07-14-5 | typechecker (method resolution) | medium | The typechecker SILENTLY ACCEPTED any method name on `Option[T]` / `Result[T,E]`, poisoning the call to `Type::Error` (universally assignable) so it… | 1af84da |
 | B-2026-07-14-7 | codegen (for-loop over iterator adaptor) | medium | Two for-loop-over-iterator-adaptor shapes SILENTLY SKIPPED the loop body in codegen (ran zero iterations, produced a wrong answer with no error), whi… | 77703ea |
-| B-2026-07-14-9 | codegen (for-loop over iter_mut) + interpreter (iter_mut unimplemented) | medium | `for x in xs.iter_mut()` (mutable iteration) is an explicitly-DEFERRED feature (typechecker/lowering.rs: 'the future .iter_mut()') that the typecheck… | this commit |
+| B-2026-07-14-9 | codegen (for-loop over iter_mut) + interpreter (iter_mut unimplemented) | medium | `for x in xs.iter_mut()` (mutable iteration) is an explicitly-DEFERRED feature (typechecker/lowering.rs: 'the future .iter_mut()') that the typecheck… | 00fc91a |
 
 </details>
 
