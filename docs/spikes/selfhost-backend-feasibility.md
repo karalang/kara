@@ -139,3 +139,49 @@ guesswork.
 
 **This spike is strictly higher-information than starting Phase A of the
 real-types work**, because it tests the assumption the entire bootstrap rests on.
+
+## 7. Spike RESULT (2026-07-12): GO
+
+Ran the §6 experiment end to end. **All three steps passed.**
+
+1. **Learned the ABI from the seed.** `fn main() { println("hi") }` emits ~833
+   lines of IR, but the load-bearing core is tiny — `println` lowers to libc
+   `fwrite` through a module-internal wrapper:
+   ```llvm
+   @str = internal constant [3 x i8] c"hi\00"
+   @stdout = external global ptr
+   declare i64 @fwrite(ptr, i64, i64, ptr)
+   define i32 @main() {
+     %s = load ptr, ptr @stdout, align 8
+     call i64 @fwrite(ptr @str, i64 1, i64 2, ptr %s)   ; "hi"
+     %s2 = load ptr, ptr @stdout, align 8
+     call i64 @fwrite(ptr @nl, i64 1, i64 1, ptr %s2)   ; "\n"
+     ret i32 0
+   }
+   ```
+   (The ~820 other lines are runtime-symbol declarations and helper defs that a
+   real program pulls in — panic prefix, allocator, par-run, provider table —
+   none needed for hello-world.)
+
+2. **Hand-written 16-line `.ll` runs.** A by-hand minimal module (the core above
+   + datalayout/triple) fed to `karac_jit_runner` printed `hi` and exited 0 —
+   the runner accepts arbitrary hand-authored IR against the real runtime ABI
+   (it links the runtime + libc and JITs `main`), not only inkwell-produced IR.
+
+3. **A Kāra program emitted that IR and it ran.** A ~20-line
+   `emit_hello() -> String` (plain `String` concatenation) printed the module;
+   piping its stdout to `karac_jit_runner` printed `hi`, exit 0. **Kāra produced
+   runnable LLVM IR against the real runtime ABI.**
+
+**Conclusion.** The single biggest bootstrap unknown is resolved: Kāra *can* be
+the IR producer, using nothing but string building + the already-shipped
+`.ll → run` path, with no inkwell/LLVM-C FFI and no process-spawn. The backend
+is a pure `AST → IR-string` transform whose output the existing runner executes.
+The remaining work is **volume, not feasibility** — grow the emitter construct
+by construct (integers → arithmetic → control flow → calls → structs →
+RC/drop-glue → monomorphization), each step behavioral-oracle-verified against
+the seed's `karac run` output and, eventually, the ~2084-case E2E corpus.
+
+**Reproduction artifacts** (this session, `/tmp`): `hello_seed.ll` (seed IR),
+`hello_hand.ll` (hand-written minimal), `/tmp/emit/src/main.kara` (the Kāra
+emitter). All three print `hi` via `target/debug/karac_jit_runner`.
