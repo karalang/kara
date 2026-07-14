@@ -1670,15 +1670,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // accessors pack the VALUE. A GENUINE address-packing `Option[ref T]`
         // (a user `Some(some_ref)`) stores the pointer in w0 and MUST keep the
         // `inttoptr` reconstruction — peeling it would misread 3 words off a
-        // single pointer. So the Vec/String leg peels ONLY when the `.unwrap()`
+        // single pointer. So the aggregate legs peel ONLY when the `.unwrap()`
         // receiver is one of the value-packing borrow accessors
         // (`get`/`first`/`last`, whose `Option[ref _]` return shape is what put
-        // a `ref` in `inner_te` here) AND the pointee is the 3-word
-        // `{ptr,len,cap}` Vec/String/VecDeque shape. The SCALAR peel stays
-        // unconditional (no producer ever packs a scalar's address). USER
-        // STRUCT pointees are deliberately LEFT UNCHANGED — their ≤3-word
-        // value-vs-ref reconstruction has a separate open gap (the B-16 struct
-        // leg), so this fix does not touch them.
+        // a `ref` in `inner_te` here). Under that gate, peel any aggregate
+        // pointee that lowers to a StructType — the 3-word `{ptr,len,cap}`
+        // Vec/String/VecDeque shape (B-2026-07-14-11) AND user structs
+        // (B-2026-07-14-16 struct leg): `Vec.get` packs the element VALUE
+        // (`coerce_to_payload_words` on the loaded element) for every element
+        // type, so rebuilding at the pointee's value shape is always right for
+        // these accessors. The SCALAR peel stays unconditional (no producer ever
+        // packs a scalar's address). A genuine address-packing `Option[ref T]`
+        // (a user `Some(some_ref)`) is NOT a get/first/last receiver, so it
+        // keeps its `inttoptr`.
         let recv_is_value_packing_borrow_accessor = matches!(
             &object.kind,
             ExprKind::MethodCall { method: m, .. }
@@ -1692,7 +1696,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ) || (recv_is_value_packing_borrow_accessor
                     && matches!(
                         self.llvm_type_for_type_expr(inner),
-                        BasicTypeEnum::StructType(st) if st == self.vec_struct_type()
+                        BasicTypeEnum::StructType(_)
                     )) =>
             {
                 inner.as_ref()

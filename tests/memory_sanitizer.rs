@@ -26485,6 +26485,41 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_get_unwrap_struct_with_heap_field_no_double_free() {
+        // B-2026-07-14-16 (struct leg): `let p = people.get(i).unwrap()` on a
+        // `Vec[Struct]` whose Struct owns heap (a `String` field). `Vec.get`
+        // returns `Option[ref Struct]` packing the element VALUE, so `p`'s
+        // `String` field shallow-aliases the container's element buffer;
+        // registering an owned struct-drop for `p` freed it a second time (the
+        // container's per-element drain already frees it → double-free). `p` is
+        // now recognised as a borrow alias (`is_borrowed_vec_get_unwrap_struct`)
+        // and takes NO owned drop — the container stays the sole owner. Covers
+        // get + first; must be double-free-clean and print the aliased fields
+        // correctly.
+        assert_clean_asan_run(
+            r#"
+struct Person { name: String, age: i64 }
+fn main() {
+    let mut people: Vec[Person] = Vec.new();
+    let mut n1 = String.from("");
+    n1.push_str("Alice");
+    people.push(Person { name: n1, age: 30 });
+    let mut n2 = String.from("");
+    n2.push_str("Bob");
+    people.push(Person { name: n2, age: 25 });
+    let p = people.get(0).unwrap();
+    println(p.name);
+    println(p.age);
+    let f = people.first().unwrap();
+    println(f.age);
+}
+"#,
+            &["Alice", "30", "30"],
+            "vec_get_unwrap_struct_with_heap_field_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_generic_fn_string_temp_arg_no_leak() {
         // B-2026-07-14-12: a fresh-heap `String` TEMP arg (a fn-return, not a
         // named binding) passed to a GENERIC fn leaked the temp's buffer — the

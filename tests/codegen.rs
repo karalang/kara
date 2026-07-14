@@ -8650,6 +8650,37 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_get_first_last_unwrap_struct_element() {
+        // B-2026-07-14-16 (struct leg): `let p = v.get(i).unwrap()` /
+        // `.first()`/`.last()` on a `Vec[Struct]` reconstructed at `ref Struct`
+        // → `ptr` and `inttoptr`'d the packed VALUE, so every field read came
+        // back 0/garbage (the crash-free but silent-wrong leg; interp was the
+        // oracle). Vec.get PACKS the element value, so the unwrap now peels the
+        // `ref` to the struct value shape for a value-packing accessor. Covers a
+        // pure-value struct (inline, ≤3 words), a heap-field struct (the fields
+        // alias the container's buffers — borrow-elided, no double-free), and a
+        // boxed struct (>3 words). Must match the interpreter.
+        if let Some(out) = run_program(
+            "struct Point { x: i64, y: i64 }\n\
+             struct Big { a: i64, b: i64, c: i64, d: i64, e: i64 }\n\
+             fn main() {\n\
+                 let pts: Vec[Point] = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }];\n\
+                 let p = pts.get(1).unwrap();\n\
+                 println(p.x);\n\
+                 println(p.y);\n\
+                 let f = pts.first().unwrap();\n\
+                 println(f.x);\n\
+                 let big: Vec[Big] = [Big { a: 1, b: 2, c: 3, d: 4, e: 5 }];\n\
+                 let b = big.last().unwrap();\n\
+                 println(b.a);\n\
+                 println(b.e);\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n4\n1\n1\n5\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_question_on_result_nested_option_payload() {
         // B-2026-07-13-19: `?` on `Result[Option[T], E]` — the Ok payload is
         // itself an `Option[T]`. `reconstruct_question_ok_payload`'s wrapper

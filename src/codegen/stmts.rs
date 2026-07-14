@@ -4469,6 +4469,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         if matches!(&value.kind, ExprKind::TupleIndex { .. }) {
                             self.suppress_tuple_index_move_source(value);
                         }
+                        // B-2026-07-14-16 (struct leg): `let p = v.get(i).unwrap()`
+                        // on a `Vec[Struct]` whose Struct owns heap. `Vec.get`
+                        // returns `Option[ref Struct]` packing the element VALUE,
+                        // so `p`'s heap fields shallow-alias the container's
+                        // element buffers; registering an owned struct-drop below
+                        // would free them a second time (the container's
+                        // per-element drain already frees them → double-free).
+                        // Suppress the drop for this borrow alias — the container
+                        // stays the sole owner (the Vec/String-element sibling is
+                        // `borrowed_vec_get_unwrap_heap_inner` → `borrow_elided`).
+                        let struct_borrow_elided = self.is_borrowed_vec_get_unwrap_struct(value);
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             let alloca = slot.ptr;
                             // A shared struct's user `impl Drop` is fired by the
@@ -4481,7 +4492,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             // `<T>.drop`, so `self.<field>` would dereference a
                             // pointer-to-pointer and crash. Gate it out for
                             // shared structs. (phase-7 L938)
-                            if has_user_drop && !self.shared_types.contains_key(&struct_name) {
+                            if struct_borrow_elided {
+                                // Borrow alias: no owned drop (see comment above).
+                            } else if has_user_drop && !self.shared_types.contains_key(&struct_name)
+                            {
                                 self.track_user_drop_var(&struct_name, var_name, alloca);
                             } else if self.struct_types.contains_key(&struct_name) {
                                 // B-2026-07-11-35 (push leg) — thread the binding's
@@ -7389,6 +7403,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Returns `None` for any other RHS shape (incl. a scalar element, whose
     /// value the scalar leg already reconstructs and which owns no buffer).
     pub(super) fn borrowed_vec_get_unwrap_heap_inner(&self, value: &Expr) -> Option<TypeExpr> {
+        let inner = self.borrowed_vec_get_unwrap_inner(value)?;
+        // Only a heap collection element takes an owned Vec/String drop that
+        // must be suppressed AND needs a `vec_elem_types` registration; a scalar
+        // element owns no buffer, so leave it to the scalar reconstruction leg
+        // (no registration / elision needed). Struct elements register + elide
+        // through the struct-drop path (`is_borrowed_vec_get_unwrap`), not here.
+        if self.is_string_type_expr(&inner) || self.extract_vec_elem_type(&inner).is_some() {
+            Some(inner)
+        } else {
+            None
+        }
+    }
+
+    /// Shared shape check for [`Self::borrowed_vec_get_unwrap_heap_inner`] and
+    /// [`Self::is_borrowed_vec_get_unwrap`]: returns the PEELED element type of
+    /// a `<recv>.get(i)/.first()/.last().unwrap()/.expect()` borrow chain, or
+    /// `None` for any other RHS. The recorded unwrap-inner type is `ref elem`
+    /// for exactly these Vec/Slice accessors (Map.get is by-value `Option[V]`),
+    /// so a leading `ref`/`mut ref` is both the discriminator and what we peel.
+    fn borrowed_vec_get_unwrap_inner(&self, value: &Expr) -> Option<TypeExpr> {
         let ExprKind::MethodCall { method, object, .. } = &value.kind else {
             return None;
         };
@@ -7407,19 +7441,45 @@ impl<'ctx> super::Codegen<'ctx> {
         let te = self
             .method_unwrap_inner_types
             .get(&(value.span.offset, value.span.length))?;
-        // Only the Vec/Slice borrow accessors put a `ref` in the recorded inner
-        // type (Map.get is `Option[V]` by value). Peel it to the element value.
-        let inner = match &te.kind {
-            TypeKind::Ref(i) | TypeKind::MutRef(i) => i.as_ref(),
-            _ => return None,
-        };
-        // Only a heap collection element takes an owned drop that must be
-        // suppressed; a scalar element owns no buffer, so leave it to the
-        // scalar reconstruction leg (no registration / elision needed).
-        if self.is_string_type_expr(inner) || self.extract_vec_elem_type(inner).is_some() {
-            Some(inner.clone())
-        } else {
-            None
+        match &te.kind {
+            TypeKind::Ref(i) | TypeKind::MutRef(i) => Some(i.as_ref().clone()),
+            _ => None,
         }
+    }
+
+    /// B-2026-07-14-16 (struct leg): true when `value` is a
+    /// `<vec>.get(i)/.first()/.last().unwrap()` borrow chain whose element is a
+    /// USER STRUCT that owns heap (a `Vec`/`String`/etc. field). `Vec.get`
+    /// returns `Option[ref elem]` packing the element VALUE, so the unwrapped
+    /// binding's struct fields shallow-alias the container's element buffers —
+    /// registering an owned scope-exit struct-drop would free them a second
+    /// time (the container's per-element drain already frees them). The let-site
+    /// uses this to SKIP `track_struct_var`/`track_user_drop_var` for the alias,
+    /// so the container stays the sole owner. Returns `false` for a Vec/String
+    /// element (handled by `borrowed_vec_get_unwrap_heap_inner` / the vec-buffer
+    /// borrow-elision) and for a scalar / pure-value struct (no heap to
+    /// double-free).
+    pub(super) fn is_borrowed_vec_get_unwrap_struct(&mut self, value: &Expr) -> bool {
+        let Some(inner) = self.borrowed_vec_get_unwrap_inner(value) else {
+            return false;
+        };
+        // Vec/String elements are not user structs — they take the vec-buffer
+        // borrow-elision path, not the struct-drop path.
+        if self.is_string_type_expr(&inner) || self.extract_vec_elem_type(&inner).is_some() {
+            return false;
+        }
+        let TypeKind::Path(p) = &inner.kind else {
+            return false;
+        };
+        let Some(name) = p.segments.first() else {
+            return false;
+        };
+        // Only a struct that actually owns heap needs the drop suppressed; a
+        // pure-value struct's drop is a no-op, so leaving it registered is
+        // harmless (and this stays a `false` there to keep the fast path).
+        if !self.struct_types.contains_key(name) {
+            return false;
+        }
+        self.vec_elem_agg_drop_for_type_expr(&inner).is_some()
     }
 }
