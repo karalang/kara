@@ -127,19 +127,35 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
-            // `for x in <src>.iter().{map|filter|take_while|skip_while}+ { … }`
-            // — a fused-adaptor iterable. Without this it falls through to the
-            // silent `_ =>` arm below and the body runs ZERO times
-            // (B-2026-07-11-18). Routed through the same fusion as the `fold`
-            // terminal, with the user body as the sink; fails closed (`None`)
-            // for any other chain (which then hits the loud unlowered-adaptor
-            // bail below, B-2026-07-14-8).
-            if args.len() == 1
-                && matches!(
-                    method.as_str(),
-                    "map" | "filter" | "take_while" | "skip_while"
-                )
-            {
+            // Pure `skip`/`take` chains over a named scalar-element Vec use
+            // the cheaper index-window lowering (no per-element counters, no
+            // iteration over skipped prefixes) — try it BEFORE the fused
+            // desugar below so it keeps priority for the shapes it covers
+            // (B-2026-07-14-8, skip/take leg).
+            if args.len() == 1 && (method == "skip" || method == "take") {
+                if let Some(v) =
+                    self.try_compile_for_skip_take_chain(label, pattern, iterable, body)?
+                {
+                    return Ok(v);
+                }
+            }
+            // `for x in <src>.iter().{map|filter|take_while|skip_while|take|
+            // skip|step_by|inspect}+ { … }` — a fused-adaptor iterable. Without
+            // this it falls through to the silent `_ =>` arm below and the body
+            // runs ZERO times (B-2026-07-11-18). Routed through the same fusion
+            // as the `fold` terminal, with the user body as the sink; fails
+            // closed (`None`) for any other chain (which then hits the loud
+            // unlowered-adaptor bail below, B-2026-07-14-8). `step_by` directly
+            // on a Range is EXCLUDED here: the dedicated strided-range arm
+            // below lowers it without a per-element counter.
+            let fusable_outer = args.len() == 1
+                && match method.as_str() {
+                    "map" | "filter" | "take_while" | "skip_while" | "inspect" | "take"
+                    | "skip" => true,
+                    "step_by" => !matches!(&object.kind, ExprKind::Range { .. }),
+                    _ => false,
+                };
+            if fusable_outer {
                 if let Some(v) = self.try_compile_for_iter_chain(label, pattern, iterable, body)? {
                     return Ok(v);
                 }
@@ -341,21 +357,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
-            // `for x in xs.iter().skip(a).take(b)…` (B-2026-07-14-8,
-            // skip/take leg): a chain of `skip`/`take` adaptors over a named
-            // scalar-element Vec is a pure INDEX-WINDOW adjustment — fold the
-            // chain (innermost first) into `[start, end)` bounds
-            // (`skip(n)`: start += n; `take(n)`: end = start + n; both clamped
-            // to the running window) and run the ordinary by-value index loop
-            // over that window. Any non-skip/take link or non-Vec source falls
-            // through to the loud adaptor bail below.
-            if args.len() == 1 && (method == "skip" || method == "take") {
-                if let Some(v) =
-                    self.try_compile_for_skip_take_chain(label, pattern, iterable, body)?
-                {
-                    return Ok(v);
-                }
-            }
+            // (The `skip`/`take` index-window dispatch moved ABOVE the fused
+            // desugar gate — see the top of this MethodCall block; chains it
+            // rejects flow through the fused counter lowering instead.)
             // `for x in xs.iter().chain(ys.iter())` (B-2026-07-14-8, chain
             // leg): two sequential by-value index loops over the two sources,
             // sharing ONE exit block so `break` leaves BOTH (a break in the
@@ -1859,7 +1863,22 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut start = i64_t.const_int(0, false);
         let mut end = len;
         for (i, (is_skip, count_expr)) in links.iter().rev().enumerate() {
-            let n = self.compile_expr(count_expr)?.into_int_value();
+            let n_raw = self.compile_expr(count_expr)?.into_int_value();
+            // Clamp a NEGATIVE count to 0 first (signed compare) — the
+            // interpreter clamps (`n.max(0)`, method_call_iter.rs): `take(-1)`
+            // yields nothing, `skip(-1)` skips nothing. Without this, the
+            // unsigned window arithmetic below treats -1 as a huge count and
+            // INVERTS both semantics (take(-1) yielded everything).
+            let zero = i64_t.const_int(0, false);
+            let is_neg = self
+                .builder
+                .build_int_compare(IntPredicate::SLT, n_raw, zero, &format!("forw.neg{i}"))
+                .unwrap();
+            let n = self
+                .builder
+                .build_select(is_neg, zero, n_raw, &format!("forw.nclamp{i}"))
+                .unwrap()
+                .into_int_value();
             let moved = self
                 .builder
                 .build_int_add(start, n, &format!("forw.adj{i}"))

@@ -8747,6 +8747,74 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_step_by_inspect_take_skip_fused() {
+        // B-2026-07-14-8 (count + inspect legs): `take`/`skip`/`step_by`/
+        // `inspect` are fused-chain steps in the SHARED peel, so for-loops and
+        // every fused terminal handle them in any composition with
+        // map/filter/take_while/skip_while. Counter arithmetic mirrors the
+        // collect engine; negative take/skip counts clamp to 0 and step_by
+        // strides clamp to 1, matching the interpreter (the skip/take
+        // index-window path gets the same signed clamp; the collect engine's
+        // step_by gets the same >=1 clamp — `% 0` used to trap). Must match
+        // the interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 10, 4, 5, 11, 6];\n\
+                 let mut a: i64 = 0;\n\
+                 for x in v.iter().step_by(2) { a = a + x; }\n\
+                 println(a);\n\
+                 let mut b: i64 = 0;\n\
+                 for x in v.iter().filter(|w| w % 2 == 0).step_by(2) { b = b + x; }\n\
+                 println(b);\n\
+                 let mut c: i64 = 0;\n\
+                 for x in v.iter().step_by(0) { c = c + x; }\n\
+                 println(c);\n\
+                 let mut seen: i64 = 0;\n\
+                 let mut d: i64 = 0;\n\
+                 for x in v.iter().inspect(|w| { seen = seen + 1; }).filter(|w| w > 5) { d = d + x; }\n\
+                 println(seen);\n\
+                 println(d);\n\
+                 let mut e: i64 = 0;\n\
+                 for x in v.iter().skip(1).step_by(2).take(3) { e = e + x; }\n\
+                 println(e);\n\
+                 let mut f: i64 = 0;\n\
+                 for y in v.iter().map(|w| w).take(0 - 1) { f = f + y; }\n\
+                 println(f);\n\
+                 let mut g: i64 = 0;\n\
+                 for y in v.iter().map(|w| w).skip(0 - 2) { g = g + y; }\n\
+                 println(g);\n\
+                 let mut h: i64 = 0;\n\
+                 for x in v.iter().take(0 - 1) { h = h + x; }\n\
+                 println(h);\n\
+                 let mut i2: i64 = 0;\n\
+                 for x in v.iter().skip(0 - 1) { i2 = i2 + x; }\n\
+                 println(i2);\n\
+                 let mut r: i64 = 0;\n\
+                 for x in (0..100).take(4) { r = r + x; }\n\
+                 println(r);\n\
+                 println(v.iter().skip(5).sum());\n\
+                 println(v.iter().take(3).fold(1, |p, q| p * q));\n\
+                 println(v.iter().step_by(3).count());\n\
+                 println(v.iter().skip(6).all(|w| w > 5));\n\
+                 let sv: Vec[i64] = v.iter().step_by(0).collect();\n\
+                 println(sv.len());\n\
+                 let names: Vec[String] = [f\"ant\", f\"bee\", f\"cat\", f\"dog\", f\"elk\"];\n\
+                 let mut s: String = f\"\";\n\
+                 for n in names.iter().step_by(2) { s = s + n + f\",\"; }\n\
+                 println(s);\n\
+                 let mut r2: i64 = 0;\n\
+                 for y in (0..10).step_by(4).map(|w| w + 1) { r2 = r2 + y; }\n\
+                 println(r2);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "19\n6\n42\n8\n27\n17\n0\n42\n0\n42\n6\n22\n6\n3\ntrue\n8\nant,cat,elk,\n15\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_for_take_while_skip_while() {
         // B-2026-07-14-8 (predicate legs): `take_while`/`skip_while` are fused
         // into the shared map/filter chain desugar — `take_while` compiles to
