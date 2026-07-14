@@ -1498,12 +1498,101 @@ impl<'ctx> super::Codegen<'ctx> {
         // Result `Err` type `E` for their absent-branch closure, and `map_err`
         // maps over `E`; `E` isn't threaded to codegen yet, so those stay a
         // clear `--interp` error (the interpreter implements all of them).
+        // `unwrap_or_else`/`map_or_else`/`or_else`: the OPTION forms take a
+        // NO-ARG absent-branch closure (`|| …`), so codegen can lower them with
+        // only the present payload `T` (which it has). The RESULT forms pass the
+        // `Err` value `e` to that closure and need `E` threaded to codegen — not
+        // yet available — so they stay a clear `--interp` error.
         if matches!(method, "unwrap_or_else" | "map_or_else" | "or_else") {
-            return Err(format!(
-                "codegen: Option/Result.{method} is not yet supported under \
-                 `karac build` (the interpreter implements it); re-run with \
-                 `--interp` (or `KARAC_RUN_JIT=0`)"
-            ));
+            let is_result = self.type_name_of_expr(object).as_deref() == Some("Result");
+            if is_result {
+                return Err(format!(
+                    "codegen: Result.{method} is not yet supported under \
+                     `karac build` (the interpreter implements it); re-run with \
+                     `--interp` (or `KARAC_RUN_JIT=0`)"
+                ));
+            }
+            if !super::vec_method::is_trivially_copyable_te(&inner_te) {
+                return Err(format!(
+                    "codegen: Option.{method} over a non-trivially-copyable payload \
+                     (String / Vec / struct) is not yet supported under \
+                     `karac build`; re-run with `--interp` (or `KARAC_RUN_JIT=0`)"
+                ));
+            }
+            let inner_ll = self.llvm_type_for_type_expr(&inner_te);
+            let fn_val = self.current_fn.unwrap();
+            let one = i64_t.const_int(1, false);
+            let some_bb = self.context.append_basic_block(fn_val, "optelse.some");
+            let none_bb = self.context.append_basic_block(fn_val, "optelse.none");
+            let merge_bb = self.context.append_basic_block(fn_val, "optelse.merge");
+            let is_some = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, tag, one, "optelse.some?")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(is_some, some_bb, none_bb)
+                .unwrap();
+
+            // Some(x): `unwrap_or_else` → x; `map_or_else` → f(x); `or_else` →
+            // the receiver (Some(x)) itself.
+            self.builder.position_at_end(some_bb);
+            let some_result: BasicValueEnum<'ctx> = match method {
+                "or_else" => recv_struct.into(),
+                _ => {
+                    let w0 = self
+                        .builder
+                        .build_extract_value(recv_struct, 1, "optelse.w0")
+                        .map_err(|e| format!("codegen: optelse w0: {:?}", e))?
+                        .into_int_value();
+                    let w1 = self
+                        .builder
+                        .build_extract_value(recv_struct, 2, "optelse.w1")
+                        .map_err(|e| format!("codegen: optelse w1: {:?}", e))?
+                        .into_int_value();
+                    let w2 = self
+                        .builder
+                        .build_extract_value(recv_struct, 3, "optelse.w2")
+                        .map_err(|e| format!("codegen: optelse w2: {:?}", e))?
+                        .into_int_value();
+                    let payload = self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?;
+                    if method == "map_or_else" {
+                        // `map_or_else(default_fn, f)` — the mapper is arg 1.
+                        let mapper = &args
+                            .get(1)
+                            .ok_or_else(|| {
+                                "codegen: Option.map_or_else missing mapper".to_string()
+                            })?
+                            .value
+                            .clone();
+                        self.compile_optres_closure_on(mapper, payload, call_span)?
+                    } else {
+                        // `unwrap_or_else` — the present payload is the result.
+                        payload
+                    }
+                }
+            };
+            let some_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // None: invoke the no-arg absent closure (arg 0 for
+            // `unwrap_or_else`/`map_or_else`/`or_else`).
+            self.builder.position_at_end(none_bb);
+            let none_closure = &args
+                .first()
+                .ok_or_else(|| format!("codegen: Option.{method} missing closure arg"))?
+                .value
+                .clone();
+            let none_result = self.compile_optres_closure_noarg(none_closure, call_span)?;
+            let none_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            self.builder.position_at_end(merge_bb);
+            let phi = self
+                .builder
+                .build_phi(some_result.get_type(), "optelse.result")
+                .map_err(|e| format!("codegen: optelse phi: {:?}", e))?;
+            phi.add_incoming(&[(&some_result, some_end), (&none_result, none_end)]);
+            return Ok(Some(phi.as_basic_value()));
         }
         // `Result[T,E].map_err(f)` — `Ok(x)` passes through; `Err(e)` →
         // `Err(f(e))`. The closure fires on the ABSENT (Err) branch and its
@@ -2123,6 +2212,24 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         result
+    }
+
+    /// Compile a NO-ARG closure call `closure()` at the builder's current
+    /// insert block — the absent-branch thunk of the OPTION `unwrap_or_else` /
+    /// `map_or_else` / `or_else` combinators (B-2026-07-14-6).
+    fn compile_optres_closure_noarg(
+        &mut self,
+        closure: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let call = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(closure.clone()),
+                args: vec![],
+            },
+            span: call_span.clone(),
+        };
+        self.compile_expr(&call)
     }
 
     /// Slice OR helper: reconstitute a value of the requested LLVM type

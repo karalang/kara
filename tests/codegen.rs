@@ -8740,9 +8740,15 @@ fn main() {
                  println(er.map_err(|x: i64| x * 10).unwrap_err());\n\
                  let ok: Result[i64, i64] = Ok(7);\n\
                  println(ok.map_err(|x: i64| x * 10).unwrap_or(0));\n\
+                 let no: Option[i64] = None;\n\
+                 println(no.unwrap_or_else(|| 42));\n\
+                 let so: Option[i64] = Some(5);\n\
+                 println(so.map_or_else(|| 0, |x: i64| x * 2));\n\
+                 let no2: Option[i64] = None;\n\
+                 println(no2.or_else(|| Some(9)).unwrap_or(0));\n\
              }",
         ) {
-            assert_eq!(out, "6\n0\n6\n-7\n5\n-1\n10\n30\n7\n");
+            assert_eq!(out, "6\n0\n6\n-7\n5\n-1\n10\n30\n7\n42\n10\n9\n");
         }
     }
 
