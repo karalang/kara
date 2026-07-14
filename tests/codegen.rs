@@ -8681,6 +8681,33 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_enumerate_single_var() {
+        // B-2026-07-14-8 (enumerate single-var leg): `for p in
+        // xs.iter().enumerate()` binds `p` to a `{i64, T}` tuple struct per
+        // iteration, so `p.0` (index) / `p.1` (element) extract via the normal
+        // TupleIndex path. Scalar elements; the 2-tuple destructure form and
+        // heap-element shapes are unaffected (destructure keeps its own peel;
+        // heap bails loud).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: Vec[i64] = [10, 20, 30];\n\
+                 let mut s: i64 = 0;\n\
+                 for p in a.iter().enumerate() {\n\
+                     s = s + p.0 * p.1;\n\
+                 }\n\
+                 println(s);\n\
+                 let mut t: i64 = 0;\n\
+                 for (i, x) in a.iter().enumerate() {\n\
+                     t = t + i + x;\n\
+                 }\n\
+                 println(t);\n\
+             }",
+        ) {
+            assert_eq!(out, "80\n63\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_zip_two_vecs() {
         // B-2026-07-14-8 (zip leg): `for (a, b) in xs.iter().zip(ys.iter())`
         // lowers to a lockstep index loop over `0..min(lenA, lenB)` for two
@@ -11644,10 +11671,14 @@ fn main() {
     fn e2e_for_unlowered_iter_adaptors_bail_loud() {
         let cases: &[(&str, &str)] = &[
             (
+                // The scalar single-var shape is now LOWERED
+                // (test_e2e_for_enumerate_single_var), so the bail contract
+                // covers a still-unsupported enumerate shape: a HEAP (String)
+                // element, which the tuple materialization would double-own.
                 "enumerate",
-                "let a: Vec[i64] = Vec[10i64, 20i64, 30i64];\n\
+                "let a: Vec[String] = Vec[f\"x\", f\"y\"];\n\
                  let mut s = 0i64;\n\
-                 for p in a.iter().enumerate() { s = s + p.1; }\n\
+                 for p in a.iter().enumerate() { s = s + p.0; }\n\
                  println(f\"{s}\");",
             ),
             (

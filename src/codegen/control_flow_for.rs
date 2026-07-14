@@ -297,6 +297,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         return r;
                     }
                 }
+                // SINGLE-VAR binding (`for p in xs.iter().enumerate()`) over a
+                // named SCALAR-element Vec (B-2026-07-14-8): materialize the
+                // `(index, element)` pair into a `{i64, T}` tuple struct bound
+                // to `p`, so `p.0` / `p.1` extract via the normal TupleIndex
+                // path. Scalar elements only — a heap element stored into the
+                // tuple would make the container loop AND the tuple both own it
+                // (the double-drop the ledger flags); heap shapes keep the loud
+                // adaptor bail below.
+                if matches!(&pattern.kind, PatternKind::Binding(_)) {
+                    if let Some(v) = self.peel_iter_to_scalar_vec_ident(object) {
+                        return self.compile_for_enumerate_single_var(label, pattern, &v, body);
+                    }
+                }
             }
             // `for (a, b) in xs.iter().zip(ys.iter())` (B-2026-07-14-8, zip
             // leg): a lockstep two-source index loop over `0..min(lenA, lenB)`
@@ -1621,6 +1634,125 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         }
+    }
+
+    /// `for p in xs.iter().enumerate()` with a SINGLE-VAR binding over a named
+    /// scalar-element Vec (B-2026-07-14-8): the by-value Vec loop skeleton,
+    /// but each iteration binds `p` to a fresh `{i64 index, T element}` tuple
+    /// struct — `p.0` / `p.1` then extract through the normal TupleIndex path.
+    /// Scalar elements only (caller-gated): a heap element inserted into the
+    /// tuple would be owned by both the container and the tuple (double-drop).
+    fn compile_for_enumerate_single_var(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        var_name: &str,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+        let elem_ty = self.vec_elem_type_for_var(var_name);
+        let tup_ty = self.context.struct_type(&[i64_t.into(), elem_ty], false);
+        let vec_ptr = self.get_data_ptr(var_name).unwrap();
+
+        let len_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, vec_ptr, 1, "fore.len.ptr")
+            .unwrap();
+        let data_ptr_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, vec_ptr, 0, "fore.data.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "fore.len")
+            .unwrap()
+            .into_int_value();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_ptr_ptr, "fore.data")
+            .unwrap()
+            .into_pointer_value();
+
+        let counter = self.create_entry_alloca(fn_val, "fore.i", i64_t.into());
+        self.builder
+            .build_store(counter, i64_t.const_int(0, false))
+            .unwrap();
+
+        let cond_bb = self.context.append_basic_block(fn_val, "fore.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "fore.body");
+        let incr_bb = self.context.append_basic_block(fn_val, "fore.incr");
+        let exit_bb = self.context.append_basic_block(fn_val, "fore.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            label: label.map(str::to_string),
+            continue_bb: incr_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
+        });
+
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "fore.i.cur")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, cur, len, "fore.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "fore.i.body")
+            .unwrap()
+            .into_int_value();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, data, &[cur], "fore.elem.ptr")
+                .unwrap()
+        };
+        let elem_val = self
+            .builder
+            .build_load(elem_ty, elem_ptr, "fore.elem")
+            .unwrap();
+        let mut tup = tup_ty.get_undef();
+        tup = self
+            .builder
+            .build_insert_value(tup, cur, 0, "fore.tup.i")
+            .unwrap()
+            .into_struct_value();
+        tup = self
+            .builder
+            .build_insert_value(tup, elem_val, 1, "fore.tup.e")
+            .unwrap()
+            .into_struct_value();
+        self.bind_pattern(pattern, tup.into())?;
+        self.compile_loop_body_with_cleanup(body, incr_bb)?;
+
+        self.builder.position_at_end(incr_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "fore.i.incr")
+            .unwrap()
+            .into_int_value();
+        let one = i64_t.const_int(1, false);
+        let next = self.builder.build_int_add(cur, one, "fore.next").unwrap();
+        self.builder.build_store(counter, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
     }
 
     /// `for (a, b) in va.iter().zip(vb.iter())` over two named scalar-element
