@@ -474,10 +474,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     if method == "iter_mut" {
                         return Err(
                             "codegen: `for x in …iter_mut()` (mutable iteration) is not yet \
-                             supported — the loop body would be silently skipped and the \
-                             collection left unmutated. For in-place mutation use an index \
-                             loop: `for i in 0..xs.len() { xs[i] = … }`. (The interpreter \
-                             also does not yet implement `iter_mut`.)"
+                             supported under `karac build`/JIT — the loop body would be \
+                             silently skipped and the collection left unmutated. The \
+                             interpreter implements it, so re-run with `--interp` (or \
+                             `KARAC_RUN_JIT=0`); for a codegen build, use an index loop: \
+                             `for i in 0..xs.len() { xs[i] = … }` (B-2026-07-14-10)."
                                 .to_string(),
                         );
                     }

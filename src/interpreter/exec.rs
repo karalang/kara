@@ -496,6 +496,7 @@ impl Env {
         //     `Entry.or_insert` — write through to the live map slot so
         //     `*r = v` / `r += 1` land in the map, not the local binding.
         let mut redirect: Option<(String, Value)> = None;
+        let mut vec_redirect: Option<(Arc<RwLock<Vec<Value>>>, usize)> = None;
         for scope in self.scopes.iter_mut().rev() {
             if let Some(slot) = scope.get_mut(name) {
                 match slot {
@@ -505,6 +506,11 @@ impl Env {
                     }
                     Value::MapSlotRef { map_var, key } => {
                         redirect = Some((map_var.clone(), (**key).clone()));
+                    }
+                    // `iter_mut` element ref (B-2026-07-14-10): `*x = v` writes
+                    // through the shared element storage to the live Vec slot.
+                    Value::VecSlotRef { storage, index } => {
+                        vec_redirect = Some((storage.clone(), *index));
                     }
                     _ => {
                         *slot = val;
@@ -516,6 +522,14 @@ impl Env {
         }
         if let Some((map_var, key)) = redirect {
             self.write_map_slot(&map_var, &key, val);
+            return;
+        }
+        if let Some((storage, index)) = vec_redirect {
+            if let Ok(mut g) = storage.write() {
+                if index < g.len() {
+                    g[index] = val;
+                }
+            }
             return;
         }
         // If not found, define in current scope
@@ -532,6 +546,12 @@ impl Env {
                 return Some(match v {
                     Value::SharedCell(cell) => cell.lock().unwrap().clone(),
                     Value::MapSlotRef { map_var, key } => self.read_map_slot(map_var, key),
+                    Value::VecSlotRef { storage, index } => storage
+                        .read()
+                        .unwrap()
+                        .get(*index)
+                        .cloned()
+                        .unwrap_or(Value::Unit),
                     other => other.clone(),
                 });
             }

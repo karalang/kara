@@ -84,6 +84,15 @@ impl<'a> super::Interpreter<'a> {
             (UnaryOp::Deref, Value::MapSlotRef { map_var, key }) => {
                 self.env.read_map_slot(&map_var, &key)
             }
+            // `iter_mut` element ref (B-2026-07-14-10): a bare-chain `*<ref>`
+            // reads the live Vec element. (A bound-identifier `*x` is already
+            // auto-deref'd by `Env::get` before reaching here.)
+            (UnaryOp::Deref, Value::VecSlotRef { storage, index }) => storage
+                .read()
+                .unwrap()
+                .get(index)
+                .cloned()
+                .unwrap_or(Value::Unit),
             // In the tree-walk interpreter references are passed by value; `*r` is
             // a semantic no-op that returns the underlying value unchanged.
             (UnaryOp::Deref, v) => v,

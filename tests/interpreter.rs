@@ -14421,6 +14421,31 @@ fn main() {
 }
 
 #[test]
+fn test_for_iter_mut() {
+    // B-2026-07-14-10 — `for x in xs.iter_mut()` yields a mutable reference to
+    // each element so `*x = …` / `*x += …` write back into the Vec. The
+    // interpreter binds each element to a `VecSlotRef` over the shared element
+    // storage; write-throughs land in the live Vec. Covers deref-assign,
+    // compound deref-assign, a second pass, and a `String` element.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let mut v: Vec[i64] = [1i64, 2i64, 3i64, 4i64];
+    for x in v.iter_mut() { *x = *x * 2i64; }
+    for x in v.iter_mut() { *x += 1i64; }
+    let mut s: i64 = 0i64;
+    for y in v { s = s + y; }
+    println(f"{s}");
+    let mut words: Vec[String] = [f"a", f"bb"];
+    for w in words.iter_mut() { *w = f"x"; }
+    for w in words { println(f"{w}"); }
+}
+"#,
+    );
+    assert_eq!(output, "24\nx\nx\n");
+}
+
+#[test]
 fn test_match_arm_guard() {
     // B-2026-07-12-9 — a `match` arm guard (`pat if cond => ..`) falls through
     // to the next arm when the condition is false. The interpreter has always

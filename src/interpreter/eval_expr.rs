@@ -872,118 +872,156 @@ impl<'a> super::Interpreter<'a> {
                 label,
                 ..
             } => {
-                let iter_val = self.eval_expr_inner(iterable);
-                let items = match iter_val {
-                    Value::Array(rc) => match Arc::try_unwrap(rc) {
-                        Ok(cell) => cell.into_inner().unwrap(),
-                        Err(rc) => rc.read().unwrap().clone(),
-                    },
-                    Value::Slice {
-                        storage,
-                        start,
-                        len,
-                        ..
-                    } => storage.read().unwrap()[start..start + len].to_vec(),
-                    Value::Tuple(v) => v,
-                    // SortedSet iterates in ascending key order
-                    Value::SortedSet(s) => s.into_keys().map(|k| k.0).collect(),
-                    // SortedMap iterates as (key, value) tuples in ascending key order
-                    Value::SortedMap(m) => m
-                        .into_iter()
-                        .map(|(k, v)| Value::Tuple(vec![k.0, v]))
-                        .collect(),
-                    // Set iterates in insertion order
-                    Value::Set(s) => s,
-                    // Map iterates as (key, value) tuples in insertion order
-                    Value::Map(m) => m
-                        .into_iter()
-                        .map(|(k, v)| Value::Tuple(vec![k, v]))
-                        .collect(),
-                    // String iterates per Unicode scalar value, matching the
-                    // canonical `s.chars()` surface — design.md § Character
-                    // type (line 2299) pins `for c in s` and `s.chars()` as
-                    // semantic peers.
-                    Value::String(s) => s.chars().map(Value::Char).collect(),
-                    // Iterator: drain via repeated `iterator_step` so adaptor
-                    // closures (Map / Filter / future) fire per element. The
-                    // for-loop walks the resulting Vec uniformly with the
-                    // raw-collection arms above.
-                    iter @ Value::Iterator { .. } => {
-                        let mut it = iter;
-                        let mut drained = Vec::new();
-                        while let Some(v) = self.iterator_step(&mut it) {
-                            drained.push(v);
+                // B-2026-07-14-10: `for x in xs.iter_mut()` — yield a MUTABLE
+                // reference to each Vec element so `*x = …` / `*x += 1` write
+                // back. Materialize per-element `VecSlotRef`s over the receiver's
+                // shared element storage; the loop binds each to the pattern like
+                // an ordinary item, and write-throughs via `Env::set` land in the
+                // live Vec. (`iter()` — the immutable form — flows through the
+                // normal value-materializing arms below.)
+                let iter_mut_items: Option<Vec<Value>> = if let ExprKind::MethodCall {
+                    method,
+                    object,
+                    args,
+                    ..
+                } = &iterable.kind
+                {
+                    if method == "iter_mut" && args.is_empty() {
+                        if let Value::Array(rc) = self.eval_expr_inner(object) {
+                            let len = rc.read().unwrap().len();
+                            Some(
+                                (0..len)
+                                    .map(|i| Value::VecSlotRef {
+                                        storage: rc.clone(),
+                                        index: i,
+                                    })
+                                    .collect(),
+                            )
+                        } else {
+                            None
                         }
-                        drained
+                    } else {
+                        None
                     }
-                    // `LinesIter[R]` (from `BufReader.lines()`) — drain the
-                    // shared reader one line at a time, yielding
-                    // `Result[String, IoError]` per line: `Ok(line)` with the
-                    // trailing `\n` / `\r\n` stripped (matching Rust's
-                    // `BufRead::lines`), `Err` once on a mid-stream read error
-                    // (then terminate), EOF terminates. Eager-materialized like
-                    // the other iterables above; the shared BufReader is left
-                    // at EOF afterward.
-                    Value::LinesIter(rc) => {
-                        use std::io::BufRead;
-                        let mut guard = rc.lock().unwrap();
-                        let mut drained = Vec::new();
-                        loop {
-                            let mut line = String::new();
-                            match guard.read_line(&mut line) {
-                                Ok(0) => break,
-                                Ok(_) => {
-                                    if line.ends_with('\n') {
-                                        line.pop();
-                                        if line.ends_with('\r') {
+                } else {
+                    None
+                };
+                let items = if let Some(its) = iter_mut_items {
+                    its
+                } else {
+                    let iter_val = self.eval_expr_inner(iterable);
+                    match iter_val {
+                        Value::Array(rc) => match Arc::try_unwrap(rc) {
+                            Ok(cell) => cell.into_inner().unwrap(),
+                            Err(rc) => rc.read().unwrap().clone(),
+                        },
+                        Value::Slice {
+                            storage,
+                            start,
+                            len,
+                            ..
+                        } => storage.read().unwrap()[start..start + len].to_vec(),
+                        Value::Tuple(v) => v,
+                        // SortedSet iterates in ascending key order
+                        Value::SortedSet(s) => s.into_keys().map(|k| k.0).collect(),
+                        // SortedMap iterates as (key, value) tuples in ascending key order
+                        Value::SortedMap(m) => m
+                            .into_iter()
+                            .map(|(k, v)| Value::Tuple(vec![k.0, v]))
+                            .collect(),
+                        // Set iterates in insertion order
+                        Value::Set(s) => s,
+                        // Map iterates as (key, value) tuples in insertion order
+                        Value::Map(m) => m
+                            .into_iter()
+                            .map(|(k, v)| Value::Tuple(vec![k, v]))
+                            .collect(),
+                        // String iterates per Unicode scalar value, matching the
+                        // canonical `s.chars()` surface — design.md § Character
+                        // type (line 2299) pins `for c in s` and `s.chars()` as
+                        // semantic peers.
+                        Value::String(s) => s.chars().map(Value::Char).collect(),
+                        // Iterator: drain via repeated `iterator_step` so adaptor
+                        // closures (Map / Filter / future) fire per element. The
+                        // for-loop walks the resulting Vec uniformly with the
+                        // raw-collection arms above.
+                        iter @ Value::Iterator { .. } => {
+                            let mut it = iter;
+                            let mut drained = Vec::new();
+                            while let Some(v) = self.iterator_step(&mut it) {
+                                drained.push(v);
+                            }
+                            drained
+                        }
+                        // `LinesIter[R]` (from `BufReader.lines()`) — drain the
+                        // shared reader one line at a time, yielding
+                        // `Result[String, IoError]` per line: `Ok(line)` with the
+                        // trailing `\n` / `\r\n` stripped (matching Rust's
+                        // `BufRead::lines`), `Err` once on a mid-stream read error
+                        // (then terminate), EOF terminates. Eager-materialized like
+                        // the other iterables above; the shared BufReader is left
+                        // at EOF afterward.
+                        Value::LinesIter(rc) => {
+                            use std::io::BufRead;
+                            let mut guard = rc.lock().unwrap();
+                            let mut drained = Vec::new();
+                            loop {
+                                let mut line = String::new();
+                                match guard.read_line(&mut line) {
+                                    Ok(0) => break,
+                                    Ok(_) => {
+                                        if line.ends_with('\n') {
                                             line.pop();
+                                            if line.ends_with('\r') {
+                                                line.pop();
+                                            }
                                         }
+                                        drained.push(super::helpers::io_ok(Value::String(line)));
                                     }
-                                    drained.push(super::helpers::io_ok(Value::String(line)));
-                                }
-                                Err(e) => {
-                                    drained.push(super::helpers::io_err_value(
-                                        super::helpers::io_error_from_std(&e),
-                                    ));
-                                    break;
+                                    Err(e) => {
+                                        drained.push(super::helpers::io_err_value(
+                                            super::helpers::io_error_from_std(&e),
+                                        ));
+                                        break;
+                                    }
                                 }
                             }
+                            drained
                         }
-                        drained
-                    }
-                    // `for line in stdin.lines()` — drain standard input a line
-                    // at a time until EOF, yielding `Result[String, IoError]`
-                    // per line (the same Item shape as `LinesIter`, trailing
-                    // `\n`/`\r\n` stripped). `std::io::stdin().read_line`
-                    // returns `Ok(0)` at EOF. Eager-materialized like
-                    // `LinesIter`; over a finite stdin the output is identical
-                    // to the codegen path's per-iteration read.
-                    Value::StdinLines => {
-                        let mut drained = Vec::new();
-                        loop {
-                            let mut line = String::new();
-                            match std::io::stdin().read_line(&mut line) {
-                                Ok(0) => break,
-                                Ok(_) => {
-                                    if line.ends_with('\n') {
-                                        line.pop();
-                                        if line.ends_with('\r') {
+                        // `for line in stdin.lines()` — drain standard input a line
+                        // at a time until EOF, yielding `Result[String, IoError]`
+                        // per line (the same Item shape as `LinesIter`, trailing
+                        // `\n`/`\r\n` stripped). `std::io::stdin().read_line`
+                        // returns `Ok(0)` at EOF. Eager-materialized like
+                        // `LinesIter`; over a finite stdin the output is identical
+                        // to the codegen path's per-iteration read.
+                        Value::StdinLines => {
+                            let mut drained = Vec::new();
+                            loop {
+                                let mut line = String::new();
+                                match std::io::stdin().read_line(&mut line) {
+                                    Ok(0) => break,
+                                    Ok(_) => {
+                                        if line.ends_with('\n') {
                                             line.pop();
+                                            if line.ends_with('\r') {
+                                                line.pop();
+                                            }
                                         }
+                                        drained.push(super::helpers::io_ok(Value::String(line)));
                                     }
-                                    drained.push(super::helpers::io_ok(Value::String(line)));
-                                }
-                                Err(e) => {
-                                    drained.push(super::helpers::io_err_value(
-                                        super::helpers::io_error_from_std(&e),
-                                    ));
-                                    break;
+                                    Err(e) => {
+                                        drained.push(super::helpers::io_err_value(
+                                            super::helpers::io_error_from_std(&e),
+                                        ));
+                                        break;
+                                    }
                                 }
                             }
+                            drained
                         }
-                        drained
+                        _ => vec![iter_val],
                     }
-                    _ => vec![iter_val],
                 };
                 for item in items {
                     self.env.push_scope();

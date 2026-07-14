@@ -383,6 +383,18 @@ pub enum Value {
         map_var: String,
         key: Box<Value>,
     },
+    /// A `mut ref T` into a `Vec`/`Array` element, produced by
+    /// `for x in xs.iter_mut()` (B-2026-07-14-10). Holds the element storage's
+    /// shared handle directly (the same `Arc<RwLock<Vec<Value>>>` the `Array`
+    /// binding shares), so `*x` reads the live element and `*x = v` / `*x += 1`
+    /// write through to it — `Env::get`/`Env::set` treat it as an auto-deref /
+    /// write-through slot exactly like `MapSlotRef`. `index` selects the
+    /// element. Never stored inside a collection; it only ever lives in the
+    /// per-iteration loop binding.
+    VecSlotRef {
+        storage: Arc<RwLock<Vec<Value>>>,
+        index: usize,
+    },
 }
 
 /// One mutable field on a `shared struct` instance. The spec
@@ -1063,6 +1075,13 @@ impl std::fmt::Display for Value {
             Value::MapSlotRef { map_var, key } => {
                 write!(f, "<slot ref for {} in {}>", key, map_var)
             }
+            Value::VecSlotRef { index, .. } => {
+                // Display renders the referenced ELEMENT, not the ref wrapper —
+                // an `iter_mut` binding printed bare (`println(x)`) should show
+                // the element. Callers that print `*x` already auto-deref via
+                // `Env::get`; this bare-ref path is a debug courtesy.
+                write!(f, "<vec slot ref @{}>", index)
+            }
             Value::File(_) => write!(f, "<File>"),
             Value::BufReader(_) => write!(f, "<BufReader>"),
             Value::BufWriter(_) => write!(f, "<BufWriter>"),
@@ -1222,6 +1241,7 @@ impl Value {
             Value::SharedCell(_) => "SharedCell",
             Value::Entry { .. } => "Entry",
             Value::MapSlotRef { .. } => "MapSlotRef",
+            Value::VecSlotRef { .. } => "VecSlotRef",
             Value::File(_) => "File",
             Value::BufReader(_) => "BufReader",
             Value::BufWriter(_) => "BufWriter",
