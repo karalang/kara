@@ -8681,6 +8681,40 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_skip_take_window() {
+        // B-2026-07-14-8 (skip/take leg): `skip`/`take` chains over a named
+        // scalar Vec fold into a `[start, end)` index window (clamped to the
+        // running window), then run the ordinary by-value loop. Covers
+        // skip+take, take-only, skip-only, over-length clamps both ways, and
+        // take-then-skip ordering.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4, 5, 6];\n\
+                 let mut s: i64 = 0;\n\
+                 for x in v.iter().skip(2).take(3) { s = s + x; }\n\
+                 println(s);\n\
+                 let mut t: i64 = 0;\n\
+                 for x in v.iter().take(4) { t = t + x; }\n\
+                 println(t);\n\
+                 let mut u: i64 = 0;\n\
+                 for x in v.iter().skip(4) { u = u + x; }\n\
+                 println(u);\n\
+                 let mut w: i64 = 0;\n\
+                 for x in v.iter().skip(10) { w = w + x; }\n\
+                 println(w);\n\
+                 let mut z: i64 = 0;\n\
+                 for x in v.iter().take(100) { z = z + x; }\n\
+                 println(z);\n\
+                 let mut n: i64 = 0;\n\
+                 for x in v.iter().take(4).skip(1) { n = n + x; }\n\
+                 println(n);\n\
+             }",
+        ) {
+            assert_eq!(out, "12\n10\n11\n0\n21\n9\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_enumerate_single_var() {
         // B-2026-07-14-8 (enumerate single-var leg): `for p in
         // xs.iter().enumerate()` binds `p` to a `{i64, T}` tuple struct per
@@ -11694,10 +11728,13 @@ fn main() {
                  println(f\"{s}\");",
             ),
             (
-                "take",
+                // Plain `skip`/`take` window chains are now LOWERED
+                // (test_e2e_for_skip_take_window), so the bail contract covers
+                // the still-unsupported predicate sibling `take_while`.
+                "take_while",
                 "let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64, 5i64, 6i64];\n\
                  let mut s = 0i64;\n\
-                 for x in v.iter().skip(2).take(3) { s = s + x; }\n\
+                 for x in v.iter().take_while(|x: i64| x < 4i64) { s = s + x; }\n\
                  println(f\"{s}\");",
             ),
             (

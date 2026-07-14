@@ -334,6 +334,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // `for x in xs.iter().skip(a).take(b)…` (B-2026-07-14-8,
+            // skip/take leg): a chain of `skip`/`take` adaptors over a named
+            // scalar-element Vec is a pure INDEX-WINDOW adjustment — fold the
+            // chain (innermost first) into `[start, end)` bounds
+            // (`skip(n)`: start += n; `take(n)`: end = start + n; both clamped
+            // to the running window) and run the ordinary by-value index loop
+            // over that window. Any non-skip/take link or non-Vec source falls
+            // through to the loud adaptor bail below.
+            if args.len() == 1 && (method == "skip" || method == "take") {
+                if let Some(v) =
+                    self.try_compile_for_skip_take_chain(label, pattern, iterable, body)?
+                {
+                    return Ok(v);
+                }
+            }
         }
         match &iterable.kind {
             ExprKind::Range {
@@ -1753,6 +1768,163 @@ impl<'ctx> super::Codegen<'ctx> {
         self.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// `for x in xs.iter().skip(a).take(b)…` over a named scalar-element Vec
+    /// (B-2026-07-14-8, skip/take leg). Walks the adaptor chain outermost→
+    /// innermost, collecting `skip`/`take` links; if the chain bottoms out at
+    /// a named scalar Vec (through `.iter()`/`.into_iter()`), folds the links
+    /// (innermost first) into a runtime `[start, end)` window —
+    /// `skip(n)`: `start = min(start + n, end)`; `take(n)`:
+    /// `end = min(start + n, end)` — and runs a by-value index loop over the
+    /// window. Returns `Ok(None)` (caller falls through to the loud bail) for
+    /// any non-skip/take link, non-Vec source, or heap element.
+    fn try_compile_for_skip_take_chain(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        iterable: &Expr,
+        body: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Collect the chain: outermost link first.
+        let mut links: Vec<(bool, Expr)> = Vec::new(); // (is_skip, count-expr)
+        let mut cur = iterable;
+        loop {
+            match &cur.kind {
+                ExprKind::MethodCall {
+                    object,
+                    method,
+                    args,
+                    ..
+                } if args.len() == 1 && (method == "skip" || method == "take") => {
+                    links.push((method == "skip", args[0].value.clone()));
+                    cur = object.as_ref();
+                }
+                _ => break,
+            }
+        }
+        let Some(var_name) = self.peel_iter_to_scalar_vec_ident(cur) else {
+            return Ok(None);
+        };
+
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+        let elem_ty = self.vec_elem_type_for_var(&var_name);
+        let vec_ptr = self.get_data_ptr(&var_name).unwrap();
+
+        let len_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, vec_ptr, 1, "forw.len.ptr")
+            .unwrap();
+        let data_ptr_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, vec_ptr, 0, "forw.data.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "forw.len")
+            .unwrap()
+            .into_int_value();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_ptr_ptr, "forw.data")
+            .unwrap()
+            .into_pointer_value();
+
+        // Fold the window, INNERMOST link first (the collection is
+        // outermost-first, so iterate in reverse). All values are lengths /
+        // counts (non-negative by construction in well-typed programs); the
+        // min-clamps keep the window inside `[0, len]` regardless.
+        let mut start = i64_t.const_int(0, false);
+        let mut end = len;
+        for (i, (is_skip, count_expr)) in links.iter().rev().enumerate() {
+            let n = self.compile_expr(count_expr)?.into_int_value();
+            let moved = self
+                .builder
+                .build_int_add(start, n, &format!("forw.adj{i}"))
+                .unwrap();
+            let lt = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, moved, end, &format!("forw.clamp{i}"))
+                .unwrap();
+            let clamped = self
+                .builder
+                .build_select(lt, moved, end, &format!("forw.sel{i}"))
+                .unwrap()
+                .into_int_value();
+            if *is_skip {
+                start = clamped;
+            } else {
+                end = clamped;
+            }
+        }
+
+        let counter = self.create_entry_alloca(fn_val, "forw.i", i64_t.into());
+        self.builder.build_store(counter, start).unwrap();
+
+        let cond_bb = self.context.append_basic_block(fn_val, "forw.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "forw.body");
+        let incr_bb = self.context.append_basic_block(fn_val, "forw.incr");
+        let exit_bb = self.context.append_basic_block(fn_val, "forw.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            label: label.map(str::to_string),
+            continue_bb: incr_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
+        });
+
+        self.builder.position_at_end(cond_bb);
+        let cur_i = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "forw.i.cur")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, cur_i, end, "forw.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let cur_i = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "forw.i.body")
+            .unwrap()
+            .into_int_value();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, data, &[cur_i], "forw.elem.ptr")
+                .unwrap()
+        };
+        let elem_val = self
+            .builder
+            .build_load(elem_ty, elem_ptr, "forw.elem")
+            .unwrap();
+        self.bind_pattern(pattern, elem_val)?;
+        self.compile_loop_body_with_cleanup(body, incr_bb)?;
+
+        self.builder.position_at_end(incr_bb);
+        let cur_i = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "forw.i.incr")
+            .unwrap()
+            .into_int_value();
+        let one = i64_t.const_int(1, false);
+        let next = self.builder.build_int_add(cur_i, one, "forw.next").unwrap();
+        self.builder.build_store(counter, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(Some(self.context.i64_type().const_int(0, false).into()))
     }
 
     /// `for (a, b) in va.iter().zip(vb.iter())` over two named scalar-element
