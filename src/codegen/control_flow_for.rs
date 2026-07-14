@@ -127,12 +127,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
-            // `for x in <src>.iter().{map|filter}+ { … }` — a fused-adaptor
-            // iterable. Without this it falls through to the silent `_ =>` arm
-            // below and the body runs ZERO times (B-2026-07-11-18). Routed
-            // through the same map/filter fusion as the `fold` terminal, with the
-            // user body as the sink; fails closed (`None`) for any other chain.
-            if args.len() == 1 && (method == "map" || method == "filter") {
+            // `for x in <src>.iter().{map|filter|take_while|skip_while}+ { … }`
+            // — a fused-adaptor iterable. Without this it falls through to the
+            // silent `_ =>` arm below and the body runs ZERO times
+            // (B-2026-07-11-18). Routed through the same fusion as the `fold`
+            // terminal, with the user body as the sink; fails closed (`None`)
+            // for any other chain (which then hits the loud unlowered-adaptor
+            // bail below, B-2026-07-14-8).
+            if args.len() == 1
+                && matches!(
+                    method.as_str(),
+                    "map" | "filter" | "take_while" | "skip_while"
+                )
+            {
                 if let Some(v) = self.try_compile_for_iter_chain(label, pattern, iterable, body)? {
                     return Ok(v);
                 }

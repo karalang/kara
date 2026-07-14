@@ -8747,6 +8747,60 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_take_while_skip_while() {
+        // B-2026-07-14-8 (predicate legs): `take_while`/`skip_while` are fused
+        // into the shared map/filter chain desugar — `take_while` compiles to
+        // `if pred { rest } else { break }`, `skip_while` to a pre-loop latch
+        // flag with `if !flag and pred {} else { flag = true; rest }`. Works in
+        // for-loops (any composition with map/filter), on heap (String)
+        // elements, and through every fused terminal (fold/sum/count/reduce/
+        // for_each/any/all). Must match the interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 10, 4, 5, 11, 6];\n\
+                 let mut a: i64 = 0;\n\
+                 for x in v.iter().take_while(|w| w < 10) { a = a + x; }\n\
+                 println(a);\n\
+                 let mut b: i64 = 0;\n\
+                 for x in v.iter().skip_while(|w| w < 10) { b = b + x; }\n\
+                 println(b);\n\
+                 let mut c: i64 = 0;\n\
+                 for y in v.iter().skip_while(|w| w < 10).map(|w| w * 2).take_while(|z| z < 21) { c = c + y; }\n\
+                 println(c);\n\
+                 let mut e: i64 = 0;\n\
+                 for x in v.iter().take_while(|w| w < 10) {\n\
+                     if x == 3 { break; }\n\
+                     e = e + x;\n\
+                 }\n\
+                 println(e);\n\
+                 let mut o: i64 = 0;\n\
+                 for x in v.iter().skip_while(|w| w < 3).skip_while(|w| w < 5) { o = o + x; }\n\
+                 println(o);\n\
+                 println(v.iter().take_while(|w| w < 10).fold(1, |acc, x| acc * x));\n\
+                 println(v.iter().skip_while(|w| w < 10).sum());\n\
+                 println(v.iter().take_while(|w| w < 10).filter(|w| w % 2 == 1).count());\n\
+                 println(v.iter().skip_while(|w| w < 10).any(|w| w == 6));\n\
+                 println(v.iter().take_while(|w| w < 10).all(|w| w % 2 == 0));\n\
+                 let names: Vec[String] = [f\"ant\", f\"bee\", f\"zebra\", f\"dog\"];\n\
+                 let mut picked: String = f\"\";\n\
+                 for n in names.iter().take_while(|s| s != \"zebra\") { picked = picked + n + f\",\"; }\n\
+                 println(picked);\n\
+                 let mut rest: String = f\"\";\n\
+                 for n in names.iter().skip_while(|s| s != \"zebra\") { rest = rest + n + f\",\"; }\n\
+                 println(rest);\n\
+                 let mut q: i64 = 0;\n\
+                 for x in v.iter().take_while(|w| w < 0) { q = q + x; }\n\
+                 println(q);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "6\n36\n38\n3\n36\n6\n36\n2\ntrue\nfalse\nant,bee,\nzebra,dog,\n0\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_for_enumerate_single_var() {
         // B-2026-07-14-8 (enumerate single-var leg): `for p in
         // xs.iter().enumerate()` binds `p` to a `{i64, T}` tuple struct per
@@ -11760,13 +11814,14 @@ fn main() {
                  println(f\"{s}\");",
             ),
             (
-                // Plain `skip`/`take` window chains are now LOWERED
-                // (test_e2e_for_skip_take_window), so the bail contract covers
-                // the still-unsupported predicate sibling `take_while`.
-                "take_while",
-                "let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64, 5i64, 6i64];\n\
+                // The predicate siblings `take_while`/`skip_while` are now
+                // LOWERED via the fused-chain desugar
+                // (test_e2e_for_take_while_skip_while), so the bail contract
+                // covers `flat_map` — a still-unlowered closure adaptor.
+                "flat_map",
+                "let v: Vec[i64] = Vec[1i64, 2i64];\n\
                  let mut s = 0i64;\n\
-                 for x in v.iter().take_while(|x: i64| x < 4i64) { s = s + x; }\n\
+                 for x in v.iter().flat_map(|x: i64| Vec[x, x * 10i64]) { s = s + x; }\n\
                  println(f\"{s}\");",
             ),
             (

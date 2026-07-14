@@ -36,6 +36,24 @@ fn atomic_alignment_for(ty: BasicTypeEnum<'_>) -> u32 {
     }
 }
 
+/// Adaptor kind for one step of a fused iterator chain
+/// (`peel_fused_map_filter_chain` / `build_fused_chain_body`). `Map`
+/// transforms the element; the other three are identity passthroughs that
+/// gate which elements reach the downstream stages: `Filter` per-element,
+/// `TakeWhile` ends the loop on the first failing element (`break`),
+/// `SkipWhile` drops a prefix via a pre-loop latch flag (hoisted by
+/// `fused_skip_while_prelude`; B-2026-07-14-8 predicate legs).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FusedStepKind {
+    Map,
+    Filter,
+    TakeWhile,
+    SkipWhile,
+}
+
+/// One peeled fused-chain step: `(kind, closure_param, body_or_pred)`.
+type FusedChainStep = (FusedStepKind, String, Expr);
+
 impl<'ctx> super::Codegen<'ctx> {
     /// `char.try_from(n) -> Result[char, i64]` (#10). Widen the codepoint arg
     /// to i64 (sign- or zero-extend per the source's signedness, so a negative
@@ -7530,10 +7548,11 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(self.compile_expr(&block)?))
     }
 
-    /// Peel `map`/`filter` adaptors off a fused iterator chain, returning the
-    /// base source and the adaptors in source order — the shared front half of
-    /// the `fold` terminal (B-2026-07-11-17) and the `for`-over-chain desugar
-    /// (B-2026-07-11-18). Each step is `(is_filter, closure_param, body_or_pred)`.
+    /// Peel `map`/`filter`/`take_while`/`skip_while` adaptors off a fused
+    /// iterator chain, returning the base source and the adaptors in source
+    /// order — the shared front half of the `fold` terminal (B-2026-07-11-17),
+    /// the `for`-over-chain desugar (B-2026-07-11-18), and the other fused
+    /// terminals. Each step is `(kind, closure_param, body_or_pred)`.
     ///
     /// The base must be a source the `for`-loop already iterates CORRECTLY on its
     /// own (an identity iterator source or a range); anything else — a plain
@@ -7543,8 +7562,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// wrong-answer loop. A non-single-`Binding` adaptor closure also returns
     /// `None`.
     #[allow(clippy::type_complexity)]
-    fn peel_fused_map_filter_chain(recv: &Expr) -> Option<(&Expr, Vec<(bool, String, Expr)>)> {
-        let mut steps: Vec<(bool, String, Expr)> = Vec::new();
+    fn peel_fused_map_filter_chain(recv: &Expr) -> Option<(&Expr, Vec<FusedChainStep>)> {
+        let mut steps: Vec<FusedChainStep> = Vec::new();
         let mut base = recv;
         while let ExprKind::MethodCall {
             object,
@@ -7553,8 +7572,14 @@ impl<'ctx> super::Codegen<'ctx> {
             ..
         } = &base.kind
         {
-            let is_filter = method == "filter";
-            if (method != "map" && !is_filter) || args.len() != 1 {
+            let kind = match method.as_str() {
+                "map" => FusedStepKind::Map,
+                "filter" => FusedStepKind::Filter,
+                "take_while" => FusedStepKind::TakeWhile,
+                "skip_while" => FusedStepKind::SkipWhile,
+                _ => break,
+            };
+            if args.len() != 1 {
                 break;
             }
             let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
@@ -7571,7 +7596,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 PatternKind::Wildcard => format!("__pw_{}", steps.len()),
                 _ => return None,
             };
-            steps.push((is_filter, param, (**body).clone()));
+            steps.push((kind, param, (**body).clone()));
             base = object;
         }
         steps.reverse(); // outermost-peeled → source order
@@ -7676,19 +7701,30 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Thread the "current element" expression through a peeled `map`/`filter`
-    /// chain (source order), emitting `if <pred> { … }` for a filter and a
-    /// `let <param> = <current>`-bound body for a map — with the collect engine's
-    /// bind-or-elide (when `current` already IS the stage param, use the body
-    /// directly to keep the loop var's element type). At the terminal the
-    /// caller's `sink` turns the fully-adapted element into the loop-body
-    /// statements (a `push` for collect, an accumulate for fold, the user's body
-    /// for `for`). Shared by `fold` and the `for`-over-chain desugar.
+    /// Thread the "current element" expression through a peeled fused chain
+    /// (source order), emitting `if <pred> { … }` for a filter, a
+    /// `let <param> = <current>`-bound body for a map, an
+    /// `if <pred> { … } else { break }` for a take_while, and a latch-gated
+    /// `if !<flag> && <pred> {} else { <flag> = true; … }` for a skip_while —
+    /// with the collect engine's bind-or-elide (when `current` already IS the
+    /// stage param, use the body directly to keep the loop var's element
+    /// type). At the terminal the caller's `sink` turns the fully-adapted
+    /// element into the loop-body statements (a `push` for collect, an
+    /// accumulate for fold, the user's body for `for`). Shared by the fused
+    /// terminals and the `for`-over-chain desugar.
+    ///
+    /// `sw_prefix` names the skip_while latch flags (`{sw_prefix}{step-index}`);
+    /// the CALLER must hoist the matching `let mut <flag> = false;` decls
+    /// (`fused_skip_while_prelude`) BEFORE the loop. `break` inside a
+    /// take_while step targets the enclosing synthesized/user `for`, which is
+    /// exactly the "iteration ends here" semantics — in a terminal desugar the
+    /// accumulator block continues after the loop.
     fn build_fused_chain_body(
-        steps: &[(bool, String, Expr)],
+        steps: &[FusedChainStep],
         i: usize,
         current: Expr,
         sink: &dyn Fn(Expr) -> Vec<Stmt>,
+        sw_prefix: &str,
         sp: &crate::token::Span,
     ) -> Vec<Stmt> {
         if i == steps.len() {
@@ -7706,8 +7742,12 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             span: sp.clone(),
         };
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
         let current_is = |name: &str| matches!(&current.kind, ExprKind::Identifier(n) if n == name);
-        let (is_filter, param, body) = &steps[i];
+        let (kind, param, body) = &steps[i];
         let bind_or_use = |expr: &Expr| -> Expr {
             if current_is(param) {
                 expr.clone()
@@ -7722,31 +7762,141 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         };
-        if *is_filter {
-            // `if <pred> { <rest> }` — filter is identity on the element it lets
-            // through, so `current` is unchanged downstream.
-            let guard = bind_or_use(body);
-            let then_stmts = Self::build_fused_chain_body(steps, i + 1, current, sink, sp);
-            vec![Stmt {
+        let if_stmt =
+            |condition: Expr, then_stmts: Vec<Stmt>, else_stmts: Option<Vec<Stmt>>| Stmt {
                 kind: StmtKind::Expr(Expr {
                     kind: ExprKind::If {
-                        condition: Box::new(guard),
+                        condition: Box::new(condition),
                         then_block: Block {
                             stmts: then_stmts,
                             final_expr: None,
                             span: sp.clone(),
                         },
-                        else_branch: None,
+                        else_branch: else_stmts.map(|s| {
+                            Box::new(Expr {
+                                kind: ExprKind::Block(Block {
+                                    stmts: s,
+                                    final_expr: None,
+                                    span: sp.clone(),
+                                }),
+                                span: sp.clone(),
+                            })
+                        }),
                     },
                     span: sp.clone(),
                 }),
                 span: sp.clone(),
-            }]
-        } else {
-            // Map: the transformed value becomes the next stage's element.
-            let map_value = bind_or_use(body);
-            Self::build_fused_chain_body(steps, i + 1, map_value, sink, sp)
+            };
+        match kind {
+            FusedStepKind::Filter => {
+                // `if <pred> { <rest> }` — filter is identity on the element it
+                // lets through, so `current` is unchanged downstream.
+                let guard = bind_or_use(body);
+                let then_stmts =
+                    Self::build_fused_chain_body(steps, i + 1, current, sink, sw_prefix, sp);
+                vec![if_stmt(guard, then_stmts, None)]
+            }
+            FusedStepKind::Map => {
+                // Map: the transformed value becomes the next stage's element.
+                let map_value = bind_or_use(body);
+                Self::build_fused_chain_body(steps, i + 1, map_value, sink, sw_prefix, sp)
+            }
+            FusedStepKind::TakeWhile => {
+                // `if <pred> { <rest> } else { break }` — the first failing
+                // element ends the whole loop; elements that pass flow through
+                // unchanged (identity).
+                let guard = bind_or_use(body);
+                let then_stmts =
+                    Self::build_fused_chain_body(steps, i + 1, current, sink, sw_prefix, sp);
+                let brk = Stmt {
+                    kind: StmtKind::Expr(Expr {
+                        kind: ExprKind::Break {
+                            label: None,
+                            value: None,
+                        },
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                };
+                vec![if_stmt(guard, then_stmts, Some(vec![brk]))]
+            }
+            FusedStepKind::SkipWhile => {
+                // `if !<flag> && <pred> {} else { <flag> = true; <rest> }` —
+                // while the latch is unset and the predicate holds, drop the
+                // element; the first failing element sets the latch and every
+                // element from there on flows through (the `&&` short-circuit
+                // means the predicate is never re-evaluated once latched,
+                // matching skip_while's contract). The `<flag> = true`
+                // re-assignment after latching is idempotent.
+                let flag = format!("{sw_prefix}{i}");
+                let guard = bind_or_use(body);
+                let cond = Expr {
+                    kind: ExprKind::Binary {
+                        op: BinOp::And,
+                        left: Box::new(Expr {
+                            kind: ExprKind::Unary {
+                                op: UnaryOp::Not,
+                                operand: Box::new(ident(&flag)),
+                            },
+                            span: sp.clone(),
+                        }),
+                        right: Box::new(guard),
+                    },
+                    span: sp.clone(),
+                };
+                let mut else_stmts = vec![Stmt {
+                    kind: StmtKind::Assign {
+                        target: ident(&flag),
+                        value: Expr {
+                            kind: ExprKind::Bool(true),
+                            span: sp.clone(),
+                        },
+                    },
+                    span: sp.clone(),
+                }];
+                else_stmts.extend(Self::build_fused_chain_body(
+                    steps,
+                    i + 1,
+                    current,
+                    sink,
+                    sw_prefix,
+                    sp,
+                ));
+                vec![if_stmt(cond, Vec::new(), Some(else_stmts))]
+            }
         }
+    }
+
+    /// Hoisted `let mut <flag> = false;` latch declarations for each
+    /// `skip_while` step in a peeled fused chain — one per step, named
+    /// `{sw_prefix}{step-index}` to match `build_fused_chain_body`'s
+    /// references. Every fused-terminal / for-desugar caller emits these
+    /// BEFORE its synthesized loop; empty when the chain has no `skip_while`.
+    fn fused_skip_while_prelude(
+        steps: &[FusedChainStep],
+        sw_prefix: &str,
+        sp: &crate::token::Span,
+    ) -> Vec<Stmt> {
+        steps
+            .iter()
+            .enumerate()
+            .filter(|(_, (k, _, _))| *k == FusedStepKind::SkipWhile)
+            .map(|(i, _)| Stmt {
+                kind: StmtKind::Let {
+                    is_mut: true,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(format!("{sw_prefix}{i}")),
+                        span: sp.clone(),
+                    },
+                    ty: None,
+                    value: Expr {
+                        kind: ExprKind::Bool(false),
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            })
+            .collect()
     }
 
     /// Lower `<src>.iter().{map|filter}*.fold(init, |acc, x| body)` — a
@@ -7891,7 +8041,9 @@ impl<'ctx> super::Codegen<'ctx> {
             });
             out
         };
-        let for_body = Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sp);
+        let sw_prefix = format!("__swf_{uid}_");
+        let for_body =
+            Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Stmt {
             kind: StmtKind::Expr(Expr {
                 kind: ExprKind::For {
@@ -7912,23 +8064,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }),
             span: sp.clone(),
         };
+        let mut block_stmts = vec![Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(accname.clone()),
+                    span: sp.clone(),
+                },
+                ty: acc_ty_ann,
+                value: init.clone(),
+            },
+            span: sp.clone(),
+        }];
+        block_stmts.extend(Self::fused_skip_while_prelude(&steps, &sw_prefix, &sp));
+        block_stmts.push(for_loop);
         let block = Expr {
             kind: ExprKind::Block(Block {
-                stmts: vec![
-                    Stmt {
-                        kind: StmtKind::Let {
-                            is_mut: true,
-                            pattern: Pattern {
-                                kind: PatternKind::Binding(accname.clone()),
-                                span: sp.clone(),
-                            },
-                            ty: acc_ty_ann,
-                            value: init.clone(),
-                        },
-                        span: sp.clone(),
-                    },
-                    for_loop,
-                ],
+                stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&accname))),
                 span: sp.clone(),
             }),
@@ -8178,7 +8330,9 @@ impl<'ctx> super::Codegen<'ctx> {
             });
             out
         };
-        let for_body = Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sp);
+        let sw_prefix = format!("__swr_{uid}_");
+        let for_body =
+            Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Stmt {
             kind: StmtKind::Expr(Expr {
                 kind: ExprKind::For {
@@ -8199,23 +8353,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }),
             span: sp.clone(),
         };
+        let mut block_stmts = vec![Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(raccname.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(opt_te),
+                value: ident("None"),
+            },
+            span: sp.clone(),
+        }];
+        block_stmts.extend(Self::fused_skip_while_prelude(&steps, &sw_prefix, &sp));
+        block_stmts.push(for_loop);
         let block = Expr {
             kind: ExprKind::Block(Block {
-                stmts: vec![
-                    Stmt {
-                        kind: StmtKind::Let {
-                            is_mut: true,
-                            pattern: Pattern {
-                                kind: PatternKind::Binding(raccname.clone()),
-                                span: sp.clone(),
-                            },
-                            ty: Some(opt_te),
-                            value: ident("None"),
-                        },
-                        span: sp.clone(),
-                    },
-                    for_loop,
-                ],
+                stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&raccname))),
                 span: sp.clone(),
             }),
@@ -8242,6 +8396,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some((base, steps)) = Self::peel_fused_map_filter_chain(recv) else {
             return Ok(None);
         };
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
         let sp = call_span.clone();
         let elem_name = steps
             .first()
@@ -8277,7 +8433,9 @@ impl<'ctx> super::Codegen<'ctx> {
             });
             out
         };
-        let for_body = Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sp);
+        let sw_prefix = format!("__swe_{uid}_");
+        let for_body =
+            Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Expr {
             kind: ExprKind::For {
                 label: None,
@@ -8296,12 +8454,14 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
         // The terminal yields unit — run the `for` loop as a statement.
+        let mut block_stmts = Self::fused_skip_while_prelude(&steps, &sw_prefix, &sp);
+        block_stmts.push(Stmt {
+            kind: StmtKind::Expr(for_loop),
+            span: sp.clone(),
+        });
         let block = Expr {
             kind: ExprKind::Block(Block {
-                stmts: vec![Stmt {
-                    kind: StmtKind::Expr(for_loop),
-                    span: sp.clone(),
-                }],
+                stmts: block_stmts,
                 final_expr: None,
                 span: sp.clone(),
             }),
@@ -8442,7 +8602,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 span: sp.clone(),
             }]
         };
-        let for_body = Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sp);
+        let sw_prefix = format!("__swa_{uid}_");
+        let for_body =
+            Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Stmt {
             kind: StmtKind::Expr(Expr {
                 kind: ExprKind::For {
@@ -8464,23 +8626,23 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
         // Seed: `any` starts false, `all` starts true.
+        let mut block_stmts = vec![Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(resname.clone()),
+                    span: sp.clone(),
+                },
+                ty: None,
+                value: bool_lit(!is_any),
+            },
+            span: sp.clone(),
+        }];
+        block_stmts.extend(Self::fused_skip_while_prelude(&steps, &sw_prefix, &sp));
+        block_stmts.push(for_loop);
         let block = Expr {
             kind: ExprKind::Block(Block {
-                stmts: vec![
-                    Stmt {
-                        kind: StmtKind::Let {
-                            is_mut: true,
-                            pattern: Pattern {
-                                kind: PatternKind::Binding(resname.clone()),
-                                span: sp.clone(),
-                            },
-                            ty: None,
-                            value: bool_lit(!is_any),
-                        },
-                        span: sp.clone(),
-                    },
-                    for_loop,
-                ],
+                stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&resname))),
                 span: sp.clone(),
             }),
@@ -8529,6 +8691,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
         let sp = iterable.span.clone();
         // The loop var is the first adaptor's param, keeping the source element
         // typed by the `for`-loop binding (as the collect/fold desugars do).
@@ -8567,7 +8730,9 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             out
         };
-        let for_body = Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sp);
+        let sw_prefix = format!("__swl_{uid}_");
+        let for_body =
+            Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
         let for_loop = Expr {
             kind: ExprKind::For {
                 label: label.map(|s| s.to_string()),
@@ -8585,7 +8750,28 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             span: sp.clone(),
         };
-        Ok(Some(self.compile_expr(&for_loop)?))
+        // A `skip_while` step needs its latch flag(s) declared before the loop
+        // — wrap in a block; the user's `label` stays on the inner `for`, so
+        // labeled `break`/`continue` in the body are unaffected. Chains
+        // without `skip_while` compile the bare `for` exactly as before.
+        let prelude = Self::fused_skip_while_prelude(&steps, &sw_prefix, &sp);
+        if prelude.is_empty() {
+            return Ok(Some(self.compile_expr(&for_loop)?));
+        }
+        let mut block_stmts = prelude;
+        block_stmts.push(Stmt {
+            kind: StmtKind::Expr(for_loop),
+            span: sp.clone(),
+        });
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: block_stmts,
+                final_expr: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
     }
 
     /// Lower `A.chain(B).collect()` for two plain identity SOURCES (`.iter()` /
