@@ -2417,6 +2417,13 @@ pub(super) struct Codegen<'ctx> {
     /// reads it to seed the fused-loop accumulator with a correctly-typed zero
     /// so `acc = acc + x` type-checks for every numeric width (B-2026-07-11-19).
     pub(crate) iter_terminal_elem_types: HashMap<(usize, usize), TypeExpr>,
+    /// Per `Iterator.fold(init, f)` MethodCall → accumulator `TypeExpr`
+    /// side-table — populated from `Program.iter_terminal_acc_types`. Key:
+    /// `(span.offset, span.length)` of the MethodCall. `try_compile_iter_chain_fold`
+    /// reads it to stamp a type annotation on the synthetic accumulator `let`,
+    /// so a heap (`String`/`Vec`) accumulator registers as a tracked binding and
+    /// the Assign move-machinery fires instead of double-freeing (B-2026-07-13-18).
+    pub(crate) iter_terminal_acc_types: HashMap<(usize, usize), TypeExpr>,
     /// Materialized iterator bindings (B-2026-07-11-19): a `let it =
     /// <iter-chain>` whose RHS is a fusable iterator chain (`v.iter()...`, a
     /// range) is NOT codegen'd as a value (codegen has no runtime iterator);
@@ -6117,6 +6124,7 @@ impl<'ctx> Codegen<'ctx> {
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
             iter_terminal_elem_types: HashMap::new(),
+            iter_terminal_acc_types: HashMap::new(),
             iter_let_bindings: HashMap::new(),
             channel_elem_types: HashMap::new(),
             stats_elem_types: HashMap::new(),
@@ -7214,6 +7222,7 @@ impl<'ctx> Codegen<'ctx> {
         self.temp_recv_elem_types = program.temp_recv_elem_types.clone();
         self.temp_recv_mapset_types = program.temp_recv_mapset_types.clone();
         self.iter_terminal_elem_types = program.iter_terminal_elem_types.clone();
+        self.iter_terminal_acc_types = program.iter_terminal_acc_types.clone();
         self.channel_elem_types = program.channel_elem_types.clone();
         self.stats_elem_types = program.stats_elem_types.clone();
         self.gpu_dispatch_wgsl = program.gpu_dispatch_wgsl.clone();

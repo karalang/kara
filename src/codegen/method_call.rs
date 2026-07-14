@@ -7777,7 +7777,6 @@ impl<'ctx> super::Codegen<'ctx> {
         let uid = self.indexed_elem_counter;
         self.indexed_elem_counter += 1;
         let sp = call_span.clone();
-        let accname = format!("__facc_{}", uid);
         // Loop var: the first adaptor's param keeps the source element typed by
         // the for-loop binding (same reason the collect engine reuses it); with
         // no adaptors the fold element param IS the source element.
@@ -7786,6 +7785,56 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, p, _)| p.clone())
             .unwrap_or_else(|| x_p.to_string());
 
+        // Accumulator type annotation (B-2026-07-13-18). The synthetic
+        // `let mut <acc> = init` reuses the fold-call span, so the typechecker
+        // recorded no `pattern_binding_types` for it — without an explicit
+        // annotation a HEAP accumulator (`String`/`Vec`) never registers in
+        // `vec_elem_types`/`string_vars`, so the Assign arm's move-machinery
+        // (eager-free of the old buffer + f-string staging-slot suppression) is
+        // skipped and the accumulator buffer double-frees. Stamp the
+        // typechecker-recorded accumulator `TypeExpr` as the annotation so the
+        // Let arm's explicit-annotation path registers it exactly as a
+        // hand-written `let mut acc: String = …` would. `is_some()` iff the
+        // accumulator is heap (`String`/`Vec`); a scalar fold (`fold(0, |a,x|
+        // a+x)`) needs no tracking and stays on the un-annotated path.
+        let acc_ty_ann = self
+            .iter_terminal_acc_types
+            .get(&(call_span.offset, call_span.length))
+            .filter(|te| self.is_string_type_expr(te) || self.extract_vec_elem_type(te).is_some())
+            .cloned();
+
+        // For a HEAP accumulator, use the closure's `acc` PARAM directly as the
+        // accumulator variable — the self-referential `acc = fold_body` shape a
+        // hand-written loop uses, which the Assign move-machinery handles
+        // cleanly. The alternative (a fresh `__facc` bound via `let acc =
+        // __facc`) makes that intermediate `let` a MOVE of the now-tracked
+        // accumulator, which zeroes `__facc`'s cap and defeats the eager-free —
+        // leaking every intermediate buffer (B-2026-07-13-18, desugar variant b).
+        // Using `acc` directly is only sound when it can't collide with a name
+        // the receiver introduces: a free/param identifier in `base` or an
+        // adaptor closure (which becomes the loop var / an inner element bind and
+        // would shadow the accumulator inside the loop body). Scalar accumulators
+        // never double-free, so they stay on the proven fresh-name path.
+        let acc_collides = || {
+            let mut r = std::collections::HashSet::new();
+            let mut d = std::collections::HashSet::new();
+            self.refs_in_expr(recv, &mut r, &mut d);
+            r.contains(acc_p) || d.contains(acc_p) || steps.iter().any(|(_, p, _)| p == acc_p)
+        };
+        let use_direct_acc = acc_ty_ann.is_some() && !acc_collides();
+        // A heap accumulator that CAN'T use the self-referential shape (its `acc`
+        // param name collides with a receiver name) has no clean codegen lowering
+        // — defer to the interpreter (loud `--interp` fallback) rather than emit
+        // the leaking/double-freeing fresh-name form. Rare and pathological.
+        if acc_ty_ann.is_some() && !use_direct_acc {
+            return Ok(None);
+        }
+        let accname = if use_direct_acc {
+            acc_p.to_string()
+        } else {
+            format!("__facc_{}", uid)
+        };
+
         let ident = |name: &str| Expr {
             kind: ExprKind::Identifier(name.to_string()),
             span: sp.clone(),
@@ -7793,7 +7842,8 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Accumulate sink: bind the fold element param to the fully-adapted
         // element (elide a redundant self-bind), bind the acc param to the
-        // running accumulator, then reassign it to the fold body's value.
+        // running accumulator (unless the accumulator IS that param already —
+        // the direct-acc heap path), then reassign it to the fold body's value.
         let sink = |current: Expr| -> Vec<Stmt> {
             let let_bind = |name: &str, value: Expr| Stmt {
                 kind: StmtKind::Let {
@@ -7812,7 +7862,9 @@ impl<'ctx> super::Codegen<'ctx> {
             if !current_is_x {
                 out.push(let_bind(x_p, current));
             }
-            out.push(let_bind(acc_p, ident(&accname)));
+            if accname != acc_p {
+                out.push(let_bind(acc_p, ident(&accname)));
+            }
             out.push(Stmt {
                 kind: StmtKind::Assign {
                     target: ident(&accname),
@@ -7853,7 +7905,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 kind: PatternKind::Binding(accname.clone()),
                                 span: sp.clone(),
                             },
-                            ty: None,
+                            ty: acc_ty_ann,
                             value: init.clone(),
                         },
                         span: sp.clone(),

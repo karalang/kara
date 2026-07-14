@@ -1215,6 +1215,19 @@ pub struct TypeCheckResult {
     /// as `channel_elem_types` (records the element type; exactly one such
     /// terminal writes a given MethodCall span). B-2026-07-11-19.
     pub iter_terminal_elem_types: HashMap<SpanKey, TypeExpr>,
+    /// `Iterator.fold(init, f)` MethodCall span → the ACCUMULATOR `TypeExpr`
+    /// (the type of `init`, i.e. the fold's result type). Codegen desugars a
+    /// heap-accumulator fold (`fold(String.from(""), |acc,x| f"…")`) into a
+    /// synthetic `{ let mut __facc = init; for … { __facc = body }; __facc }`
+    /// block AFTER typecheck, so those synthetic nodes carry no
+    /// `pattern_binding_types` — the accumulator binding never registers as a
+    /// tracked `String`/`Vec` and the Assign move-machinery (eager-free of the
+    /// old buffer + f-string staging-slot suppression) is skipped, double-freeing
+    /// the buffer. Codegen reads this to stamp an explicit type annotation on the
+    /// synthetic `let`, restoring the tracking a hand-written loop gets for free.
+    /// Same key shape / no-collision rationale as `iter_terminal_elem_types`.
+    /// B-2026-07-13-18.
+    pub iter_terminal_acc_types: HashMap<SpanKey, TypeExpr>,
     /// `TaskHandle[T].join()` MethodCall span → the result type `T`. Drives
     /// codegen's cross-task result-transfer sizing so a non-scalar spawn
     /// return (`Vec`/`String`/struct) round-trips through `join` intact
@@ -1543,6 +1556,9 @@ pub struct TypeChecker<'a> {
     /// `Iterator.sum()` / `Iterator.reduce(f)` terminal. See the public copy
     /// on `TypeCheckResult`.
     pub(super) iter_terminal_elem_types: HashMap<SpanKey, TypeExpr>,
+    /// MethodCall span → the accumulator `TypeExpr` of an `Iterator.fold(init,
+    /// f)` terminal. See the public copy on `TypeCheckResult`. B-2026-07-13-18.
+    pub(super) iter_terminal_acc_types: HashMap<SpanKey, TypeExpr>,
     /// MethodCall span → channel element `TypeExpr` for `Sender.send` /
     /// `Receiver.recv` / `Receiver.try_recv`. See the public copy on
     /// `TypeCheckResult` for the full rationale.
@@ -1774,6 +1790,7 @@ impl<'a> TypeChecker<'a> {
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
             iter_terminal_elem_types: HashMap::new(),
+            iter_terminal_acc_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
             stats_elem_types: HashMap::new(),
             gpu_dispatch_wgsl: HashMap::new(),
@@ -1962,6 +1979,7 @@ impl<'a> TypeChecker<'a> {
             temp_recv_elem_types: self.temp_recv_elem_types,
             temp_recv_mapset_types: self.temp_recv_mapset_types,
             iter_terminal_elem_types: self.iter_terminal_elem_types,
+            iter_terminal_acc_types: self.iter_terminal_acc_types,
             channel_elem_types: self.channel_elem_types,
             stats_elem_types: self.stats_elem_types,
             gpu_dispatch_wgsl: self.gpu_dispatch_wgsl,

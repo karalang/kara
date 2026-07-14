@@ -116,6 +116,14 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // `Iterator.fold(init, f)` accumulator types — codegen annotates the
+    // synthetic accumulator `let` so a heap accumulator registers as a tracked
+    // String/Vec and its move-machinery fires. Same keying. B-2026-07-13-18.
+    program.iter_terminal_acc_types = tc
+        .iter_terminal_acc_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Forward the channel-op element-type table so codegen's
     // `karac_runtime_channel_*` lowering knows the LLVM shape of `T` to size
     // the type-erased transfer + shape the recv/try_recv out slot. Sibling

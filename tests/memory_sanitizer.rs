@@ -26229,4 +26229,48 @@ fn main() {
             "rc_elide_is_mirror_symmetric_walk_preserved_no_leak",
         );
     }
+
+    #[test]
+    fn asan_fold_string_accumulator_no_double_free() {
+        // B-2026-07-13-18: `iter().fold(String.from(""), |acc,x| f"{acc}-{x}")`
+        // — a heap-accumulator string-join fold. Codegen desugars it AFTER
+        // typecheck, so without the accumulator's recorded type the synthetic
+        // `let mut acc` never registered as a tracked String and the Assign
+        // move-machinery was skipped: the accumulator buffer double-freed
+        // (`free(): double free`), and an intermediate restructure leaked every
+        // middle buffer. The fix stamps the typechecker-recorded accumulator
+        // type on the synthetic `let` and lowers to the self-referential
+        // `acc = f"{acc}-{x}"` shape a hand-written loop uses. Must be
+        // double-free-AND-leak-clean.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let j = v.iter().fold(String.from(""), |acc, x| f"{acc}-{x}");
+    println(j);
+}
+"#,
+            &["-1-2-3"],
+            "fold_string_accumulator_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_fold_string_accumulator_over_map_no_leak() {
+        // Sibling of the above with a fused `map` adaptor ahead of the fold, so
+        // the loop var is the adaptor's param (`y`) and the accumulator is the
+        // fold's own param (`acc`). Exercises the collision-free direct-acc path
+        // with a non-trivial fused chain. Leak/double-free-clean.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let j = v.iter().map(|y| y * 2).fold(String.from("<"), |acc, x| f"{acc}{x},");
+    println(j);
+}
+"#,
+            &["<2,4,6,"],
+            "fold_string_accumulator_over_map_no_leak",
+        );
+    }
 }

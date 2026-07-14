@@ -270,6 +270,14 @@ pub type TempRecvElemTypesTable = std::collections::HashMap<(usize, usize), Type
 /// `(0 as <elem>)` zero (B-2026-07-11-19).
 pub type IterTerminalElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Side-table populated by the lowering pass from the typechecker's
+/// `iter_terminal_acc_types` map. Maps each `Iterator.fold(init, f)` terminal
+/// `MethodCall` span to the accumulator `TypeExpr`. Codegen stamps it as the
+/// type annotation on the synthetic accumulator `let`, so a heap accumulator
+/// registers as a tracked `String`/`Vec` and its move-machinery fires
+/// (B-2026-07-13-18).
+pub type IterTerminalAccTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
 /// Sibling of `TempRecvElemTypesTable` for `Map`/`Set` fresh-temp receivers
 /// (`make_map().get(k)`, `make_set().contains(x)`): `MethodCall` span → the
 /// receiver's whole `Map[K, V]` / `Set[T]` `TypeExpr`. Codegen materializes the
@@ -624,6 +632,12 @@ pub struct Program {
     /// MethodCall span → yielded element `TypeExpr`, so codegen seeds the fused
     /// loop's accumulator with a width-correct zero (B-2026-07-11-19).
     pub iter_terminal_elem_types: IterTerminalElemTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.iter_terminal_acc_types`;
+    /// empty otherwise. `Iterator.fold(init, f)` terminal MethodCall span →
+    /// accumulator `TypeExpr`, so codegen can annotate the synthetic
+    /// accumulator `let` and register a heap accumulator for its move-machinery
+    /// (B-2026-07-13-18).
+    pub iter_terminal_acc_types: IterTerminalAccTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.channel_elem_types`;
     /// empty otherwise. Channel-op element types for codegen's
     /// `karac_runtime_channel_*` lowering.

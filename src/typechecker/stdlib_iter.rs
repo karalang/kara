@@ -160,6 +160,14 @@ impl<'a> super::TypeChecker<'a> {
                     return_type: Box::new(acc_ty.clone()),
                 };
                 self.check_expr(&args[1].value, &f_ty);
+                // Record the accumulator type span-keyed. Codegen desugars a
+                // heap-accumulator fold into a synthetic accumulator loop after
+                // typecheck; without this the synthetic `let mut __facc` never
+                // registers as a tracked String/Vec and double-frees the buffer
+                // (B-2026-07-13-18). Scalar accumulators are recorded too but
+                // codegen only acts on heap ones.
+                self.iter_terminal_acc_types
+                    .insert(SpanKey::from_span(span), Self::type_to_type_expr(&acc_ty));
                 acc_ty
             }
             "sum" => {
