@@ -27034,7 +27034,7 @@ fn vector_bitwise_float_rejected() {
     assert!(
         errors
             .iter()
-            .any(|e| e.message.contains("bitwise vector operators")),
+            .any(|e| e.message.contains("require integer lanes")),
         "bitwise `&` on a float vector must be rejected; got: {errors:?}"
     );
 }
