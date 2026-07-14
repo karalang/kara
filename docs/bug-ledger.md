@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **432 surfaced · 4 open · 424 fixed** (2026-05-20 → 2026-07-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **433 surfaced · 5 open · 424 fixed** (2026-05-20 → 2026-07-13). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -99,6 +99,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **432 surfaced 
 | B-2026-07-12-30 | 2026-07-12 | codegen | medium | Reassigning a `Vec[shared]` / `Vec[Option[shared]]` local variable (`current = next`) LEAKS the shared elements of the OVERWRITTEN old Vec (x86-visible; the BFS-worklist `current = next` idiom) | kata #102 |
 | B-2026-07-13-17 | 2026-07-13 | codegen | medium | A heap payload (`Vec`/`String`/…) SENT on a `Channel` but never RECEIVED leaks its buffer when the channel is dropped. The runtime channel is a type-erased byte queue (`runtime/src/channel.rs`) — it memcpy's element bytes and cannot know a slot holds a heap `{ptr,len,cap}`, so its drop frees the queue storage but not the payload buffers still queued. Before B-2026-07-13-16 this was masked (the un-suppressed source freed the buffer, leaving the queue a dangling alias); correct move-ownership now surfaces it as a genuine leak. | — |
 | B-2026-07-13-18 | 2026-07-13 | codegen | high | `iter().fold(init, |acc, x| ...)` with a HEAP accumulator (`String`; a Vec accumulator hits a separate type-inference wall) double-frees the accumulator buffer on native/JIT. The idiomatic string-join fold is the headline shape. Scalar accumulators (`sum`, numeric fold) are unaffected; a 0-element fold (init returned, no iteration) is clean — the double-free is per-iteration, from the accumulator reassignment. | — |
+| B-2026-07-13-19 | 2026-07-13 | codegen | medium | The `?` operator applied to a `Result[Option[T], E]` (an Option NESTED inside the Result's Ok) loses the Option's payload type/value: the extracted `Option[T]` is truncated to its first word and left untyped, so a subsequent `match { Some(s) => … }` on it fails codegen — `Undefined variable 's'` when the arm returns the binding (`Ok(s)`), or `no handler for method 'len' on variable 's'` when it calls a method (`s.len()`). LOUD codegen failure (compile error, not a silent wrong answer or crash); the interpreter handles it. Plain `?` on a scalar-Ok Result, and matching an Option produced any OTHER way, both work — the trigger is `?` on a Result whose Ok payload is itself an Option. | — |
 
 ### Fixed (424)
 
