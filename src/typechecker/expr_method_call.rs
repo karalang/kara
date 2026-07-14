@@ -2492,6 +2492,132 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // ── Option / Result combinators, non-closure batch (B-2026-07-14-6) ──
+        // A family of standard combinators the typechecker previously rejected
+        // (no dedicated arm → `no method 'X' on Option/Result`) and which had no
+        // runtime dispatch in either backend. Modelled here so they type
+        // correctly; interpreter arms live in `method_call_optres.rs`, codegen
+        // arms in `calls.rs`. The SOURCE payload type is recorded in
+        // `method_unwrap_inner_types` (keyed by the call span) so codegen can
+        // reconstruct the receiver's payload words, mirroring `map`/`unwrap`.
+        // This batch is the CLOSURE-FREE subset: `ok`/`err` (Result→Option),
+        // `or` (passthrough), `ok_or` (Option→Result), `flatten` (Option
+        // un-nest). The closure-taking combinators are a separate arm below.
+        if matches!(method, "ok" | "err" | "or" | "and" | "ok_or" | "flatten") {
+            let optres = |ty: &Type| -> Option<(bool, Type, Option<Type>)> {
+                match ty {
+                    Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                        Some((false, args[0].clone(), None))
+                    }
+                    Type::Named { name, args } if name == "Result" && args.len() == 2 => {
+                        Some((true, args[0].clone(), Some(args[1].clone())))
+                    }
+                    _ => None,
+                }
+            };
+            let recv = match &obj_ty {
+                Type::Ref(i) | Type::MutRef(i) => optres(i),
+                other => optres(other),
+            };
+            if let Some((is_result, t_ty, e_ty)) = recv {
+                let opt = |payload: Type| Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![payload],
+                };
+                let record_src = |s: &mut Self, ty: &Type| {
+                    let resolved = resolve_type_var_top(ty, &s.env.substitutions);
+                    s.method_unwrap_inner_types
+                        .insert(SpanKey::from_span(span), Self::type_to_type_expr(&resolved));
+                };
+                let result = match method {
+                    // `Result[T, E].ok() -> Option[T]` / `.err() -> Option[E]`.
+                    "ok" | "err" if is_result => {
+                        if !args.is_empty() {
+                            self.type_error(
+                                format!("Result.{method} takes no arguments"),
+                                span.clone(),
+                                TypeErrorKind::WrongNumberOfArgs,
+                            );
+                        }
+                        let payload = if method == "ok" {
+                            t_ty.clone()
+                        } else {
+                            e_ty.clone().unwrap_or(Type::Error)
+                        };
+                        record_src(self, &payload);
+                        Some(opt(resolve_type_var_top(&payload, &self.env.substitutions)))
+                    }
+                    // `Option[T].or(alt: Option[T]) -> Option[T]` /
+                    // `Result[T,E].or(alt: Result[T,F]) -> Result[T,F]` — eager
+                    // alternative, returned when the receiver is absent/err.
+                    // `and` is the dual: `Option[T].and(other: Option[U]) ->
+                    // Option[U]` / `Result[T,E].and(other: Result[U,E]) ->
+                    // Result[U,E]` — the eager `other`, returned when the
+                    // receiver is PRESENT (else the absent receiver passes
+                    // through). Both take the argument's type as the result
+                    // (its payload governs the present/other branch), kept
+                    // permissive like `unwrap_or`.
+                    "or" | "and" => {
+                        let arg_ty = args
+                            .first()
+                            .map(|a| self.infer_expr(&a.value))
+                            .unwrap_or(Type::Error);
+                        record_src(self, &t_ty);
+                        Some(resolve_type_var_top(&arg_ty, &self.env.substitutions))
+                    }
+                    // `Option[T].ok_or(err: E) -> Result[T, E]` — eager error.
+                    "ok_or" if !is_result => {
+                        let err_ty = args
+                            .first()
+                            .map(|a| self.infer_expr(&a.value))
+                            .unwrap_or(Type::Error);
+                        record_src(self, &t_ty);
+                        Some(Type::Named {
+                            name: "Result".to_string(),
+                            args: vec![
+                                resolve_type_var_top(&t_ty, &self.env.substitutions),
+                                resolve_type_var_top(&err_ty, &self.env.substitutions),
+                            ],
+                        })
+                    }
+                    // `Option[Option[U]].flatten() -> Option[U]`.
+                    "flatten" if !is_result => {
+                        if !args.is_empty() {
+                            self.type_error(
+                                "Option.flatten takes no arguments".to_string(),
+                                span.clone(),
+                                TypeErrorKind::WrongNumberOfArgs,
+                            );
+                        }
+                        let inner = resolve_type_var_top(&t_ty, &self.env.substitutions);
+                        match &inner {
+                            Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                                record_src(self, &inner);
+                                Some(opt(args[0].clone()))
+                            }
+                            _ => {
+                                self.type_error(
+                                    format!(
+                                        "Option.flatten requires an `Option[Option[T]]` \
+                                         receiver, found `Option[{}]`",
+                                        type_display(&inner)
+                                    ),
+                                    span.clone(),
+                                    TypeErrorKind::TypeMismatch,
+                                );
+                                Some(Type::Error)
+                            }
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(result) = result {
+                    self.record_expr_type(span, &result);
+                    return result;
+                }
+            }
+        }
+
         // `ElementwiseMap`'s binary form `zip_with(other: Self, f: Fn(T, T) ->
         // T) -> Self` on the handle-backed containers (S6c) — element-wise
         // combine of two same-shape containers through the closure, yielding a

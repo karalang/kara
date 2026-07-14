@@ -1486,6 +1486,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "unwrap_err"
                 | "expect_err"
                 | "map"
+                // Option/Result combinators, non-closure batch (B-2026-07-14-6).
+                | "ok"
+                | "err"
+                | "or"
+                | "and"
+                | "ok_or"
+                | "flatten"
         ) {
             if let Some(value) =
                 self.try_compile_option_result_method(object, method, args, call_span)?

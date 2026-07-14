@@ -8681,6 +8681,80 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_get_unwrap_struct_element_loop() {
+        // B-2026-07-14-16 (struct leg) regression: reading many `Vec[Struct]`
+        // elements via `v.get(j).unwrap()` in a loop. An earlier version of the
+        // struct borrow-elision probed a drop-fn SYNTHESISER as a predicate,
+        // which moved the LLVM builder's insert point mid-let-codegen and
+        // produced a layout-sensitive CRASH here (empty output) that valgrind
+        // masked. The predicate is now pure. Sum must be exact.
+        if let Some(out) = run_program(
+            "struct Score { v: i64 }\n\
+             fn main() {\n\
+                 let mut v: Vec[Score] = Vec.new();\n\
+                 let mut i: i64 = 0;\n\
+                 while i < 100 {\n\
+                     v.push(Score { v: (i * 37 + 5) % 100 });\n\
+                     i = i + 1;\n\
+                 }\n\
+                 v.sort_by(|a, b| a.v.cmp(b.v));\n\
+                 let mut bad: i64 = 0;\n\
+                 let mut prev: i64 = -1;\n\
+                 let mut j: i64 = 0;\n\
+                 while j < 100 {\n\
+                     let s = v.get(j).unwrap();\n\
+                     if s.v < prev { bad = bad + 1; }\n\
+                     prev = s.v;\n\
+                     j = j + 1;\n\
+                 }\n\
+                 println(bad);\n\
+             }",
+        ) {
+            assert_eq!(out, "0\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_result_combinators_nonclosure() {
+        // B-2026-07-14-6: `ok`/`err` (Result→Option), `or`/`and` (select),
+        // `ok_or` (Option→Result), `flatten` (Option un-nest) — the closure-free
+        // combinator batch. Option and Result share the type-erased 4-word
+        // layout, so these lower to tag manipulations / selects on the shared
+        // struct. Must match the interpreter oracle.
+        // Fresh operand per call: the combinators consume `self` (and the eager
+        // arg), and `Option[i64]` is not Copy, so reusing a moved receiver/arg
+        // would (correctly) fail the ownership checker.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let r: Result[i64, i64] = Ok(5);\n\
+                 println(r.ok().unwrap_or(0));\n\
+                 let e: Result[i64, i64] = Err(7);\n\
+                 println(e.ok().unwrap_or(0));\n\
+                 let e2: Result[i64, i64] = Err(7);\n\
+                 println(e2.err().unwrap_or(0));\n\
+                 let r2: Result[i64, i64] = Ok(5);\n\
+                 println(r2.err().unwrap_or(0));\n\
+                 let n: Option[i64] = None;\n\
+                 println(n.or(Some(9)).unwrap_or(0));\n\
+                 let s: Option[i64] = Some(9);\n\
+                 println(s.and(Some(3)).unwrap_or(0));\n\
+                 let n2: Option[i64] = None;\n\
+                 println(n2.and(Some(9)).unwrap_or(-1));\n\
+                 let s2: Option[i64] = Some(9);\n\
+                 println(s2.ok_or(99).unwrap());\n\
+                 let n3: Option[i64] = None;\n\
+                 println(n3.ok_or(99).unwrap_err());\n\
+                 let oo: Option[Option[i64]] = Some(Some(42));\n\
+                 println(oo.flatten().unwrap_or(0));\n\
+                 let on: Option[Option[i64]] = Some(None);\n\
+                 println(on.flatten().unwrap_or(-1));\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n0\n7\n0\n9\n3\n-1\n9\n99\n42\n-1\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_question_on_result_nested_option_payload() {
         // B-2026-07-13-19: `?` on `Result[Option[T], E]` — the Ok payload is
         // itself an `Option[T]`. `reconstruct_question_ok_payload`'s wrapper

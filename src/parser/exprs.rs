@@ -150,15 +150,21 @@ impl super::Parser {
                                 },
                             };
                         }
-                        Token::Identifier { .. } | Token::Union | Token::Const | Token::Mut => {
-                            // `union`, `const`, and `mut` are keywords at item
-                            // / type / parameter position only — in field- or
-                            // method-name position they're accepted as plain
-                            // identifiers so existing surfaces like
-                            // `Set.union(...)`, `ptr.const(x)`, and
-                            // `ptr.mut(x)` (raw-pointer construction —
-                            // design.md § Raw Pointer Construction) keep
-                            // working. Standard "weak keyword" treatment.
+                        Token::Identifier { .. }
+                        | Token::Union
+                        | Token::Const
+                        | Token::Mut
+                        | Token::Or
+                        | Token::And => {
+                            // `union`, `const`, `mut`, `or`, and `and` are
+                            // keywords at item / type / parameter / operator
+                            // position only — in field- or method-name position
+                            // they're accepted as plain identifiers so surfaces
+                            // like `Set.union(...)`, `ptr.const(x)`, `ptr.mut(x)`
+                            // (raw-pointer construction — design.md § Raw Pointer
+                            // Construction), and the Option/Result combinators
+                            // `opt.or(alt)` / `opt.and(other)` (B-2026-07-14-6)
+                            // keep working. Standard "weak keyword" treatment.
                             let method = if self.check(&Token::Union) {
                                 self.advance();
                                 "union".to_string()
@@ -168,6 +174,12 @@ impl super::Parser {
                             } else if self.check(&Token::Mut) {
                                 self.advance();
                                 "mut".to_string()
+                            } else if self.check(&Token::Or) {
+                                self.advance();
+                                "or".to_string()
+                            } else if self.check(&Token::And) {
+                                self.advance();
+                                "and".to_string()
                             } else {
                                 self.expect_identifier()?
                             };

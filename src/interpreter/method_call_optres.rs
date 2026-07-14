@@ -160,6 +160,102 @@ impl<'a> super::Interpreter<'a> {
                     other => other.clone(),
                 });
             }
+            // ── Option / Result combinators, non-closure batch (B-2026-07-14-6) ──
+            // Each arm is GATED on the receiver being the matching Option/Result
+            // variant shape and otherwise falls through (reaches the trailing
+            // `None`), so a user type with an identically-named method still
+            // dispatches through the normal path — this handler runs for every
+            // receiver, not just Option/Result.
+            "ok" | "err" => {
+                // `Result[T,E].ok() -> Option[T]`; `.err() -> Option[E]`.
+                if let Value::EnumVariant {
+                    variant,
+                    data: EnumData::Tuple(vals),
+                    ..
+                } = obj
+                {
+                    if variant == "Ok" || variant == "Err" {
+                        let want = if method == "ok" { "Ok" } else { "Err" };
+                        return Some(if variant == want {
+                            Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "Some".to_string(),
+                                data: EnumData::Tuple(vec![vals
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or(Value::Unit)]),
+                            }
+                        } else {
+                            Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "None".to_string(),
+                                data: EnumData::Unit,
+                            }
+                        });
+                    }
+                }
+            }
+            "or" | "and" => {
+                // `Option[T].or(alt)` / `Result[T,E].or(alt)` — the receiver when
+                // present (`Some`/`Ok`), else the eagerly-evaluated alternative.
+                // `and` is the dual: the eagerly-evaluated `other` when the
+                // receiver is present, else the (absent) receiver passes through.
+                if let Value::EnumVariant { variant, .. } = obj {
+                    if matches!(variant.as_str(), "Some" | "None" | "Ok" | "Err") {
+                        let arg = args
+                            .first()
+                            .map(|a| self.eval_expr_inner(&a.value))
+                            .unwrap_or(Value::Unit);
+                        let present = variant == "Some" || variant == "Ok";
+                        let take_arg = if method == "or" { !present } else { present };
+                        return Some(if take_arg { arg } else { obj.clone() });
+                    }
+                }
+            }
+            "ok_or" => {
+                // `Option[T].ok_or(e) -> Result[T, E]`: `Some(x)`→`Ok(x)`,
+                // `None`→`Err(e)` (the error arg is eagerly evaluated).
+                if let Value::EnumVariant { variant, data, .. } = obj {
+                    if variant == "Some" {
+                        let payload = match data {
+                            EnumData::Tuple(vals) => vals.first().cloned().unwrap_or(Value::Unit),
+                            _ => Value::Unit,
+                        };
+                        return Some(Value::EnumVariant {
+                            enum_name: "Result".to_string(),
+                            variant: "Ok".to_string(),
+                            data: EnumData::Tuple(vec![payload]),
+                        });
+                    } else if variant == "None" {
+                        let e = args
+                            .first()
+                            .map(|a| self.eval_expr_inner(&a.value))
+                            .unwrap_or(Value::Unit);
+                        return Some(Value::EnumVariant {
+                            enum_name: "Result".to_string(),
+                            variant: "Err".to_string(),
+                            data: EnumData::Tuple(vec![e]),
+                        });
+                    }
+                }
+            }
+            "flatten" => {
+                // `Option[Option[T]].flatten() -> Option[T]`: `Some(inner)`→
+                // `inner`, `None`→`None`.
+                if let Value::EnumVariant { variant, data, .. } = obj {
+                    if variant == "Some" {
+                        if let EnumData::Tuple(vals) = data {
+                            return Some(vals.first().cloned().unwrap_or(Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "None".to_string(),
+                                data: EnumData::Unit,
+                            }));
+                        }
+                    } else if variant == "None" {
+                        return Some(obj.clone());
+                    }
+                }
+            }
             "is_some" => {
                 return Some(match obj {
                     Value::EnumVariant { variant, .. } if variant == "Some" => Value::Bool(true),

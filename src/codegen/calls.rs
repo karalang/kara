@@ -1490,6 +1490,151 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(Some(phi.as_basic_value()));
         }
 
+        // ── Option/Result combinators, non-closure batch (B-2026-07-14-6) ──
+        // Option and Result share the type-erased 4-word `{tag, w0, w1, w2}`
+        // layout with tag 1 = present (`Some`/`Ok`) and tag 0 = absent
+        // (`None`/`Err`), so these are tag manipulations / selects on the shared
+        // struct. Gated to a trivially-copyable (scalar) payload — like
+        // `Option/Result.map` above — so no heap payload's ownership (which the
+        // consuming combinator would need to thread) can be mishandled under
+        // `karac build`; the interpreter covers heap payloads and is the oracle.
+        if matches!(method, "ok" | "err" | "or" | "and" | "ok_or" | "flatten") {
+            // Heap-safety gate (see the block comment). For every method except
+            // `flatten`, `inner_te` IS the scalar payload to check. For
+            // `flatten`, `inner_te` is the inner `Option[T]`, so check its `T`.
+            let payload_te: &TypeExpr = if method == "flatten" {
+                match &inner_te.kind {
+                    TypeKind::Path(p)
+                        if p.segments.last().map(|s| s.as_str()) == Some("Option") =>
+                    {
+                        match p.generic_args.as_ref().and_then(|a| a.first()) {
+                            Some(GenericArg::Type(t)) => t,
+                            _ => &inner_te,
+                        }
+                    }
+                    _ => &inner_te,
+                }
+            } else {
+                &inner_te
+            };
+            if !super::vec_method::is_trivially_copyable_te(payload_te) {
+                return Err(format!(
+                    "codegen: Option/Result.{method} over a non-trivially-copyable \
+                     payload (String / Vec / struct) is not yet supported under \
+                     `karac build`; re-run with `--interp` (or `KARAC_RUN_JIT=0`)"
+                ));
+            }
+            let one = i64_t.const_int(1, false);
+            let zero = i64_t.const_int(0, false);
+            let is_present = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, tag, one, "combi.present")
+                .unwrap();
+            let struct_ty = recv_struct.get_type();
+            match method {
+                "ok" => {
+                    // `Ok(x)`[tag1,payload] → `Some(x)`[tag1,payload]; `Err(_)`
+                    // [tag0] → `None`[tag0]. Identical layout + tag semantics, so
+                    // the receiver struct already IS the Option value.
+                    return Ok(Some(recv_struct.into()));
+                }
+                "err" => {
+                    // `Err(e)`[tag0] → `Some(e)`[tag1]; `Ok(_)`[tag1] →
+                    // `None`[tag0]. Flip the tag (1 - tag); keep the payload
+                    // words (Err's payload becomes Some's; Ok's is dead under
+                    // tag0).
+                    let flipped = self.builder.build_int_sub(one, tag, "err.tag").unwrap();
+                    let agg = self
+                        .builder
+                        .build_insert_value(recv_struct, flipped, 0, "err.set")
+                        .unwrap()
+                        .into_struct_value();
+                    return Ok(Some(agg.into()));
+                }
+                "or" | "and" => {
+                    // Eager arg (matches the interpreter + Rust's `or`/`and`).
+                    // present(tag1): `or`→receiver, `and`→arg.
+                    // absent(tag0):  `or`→arg,      `and`→receiver.
+                    let arg = args.first().ok_or_else(|| {
+                        format!("codegen: Option/Result.{method} expects 1 argument, found 0")
+                    })?;
+                    let arg_val = self.compile_expr(&arg.value)?;
+                    let recv_bv: BasicValueEnum<'ctx> = recv_struct.into();
+                    let (present_val, absent_val) = if method == "or" {
+                        (recv_bv, arg_val)
+                    } else {
+                        (arg_val, recv_bv)
+                    };
+                    let sel = self
+                        .builder
+                        .build_select(is_present, present_val, absent_val, "combi.sel")
+                        .unwrap();
+                    return Ok(Some(sel));
+                }
+                "ok_or" => {
+                    // `Some(x)`[tag1,payload] → `Ok(x)`[tag1,payload] (receiver
+                    // as-is: Ok and Some share tag1 + payload); `None`[tag0] →
+                    // `Err(e)`[tag0, packed e].
+                    let err_arg = args.first().ok_or_else(|| {
+                        "codegen: Option.ok_or expects 1 argument, found 0".to_string()
+                    })?;
+                    let e_val = self.compile_expr(&err_arg.value)?;
+                    let words = self.coerce_to_payload_words(e_val, 3)?;
+                    let mut err_agg = struct_ty.get_undef();
+                    err_agg = self
+                        .builder
+                        .build_insert_value(err_agg, zero, 0, "okor.errtag")
+                        .unwrap()
+                        .into_struct_value();
+                    for (i, w) in words.iter().enumerate() {
+                        err_agg = self
+                            .builder
+                            .build_insert_value(err_agg, *w, (i + 1) as u32, "okor.errw")
+                            .unwrap()
+                            .into_struct_value();
+                    }
+                    let ok_bv: BasicValueEnum<'ctx> = recv_struct.into();
+                    let err_bv: BasicValueEnum<'ctx> = err_agg.into();
+                    let sel = self
+                        .builder
+                        .build_select(is_present, ok_bv, err_bv, "okor.sel")
+                        .unwrap();
+                    return Ok(Some(sel));
+                }
+                "flatten" => {
+                    // `Some(inner)` → the inner `Option` value; `None` → `None`
+                    // (receiver). The outer payload boxes the 4-word inner
+                    // Option (4 > 3 payload words), so w0 is the box pointer —
+                    // unbox and load. `inner_te` is the inner `Option[T]`.
+                    let w0 = self
+                        .builder
+                        .build_extract_value(recv_struct, 1, "flat.w0")
+                        .map_err(|e| format!("codegen: flatten w0: {:?}", e))?
+                        .into_int_value();
+                    // The inner `Option` shares the outer's type-erased 4-word
+                    // `{tag, w0, w1, w2}` layout (`struct_ty`), and the outer
+                    // `Some` payload BOXES it (4 words > 3 payload slots), so w0
+                    // is the box pointer — unbox and load a 4-word struct.
+                    let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                    let box_ptr = self
+                        .builder
+                        .build_int_to_ptr(w0, ptr_ty, "flat.box")
+                        .unwrap();
+                    let inner_val = self
+                        .builder
+                        .build_load(struct_ty, box_ptr, "flat.inner")
+                        .unwrap();
+                    let none_bv: BasicValueEnum<'ctx> = recv_struct.into();
+                    let sel = self
+                        .builder
+                        .build_select(is_present, inner_val, none_bv, "flat.sel")
+                        .unwrap();
+                    return Ok(Some(sel));
+                }
+                _ => {}
+            }
+        }
+
         // unwrap_or(default): eager fallback, NO panic. Compile the default
         // once (matching Rust's eager `unwrap_or`, unlike `unwrap_or_else`),
         // then branch on the tag — present (tag == 1) reconstitutes the
