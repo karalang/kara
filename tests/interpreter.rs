@@ -417,7 +417,7 @@ fn test_float_math_inverse_hyperbolic_and_extras() {
     // last ULP differs macOS vs Linux (see `assert_prints_float_near`).
     assert_prints_float_near(
         "fn main() { println((0.5f64).asin()); }",
-        0.5235987755982989,
+        std::f64::consts::FRAC_PI_6,
     );
 }
 
