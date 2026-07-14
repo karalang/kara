@@ -556,6 +556,7 @@ impl Checker {
             Const(_) => {}
             TypeAlias(_) => {}
             Struct(_) => {}
+            Union(_) => {}
             Enum(_) => {}
             Trait(_) => {}
             Impl(_) => {}

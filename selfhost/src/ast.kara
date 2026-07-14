@@ -820,6 +820,21 @@ pub struct StructDefNode {
     pub span: Span,
 }
 
+// A v1 FFI `union NAME { field: T, ... }` — non-generic, brace-bodied, named
+// fields sharing one storage slot. Simpler than `StructDefNode`: no
+// `shared`/`par` modifiers, no generics (the seed rejects `union NAME[...]` and
+// tuple/`where` forms at parse). Fields reuse `StructFieldNode` (union fields
+// are always non-`mut` — the seed rejects `mut` on a union field — so `is_mut`
+// is always `false` here).
+pub struct UnionDefNode {
+    pub is_pub: bool,
+    pub name: String,
+    pub fields: Vec[StructFieldNode],
+    pub attributes: Vec[AttrNode],
+    pub doc: Option[String],
+    pub span: Span,
+}
+
 // The shape of an enum variant's payload. A payload-less plain enum (legal as a
 // struct field, like `BinOp`) used as a discriminator on `VariantNode` — this
 // sidesteps `E_ENUM_NESTED_ENUM_PAYLOAD` (an enum variant may not carry another
@@ -949,6 +964,7 @@ pub enum Item {
     Const(ConstDeclNode),
     TypeAlias(TypeAliasNode),
     Struct(StructDefNode),
+    Union(UnionDefNode),
     Enum(EnumDefNode),
     // `Func` (not `Fn`) — a bare `Fn` match-arm variant collides with the `Fn`
     // function-type keyword (the `Fn(...)` type), mirroring why `Block`/`Tuple`

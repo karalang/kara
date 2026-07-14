@@ -58,6 +58,7 @@ import ast.{
     TypeAliasNode,
     StructFieldNode,
     StructDefNode,
+    UnionDefNode,
     VariantTag,
     VariantNode,
     EnumDefNode,
@@ -1388,6 +1389,27 @@ pub fn render_item(item: Item) -> String {
             out.push_str(span_str(span.offset, span.length));
             out.push_str(render_meta(attributes, doc));
             out.push_str(render_generics(generics));
+            for f in fields {
+                out.push_str(" ");
+                out.push_str(render_struct_field(f));
+            }
+            out.push_str(")");
+        }
+        Union(n) => {
+            let UnionDefNode {
+                is_pub,
+                name,
+                fields,
+                attributes,
+                doc,
+                span,
+            } = n;
+            out.push_str("(union");
+            out.push_str(render_vis(is_pub));
+            out.push_str(" ");
+            out.push_str(name);
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_meta(attributes, doc));
             for f in fields {
                 out.push_str(" ");
                 out.push_str(render_struct_field(f));

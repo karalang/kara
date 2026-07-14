@@ -76,6 +76,15 @@ const CORPUS: &[&str] = &[
     "par struct Counter { mut hits: Atomic[i64] }",
     "struct Trailing { a: i64, b: bool, }",
     "struct Refs { left: ref i64, owner: Box[String] }",
+    // `union` definitions — v1 FFI unions: non-generic, brace-bodied, named
+    // fields (never `mut`). Well-formed forms only; the generic/tuple/`where`/
+    // empty-union error paths are a later increment.
+    "union Bits { i: i64, f: f64 }",
+    "pub union Handle { ptr: i64, tag: u8 }",
+    "union Mixed3 { pub raw: i64, name: String }",
+    "union Single { only: i64 }",
+    "union Trailing2 { a: i64, b: bool, }",
+    "union Typed { slot: Vec[i64], other: Box[String] }",
     // `enum` definitions (no generics).
     "enum Color { Red, Green, Blue }",
     "enum Shape { Circle(i64), Rect(i64, i64) }",
@@ -447,6 +456,22 @@ fn render_rust_struct_field(f: &karac::ast::StructField) -> String {
     out
 }
 
+/// `(field[ pub] NAME<span> TYPE)` — a union field (never `mut`); must match
+/// `ast_render.kara::render_struct_field` with `is_mut = false`.
+fn render_rust_union_field(f: &karac::ast::UnionField) -> String {
+    let mut out = String::from("(field");
+    if f.is_pub {
+        out.push_str(" pub");
+    }
+    out.push(' ');
+    out.push_str(&f.name);
+    out.push_str(&span_item_off_len(f.span.offset, f.span.length));
+    out.push(' ');
+    out.push_str(&render_rust_type(&f.ty));
+    out.push(')');
+    out
+}
+
 /// `(variant NAME<span>[ (vtuple ...)|(vstruct ...)])` — must match
 /// `ast_render.kara::render_variant`.
 fn render_rust_variant(v: &karac::ast::Variant) -> String {
@@ -792,6 +817,21 @@ fn render_rust_item(item: &Item) -> String {
             for f in &s.fields {
                 out.push(' ');
                 out.push_str(&render_rust_struct_field(f));
+            }
+            out.push(')');
+            out
+        }
+        Item::UnionDef(u) => {
+            let mut out = format!(
+                "(union{} {}{}{}",
+                vis(u.is_pub),
+                u.name,
+                span_item_off_len(u.span.offset, u.span.length),
+                render_rust_meta(&u.attributes, &u.doc_comment),
+            );
+            for f in &u.fields {
+                out.push(' ');
+                out.push_str(&render_rust_union_field(f));
             }
             out.push(')');
             out

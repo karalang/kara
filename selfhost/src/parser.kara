@@ -80,6 +80,7 @@ import ast.{
     TypeAliasNode,
     StructFieldNode,
     StructDefNode,
+    UnionDefNode,
     VariantTag,
     VariantNode,
     EnumDefNode,
@@ -2621,6 +2622,7 @@ impl Parser {
             Const => self.parse_const_decl(is_pub, attrs, doc),
             Type => self.parse_type_alias_decl(is_pub, attrs, doc),
             Struct => self.parse_struct_def(is_pub, false, false, attrs, doc),
+            Union => self.parse_union_def(is_pub, attrs, doc),
             Enum => self.parse_enum_def(is_pub, false, false, attrs, doc),
             Shared => self.parse_shared_or_par(is_pub, true, false, attrs, doc),
             Par => self.parse_shared_or_par(is_pub, false, true, attrs, doc),
@@ -2916,6 +2918,66 @@ impl Parser {
             doc: doc,
             span: self.span_from(start),
         })
+    }
+
+    // `union NAME { field: T, ... }` — a v1 FFI union: non-generic, brace-bodied,
+    // named fields. `start` is at `union`. Mirrors the seed's `parse_union_def`
+    // happy path; the generic/tuple/`where`/empty-union DIAGNOSTICS are a later
+    // increment (the corpus stays well-formed and non-generic).
+    fn parse_union_def(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
+        let start = self.current_span();
+        self.advance(); // `union`
+        let name = self.take_member_name();
+        self.expect_lbrace();
+        let fields = self.parse_union_fields();
+        self.expect_rbrace();
+        Item.Union(UnionDefNode {
+            is_pub: is_pub,
+            name: name,
+            fields: fields,
+            attributes: attrs,
+            doc: doc,
+            span: self.span_from(start),
+        })
+    }
+
+    // `[pub] name: TYPE, ...` up to (not consuming) `}`. The union analog of
+    // `parse_struct_fields`, minus the `mut` branch: the seed rejects `mut` on a
+    // union field (all fields share storage), so `is_mut` is always `false`.
+    fn parse_union_fields(mut ref self) -> Vec[StructFieldNode] {
+        let mut fields: Vec[StructFieldNode] = Vec.new();
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            if self.at_rbrace() {
+                break;
+            }
+            let start = self.current_span();
+            let is_pub = match self.tokens[self.pos].token {
+                Pub => true,
+                _ => false,
+            };
+            if is_pub {
+                self.advance();
+            }
+            let name = self.take_member_name();
+            self.eat_colon();
+            let ty = self.parse_type();
+            fields.push(StructFieldNode {
+                is_pub: is_pub,
+                is_mut: false,
+                name: name,
+                ty: ty,
+                span: self.span_from(start),
+            });
+            if self.at_comma() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        fields
     }
 
     // `[pub] [mut] name: TYPE, ...` up to (not consuming) `}`. Mirrors the seed's

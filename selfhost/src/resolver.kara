@@ -32,6 +32,7 @@ import ast.{
     Item,
     FnDefNode,
     StructDefNode,
+    UnionDefNode,
     StructFieldNode,
     EnumDefNode,
     VariantNode,
@@ -635,6 +636,9 @@ impl Resolver {
             Struct(s) => {
                 self.define(s.name, s.span);
             }
+            Union(u) => {
+                self.define(u.name, u.span);
+            }
             Enum(e) => {
                 self.define(e.name, e.span);
                 // Register each variant name globally (the seed's `collect_enum`),
@@ -698,6 +702,9 @@ impl Resolver {
             }
             Struct(s) => {
                 self.resolve_struct(s);
+            }
+            Union(u) => {
+                self.resolve_union(u);
             }
             Enum(e) => {
                 self.resolve_enum(e);
@@ -765,6 +772,17 @@ impl Resolver {
             self.resolve_type(fty);
         }
         self.pop_scope();
+    }
+
+    // A union's field types resolve exactly like a struct's — but unions are
+    // non-generic (no scope needed for generic params). Name registered in the
+    // collect pass.
+    fn resolve_union(mut ref self, u: UnionDefNode) {
+        let UnionDefNode { is_pub, name, fields, attributes, doc, span } = u;
+        for field in fields {
+            let StructFieldNode { is_pub, is_mut, name: fname, ty: fty, span: fsp } = field;
+            self.resolve_type(fty);
+        }
     }
 
     // `resolve_enum_def` + `resolve_enum_variants` (resolve_items.rs:133-163).
