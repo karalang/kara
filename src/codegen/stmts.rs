@@ -7459,7 +7459,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// element (handled by `borrowed_vec_get_unwrap_heap_inner` / the vec-buffer
     /// borrow-elision) and for a scalar / pure-value struct (no heap to
     /// double-free).
-    pub(super) fn is_borrowed_vec_get_unwrap_struct(&mut self, value: &Expr) -> bool {
+    pub(super) fn is_borrowed_vec_get_unwrap_struct(&self, value: &Expr) -> bool {
         let Some(inner) = self.borrowed_vec_get_unwrap_inner(value) else {
             return false;
         };
@@ -7474,12 +7474,18 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(name) = p.segments.first() else {
             return false;
         };
-        // Only a struct that actually owns heap needs the drop suppressed; a
-        // pure-value struct's drop is a no-op, so leaving it registered is
-        // harmless (and this stays a `false` there to keep the fast path).
-        if !self.struct_types.contains_key(name) {
-            return false;
-        }
-        self.vec_elem_agg_drop_for_type_expr(&inner).is_some()
+        // Any struct element reconstructed from this borrow chain is a SHALLOW
+        // alias of the container's element (the accessor packs the value), so
+        // suppress its scope-exit struct-drop unconditionally: a heap-owning
+        // struct's fields alias the container's buffers (eliding avoids the
+        // double-free), and a pure-value struct's drop is a no-op (eliding is
+        // harmless). MUST stay a PURE predicate — an earlier version probed
+        // `vec_elem_agg_drop_for_type_expr` for its `Some`/`None`, but that
+        // helper SYNTHESISES a drop function as a side effect (and returns
+        // `Some` for EVERY struct, even pure-value ones), moving the LLVM
+        // builder's insert point mid-let-codegen; the corrupted insert point
+        // then produced a layout-sensitive crash in downstream code (a
+        // 100-element struct sort read via `v.get(j).unwrap()`).
+        self.struct_types.contains_key(name)
     }
 }
