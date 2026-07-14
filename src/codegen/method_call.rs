@@ -1493,6 +1493,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "and"
                 | "ok_or"
                 | "flatten"
+                // Option/Result combinators, closure batch (B-2026-07-14-6).
+                | "unwrap_or_else"
+                | "map_or"
+                | "map_or_else"
+                | "map_err"
+                | "and_then"
+                | "or_else"
+                | "filter"
         ) {
             if let Some(value) =
                 self.try_compile_option_result_method(object, method, args, call_span)?

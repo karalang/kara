@@ -2618,6 +2618,196 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // ── Option / Result combinators, CLOSURE batch (B-2026-07-14-6) ──────
+        // The closure-taking siblings of the non-closure block above:
+        // `unwrap_or_else`, `map_or`, `map_or_else`, `map_err` (Result),
+        // `and_then`, `or_else`, `filter` (Option). Each infers its closure
+        // argument, seeds the closure's parameter from the receiver's payload
+        // (present `T` / error `E`), reads the closure's return, and shapes the
+        // result type accordingly. The SOURCE payload `T` is recorded in
+        // `method_unwrap_inner_types` for codegen payload reconstruction (as
+        // `map` does). Interpreter arms in `method_call_optres.rs`, codegen in
+        // `calls.rs`.
+        if matches!(
+            method,
+            "unwrap_or_else"
+                | "map_or"
+                | "map_or_else"
+                | "map_err"
+                | "and_then"
+                | "or_else"
+                | "filter"
+        ) {
+            let optres = |ty: &Type| -> Option<(bool, Type, Option<Type>)> {
+                match ty {
+                    Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                        Some((false, args[0].clone(), None))
+                    }
+                    Type::Named { name, args } if name == "Result" && args.len() == 2 => {
+                        Some((true, args[0].clone(), Some(args[1].clone())))
+                    }
+                    _ => None,
+                }
+            };
+            let recv = match &obj_ty {
+                Type::Ref(i) | Type::MutRef(i) => optres(i),
+                other => optres(other),
+            };
+            if let Some((is_result, t_ty, e_ty)) = recv {
+                let e_ty = e_ty.unwrap_or(Type::Error);
+                // Two closure-checking strategies:
+                //  - `check_closure` (used when the closure's RETURN is already
+                //    known — `filter`'s `bool`, `unwrap_or_else`'s payload `T`):
+                //    `check_expr` against a fully-concrete `Fn(params) -> ret`
+                //    SEEDS the closure's parameter, so an un-annotated `|x| x > 3`
+                //    predicate type-checks against `T` (the `infer_expr`-then-
+                //    unify order left `x` unsolved and `x > 3` failed as "cannot
+                //    compare '?T' and 'i64'").
+                //  - `infer_closure_ret` (used when the return is UNKNOWN —
+                //    `map_or`/`map_err`/`and_then`/…): infer the closure, unify
+                //    its first param with the seed, read the resolved return.
+                //    Same limitation `map` has: an un-annotated param is only
+                //    inferred for a body that unifies it (arithmetic), not a bare
+                //    comparison — annotate `|x: T|` for those.
+                let check_closure = |s: &mut Self, arg: &CallArg, params: Vec<Type>, ret: Type| {
+                    let f_ty = Type::Function {
+                        params,
+                        return_type: Box::new(ret),
+                    };
+                    s.check_expr(&arg.value, &f_ty);
+                };
+                let infer_closure_ret =
+                    |s: &mut Self, arg: &CallArg, seed: Option<&Type>| -> Type {
+                        let f_actual = s.infer_expr(&arg.value);
+                        let f_resolved = resolve_type_var_top(&f_actual, &s.env.substitutions);
+                        match &f_resolved {
+                            Type::Function {
+                                params,
+                                return_type,
+                            }
+                            | Type::OnceFunction {
+                                params,
+                                return_type,
+                            } => {
+                                if let (Some(p0), Some(seed)) = (params.first(), seed) {
+                                    unify_types(
+                                        p0,
+                                        seed,
+                                        &mut s.env.substitutions,
+                                        &mut s.env.const_substitutions,
+                                    );
+                                }
+                                resolve_type_var_top(return_type, &s.env.substitutions)
+                            }
+                            _ => Type::Error,
+                        }
+                    };
+                self.method_unwrap_inner_types.insert(
+                    SpanKey::from_span(span),
+                    Self::type_to_type_expr(&resolve_type_var_top(&t_ty, &self.env.substitutions)),
+                );
+                let opt = |payload: Type| Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![payload],
+                };
+                // The closure's param list for the ABSENT branch (`unwrap_or_else`
+                // / `map_or_else` default / `or_else`): none for Option, the error
+                // `E` for Result.
+                let absent_params = || {
+                    if is_result {
+                        vec![e_ty.clone()]
+                    } else {
+                        vec![]
+                    }
+                };
+                let result: Option<Type> = match method {
+                    // `unwrap_or_else(f)` — present payload, else `f()`/`f(e)`. → T.
+                    // Return is the known payload `T`, so `check_closure` seeds
+                    // the absent-branch param (`E` for Result) precisely.
+                    "unwrap_or_else" => {
+                        let t = resolve_type_var_top(&t_ty, &self.env.substitutions);
+                        if let Some(a) = args.first() {
+                            check_closure(self, a, absent_params(), t.clone());
+                        }
+                        Some(t)
+                    }
+                    // `map_or(default, f)` — `f(T)` if present, else `default`. → U.
+                    "map_or" => {
+                        let default_ty = args
+                            .first()
+                            .map(|a| self.infer_expr(&a.value))
+                            .unwrap_or(Type::Error);
+                        let r = args
+                            .get(1)
+                            .map(|a| infer_closure_ret(self, a, Some(&t_ty)))
+                            .unwrap_or(default_ty);
+                        Some(resolve_type_var_top(&r, &self.env.substitutions))
+                    }
+                    // `map_or_else(default_fn, f)` — `f(T)` if present, else
+                    // `default_fn()`/`default_fn(e)`. → U (the mapper's return).
+                    "map_or_else" => {
+                        let r = args
+                            .get(1)
+                            .map(|a| infer_closure_ret(self, a, Some(&t_ty)))
+                            .unwrap_or(Type::Error);
+                        let r = resolve_type_var_top(&r, &self.env.substitutions);
+                        // Seed the default_fn against the now-known result type.
+                        if let Some(a) = args.first() {
+                            check_closure(self, a, absent_params(), r.clone());
+                        }
+                        Some(r)
+                    }
+                    // `Result[T,E].map_err(f)` — `Err(f(e))`; `Ok` passes through.
+                    // → `Result[T, F]`.
+                    "map_err" if is_result => {
+                        let f_ret = args
+                            .first()
+                            .map(|a| infer_closure_ret(self, a, Some(&e_ty)))
+                            .unwrap_or(Type::Error);
+                        Some(Type::Named {
+                            name: "Result".to_string(),
+                            args: vec![
+                                resolve_type_var_top(&t_ty, &self.env.substitutions),
+                                resolve_type_var_top(&f_ret, &self.env.substitutions),
+                            ],
+                        })
+                    }
+                    // `and_then(f)` — `f(T)` (itself an Option/Result) if present,
+                    // else the absent receiver. → the closure's return type.
+                    "and_then" => {
+                        let r = args
+                            .first()
+                            .map(|a| infer_closure_ret(self, a, Some(&t_ty)))
+                            .unwrap_or(Type::Error);
+                        Some(resolve_type_var_top(&r, &self.env.substitutions))
+                    }
+                    // `or_else(f)` — present receiver, else `f()`/`f(e)` (itself
+                    // an Option/Result). → the closure's return type.
+                    "or_else" => {
+                        let r = args
+                            .first()
+                            .map(|a| infer_closure_ret(self, a, absent_params().first()))
+                            .unwrap_or_else(|| obj_ty.clone());
+                        Some(resolve_type_var_top(&r, &self.env.substitutions))
+                    }
+                    // `Option[T].filter(pred)` — `Some(x)` kept iff `pred(x)`,
+                    // else `None`. → `Option[T]`. Return is `bool`, so
+                    // `check_closure` seeds `pred`'s param as `T`.
+                    "filter" if !is_result => {
+                        if let Some(a) = args.first() {
+                            check_closure(self, a, vec![t_ty.clone()], Type::Bool);
+                        }
+                        Some(opt(resolve_type_var_top(&t_ty, &self.env.substitutions)))
+                    }
+                    _ => None,
+                };
+                if let Some(result) = result {
+                    self.record_expr_type(span, &result);
+                    return result;
+                }
+            }
+        }
+
         // `ElementwiseMap`'s binary form `zip_with(other: Self, f: Fn(T, T) ->
         // T) -> Self` on the handle-backed containers (S6c) — element-wise
         // combine of two same-shape containers through the closure, yielding a

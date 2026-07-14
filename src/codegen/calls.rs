@@ -1490,6 +1490,31 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(Some(phi.as_basic_value()));
         }
 
+        // ── Option/Result combinators, CLOSURE batch (B-2026-07-14-6) ──
+        // `unwrap_or_else`/`map_or`/`map_or_else`/`map_err`/`and_then`/
+        // `or_else`/`filter` are fully implemented in the typechecker and the
+        // interpreter (the oracle). Their `karac build`/JIT lowering — closure
+        // invocation on the reconstructed payload, with per-method basic-block
+        // management like `Option/Result.map` — is a follow-up; until then emit
+        // a clear, actionable error (the same shape `map` uses for heap
+        // payloads) instead of a cryptic dispatch-fall-through.
+        if matches!(
+            method,
+            "unwrap_or_else"
+                | "map_or"
+                | "map_or_else"
+                | "map_err"
+                | "and_then"
+                | "or_else"
+                | "filter"
+        ) {
+            return Err(format!(
+                "codegen: Option/Result.{method} is not yet supported under \
+                 `karac build` (the interpreter implements it); re-run with \
+                 `--interp` (or `KARAC_RUN_JIT=0`)"
+            ));
+        }
+
         // ── Option/Result combinators, non-closure batch (B-2026-07-14-6) ──
         // Option and Result share the type-erased 4-word `{tag, w0, w1, w2}`
         // layout with tag 1 = present (`Some`/`Ok`) and tag 0 = absent

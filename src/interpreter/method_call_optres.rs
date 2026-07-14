@@ -256,6 +256,169 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
             }
+            // ── Option / Result combinators, CLOSURE batch (B-2026-07-14-6) ──
+            // Each is gated on the receiver being the matching Option/Result
+            // variant, else falls through (preserving user methods).
+            "unwrap_or_else" => {
+                // present → payload; absent → `f()` (Option) / `f(e)` (Result).
+                if let Value::EnumVariant { variant, data, .. } = obj {
+                    if matches!(variant.as_str(), "Some" | "Ok" | "None" | "Err") {
+                        let present = variant == "Some" || variant == "Ok";
+                        let payload = match data {
+                            EnumData::Tuple(vals) => vals.first().cloned(),
+                            _ => None,
+                        };
+                        if present {
+                            return Some(payload.unwrap_or(Value::Unit));
+                        }
+                        let f = self.eval_expr_inner(&args[0].value);
+                        let call_args = if variant == "Err" {
+                            vec![payload.unwrap_or(Value::Unit)]
+                        } else {
+                            vec![]
+                        };
+                        return Some(self.invoke_function_value(f, call_args));
+                    }
+                }
+            }
+            "map_or" => {
+                // present → `f(payload)`; absent → eager `default` (arg 0).
+                if let Value::EnumVariant { variant, data, .. } = obj {
+                    if matches!(variant.as_str(), "Some" | "Ok" | "None" | "Err") {
+                        let present = variant == "Some" || variant == "Ok";
+                        if present {
+                            let payload = match data {
+                                EnumData::Tuple(vals) => {
+                                    vals.first().cloned().unwrap_or(Value::Unit)
+                                }
+                                _ => Value::Unit,
+                            };
+                            let f = self.eval_expr_inner(&args[1].value);
+                            return Some(self.invoke_function_value(f, vec![payload]));
+                        }
+                        return Some(self.eval_expr_inner(&args[0].value));
+                    }
+                }
+            }
+            "map_or_else" => {
+                // present → `f(payload)` (arg 1); absent → `default_fn()`
+                // (Option) / `default_fn(e)` (Result) (arg 0).
+                if let Value::EnumVariant { variant, data, .. } = obj {
+                    if matches!(variant.as_str(), "Some" | "Ok" | "None" | "Err") {
+                        let present = variant == "Some" || variant == "Ok";
+                        let payload = match data {
+                            EnumData::Tuple(vals) => vals.first().cloned().unwrap_or(Value::Unit),
+                            _ => Value::Unit,
+                        };
+                        if present {
+                            let f = self.eval_expr_inner(&args[1].value);
+                            return Some(self.invoke_function_value(f, vec![payload]));
+                        }
+                        let d = self.eval_expr_inner(&args[0].value);
+                        let call_args = if variant == "Err" {
+                            vec![payload]
+                        } else {
+                            vec![]
+                        };
+                        return Some(self.invoke_function_value(d, call_args));
+                    }
+                }
+            }
+            "map_err" => {
+                // `Ok` passes through; `Err(e)` → `Err(f(e))`.
+                if let Value::EnumVariant {
+                    enum_name,
+                    variant,
+                    data: EnumData::Tuple(vals),
+                } = obj
+                {
+                    if variant == "Ok" {
+                        return Some(obj.clone());
+                    } else if variant == "Err" {
+                        let e = vals.first().cloned().unwrap_or(Value::Unit);
+                        let f = self.eval_expr_inner(&args[0].value);
+                        let mapped = self.invoke_function_value(f, vec![e]);
+                        return Some(Value::EnumVariant {
+                            enum_name: enum_name.clone(),
+                            variant: "Err".to_string(),
+                            data: EnumData::Tuple(vec![mapped]),
+                        });
+                    }
+                }
+            }
+            "and_then" => {
+                // present → `f(payload)` (itself an Option/Result); absent → self.
+                if let Value::EnumVariant { variant, data, .. } = obj {
+                    if matches!(variant.as_str(), "Some" | "Ok" | "None" | "Err") {
+                        let present = variant == "Some" || variant == "Ok";
+                        if !present {
+                            return Some(obj.clone());
+                        }
+                        let payload = match data {
+                            EnumData::Tuple(vals) => vals.first().cloned().unwrap_or(Value::Unit),
+                            _ => Value::Unit,
+                        };
+                        let f = self.eval_expr_inner(&args[0].value);
+                        return Some(self.invoke_function_value(f, vec![payload]));
+                    }
+                }
+            }
+            "or_else" => {
+                // present → self; absent → `f()` (Option) / `f(e)` (Result),
+                // itself an Option/Result.
+                if let Value::EnumVariant { variant, data, .. } = obj {
+                    if matches!(variant.as_str(), "Some" | "Ok" | "None" | "Err") {
+                        let present = variant == "Some" || variant == "Ok";
+                        if present {
+                            return Some(obj.clone());
+                        }
+                        let f = self.eval_expr_inner(&args[0].value);
+                        let call_args = if variant == "Err" {
+                            let e = match data {
+                                EnumData::Tuple(vals) => {
+                                    vals.first().cloned().unwrap_or(Value::Unit)
+                                }
+                                _ => Value::Unit,
+                            };
+                            vec![e]
+                        } else {
+                            vec![]
+                        };
+                        return Some(self.invoke_function_value(f, call_args));
+                    }
+                }
+            }
+            "filter" => {
+                // `Some(x)` kept iff `pred(x)`, else `None`; `None` → `None`.
+                if let Value::EnumVariant { variant, data, .. } = obj {
+                    if variant == "Some" {
+                        let payload = match data {
+                            EnumData::Tuple(vals) => vals.first().cloned().unwrap_or(Value::Unit),
+                            _ => Value::Unit,
+                        };
+                        let pred = self.eval_expr_inner(&args[0].value);
+                        let keep = matches!(
+                            self.invoke_function_value(pred, vec![payload.clone()]),
+                            Value::Bool(true)
+                        );
+                        return Some(if keep {
+                            Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "Some".to_string(),
+                                data: EnumData::Tuple(vec![payload]),
+                            }
+                        } else {
+                            Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "None".to_string(),
+                                data: EnumData::Unit,
+                            }
+                        });
+                    } else if variant == "None" {
+                        return Some(obj.clone());
+                    }
+                }
+            }
             "is_some" => {
                 return Some(match obj {
                     Value::EnumVariant { variant, .. } if variant == "Some" => Value::Bool(true),

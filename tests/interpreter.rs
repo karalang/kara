@@ -14377,6 +14377,50 @@ fn main() {
 }
 
 #[test]
+fn test_option_result_combinators() {
+    // B-2026-07-14-6 — the standard Option/Result combinator family, previously
+    // rejected at typecheck with no runtime dispatch. Non-closure batch:
+    // `ok`/`err`/`or`/`and`/`ok_or`/`flatten`. Closure batch: `unwrap_or_else`/
+    // `map_or`/`map_or_else`/`map_err`/`and_then`/`or_else`/`filter`. The
+    // interpreter is the oracle for the parity that codegen is verified against.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let r: Result[i64, i64] = Ok(5i64);
+    println(f"{r.ok().unwrap_or(0i64)}");
+    let e: Result[i64, i64] = Err(7i64);
+    println(f"{e.err().unwrap_or(0i64)}");
+    let n: Option[i64] = None;
+    println(f"{n.or(Some(9i64)).unwrap_or(0i64)}");
+    let s: Option[i64] = Some(9i64);
+    println(f"{s.and(Some(3i64)).unwrap_or(0i64)}");
+    let s2: Option[i64] = Some(9i64);
+    println(f"{s2.ok_or(99i64).unwrap()}");
+    let oo: Option[Option[i64]] = Some(Some(42i64));
+    println(f"{oo.flatten().unwrap_or(0i64)}");
+    let n2: Option[i64] = None;
+    println(f"{n2.unwrap_or_else(|| 42i64)}");
+    let s3: Option[i64] = Some(5i64);
+    println(f"{s3.map_or(0i64, |x: i64| x + 1i64)}");
+    let s4: Option[i64] = Some(5i64);
+    println(f"{s4.map_or_else(|| 0i64, |x: i64| x * 2i64)}");
+    let er: Result[i64, i64] = Err(3i64);
+    println(f"{er.map_err(|x: i64| x * 10i64).unwrap_err()}");
+    let s5: Option[i64] = Some(5i64);
+    println(f"{s5.and_then(|x: i64| Some(x + 1i64)).unwrap_or(0i64)}");
+    let n3: Option[i64] = None;
+    println(f"{n3.or_else(|| Some(9i64)).unwrap_or(0i64)}");
+    let s6: Option[i64] = Some(5i64);
+    println(f"{s6.filter(|x: i64| x > 3i64).unwrap_or(0i64)}");
+    let s7: Option[i64] = Some(2i64);
+    println(f"{s7.filter(|x: i64| x > 3i64).unwrap_or(0i64 - 1i64)}");
+}
+"#,
+    );
+    assert_eq!(output, "5\n7\n9\n3\n9\n42\n42\n6\n10\n30\n6\n9\n5\n-1\n");
+}
+
+#[test]
 fn test_match_arm_guard() {
     // B-2026-07-12-9 — a `match` arm guard (`pat if cond => ..`) falls through
     // to the next arm when the condition is false. The interpreter has always
