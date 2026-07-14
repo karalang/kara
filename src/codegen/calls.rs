@@ -1494,28 +1494,39 @@ impl<'ctx> super::Codegen<'ctx> {
         // `map_or`/`and_then`/`filter` use ONLY the present payload `T` (which
         // codegen has via `method_unwrap_inner_types`) and are lowered below,
         // following `Option/Result.map`'s reconstruct-payload → invoke-closure →
-        // branch/phi shape. `unwrap_or_else`/`map_or_else`/`or_else` need the
-        // Result `Err` type `E` for their absent-branch closure, and `map_err`
-        // maps over `E`; `E` isn't threaded to codegen yet, so those stay a
-        // clear `--interp` error (the interpreter implements all of them).
+        // branch/phi shape. `map_err` maps over `E` (recorded in the
+        // present-payload slot for it).
+        //
         // `unwrap_or_else`/`map_or_else`/`or_else`: the OPTION forms take a
-        // NO-ARG absent-branch closure (`|| …`), so codegen can lower them with
-        // only the present payload `T` (which it has). The RESULT forms pass the
-        // `Err` value `e` to that closure and need `E` threaded to codegen — not
-        // yet available — so they stay a clear `--interp` error.
+        // NO-ARG absent-branch closure (`|| …`); the RESULT forms pass the
+        // `Err` value `e` to it, reconstructed at the `E` recorded in the
+        // sibling `method_unwrap_err_types` table.
         if matches!(method, "unwrap_or_else" | "map_or_else" | "or_else") {
             let is_result = self.type_name_of_expr(object).as_deref() == Some("Result");
-            if is_result {
+            // For a Result receiver the absent closure takes `e: E` — pull `E`
+            // from the sibling table (recorded by the typechecker for exactly
+            // these three methods on a Result).
+            let err_te = if is_result {
+                match self.method_unwrap_err_types.get(&key).cloned() {
+                    Some(te) => Some(te),
+                    None => {
+                        return Err(format!(
+                            "codegen: Result.{method} is missing its recorded Err type; \
+                             re-run with `--interp` (or `KARAC_RUN_JIT=0`)"
+                        ));
+                    }
+                }
+            } else {
+                None
+            };
+            if !super::vec_method::is_trivially_copyable_te(&inner_te)
+                || err_te
+                    .as_ref()
+                    .is_some_and(|te| !super::vec_method::is_trivially_copyable_te(te))
+            {
                 return Err(format!(
-                    "codegen: Result.{method} is not yet supported under \
-                     `karac build` (the interpreter implements it); re-run with \
-                     `--interp` (or `KARAC_RUN_JIT=0`)"
-                ));
-            }
-            if !super::vec_method::is_trivially_copyable_te(&inner_te) {
-                return Err(format!(
-                    "codegen: Option.{method} over a non-trivially-copyable payload \
-                     (String / Vec / struct) is not yet supported under \
+                    "codegen: Option/Result.{method} over a non-trivially-copyable \
+                     payload (String / Vec / struct) is not yet supported under \
                      `karac build`; re-run with `--interp` (or `KARAC_RUN_JIT=0`)"
                 ));
             }
@@ -1533,8 +1544,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_conditional_branch(is_some, some_bb, none_bb)
                 .unwrap();
 
-            // Some(x): `unwrap_or_else` → x; `map_or_else` → f(x); `or_else` →
-            // the receiver (Some(x)) itself.
+            // Present (`Some(x)`/`Ok(x)`): `unwrap_or_else` → x; `map_or_else`
+            // → f(x); `or_else` → the receiver itself.
             self.builder.position_at_end(some_bb);
             let some_result: BasicValueEnum<'ctx> = match method {
                 "or_else" => recv_struct.into(),
@@ -1574,15 +1585,36 @@ impl<'ctx> super::Codegen<'ctx> {
             let some_end = self.builder.get_insert_block().unwrap();
             self.builder.build_unconditional_branch(merge_bb).unwrap();
 
-            // None: invoke the no-arg absent closure (arg 0 for
-            // `unwrap_or_else`/`map_or_else`/`or_else`).
+            // Absent (`None`/`Err(e)`): invoke the absent closure (arg 0) —
+            // no-arg for Option, `f(e)` for Result (reconstruct `e` at `E`).
             self.builder.position_at_end(none_bb);
             let none_closure = &args
                 .first()
-                .ok_or_else(|| format!("codegen: Option.{method} missing closure arg"))?
+                .ok_or_else(|| format!("codegen: Option/Result.{method} missing closure arg"))?
                 .value
                 .clone();
-            let none_result = self.compile_optres_closure_noarg(none_closure, call_span)?;
+            let none_result = if let Some(err_te) = &err_te {
+                let err_ll = self.llvm_type_for_type_expr(err_te);
+                let ew0 = self
+                    .builder
+                    .build_extract_value(recv_struct, 1, "optelse.ew0")
+                    .map_err(|e| format!("codegen: optelse ew0: {:?}", e))?
+                    .into_int_value();
+                let ew1 = self
+                    .builder
+                    .build_extract_value(recv_struct, 2, "optelse.ew1")
+                    .map_err(|e| format!("codegen: optelse ew1: {:?}", e))?
+                    .into_int_value();
+                let ew2 = self
+                    .builder
+                    .build_extract_value(recv_struct, 3, "optelse.ew2")
+                    .map_err(|e| format!("codegen: optelse ew2: {:?}", e))?
+                    .into_int_value();
+                let e_val = self.rebuild_value_from_payload_words(err_ll, ew0, ew1, ew2)?;
+                self.compile_optres_closure_on(none_closure, e_val, call_span)?
+            } else {
+                self.compile_optres_closure_noarg(none_closure, call_span)?
+            };
             let none_end = self.builder.get_insert_block().unwrap();
             self.builder.build_unconditional_branch(merge_bb).unwrap();
 

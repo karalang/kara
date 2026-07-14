@@ -632,6 +632,14 @@ pub struct Program {
     /// Set by the lowering pass from
     /// `TypeCheckResult.method_unwrap_inner_types`; empty otherwise.
     pub method_unwrap_inner_types: MethodUnwrapInnerTypesTable,
+    /// Set by the lowering pass from
+    /// `TypeCheckResult.method_unwrap_err_types`; empty otherwise. The ERR
+    /// (`E`) sibling of `method_unwrap_inner_types` (which records the present
+    /// payload `T`): populated for the Result forms of the closure combinators
+    /// whose ABSENT-branch closure takes the `Err` value
+    /// (`unwrap_or_else`/`map_or_else`/`or_else`, B-2026-07-14-6), so codegen
+    /// can reconstruct `e` to feed that closure. Same keying (MethodCall span).
+    pub method_unwrap_err_types: MethodUnwrapInnerTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.temp_recv_elem_types`;
     /// empty otherwise. Fresh-temp `Vec`/`VecDeque` receiver scalar element
     /// types for codegen's slice-3b read-method redispatch.

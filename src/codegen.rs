@@ -2402,6 +2402,11 @@ pub(super) struct Codegen<'ctx> {
     /// Codegen's `unwrap` arm uses this to lower the inner type to its
     /// LLVM shape and reconstitute the payload words back to a value.
     pub(crate) method_unwrap_inner_types: HashMap<(usize, usize), TypeExpr>,
+    /// ERR (`E`) sibling of `method_unwrap_inner_types` — the Result forms of
+    /// the absent-closure combinators (`unwrap_or_else`/`map_or_else`/
+    /// `or_else`, B-2026-07-14-6) reconstruct the `Err` value at this type to
+    /// feed their closure. Same keying (MethodCall span).
+    pub(crate) method_unwrap_err_types: HashMap<(usize, usize), TypeExpr>,
     /// Per-fresh-temp `Vec`/`VecDeque` receiver read-method (`get`/`first`/
     /// `last`/`get_unchecked`/`contains`) MethodCall → scalar element
     /// `TypeExpr` side-table — populated from `Program.temp_recv_elem_types`.
@@ -6142,6 +6147,7 @@ impl<'ctx> Codegen<'ctx> {
             method_callee_types: HashMap::new(),
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
             method_unwrap_inner_types: HashMap::new(),
+            method_unwrap_err_types: HashMap::new(),
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
             iter_terminal_elem_types: HashMap::new(),
@@ -7244,6 +7250,7 @@ impl<'ctx> Codegen<'ctx> {
         // maps to the inner `TypeExpr`. Read by the codegen `unwrap` arm
         // to know how to reconstitute the payload back to a value of T.
         self.method_unwrap_inner_types = program.method_unwrap_inner_types.clone();
+        self.method_unwrap_err_types = program.method_unwrap_err_types.clone();
         self.temp_recv_elem_types = program.temp_recv_elem_types.clone();
         self.temp_recv_mapset_types = program.temp_recv_mapset_types.clone();
         self.iter_terminal_elem_types = program.iter_terminal_elem_types.clone();
@@ -8311,6 +8318,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_enum_inst_type_exprs = tp.enum_inst_type_exprs.clone();
         let mut t_call_effect_subs = tp.call_effect_subs.clone();
         let mut t_method_unwrap_inner_types = tp.method_unwrap_inner_types.clone();
+        let mut t_method_unwrap_err_types = tp.method_unwrap_err_types.clone();
         let mut t_temp_recv_elem_types = tp.temp_recv_elem_types.clone();
         let mut t_temp_recv_mapset_types = tp.temp_recv_mapset_types.clone();
         let mut t_channel_elem_types = tp.channel_elem_types.clone();
@@ -8349,6 +8357,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.method_unwrap_inner_types,
                     &mut t_method_unwrap_inner_types,
+                );
+                std::mem::swap(
+                    &mut self.method_unwrap_err_types,
+                    &mut t_method_unwrap_err_types,
                 );
                 std::mem::swap(&mut self.temp_recv_elem_types, &mut t_temp_recv_elem_types);
                 std::mem::swap(

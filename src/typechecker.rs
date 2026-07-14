@@ -1188,6 +1188,12 @@ pub struct TypeCheckResult {
     /// there does not apply here because we record the inner *element*
     /// type, not the receiver's whole type.
     pub method_unwrap_inner_types: HashMap<SpanKey, TypeExpr>,
+    /// The ERR (`E`) sibling of `method_unwrap_inner_types`: populated for the
+    /// Result forms of the closure combinators whose ABSENT-branch closure
+    /// takes the `Err` value (`unwrap_or_else`/`map_or_else`/`or_else`,
+    /// B-2026-07-14-6), so codegen can reconstruct `e` to feed that closure.
+    /// Same keying (MethodCall span) and no-collision rationale.
+    pub method_unwrap_err_types: HashMap<SpanKey, TypeExpr>,
     /// `MethodCall` span → the SCALAR element `TypeExpr` of a non-identifier
     /// (fresh-temp) `Vec`/`VecDeque` receiver, for element-type-aware read
     /// methods (`get`/`first`/`last`/`get_unchecked`/`contains`) that codegen
@@ -1558,6 +1564,9 @@ pub struct TypeChecker<'a> {
     /// dispatch. See the public copy on `TypeCheckResult` for the full
     /// rationale.
     pub(super) method_unwrap_inner_types: HashMap<SpanKey, TypeExpr>,
+    /// MethodCall span → `Err` (`E`) `TypeExpr` for the Result forms of the
+    /// absent-closure combinators. See the public copy on `TypeCheckResult`.
+    pub(super) method_unwrap_err_types: HashMap<SpanKey, TypeExpr>,
     /// MethodCall span → scalar element `TypeExpr` of a fresh-temp
     /// `Vec`/`VecDeque` receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_elem_types: HashMap<SpanKey, TypeExpr>,
@@ -1800,6 +1809,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: HashMap::new(),
             impl_trait_captures: HashMap::new(),
             method_unwrap_inner_types: HashMap::new(),
+            method_unwrap_err_types: HashMap::new(),
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
             iter_terminal_elem_types: HashMap::new(),
@@ -1990,6 +2000,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: self.fn_value_callee_types,
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,
+            method_unwrap_err_types: self.method_unwrap_err_types,
             temp_recv_elem_types: self.temp_recv_elem_types,
             temp_recv_mapset_types: self.temp_recv_mapset_types,
             iter_terminal_elem_types: self.iter_terminal_elem_types,

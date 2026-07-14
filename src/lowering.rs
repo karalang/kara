@@ -98,6 +98,14 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // ERR (`E`) sibling — the Result forms of the absent-closure combinators
+    // (`unwrap_or_else`/`map_or_else`/`or_else`) pass the `Err` value to their
+    // closure, and codegen reconstructs it at this type. Same keying.
+    program.method_unwrap_err_types = tc
+        .method_unwrap_err_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Forward the slice-3b fresh-temp `Vec`/`VecDeque` receiver element-type
     // table so codegen can materialize a non-identifier collection receiver
     // and re-dispatch element-type-aware read methods through

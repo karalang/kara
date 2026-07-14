@@ -2715,6 +2715,17 @@ impl<'a> super::TypeChecker<'a> {
                     SpanKey::from_span(span),
                     Self::type_to_type_expr(&recorded_payload),
                 );
+                // The RESULT forms of the absent-closure combinators pass the
+                // `Err` value `e` to that closure, so codegen additionally needs
+                // `E` — recorded in the sibling table (the present-payload slot
+                // above already holds `T` for these methods).
+                if is_result && matches!(method, "unwrap_or_else" | "map_or_else" | "or_else") {
+                    let e_resolved = resolve_type_var_top(&e_ty, &self.env.substitutions);
+                    self.method_unwrap_err_types.insert(
+                        SpanKey::from_span(span),
+                        Self::type_to_type_expr(&e_resolved),
+                    );
+                }
                 let opt = |payload: Type| Type::Named {
                     name: "Option".to_string(),
                     args: vec![payload],
