@@ -443,6 +443,15 @@ pub fn check_match_exhaustive(
     let matrix = build_matrix(arms, scrutinee_type, env);
     let head_types = vec![scrutinee_type.clone()];
 
+    // Slice-pattern length-coverage exhaustiveness (B-2026-07-14-14). `Vec[T]` /
+    // `Slice[T]` are open-domain, so the general Maranget engine demands an
+    // explicit wildcard arm — but a set of IRREFUTABLE slice patterns whose
+    // length classes tile `{0, 1, 2, …}` (e.g. `[]` + `[head, ..]`) is already
+    // total. Recognise that conservatively BEFORE the open-domain fallthrough.
+    if is_open_slice_scrutinee(scrutinee_type) && slice_patterns_cover_all_lengths(&matrix) {
+        return ExhaustiveResult::Exhaustive;
+    }
+
     match usefulness(&matrix, &[Pat::Wildcard], &head_types, env) {
         None => ExhaustiveResult::Exhaustive,
         Some(witness_vec) => {
@@ -461,6 +470,59 @@ pub fn check_match_exhaustive(
 /// named, never — flows through. For open-domain types the wildcard
 /// recursion in `is_useful` falls to the default-matrix path, demanding a
 /// wildcard arm.
+/// A scrutinee that admits open-ended slice patterns: an owned `Vec[T]` or a
+/// `Slice[T]`. Used to gate the slice-pattern length-coverage exhaustiveness
+/// check (B-2026-07-14-14). `Array[T, N]` is fixed-arity (the general engine
+/// handles it exactly); `VecDeque` is excluded from slice patterns entirely.
+fn is_open_slice_scrutinee(ty: &Type) -> bool {
+    match ty {
+        Type::Slice { .. } => true,
+        Type::Named { name, .. } => is_open_collection(name),
+        _ => false,
+    }
+}
+
+/// Conservative slice-pattern length-coverage exhaustiveness (B-2026-07-14-14).
+/// An IRREFUTABLE open-ended arm `[a…, ..]` (`has_rest`, every fixed element a
+/// wildcard/binding) covers EVERY length `≥ fixed`; an irrefutable closed arm
+/// `[a…]` covers EXACTLY `fixed`. The match tiles all lengths iff some open-ended
+/// arm exists — covering `[m, ∞)` for its minimum fixed `m` — AND every length
+/// in `0..m` is covered by a closed arm. Only wildcard/binding elements count
+/// (a literal or nested-constructor element narrows the class and can't complete
+/// the cover), so this is SOUND: it never turns a genuinely non-exhaustive match
+/// total. Operates on the already-lowered matrix, so guarded arms (dropped by
+/// `build_matrix`) don't contribute and variant-name element bindings (lowered
+/// to a `Ctor`, not `Wildcard`) are correctly treated as refutable.
+fn slice_patterns_cover_all_lengths(matrix: &Matrix) -> bool {
+    use std::collections::HashSet;
+    let mut open_min: Option<usize> = None;
+    let mut closed_lens: HashSet<usize> = HashSet::new();
+    for row in &matrix.rows {
+        match row.pats.first() {
+            // A catch-all (bare `_` / binding) is already total.
+            Some(Pat::Wildcard) => return true,
+            Some(Pat::Ctor {
+                ctor: PatCtor::SliceLen { fixed, has_rest },
+                args,
+            }) => {
+                if !args.iter().all(|a| matches!(a, Pat::Wildcard)) {
+                    continue;
+                }
+                if *has_rest {
+                    open_min = Some(open_min.map_or(*fixed, |m| m.min(*fixed)));
+                } else {
+                    closed_lens.insert(*fixed);
+                }
+            }
+            _ => {}
+        }
+    }
+    match open_min {
+        Some(m) => (0..m).all(|l| closed_lens.contains(&l)),
+        None => false,
+    }
+}
+
 fn is_handled_scrutinee(ty: &Type) -> bool {
     !matches!(
         ty,

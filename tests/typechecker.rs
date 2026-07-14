@@ -17097,6 +17097,40 @@ fn test_slice_pattern_match_vec_with_wildcard_typechecks() {
 }
 
 #[test]
+fn test_slice_pattern_empty_plus_open_head_is_exhaustive() {
+    // B-2026-07-14-14: `[] + [head, ..]` tiles all lengths (0 and ≥1) so it is
+    // exhaustive WITHOUT a wildcard arm — the length-coverage recogniser must
+    // accept it. Also the multi-length tile `[] + [a] + [a, b, ..]` and the
+    // suffix-rest form `[] + [.., last]`.
+    typecheck_ok("fn f(xs: Vec[i64]) -> i64 { match xs { [] => 0, [head, ..] => head, } }");
+    typecheck_ok(
+        "fn f(xs: Vec[i64]) -> i64 { match xs { [] => 0, [a] => a, [a, b, ..] => a + b, } }",
+    );
+    typecheck_ok("fn f(xs: Vec[i64]) -> i64 { match xs { [] => 0, [.., last] => last, } }");
+}
+
+#[test]
+fn test_slice_pattern_length_coverage_soundness() {
+    // The recogniser must stay SOUND — these are genuinely non-exhaustive and
+    // must still be rejected: `[head, ..]` alone misses `[]`; `[] + [a]` misses
+    // length ≥2; a literal element `[5, ..]` is refutable so it cannot complete
+    // the cover.
+    for src in [
+        "fn f(xs: Vec[i64]) -> i64 { match xs { [head, ..] => head, } }",
+        "fn f(xs: Vec[i64]) -> i64 { match xs { [] => 0, [a] => a, } }",
+        "fn f(xs: Vec[i64]) -> i64 { match xs { [] => 0, [5, ..] => 5, } }",
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter()
+                .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
+            "expected NonExhaustiveMatch for `{src}`, got: {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn test_slice_pattern_match_vec_without_wildcard_non_exhaustive() {
     let errs = typecheck_errors(
         "fn f(xs: Vec[i64]) -> i64 { \
