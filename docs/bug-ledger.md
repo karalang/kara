@@ -536,7 +536,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **439 surfaced 
 | B-2026-07-14-1 | codegen (for-loop element drop x match-arm payload move) | high | DOUBLE-FREE: a heap payload MOVED out of a for-loop-over-owned-Vec element (via a match arm, into a function-call argument) is freed twice — once by… | this commit |
 | B-2026-07-14-2 | lexer (Rust seed vs self-host) / design.md spec inconsistency | medium | SPEC CONTRADICTION on bare `f16`/`bf16`: the Rust seed lexer (src/lexer.rs, keyword_or_ident, explicit comment ~L1373) treats bare `f16`/`bf16` as OR… | this commit |
 | B-2026-07-14-3 | codegen | high | ARM64 LEAK: `let a = m.get(k).unwrap()` where m is `Map[_, shared T]` DOUBLE rc-inc's the fetched node | this commit |
-| B-2026-07-14-4 | typechecker + ownership (diagnostics) | low | A recursive value enum whose variant carries the SAME nested/recursive type in TWO payload fields (`enum Expr { Num(i64), Add(Expr, Expr) }`) emitted… | this commit |
+| B-2026-07-14-4 | typechecker + ownership (diagnostics) | low | A recursive value enum whose variant carries the SAME nested/recursive type in TWO payload fields (`enum Expr { Num(i64), Add(Expr, Expr) }`) emitted… | d831ebe |
 
 </details>
 
