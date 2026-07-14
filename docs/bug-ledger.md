@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **451 surfaced · 7 open · 440 fixed** (2026-05-20 → 2026-07-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **452 surfaced · 7 open · 441 fixed** (2026-05-20 → 2026-07-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -103,9 +103,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **451 surfaced 
 | B-2026-07-14-14 | 2026-07-14 | typechecker (slice-pattern binding types + exhaustiveness) | low | Two related slice-pattern typechecker ergonomics gaps, both CONSISTENT across interp/JIT/native (so not miscompiles — just friction). (1) BINDING TYPE: an element binding in a slice pattern types as `ref T`, not `T`, and does not coerce in the arm body — `match v { [x] => x, .. }` where the arm must yield `i64` errors `expected 'i64', found 'ref i64'`; the user must write `*x` or rebind. Arithmetic auto-derefs (`[a, b] => a + b` works), so it is inconsistent: `+` derefs but a bare tail/return position does not. Likely the same `ref T` element-binding shape as the for-loop borrow element, which DOES bind Copy scalars by value (lowering.rs `is_borrow_copy_scalar`) — the slice-pattern binder should apply the same Copy-scalar-by-value rule. (2) EXHAUSTIVENESS: `match v { [] => .., [head, ..] => .. }` is genuinely exhaustive (empty + non-empty covers every length) but the checker reports `non-exhaustive match: pattern '_' not covered`, forcing a dead `_` arm. Holds for owned Vec, ref Vec, and Slice scrutinees alike. The slice-pattern exhaustiveness logic does not model `[]` + `[_, ..]` (or `[_, ..]` + `[..,  _]`) as covering the length space. FIX DIRECTION: (1) apply the Copy-scalar-by-value binding rule to slice-pattern leaves (mirror the for-loop element binder); (2) extend match-exhaustiveness for slice patterns to recognize an empty-slice arm plus an open-ended `[head, ..]`/`[.., tail]` arm as total — carefully, since a WRONG widening here would ACCEPT a genuinely non-exhaustive match (soundness), so it must be conservative (only the exact `[] + [_, ..]` / `[_, ..] + []` complementary pair). Deferred rather than rushed for that soundness reason. | none yet |
 | B-2026-07-14-16 | 2026-07-14 | codegen (Iterator/Vec .get(i)/.first().unwrap() on a SCALAR element) | high | CRASH: `let x = v.get(i).unwrap()` / `v.first().unwrap()` on a `Vec[T]` with a SCALAR element (`i64`) reads invalid memory under JIT/native (`Invalid read of size 1`, empty output — crashes before the value is used) while the interpreter (oracle) prints the correct value. `v.get(i)` returns `Option[ref T]` (a borrow of the element); the consuming `.unwrap()`/`.expect()` on a SCALAR-payload borrowed Option mis-lowers the extraction (the size-1 read suggests the discriminant/byte path is walked off a bad pointer). DISCRIMINATORS (all valgrind-confirmed, x86-64): CRASHES — `v.get(i).unwrap()` and `v.first().unwrap()` with element `i64`. CLEAN — the SAME shape with a `String` element (`v.get(i).unwrap()` on `Vec[String]`); a plain index `v[i]` (0 errors); and `match v.get(i) { Some(x) => .. }` (the match, not unwrap, is clean). So the trigger is precisely {borrowed `Option[ref scalar]` from `Vec.get`/`.first`} x {consumed by `.unwrap()`/`.expect()`}. Distinct from B-2026-07-14-11 (`Vec[Vec].get().unwrap()` loses the inner Vec TYPE -> LOUD `no handler for len`) and B-2026-07-14-15 (`Map` get().unwrap() of a HEAP value -> double-free): this is a SCALAR-element Vec.get()/first().unwrap() -> silent invalid-read crash. NOT YET FIXED. FIX DIRECTION (unconfirmed): the `.unwrap()` lowering for an `Option[ref scalar]` produced by `Vec.get`/`.first` must deref the ref to load the scalar (or the borrowed-Option payload extraction must yield the pointee), not read a byte off the option layout. Common idiom, high severity (crash on a routine access pattern), but users have the `v[i]` / `match` workarounds. | none yet |
 
-### Fixed (440)
+### Fixed (441)
 
-<details><summary>440 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>441 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -549,6 +549,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **451 surfaced 
 | B-2026-07-14-12 | codegen (generic monomorph owned heap-param drop) | medium | A GENERIC function that consumes an owned HEAP param MORE THAN ONCE leaks exactly one heap buffer (the original param), in the AOT/native binary (int… | 6a51fe9 |
 | B-2026-07-14-13 | codegen (slice-pattern match on borrowed scrutinee) | high | A slice pattern (`[]`, `[a, b]`, `[first, .., last]`) matched on a `ref Vec[T]` / `ref Slice[T]` PARAMETER silently mis-dispatched in codegen — the w… | f85ddf8 |
 | B-2026-07-14-15 | codegen (map-get heap-value binding ownership) | high | CRASH: `let r = m.get(k).unwrap()` on a `Map[K, V]` whose VALUE is a NON-shared heap type (`Vec`, `String`) DOUBLE-FREES under JIT and native (`free(… | 51618aa |
+| B-2026-07-14-17 | codegen (auto-par write-dependency gate) | high | `Vec.clear()` (and the in-place mutators `fill` / `swap` / `swap_remove`) were INVISIBLE to the auto-parallelizer's write-dependency gate: the effect… | — |
 
 </details>
 

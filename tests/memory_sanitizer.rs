@@ -520,6 +520,51 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_clear_under_autopar_no_double_free() {
+        // B-2026-07-14-17: `Vec.clear()` was invisible to the auto-parallelizer's
+        // write-dependency gate (unseeded in the effectchecker builtin table —
+        // the residual B-2026-07-02-8 flagged). A SECOND Vec in `main` gives the
+        // auto-parallelizer an independent group; `a.clear()` (which frees the
+        // buffer + drops the String elements + resets the header) then raced its
+        // sibling read, so the scope-exit cleanup freed the already-freed buffer
+        // — a DOUBLE-FREE at -O2 (ASan abort), and a stale non-zero `len` read at
+        // -O0. Seeding `Vec.clear` `allocates(Heap)` serializes it. Looped over
+        // heap-owning elements so any per-iteration imbalance accumulates for
+        // ASan/LSan; the second Vec `b` keeps the racing group present.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let mut a: Vec[String] = Vec.new();
+        a.push(f"a-{i}-padding-padding");
+        a.push(f"b-{i}-padding-padding");
+        a.clear();
+        println(a.len());
+        let mut b: Vec[String] = Vec.new();
+        b.push(f"c-{i}-padding-padding");
+        println(b.len());
+        println(b[0]);
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "0",
+                "1",
+                "c-0-padding-padding",
+                "0",
+                "1",
+                "c-1-padding-padding",
+                "0",
+                "1",
+                "c-2-padding-padding",
+            ],
+            "asan_vec_clear_under_autopar_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_oncelock_vec_set_get_no_leak() {
         // B-2026-07-12-2 heap-`T` ungate — `OnceLock[Vec[i64]]` (Vec is also a
         // 3-word `{ptr,len,cap}` fitting `T`): the moved-in Vec buffer must be

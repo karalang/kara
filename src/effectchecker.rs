@@ -678,6 +678,25 @@ impl<'a> EffectChecker<'a> {
             "Vec.reverse",
             "Vec.pop",
             "Vec.remove",
+            // In-place mutators that carry NO resource-effect verb of their own
+            // (`clear` frees the buffer + resets the header; `fill`/`swap`
+            // overwrite/exchange elements; `swap_remove` pops via a
+            // last-element swap) but DO mutate the receiver — so they must be
+            // seeded here or `method_effects_imply_receiver_mutation` sees them
+            // as read-only and the DEFAULT auto-par build races them. This is
+            // the residual B-2026-07-02-8 flagged: `clear` co-grouped with a
+            // sibling read of the same Vec (a second Vec in `main` gives the
+            // auto-parallelizer an independent group to hoist the read into)
+            // read a stale pre-clear {ptr,len,cap} branch-capture copy AND the
+            // scope-exit cleanup then freed the already-freed buffer — a
+            // DOUBLE-FREE at -O2 (B-2026-07-14-17). `allocates(Heap)` is a
+            // conservative non-pure MUTATION marker here (not a literal alloc
+            // claim), matching the over-approximate pop/remove seeds above. The
+            // `.clear` suffix match also serializes `Map.clear` / `Set.clear`.
+            "Vec.clear",
+            "Vec.fill",
+            "Vec.swap",
+            "Vec.swap_remove",
             // `VecDeque[T]`'s mutating method surface — seeded as
             // `allocates(Heap)` so the auto-parallelizer's
             // `method_effects_imply_receiver_mutation` lookup
