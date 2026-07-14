@@ -538,7 +538,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **441 surfaced 
 | B-2026-07-14-2 | lexer (Rust seed vs self-host) / design.md spec inconsistency | medium | SPEC CONTRADICTION on bare `f16`/`bf16`: the Rust seed lexer (src/lexer.rs, keyword_or_ident, explicit comment ~L1373) treats bare `f16`/`bf16` as OR… | this commit |
 | B-2026-07-14-3 | codegen | high | ARM64 LEAK: `let a = m.get(k).unwrap()` where m is `Map[_, shared T]` DOUBLE rc-inc's the fetched node | this commit |
 | B-2026-07-14-4 | typechecker + ownership (diagnostics) | low | A recursive value enum whose variant carries the SAME nested/recursive type in TWO payload fields (`enum Expr { Num(i64), Add(Expr, Expr) }`) emitted… | d831ebe |
-| B-2026-07-14-5 | typechecker (method resolution) | medium | The typechecker SILENTLY ACCEPTED any method name on `Option[T]` / `Result[T,E]`, poisoning the call to `Type::Error` (universally assignable) so it… | this commit |
+| B-2026-07-14-5 | typechecker (method resolution) | medium | The typechecker SILENTLY ACCEPTED any method name on `Option[T]` / `Result[T,E]`, poisoning the call to `Type::Error` (universally assignable) so it… | 1af84da |
 
 </details>
 
