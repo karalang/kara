@@ -1471,6 +1471,43 @@ fn test_vec_truncate() {
 }
 
 #[test]
+fn test_vec_swap_remove() {
+    // `Vec[T].swap_remove(i) -> T` — O(1) remove: return element `i` and move
+    // the LAST element into slot `i` (order NOT preserved). Covers a middle
+    // index (swap-with-last) and heap (`String`) elements. Codegen mirrors this
+    // (`tests/codegen.rs::e2e_vec_swap_remove`); heap leak-safety in
+    // `tests/memory_sanitizer.rs::asan_vec_swap_remove_heap_no_leak`.
+    let out = run(r#"
+        fn main() {
+            let mut a: Vec[i64] = Vec.new();
+            a.push(10);
+            a.push(20);
+            a.push(30);
+            a.push(40);
+            let x = a.swap_remove(1);
+            println(x);
+            println(a.len());
+            println(a[0]);
+            println(a[1]);
+            println(a[2]);
+
+            let mut s: Vec[String] = Vec.new();
+            s.push("aa");
+            s.push("bb");
+            s.push("cc");
+            let z = s.swap_remove(0);
+            println(z);
+            println(s.len());
+            println(s[0]);
+            println(s[1]);
+        }
+    "#);
+    // swap_remove(1) on [10,20,30,40] → returns 20, a=[10,40,30]; String
+    // swap_remove(0) on [aa,bb,cc] → returns "aa", s=[cc,bb].
+    assert_eq!(out, "20\n3\n10\n40\n30\naa\n2\ncc\nbb\n");
+}
+
+#[test]
 fn test_vec_pop_string_elements() {
     // Non-Copy element type flows through the same dispatch — pins the
     // generic shape against future regressions where the arm might

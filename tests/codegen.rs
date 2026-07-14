@@ -5633,6 +5633,29 @@ fn main() {
         }
     }
 
+    /// `Vec[T].swap_remove(i) -> T` — return element `i`, move the last element
+    /// into slot `i` (order not preserved), `len--`. Must match the interpreter
+    /// oracle (`test_vec_swap_remove`): middle index (pod) + heap (`String`)
+    /// index-0. Heap move-safety (no leak / no double-free) in
+    /// `tests/memory_sanitizer.rs::asan_vec_swap_remove_heap_no_leak`.
+    #[test]
+    fn e2e_vec_swap_remove() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut a: Vec[i64] = Vec.new();\n\
+                 a.push(10); a.push(20); a.push(30); a.push(40);\n\
+                 let x = a.swap_remove(1);\n\
+                 println(x); println(a.len()); println(a[0]); println(a[1]); println(a[2]);\n\
+                 let mut s: Vec[String] = Vec.new();\n\
+                 s.push(\"aa\".to_string()); s.push(\"bb\".to_string()); s.push(\"cc\".to_string());\n\
+                 let z = s.swap_remove(0);\n\
+                 println(z); println(s.len()); println(s[0]); println(s[1]);\n\
+             }",
+        ) {
+            assert_eq!(out, "20\n3\n10\n40\n30\naa\n2\ncc\nbb\n");
+        }
+    }
+
     #[test]
     fn e2e_index_store_heap_vec_element_no_double_free() {
         // Single overwrite: out[0] becomes [99]; read it back.

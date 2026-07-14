@@ -613,6 +613,55 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_swap_remove_heap_no_leak() {
+        // `Vec[String].swap_remove(i)` moves element `i` OUT (returned + printed,
+        // then dropped) and moves the LAST element into slot `i` — pure moves, no
+        // clone: element `i`'s buffer transfers to the return value and the last
+        // element's buffer transfers into slot `i`, so the vacated tail slot is
+        // abandoned by `len--` with nothing to free. ASan/LSan flag a double-free
+        // if slot `i` were also freed, or a leak if the moved-out element weren't.
+        // A second Vec keeps the auto-parallelizer's racing group present
+        // (swap_remove is seeded receiver-mutating, B-2026-07-14-17). Looped so
+        // any per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let mut s: Vec[String] = Vec.new();
+        s.push(f"a-{i}-padding-padding");
+        s.push(f"b-{i}-padding-padding");
+        s.push(f"c-{i}-padding-padding");
+        let removed = s.swap_remove(0);
+        println(removed);
+        println(s.len());
+        println(s[0]);
+        let mut t: Vec[String] = Vec.new();
+        t.push(f"t-{i}-padding-padding");
+        println(t.len());
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "a-0-padding-padding",
+                "2",
+                "c-0-padding-padding",
+                "1",
+                "a-1-padding-padding",
+                "2",
+                "c-1-padding-padding",
+                "1",
+                "a-2-padding-padding",
+                "2",
+                "c-2-padding-padding",
+                "1",
+            ],
+            "asan_vec_swap_remove_heap_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_oncelock_vec_set_get_no_leak() {
         // B-2026-07-12-2 heap-`T` ungate — `OnceLock[Vec[i64]]` (Vec is also a
         // 3-word `{ptr,len,cap}` fitting `T`): the moved-in Vec buffer must be

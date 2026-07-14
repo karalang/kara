@@ -626,6 +626,32 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Unit);
                 }
             }
+            "swap_remove" => {
+                // `Vec[T].swap_remove(i) -> T` — O(1) remove: replace element `i`
+                // with the LAST element (order NOT preserved) and return the
+                // removed element. Panics if `i >= len` (Rust `Vec::swap_remove`).
+                // Typechecker arm in `expr_method_call.rs`; codegen in
+                // `vec_method.rs`.
+                if let Value::Array(rc) = &obj {
+                    let idx = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Int(i)) => i as usize,
+                        _ => return Some(Value::Unit),
+                    };
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    let mut guard = try_write_or_panic(rc, &label);
+                    let len = guard.len();
+                    if idx >= len {
+                        return Some(self.record_runtime_error(
+                            format!("Vec.swap_remove: index {} out of bounds (len {})", idx, len),
+                            span,
+                        ));
+                    }
+                    return Some(guard.swap_remove(idx));
+                }
+            }
             // ── Slice[T] / Vec[T] / Array[T,N] shared read-only methods ──────────
             // The interpreter uses Value::Array for all sequence types (Vec,
             // Array, Slice). Each arm only returns when `obj` IS a

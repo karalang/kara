@@ -3298,7 +3298,7 @@ impl<'a> super::TypeChecker<'a> {
         // `find_index_by_id` first, then removes — the index is
         // known-good at the call). Mirrors the pop_front shape but
         // at an arbitrary index instead of 0.
-        if method == "remove" && args.len() == 1 {
+        if matches!(method, "remove" | "swap_remove") && args.len() == 1 {
             let element_ty = match &obj_ty {
                 Type::Named { name, args }
                     if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>

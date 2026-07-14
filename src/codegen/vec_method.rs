@@ -3078,6 +3078,72 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 Ok(elem_val)
             }
+            "swap_remove" => {
+                // `Vec[T].swap_remove(i) -> T` — O(1) remove: return element `i`
+                // (moved out to the caller) and move the LAST element into slot
+                // `i` (order NOT preserved), then `len--`. No memmove, no clone:
+                // element `i`'s buffer transfers to the return value and the
+                // last element's buffer transfers into slot `i`, so the vacated
+                // tail slot is abandoned by the `len--` with nothing to free —
+                // pure moves, no double-free. Mirrors `remove`'s no-codegen-
+                // bounds-check precedent (the interpreter checks + panics).
+                if args.is_empty() {
+                    return Err("Vec.swap_remove requires an index argument".to_string());
+                }
+                let idx_val = self.compile_expr(&args[0].value)?.into_int_value();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "swrm.len.ptr")
+                    .unwrap();
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "swrm.data.ptr")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "swrm.len")
+                    .unwrap()
+                    .into_int_value();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "swrm.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let one = i64_t.const_int(1, false);
+
+                // Element being removed (the return value, moved out).
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, data, &[idx_val], "swrm.elem.ptr")
+                        .unwrap()
+                };
+                let elem_val = self
+                    .builder
+                    .build_load(elem_ty, elem_ptr, "swrm.elem")
+                    .unwrap();
+
+                // Move the last element into slot `idx` (self-store when
+                // idx == last — harmless). `new_len = len - 1`.
+                let new_len = self
+                    .builder
+                    .build_int_sub(len, one, "swrm.new_len")
+                    .unwrap();
+                let last_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, data, &[new_len], "swrm.last.ptr")
+                        .unwrap()
+                };
+                let last_val = self
+                    .builder
+                    .build_load(elem_ty, last_ptr, "swrm.last")
+                    .unwrap();
+                self.builder.build_store(elem_ptr, last_val).unwrap();
+
+                // Decrement len (the vacated tail slot's value was moved out).
+                self.builder.build_store(len_ptr, new_len).unwrap();
+
+                Ok(elem_val)
+            }
             // `Vec.pop` / `VecDeque.pop_back` / `VecDeque.pop_front` —
             // return `Option[T]` per design.md. None when empty;
             // Some(elem) when non-empty. Multi-word payload via
