@@ -1655,7 +1655,32 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
 
         // Reconstruct based on the inner type's LLVM shape.
-        let inner_ll = self.llvm_type_for_type_expr(&inner_te);
+        // B-2026-07-14-16 (scalar crash leg): `v.get(i)` / `.first()` / `.last()`
+        // return `Option[ref T]` but PACK the element VALUE into the payload
+        // words (`get.valid` loads `*elem` and coerces its words). For a SCALAR
+        // element the payload w0 is the value itself, yet `ref T` lowers to `ptr`
+        // (types_lowering.rs) so the reconstruction `inttoptr`s w0 — turning a
+        // value like `10` into pointer `0xA`, which crashes with an `Invalid
+        // read` the moment the binding is used. Peel a leading `ref`/`mut ref`
+        // ONLY when the pointee is a SCALAR (int/float/bool/char): no producer
+        // ever packs a scalar's ADDRESS in an `Option[ref scalar]` (you store the
+        // value), so rebuilding at the scalar type is always correct and can't
+        // misread a genuine pointer payload. Heap/struct pointees are LEFT
+        // UNCHANGED here (their value-vs-ref reconstruction + binding registration
+        // is the broader B-11/B-16 coupling, tracked separately) so this leg is a
+        // pure, regression-free fix for the memory-unsafe scalar case.
+        let recon_te = match &inner_te.kind {
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner)
+                if matches!(
+                    self.llvm_type_for_type_expr(inner),
+                    BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)
+                ) =>
+            {
+                inner.as_ref()
+            }
+            _ => &inner_te,
+        };
+        let inner_ll = self.llvm_type_for_type_expr(recon_te);
         // Oversized boxed payload (see `coerce_to_payload_words`): if `T`'s
         // LLVM word count exceeds this enum's payload area, the pack side
         // heap-boxed it and w0 holds the box pointer. The area is the

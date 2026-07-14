@@ -8573,6 +8573,29 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_get_first_last_unwrap_scalar() {
+        // B-2026-07-14-16 (scalar leg): `v.get(i).unwrap()` / `.first().unwrap()`
+        // / `.last().unwrap()` on a scalar `Vec[i64]` crashed under JIT/native —
+        // `get` packs the element VALUE into the `Option[ref T]` payload, but the
+        // unwrap reconstructed at `ref T` (→ `ptr`) and `inttoptr`'d the value,
+        // producing a bogus pointer that faulted on use (the interpreter was
+        // correct). The unwrap now peels a `ref`/`mut ref` to a SCALAR pointee so
+        // the payload is rebuilt as the value. Must print the actual elements.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(10); v.push(20); v.push(30);\n\
+                 println(v.get(0).unwrap());\n\
+                 println(v.get(2).unwrap());\n\
+                 println(v.first().unwrap());\n\
+                 println(v.last().unwrap());\n\
+             }",
+        ) {
+            assert_eq!(out, "10\n30\n10\n30\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_question_on_result_nested_option_payload() {
         // B-2026-07-13-19: `?` on `Result[Option[T], E]` — the Ok payload is
         // itself an `Option[T]`. `reconstruct_question_ok_payload`'s wrapper
