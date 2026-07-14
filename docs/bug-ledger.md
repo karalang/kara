@@ -527,7 +527,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **430 surfaced 
 | B-2026-07-13-13 | codegen | high | A `shared enum` with a `Vec[shared T]` PAYLOAD (`shared enum Tree { Branch(Vec[Node]) }`) leaked the element boxes when the enum was dropped with its… | 5070066 |
 | B-2026-07-13-14 | codegen | high | Matching a `shared enum` and binding a `Vec[shared T]` PAYLOAD out (`match t { Branch(xs) => … }`) leaks the shared elements | 05c1383 |
 | B-2026-07-13-15 | codegen | high | A `shared enum` with a `Map[K, shared V]` (or shared K) PAYLOAD (`shared enum Store { Full(Map[i64, Node]) }`) leaked the shared K/V boxes when dropp… | 9f59f09 |
-| B-2026-07-13-16 | codegen | high | Sending an OWNED heap payload (`Vec`/`String`) through a `Channel` and then `recv`-ing it DOUBLE-FREED on native/JIT | PENDING |
+| B-2026-07-13-16 | codegen | high | Sending an OWNED heap payload (`Vec`/`String`) through a `Channel` and then `recv`-ing it DOUBLE-FREED on native/JIT | eb8db8d |
 
 </details>
 
