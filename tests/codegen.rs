@@ -8736,9 +8736,13 @@ fn main() {
                  println(s4.filter(|x: i64| x > 3).unwrap_or(0 - 1));\n\
                  let r: Result[i64, i64] = Ok(5);\n\
                  println(r.and_then(|x: i64| Ok(x * 2)).unwrap_or(0));\n\
+                 let er: Result[i64, i64] = Err(3);\n\
+                 println(er.map_err(|x: i64| x * 10).unwrap_err());\n\
+                 let ok: Result[i64, i64] = Ok(7);\n\
+                 println(ok.map_err(|x: i64| x * 10).unwrap_or(0));\n\
              }",
         ) {
-            assert_eq!(out, "6\n0\n6\n-7\n5\n-1\n10\n");
+            assert_eq!(out, "6\n0\n6\n-7\n5\n-1\n10\n30\n7\n");
         }
     }
 

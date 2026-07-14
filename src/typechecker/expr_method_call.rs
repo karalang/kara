@@ -2702,9 +2702,18 @@ impl<'a> super::TypeChecker<'a> {
                             _ => Type::Error,
                         }
                     };
+                // Record the payload type codegen reconstructs. `map_err` maps
+                // over the `Err` payload (`Ok` passes through untouched), so it
+                // records `E`; every other combinator reconstructs the present
+                // payload `T`.
+                let recorded_payload = if method == "map_err" {
+                    resolve_type_var_top(&e_ty, &self.env.substitutions)
+                } else {
+                    resolve_type_var_top(&t_ty, &self.env.substitutions)
+                };
                 self.method_unwrap_inner_types.insert(
                     SpanKey::from_span(span),
-                    Self::type_to_type_expr(&resolve_type_var_top(&t_ty, &self.env.substitutions)),
+                    Self::type_to_type_expr(&recorded_payload),
                 );
                 let opt = |payload: Type| Type::Named {
                     name: "Option".to_string(),

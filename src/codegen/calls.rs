@@ -1498,15 +1498,94 @@ impl<'ctx> super::Codegen<'ctx> {
         // Result `Err` type `E` for their absent-branch closure, and `map_err`
         // maps over `E`; `E` isn't threaded to codegen yet, so those stay a
         // clear `--interp` error (the interpreter implements all of them).
-        if matches!(
-            method,
-            "unwrap_or_else" | "map_or_else" | "or_else" | "map_err"
-        ) {
+        if matches!(method, "unwrap_or_else" | "map_or_else" | "or_else") {
             return Err(format!(
                 "codegen: Option/Result.{method} is not yet supported under \
                  `karac build` (the interpreter implements it); re-run with \
                  `--interp` (or `KARAC_RUN_JIT=0`)"
             ));
+        }
+        // `Result[T,E].map_err(f)` — `Ok(x)` passes through; `Err(e)` →
+        // `Err(f(e))`. The closure fires on the ABSENT (Err) branch and its
+        // result is re-packed as `Err`. `inner_te` is `E` here (the typechecker
+        // records the Err payload for `map_err`, not `T`). Scalar `E`.
+        if method == "map_err" {
+            if !super::vec_method::is_trivially_copyable_te(&inner_te) {
+                return Err(format!(
+                    "codegen: Option/Result.{method} over a non-trivially-copyable \
+                     payload (String / Vec / struct) is not yet supported under \
+                     `karac build`; re-run with `--interp` (or `KARAC_RUN_JIT=0`)"
+                ));
+            }
+            let inner_ll = self.llvm_type_for_type_expr(&inner_te);
+            let fn_val = self.current_fn.unwrap();
+            let one = i64_t.const_int(1, false);
+            let ok_bb = self.context.append_basic_block(fn_val, "maperr.ok");
+            let err_bb = self.context.append_basic_block(fn_val, "maperr.err");
+            let merge_bb = self.context.append_basic_block(fn_val, "maperr.merge");
+            let is_ok = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, tag, one, "maperr.ok?")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(is_ok, ok_bb, err_bb)
+                .unwrap();
+
+            // Ok(x): pass the receiver through unchanged.
+            self.builder.position_at_end(ok_bb);
+            let ok_result: BasicValueEnum<'ctx> = recv_struct.into();
+            let ok_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // Err(e): reconstruct e, apply f, re-pack as Err(f(e)).
+            self.builder.position_at_end(err_bb);
+            let w0 = self
+                .builder
+                .build_extract_value(recv_struct, 1, "maperr.w0")
+                .map_err(|e| format!("codegen: map_err w0: {:?}", e))?
+                .into_int_value();
+            let w1 = self
+                .builder
+                .build_extract_value(recv_struct, 2, "maperr.w1")
+                .map_err(|e| format!("codegen: map_err w1: {:?}", e))?
+                .into_int_value();
+            let w2 = self
+                .builder
+                .build_extract_value(recv_struct, 3, "maperr.w2")
+                .map_err(|e| format!("codegen: map_err w2: {:?}", e))?
+                .into_int_value();
+            let e_val = self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?;
+            let closure = &args
+                .first()
+                .ok_or_else(|| "codegen: Result.map_err missing closure arg".to_string())?
+                .value
+                .clone();
+            let mapped = self.compile_optres_closure_on(closure, e_val, call_span)?;
+            let words = self.coerce_to_payload_words(mapped, 3)?;
+            let mut err_agg = recv_struct.get_type().get_undef();
+            err_agg = self
+                .builder
+                .build_insert_value(err_agg, i64_t.const_zero(), 0, "maperr.tag")
+                .unwrap()
+                .into_struct_value();
+            for (i, w) in words.iter().enumerate() {
+                err_agg = self
+                    .builder
+                    .build_insert_value(err_agg, *w, (i + 1) as u32, "maperr.w")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            let err_result: BasicValueEnum<'ctx> = err_agg.into();
+            let err_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            self.builder.position_at_end(merge_bb);
+            let phi = self
+                .builder
+                .build_phi(ok_result.get_type(), "maperr.result")
+                .map_err(|e| format!("codegen: map_err phi: {:?}", e))?;
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            return Ok(Some(phi.as_basic_value()));
         }
         if matches!(method, "map_or" | "and_then" | "filter") {
             if !super::vec_method::is_trivially_copyable_te(&inner_te) {
