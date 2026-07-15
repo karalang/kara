@@ -14,6 +14,31 @@ use crate::token::Span;
 use super::value::{EnumData, IteratorSource, IteratorStep, Value};
 
 impl<'a> super::Interpreter<'a> {
+    /// Evaluate an iterator adaptor/terminal CLOSURE argument with
+    /// live-capture semantics (B-2026-07-14-20): a bare closure literal
+    /// wraps ALL its free captures in `Value::SharedCell` aliases, so the
+    /// predicate/mapper reads the LIVE outer binding on every invocation —
+    /// matching codegen's fused-adaptor inlining (which reads the live
+    /// variable each iteration) and design.md § Closures Rule 2 (read →
+    /// capture by reference). Without this the interpreter's construction-
+    /// time snapshot diverged from codegen whenever the loop body mutated
+    /// a captured variable (`let mut lim = 5; for x in
+    /// xs.iter().filter(|v| v < lim) { lim = lim - 1; … }`). Engages only
+    /// for a closure LITERAL argument — any other expression evaluates
+    /// normally (a stored closure value keeps its creation-time
+    /// semantics), and explicit `own`/`ref`/`mut ref` prefixes keep their
+    /// pinned modes (the flag only widens the BARE-closure wrap set).
+    fn eval_iter_closure_arg(&mut self, expr: &Expr) -> Value {
+        if !matches!(expr.kind, ExprKind::Closure { .. }) {
+            return self.eval_expr_inner(expr);
+        }
+        let saved = self.wrap_all_closure_captures;
+        self.wrap_all_closure_captures = true;
+        let v = self.eval_expr_inner(expr);
+        self.wrap_all_closure_captures = saved;
+        v
+    }
+
     pub(super) fn try_eval_iterator_method(
         &mut self,
         method: &str,
@@ -130,7 +155,7 @@ impl<'a> super::Interpreter<'a> {
                             span,
                         ));
                     };
-                    let closure = self.eval_expr_inner(&arg.value);
+                    let closure = self.eval_iter_closure_arg(&arg.value);
                     if !matches!(closure, Value::Function { .. }) {
                         return Some(self.record_runtime_error(
                             format!("Iterator.{}() expects a closure; got {}", method, closure),
@@ -204,7 +229,7 @@ impl<'a> super::Interpreter<'a> {
                             span,
                         ));
                     };
-                    let closure = self.eval_expr_inner(&arg.value);
+                    let closure = self.eval_iter_closure_arg(&arg.value);
                     if !matches!(closure, Value::Function { .. }) {
                         return Some(self.record_runtime_error(
                             format!("Iterator.{}() expects a closure; got {}", method, closure),
@@ -242,7 +267,7 @@ impl<'a> super::Interpreter<'a> {
                             span,
                         ));
                     };
-                    let closure = self.eval_expr_inner(&arg.value);
+                    let closure = self.eval_iter_closure_arg(&arg.value);
                     if !matches!(closure, Value::Function { .. }) {
                         return Some(self.record_runtime_error(
                             format!("Iterator.flat_map() expects a closure; got {}", closure),
@@ -329,7 +354,7 @@ impl<'a> super::Interpreter<'a> {
                             span,
                         ));
                     };
-                    let closure = self.eval_expr_inner(&arg.value);
+                    let closure = self.eval_iter_closure_arg(&arg.value);
                     if !matches!(closure, Value::Function { .. }) {
                         return Some(self.record_runtime_error(
                             format!("Iterator.inspect() expects a closure; got {}", closure),
@@ -357,7 +382,7 @@ impl<'a> super::Interpreter<'a> {
                         ));
                     }
                     let init = self.eval_expr_inner(&args[0].value);
-                    let closure = self.eval_expr_inner(&args[1].value);
+                    let closure = self.eval_iter_closure_arg(&args[1].value);
                     if !matches!(closure, Value::Function { .. }) {
                         return Some(self.record_runtime_error(
                             format!("Iterator.scan() expects a closure; got {}", closure),
@@ -387,7 +412,7 @@ impl<'a> super::Interpreter<'a> {
                             span,
                         ));
                     };
-                    let closure = self.eval_expr_inner(&arg.value);
+                    let closure = self.eval_iter_closure_arg(&arg.value);
                     if !matches!(closure, Value::Function { .. }) {
                         return Some(self.record_runtime_error(
                             format!("Iterator.chunk_by() expects a closure; got {}", closure),
@@ -552,7 +577,7 @@ impl<'a> super::Interpreter<'a> {
                         ));
                     }
                     let mut acc = self.eval_expr_inner(&args[0].value);
-                    let f = self.eval_expr_inner(&args[1].value);
+                    let f = self.eval_iter_closure_arg(&args[1].value);
                     if !matches!(f, Value::Function { .. }) {
                         return Some(self.record_runtime_error(
                             format!("Iterator.fold() expects a closure; got {}", f),
@@ -601,7 +626,7 @@ impl<'a> super::Interpreter<'a> {
                             span,
                         ));
                     }
-                    let f = self.eval_expr_inner(&args[0].value);
+                    let f = self.eval_iter_closure_arg(&args[0].value);
                     if !matches!(f, Value::Function { .. }) {
                         return Some(self.record_runtime_error(
                             format!("Iterator.reduce() expects a closure; got {}", f),
@@ -645,7 +670,7 @@ impl<'a> super::Interpreter<'a> {
                             span,
                         ));
                     }
-                    let f = self.eval_expr_inner(&args[0].value);
+                    let f = self.eval_iter_closure_arg(&args[0].value);
                     if !matches!(f, Value::Function { .. }) {
                         return Some(self.record_runtime_error(
                             format!("Iterator.for_each() expects a closure; got {}", f),
@@ -676,7 +701,7 @@ impl<'a> super::Interpreter<'a> {
                             span,
                         ));
                     };
-                    let pred = self.eval_expr_inner(&arg.value);
+                    let pred = self.eval_iter_closure_arg(&arg.value);
                     if !matches!(pred, Value::Function { .. }) {
                         return Some(self.record_runtime_error(
                             format!("Iterator.{}() expects a closure; got {}", method, pred),

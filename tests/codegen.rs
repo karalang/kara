@@ -9130,6 +9130,48 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_adaptor_closure_live_capture_parity() {
+        // B-2026-07-14-20: an adaptor predicate that reads a variable the
+        // LOOP BODY mutates sees the LIVE value each iteration (design.md
+        // § Closures Rule 2: read → capture by reference). Codegen's fused
+        // inlining always had this behavior; the interpreter now matches
+        // (its adaptor closures capture via live SharedCell aliases). This
+        // e2e pins the codegen side of the parity — the interpreter twins
+        // are `test_iter_adaptor_closure_reads_live_captured_var` /
+        // `test_iter_take_while_reads_live_captured_var`, and the plain
+        // stored-closure snapshot guard is
+        // `test_plain_stored_closure_keeps_snapshot_semantics` (both
+        // backends keep snapshot semantics there — pinned by the last
+        // println).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let xs: Vec[i64] = [1, 2, 3, 10, 4];\n\
+                 let mut lim: i64 = 5;\n\
+                 let mut s: i64 = 0;\n\
+                 for x in xs.iter().filter(|v| v < lim) {\n\
+                     lim = lim - 1;\n\
+                     s = s + x;\n\
+                 }\n\
+                 println(s);\n\
+                 let ys: Vec[i64] = [1, 2, 3, 4, 5, 6];\n\
+                 let mut seen: i64 = 0;\n\
+                 let mut t: i64 = 0;\n\
+                 for x in ys.iter().take_while(|v| seen < 3) {\n\
+                     seen = seen + 1;\n\
+                     t = t + x;\n\
+                 }\n\
+                 println(t);\n\
+                 let mut k: i64 = 1;\n\
+                 let f = |x| x + k;\n\
+                 k = 10;\n\
+                 println(f(1));\n\
+             }\n",
+        ) {
+            assert_eq!(out, "3\n6\n2\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_take_while_skip_while() {
         // B-2026-07-14-8 (predicate legs): `take_while`/`skip_while` are fused
         // into the shared map/filter chain desugar — `take_while` compiles to

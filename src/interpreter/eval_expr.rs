@@ -1187,9 +1187,25 @@ impl<'a> super::Interpreter<'a> {
                     }
                     let mut free: Vec<String> = Vec::new();
                     collect_free_idents_expr(body, &mut bound, &mut free);
-                    let mut assigned: HashSet<String> = HashSet::new();
-                    collect_assigned_roots_expr(body, &mut assigned);
-                    free.into_iter().filter(|n| assigned.contains(n)).collect()
+                    // B-2026-07-14-20 — an iterator-adaptor closure argument
+                    // (`xs.iter().filter(|v| v < lim)`) wraps ALL free
+                    // captures, not just the mutated ones, so read-captures
+                    // alias the LIVE outer binding: the loop body mutating
+                    // `lim` is then visible to the predicate on the next
+                    // element — matching codegen's fused inlining (which
+                    // reads the live variable) and design.md § Closures
+                    // Rule 2 (read → capture by reference). Scoped to the
+                    // adaptor path via `wrap_all_closure_captures`
+                    // (set/restored by `eval_iter_closure_arg`); a plain
+                    // stored closure keeps the mutated-only wrap so both
+                    // backends' shared snapshot model is unchanged.
+                    if self.wrap_all_closure_captures {
+                        free
+                    } else {
+                        let mut assigned: HashSet<String> = HashSet::new();
+                        collect_assigned_roots_expr(body, &mut assigned);
+                        free.into_iter().filter(|n| assigned.contains(n)).collect()
+                    }
                 } else {
                     Vec::new()
                 };

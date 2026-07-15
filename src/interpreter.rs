@@ -196,6 +196,16 @@ pub struct Interpreter<'a> {
     /// consumes it; `None` falls back to the historical `f64` fill. See
     /// `src/interpreter/method_call_tensor.rs`.
     pub(crate) pending_tensor_fill: Option<method_call_tensor::TensorElemFill>,
+    /// B-2026-07-14-20 — live-capture mode for iterator-adaptor closures.
+    /// When set, a BARE closure expression wraps ALL its free captures in
+    /// `Value::SharedCell` aliases (not just the mutated ones), so the
+    /// closure reads the LIVE outer binding on every invocation — matching
+    /// codegen's fused-adaptor inlining and design.md § Closures Rule 2
+    /// (read → capture by reference). Set only around the evaluation of a
+    /// closure-literal argument to an iterator adaptor/terminal
+    /// (`eval_iter_closure_arg`); plain stored closures keep the snapshot
+    /// model both backends share.
+    pub(crate) wrap_all_closure_captures: bool,
     /// Full source text of the program being executed. Used by
     /// `eval_builtin_dbg` to slice the argument's `Span.offset/length`
     /// for the `expr` field (terminal mode) and `"expr":"…"` field
@@ -578,6 +588,7 @@ impl<'a> Interpreter<'a> {
             runtime_errors: Vec::new(),
             comptime_user_errors: Vec::new(),
             comptime_splice_base: 1_000_000_000,
+            wrap_all_closure_captures: false,
             provider_stack: vec![HashMap::new()],
             active_span_stack: Vec::new(),
             tracing_min_level: 0,

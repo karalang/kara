@@ -15133,6 +15133,80 @@ fn main() {
 }
 
 #[test]
+fn test_iter_adaptor_closure_reads_live_captured_var() {
+    // B-2026-07-14-20: an iterator-adaptor closure captures by REFERENCE
+    // (design.md § Closures Rule 2: read → ref), so a loop body mutating a
+    // captured variable is visible to the predicate on the NEXT element —
+    // matching codegen's fused inlining. Pre-fix the interpreter snapshotted
+    // at adaptor construction and the predicate kept seeing the stale value
+    // (this program summed 10 instead of 3).
+    //
+    // Trace over [1,2,3,10,4] with `lim` starting at 5:
+    //   x=1 passes (1<5), body sets lim=4, s=1
+    //   x=2 passes (2<4), body sets lim=3, s=3
+    //   x=3 fails (3<3 is false), 10 fails, 4 fails (4<3) → s stays 3.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let xs: Vec[i64] = [1, 2, 3, 10, 4];
+    let mut lim = 5;
+    let mut s = 0;
+    for x in xs.iter().filter(|v| v < lim) {
+        lim = lim - 1;
+        s = s + x;
+    }
+    println(s);
+}
+"#,
+    );
+    assert_eq!(output, "3\n");
+}
+
+#[test]
+fn test_iter_take_while_reads_live_captured_var() {
+    // B-2026-07-14-20, take_while leg: `seen` is incremented in the LOOP
+    // BODY; the predicate must see the live count and stop after 3 elements
+    // (sum 1+2+3=6). Pre-fix the snapshot kept `seen`=0 forever and all six
+    // elements were yielded (sum 21).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let xs: Vec[i64] = [1, 2, 3, 4, 5, 6];
+    let mut seen = 0;
+    let mut s = 0;
+    for x in xs.iter().take_while(|v| seen < 3) {
+        seen = seen + 1;
+        s = s + x;
+    }
+    println(s);
+}
+"#,
+    );
+    assert_eq!(output, "6\n");
+}
+
+#[test]
+fn test_plain_stored_closure_keeps_snapshot_semantics() {
+    // Guard for the B-2026-07-14-20 fix's SCOPE: a plain STORED closure
+    // (not an adaptor argument) keeps the snapshot model both backends
+    // share — `f` sees `k`'s value at creation (1), not the later write
+    // (10). Full Rule-2 by-reference capture for materialized closures is
+    // a separate cross-backend change; widening only the interpreter here
+    // would CREATE a plain-closure divergence.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let mut k = 1;
+    let f = |x| x + k;
+    k = 10;
+    println(f(1));
+}
+"#,
+    );
+    assert_eq!(output, "2\n");
+}
+
+#[test]
 fn test_iter_take_while_first_element_fails_yields_nothing() {
     let output = run_no_errors(
         r#"
