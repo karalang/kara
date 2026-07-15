@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **478 surfaced · 4 open · 470 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **479 surfaced · 4 open · 471 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -100,9 +100,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **478 surfaced 
 | B-2026-07-15-20 | 2026-07-15 | codegen (field-receiver method dispatch over a GENERIC struct — calls.rs lower_field_access_ptr / resolve_generic_field_te instantiation resolution for ref-param and indexed receivers) | medium | A generic-struct field-receiver method loud-bails for a ref-param receiver (`p: ref Pair[Vec,Vec]` → `p.second.len()`) or an indexed receiver (`v[i].second.len()` over `Vec[Pair[Vec,Vec]]`): the synth field-element binding is registered with the bare generic param type, not the concrete `Vec[i64]`, so `.len()` finds no handler | sibling-of-B-2026-07-15-18 |
 | B-2026-07-15-21 | 2026-07-15 | codegen (per-node Option[shared] traversal lowering: niche-match + field GEP + recursion) | low | Read-only `Option[shared]` tree traversal runs ~1.45x behind equal-safety Rust (rustc -O -C overflow-checks=on) on a pure per-node walk — the residual is Option[shared] match/field/recursion lowering, NOT refcount traffic (retain/release is already elided; by-value == ref-borrow to the millisecond) | none |
 
-### Fixed (470)
+### Fixed (471)
 
-<details><summary>470 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>471 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -576,6 +576,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **478 surfaced 
 | B-2026-07-15-16 | typechecker (closure-parameter type inference for direct collection / Result methods that take a predicate/mapper closure) | low | Closure-param inference is missing for direct collection/Result methods that take a closure (`Vec.retain(\|x\| …)`, `Result.and_then(\|x\| …)`) — the par… | c4820b1 |
 | B-2026-07-15-17 | codegen (closure return-type inference — a closure whose body/tail is a method call returning Option, e.g. Map.insert -> Option[V]) | low | A closure whose tail expression is an Option-returning method call miscompiles: `let put = \|k, v\| m.insert(k, v)` (Map.insert -> Option[V]) fails cod… | 286636f |
 | B-2026-07-15-18 | codegen (field-receiver method dispatch — calls.rs lower_field_access_ptr plain-struct GEP) | high | A `<generic-struct>.field.method()` receiver reads the WRONG field for a multi-heap-field generic struct: `Pair[Vec,Vec].second.len()` returns the fi… | bf4b002 |
+| B-2026-07-15-22 | codegen (stmts.rs Let-arm struct-var move-suppression — the FieldAccess RHS case was missing) | high | `let bound = o.inner` moving a struct-typed heap-bearing field out of an owned struct double-frees the inner Vec buffer at scope exit — both `bound`'… | 8a02f75 |
 
 </details>
 
