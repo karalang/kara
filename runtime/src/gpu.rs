@@ -15,6 +15,7 @@
 //! references this symbol.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use wgpu::util::DeviceExt;
 
@@ -377,6 +378,7 @@ async fn dispatch_multi_bytes_async(
     let device = &ctx.device;
     let queue = &ctx.queue;
 
+    let sizes: Vec<u64> = inputs.iter().map(|b| b.len() as u64).collect();
     let input_bufs: Vec<wgpu::Buffer> = inputs
         .iter()
         .map(|bytes| {
@@ -387,24 +389,52 @@ async fn dispatch_multi_bytes_async(
             })
         })
         .collect();
-    let output_bufs: Vec<wgpu::Buffer> = inputs
+    // Run the pass into fresh device output buffers, then read them back — the
+    // round-trip path. GPU-SLIP-4b factors both halves (`run_compute` +
+    // `readback`) so the resident path can reuse the exact same dispatch core
+    // without the host transfer.
+    let output_bufs = run_compute(
+        device,
+        queue,
+        wgsl,
+        &input_bufs,
+        &sizes,
+        uniforms,
+        elem_count,
+    );
+    readback(device, queue, &output_bufs, &sizes)
+}
+
+/// Bind a kernel over N group input buffers already resident on the device and
+/// dispatch it, returning N fresh output buffers left **resident** on the GPU
+/// (`STORAGE | COPY_SRC | COPY_DST` — ready to be the next dispatch's input or to
+/// be read back). Shared by the round-trip [`dispatch_multi_bytes_async`] and the
+/// resident [`karac_runtime_gpu_dispatch_resident`] path (GPU-SLIP-4b): the only
+/// difference between them is whether the outputs are read back to the host or
+/// kept on the device. `sizes[k]` is group `k`'s byte length — input and output
+/// share it, since an element-wise SoA / stencil kernel preserves each group's
+/// layout. `uniforms` are the raw scalar-uniform bytes (one storage buffer each,
+/// bound after the in/out buffers). Only submits — never waits; a following
+/// `readback` or next dispatch orders after it on the same queue.
+fn run_compute(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    wgsl: &str,
+    input_bufs: &[wgpu::Buffer],
+    sizes: &[u64],
+    uniforms: &[&[u8]],
+    elem_count: usize,
+) -> Vec<wgpu::Buffer> {
+    let n_buffers = input_bufs.len();
+    let output_bufs: Vec<wgpu::Buffer> = sizes
         .iter()
-        .map(|bytes| {
+        .map(|&sz| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("gpu-cg4-output"),
-                size: bytes.len() as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            })
-        })
-        .collect();
-    let staging_bufs: Vec<wgpu::Buffer> = inputs
-        .iter()
-        .map(|bytes| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("gpu-cg4-staging"),
-                size: bytes.len() as u64,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                size: sz,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
         })
@@ -423,13 +453,12 @@ async fn dispatch_multi_bytes_async(
         })
         .collect();
 
-    // Cached compiled pipeline (GPU-SLIP-4a) — compiled once per distinct shader,
-    // not once per dispatch.
+    // Cached compiled pipeline (GPU-SLIP-4a) — compiled once per distinct shader.
     let pipeline = compute_pipeline(device, wgsl);
-
     let bind_group_layout = pipeline.get_bind_group_layout(0);
-    // Inputs at binding 0..n, outputs at binding n..2n (the emitter's convention).
-    let mut entries: Vec<wgpu::BindGroupEntry> = Vec::with_capacity(n_buffers * 2);
+    // Inputs at binding 0..n, outputs at n..2n, uniforms at 2n..2n+u.
+    let mut entries: Vec<wgpu::BindGroupEntry> =
+        Vec::with_capacity(n_buffers * 2 + uniform_bufs.len());
     for (i, buf) in input_bufs.iter().enumerate() {
         entries.push(wgpu::BindGroupEntry {
             binding: i as u32,
@@ -442,7 +471,6 @@ async fn dispatch_multi_bytes_async(
             resource: buf.as_entire_binding(),
         });
     }
-    // Uniforms at binding 2n..2n+u (after all group in/out buffers).
     for (i, buf) in uniform_bufs.iter().enumerate() {
         entries.push(wgpu::BindGroupEntry {
             binding: (2 * n_buffers + i) as u32,
@@ -454,7 +482,6 @@ async fn dispatch_multi_bytes_async(
         layout: &bind_group_layout,
         entries: &entries,
     });
-
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("gpu-cg4-encoder"),
     });
@@ -468,12 +495,37 @@ async fn dispatch_multi_bytes_async(
         // One invocation per element; @workgroup_size(64) in the shader.
         pass.dispatch_workgroups((elem_count as u32).div_ceil(64), 1, 1);
     }
-    for ((out_buf, staging), bytes) in output_bufs
+    queue.submit(Some(encoder.finish()));
+    output_bufs
+}
+
+/// Copy N resident device buffers back to host memory — one `MAP_READ` staging
+/// buffer per group, a single submit + poll drains every readback. Returns one
+/// byte-vector per group (same order + size as `bufs`); `None` on a map failure.
+/// This is the host-transfer half GPU-SLIP-4b keeps OUT of the resident dispatch
+/// loop (it runs only at `gpu.download`, not per substep).
+fn readback(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    bufs: &[wgpu::Buffer],
+    sizes: &[u64],
+) -> Option<Vec<Vec<u8>>> {
+    let staging_bufs: Vec<wgpu::Buffer> = sizes
         .iter()
-        .zip(staging_bufs.iter())
-        .zip(inputs.iter())
-    {
-        encoder.copy_buffer_to_buffer(out_buf, 0, staging, 0, bytes.len() as u64);
+        .map(|&sz| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("gpu-cg4-staging"),
+                size: sz,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        })
+        .collect();
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("gpu-cg4-readback-encoder"),
+    });
+    for ((buf, staging), &sz) in bufs.iter().zip(staging_bufs.iter()).zip(sizes.iter()) {
+        encoder.copy_buffer_to_buffer(buf, 0, staging, 0, sz);
     }
     queue.submit(Some(encoder.finish()));
 
@@ -492,7 +544,7 @@ async fn dispatch_multi_bytes_async(
         .collect();
     device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
 
-    let mut outs = Vec::with_capacity(n_buffers);
+    let mut outs = Vec::with_capacity(bufs.len());
     for (staging, rx) in staging_bufs.iter().zip(receivers) {
         rx.recv().ok()?.ok()?;
         let slice = staging.slice(..);
@@ -502,6 +554,273 @@ async fn dispatch_multi_bytes_async(
         staging.unmap();
     }
     Some(outs)
+}
+
+// ── GPU-SLIP-4b: persistent on-device (resident) SoA buffers ─────────────────
+//
+// The round-trip `karac_runtime_gpu_dispatch_soa` uploads the grid, dispatches,
+// and downloads on EVERY call — for an iterative LBM sim that host↔device
+// transfer dominates (the 218 ms baseline is ~all transfer, not compute). The
+// resident path keeps the grid on the GPU across substeps: `upload` moves it to
+// the device once, `dispatch_resident` runs device→device with no round-trip,
+// and `download` brings it back once at the end. A `gpu.Buffer[S]` value on the
+// Kāra side carries the opaque handle; its ownership drop frees the device
+// buffers (`free_soa`). This slice (4b-1) is the runtime substrate; the codegen
+// + language surface that emits these calls is 4b-2.
+
+/// A group-SoA buffer set resident on the GPU across dispatches. One
+/// `wgpu::Buffer` per layout group plus its byte length (`sizes[k] == n *
+/// group_stride[k]`); `n` is the element count (one GPU thread per element).
+/// Dropping this (removing it from the registry) frees the device memory.
+struct ResidentSoa {
+    bufs: Vec<wgpu::Buffer>,
+    sizes: Vec<u64>,
+    n: usize,
+}
+
+/// Registry of live resident-buffer handles. An opaque `u64` handle (never 0)
+/// keys each `ResidentSoa`; the Kāra `gpu.Buffer[S]` value carries the handle,
+/// and its ownership drop calls [`karac_runtime_gpu_free_soa`].
+fn resident_registry() -> &'static Mutex<HashMap<u64, ResidentSoa>> {
+    static REG: OnceLock<Mutex<HashMap<u64, ResidentSoa>>> = OnceLock::new();
+    REG.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A fresh, never-reused, never-zero resident handle.
+fn next_resident_handle() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Upload N group-arrays to the GPU as one resident SoA buffer set (GPU-SLIP-4b).
+/// `in_ptrs[k]` points to `n * group_strides[k]` host bytes; each becomes a
+/// STORAGE device buffer that stays resident until the handle is downloaded or
+/// freed. Returns an opaque handle (never 0). The host source is NOT freed — the
+/// `gpu.upload` codegen has moved the `Vec[S]` and its owner frees it.
+///
+/// # Safety
+///
+/// `in_ptrs` an array of `n_groups` pointers, each to `n * group_strides[k]`
+/// valid bytes for the duration of the call; `group_strides` an array of
+/// `n_groups`. Aborts on no available GPU adapter (no CPU fallback).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_upload_soa(
+    n_groups: usize,
+    in_ptrs: *const *const u8,
+    group_strides: *const usize,
+    n: usize,
+) -> u64 {
+    let handle = next_resident_handle();
+
+    // Empty / degenerate: register a bufferless handle (download returns a unique
+    // non-null allocation, dispatch yields another empty handle) — mirrors the
+    // round-trip path's `n == 0` contract without a zero-size wgpu buffer.
+    if n == 0 || n_groups == 0 {
+        resident_registry().lock().unwrap().insert(
+            handle,
+            ResidentSoa {
+                bufs: Vec::new(),
+                sizes: Vec::new(),
+                n: 0,
+            },
+        );
+        return handle;
+    }
+
+    let Some(ctx) = gpu_context() else {
+        crate::fatal::write_stderr(
+            b"panic: gpu.upload found no available GPU adapter (no CPU fallback)\n",
+        );
+        std::process::abort();
+    };
+    let device = &ctx.device;
+    let strides = std::slice::from_raw_parts(group_strides, n_groups);
+    let in_ptr_slice = std::slice::from_raw_parts(in_ptrs, n_groups);
+    let mut bufs = Vec::with_capacity(n_groups);
+    let mut sizes = Vec::with_capacity(n_groups);
+    for (&p, &stride) in in_ptr_slice.iter().zip(strides.iter()) {
+        let byte_len = n.saturating_mul(stride);
+        let bytes = std::slice::from_raw_parts(p, byte_len);
+        bufs.push(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("gpu-4b-resident-input"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            }),
+        );
+        sizes.push(byte_len as u64);
+    }
+    resident_registry()
+        .lock()
+        .unwrap()
+        .insert(handle, ResidentSoa { bufs, sizes, n });
+    handle
+}
+
+/// Dispatch a kernel against a RESIDENT input handle, producing a fresh resident
+/// output handle — no host round-trip (GPU-SLIP-4b). Borrows the input (does not
+/// free it): the caller frees both when their `gpu.Buffer` bindings drop, which
+/// gives the double-buffer ping-pong its device-side lifecycle for free. Returns
+/// a new opaque handle. Aborts on no GPU adapter / an unknown-or-freed input
+/// handle.
+///
+/// # Safety
+///
+/// `wgsl_ptr`/`wgsl_len` a valid UTF-8 shader; `uniform_ptrs` an array of
+/// `n_uniforms` pointers, each to `uniform_size` valid bytes. The returned handle
+/// is owned by the caller.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_dispatch_resident(
+    wgsl_ptr: *const u8,
+    wgsl_len: usize,
+    in_handle: u64,
+    n_uniforms: usize,
+    uniform_ptrs: *const *const u8,
+    uniform_size: usize,
+) -> u64 {
+    let Some(ctx) = gpu_context() else {
+        crate::fatal::write_stderr(
+            b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
+        );
+        std::process::abort();
+    };
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+    let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
+    let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
+        crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
+        std::process::abort();
+    };
+    let uniform_slice = std::slice::from_raw_parts(uniform_ptrs, n_uniforms);
+    let uniforms: Vec<&[u8]> = uniform_slice
+        .iter()
+        .map(|&p| std::slice::from_raw_parts(p, uniform_size))
+        .collect();
+
+    // Hold the registry lock across the (submit-only, non-blocking) dispatch: the
+    // input buffers live in the registry and `wgpu::Buffer` is not clonable, so we
+    // read them in place. The single-threaded sim loop never contends this.
+    let mut reg = resident_registry().lock().unwrap();
+    let (output_bufs, sizes, n) = {
+        let Some(input) = reg.get(&in_handle) else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.dispatch on an unknown or already-freed device buffer\n",
+            );
+            std::process::abort();
+        };
+        if input.n == 0 {
+            (Vec::new(), Vec::new(), 0)
+        } else {
+            let out = run_compute(
+                device,
+                queue,
+                wgsl,
+                &input.bufs,
+                &input.sizes,
+                &uniforms,
+                input.n,
+            );
+            (out, input.sizes.clone(), input.n)
+        }
+    };
+    let handle = next_resident_handle();
+    reg.insert(
+        handle,
+        ResidentSoa {
+            bufs: output_bufs,
+            sizes,
+            n,
+        },
+    );
+    handle
+}
+
+/// Download a resident SoA handle back to a host AoS buffer and FREE the handle
+/// (GPU-SLIP-4b): `gpu.download` moves the `gpu.Buffer[S]` back to a `Vec[S]`, so
+/// the handle is consumed. Reads each group's device buffer, scatters the struct
+/// fields into one freshly `malloc`'d `n * aos_stride` AoS buffer (the same
+/// field-descriptor scheme as [`karac_runtime_gpu_dispatch_soa`]), and drops the
+/// device buffers. The returned pointer is owned by the caller's `Vec[S]`. Empty
+/// handle (`n == 0`) returns a unique non-null 1-byte allocation.
+///
+/// # Safety
+///
+/// `field_group`/`field_src`/`field_dst` arrays of `n_fields`. The returned
+/// pointer transfers ownership. Aborts on no GPU adapter, an unknown handle, or a
+/// device-buffer map failure.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn karac_runtime_gpu_download_soa(
+    handle: u64,
+    n_fields: usize,
+    field_group: *const usize,
+    field_src: *const usize,
+    field_dst: *const usize,
+    field_size: usize,
+    aos_stride: usize,
+    n: usize,
+) -> *mut u8 {
+    // Remove the handle up front — download consumes it (freeing the device
+    // buffers when `resident` drops at end of scope).
+    let Some(resident) = resident_registry().lock().unwrap().remove(&handle) else {
+        crate::fatal::write_stderr(
+            b"panic: gpu.download on an unknown or already-freed device buffer\n",
+        );
+        std::process::abort();
+    };
+    let aos_total = n.saturating_mul(aos_stride);
+    if aos_total == 0 || resident.bufs.is_empty() {
+        return crate::alloc::karac_alloc_or_panic(aos_total.max(1));
+    }
+
+    let Some(ctx) = gpu_context() else {
+        crate::fatal::write_stderr(
+            b"panic: gpu.download found no available GPU adapter (no CPU fallback)\n",
+        );
+        std::process::abort();
+    };
+    let Some(group_bytes) = readback(&ctx.device, &ctx.queue, &resident.bufs, &resident.sizes)
+    else {
+        crate::fatal::write_stderr(b"panic: gpu.download failed to map device buffers\n");
+        std::process::abort();
+    };
+
+    // Scatter each struct field from its group's element to the AoS element —
+    // identical to the round-trip `karac_runtime_gpu_dispatch_soa` scatter. Each
+    // group's per-element stride is `sizes[g] / n`.
+    let fgroup = std::slice::from_raw_parts(field_group, n_fields);
+    let fsrc = std::slice::from_raw_parts(field_src, n_fields);
+    let fdst = std::slice::from_raw_parts(field_dst, n_fields);
+    let strides: Vec<usize> = resident.sizes.iter().map(|&s| (s as usize) / n).collect();
+    let out = crate::alloc::karac_alloc_or_panic(aos_total);
+    for f in 0..n_fields {
+        let g = fgroup[f];
+        let src_buf = &group_bytes[g];
+        let gstride = strides[g];
+        for i in 0..n {
+            std::ptr::copy_nonoverlapping(
+                src_buf.as_ptr().add(i * gstride + fsrc[f]),
+                out.add(i * aos_stride + fdst[f]),
+                field_size,
+            );
+        }
+    }
+    out
+}
+
+/// Free a resident SoA handle's device buffers (GPU-SLIP-4b) — the drop-glue
+/// target for a `gpu.Buffer[S]` that goes out of scope without being downloaded
+/// (the double-buffer ping-pong's displaced grids). Idempotent: a no-op for an
+/// unknown or already-freed handle.
+///
+/// # Safety
+///
+/// Safe to call with any `u64`; only touches the process-wide registry.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_free_soa(handle: u64) {
+    resident_registry().lock().unwrap().remove(&handle);
 }
 
 #[cfg(test)]
@@ -688,5 +1007,86 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         for i in 0..n {
             assert_eq!(out[i], input[i] * k, "elem {i}");
         }
+    }
+
+    // GPU-SLIP-4b: the resident-buffer path — upload once, dispatch device→device
+    // across N substeps (ping-pong, freeing each consumed grid), download once.
+    // The Particle step is `pos += vel; vel unchanged`, so after `STEPS` resident
+    // dispatches `pos == pos0 + STEPS*vel` — proving the output of one dispatch is
+    // correctly consumed as the input of the next with NO host round-trip, and
+    // that the download AoS scatter matches the round-trip path's result.
+    #[test]
+    fn resident_ping_pong_particle_step() {
+        if gpu_context().is_none() {
+            eprintln!("gpu-4b: no GPU adapter available — skipping");
+            return;
+        }
+        extern "C" {
+            // Match the crate-wide `free` signature (map.rs / lib.rs) to avoid a
+            // clashing-extern-declarations lint — same C symbol, one signature.
+            fn free(ptr: *mut core::ffi::c_void);
+        }
+        const N: usize = 200;
+        const STEPS: usize = 12;
+        let pos0: Vec<f32> = (0..N).map(|i| i as f32).collect();
+        let vel: Vec<f32> = (0..N).map(|i| (i as f32) * 0.25 + 1.0).collect();
+        let pos_bytes = f32s_to_le(&pos0);
+        let vel_bytes = f32s_to_le(&vel);
+
+        // Upload the two group-arrays (pos, vel); 4-byte f32 elements each.
+        let in_ptrs = [pos_bytes.as_ptr(), vel_bytes.as_ptr()];
+        let strides = [4usize, 4usize];
+        let mut handle =
+            unsafe { karac_runtime_gpu_upload_soa(2, in_ptrs.as_ptr(), strides.as_ptr(), N) };
+        assert_ne!(handle, 0, "upload returned a null handle");
+
+        // Ping-pong: each dispatch produces a new resident handle; free the old
+        // one (what a `gpu.Buffer` ownership drop does in the compiled loop).
+        for _ in 0..STEPS {
+            let next = unsafe {
+                karac_runtime_gpu_dispatch_resident(
+                    PARTICLE_STEP_WGSL.as_ptr(),
+                    PARTICLE_STEP_WGSL.len(),
+                    handle,
+                    0,
+                    std::ptr::null(),
+                    0,
+                )
+            };
+            unsafe { karac_runtime_gpu_free_soa(handle) };
+            handle = next;
+        }
+
+        // Download to AoS {pos: f32 @0, vel: f32 @4}: field 0 (pos) in group 0
+        // (gp), field 1 (vel) in group 1 (gv), each src offset 0, dst 0/4, 8-byte
+        // AoS stride. Consumes the handle.
+        let field_group = [0usize, 1];
+        let field_src = [0usize, 0];
+        let field_dst = [0usize, 4];
+        let aos = unsafe {
+            karac_runtime_gpu_download_soa(
+                handle,
+                2,
+                field_group.as_ptr(),
+                field_src.as_ptr(),
+                field_dst.as_ptr(),
+                4,
+                8,
+                N,
+            )
+        };
+        assert!(!aos.is_null());
+        let aos_bytes = unsafe { std::slice::from_raw_parts(aos, N * 8) };
+        for i in 0..N {
+            let pos = f32::from_le_bytes(aos_bytes[i * 8..i * 8 + 4].try_into().unwrap());
+            let v = f32::from_le_bytes(aos_bytes[i * 8 + 4..i * 8 + 8].try_into().unwrap());
+            assert_eq!(
+                pos,
+                pos0[i] + STEPS as f32 * vel[i],
+                "pos[{i}] after {STEPS} resident steps"
+            );
+            assert_eq!(v, vel[i], "vel[{i}] unchanged");
+        }
+        unsafe { free(aos as *mut core::ffi::c_void) };
     }
 }
