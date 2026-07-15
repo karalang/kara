@@ -26982,4 +26982,49 @@ fn main() {
             "write_only_vec_shared_single_push_no_leak",
         );
     }
+
+    #[test]
+    fn asan_nested_option_pattern_boxed_payload_lifecycle_clean() {
+        // B-2026-07-15-5: an inner `Option[T]` payload is heap-BOXED (4 words
+        // > Option's 3-word area / a user enum's 1-word enum-payload
+        // carve-out). Nested variant patterns (`Option.Some(Option.Some(x))`,
+        // `Wrap.W(Option.Some(x))`) must debox on both the condition and bind
+        // paths, the box must be freed at scope exit (32-byte leak pre-fix),
+        // and matching a nested pattern against a NON-matching variant
+        // (`Option.None` value) must not NULL-deref the zero payload word —
+        // the debox load is gated behind the outer tag comparison.
+        assert_clean_asan_run(
+            r#"
+enum Wrap {
+    W(Option[String]),
+    Empty,
+}
+fn classify(v: Option[Option[i64]]) -> String {
+    match v {
+        Option.Some(Option.Some(x)) => f"inner {x}",
+        Option.Some(Option.None) => "inner none",
+        Option.None => "outer none",
+    }
+}
+fn main() {
+    println(classify(Option.Some(Option.Some(42))));
+    println(classify(Option.Some(Option.None)));
+    println(classify(Option.None));
+    let w: Wrap = Wrap.W(Option.Some("boxed heap payload well beyond inline width"));
+    match w {
+        Wrap.W(Option.Some(s)) => println(s.len()),
+        Wrap.W(Option.None) => println(-1),
+        Wrap.Empty => println(-2),
+    }
+    let dropped: Option[Option[String]] = Option.Some(Option.Some("never matched out"));
+    match dropped {
+        Option.None => println("none"),
+        _ => println("kept"),
+    }
+}
+"#,
+            &["inner 42", "inner none", "outer none", "43", "kept"],
+            "nested_option_pattern_boxed_payload_lifecycle_clean",
+        );
+    }
 }

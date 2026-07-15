@@ -2284,7 +2284,7 @@ impl<'ctx> super::Codegen<'ctx> {
         scrut: BasicValueEnum<'ctx>,
         outer_variant_name: &str,
         sub_patterns: &[Pattern],
-        mut cond: inkwell::values::IntValue<'ctx>,
+        cond: inkwell::values::IntValue<'ctx>,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let BasicValueEnum::StructValue(sv) = scrut else {
             return Ok(cond);
@@ -2295,6 +2295,23 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return Ok(cond);
         }
+        // Lazy gate (B-2026-07-15-5): the nested reconstruction may DEBOX
+        // the payload — an oversized nested enum payload is heap-boxed, so
+        // `reconstruct_payload_value` emits `inttoptr` + `load` on payload
+        // word 0. On a NON-matching outer variant that word is not a box
+        // pointer (a `None` payload area is zeros → NULL deref). Emit the
+        // inner checks in a block reached only when `cond` (which includes
+        // the outer tag check) already passed, and phi the result; the old
+        // eager `and` executed the load unconditionally.
+        let fn_val = self.current_fn.unwrap();
+        let entry_bb = self.builder.get_insert_block().unwrap();
+        let check_bb = self.context.append_basic_block(fn_val, "ncond.check");
+        let merge_bb = self.context.append_basic_block(fn_val, "ncond.merge");
+        self.builder
+            .build_conditional_branch(cond, check_bb, merge_bb)
+            .unwrap();
+        self.builder.position_at_end(check_bb);
+        let mut inner_cond = self.context.bool_type().const_int(1, false);
         let offsets = self.resolve_variant_field_offsets(
             outer_variant_name,
             Some(sv.get_type()),
@@ -2332,16 +2349,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_int_compare(IntPredicate::EQ, actual_tag, expected, "ncond.tageq")
                 .unwrap();
-            cond = self.builder.build_and(cond, tag_eq, "ncond.and").unwrap();
+            inner_cond = self
+                .builder
+                .build_and(inner_cond, tag_eq, "ncond.and")
+                .unwrap();
             // Deeper nesting: if this variant's own payload contains further
             // variant sub-patterns, recurse against the rebuilt inner value.
+            // The recursion re-applies the same lazy gate on `inner_cond`, so
+            // each level's debox load only runs once every enclosing tag has
+            // matched.
             if let PatternKind::TupleVariant { path, patterns } = &sub.kind {
                 let inner_variant = path.last().map(|s| s.as_str()).unwrap_or("");
-                cond =
-                    self.and_in_nested_variant_conditions(inner, inner_variant, patterns, cond)?;
+                inner_cond = self.and_in_nested_variant_conditions(
+                    inner,
+                    inner_variant,
+                    patterns,
+                    inner_cond,
+                )?;
             }
         }
-        Ok(cond)
+        // The recursion above may have moved the insert point into its own
+        // merge block — the phi's incoming edge must be the block that
+        // actually branches to `merge_bb`.
+        let check_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+        let fls = self.context.bool_type().const_int(0, false);
+        let phi = self
+            .builder
+            .build_phi(self.context.bool_type(), "ncond.phi")
+            .unwrap();
+        phi.add_incoming(&[(&fls, entry_bb), (&inner_cond, check_end_bb)]);
+        Ok(phi.as_basic_value().into_int_value())
     }
 
     /// Compound-payload enum codegen (tuple-destructure helper) —
@@ -2363,8 +2402,54 @@ impl<'ctx> super::Codegen<'ctx> {
                 .iter()
                 .map(|p| self.pattern_payload_word_count(p))
                 .sum(),
-            PatternKind::Binding(_) => {
+            // Nested enum-variant sub-pattern (`Option.Some(x)` as the
+            // payload of another variant — `Option.Some(Option.Some(x))`,
+            // `Wrap.W(Option.Some(x))`): the payload's natural width is the
+            // inner enum's full tagged-union word count, exactly like the
+            // enum-typed Binding arm below. Shared enums are RC pointers
+            // (1 word — see the shared caveat in `pattern_payload_llvm_type`).
+            // Before this arm the `_ => 1` default kept the debox predicate
+            // (`want > field_words.len()` in `reconstruct_payload_value`)
+            // from ever firing for a heap-BOXED nested enum payload —
+            // Option-in-Option (inner 4 words > Option's 3-word area) or any
+            // enum payload sized through `payload_word_count_for_type_expr`'s
+            // enum-in-enum 1-word carve-out — so the nested tag check
+            // compared the box POINTER against the tag and the wrong arm
+            // matched silently, and the bind side read undef words
+            // (B-2026-07-15-5).
+            PatternKind::TupleVariant { .. } => {
+                if let Some(name) = self.variant_pattern_enum_name(pat) {
+                    if self.shared_types.contains_key(&name) {
+                        return 1;
+                    }
+                    if let Some(layout) = self.enum_layouts.get(&name) {
+                        return Self::llvm_type_word_count(layout.llvm_type.into());
+                    }
+                }
+                1
+            }
+            PatternKind::Binding(name) => {
                 let key = (pat.span.offset, pat.span.length);
+                // Unit-variant sub-pattern (`Option.None` inside
+                // `Option.Some(Option.None)`): same enum-width rule as the
+                // TupleVariant arm above, so the condition-path
+                // reconstruction deboxes and tests the real inner tag.
+                // Guarded on the name resolving to a variant AND no
+                // typechecker-recorded binding type, so ordinary bindings
+                // never take this path (B-2026-07-15-5).
+                if !self.pattern_binding_types.contains_key(&key) {
+                    let variant_name = name.rsplit('.').next().unwrap_or(name);
+                    if name.contains('.') || self.enum_tag_for_variant(variant_name).is_some() {
+                        if let Some(en) = self.variant_pattern_enum_name(pat) {
+                            if self.shared_types.contains_key(&en) {
+                                return 1;
+                            }
+                            if let Some(layout) = self.enum_layouts.get(&en) {
+                                return Self::llvm_type_word_count(layout.llvm_type.into());
+                            }
+                        }
+                    }
+                }
                 // B-2026-07-13-3: a generic enum's bare-`T` payload binding has
                 // no typechecker-recorded surface type, but the active monomorph
                 // substitution resolved it to a concrete heap type (String/Vec)
@@ -2493,8 +2578,41 @@ impl<'ctx> super::Codegen<'ctx> {
                     .collect();
                 self.context.struct_type(&elem_tys, false).into()
             }
-            PatternKind::Binding(_) => {
+            // Nested enum-variant sub-pattern — the tagged-union twin of the
+            // `pattern_payload_word_count` TupleVariant arm: the debox load
+            // must read the inner enum's full `{tag, words…}` shape, not the
+            // i64 default (which would load only the first word of the boxed
+            // value). Shared enums stay a single RC pointer (B-2026-07-15-5).
+            PatternKind::TupleVariant { .. } => {
+                if let Some(name) = self.variant_pattern_enum_name(pat) {
+                    if self.shared_types.contains_key(&name) {
+                        return self.context.ptr_type(AddressSpace::default()).into();
+                    }
+                    if let Some(layout) = self.enum_layouts.get(&name) {
+                        return layout.llvm_type.into();
+                    }
+                }
+                self.context.i64_type().into()
+            }
+            PatternKind::Binding(name) => {
                 let key = (pat.span.offset, pat.span.length);
+                // Unit-variant sub-pattern (`Option.None` nested in another
+                // variant's payload) — same rule as the TupleVariant arm
+                // above; see the word-count twin for the guard rationale
+                // (B-2026-07-15-5).
+                if !self.pattern_binding_types.contains_key(&key) {
+                    let variant_name = name.rsplit('.').next().unwrap_or(name);
+                    if name.contains('.') || self.enum_tag_for_variant(variant_name).is_some() {
+                        if let Some(en) = self.variant_pattern_enum_name(pat) {
+                            if self.shared_types.contains_key(&en) {
+                                return self.context.ptr_type(AddressSpace::default()).into();
+                            }
+                            if let Some(layout) = self.enum_layouts.get(&en) {
+                                return layout.llvm_type.into();
+                            }
+                        }
+                    }
+                }
                 // B-2026-07-13-3: monomorph-concrete heap payload type for a
                 // generic bare-`T` binding (String/Vec) — the debox `load`
                 // needs the full `{ptr,i64,i64}` shape, not the erased i64, or

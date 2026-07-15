@@ -67528,6 +67528,114 @@ fn main() {
             assert_eq!(out, "100200300\n");
         }
     }
+
+    mod nested_enum_payload_patterns_b_2026_07_15_5 {
+        //! B-2026-07-15-5 — nested enum-variant PATTERNS over heap-BOXED enum
+        //! payloads. An inner `Option[i64]` value is 4 words; Option's seeded
+        //! payload area is 3 and the enum-in-enum carve-out sizes a user enum's
+        //! enum-typed payload area to 1 — both pack sides heap-box the inner
+        //! value (box pointer in payload word 0). The match side never deboxed:
+        //! `pattern_payload_word_count` / `pattern_payload_llvm_type` defaulted
+        //! a `TupleVariant` (and unit-variant `Binding`) sub-pattern to
+        //! 1 word / i64, so `reconstruct_payload_value`'s debox predicate
+        //! (`want > field_words.len()`) never fired. The nested tag check then
+        //! compared the BOX POINTER against the tag — `Option.Some(Option.Some(x))`
+        //! silently took the wrong arm (interp: `inner 42`, codegen: `other`),
+        //! `Wrap.W(Option.Some(x))` bound garbage (`got 0`), and multi-arm
+        //! variants segfaulted. The fix adds enum-width arms for variant-shaped
+        //! sub-patterns to both helpers and gates the nested checks in
+        //! `and_in_nested_variant_conditions` behind the outer tag comparison
+        //! (branch + phi) so the debox load can't NULL-deref a non-matching
+        //! variant's zero payload words.
+        use super::run_program;
+
+        #[test]
+        fn test_e2e_option_in_option_nested_pattern_all_shapes() {
+            if let Some(out) = run_program(
+                "fn classify(v: Option[Option[i64]]) -> String {\n\
+                     match v {\n\
+                         Option.Some(Option.Some(x)) => f\"inner {x}\",\n\
+                         Option.Some(Option.None) => \"inner none\",\n\
+                         Option.None => \"outer none\",\n\
+                     }\n\
+                 }\n\
+                 fn main() {\n\
+                     println(classify(Option.Some(Option.Some(42))));\n\
+                     println(classify(Option.Some(Option.None)));\n\
+                     println(classify(Option.None));\n\
+                     // wildcard fallthrough — the exact wrong-arm repro\n\
+                     let nested: Option[Option[i64]] = Option.Some(Option.Some(7));\n\
+                     match nested {\n\
+                         Option.Some(Option.Some(x)) => println(f\"got {x}\"),\n\
+                         _ => println(\"other\"),\n\
+                     }\n\
+                 }",
+            ) {
+                assert_eq!(out.trim(), "inner 42\ninner none\nouter none\ngot 7");
+            }
+        }
+
+        #[test]
+        fn test_e2e_user_enum_wrapping_option_nested_pattern_bind() {
+            // The garbage-bind leg: `Wrap`'s enum-typed payload area is the
+            // 1-word carve-out fallback, so the inner Option is always boxed.
+            if let Some(out) = run_program(
+                "enum Wrap {\n\
+                     W(Option[i64]),\n\
+                     Empty,\n\
+                 }\n\
+                 fn describe(w: Wrap) -> String {\n\
+                     match w {\n\
+                         Wrap.W(Option.Some(x)) => f\"some {x}\",\n\
+                         Wrap.W(Option.None) => \"w none\",\n\
+                         Wrap.Empty => \"empty\",\n\
+                     }\n\
+                 }\n\
+                 fn main() {\n\
+                     println(describe(Wrap.W(Option.Some(5))));\n\
+                     println(describe(Wrap.W(Option.None)));\n\
+                     println(describe(Wrap.Empty));\n\
+                 }",
+            ) {
+                assert_eq!(out.trim(), "some 5\nw none\nempty");
+            }
+        }
+
+        #[test]
+        fn test_e2e_triple_nested_option_and_moved_string_payload() {
+            // Triple nesting exercises the recursive lazy gate (each level's
+            // debox load must be reached only after every enclosing tag
+            // matched); the String leg moves a heap payload out of the box.
+            if let Some(out) = run_program(
+                "fn main() {\n\
+                     let deep: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(99)));\n\
+                     match deep {\n\
+                         Option.Some(Option.Some(Option.Some(x))) => println(f\"deep {x}\"),\n\
+                         Option.Some(Option.Some(Option.None)) => println(\"l3 none\"),\n\
+                         Option.Some(Option.None) => println(\"l2 none\"),\n\
+                         Option.None => println(\"l1 none\"),\n\
+                     }\n\
+                     let mid: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.None));\n\
+                     match mid {\n\
+                         Option.Some(Option.Some(Option.Some(x))) => println(f\"deep {x}\"),\n\
+                         Option.Some(Option.Some(Option.None)) => println(\"l3 none\"),\n\
+                         Option.Some(Option.None) => println(\"l2 none\"),\n\
+                         Option.None => println(\"l1 none\"),\n\
+                     }\n\
+                     let s: Option[Option[String]] = Option.Some(Option.Some(\"moved\"));\n\
+                     match s {\n\
+                         Option.Some(Option.Some(v)) => {\n\
+                             let joined: String = v + \"!\";\n\
+                             println(joined);\n\
+                         },\n\
+                         _ => println(\"other\"),\n\
+                     }\n\
+                 }",
+            ) {
+                assert_eq!(out.trim(), "deep 99\nl3 none\nmoved!");
+            }
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]
