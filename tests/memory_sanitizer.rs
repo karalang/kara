@@ -27027,4 +27027,44 @@ fn main() {
             "nested_option_pattern_boxed_payload_lifecycle_clean",
         );
     }
+
+    #[test]
+    fn asan_generic_mono_bare_t_local_reassign_no_leak() {
+        // B-2026-07-15-6: inside a monomorphized generic fn, a bare-`T`
+        // annotated local (`let mut best: T = items[0]`) mono'd to String
+        // never registered as a tracked heap binding (`is_string_type_expr`
+        // saw the raw name "T"), so the Assign arm's eager old-value free
+        // never armed and every reassignment (`best = items[i]`) leaked the
+        // previous buffer — one leaked allocation per improving element in
+        // the running-max scan. The concrete `Vec[String]` twin was always
+        // clean. Leak-clean now, with the returned value moved out (its
+        // scope-exit free must stay suppressed — no double-free).
+        assert_clean_asan_run(
+            r#"
+fn largest[T: Ord](items: ref Vec[T]) -> T {
+    let mut best: T = items[0];
+    for i in 1..items.len() {
+        if items[i] > best {
+            best = items[i];
+        }
+    }
+    best
+}
+fn main() {
+    let mut words: Vec[String] = Vec.new();
+    words.push("alpha");
+    words.push("middle");
+    words.push("zebra");
+    println(largest(words));
+    let mut nums: Vec[i64] = Vec.new();
+    nums.push(3);
+    nums.push(9);
+    nums.push(1);
+    println(largest(nums));
+}
+"#,
+            &["zebra", "9"],
+            "generic_mono_bare_t_local_reassign_no_leak",
+        );
+    }
 }

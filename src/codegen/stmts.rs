@@ -2190,6 +2190,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     // Explicit type annotation: let v: Vec[T] = ... or let s: String = ...
                     if let Some(ref te) = ty {
+                        // B-2026-07-15-6: inside a monomorphized generic fn, a
+                        // bare type-param annotation (`let mut best: T = …`
+                        // under the active binding `T → String`) must resolve
+                        // through the substitution BEFORE the name-keyed
+                        // detection chain below — `is_string_type_expr("T")`
+                        // etc. miss, so the String/Vec-mono'd local never
+                        // registered in `string_vars` / `vec_elem_types`, the
+                        // Assign arm's `lhs_is_tracked_vec` eager-free gate
+                        // stayed false, and every reassignment
+                        // (`best = items[i]`) leaked the previous heap buffer.
+                        // No-op outside a monomorph (empty substitution) and
+                        // for concrete annotations (only bare param names are
+                        // substitution keys).
+                        let te_subst = self.subst_monomorph_type_params(te);
+                        let te = &te_subst;
                         // `let t: Tensor[T, [dims]] = ...` — register the
                         // binding's element type + static dims
                         // (`src/codegen/tensor.rs`); the pending-info
