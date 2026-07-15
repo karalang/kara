@@ -38,8 +38,20 @@ fn gpu_context() -> Option<&'static GpuContext> {
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
                 .ok()?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+        // Request the ADAPTER's full limits, not `Limits::default()`. The default
+        // is wgpu's conservative cross-platform floor (`max_storage_buffers_per_
+        // shader_stage = 8`), which caps a Path-A SoA kernel at 4 fields (in+out
+        // buffers). The real Slipstream D2Q9 collide is 9 fields → 18 storage
+        // buffers; native Metal on Apple Silicon supports 31/stage, so requesting
+        // `adapter.limits()` (always satisfiable by construction — it's what the
+        // adapter reports) lifts the cap to the hardware ceiling. Enables any
+        // multi-field `#[gpu]` kernel up to the device's real limit.
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("gpu-cg4-device"),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .ok()?;
         Some(GpuContext { device, queue })
     })
     .as_ref()
@@ -1138,6 +1150,100 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 "pos[{i}] after {STEPS} resident steps"
             );
             assert_eq!(v, vel[i], "vel[{i}] unchanged");
+        }
+        unsafe { free(aos as *mut core::ffi::c_void) };
+    }
+
+    // Regression guard for the raised device limits (`adapter.limits()` instead of
+    // `Limits::default()`). A 5-group SoA kernel binds 5 inputs + 5 outputs = 10
+    // storage buffers — over wgpu's default `max_storage_buffers_per_shader_stage`
+    // of 8, so before the limit fix this dispatch panicked at pipeline creation
+    // with "Too many bindings of type StorageBuffers ... limit is 8, count was 10".
+    // The real Slipstream D2Q9 collide is 9 fields (18 buffers), so this class of
+    // kernel must dispatch. Bindings follow run_compute's convention: inputs
+    // @binding(0..5), outputs @binding(5..10).
+    const FIVE_GROUP_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       a_in: array<f32>;
+@group(0) @binding(1) var<storage, read>       b_in: array<f32>;
+@group(0) @binding(2) var<storage, read>       c_in: array<f32>;
+@group(0) @binding(3) var<storage, read>       d_in: array<f32>;
+@group(0) @binding(4) var<storage, read>       e_in: array<f32>;
+@group(0) @binding(5) var<storage, read_write> a_out: array<f32>;
+@group(0) @binding(6) var<storage, read_write> b_out: array<f32>;
+@group(0) @binding(7) var<storage, read_write> c_out: array<f32>;
+@group(0) @binding(8) var<storage, read_write> d_out: array<f32>;
+@group(0) @binding(9) var<storage, read_write> e_out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= arrayLength(&a_in)) { return; }
+    a_out[i] = a_in[i] + 1.0;
+    b_out[i] = b_in[i] + 2.0;
+    c_out[i] = c_in[i] + 3.0;
+    d_out[i] = d_in[i] + 4.0;
+    e_out[i] = e_in[i] + 5.0;
+}
+"#;
+
+    #[test]
+    fn five_group_kernel_exceeds_default_storage_buffer_limit() {
+        if gpu_context().is_none() {
+            eprintln!("gpu: no GPU adapter available — skipping");
+            return;
+        }
+        extern "C" {
+            fn free(ptr: *mut core::ffi::c_void);
+        }
+        const N: usize = 128;
+        let groups: Vec<Vec<u8>> = (0..5)
+            .map(|g| f32s_to_le(&(0..N).map(|i| (g * 100 + i) as f32).collect::<Vec<_>>()))
+            .collect();
+        let in_ptrs: Vec<*const u8> = groups.iter().map(|v| v.as_ptr()).collect();
+        let strides = [4usize; 5];
+        let handle =
+            unsafe { karac_runtime_gpu_upload_soa(5, in_ptrs.as_ptr(), strides.as_ptr(), N) };
+        assert_ne!(handle, 0, "upload returned a null handle");
+        let out = unsafe {
+            karac_runtime_gpu_dispatch_resident(
+                FIVE_GROUP_WGSL.as_ptr(),
+                FIVE_GROUP_WGSL.len(),
+                handle,
+                0,
+                std::ptr::null(),
+                0,
+            )
+        };
+        unsafe { karac_runtime_gpu_free_soa(handle) };
+        assert_ne!(out, 0, "10-buffer dispatch returned a null handle");
+
+        // Download all 5 groups into a 20-byte AoS record (field g at offset 4*g).
+        let field_group = [0usize, 1, 2, 3, 4];
+        let field_src = [0usize; 5];
+        let field_dst = [0usize, 4, 8, 12, 16];
+        let aos = unsafe {
+            karac_runtime_gpu_download_soa(
+                out,
+                5,
+                field_group.as_ptr(),
+                field_src.as_ptr(),
+                field_dst.as_ptr(),
+                4,
+                20,
+                N,
+            )
+        };
+        assert!(!aos.is_null());
+        let bytes = unsafe { std::slice::from_raw_parts(aos, N * 20) };
+        for i in 0..N {
+            for g in 0..5 {
+                let v = f32::from_le_bytes(
+                    bytes[i * 20 + g * 4..i * 20 + g * 4 + 4]
+                        .try_into()
+                        .unwrap(),
+                );
+                let expect = (g * 100 + i) as f32 + (g as f32 + 1.0);
+                assert_eq!(v, expect, "group {g} elem {i}");
+            }
         }
         unsafe { free(aos as *mut core::ffi::c_void) };
     }
