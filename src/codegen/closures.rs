@@ -2908,6 +2908,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // function"). Clear it for the body and restore after, exactly as the
         // par/reduce/task-group emitters do at their function boundaries.
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        // Isolate the owned-Vec/String PARAM set (B-2026-07-15-9). A closure's
+        // owned heap params are caller-retained exactly like a function's: the
+        // CALLER frees the arg buffer (materialized at the closure call site),
+        // and the closure must deep-copy such a param if it flows to the return
+        // (else the caller's arg-free and the result-binding's free double-free
+        // the same buffer). Registering the closure's params here — with the
+        // outer function's set swapped out and restored below — makes the
+        // body's tail-return defensive copy (`maybe_defensive_copy_param_arg`)
+        // and the capture defensive-copy (which key off `owned_vecstr_params`)
+        // see the CLOSURE's params during the body compile, not the outer fn's.
+        let saved_owned_vecstr_params = std::mem::take(&mut self.owned_vecstr_params);
 
         // 7. Build the closure body.
         self.current_fn = Some(closure_fn);
@@ -3082,6 +3093,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 let te = te.clone();
                 self.register_var_from_type_expr(&param_name, &te);
             }
+            // Owned (non-`ref`) Vec/String param → the caller-retained set, so a
+            // tail return of this param deep-copies (B-2026-07-15-9). Mirrors the
+            // function-param registration (`functions.rs`): gated on a heap
+            // element type (`vec_elem_types` populated by the
+            // `register_var_from_type_expr` above) and not a borrow mode.
+            let is_borrow_param = matches!(
+                cp.ty.as_ref().map(|t| &t.kind),
+                Some(TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_))
+            );
+            if !is_borrow_param && self.vec_elem_types.contains_key(&param_name) {
+                self.owned_vecstr_params.insert(param_name.clone());
+            }
         }
 
         // 7b½. Currying (B-2026-07-12-12): if this closure's tail is itself a
@@ -3107,7 +3130,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Compiling the block raw makes its statements register their
         // cleanups in THIS closure's already-pushed frame, drained after
         // suppression. Non-block bodies are single expressions.
-        let result = match &body.kind {
+        let mut result = match &body.kind {
             ExprKind::Block(block) | ExprKind::Seq(block) => self
                 .compile_block(block)?
                 .unwrap_or_else(|| self.context.i64_type().const_int(0, false).into()),
@@ -3137,6 +3160,15 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             if let Some(t) = returned_tail {
                 self.suppress_fstr_acc_if_moved_out(t);
+                // Owned Vec/String PARAM in tail position (`|s| s`, `|s| { s }`,
+                // or buried in a branch tail): the caller now frees the arg
+                // buffer it passed (materialized at the closure call site,
+                // B-2026-07-15-9), and the consumer of THIS return also frees
+                // the value — so hand back a deep copy, exactly as
+                // `compile_function`'s tail does. A no-op unless `t` ultimately
+                // names one of this closure's `owned_vecstr_params`, so the
+                // common fresh-result tail (`|s| wrap(wrap(s))`) is untouched.
+                result = self.deepcopy_owned_param_branch_tail(t, result);
             }
             // Drain the closure's own cleanup frame before returning, so its
             // f-string / heap-local cleanups are emitted in THIS fn
@@ -3159,6 +3191,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.last_fstr_acc = saved_fstr_acc;
         self.scope_cleanup_actions = saved_cleanup;
         self.branch_cancel_ptr = saved_cancel_ptr;
+        // Restore the outer fn's owned-param set BEFORE the env is built below
+        // (the capture defensive-copy at env-build time keys off the OUTER fn's
+        // `owned_vecstr_params` to decide whether a captured Vec/String is a
+        // caller-retained param — B-2026-06-22-2).
+        self.owned_vecstr_params = saved_owned_vecstr_params;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -3396,6 +3433,7 @@ impl<'ctx> super::Codegen<'ctx> {
             vec![BasicMetadataValueEnum::from(env_ptr)];
         for arg in args {
             let val = self.compile_expr(&arg.value)?;
+            self.free_fresh_owned_heap_closure_arg(&arg.value, val);
             call_args.push(BasicMetadataValueEnum::from(val));
         }
 
@@ -3409,6 +3447,26 @@ impl<'ctx> super::Codegen<'ctx> {
             Ok(self.context.i64_type().const_int(0, false).into())
         } else {
             Ok(basic_val.unwrap_basic())
+        }
+    }
+
+    /// Caller-side cleanup of a FRESH owned heap arg (a `String.from(..)` /
+    /// user-fn result / collection literal producing a `{ptr,len,cap}` temp)
+    /// passed BY VALUE into a closure. A closure's owned Vec/String param is
+    /// caller-retained (it deep-copies the param on any return), so the caller
+    /// must free the temp — the exact `is_fresh_heap_call_arg` →
+    /// `materialize_owned_temp` cleanup the direct-call path performs
+    /// (`call_dispatch.rs`). Without it the temp leaks once per call
+    /// (B-2026-07-15-9). A bound local / borrow / f-string-accumulator arg is
+    /// excluded (its own binding owns the free / it stages its own cleanup), so
+    /// no double-free with a caller-scope owner. Shared by the named-binding and
+    /// value-callee closure-call paths.
+    fn free_fresh_owned_heap_closure_arg(&mut self, arg: &Expr, val: BasicValueEnum<'ctx>) {
+        if self.expr_yields_fresh_owned_temp(arg)
+            && self.llvm_ty_is_vec_struct(val.get_type())
+            && !self.rhs_stages_fstr_acc(arg)
+        {
+            self.materialize_owned_temp(val, (arg.span.offset, arg.span.length));
         }
     }
 
@@ -3469,6 +3527,7 @@ impl<'ctx> super::Codegen<'ctx> {
             vec![BasicMetadataValueEnum::from(env_ptr)];
         for arg in args {
             let val = self.compile_expr(&arg.value)?;
+            self.free_fresh_owned_heap_closure_arg(&arg.value, val);
             call_args.push(BasicMetadataValueEnum::from(val));
         }
 

@@ -520,6 +520,98 @@ fn main() {
     }
 
     #[test]
+    fn asan_closure_nested_consume_frees_fresh_arg_no_leak() {
+        // B-2026-07-15-9: an indirect closure call passing a FRESH owned heap
+        // temp (`String.from(..)`) whose owned param is consumed inside the
+        // closure body — the caller must free the temp exactly as the direct-
+        // call path does. The nested `wrap(wrap(s))` shape is where the closure
+        // param survives O2 (the single-`wrap` shape was masked by dead-malloc
+        // elision), so every iteration leaked the input String without the
+        // caller-side `materialize_owned_temp` now emitted at the closure call
+        // site. 30 iterations so any per-call leak accumulates past noise.
+        assert_clean_asan_run(
+            r#"
+fn wrap(s: String) -> String { "[" + s + "]" }
+fn main() {
+    let f = |s: String| wrap(wrap(s));
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 30i64 {
+        let r = f(String.from("payload-string"));
+        total = total + r.len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // wrap(wrap("payload-string")) = "[[payload-string]]" = 18 chars; 30*18 = 540
+            &["540"],
+            "closure_nested_consume_frees_fresh_arg_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_closure_identity_returns_param_no_double_free() {
+        // B-2026-07-15-9 double-free guard: with the caller now freeing the
+        // fresh arg it passes to a closure, a closure that RETURNS its owned
+        // heap param (`|s| s`, `|s| { s }`) must deep-copy the param on return —
+        // otherwise the caller's arg-free and the result-binding's free hit the
+        // same buffer (double-free / ASan abort). Both the bare-tail and
+        // block-tail identity shapes, looped.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let id1 = |s: String| s;
+    let id2 = |s: String| { s };
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 30i64 {
+        let a = id1(String.from("first-payload"));
+        let b = id2(String.from("second-payload"));
+        total = total + a.len() + b.len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // 13 + 14 = 27 per iter; 30 * 27 = 810
+            &["810"],
+            "closure_identity_returns_param_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_closure_vec_arg_nested_consume_no_leak() {
+        // B-2026-07-15-9 Vec sibling: the fresh-owned-heap-arg cleanup at the
+        // closure call site covers `Vec` (`{ptr,len,cap}`), not only `String`.
+        // A fresh `Vec.filled(..)` passed into a closure whose body consumes it
+        // (`dup(dup(v))`, a by-value Vec param) must be freed by the caller.
+        assert_clean_asan_run(
+            r#"
+fn dup(v: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    out.push(v.len());
+    out
+}
+fn main() {
+    let f = |v: Vec[i64]| dup(dup(v));
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 30i64 {
+        let r = f(Vec.filled(5, 9));
+        total = total + r[0];
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // dup(dup(filled(5))) → [1]; r[0] = 1; 30 * 1 = 30
+            &["30"],
+            "closure_vec_arg_nested_consume_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_vec_clear_under_autopar_no_double_free() {
         // B-2026-07-14-17: `Vec.clear()` was invisible to the auto-parallelizer's
         // write-dependency gate (unseeded in the effectchecker builtin table —
