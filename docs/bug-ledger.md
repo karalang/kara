@@ -89,18 +89,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **475 surfaced · 2 open · 469 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **476 surfaced · 2 open · 470 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-15-11 | 2026-07-15 | codegen (per-monomorph struct-drop synthesis — synth_drop.rs emit_struct_drop_synthesis_impl field classifier; PAIRED move-suppression call_dispatch.rs zero_struct_move_caps) | medium | A monomorphized generic struct whose field IS a bare type param (`struct Box[T] { value: T }`, used as `Box[String]` / `Box[Vec[..]]`) never frees the heap field at scope exit — the mono struct-drop classifier reads the erased field name `T` (not Vec/String) and classifies it no-cleanup; the CONCRETE-field twin (`struct Box { value: String }`) is clean | none |
-| B-2026-07-15-16 | 2026-07-15 | typechecker (closure-parameter type inference for direct collection / Result methods that take a predicate/mapper closure) | low | Closure-param inference is missing for direct collection/Result methods that take a closure (`Vec.retain(|x| …)`, `Result.and_then(|x| …)`) — the param `x` stays `?T` and any use (`x != 3`) fails, while the `.iter().map/filter/any` adaptor path infers the element type fine | none |
+| B-2026-07-15-19 | 2026-07-15 | codegen (Vec/VecDeque.retain in-place predicate filter — no LLVM lowering) | low | `Vec[T]/VecDeque[T].retain(|x| pred)` has no AOT codegen lowering — typechecks and runs correctly in the interpreter (B-2026-07-15-16 added both), but `karac build` loud-bails 'method retain not yet supported in codegen'; needs the same snapshot-filter-writeback shape the interpreter uses, lowered to LLVM (allocate kept-buffer, invoke the predicate closure per element, compact in place) | none |
 
-### Fixed (469)
+### Fixed (470)
 
-<details><summary>469 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>470 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -571,6 +571,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **475 surfaced 
 | B-2026-07-15-13 | codegen (closures.rs mutref_caps capture-mode inference) + interpreter (eval_expr.rs closure SharedCell wrap set); shared detection in ast.rs collect_mut_method_receiver_roots | high | A closure that mutates a captured collection through a mutating METHOD (`acc.push(x)`, `buf.push_str(s)`, `m.insert(k,v)`) does not write through to… | 25f43a1 |
 | B-2026-07-15-14 | ownership / use-classifier (method receiver-mode classification for compiler-builtin collection mutators: push_str / insert / …) | medium | `karac check` rejects calling a String/Map-mutating closure more than once (`append("a"); append("b")` → `value 'append' moved here, used again`) whi… | e69d078 |
 | B-2026-07-15-15 | codegen (calls.rs Option/Result combinator lowering — the `ok_or` arm builds the result value in the Option layout) | high | `Option.ok_or(e)` panics the compiler (ExtractOutOfRange at pattern_binding.rs) — it builds the result value in the OPTION layout {tag,w0..w2} (4 fie… | b287a24 |
+| B-2026-07-15-16 | typechecker (closure-parameter type inference for direct collection / Result methods that take a predicate/mapper closure) | low | Closure-param inference is missing for direct collection/Result methods that take a closure (`Vec.retain(\|x\| …)`, `Result.and_then(\|x\| …)`) — the par… | c4820b1 |
 | B-2026-07-15-17 | codegen (closure return-type inference — a closure whose body/tail is a method call returning Option, e.g. Map.insert -> Option[V]) | low | A closure whose tail expression is an Option-returning method call miscompiles: `let put = \|k, v\| m.insert(k, v)` (Map.insert -> Option[V]) fails cod… | 286636f |
 | B-2026-07-15-18 | codegen (field-receiver method dispatch — calls.rs lower_field_access_ptr plain-struct GEP) | high | A `<generic-struct>.field.method()` receiver reads the WRONG field for a multi-heap-field generic struct: `Pair[Vec,Vec].second.len()` returns the fi… | bf4b002 |
 
