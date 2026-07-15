@@ -206,6 +206,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(v);
                 }
             }
+            // `for g in xs.iter().chunk_by(|x| key) { … }` — boundary-walk +
+            // group-materializing desugar over a named scalar-element Vec
+            // (B-2026-07-14-8, chunk_by leg). Fails closed to the loud
+            // `.chunk_by()` bail below for heap elements / complex closure
+            // params / non-identity sources.
+            if args.len() == 1 && method == "chunk_by" {
+                if let Some(v) = self.try_compile_for_chunk_by(
+                    label,
+                    pattern,
+                    object,
+                    &args[0].value,
+                    body,
+                    &iterable.span,
+                )? {
+                    return Ok(v);
+                }
+            }
             // `for x in <src>.scan(init, |acc, x| Some((new, out))) { … }` —
             // single accumulator-loop desugar (B-2026-07-14-8, scan leg).
             // Fails closed to the loud `.scan()` bail below for the
@@ -223,6 +240,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 )? {
                     return Ok(v);
                 }
+            }
+            // `for x in <src>.peekable()` — a bare `Peekable` wrapper is a
+            // pure identity in for-loop position (`.peek()` only exists on a
+            // materialized iterator binding, which a for-iterable never is) —
+            // peel it off and recurse (B-2026-07-14-8, peekable leg). The
+            // fused peel does the same for mid-chain `peekable()`.
+            if args.is_empty() && method == "peekable" {
+                return self.compile_for(label, pattern, object, body);
             }
             if args.is_empty() && (method == "iter" || method == "into_iter") {
                 // Indexed receiver (`coll[i].iter()`): synthesize a
@@ -402,16 +427,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // leg): a lockstep two-source index loop over `0..min(lenA, lenB)`
             // binding `A[i]` / `B[i]` to the tuple's sub-patterns. Supported
             // shape: a 2-tuple destructure pattern and BOTH sources peeling
-            // (through `.iter()`/`.into_iter()`) to named Vec bindings with
-            // SCALAR elements — by-value heap elements would need the
-            // loop-borrow defensive-copy machinery threaded for two containers
-            // at once (deferred with the rest of the heap legs). Anything else
-            // falls through to the loud adaptor bail below.
+            // (through `.iter()`/`.into_iter()`) to named Vec bindings — ANY
+            // element type: the compiler registers each sub-binding via
+            // `register_for_loop_bindings`, whose borrow-marking makes heap
+            // elements safe exactly like the single-source Vec loop. Anything
+            // else falls through to the loud adaptor bail below.
             if args.len() == 1 && method == "zip" {
                 if let PatternKind::Tuple(subs) = &pattern.kind {
                     if subs.len() == 2 {
-                        let lhs = self.peel_iter_to_scalar_vec_ident(object);
-                        let rhs = self.peel_iter_to_scalar_vec_ident(&args[0].value);
+                        let lhs = self.peel_iter_to_vec_ident(object);
+                        let rhs = self.peel_iter_to_vec_ident(&args[0].value);
                         if let (Some(va), Some(vb)) = (lhs, rhs) {
                             let pat_a = subs[0].clone();
                             let pat_b = subs[1].clone();
@@ -427,11 +452,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // `for x in xs.iter().chain(ys.iter())` (B-2026-07-14-8, chain
             // leg): two sequential by-value index loops over the two sources,
             // sharing ONE exit block so `break` leaves BOTH (a break in the
-            // first source's body must not fall into the second). Named
-            // scalar-element Vec sources only; anything else bails loud below.
+            // first source's body must not fall into the second). Named Vec
+            // sources, ANY element type (per-leg `register_for_loop_bindings`
+            // borrow-marks heap elements); anything else bails loud below.
             if args.len() == 1 && method == "chain" {
-                let lhs = self.peel_iter_to_scalar_vec_ident(object);
-                let rhs = self.peel_iter_to_scalar_vec_ident(&args[0].value);
+                let lhs = self.peel_iter_to_vec_ident(object);
+                let rhs = self.peel_iter_to_vec_ident(&args[0].value);
                 if let (Some(va), Some(vb)) = (lhs, rhs) {
                     return self.compile_for_chain_vec_vars(label, pattern, &va, &vb, body);
                 }
@@ -1728,6 +1754,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// supports. `None` for every other shape (the caller falls through to
     /// the loud adaptor bail).
     fn peel_iter_to_scalar_vec_ident(&self, e: &Expr) -> Option<String> {
+        self.peel_iter_to_vec_ident(e).filter(|n| {
+            self.var_elem_type_exprs
+                .get(n.as_str())
+                .is_some_and(super::vec_method::is_trivially_copyable_te)
+        })
+    }
+
+    /// Like `peel_iter_to_scalar_vec_ident` but element-type-agnostic: any
+    /// named Vec binding qualifies. Used by the legs that pair the by-value
+    /// element bind with `register_for_loop_bindings` — which borrow-marks
+    /// heap elements exactly like the single-source Vec loop, making heap
+    /// (String/Vec/struct) elements safe (B-2026-07-14-8, heap legs).
+    fn peel_iter_to_vec_ident(&self, e: &Expr) -> Option<String> {
         let inner = match &e.kind {
             ExprKind::MethodCall {
                 object,
@@ -1740,12 +1779,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(n) = &inner.kind else {
             return None;
         };
-        if self.vec_elem_types.contains_key(n.as_str())
-            && self
-                .var_elem_type_exprs
-                .get(n.as_str())
-                .is_some_and(super::vec_method::is_trivially_copyable_te)
-        {
+        if self.vec_elem_types.contains_key(n.as_str()) {
             Some(n.clone())
         } else {
             None
@@ -1904,7 +1938,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => break,
             }
         }
-        let Some(var_name) = self.peel_iter_to_scalar_vec_ident(cur) else {
+        let Some(var_name) = self.peel_iter_to_vec_ident(cur) else {
             return Ok(None);
         };
 
@@ -2025,6 +2059,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(elem_ty, elem_ptr, "forw.elem")
             .unwrap();
         self.bind_pattern(pattern, elem_val)?;
+        // Borrow-mark heap element bindings (B-2026-07-14-8, heap legs).
+        self.register_for_loop_bindings(pattern, &var_name);
         self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
         self.builder.position_at_end(incr_bb);
@@ -2158,6 +2194,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(elem_ty, elem_ptr, &format!("chain{leg}.elem"))
                 .unwrap();
             self.bind_pattern(pattern, elem_val)?;
+            // Borrow-mark heap element bindings per leg (B-2026-07-14-8,
+            // heap legs) — both sources share the element type.
+            self.register_for_loop_bindings(pattern, name);
             self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
             self.builder.position_at_end(incr_bb);
@@ -2304,6 +2343,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let b_val = self.builder.build_load(elem_ty_b, b_ptr, "zip.b").unwrap();
         self.bind_pattern(pat_a, a_val)?;
         self.bind_pattern(pat_b, b_val)?;
+        // Borrow-mark heap element bindings like the single-source Vec loop
+        // (B-2026-07-14-8, heap legs) — each side against its own source.
+        self.register_for_loop_bindings(pat_a, va);
+        self.register_for_loop_bindings(pat_b, vb);
         self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
         self.builder.position_at_end(incr_bb);
@@ -3209,84 +3252,127 @@ impl<'ctx> super::Codegen<'ctx> {
 
 // ── flat_map for-loop desugar (B-2026-07-14-8, flat_map leg) ──────────
 
-/// Retarget every UNLABELED `break` in `block` that would bind to the
-/// for-loop this block is the body of, onto the label `target` instead.
-/// Used by the flat_map nested-loop desugar: the user's body ends up inside
-/// the synthesized INNER loop, so an unlabeled `break` (which the user wrote
-/// to exit the whole flat_map loop) would only exit the current inner batch
-/// — retargeting it to the labeled OUTER loop restores the flat-sequence
-/// semantics. Unlabeled `continue` is left untouched on purpose: the next
-/// flat element IS the inner loop's next iteration.
+/// Rewrite plan for loop-control statements inside a desugared loop body
+/// (flat_map / cycle nested desugars). Two independent rules:
 ///
-/// Walk rules: do NOT descend into nested loop BODIES (an unlabeled break
-/// there binds that loop) — but DO descend their header expressions
-/// (iterable / condition), which evaluate in the outer context. Do NOT
-/// descend into closures (`break` cannot cross a closure boundary), comptime
-/// blocks (compile-time evaluation), or defer/errdefer bodies (scope-exit
-/// context; a break there is illegal upstream). Labeled blocks are NOT
-/// unlabeled-break targets, so they are descended. The matches are
-/// deliberately EXHAUSTIVE (no `_` arm) so a future ExprKind/StmtKind
-/// variant fails the build here instead of silently escaping the walk.
-fn retarget_unlabeled_breaks_block(block: &mut Block, target: &str) {
-    for stmt in &mut block.stmts {
-        retarget_unlabeled_breaks_stmt(stmt, target);
+/// - `retarget_unlabeled_break`: an UNLABELED `break` that would bind the
+///   loop this block is the body of is rewritten to `break <label>` — used
+///   so a user break inside the synthesized INNER loop exits the whole
+///   structure. Applies only OUTSIDE nested loop bodies (an unlabeled break
+///   inside a nested loop binds that loop).
+/// - `rename_labeled_continue`: `continue <from>` → `continue <to>` — used
+///   when the user LABELED the flat_map/cycle loop: the label lands on the
+///   synthesized OUTER loop (so `break <label>` exits everything), but a
+///   labeled continue means "next flat element", which is the INNER loop's
+///   continue — so it renames to the inner loop's synthesized label. Labels
+///   are unique in scope (the resolver rejects duplicates), so this applies
+///   EVERYWHERE in the body, including inside nested user loops.
+///
+/// Closures and comptime blocks are opaque (loop control cannot cross
+/// them); defer/errdefer bodies are skipped (a break/continue there is
+/// illegal upstream). The matches are deliberately EXHAUSTIVE (no `_` arm)
+/// so a future ExprKind/StmtKind variant fails the build here instead of
+/// silently escaping the walk.
+struct LoopCtlRewrite {
+    retarget_unlabeled_break: Option<String>,
+    rename_labeled_continue: Option<(String, String)>,
+}
+
+impl LoopCtlRewrite {
+    fn is_noop(&self) -> bool {
+        self.retarget_unlabeled_break.is_none() && self.rename_labeled_continue.is_none()
     }
-    if let Some(fe) = &mut block.final_expr {
-        retarget_unlabeled_breaks_expr(fe, target);
+    /// The cfg that applies inside a NESTED loop body: unlabeled breaks bind
+    /// the nested loop (rule off); labeled-continue renaming still applies.
+    fn inside_nested_loop(&self) -> LoopCtlRewrite {
+        LoopCtlRewrite {
+            retarget_unlabeled_break: None,
+            rename_labeled_continue: self.rename_labeled_continue.clone(),
+        }
     }
 }
 
-fn retarget_unlabeled_breaks_stmt(stmt: &mut Stmt, target: &str) {
+fn rewrite_loop_ctl_block(block: &mut Block, cfg: &LoopCtlRewrite) {
+    if cfg.is_noop() {
+        return;
+    }
+    for stmt in &mut block.stmts {
+        rewrite_loop_ctl_stmt(stmt, cfg);
+    }
+    if let Some(fe) = &mut block.final_expr {
+        rewrite_loop_ctl_expr(fe, cfg);
+    }
+}
+
+fn rewrite_loop_ctl_stmt(stmt: &mut Stmt, cfg: &LoopCtlRewrite) {
     match &mut stmt.kind {
-        StmtKind::Let { value, .. } => retarget_unlabeled_breaks_expr(value, target),
+        StmtKind::Let { value, .. } => rewrite_loop_ctl_expr(value, cfg),
         StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {
             value, else_block, ..
         } => {
-            retarget_unlabeled_breaks_expr(value, target);
-            retarget_unlabeled_breaks_block(else_block, target);
+            rewrite_loop_ctl_expr(value, cfg);
+            rewrite_loop_ctl_block(else_block, cfg);
         }
         StmtKind::Defer { .. } | StmtKind::ErrDefer { .. } => {}
-        StmtKind::Assign {
-            target: t, value, ..
-        } => {
-            retarget_unlabeled_breaks_expr(t, target);
-            retarget_unlabeled_breaks_expr(value, target);
+        StmtKind::Assign { target, value, .. } => {
+            rewrite_loop_ctl_expr(target, cfg);
+            rewrite_loop_ctl_expr(value, cfg);
         }
         StmtKind::MultiAssign { targets, values } => {
             for e in targets.iter_mut().chain(values.iter_mut()) {
-                retarget_unlabeled_breaks_expr(e, target);
+                rewrite_loop_ctl_expr(e, cfg);
             }
         }
-        StmtKind::CompoundAssign {
-            target: t, value, ..
-        } => {
-            retarget_unlabeled_breaks_expr(t, target);
-            retarget_unlabeled_breaks_expr(value, target);
+        StmtKind::CompoundAssign { target, value, .. } => {
+            rewrite_loop_ctl_expr(target, cfg);
+            rewrite_loop_ctl_expr(value, cfg);
         }
-        StmtKind::Expr(e) => retarget_unlabeled_breaks_expr(e, target),
+        StmtKind::Expr(e) => rewrite_loop_ctl_expr(e, cfg),
     }
 }
 
-fn retarget_unlabeled_breaks_expr(e: &mut Expr, target: &str) {
-    let walk = retarget_unlabeled_breaks_expr;
+fn rewrite_loop_ctl_expr(e: &mut Expr, cfg: &LoopCtlRewrite) {
+    let walk = rewrite_loop_ctl_expr;
     match &mut e.kind {
         // ── the point of the walk ──
         ExprKind::Break { label, value } => {
             if label.is_none() {
-                *label = Some(target.to_string());
+                if let Some(t) = &cfg.retarget_unlabeled_break {
+                    *label = Some(t.clone());
+                }
             }
             if let Some(v) = value {
-                walk(v, target);
+                walk(v, cfg);
             }
         }
-        ExprKind::Continue { .. } => {}
-        // ── loop boundaries: headers evaluate in the outer context, bodies
-        //    own their unlabeled breaks ──
-        ExprKind::For { iterable, .. } => walk(iterable, target),
-        ExprKind::While { condition, .. } => walk(condition, target),
-        ExprKind::WhileLet { value, .. } => walk(value, target),
-        ExprKind::Loop { .. } => {}
+        ExprKind::Continue { label, .. } => {
+            if let (Some(l), Some((from, to))) = (&label, &cfg.rename_labeled_continue) {
+                if l == from {
+                    *label = Some(to.clone());
+                }
+            }
+        }
+        // ── loop boundaries: headers evaluate in the outer context; bodies
+        //    own their unlabeled breaks but labeled-continue renaming still
+        //    reaches inside ──
+        ExprKind::For { iterable, body, .. } => {
+            walk(iterable, cfg);
+            rewrite_loop_ctl_block(body, &cfg.inside_nested_loop());
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            walk(condition, cfg);
+            rewrite_loop_ctl_block(body, &cfg.inside_nested_loop());
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            walk(value, cfg);
+            rewrite_loop_ctl_block(body, &cfg.inside_nested_loop());
+        }
+        ExprKind::Loop { body, .. } => {
+            rewrite_loop_ctl_block(body, &cfg.inside_nested_loop());
+        }
         // ── opaque boundaries ──
         ExprKind::Closure { .. } | ExprKind::Comptime(_) => {}
         // ── leaves ──
@@ -3309,61 +3395,61 @@ fn retarget_unlabeled_breaks_expr(e: &mut Expr, target: &str) {
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
                 if let ParsedInterpolationPart::Expr(inner, _) = p {
-                    walk(inner, target);
+                    walk(inner, cfg);
                 }
             }
         }
         ExprKind::Binary { left, right, .. } => {
-            walk(left, target);
-            walk(right, target);
+            walk(left, cfg);
+            walk(right, cfg);
         }
-        ExprKind::Unary { operand, .. } => walk(operand, target),
-        ExprKind::Question(inner) => walk(inner, target),
+        ExprKind::Unary { operand, .. } => walk(operand, cfg),
+        ExprKind::Question(inner) => walk(inner, cfg),
         ExprKind::OptionalChain { object, args, .. } => {
-            walk(object, target);
+            walk(object, cfg);
             if let Some(args) = args {
                 for a in args {
-                    walk(&mut a.value, target);
+                    walk(&mut a.value, cfg);
                 }
             }
         }
         ExprKind::NilCoalesce { left, right } => {
-            walk(left, target);
-            walk(right, target);
+            walk(left, cfg);
+            walk(right, cfg);
         }
         ExprKind::Call { callee, args } => {
-            walk(callee, target);
+            walk(callee, cfg);
             for a in args {
-                walk(&mut a.value, target);
+                walk(&mut a.value, cfg);
             }
         }
         ExprKind::MethodCall { object, args, .. } => {
-            walk(object, target);
+            walk(object, cfg);
             for a in args {
-                walk(&mut a.value, target);
+                walk(&mut a.value, cfg);
             }
         }
-        ExprKind::FieldAccess { object, .. } => walk(object, target),
-        ExprKind::TupleIndex { object, .. } => walk(object, target),
+        ExprKind::FieldAccess { object, .. } => walk(object, cfg),
+        ExprKind::TupleIndex { object, .. } => walk(object, cfg),
         ExprKind::Index { object, index } => {
-            walk(object, target);
-            walk(index, target);
+            walk(object, cfg);
+            walk(index, cfg);
         }
         ExprKind::Block(b)
         | ExprKind::Unsafe(b)
         | ExprKind::Try(b)
         | ExprKind::Seq(b)
-        | ExprKind::Par(b) => retarget_unlabeled_breaks_block(b, target),
-        ExprKind::LabeledBlock { body, .. } => retarget_unlabeled_breaks_block(body, target),
+        | ExprKind::Par(b) => rewrite_loop_ctl_block(b, cfg),
+        ExprKind::LabeledBlock { body, .. } => rewrite_loop_ctl_block(body, cfg),
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
-            walk(condition, target);
-            retarget_unlabeled_breaks_block(then_block, target);
+            walk(condition, cfg);
+            rewrite_loop_ctl_block(then_block, cfg);
             if let Some(eb) = else_branch {
-                walk(eb, target);
+                walk(eb, cfg);
             }
         }
         ExprKind::IfLet {
@@ -3372,76 +3458,76 @@ fn retarget_unlabeled_breaks_expr(e: &mut Expr, target: &str) {
             else_branch,
             ..
         } => {
-            walk(value, target);
-            retarget_unlabeled_breaks_block(then_block, target);
+            walk(value, cfg);
+            rewrite_loop_ctl_block(then_block, cfg);
             if let Some(eb) = else_branch {
-                walk(eb, target);
+                walk(eb, cfg);
             }
         }
         ExprKind::Match { scrutinee, arms } => {
-            walk(scrutinee, target);
+            walk(scrutinee, cfg);
             for arm in arms {
                 if let Some(g) = &mut arm.guard {
-                    walk(g, target);
+                    walk(g, cfg);
                 }
-                walk(&mut arm.body, target);
+                walk(&mut arm.body, cfg);
             }
         }
         ExprKind::Return(v) => {
             if let Some(v) = v {
-                walk(v, target);
+                walk(v, cfg);
             }
         }
         ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
             for it in items {
-                walk(it, target);
+                walk(it, cfg);
             }
         }
         ExprKind::PrefixCollectionLiteral { items, .. } => {
             for it in items {
-                walk(it, target);
+                walk(it, cfg);
             }
         }
         ExprKind::RepeatLiteral { value, count, .. } => {
-            walk(value, target);
-            walk(count, target);
+            walk(value, cfg);
+            walk(count, cfg);
         }
         ExprKind::MapLiteral(pairs) => {
             for (k, v) in pairs {
-                walk(k, target);
-                walk(v, target);
+                walk(k, cfg);
+                walk(v, cfg);
             }
         }
         ExprKind::StructLiteral { fields, spread, .. } => {
             for f in fields {
-                walk(&mut f.value, target);
+                walk(&mut f.value, cfg);
             }
             if let Some(s) = spread {
-                walk(s, target);
+                walk(s, cfg);
             }
         }
         ExprKind::Pipe { left, right } => {
-            walk(left, target);
-            walk(right, target);
+            walk(left, cfg);
+            walk(right, cfg);
         }
-        ExprKind::Cast { expr, .. } => walk(expr, target),
+        ExprKind::Cast { expr, .. } => walk(expr, cfg),
         ExprKind::Range { start, end, .. } => {
             if let Some(s) = start {
-                walk(s, target);
+                walk(s, cfg);
             }
             if let Some(en) = end {
-                walk(en, target);
+                walk(en, cfg);
             }
         }
         ExprKind::Lock { mutex, body, .. } => {
-            walk(mutex, target);
-            retarget_unlabeled_breaks_block(body, target);
+            walk(mutex, cfg);
+            rewrite_loop_ctl_block(body, cfg);
         }
         ExprKind::Providers { bindings, body } => {
             for b in bindings {
-                walk(&mut b.value, target);
+                walk(&mut b.value, cfg);
             }
-            retarget_unlabeled_breaks_block(body, target);
+            rewrite_loop_ctl_block(body, cfg);
         }
     }
 }
@@ -3466,10 +3552,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// label so it exits the WHOLE flat sequence, not just the current batch
     /// (`retarget_unlabeled_breaks_block`).
     ///
-    /// Fails closed (`Ok(None)` → the loud `.flat_map()` adaptor bail) for:
-    /// a user LABEL on the loop (a labeled `continue` means "next flat
-    /// element", which the nested shape cannot express without rewriting the
-    /// user's own labels — rare; `--interp` handles it), a non-single-Binding
+    /// A USER label lands on the OUTER loop (`break <label>` exits the whole
+    /// flat sequence) and `continue <label>` is renamed to the inner loop's
+    /// synthesized label (next flat element). Fails closed (`Ok(None)` → the
+    /// loud `.flat_map()` adaptor bail) for: a non-single-Binding
     /// closure param, and an inner iterable outside the proven-to-iterate
     /// whitelist (array/Vec literal, bounded range, named binding, or a chain
     /// the fused peel accepts) — an unproven inner shape could hit
@@ -3540,9 +3626,6 @@ impl<'ctx> super::Codegen<'ctx> {
         body: &Block,
         span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        if label.is_some() {
-            return Ok(None);
-        }
         let ExprKind::Closure {
             params,
             body: inner,
@@ -3565,13 +3648,27 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
 
-        let outer_label = format!("__fml_{uid}");
+        // A USER label lands on the OUTER loop (so `break <label>` exits the
+        // whole flat sequence), and `continue <label>` — which means "next
+        // flat element", i.e. the INNER loop's continue — is renamed to the
+        // inner loop's synthesized label (labels are unique in scope, so the
+        // rename applies everywhere in the body).
+        let outer_label = label
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("__fml_{uid}"));
+        let inner_label = format!("__fmi_{uid}");
         let mut user_body = body.clone();
-        retarget_unlabeled_breaks_block(&mut user_body, &outer_label);
+        rewrite_loop_ctl_block(
+            &mut user_body,
+            &LoopCtlRewrite {
+                retarget_unlabeled_break: Some(outer_label.clone()),
+                rename_labeled_continue: label.map(|l| (l.to_string(), inner_label.clone())),
+            },
+        );
 
         let inner_for = Expr {
             kind: ExprKind::For {
-                label: None,
+                label: label.map(|_| inner_label),
                 pattern: pattern.clone(),
                 iterable: inner.clone(),
                 attributes: Vec::new(),
@@ -3633,10 +3730,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `break` is unlabeled and sits at loop-body level (outside the `for`),
     /// so it binds the `loop` correctly without a label.
     ///
+    /// A USER label lands on the outer restart `loop` (`break <label>` exits
+    /// the whole cycle) and `continue <label>` is renamed to the pass-`for`'s
+    /// synthesized label (next flat element) — same scheme as flat_map.
     /// Fails closed (`Ok(None)` → the loud `.cycle()` adaptor bail) for a
-    /// user LABEL on the loop (labeled `continue` means next-flat-element —
-    /// same rationale as flat_map) and for a source chain the fused peel
-    /// rejects.
+    /// source chain the fused peel rejects.
     pub(super) fn try_compile_for_cycle(
         &mut self,
         label: Option<&str>,
@@ -3645,15 +3743,19 @@ impl<'ctx> super::Codegen<'ctx> {
         body: &Block,
         span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        if label.is_some() {
-            return Ok(None);
-        }
         if Self::peel_fused_map_filter_chain(src).is_none() {
             return Ok(None);
         }
         self.indexed_elem_counter += 1;
         let uid = self.indexed_elem_counter;
-        let cyl = format!("__cyl_{uid}");
+        // A USER label lands on the outer restart `loop` (so `break <label>`
+        // exits the whole cycle); `continue <label>` means "next flat
+        // element" — the pass-`for`'s continue — and is renamed to its
+        // synthesized label (same scheme as flat_map).
+        let cyl = label
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("__cyl_{uid}"));
+        let cyi = format!("__cyi_{uid}");
         let cyp = format!("__cyp_{uid}");
         let ident = |name: &str| Expr {
             kind: ExprKind::Identifier(name.to_string()),
@@ -3661,7 +3763,13 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let mut user_body = body.clone();
-        retarget_unlabeled_breaks_block(&mut user_body, &cyl);
+        rewrite_loop_ctl_block(
+            &mut user_body,
+            &LoopCtlRewrite {
+                retarget_unlabeled_break: Some(cyl.clone()),
+                rename_labeled_continue: label.map(|l| (l.to_string(), cyi.clone())),
+            },
+        );
 
         // `__cyp_N = true;` prepended to the user body.
         let mut inner_stmts = vec![Stmt {
@@ -3684,7 +3792,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let pass_for = Stmt {
             kind: StmtKind::Expr(Expr {
                 kind: ExprKind::For {
-                    label: None,
+                    label: label.map(|_| cyi),
                     pattern: pattern.clone(),
                     iterable: Box::new(src.clone()),
                     attributes: Vec::new(),
@@ -3963,7 +4071,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(&count.kind, ExprKind::Closure { .. }) {
             return Ok(None);
         }
-        let Some(var_name) = self.peel_iter_to_scalar_vec_ident(src) else {
+        let Some(var_name) = self.peel_iter_to_vec_ident(src) else {
             return Ok(None);
         };
         let Some(elem_te) = self.var_elem_type_exprs.get(var_name.as_str()).cloned() else {
@@ -4170,7 +4278,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Outer loop body: materialize the group, bind, run the user body.
         let mut outer_body = vec![
             let_stmt(false, &end_name.replace("__wce", "__wcge"), None, group_end),
-            let_stmt(true, &v_name, Some(vec_te), vec_new),
+            let_stmt(true, &v_name, Some(vec_te.clone()), vec_new),
             Stmt {
                 kind: StmtKind::Expr(Expr {
                     kind: ExprKind::For {
@@ -4198,7 +4306,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind: StmtKind::Let {
                     is_mut: false,
                     pattern: pattern.clone(),
-                    ty: None,
+                    // Explicit Vec[T] annotation: when this desugar runs UNDER
+                    // the fused-chain desugar (adaptors after windows/chunks),
+                    // the binding sits at a synthesized span with no
+                    // typechecker record — without the annotation the group
+                    // binding never registers as a Vec and `w[0]` / `w.len()`
+                    // in the downstream stages fail to dispatch.
+                    ty: Some(vec_te.clone()),
                     value: ident(&v_name),
                 },
                 span: sp.clone(),
@@ -4243,5 +4357,381 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
         Ok(Some(self.compile_expr(&block)?))
+    }
+}
+
+impl<'ctx> super::Codegen<'ctx> {
+    /// Lower `for g in xs.iter().chunk_by(|x| <key>) { <body> }` over a NAMED
+    /// SCALAR-element Vec (B-2026-07-14-8, chunk_by leg). Two phases:
+    ///
+    /// ```text
+    /// { let __cbl: i64 = xs.len();
+    ///   let mut __cbst: Vec[i64] = Vec.new();          // group START indices
+    ///   let mut __cbi: i64 = 0;
+    ///   while __cbi < __cbl {
+    ///       if __cbi == 0 { __cbst.push(0); }
+    ///       else if !({let x = xs[__cbi - 1]; key} == {let x = xs[__cbi]; key})
+    ///            { __cbst.push(__cbi); }
+    ///       __cbi = __cbi + 1;
+    ///   }
+    ///   __cbst.push(__cbl);                            // sentinel end
+    ///   [label:] for __cbg in 0..(__cbst.len() - 1) {
+    ///       <group Vec build from __cbst[__cbg] .. __cbst[__cbg + 1]>
+    ///       let <pat>: Vec[T] = __cbv;  <body>
+    ///   } }
+    /// ```
+    ///
+    /// The boundary walk is fully synthesized (no user code inside the
+    /// `while`), so the user body sits in an ordinary `for` — break /
+    /// continue / labels bind naturally. Groups are fresh `Vec[T]`s like the
+    /// interpreter's `ChunkBy` source. Key equality uses `==` on the key
+    /// values (String keys compare by content like the interpreter's
+    /// `Value::PartialEq`). Known, documented divergence: the key closure
+    /// re-evaluates at both sides of each boundary (≤ 2× per element) where
+    /// the interpreter caches one key per element — observable only with a
+    /// side-effecting key closure. Scalar elements only; other shapes fail
+    /// closed to the loud `.chunk_by()` bail.
+    pub(super) fn try_compile_for_chunk_by(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        src: &Expr,
+        key_closure: &Expr,
+        body: &Block,
+        span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let ExprKind::Closure {
+            params,
+            body: key_body,
+            ..
+        } = &key_closure.kind
+        else {
+            return Ok(None);
+        };
+        if params.len() != 1 {
+            return Ok(None);
+        }
+        let PatternKind::Binding(key_p) = &params[0].pattern.kind else {
+            return Ok(None);
+        };
+        let Some(var_name) = self.peel_iter_to_vec_ident(src) else {
+            return Ok(None);
+        };
+        let Some(elem_te) = self.var_elem_type_exprs.get(var_name.as_str()).cloned() else {
+            return Ok(None);
+        };
+        // Key-shape gate. An IDENTITY key (`|x| x`) compares the elements
+        // directly (`xs[i-1] == xs[i]`) with NO synthesized binding block —
+        // safe for any element type. A COMPUTED key must bind the element
+        // into the synthesized `{ let x = xs[i]; <key> }` block, and for a
+        // HEAP element that binding is an unregistered clone the block never
+        // frees (leaks one buffer per boundary compare — found by valgrind on
+        // the heap-element leg) — so computed keys require SCALAR elements;
+        // heap-element computed-key chunk_by fails closed to the loud bail.
+        let identity_key = matches!(&key_body.kind, ExprKind::Identifier(n) if n == key_p);
+        if !identity_key && !super::vec_method::is_trivially_copyable_te(&elem_te) {
+            return Ok(None);
+        }
+        let vec_te = Self::vec_type_expr_from_element(&elem_te);
+
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let sp = span.clone();
+        let len_n = format!("__cbl_{uid}");
+        let starts_n = format!("__cbst_{uid}");
+        let i_n = format!("__cbi_{uid}");
+        let g_n = format!("__cbg_{uid}");
+        let j_n = format!("__cbj_{uid}");
+        let s_n = format!("__cbs_{uid}");
+        let e_n = format!("__cbe_{uid}");
+        let v_n = format!("__cbv_{uid}");
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let i64_lit = |n: i64| Expr {
+            kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
+            span: sp.clone(),
+        };
+        let i64_ty = || TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["i64".to_string()],
+                generic_args: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let vec_i64_ty = || TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![GenericArg::Type(i64_ty())]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
+            kind: StmtKind::Let {
+                is_mut,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name.to_string()),
+                    span: sp.clone(),
+                },
+                ty,
+                value,
+            },
+            span: sp.clone(),
+        };
+        let bin = |op: BinOp, l: Expr, r: Expr| Expr {
+            kind: ExprKind::Binary {
+                op,
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            span: sp.clone(),
+        };
+        let index = |obj: Expr, idx: Expr| Expr {
+            kind: ExprKind::Index {
+                object: Box::new(obj),
+                index: Box::new(idx),
+            },
+            span: sp.clone(),
+        };
+        let call1 = |obj: Expr, method: &str, arg: Option<Expr>| Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(obj),
+                method: method.to_string(),
+                turbofish: None,
+                args: arg
+                    .map(|a| {
+                        vec![CallArg {
+                            label: None,
+                            mut_marker: false,
+                            value: a,
+                            span: sp.clone(),
+                        }]
+                    })
+                    .unwrap_or_default(),
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+        // The key of one element: for an identity key, the element itself
+        // (`xs[<idx>]` — compared in place, no binding); for a computed key,
+        // `{ let <key_p> = xs[<idx>]; <key_body> }` (scalar elements only,
+        // per the gate above).
+        let key_of = |idx: Expr| -> Expr {
+            if identity_key {
+                return index(ident(&var_name), idx);
+            }
+            Expr {
+                kind: ExprKind::Block(Block {
+                    stmts: vec![let_stmt(false, key_p, None, index(ident(&var_name), idx))],
+                    final_expr: Some(Box::new((**key_body).clone())),
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            }
+        };
+        let expr_stmt = |e: Expr| Stmt {
+            kind: StmtKind::Expr(e),
+            span: sp.clone(),
+        };
+        let if_stmt = |cond: Expr, then_stmts: Vec<Stmt>, else_stmts: Option<Vec<Stmt>>| {
+            expr_stmt(Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(cond),
+                    then_block: Block {
+                        stmts: then_stmts,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                    else_branch: else_stmts.map(|s| {
+                        Box::new(Expr {
+                            kind: ExprKind::Block(Block {
+                                stmts: s,
+                                final_expr: None,
+                                span: sp.clone(),
+                            }),
+                            span: sp.clone(),
+                        })
+                    }),
+                },
+                span: sp.clone(),
+            })
+        };
+        let assign = |name: &str, value: Expr| Stmt {
+            kind: StmtKind::Assign {
+                target: ident(name),
+                value,
+            },
+            span: sp.clone(),
+        };
+        let push_to = |vec: &str, val: Expr| expr_stmt(call1(ident(vec), "push", Some(val)));
+
+        // Phase 1: boundary walk.
+        let boundary_check = if_stmt(
+            bin(BinOp::Eq, ident(&i_n), i64_lit(0)),
+            vec![push_to(&starts_n, i64_lit(0))],
+            Some(vec![if_stmt(
+                Expr {
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::Not,
+                        operand: Box::new(bin(
+                            BinOp::Eq,
+                            key_of(bin(BinOp::Sub, ident(&i_n), i64_lit(1))),
+                            key_of(ident(&i_n)),
+                        )),
+                    },
+                    span: sp.clone(),
+                },
+                vec![push_to(&starts_n, ident(&i_n))],
+                None,
+            )]),
+        );
+        let while_walk = expr_stmt(Expr {
+            kind: ExprKind::While {
+                label: None,
+                condition: Box::new(bin(BinOp::Lt, ident(&i_n), ident(&len_n))),
+                body: Block {
+                    stmts: vec![
+                        boundary_check,
+                        assign(&i_n, bin(BinOp::Add, ident(&i_n), i64_lit(1))),
+                    ],
+                    final_expr: None,
+                    span: sp.clone(),
+                },
+                attributes: Vec::new(),
+            },
+            span: sp.clone(),
+        });
+
+        // Phase 2: the group loop.
+        let vec_new = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+        let mut group_body = vec![
+            let_stmt(false, &s_n, None, index(ident(&starts_n), ident(&g_n))),
+            let_stmt(
+                false,
+                &e_n,
+                None,
+                index(ident(&starts_n), bin(BinOp::Add, ident(&g_n), i64_lit(1))),
+            ),
+            let_stmt(true, &v_n, Some(vec_te.clone()), vec_new),
+            expr_stmt(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(j_n.clone()),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(Expr {
+                        kind: ExprKind::Range {
+                            start: Some(Box::new(ident(&s_n))),
+                            end: Some(Box::new(ident(&e_n))),
+                            inclusive: false,
+                        },
+                        span: sp.clone(),
+                    }),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: vec![push_to(&v_n, index(ident(&var_name), ident(&j_n)))],
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            Stmt {
+                kind: StmtKind::Let {
+                    is_mut: false,
+                    pattern: pattern.clone(),
+                    ty: Some(vec_te),
+                    value: ident(&v_n),
+                },
+                span: sp.clone(),
+            },
+        ];
+        group_body.extend(body.stmts.iter().cloned());
+        if let Some(fe) = &body.final_expr {
+            group_body.push(expr_stmt((**fe).clone()));
+        }
+        let group_for = expr_stmt(Expr {
+            kind: ExprKind::For {
+                label: label.map(str::to_string),
+                pattern: Pattern {
+                    kind: PatternKind::Binding(g_n.clone()),
+                    span: sp.clone(),
+                },
+                iterable: Box::new(Expr {
+                    kind: ExprKind::Range {
+                        start: Some(Box::new(i64_lit(0))),
+                        end: Some(Box::new(bin(
+                            BinOp::Sub,
+                            call1(ident(&starts_n), "len", None),
+                            i64_lit(1),
+                        ))),
+                        inclusive: false,
+                    },
+                    span: sp.clone(),
+                }),
+                attributes: Vec::new(),
+                body: Block {
+                    stmts: group_body,
+                    final_expr: None,
+                    span: sp.clone(),
+                },
+            },
+            span: sp.clone(),
+        });
+
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![
+                    let_stmt(
+                        false,
+                        &len_n,
+                        Some(i64_ty()),
+                        call1(ident(&var_name), "len", None),
+                    ),
+                    let_stmt(true, &starts_n, Some(vec_i64_ty()), vec_new_expr(&sp)),
+                    let_stmt(true, &i_n, Some(i64_ty()), i64_lit(0)),
+                    while_walk,
+                    push_to(&starts_n, ident(&len_n)),
+                    group_for,
+                ],
+                final_expr: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+}
+
+/// A `Vec.new()` call expr — shared by the synthesized-group desugars.
+fn vec_new_expr(sp: &crate::token::Span) -> Expr {
+    Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Path {
+                    segments: vec!["Vec".to_string(), "new".to_string()],
+                    generic_args: None,
+                },
+                span: sp.clone(),
+            }),
+            args: vec![],
+        },
+        span: sp.clone(),
     }
 }

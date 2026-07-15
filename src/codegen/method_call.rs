@@ -7641,6 +7641,15 @@ impl<'ctx> super::Codegen<'ctx> {
             ..
         } = &base.kind
         {
+            // `peekable()` in a CHAIN position is a pure identity — the
+            // `Peekable` wrapper only changes behavior through `.peek()`
+            // calls on a materialized iterator binding, which a fused chain
+            // never has (B-2026-07-14-8, peekable leg). Peel it off with no
+            // step.
+            if method == "peekable" && args.is_empty() {
+                base = object;
+                continue;
+            }
             let kind = match method.as_str() {
                 "map" => FusedStepKind::Map,
                 "filter" => FusedStepKind::Filter,
@@ -7690,11 +7699,12 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let base_ok = match &base.kind {
             ExprKind::MethodCall { method, args, .. } => {
-                args.is_empty()
+                (args.is_empty()
                     && matches!(
                         method.as_str(),
                         "iter" | "iter_mut" | "into_iter" | "chars" | "bytes" | "keys" | "values"
-                    )
+                    ))
+                    || Self::peel_base_is_structural_adaptor(base)
             }
             ExprKind::Range { .. } => true,
             _ => false,
@@ -7703,6 +7713,67 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         Some((base, steps))
+    }
+
+    /// True iff `base` is a STRUCTURAL-adaptor chain the for-loop lowers via
+    /// its own desugar (flat_map / cycle / scan / windows / chunks), making it
+    /// a valid fused-chain BASE: the fused desugar emits `for <elem> in
+    /// <base>` and `compile_for` recursion handles it (B-2026-07-14-8,
+    /// post-structural chaining). Composition is sound because the flat_map /
+    /// cycle desugars RETARGET unlabeled breaks in their body onto their outer
+    /// label — a downstream `take`/`take_while` step's synthesized `break`
+    /// therefore exits the whole structure, and the fused steps' hoisted state
+    /// (skip_while latches, take/step_by counters) lives OUTSIDE the emitted
+    /// `for`, persisting across cycle restarts / flat_map batches exactly like
+    /// the interpreter's post-adaptor step list. Shape gates only — a base
+    /// that passes here but whose own desugar declines (e.g. heap-element
+    /// windows over a non-named source) fails LOUD via the adaptor bail,
+    /// never silently.
+    fn peel_base_is_structural_adaptor(base: &Expr) -> bool {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &base.kind
+        else {
+            return false;
+        };
+        match method.as_str() {
+            "flat_map" => Self::for_loop_iterates_flat_map(base),
+            "cycle" if args.is_empty() => Self::peel_fused_map_filter_chain(object).is_some(),
+            "scan" if args.len() == 2 => {
+                let ExprKind::Closure { params, body, .. } = &args[1].value.kind else {
+                    return false;
+                };
+                params.len() == 2
+                    && params
+                        .iter()
+                        .all(|p| matches!(&p.pattern.kind, PatternKind::Binding(_)))
+                    && matches!(
+                        &body.kind,
+                        ExprKind::Call { callee, args: cargs } if cargs.len() == 1
+                            && matches!(
+                                &callee.kind,
+                                ExprKind::Identifier(n) if n == "Some"
+                            )
+                    )
+                    && Self::peel_fused_map_filter_chain(object).is_some()
+            }
+            "windows" | "chunks" if args.len() == 1 => {
+                !matches!(&args[0].value.kind, ExprKind::Closure { .. })
+                    && Self::peel_fused_map_filter_chain(object).is_some()
+            }
+            "chunk_by" if args.len() == 1 => {
+                matches!(
+                    &args[0].value.kind,
+                    ExprKind::Closure { params, .. }
+                        if params.len() == 1
+                            && matches!(&params[0].pattern.kind, PatternKind::Binding(_))
+                ) && Self::peel_fused_map_filter_chain(object).is_some()
+            }
+            _ => false,
+        }
     }
 
     /// Materialized-iterator substitution (B-2026-07-11-19): if `recv`'s base

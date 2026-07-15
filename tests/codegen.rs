@@ -8857,6 +8857,92 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_adaptor_tail_complete() {
+        // B-2026-07-14-8 (tail completion): peekable as identity (for-loops,
+        // mid-chain, terminals); adaptors chained AFTER structural adaptors
+        // (flat_map/cycle/windows/chunks/scan/chunk_by as fused-chain BASES);
+        // labeled flat_map/cycle (label on the outer loop, labeled continue
+        // renamed to the inner); chunk_by (identity + computed keys); HEAP
+        // (String) elements through zip/chain/skip-take windows and the
+        // windows/chunks/chunk_by group builds (group pushes clone; sources
+        // survive). Must match the interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let xs: Vec[i64] = [1, 2, 3, 4, 5];\n\
+                 let vv: Vec[Vec[i64]] = [[1, 2], [3], [4, 5]];\n\
+                 let mut a: i64 = 0;\n\
+                 for x in xs.iter().peekable() { a = a + x; }\n\
+                 println(a);\n\
+                 println(xs.iter().peekable().filter(|v| v % 2 == 1).sum());\n\
+                 let mut b: i64 = 0;\n\
+                 for y in vv.iter().flat_map(|row| row.iter()).filter(|v| v > 2) { b = b + y; }\n\
+                 println(b);\n\
+                 let mut c: i64 = 0;\n\
+                 for x in xs.iter().cycle().take(7) { c = c + x; }\n\
+                 println(c);\n\
+                 let mut d: i64 = 0;\n\
+                 for w in xs.iter().windows(2).skip(2) { d = d + w[0]; }\n\
+                 println(d);\n\
+                 let mut g1: i64 = 0;\n\
+                 out1: for y in vv.iter().flat_map(|row| row.iter()) {\n\
+                     g1 = g1 + y;\n\
+                     if y == 3 { break out1 (); }\n\
+                 }\n\
+                 println(g1);\n\
+                 let mut h: i64 = 0;\n\
+                 out2: for y in vv.iter().flat_map(|row| row.iter()) {\n\
+                     if y % 2 == 0 { continue out2; }\n\
+                     h = h + y;\n\
+                 }\n\
+                 println(h);\n\
+                 let mut m: i64 = 0;\n\
+                 let mut pulls: i64 = 0;\n\
+                 out4: for x in xs.iter().cycle() {\n\
+                     pulls = pulls + 1;\n\
+                     if pulls == 12 { break; }\n\
+                     if x % 2 == 0 { continue out4; }\n\
+                     m = m + x;\n\
+                 }\n\
+                 println(m);\n\
+                 let rs: Vec[i64] = [1, 1, 2, 2, 2, 3];\n\
+                 for g in rs.iter().chunk_by(|x| x) { println(f\"{g.len()}:{g[0]}\"); }\n\
+                 let mut lens: i64 = 0;\n\
+                 for g in rs.iter().chunk_by(|x| x % 2) { lens = lens * 10 + g.len(); }\n\
+                 println(lens);\n\
+                 let mut w2: i64 = 0;\n\
+                 for g in rs.iter().chunk_by(|x| x).filter(|q| q.len() >= 2) { w2 = w2 + g[0]; }\n\
+                 println(w2);\n\
+                 let names: Vec[String] = [f\"ant\", f\"bee\", f\"cat\", f\"dog\"];\n\
+                 let tags: Vec[String] = [f\"x\", f\"yy\", f\"zzz\"];\n\
+                 let mut za: i64 = 0;\n\
+                 for (n, t) in names.iter().zip(tags.iter()) { za = za + n.len() + t.len(); }\n\
+                 println(za);\n\
+                 let mut ch: String = f\"\";\n\
+                 for w in names.iter().chain(tags.iter()) {\n\
+                     if w == \"cat\" { break; }\n\
+                     ch = ch + w;\n\
+                 }\n\
+                 println(ch);\n\
+                 let mut sk: String = f\"\";\n\
+                 for w in names.iter().skip(1).take(2) { sk = sk + w + f\"|\"; }\n\
+                 println(sk);\n\
+                 let hs: Vec[String] = [f\"aa\", f\"bb\", f\"aa\", f\"cc\", f\"cc\"];\n\
+                 for w in hs.iter().windows(2) { println(f\"{w[0]}~{w[1]}\"); }\n\
+                 let mut hc: i64 = 0;\n\
+                 for c2 in hs.iter().chunks(2) { hc = hc + c2.len(); }\n\
+                 println(hc);\n\
+                 for g in hs.iter().chunk_by(|x| x) { println(f\"{g.len()}:{g[0]}\"); }\n\
+                 println(hs.len());\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "15\n9\n12\n18\n7\n6\n9\n19\n2:1\n3:2\n1:3\n231\n3\n15\nantbee\nbee|cat|\naa~bb\nbb~aa\naa~cc\ncc~cc\n5\n1:aa\n1:bb\n1:aa\n2:cc\n5\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_for_windows_chunks() {
         // B-2026-07-14-8 (windows/chunks legs): both adaptors yield a FRESH
         // `Vec[T]` per group (matching the interpreter's per-pull allocation),
@@ -12099,31 +12185,29 @@ fn main() {
                  println(f\"{s}\");",
             ),
             (
-                // The scalar two-Vec `for (a, b) in xs.iter().zip(ys.iter())`
-                // shape is now LOWERED (test_e2e_for_zip_two_vecs), so the bail
-                // contract covers a still-unsupported zip shape: HEAP (String)
-                // elements.
-                "zip",
-                "let a: Vec[String] = Vec[f\"x\", f\"y\"];\n\
-                 let b: Vec[String] = Vec[f\"p\", f\"q\"];\n\
+                // Heap-element zip is now LOWERED (the loop-borrow marking,
+                // test_e2e_for_adaptor_tail_complete), so the bail contract
+                // covers a still-unsupported zip shape: a SINGLE-var binding
+                // (the pair would need tuple materialization like enumerate).
+                "zip (single-var binding)",
+                "let a: Vec[i64] = Vec[1i64, 2i64];\n\
+                 let b: Vec[i64] = Vec[3i64, 4i64];\n\
                  let mut s = 0i64;\n\
-                 for (x, y) in a.iter().zip(b.iter()) { s = s + 1i64; }\n\
+                 for p in a.iter().zip(b.iter()) { s = s + p.0; }\n\
                  println(f\"{s}\");",
             ),
             (
                 // `flat_map` for-loops are now LOWERED via the nested-loop
-                // desugar (test_e2e_for_flat_map), so the bail contract covers
-                // a shape the desugar declines: a USER LABEL on the loop (a
-                // labeled `continue` means "next flat element", which the
-                // nested shape cannot express without rewriting the user's own
-                // labels). The interpreter handles it.
-                "flat_map (labeled loop)",
-                "let vv: Vec[Vec[i64]] = Vec[Vec[1i64, 2i64], Vec[3i64]];\n\
+                // desugar (test_e2e_for_flat_map) — INCLUDING labeled loops
+                // (the label lands on the outer loop; labeled continues are
+                // renamed to the inner loop). The bail contract covers a shape
+                // the desugar still declines: a DESTRUCTURING closure param.
+                // The interpreter handles it.
+                "flat_map (destructuring closure param)",
+                "let ps: Vec[(i64, i64)] = Vec[(1i64, 2i64), (3i64, 4i64)];\n\
+                 let vv: Vec[Vec[i64]] = Vec[Vec[1i64]];\n\
                  let mut s = 0i64;\n\
-                 out: for y in vv.iter().flat_map(|row| row.iter()) {\n\
-                     s = s + y;\n\
-                     if y == 2i64 { break out (); }\n\
-                 }\n\
+                 for y in ps.iter().flat_map(|(a, b)| vv[0].iter()) { s = s + y; }\n\
                  println(f\"{s}\");",
             ),
             (
@@ -12139,14 +12223,13 @@ fn main() {
                  println(f\"{s}\");",
             ),
             (
-                // The scalar two-Vec chain shape is now LOWERED
-                // (test_e2e_for_chain_two_vecs); the bail contract covers the
-                // heap-element chain shape.
-                "chain",
-                "let v: Vec[String] = Vec[f\"a\"];\n\
-                 let w: Vec[String] = Vec[f\"b\"];\n\
+                // Heap-element chain is now LOWERED (loop-borrow marking,
+                // test_e2e_for_adaptor_tail_complete); the bail contract
+                // covers a chain whose side is NOT a named Vec (a range).
+                "chain (range side)",
+                "let v: Vec[i64] = Vec[1i64];\n\
                  let mut s = 0i64;\n\
-                 for x in v.iter().chain(w.iter()) { s = s + 1i64; }\n\
+                 for x in v.iter().chain(0..3) { s = s + x; }\n\
                  println(f\"{s}\");",
             ),
         ];
@@ -12194,20 +12277,24 @@ fn main() {
     /// test_e2e_for_chain_two_vecs).
     #[test]
     fn e2e_for_unlowered_iter_adaptor_message() {
-        // `cycle` is now lowered (test_e2e_for_cycle) — `peekable` remains a
-        // genuinely-unlowered adaptor for the message contract.
+        // Every ADAPTOR now has a lowering (`peekable` peels as identity;
+        // `cycle`/`scan`/… have desugars) — the message contract now rides on
+        // a still-declined SHAPE: `scan`'s conditional-`None` early-stop body
+        // (the desugar only handles direct `Some((new, out))` bodies; the
+        // Option-typed early-stop needs typed match reconstruction on
+        // synthetic AST — deferred with rationale in the ledger).
         let err = ir_result(
             "fn main() {\n\
                  let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];\n\
                  let mut s = 0i64;\n\
-                 for x in v.iter().peekable() { s = s + x; }\n\
+                 for x in v.iter().scan(0i64, |acc, q| if q > 2i64 { None } else { Some((acc + q, acc + q)) }) { s = s + x; }\n\
                  println(f\"{s}\");\n\
              }\n",
         )
-        .expect_err("peekable for-loop must bail loud, not silently skip");
+        .expect_err("early-stop scan for-loop must bail loud, not silently skip");
         assert!(
-            err.contains("`.peekable()`") && err.contains("not yet lowered"),
-            "expected peekable loud-bail message, got: {err}"
+            err.contains("`.scan()`") && err.contains("not yet lowered"),
+            "expected scan loud-bail message, got: {err}"
         );
     }
 
