@@ -1162,10 +1162,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(self.finish_vec_filled_agg(buf, n));
         }
 
-        let alloc_bytes = self
-            .builder
-            .build_int_mul(n, elem_size, "filled.alloc_bytes")
-            .unwrap();
+        // User-controlled count: overflow-checked multiply (the calloc fast
+        // path above gets the equivalent check inside the runtime wrapper).
+        let alloc_bytes = self.checked_alloc_bytes(n, elem_size, "filled")?;
         let buf = self
             .builder
             .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "filled.buf")
@@ -3317,7 +3316,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // analysis didn't prove. The runtime panic path is reachable iff
         // some unproven half fails; both halves proven → no runtime
         // check at all (status quo for `unsafe { v.get_unchecked(i) }`).
-        self.emit_split_bounds_check("vidx", idx_val, vec_ty, vec_ptr, lower_proven, upper_proven);
+        self.emit_split_bounds_check(
+            "vidx",
+            idx_val,
+            vec_ty,
+            vec_ptr,
+            lower_proven,
+            upper_proven,
+            Some(elem_ty),
+        );
 
         // `inbounds` (Codegen Optimization § no-wrap facts): this element GEP is
         // reached only with a valid in-range index — either the bounds check
@@ -3486,6 +3493,119 @@ impl<'ctx> super::Codegen<'ctx> {
         None
     }
 
+    /// The exclusive upper bound for the `!range` metadata attached to
+    /// Vec/String `len` loads: `2^61`. Sound because every collection buffer
+    /// allocation routes through the runtime wrappers (`karac_alloc_or_panic`
+    /// / `karac_alloc_fallible` / `karac_realloc_or_panic` /
+    /// `karac_alloc_zeroed_or_panic`), which refuse any request beyond
+    /// `KARAC_MAX_ALLOC_BYTES = 2^61 - 1` bytes (`runtime/src/alloc.rs`) —
+    /// so for a non-zero-sized element, `len <= cap <= cap * elem_size
+    /// <= 2^61 - 1 < 2^61` on every live Vec/String. Byte-count computations
+    /// feeding those wrappers from USER-controlled counts guard the multiply
+    /// via [`Self::checked_alloc_bytes`], so a wrapped product can never
+    /// sneak a huge `cap` past the wrappers' ceiling.
+    pub(super) const LEN_RANGE_EXCLUSIVE_MAX: u64 = 1u64 << 61;
+
+    /// Attach `!range [0, 2^61)` metadata to a just-emitted Vec/String `len`
+    /// load (B-2026-07-10-5). This is the fact rustc gets from its
+    /// `Layout <= isize::MAX` contract and karac previously never
+    /// communicated: without it LLVM must assume `len` can be `i64::MAX`, so
+    /// len-derived arithmetic keeps its overflow checks in hot loops —
+    /// `n + 1` stays flag-checked per iteration, and `l + 1` under a
+    /// dominating `l <u len` bounds check keeps a full checked add. With the
+    /// range, both fold; the #76 two-pointer loop reaches exact instruction
+    /// parity with equal-safety rustc (22/8 instrs per outer/inner iteration
+    /// on aarch64).
+    ///
+    /// `elem_ty` gates soundness: the `len <= cap * elem_size` argument
+    /// needs elements of at least one byte, and kara permits zero-sized
+    /// elements (`struct E {}` compiles; `Vec[E]` never allocates, so its
+    /// `cap`/`len` are unbounded by the allocator ceiling). Callers pass the
+    /// element type when they have it; an unknown (`None`) or
+    /// not-provably-nonzero size skips the annotation — conservative, never
+    /// wrong. String callers pass the byte type (size 1).
+    pub(super) fn annotate_len_load_range(
+        &self,
+        load: BasicValueEnum<'ctx>,
+        elem_ty: Option<BasicTypeEnum<'ctx>>,
+    ) {
+        if !elem_ty.is_some_and(Self::type_has_nonzero_size) {
+            return;
+        }
+        if let Some(inst) = load.as_instruction_value() {
+            let i64_t = self.context.i64_type();
+            let range = self.context.metadata_node(&[
+                i64_t.const_zero().into(),
+                i64_t.const_int(Self::LEN_RANGE_EXCLUSIVE_MAX, false).into(),
+            ]);
+            let _ = inst.set_metadata(range, self.context.get_kind_id("range"));
+        }
+    }
+
+    /// Whether `ty` provably occupies at least one byte. Structural walk
+    /// rather than `size_of()`: LLVM's `sizeof` constant is an unfolded
+    /// `ptrtoint (gep …)` constant EXPRESSION (not a `ConstantInt`), so it
+    /// can't be inspected at build time. `true` only when the type
+    /// definitely stores >= 1 byte; empty structs / zero-length arrays /
+    /// all-zero-sized aggregates (the `struct E {}` family) return `false`,
+    /// which conservatively skips the `!range` len annotation for them.
+    fn type_has_nonzero_size(ty: BasicTypeEnum<'ctx>) -> bool {
+        match ty {
+            BasicTypeEnum::IntType(_)
+            | BasicTypeEnum::FloatType(_)
+            | BasicTypeEnum::PointerType(_)
+            | BasicTypeEnum::VectorType(_)
+            | BasicTypeEnum::ScalableVectorType(_) => true,
+            BasicTypeEnum::ArrayType(a) => {
+                !a.is_empty() && Self::type_has_nonzero_size(a.get_element_type())
+            }
+            BasicTypeEnum::StructType(s) => {
+                s.get_field_types_iter().any(Self::type_has_nonzero_size)
+            }
+        }
+    }
+
+    /// Compute `count * elem_size` for a buffer allocation with an
+    /// **unsigned** overflow check, panicking `capacity overflow` on wrap.
+    /// Required at every allocation site whose element count is
+    /// user-controlled (`Vec.with_capacity(n)`, `Vec.filled(n, v)`,
+    /// `String.repeat(n)`, …): a plain wrapping multiply would let
+    /// `with_capacity((1 << 61) + 1)` of an 8-byte element wrap to an
+    /// 8-byte allocation while recording the huge `cap` — a heap overflow on
+    /// the first pushes (memory unsafety on its own), and a hole in the
+    /// `len < 2^61` invariant that [`Self::annotate_len_load_range`] rests
+    /// on. Counts derived from EXISTING collection lens/caps don't need this
+    /// (bounded by the allocator ceiling, sums/doublings can't wrap u64);
+    /// honest-but-huge non-wrapping products are refused by the runtime
+    /// wrappers' `KARAC_MAX_ALLOC_BYTES` ceiling.
+    ///
+    /// A negative `count` reads as a huge unsigned value, so it lands in the
+    /// same panic — previously it produced a negative byte count that only
+    /// failed OOM-abort inside the allocator.
+    pub(super) fn checked_alloc_bytes(
+        &mut self,
+        count: IntValue<'ctx>,
+        elem_size: IntValue<'ctx>,
+        label: &str,
+    ) -> Result<IntValue<'ctx>, String> {
+        let (bytes, overflowed) = self.emit_overflow_intrinsic("mul", count, elem_size, true)?;
+        let fn_val = self.current_fn.unwrap();
+        let trap_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{label}.capovf"));
+        let ok_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{label}.capok"));
+        self.builder
+            .build_conditional_branch(overflowed, trap_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(trap_bb);
+        self.emit_panic("capacity overflow");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+        Ok(bytes)
+    }
+
     /// Emit the runtime bounds check for `vec_ptr[idx]`, dropping
     /// whichever half(s) the caller's `lower_proven` / `upper_proven`
     /// flags say are already established. The remaining branches still
@@ -3496,6 +3616,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// all — the caller's GEP+load runs straight through, matching the
     /// shape of `Vec.get_unchecked` for safe code that the source-level
     /// guard already justifies.
+    ///
+    /// `elem_ty` (when known to the caller) lets the emitted `len` load
+    /// carry the `!range [0, 2^61)` fact — see
+    /// [`Self::annotate_len_load_range`]; `None` just skips the annotation.
+    #[allow(clippy::too_many_arguments)] // two proof flags + the len-range elem type push it to 8
     pub(super) fn emit_split_bounds_check(
         &mut self,
         label_prefix: &str,
@@ -3504,6 +3629,7 @@ impl<'ctx> super::Codegen<'ctx> {
         vec_ptr: PointerValue<'ctx>,
         lower_proven: bool,
         upper_proven: bool,
+        elem_ty: Option<BasicTypeEnum<'ctx>>,
     ) {
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();
@@ -3531,6 +3657,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(i64_t, len_ptr, "v.len")
                 .unwrap()
                 .into_int_value();
+            self.annotate_len_load_range(len.into(), elem_ty);
             let oob_bb = self
                 .context
                 .append_basic_block(fn_val, &format!("{label_prefix}.oob"));
@@ -3597,6 +3724,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(i64_t, len_ptr, "v.len")
                 .unwrap()
                 .into_int_value();
+            self.annotate_len_load_range(len.into(), elem_ty);
             let oob_bb = self
                 .context
                 .append_basic_block(fn_val, &format!("{label_prefix}.oob.upper"));
@@ -3654,7 +3782,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
 
-        self.emit_split_bounds_check("v.st", idx_val, vec_ty, vec_ptr, lower_proven, upper_proven);
+        self.emit_split_bounds_check(
+            "v.st",
+            idx_val,
+            vec_ty,
+            vec_ptr,
+            lower_proven,
+            upper_proven,
+            Some(elem_ty),
+        );
         // `inbounds`: bounds-check-dominated (or BCE-proven) element store — see
         // the `vec_index_elem_ptr` read path for the full rationale.
         let elem_ptr = unsafe {
@@ -3804,7 +3940,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(ptr_ty, outer_data_pp, "nvv.outer.data")
             .unwrap()
             .into_pointer_value();
-        self.emit_split_bounds_check("nvv.outer", oi, vec_ty, outer_vec_ptr, outer_lo, outer_hi);
+        self.emit_split_bounds_check(
+            "nvv.outer",
+            oi,
+            vec_ty,
+            outer_vec_ptr,
+            outer_lo,
+            outer_hi,
+            Some(outer_elem_ty),
+        );
         let inner_vec_ptr = unsafe {
             self.builder
                 .build_gep(outer_elem_ty, outer_data, &[oi], "nvv.inner.vec.ptr")
@@ -3826,7 +3970,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(ptr_ty, inner_data_pp, "nvv.inner.data")
             .unwrap()
             .into_pointer_value();
-        self.emit_split_bounds_check("nvv.inner", ii, vec_ty, inner_vec_ptr, false, false);
+        self.emit_split_bounds_check(
+            "nvv.inner",
+            ii,
+            vec_ty,
+            inner_vec_ptr,
+            false,
+            false,
+            Some(inner_elem_ty),
+        );
         let leaf_ptr = unsafe {
             self.builder
                 .build_gep(inner_elem_ty, inner_data, &[ii], "nvv.leaf.ptr")
@@ -3866,6 +4018,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // shared with Vec (`vec index out of bounds`) per the kata-5
         // precedent; users routing through `Slice.get` get the typed
         // diagnostic via the safe path, this is the unsafe-form panic.
+        // `None` elem_ty: a slice can view a stack `Array`, whose length is
+        // not bounded by the allocator ceiling the `!range` len annotation
+        // rests on — skip the annotation on slice len loads until array
+        // sizes are capped at the type level.
         self.emit_split_bounds_check(
             "s.st",
             idx_val,
@@ -3873,6 +4029,7 @@ impl<'ctx> super::Codegen<'ctx> {
             slice_ptr,
             lower_proven,
             upper_proven,
+            None,
         );
         // `inbounds`: bounds-check-dominated (or BCE-proven) slice element store
         // — see the `vec_index_elem_ptr` read path for the full rationale.
@@ -3921,6 +4078,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
 
+        // `None` elem_ty: same Array-backed-slice caveat as the `s.st` site.
         self.emit_split_bounds_check(
             "sidx",
             idx_val,
@@ -3928,6 +4086,7 @@ impl<'ctx> super::Codegen<'ctx> {
             slice_ptr,
             lower_proven,
             upper_proven,
+            None,
         );
         // `inbounds`: bounds-check-dominated (or BCE-proven) slice element read
         // — see the `vec_index_elem_ptr` read path for the full rationale.

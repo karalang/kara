@@ -1523,6 +1523,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i64_t, len_ptr, "for.v.len")
             .unwrap()
             .into_int_value();
+        // `!range [0, 2^61)` — folds overflow checks on loop-bound
+        // arithmetic derived from this len (see `annotate_len_load_range`,
+        // B-2026-07-10-5).
+        self.annotate_len_load_range(len.into(), Some(elem_ty));
         let data = self
             .builder
             .build_load(ptr_ty, data_ptr_ptr, "for.v.data")

@@ -13373,6 +13373,84 @@ fn main() {
     }
 
     #[test]
+    fn ir_vec_len_load_carries_range_metadata() {
+        // B-2026-07-10-5: a Vec `.len()` load carries `!range [0, 2^61)` —
+        // sound because every collection buffer allocation is capped at
+        // `KARAC_MAX_ALLOC_BYTES = 2^61 - 1` bytes by the runtime wrappers
+        // (`runtime/src/alloc.rs`), so `len <= cap <= cap * elem_size < 2^61`
+        // for any non-zero-sized element. The fact lets LLVM fold overflow
+        // checks on len-derived arithmetic (`n + 1`, `l + 1` under a
+        // dominating bounds check), reaching instruction parity with
+        // equal-safety rustc on the #76 two-pointer loop shape.
+        let ir = ir_for(
+            "fn tail(s: ref Vec[i64]) -> i64 {\n\
+                 let n = s.len();\n\
+                 n + 1\n\
+             }\n\
+             fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(3);\n\
+                 println(tail(v));\n\
+             }",
+        );
+        assert!(
+            ir.contains("%vec.len = load i64, ptr %vec.len.ptr, align 8, !range"),
+            "Vec .len() load must carry !range metadata, got IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("!{i64 0, i64 2305843009213693952}"),
+            "!range bounds must be [0, 2^61), got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn ir_zero_sized_elem_vec_len_has_no_range_metadata() {
+        // `struct E {}` is zero-sized: a `Vec[E]` never allocates, so its
+        // len/cap are NOT bounded by the allocator byte ceiling and the
+        // `!range` claim would be unsound — the annotation must not fire.
+        let ir = ir_for(
+            "struct E {}\n\
+             fn main() {\n\
+                 let mut v: Vec[E] = Vec.new();\n\
+                 v.push(E {});\n\
+                 println(v.len());\n\
+             }",
+        );
+        assert!(
+            !ir.contains("!range"),
+            "zero-sized-element Vec len loads must NOT carry !range, got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn e2e_with_capacity_count_overflow_panics() {
+        // `(1 << 61) + 1` elements of 8 bytes wraps the u64 byte-count
+        // multiply. Before the checked multiply this allocated 8 bytes while
+        // recording `cap = 2^61 + 1` — a heap overflow on the first pushes.
+        // Must now panic `capacity overflow` up front.
+        if let Some(cap) = run_program_capturing(
+            "fn main() {\n\
+                 let v: Vec[i64] = Vec.with_capacity(2305843009213693953);\n\
+                 println(v.len());\n\
+             }",
+        ) {
+            assert_eq!(
+                cap.status.code(),
+                Some(1),
+                "stdout={:?} stderr={:?}",
+                cap.stdout,
+                cap.stderr
+            );
+            assert!(
+                cap.stdout.contains("capacity overflow"),
+                "expected capacity-overflow panic, got stdout={:?} stderr={:?}",
+                cap.stdout,
+                cap.stderr
+            );
+        }
+    }
+
+    #[test]
     fn e2e_try_with_capacity_question_codegen() {
         // `?`-form: `let mut v: Vec[i64] = Vec.try_with_capacity(n)?` pre-sizes
         // the Vec, pushes fill the reserved slots. Exercises both the

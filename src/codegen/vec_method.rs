@@ -546,6 +546,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
                     .unwrap();
                 let len = self.builder.build_load(i64_t, len_ptr, "vec.len").unwrap();
+                // `!range [0, 2^61)` — lets LLVM fold overflow checks on
+                // len-derived arithmetic (`n + 1`, hot-loop index steps);
+                // see `annotate_len_load_range` for the soundness argument
+                // (B-2026-07-10-5).
+                self.annotate_len_load_range(len, Some(elem_ty));
                 Ok(len)
             }
             // `Vec[T].as_ptr()` / `.as_mut_ptr()` — raw element-0 pointer of
@@ -1742,11 +1747,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_select(is_neg, zero64, count_raw, "rep.count")
                     .unwrap()
                     .into_int_value();
-                // total = count * len.
-                let total = self
-                    .builder
-                    .build_int_nsw_mul(count, recv_len, "rep.total")
-                    .unwrap();
+                // total = count * len — user-controlled count, so the
+                // multiply is overflow-checked (`capacity overflow` on
+                // wrap); see `checked_alloc_bytes`.
+                let total = self.checked_alloc_bytes(count, recv_len, "rep.total")?;
                 let total_zero = self
                     .builder
                     .build_int_compare(inkwell::IntPredicate::EQ, total, zero64, "rep.total.z")

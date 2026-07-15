@@ -2294,10 +2294,10 @@ impl<'ctx> super::Codegen<'ctx> {
             let n_val = self.compile_expr(&args[0].value)?;
             let n = self.coerce_to_i64(n_val)?;
             let elem_size = elem_ty.size_of().unwrap();
-            let alloc_bytes = self
-                .builder
-                .build_int_mul(n, elem_size, "with_cap.alloc_bytes")
-                .unwrap();
+            // User-controlled count: overflow-checked multiply, else a huge
+            // `n` wraps to a tiny allocation with `cap = n` recorded — heap
+            // overflow on the first pushes (see `checked_alloc_bytes`).
+            let alloc_bytes = self.checked_alloc_bytes(n, elem_size, "with_cap")?;
             // A null buffer when `alloc_bytes == 0` — otherwise the zero-cap Vec
             // (`cap = 0`) would own a non-null 1-byte allocation the drop path
             // skips freeing (B-2026-07-11-15).
@@ -2402,10 +2402,11 @@ impl<'ctx> super::Codegen<'ctx> {
             })?;
             let n = self.compile_expr(&args[0].value)?.into_int_value();
             let elem_size = elem_ty.size_of().unwrap();
-            let alloc_bytes = self
-                .builder
-                .build_int_mul(n, elem_size, "try_with_cap.alloc_bytes")
-                .unwrap();
+            // User-controlled count — same overflow-checked multiply as the
+            // panicking `with_capacity` arm. The wrap case panics rather
+            // than returning Err: it is a bogus count (only expressible with
+            // a count whose BYTE size exceeds u64), not a recoverable OOM.
+            let alloc_bytes = self.checked_alloc_bytes(n, elem_size, "try_with_cap")?;
             // Null buffer + non-OOM for a zero-byte reservation (B-2026-07-11-15).
             let (buf, is_oom) = self.fallible_with_capacity_buffer(alloc_bytes, "try_with_cap.buf");
 

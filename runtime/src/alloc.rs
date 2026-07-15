@@ -25,14 +25,34 @@ extern "C" {
     fn calloc(nmemb: usize, size: usize) -> *mut u8;
 }
 
+/// Hard ceiling on any single runtime allocation: `2^61 - 1` bytes (~2.3 EB).
+///
+/// This can never fire on a satisfiable request — current hardware tops out
+/// at 2^57 bytes of virtual address space (x86-64 5-level paging) — so it is
+/// not a resource limit but a **provable compile-time invariant**: with every
+/// Vec/String buffer capped here, `len <= cap <= cap * elem_size <= 2^61 - 1`
+/// holds for every live collection (elements are >= 1 byte; codegen rejects
+/// the zero-sized-element case separately), which lets codegen annotate
+/// `len` loads with `!range [0, 2^61)` so LLVM can fold len-derived overflow
+/// checks (`n + 1`, `l + 1` under a dominating bounds check) that otherwise
+/// survive into hot loops (B-2026-07-10-5). Same posture as Rust's
+/// `Layout`-size <= `isize::MAX` allocator contract, two powers of two
+/// stricter. `u64` (not `usize`) so the wasm32 build — where `usize` is
+/// 32-bit and the guard is trivially unreachable — still compiles.
+pub const KARAC_MAX_ALLOC_BYTES: u64 = (1u64 << 61) - 1;
+
 /// Fallible allocation — non-null on success, null on failure (OOM).
 ///
 /// A zero-byte request is normalised to one byte so a successful allocation is
 /// always a unique non-null pointer; the collection codegen treats a non-null
 /// result as success, so a `malloc(0)`-returns-null platform must not be
-/// mistaken for OOM.
+/// mistaken for OOM. A request beyond [`KARAC_MAX_ALLOC_BYTES`] fails as OOM
+/// (null) without touching the allocator — see the const's invariant note.
 #[no_mangle]
 pub extern "C" fn karac_alloc_fallible(size: usize) -> *mut u8 {
+    if size as u64 > KARAC_MAX_ALLOC_BYTES {
+        return std::ptr::null_mut();
+    }
     let n = if size == 0 { 1 } else { size };
     unsafe { malloc(n) }
 }
@@ -70,6 +90,13 @@ pub extern "C" fn karac_alloc_or_panic(size: usize) -> *mut u8 {
 /// check and takes a fresh malloc+copy for the `cap == 0` static/null case.
 #[no_mangle]
 pub extern "C" fn karac_realloc_or_panic(ptr: *mut u8, size: usize) -> *mut u8 {
+    // Same `KARAC_MAX_ALLOC_BYTES` ceiling as the malloc wrappers — the grow
+    // path must uphold the identical `cap * elem_size` bound or the codegen
+    // `!range` len-load invariant breaks on the first oversized grow.
+    if size as u64 > KARAC_MAX_ALLOC_BYTES {
+        crate::fatal::write_stderr(b"panic: out of memory\n");
+        std::process::abort();
+    }
     let n = if size == 0 { 1 } else { size };
     let p = unsafe { realloc(ptr, n) };
     if p.is_null() {
@@ -100,6 +127,17 @@ pub extern "C" fn karac_alloc_zeroed_or_panic(count: usize, size: usize) -> *mut
     } else {
         (count, size)
     };
+    // `calloc` already refuses a wrapping `count * size`, but the total must
+    // also respect the `KARAC_MAX_ALLOC_BYTES` ceiling (see the const's
+    // invariant note) — a non-wrapping product beyond it must fail the same
+    // way, not reach the allocator.
+    match (count as u64).checked_mul(size as u64) {
+        Some(total) if total <= KARAC_MAX_ALLOC_BYTES => {}
+        _ => {
+            crate::fatal::write_stderr(b"panic: out of memory\n");
+            std::process::abort();
+        }
+    }
     let p = unsafe { calloc(count, size) };
     if p.is_null() {
         crate::fatal::write_stderr(b"panic: out of memory\n");
@@ -147,5 +185,23 @@ mod tests {
         // A degenerate 0-count / 0-size request must still yield a usable pointer.
         assert!(!karac_alloc_zeroed_or_panic(0, 8).is_null());
         assert!(!karac_alloc_zeroed_or_panic(16, 0).is_null());
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn fallible_beyond_cap_is_null() {
+        // One past KARAC_MAX_ALLOC_BYTES is refused up front (null, no
+        // allocator call) — the invariant the codegen `!range` len-load
+        // annotation rests on.
+        assert!(karac_alloc_fallible((KARAC_MAX_ALLOC_BYTES + 1) as usize).is_null());
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn fallible_at_cap_reaches_allocator() {
+        // Exactly at the cap the guard passes; the request then fails in the
+        // allocator itself (no machine can satisfy 2^61 - 1 bytes), which is
+        // the same null the caller handles. Pin only that it does not panic.
+        let _ = karac_alloc_fallible(KARAC_MAX_ALLOC_BYTES as usize);
     }
 }
