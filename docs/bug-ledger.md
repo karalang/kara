@@ -89,14 +89,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **472 surfaced · 2 open · 466 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **473 surfaced · 3 open · 466 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-15-11 | 2026-07-15 | codegen (per-monomorph struct-drop synthesis — synth_drop.rs emit_struct_drop_synthesis_impl field classifier; PAIRED move-suppression call_dispatch.rs zero_struct_move_caps) | medium | A monomorphized generic struct whose field IS a bare type param (`struct Box[T] { value: T }`, used as `Box[String]` / `Box[Vec[..]]`) never frees the heap field at scope exit — the mono struct-drop classifier reads the erased field name `T` (not Vec/String) and classifies it no-cleanup; the CONCRETE-field twin (`struct Box { value: String }`) is clean | none |
 | B-2026-07-15-14 | 2026-07-15 | ownership / use-classifier (method receiver-mode classification for compiler-builtin collection mutators: push_str / insert / …) | medium | `karac check` rejects calling a String/Map-mutating closure more than once (`append("a"); append("b")` → `value 'append' moved here, used again`) while the identical Vec-push closure is accepted — the ownership checker classifies push_str/insert as CONSUMING the receiver (once-callable closure) instead of `mut ref self` (multi-callable) | none |
+| B-2026-07-15-16 | 2026-07-15 | typechecker (closure-parameter type inference for direct collection / Result methods that take a predicate/mapper closure) | low | Closure-param inference is missing for direct collection/Result methods that take a closure (`Vec.retain(|x| …)`, `Result.and_then(|x| …)`) — the param `x` stays `?T` and any use (`x != 3`) fails, while the `.iter().map/filter/any` adaptor path infers the element type fine | none |
 
 ### Fixed (466)
 
