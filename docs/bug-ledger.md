@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **481 surfaced · 4 open · 473 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **482 surfaced · 5 open · 473 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -99,6 +99,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **481 surfaced 
 | B-2026-07-15-20 | 2026-07-15 | codegen (field-receiver method dispatch over a GENERIC struct — calls.rs lower_field_access_ptr / resolve_generic_field_te instantiation resolution for ref-param and indexed receivers) | medium | A generic-struct field-receiver method loud-bails for a ref-param receiver (`p: ref Pair[Vec,Vec]` → `p.second.len()`) or an indexed receiver (`v[i].second.len()` over `Vec[Pair[Vec,Vec]]`): the synth field-element binding is registered with the bare generic param type, not the concrete `Vec[i64]`, so `.len()` finds no handler | sibling-of-B-2026-07-15-18 |
 | B-2026-07-15-21 | 2026-07-15 | codegen (per-node Option[shared] traversal lowering: niche-match + field GEP + recursion) | low | Read-only `Option[shared]` tree traversal runs ~1.45x behind equal-safety Rust (rustc -O -C overflow-checks=on) on a pure per-node walk — the residual is Option[shared] match/field/recursion lowering, NOT refcount traffic (retain/release is already elided; by-value == ref-borrow to the millisecond) | none |
 | B-2026-07-15-24 | 2026-07-15 | codegen (call_dispatch.rs `zero_struct_move_caps` GEPs the Map handle field using the BASE erased struct layout, not the per-monomorph layout — the mono-blindness class, cf. B-2026-07-15-11) | low | `zero_struct_move_caps` GEPs a Map/Set handle field at the BASE struct-layout offset; when a PRECEDING field is a bare generic param mono'd to a wider heap type (e.g. `Inner[T]{a: T, m: Map[i64,i64]}`, T=Vec[i64]), the base layout erases `a` to i64 (1 word) but the mono widens it (Vec = 3 words), so the Map handle's null-store (B-23) lands at the wrong offset and the real handle stays live → double-free / SIGSEGV on move-out. | none |
+| B-2026-07-15-25 | 2026-07-15 | codegen (expr_ops.rs `compile_field_store` never drops the old field value for a plain-struct heap field; stmts.rs Assign arm eager-free + `suppress_source_vec_cleanup_for_arg` are gated to `lhs_is_tracked_vec` only, so Map/Set var reassignment is uncovered) | high | Reassigning a struct's heap-owning field (`o.f = x`) never drops the OLD field value: leaks it for a fresh RHS (`h.v = [9,8,7]` strands the old Vec buffer), or double-frees / SIGSEGVs for a moved-binding RHS (`h.v = v2`, `h.s = heap_str`, `h.m = m2`) because the source's own scope-exit cleanup isn't suppressed. Separately, Map/Set VARIABLE reassignment (`m = m2`, `set_a = set_b`) leaks the old handle AND double-frees the source — the Assign arm's eager-free + move-suppression are Vec/String-only (`lhs_is_tracked_vec`); Vec/String var reassignment works. | none |
 
 ### Fixed (473)
 
