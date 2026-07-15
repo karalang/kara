@@ -757,6 +757,16 @@ struct StmtInfo {
     let_introduced: HashSet<String>,
     /// Variables read by this statement.
     reads: HashSet<String>,
+    /// Bare names of functions this statement calls (free-fn callee names
+    /// and method names, transitively through the statement's expression
+    /// tree). Drives the SELF-RECURSION par gate (B-2026-07-15-4): a group
+    /// whose statement calls the enclosing function is a recursive
+    /// divide-and-conquer — spawning it costs ~70µs per dispatch and O(nodes)
+    /// dispatches per top-level call (each recursion level re-spawns), which
+    /// no bounded top-level win can amortize without a work-stealing
+    /// sequential-cutoff scheduler. Measured 175x wall-time regression on a
+    /// 15-node tree build at 20k reps before the gate.
+    called_fn_names: HashSet<String>,
     /// Effects produced by this statement (from called functions).
     effects: Vec<StmtEffect>,
     /// Whether this statement (transitively) calls a function with polymorphic
@@ -1386,8 +1396,13 @@ impl<'a> ConcurrencyChecker<'a> {
         // Names of locals whose declared/recorded type is a heap-owning
         // container — feeds `captured_container_mutations` (B-2026-07-15-2).
         let container_locals = self.collect_container_locals(&func.body);
-        let parallel_groups =
-            self.find_parallel_groups(&stmt_infos, &graph, total_statements, &container_locals);
+        let parallel_groups = self.find_parallel_groups(
+            &stmt_infos,
+            &graph,
+            total_statements,
+            &container_locals,
+            &func.name,
+        );
 
         // Step 4: Recognize reductions in top-level loops. Independent of
         // the parallel-group / dependency machinery — a reduction loop
@@ -2156,6 +2171,7 @@ impl<'a> ConcurrencyChecker<'a> {
             defines: HashSet::new(),
             let_introduced: HashSet::new(),
             reads: HashSet::new(),
+            called_fn_names: HashSet::new(),
             effects: Vec::new(),
             calls_polymorphic: false,
             is_seq,
@@ -2734,6 +2750,7 @@ impl<'a> ConcurrencyChecker<'a> {
         graph: &ConflictGraph,
         n: usize,
         container_locals: &HashSet<String>,
+        enclosing_fn: &str,
     ) -> Vec<ParallelGroup> {
         let mut groups: Vec<ParallelGroup> = Vec::new();
         let mut assigned = vec![false; n];
@@ -2861,8 +2878,23 @@ impl<'a> ConcurrencyChecker<'a> {
                 }
             }
 
+            // SELF-RECURSION gate (B-2026-07-15-4): a group whose statement
+            // calls the enclosing function is a recursive divide-and-conquer
+            // (`let left = build(..); let right = build(..)`). Auto-par
+            // spawns per call with no sequential cutoff, so EVERY recursion
+            // level re-dispatches (~70µs each, O(nodes) dispatches per
+            // top-level call) — measured 175x wall-time regression on a
+            // 15-node tree build at 20k reps, sys-time-dominated, identical
+            // output. Until a work-stealing scheduler with a lazy sequential
+            // cutoff exists, these groups run sequentially. Direct
+            // self-calls only (bare fn name / method name); mutual recursion
+            // through a helper is a documented residual.
+            let is_self_recursive = group_indices
+                .iter()
+                .any(|&i| infos[i].called_fn_names.contains(enclosing_fn));
+
             // Only emit groups with more than 1 statement (parallelism requires >= 2)
-            if group_indices.len() > 1 {
+            if group_indices.len() > 1 && !is_self_recursive {
                 let reason = self.describe_group_reason(infos, &group_indices);
                 // A group is trivial when running it in parallel can produce
                 // no measurable speedup, so the `karac_par_run` spawn cost
@@ -3718,6 +3750,7 @@ impl<'a> ConcurrencyChecker<'a> {
             ExprKind::Call { callee, args } => {
                 // Look up callee effects
                 if let Some(name) = self.extract_callee_name(callee) {
+                    info.called_fn_names.insert(name.clone());
                     let from = info.effects.len();
                     self.add_function_effects(&name, info);
                     // Slice 3: substitute the callee's parameterized-resource
@@ -3736,6 +3769,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 args,
                 ..
             } => {
+                info.called_fn_names.insert(method.clone());
                 // Walk every effect key ending in `.<method>`. Builtin methods
                 // (`Vec.push`, `Map.insert`, ...) live only in
                 // `effects.inferred_effects`; user-defined impl methods live

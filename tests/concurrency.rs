@@ -3837,3 +3837,53 @@ fn test_scale_round_robin_resources_group_in_runs() {
         assert!(w[0][0] < w[0][1], "each pair is stored low-index first");
     }
 }
+
+#[test]
+fn test_self_recursive_calls_do_not_form_parallel_group() {
+    // B-2026-07-15-4: `let left = build(..); let right = build(..)` inside
+    // `build` itself is a recursive divide-and-conquer — auto-par spawns per
+    // call with no sequential cutoff, so every recursion level re-dispatches
+    // (~70µs each, O(nodes) dispatches per top-level call; measured 175x
+    // wall-time regression on a 15-node tree at 20k reps). The analyzer now
+    // withholds the group when any member statement calls the enclosing
+    // function.
+    let analysis = analyze(
+        "fn build(vals: Vec[i64], lo: i64, hi: i64) -> i64 {\n\
+             if lo > hi { return 0; }\n\
+             let mid = (lo + hi) / 2;\n\
+             let left = build(vals, lo, mid - 1);\n\
+             let right = build(vals, mid + 1, hi);\n\
+             vals[mid] + left * 3 + right * 7\n\
+         }\n\
+         fn main() {\n\
+             let vals: Vec[i64] = [1, 2, 3];\n\
+             println(build(vals, 0, 2));\n\
+         }",
+    );
+    let fc = analysis.function_decisions.get("build").unwrap();
+    assert!(
+        fc.parallel_groups.is_empty(),
+        "self-recursive call pair must not form a parallel group, got: {:?}",
+        fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_non_recursive_independent_calls_still_group() {
+    // Guard for the B-2026-07-15-4 gate: two independent NON-recursive calls
+    // keep parallelizing (the gate is scoped to the enclosing function's own
+    // name).
+    let analysis = analyze(
+        "fn work(n: i64) -> i64 { n * 2 }\n\
+         fn main() {\n\
+             let a = work(1);\n\
+             let b = work(2);\n\
+             println(a + b);\n\
+         }",
+    );
+    let fc = analysis.function_decisions.get("main").unwrap();
+    assert!(
+        !fc.parallel_groups.is_empty(),
+        "independent non-recursive calls must still form a parallel group"
+    );
+}
