@@ -809,6 +809,13 @@ pub(crate) fn is_copy_type(ty: &Type, tc: &TypeCheckResult) -> bool {
         return true;
     }
     match ty {
+        // B-2026-07-15-3: a `ref` / `mut ref` to a plain SCALAR is a Copy
+        // handle — reading it into a value (`let ci: i64 = cur;`,
+        // `f(cur)`, `xs[cur]`) copies the pointee and can never move or
+        // alias owned state, so the move checker must not fire
+        // use-after-move on later uses of the borrow. Heap-typed borrows
+        // stay non-Copy (their reads keep the borrow-discipline checks).
+        Type::Ref(inner) | Type::MutRef(inner) if is_copy_type_basic(inner) => true,
         Type::Tuple(types) => types.iter().all(|t| is_copy_type(t, tc)),
         Type::Array { element, .. } => is_copy_type(element, tc),
         // A `Vector[T, N]` is a fixed-size, register-resident SIMD value — a POD

@@ -3094,6 +3094,16 @@ impl<'a> TypeChecker<'a> {
             return;
         }
 
+        // B-2026-07-15-3: `<ref/mut ref scalar> as T` reads through the
+        // borrow, exactly like arithmetic's auto-deref (`cur as i64` on a
+        // `mut ref i64` cursor). Placed AFTER the ref→raw-pointer
+        // prohibition so that rule keeps firing. One peel level.
+        if let Type::Ref(inner) | Type::MutRef(inner) = from_ty {
+            if Self::scalar_reads_as_value(inner) {
+                return self.check_cast_pair(&inner.clone(), to_ty, span);
+            }
+        }
+
         // Raw pointer → raw pointer: accepted. Mutability changes
         // (`*const T as *mut T`) and pointee changes (`*const T as
         // *const U`) are both bitcasts at the IR level; the strict-
@@ -3508,7 +3518,30 @@ impl<'a> TypeChecker<'a> {
         );
     }
 
+    /// Is `t` a scalar a `ref`/`mut ref` binding reads through implicitly
+    /// (B-2026-07-15-3)? Numeric + bool + char — the plain-`Copy` value
+    /// kinds, matching arithmetic's existing auto-deref set.
+    pub(super) fn scalar_reads_as_value(t: &Type) -> bool {
+        matches!(
+            t,
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+        )
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
+        // B-2026-07-15-3: a `ref` / `mut ref` SCALAR reads as its value type
+        // in any value position (annotated let, argument passing, …) — the
+        // same auto-deref arithmetic already performs
+        // (`deref_numeric_scalar`). One peel level: scalar borrows don't
+        // nest. Gated to scalars so heap borrows keep their explicit-borrow
+        // typing discipline.
+        if let Type::Ref(inner) | Type::MutRef(inner) = found {
+            if Self::scalar_reads_as_value(inner)
+                && self.is_subtype_with_projections(expected, inner)
+            {
+                return true;
+            }
+        }
         if self.is_subtype_with_projections(expected, found) {
             // Record a concrete witness flowing into the current function's
             // return-position `impl Trait`, so the end-of-body single-witness

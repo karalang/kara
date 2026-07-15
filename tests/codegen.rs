@@ -9401,6 +9401,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_mut_ref_scalar_value_reads() {
+        // B-2026-07-15-3: a `mut ref` scalar param reads as its value type in
+        // an annotated let, an index expression, an argument, and a cast —
+        // and the write-back through the borrow still reaches the caller.
+        // Must match the interpreter.
+        if let Some(out) = run_program(
+            "fn take(v: i64) -> i64 { v * 2 }\n\
+             fn probe(xs: Vec[i64], cur: mut ref i64) {\n\
+                 let ci: i64 = cur;\n\
+                 println(ci);\n\
+                 println(xs[cur]);\n\
+                 println(take(cur));\n\
+                 let c2 = cur as i64;\n\
+                 println(c2);\n\
+                 cur = cur + 1;\n\
+             }\n\
+             fn main() {\n\
+                 let xs: Vec[i64] = [10, 20, 30];\n\
+                 let mut c: i64 = 1;\n\
+                 probe(xs, mut c);\n\
+                 println(c);\n\
+             }",
+        ) {
+            assert_eq!(out, "1\n20\n2\n1\n2\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_iter_mut_scalar() {
         // B-2026-07-14-10 (codegen leg): `for x in xs.iter_mut()` over a named
         // Vec with a SCALAR element. The loop binds `x` as a mut-ref slot

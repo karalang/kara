@@ -2759,6 +2759,13 @@ impl<'a> super::TypeChecker<'a> {
                         };
                     }
                 }
+                // B-2026-07-15-3: an integer `ref` / `mut ref` indexes
+                // through the borrow (`preorder[cur]` with `cur: mut ref
+                // i64`) — same auto-deref arithmetic performs.
+                let idx_ty = match idx_ty {
+                    Type::Ref(inner) | Type::MutRef(inner) if is_integer(&inner) => *inner,
+                    other => other,
+                };
                 let is_range_idx = matches!(&idx_ty, Type::Named { name, .. }
                     if matches!(name.as_str(), "Range" | "RangeInclusive" | "RangeFrom"
                         | "RangeTo" | "RangeToInclusive" | "RangeFull"));

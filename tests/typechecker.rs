@@ -32983,3 +32983,62 @@ fn test_volatile_cell_copy_bound_accepts_primitive_rejects_string() {
         errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn test_mut_ref_scalar_reads_as_value() {
+    // B-2026-07-15-3: a `ref`/`mut ref` SCALAR reads as its value type in
+    // every value position — annotated let, argument passing, index
+    // expression, and cast — matching the auto-deref arithmetic already
+    // performs. The write-back through the borrow keeps working.
+    typecheck_ok(
+        "fn take(v: i64) -> i64 { v * 2 }\n\
+         fn probe(xs: Vec[i64], cur: mut ref i64) {\n\
+             let ci: i64 = cur;\n\
+             println(ci);\n\
+             println(xs[cur]);\n\
+             println(take(cur));\n\
+             let c2 = cur as i64;\n\
+             println(c2);\n\
+             cur = cur + 1;\n\
+         }\n\
+         fn fprobe(f: mut ref f64, b: ref bool) -> f64 {\n\
+             let fv: f64 = f;\n\
+             let bv: bool = b;\n\
+             if bv { fv } else { f as f64 }\n\
+         }\n\
+         fn main() {\n\
+             let xs: Vec[i64] = [10, 20, 30];\n\
+             let mut c: i64 = 1;\n\
+             probe(xs, mut c);\n\
+             println(c);\n\
+             let mut fl: f64 = 2.5;\n\
+             let flag: bool = true;\n\
+             println(fprobe(mut fl, flag));\n\
+         }",
+    );
+}
+
+#[test]
+fn test_mut_ref_heap_does_not_read_as_value() {
+    // Negative guard for B-2026-07-15-3: the scalar-ref coercion must NOT
+    // loosen HEAP borrows — reading a `mut ref String` into a `String`
+    // binding stays a type error (heap borrows keep the explicit-borrow
+    // discipline).
+    let errors = typecheck_errors(
+        "fn heap_probe(s: mut ref String) {\n\
+             let t: String = s;\n\
+             println(t);\n\
+         }\n\
+         fn main() {\n\
+             let mut x: String = \"hi\";\n\
+             heap_probe(mut x);\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .to_string()
+            .contains("expected 'String', found 'mut ref String'")),
+        "expected the heap-borrow mismatch to survive, got: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
