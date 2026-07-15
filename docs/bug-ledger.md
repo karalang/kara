@@ -89,14 +89,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **476 surfaced · 2 open · 470 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **477 surfaced · 3 open · 470 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-15-11 | 2026-07-15 | codegen (per-monomorph struct-drop synthesis — synth_drop.rs emit_struct_drop_synthesis_impl field classifier; PAIRED move-suppression call_dispatch.rs zero_struct_move_caps) | medium | A monomorphized generic struct whose field IS a bare type param (`struct Box[T] { value: T }`, used as `Box[String]` / `Box[Vec[..]]`) never frees the heap field at scope exit — the mono struct-drop classifier reads the erased field name `T` (not Vec/String) and classifies it no-cleanup; the CONCRETE-field twin (`struct Box { value: String }`) is clean | none |
 | B-2026-07-15-19 | 2026-07-15 | codegen (Vec/VecDeque.retain in-place predicate filter — no LLVM lowering) | low | `Vec[T]/VecDeque[T].retain(|x| pred)` has no AOT codegen lowering — typechecks and runs correctly in the interpreter (B-2026-07-15-16 added both), but `karac build` loud-bails 'method retain not yet supported in codegen'; needs the same snapshot-filter-writeback shape the interpreter uses, lowered to LLVM (allocate kept-buffer, invoke the predicate closure per element, compact in place) | none |
+| B-2026-07-15-20 | 2026-07-15 | codegen (field-receiver method dispatch over a GENERIC struct — calls.rs lower_field_access_ptr / resolve_generic_field_te instantiation resolution for ref-param and indexed receivers) | medium | A generic-struct field-receiver method loud-bails for a ref-param receiver (`p: ref Pair[Vec,Vec]` → `p.second.len()`) or an indexed receiver (`v[i].second.len()` over `Vec[Pair[Vec,Vec]]`): the synth field-element binding is registered with the bare generic param type, not the concrete `Vec[i64]`, so `.len()` finds no handler | sibling-of-B-2026-07-15-18 |
 
 ### Fixed (470)
 
