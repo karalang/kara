@@ -48,6 +48,9 @@ mod gpu;
 mod map;
 mod mutex;
 mod once;
+// Regex FFI (`karac_regex_*`) — opt-in `regex` feature → `libkarac_runtime_regex.a`.
+#[cfg(feature = "regex")]
+mod regex;
 #[cfg(feature = "net")]
 pub mod scheduler;
 // Small-String Optimization encoding — the executable contract shared with

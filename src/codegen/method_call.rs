@@ -703,6 +703,91 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_expr(object);
         }
 
+        // `re.is_match(s: String) -> bool` on a `Regex { pattern }` receiver
+        // (B-2026-07-14-19) — the AOT backend for regex.kara's
+        // `#[compiler_builtin]` stub. Extract the receiver's pattern String and
+        // the subject String, call the runtime `karac_regex_is_match` (which
+        // re-compiles `pattern` per call, matching the interpreter). Gated on
+        // the receiver's static type being `Regex`, so a same-named user method
+        // never routes here. `find` / `find_all` / `replace_all` stay
+        // interp-only (later slices).
+        if method == "is_match"
+            && args.len() == 1
+            && self.type_name_of_expr(object).as_deref() == Some("Regex")
+        {
+            let recv = self.compile_expr(object)?;
+            let recv_sv = recv.into_struct_value();
+            // `Regex { pattern: String }` may lower flattened (`{ptr,len,cap}`)
+            // or nested (`{ String }`) — extract field 0 and branch on whether
+            // it is the ptr itself or the nested String struct.
+            let field0 = self
+                .builder
+                .build_extract_value(recv_sv, 0, "rx.recv.f0")
+                .unwrap();
+            let (pat_data, pat_len) = if field0.is_struct_value() {
+                let ssv = field0.into_struct_value();
+                let d = self
+                    .builder
+                    .build_extract_value(ssv, 0, "rx.recv.pat.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let l = self
+                    .builder
+                    .build_extract_value(ssv, 1, "rx.recv.pat.len")
+                    .unwrap()
+                    .into_int_value();
+                (d, l)
+            } else {
+                let d = field0.into_pointer_value();
+                let l = self
+                    .builder
+                    .build_extract_value(recv_sv, 1, "rx.recv.pat.len")
+                    .unwrap()
+                    .into_int_value();
+                (d, l)
+            };
+
+            let s_val = self.compile_expr(&args[0].value)?;
+            let s_sv = s_val.into_struct_value();
+            let s_data = self
+                .builder
+                .build_extract_value(s_sv, 0, "rx.subj.data")
+                .unwrap()
+                .into_pointer_value();
+            let s_len = self
+                .builder
+                .build_extract_value(s_sv, 1, "rx.subj.len")
+                .unwrap()
+                .into_int_value();
+
+            let is_match_fn = self
+                .module
+                .get_function("karac_regex_is_match")
+                .expect("karac_regex_is_match declared in Codegen::new");
+            let res = self
+                .builder
+                .build_call(
+                    is_match_fn,
+                    &[pat_data.into(), pat_len.into(), s_data.into(), s_len.into()],
+                    "rx.is_match",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            // u8 (0/1) → Kāra `bool` (i1).
+            let bool_val = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    res,
+                    self.context.i8_type().const_zero(),
+                    "rx.is_match.bool",
+                )
+                .unwrap();
+            return Ok(bool_val.into());
+        }
+
         // Tensor shape-transform family (`reshape` / `permute` / `slice`
         // / `squeeze`, phase-11 numerical stdlib — `src/codegen/tensor.rs`).
         // Handled here (before the rest of dispatch) so both identifier

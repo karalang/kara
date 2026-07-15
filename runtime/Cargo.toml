@@ -124,6 +124,15 @@ test-helpers = ["net"]
 # and the wasm archives untouched while the runtime GPU spine is proven.
 gpu = ["dep:wgpu", "dep:pollster"]
 
+# Regex backend — codegen support for `runtime/stdlib/regex.kara`'s
+# `Regex.compile` / `is_match` (B-2026-07-14-19). Opt-in ONLY, like `gpu`:
+# never in `default` / lean / wasm archives. Pulls the `regex` crate (+
+# regex-automata / regex-syntax / aho-corasick / memchr). Built into
+# `libkarac_runtime_regex.a`, which `karac` selects only when the emitted
+# object references a `karac_regex_*` symbol, so non-regex binaries never
+# carry the dep.
+regex = ["dep:regex"]
+
 [dependencies]
 # Slice F (`std.json`): backing impl for `karac_runtime_json_parse` /
 # `karac_runtime_json_stringify`. Locked design choice (iii) — use
@@ -239,6 +248,10 @@ ureq = { version = "2", default-features = false, features = ["tls"], optional =
 webpki-roots = { version = "0.26", optional = true }
 wgpu = { version = "29.0.3", optional = true }
 pollster = { version = "0.4.0", optional = true }
+# Regex backend (opt-in `regex` feature → `libkarac_runtime_regex.a`). Same
+# major as the top-level `regex` in the workspace `Cargo.toml`, so the
+# interpreter (in-process) and the AOT runtime agree on match semantics.
+regex = { version = "1", optional = true }
 
 [dev-dependencies]
 # Hermetic test-cert generation for `src/tls.rs`'s unit tests. Slice 4

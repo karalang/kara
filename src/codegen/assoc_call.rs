@@ -527,6 +527,116 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result.into());
         }
 
+        // `Regex.compile(pattern: String) -> Result[Regex, RegexError]`
+        // (B-2026-07-14-19) — the AOT backend for `runtime/stdlib/regex.kara`'s
+        // `#[compiler_builtin]` stub, matching the interpreter's
+        // `RustRegex::new` path. Validate via the runtime `karac_regex_validate`
+        // (from the opt-in `libkarac_runtime_regex.a`); Ok wraps an owned COPY
+        // of the pattern as `Regex { pattern }` (copy, not move — the arg temp
+        // keeps its own drop), Err yields `RegexError { message }` with a static
+        // message. `Regex` and `RegexError` are single-`String`-field newtypes,
+        // so a `String` value coerces straight into each variant's 3-word
+        // payload. (Exact regex-crate error-string parity for an INVALID
+        // pattern is a later slice; the repro/oracle use valid patterns.)
+        if type_name == "Regex" && method == "compile" {
+            if _args.len() != 1 {
+                return Err(format!(
+                    "Regex.compile expects 1 argument (a pattern String), got {}",
+                    _args.len()
+                ));
+            }
+            let i8_t = self.context.i8_type();
+            let i64_t = self.context.i64_type();
+            let pat_val = self.compile_expr(&_args[0].value)?;
+            let pat_sv = pat_val.into_struct_value();
+            let pat_data = self
+                .builder
+                .build_extract_value(pat_sv, 0, "rx.pat.data")
+                .unwrap()
+                .into_pointer_value();
+            let pat_len = self
+                .builder
+                .build_extract_value(pat_sv, 1, "rx.pat.len")
+                .unwrap()
+                .into_int_value();
+
+            let validate_fn = self
+                .module
+                .get_function("karac_regex_validate")
+                .expect("karac_regex_validate declared in Codegen::new");
+            let valid = self
+                .builder
+                .build_call(validate_fn, &[pat_data.into(), pat_len.into()], "rx.valid")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let is_valid = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    valid,
+                    i8_t.const_zero(),
+                    "rx.valid.bool",
+                )
+                .unwrap();
+
+            let fn_val = self.current_fn.unwrap();
+            let ok_bb = self.context.append_basic_block(fn_val, "rx.compile.ok");
+            let err_bb = self.context.append_basic_block(fn_val, "rx.compile.err");
+            let merge_bb = self.context.append_basic_block(fn_val, "rx.compile.merge");
+            self.builder
+                .build_conditional_branch(is_valid, ok_bb, err_bb)
+                .unwrap();
+
+            // Ok(Regex { pattern: <owned copy> }).
+            self.builder.position_at_end(ok_bb);
+            let pat_copy = self.emit_vecstr_defensive_copy(pat_val, i8_t.into(), None);
+            let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[pat_copy])?;
+            let ok_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // Err(RegexError { message: "invalid regular expression" }) — a
+            // cap=0 static String (never freed → no leak, no double-free).
+            self.builder.position_at_end(err_bb);
+            let msg = "invalid regular expression";
+            let msg_ptr = self.build_str_bytes_global(msg.as_bytes(), "rx.err.msg");
+            let str_ty = self.vec_struct_type();
+            let mut msg_val = str_ty.get_undef();
+            msg_val = self
+                .builder
+                .build_insert_value(msg_val, msg_ptr, 0, "rx.err.msg.ptr")
+                .unwrap()
+                .into_struct_value();
+            msg_val = self
+                .builder
+                .build_insert_value(
+                    msg_val,
+                    i64_t.const_int(msg.len() as u64, false),
+                    1,
+                    "rx.err.msg.len",
+                )
+                .unwrap()
+                .into_struct_value();
+            msg_val = self
+                .builder
+                .build_insert_value(msg_val, i64_t.const_zero(), 2, "rx.err.msg.cap")
+                .unwrap()
+                .into_struct_value();
+            let err_result = self.build_nonshared_enum_value("Result", "Err", &[msg_val.into()])?;
+            let err_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // Merge the two `Result` aggregates.
+            self.builder.position_at_end(merge_bb);
+            let phi = self
+                .builder
+                .build_phi(ok_result.get_type(), "rx.compile.result")
+                .unwrap();
+            phi.add_incoming(&[(&ok_result, ok_end), (&err_result, err_end)]);
+            return Ok(phi.as_basic_value());
+        }
+
         // Phase 6 "Channel AOT codegen lowering": `Channel.new()` — allocate
         // a runtime channel (refcount 2) and return it as the `(Sender[T],
         // Receiver[T])` tuple. Both ends carry the *same* opaque pointer

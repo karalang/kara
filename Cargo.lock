@@ -1175,6 +1175,7 @@ dependencies = [
  "mio",
  "pollster",
  "rcgen",
+ "regex",
  "rustls",
  "rustls-pemfile",
  "serde_json",

@@ -462,6 +462,25 @@ fn mem_stdlib_program() -> &'static Program {
     &MEM_LOWERED_PROGRAM
 }
 
+static REGEX_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
+    lower_stdlib_source("regex", include_str!("../runtime/stdlib/regex.kara"))
+});
+
+/// The lowered `std` regex program. Every `Regex` method is
+/// `#[compiler_builtin]` — `compile` / `is_match` are hand-rolled codegen
+/// intercepts (`assoc_call.rs` / `method_call.rs`), and `find` / `find_all` /
+/// `replace_all` stay interp-only (they fail loud under codegen, unchanged) —
+/// so, like `mem`, NO method body is compiled from here. Its sole contribution
+/// is the `Regex` / `RegexError` / `Match` STRUCT LAYOUTS: without them a
+/// `Regex` value collapses to a single i64 and the
+/// `Regex.compile(...).unwrap().is_match(...)` round-trip loses the pattern
+/// String (B-2026-07-14-19). Always present (like `mem`) — the layouts cost
+/// nothing when unused and a `Regex`-redefining user program skips the module
+/// via `user_redefines_stdlib_type`.
+fn regex_stdlib_program() -> &'static Program {
+    &REGEX_LOWERED_PROGRAM
+}
+
 /// True when `user` references the `std.protobuf` runtime surface — i.e. it
 /// carries a `#[derive(Message)]` on some struct/enum. That derive is the sole
 /// entry point to protobuf: its expansion (already run by codegen time, per
@@ -502,7 +521,11 @@ fn program_uses_protobuf(user: &Program) -> bool {
 /// compile) MUST all call this with the same `user` program so a module is
 /// declared iff its bodies are compiled.
 fn compiled_stdlib_programs(user: &Program) -> Vec<&'static Program> {
-    let mut programs = vec![ordering_stdlib_program(), mem_stdlib_program()];
+    let mut programs = vec![
+        ordering_stdlib_program(),
+        mem_stdlib_program(),
+        regex_stdlib_program(),
+    ];
     if program_uses_protobuf(user) {
         programs.push(protobuf_stdlib_program());
     }
@@ -4261,6 +4284,34 @@ impl<'ctx> Codegen<'ctx> {
         let _karac_runtime_parse_i64_fn = module.add_function(
             "karac_runtime_parse_i64",
             parse_i64_type,
+            Some(Linkage::External),
+        );
+        // Regex FFI (B-2026-07-14-19) — the AOT backend for
+        // `runtime/stdlib/regex.kara`'s `#[compiler_builtin]` `Regex.compile` /
+        // `is_match`, resolved from the opt-in `libkarac_runtime_regex.a`
+        // (`karac` selects it on any `karac_regex_*` reference).
+        //   `u8 karac_regex_validate(*const u8 pat, i64 pat_len)` — 1 if the
+        //    pattern compiles, backing `Regex.compile`'s Ok/Err decision.
+        module.add_function(
+            "karac_regex_validate",
+            context
+                .i8_type()
+                .fn_type(&[ptr_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `u8 karac_regex_is_match(*const u8 pat, i64 pat_len, *const u8 s,
+        //    i64 s_len)` — 1 if `pat` matches anywhere in `s`; backs `is_match`.
+        module.add_function(
+            "karac_regex_is_match",
+            context.i8_type().fn_type(
+                &[
+                    ptr_type.into(),
+                    i64_type.into(),
+                    ptr_type.into(),
+                    i64_type.into(),
+                ],
+                false,
+            ),
             Some(Linkage::External),
         );
         // Unicode `char` classification predicates (phase-12 #13): `char`

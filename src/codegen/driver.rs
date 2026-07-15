@@ -447,8 +447,9 @@ pub(super) fn link_executable_impl(
     // a non-GPU program never sees it. Computed once — also gates the macOS
     // Metal-framework flags below.
     let references_gpu = object_references_gpu(obj_path);
-    let prefer_min = !references_gpu && !object_references_tls(obj_path);
-    let runtime_path = resolve_runtime_path(prefer_min, references_gpu)?;
+    let references_regex = !references_gpu && object_references_regex(obj_path);
+    let prefer_min = !references_gpu && !references_regex && !object_references_tls(obj_path);
+    let runtime_path = resolve_runtime_path(prefer_min, references_gpu, references_regex)?;
 
     // Windows uses a separate link path (MSVC toolchain): a `clang` driver
     // (not `cc`), the Windows system import libs the runtime archive
@@ -636,8 +637,9 @@ pub fn link_native_library(
     export_symbols: &[String],
 ) -> Result<(), String> {
     let references_gpu = object_references_gpu(obj_path);
-    let prefer_min = !references_gpu && !object_references_tls(obj_path);
-    let runtime_path = resolve_runtime_path(prefer_min, references_gpu)?;
+    let references_regex = !references_gpu && object_references_regex(obj_path);
+    let prefer_min = !references_gpu && !references_regex && !object_references_tls(obj_path);
+    let runtime_path = resolve_runtime_path(prefer_min, references_gpu, references_regex)?;
     match kind {
         NativeLibKind::StaticLib => link_static_library(obj_path, out_path, &runtime_path),
         NativeLibKind::CDylib => link_shared_library(
@@ -1097,6 +1099,23 @@ fn symbol_listing_references_gpu(nm_output: &str) -> bool {
         .any(|line| line.contains("karac_runtime_gpu_"))
 }
 
+/// Whether the emitted object references a `karac_regex_*` symbol — i.e. the
+/// program uses `Regex.compile` / `is_match`. Those symbols live only in the
+/// opt-in `libkarac_runtime_regex.a`, so a hit selects that archive
+/// (B-2026-07-14-19). Mirrors `object_references_gpu`.
+fn object_references_regex(obj_path: &str) -> bool {
+    match std::process::Command::new("nm").arg(obj_path).output() {
+        Ok(o) if o.status.success() => {
+            symbol_listing_references_regex(&String::from_utf8_lossy(&o.stdout))
+        }
+        _ => false,
+    }
+}
+
+fn symbol_listing_references_regex(nm_output: &str) -> bool {
+    nm_output.lines().any(|line| line.contains("karac_regex_"))
+}
+
 /// Pure predicate over `nm`-style symbol-listing text: true iff any line
 /// names a TLS-only runtime symbol. Split out from the `nm` shell-out so
 /// the marker matching — in particular the `serve_http` vs `serve_https`
@@ -1128,7 +1147,11 @@ fn symbol_listing_references_tls(nm_output: &str) -> bool {
 /// undefined `_karac_runtime_test_bind_and_print_port` whenever a lean
 /// archive existed on disk. The min preference now applies only to the
 /// directory-search tiers (2 and 3), where no specific file was named.
-pub(super) fn resolve_runtime_path(prefer_min: bool, gpu: bool) -> Result<String, String> {
+pub(super) fn resolve_runtime_path(
+    prefer_min: bool,
+    gpu: bool,
+    regex: bool,
+) -> Result<String, String> {
     // Windows (MSVC) names a `staticlib` crate `karac_runtime.lib`, not the
     // unix `libkarac_runtime.a`. The `KARAC_RUNTIME` override (tier 1) is
     // honored verbatim on either platform.
@@ -1138,12 +1161,16 @@ pub(super) fn resolve_runtime_path(prefer_min: bool, gpu: bool) -> Result<String
     const MIN: &str = "karac_runtime_min.lib";
     #[cfg(windows)]
     const GPU: &str = "karac_runtime_gpu.lib";
+    #[cfg(windows)]
+    const REGEX: &str = "karac_runtime_regex.lib";
     #[cfg(not(windows))]
     const FULL: &str = "libkarac_runtime.a";
     #[cfg(not(windows))]
     const MIN: &str = "libkarac_runtime_min.a";
     #[cfg(not(windows))]
     const GPU: &str = "libkarac_runtime_gpu.a";
+    #[cfg(not(windows))]
+    const REGEX: &str = "libkarac_runtime_regex.a";
 
     // Pick the archive name within a directory. The GPU archive (a superset of
     // the full archive, with the wgpu backend) is a distinct artifact — when a
@@ -1154,6 +1181,15 @@ pub(super) fn resolve_runtime_path(prefer_min: bool, gpu: bool) -> Result<String
         if gpu {
             let g = dir.join(GPU);
             return g.exists().then(|| g.to_string_lossy().into_owned());
+        }
+        // A program that uses `Regex.compile` / `is_match` references
+        // `karac_regex_*`, resolved only by the opt-in `libkarac_runtime_regex.a`
+        // (a superset of the full archive + the `regex` crate). Like `gpu`, it
+        // is a distinct artifact that takes priority and never falls back to
+        // min/full — those don't carry the symbol.
+        if regex {
+            let r = dir.join(REGEX);
+            return r.exists().then(|| r.to_string_lossy().into_owned());
         }
         if prefer_min {
             let m = dir.join(MIN);
@@ -1203,6 +1239,20 @@ pub(super) fn resolve_runtime_path(prefer_min: bool, gpu: bool) -> Result<String
              non-GPU archives). Or set KARAC_RUNTIME to an explicit gpu archive path. The GPU \
              archive carries the heavy wgpu backend, so it is opt-in — only programs that \
              dispatch to the GPU link it."
+                .to_string(),
+        );
+    }
+    if regex {
+        return Err(
+            "this program uses `Regex.compile` / `is_match`, which needs the regex runtime \
+             archive `libkarac_runtime_regex.a` — not found. Build it with `cargo rustc -p \
+             karac-runtime --release --features regex --crate-type staticlib` then `cp \
+             target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a` (the \
+             `--features regex` build reuses the canonical archive name; the rename keeps it \
+             distinct from the non-regex archives). Re-run the plain full build afterward so \
+             the canonical name is the non-regex archive again. Or set KARAC_RUNTIME to an \
+             explicit regex archive path. The regex archive carries the `regex` crate, so it \
+             is opt-in — only programs that use Regex link it."
                 .to_string(),
         );
     }

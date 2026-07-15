@@ -4127,6 +4127,38 @@ fn main() {
         );
     }
 
+    /// Regex codegen (B-2026-07-14-19) — `Regex.compile(pat).unwrap().is_match(s)`
+    /// looped over a HEAP-backed (cap>0, runtime-built) pattern, so the pattern
+    /// String is malloc'd every iteration. Exercises the whole ownership path:
+    /// the owned `pattern` arg into `Regex.compile`, the `Ok(Regex { pattern })`
+    /// payload, `.unwrap()`, `.is_match(...)`, and the per-iteration scope-exit
+    /// drop of the `Regex`. Asserts no leak (LSan) + no double-free / UAF
+    /// (ASAN): the pattern buffer must be owned by EXACTLY one of the arg-temp
+    /// and the `Regex` payload, freed once. The Err path uses a cap=0 static
+    /// message (never freed).
+    #[test]
+    fn asan_regex_compile_is_match_heap_pattern_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0i64;
+    let mut hits = 0i64;
+    while i < 40i64 {
+        let mut p = String.from("^a");
+        p.push_str(".c$");
+        let re = Regex.compile(p).unwrap();
+        if re.is_match("abc") { hits = hits + 1i64; }
+        if re.is_match("xyz") { hits = hits + 100i64; }
+        i = i + 1i64;
+    }
+    println(f"{hits}");
+}
+"#,
+            &["40"],
+            "asan_regex_compile_is_match_heap_pattern_no_leak",
+        );
+    }
+
     /// Return-again move-out (B-2026-06-22-2): a relay RE-RETURNS a bound
     /// heap-env closure (explicit `return f`, bare-identifier tail, relay-of-a-
     /// relay, and copy-then-return). The RC env box MOVES OUT of each relay to

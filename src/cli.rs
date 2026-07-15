@@ -4939,7 +4939,26 @@ fn cmd_run(
             Some(filename),
             Some(&source),
         ) {
-            Ok(ir) => process::exit(run_ir_via_jit_subprocess(&ir)),
+            Ok(ir) => {
+                // B-2026-07-14-19 — a program that uses `Regex.compile` /
+                // `is_match` emits `call ... @karac_regex_*`, resolved only from
+                // the opt-in `libkarac_runtime_regex.a`. The JIT runner's runtime
+                // is built WITHOUT the `regex` feature, so the LLJIT dlsym
+                // generator can't materialize those symbols (`Symbols not found:
+                // [ karac_regex_validate ]`). The interpreter runs regex
+                // correctly with no extra dep, so route there — closing the
+                // run-vs-build divergence (mirrors the `gpu` fallback above; the
+                // AOT `karac build` path auto-selects the regex archive and is
+                // unaffected). Gate on a `call` line, not the unconditional
+                // extern *declaration* every module carries.
+                let uses_regex = ir
+                    .lines()
+                    .any(|l| l.contains("@karac_regex_") && l.contains("call"));
+                if !uses_regex {
+                    process::exit(run_ir_via_jit_subprocess(&ir));
+                }
+                // else: fall through to the interpreter below.
+            }
             Err(e) => {
                 eprintln!("error: codegen failed: {e}");
                 // The JIT is the default backend (Slice 6c). A codegen gap the
