@@ -1497,9 +1497,34 @@ fn lower_soa_expr(expr: &Expr, ctx: &SoaCtx) -> Result<String, WgslError> {
             "identifier `{name}` — a struct GPU kernel body accesses `<param>.<field>`, a \
              uniform, or a `let` local, not the whole struct value"
         ))),
+        // Scalar math intrinsic method (`e.sqrt()` → `sqrt(e)`) — GPU-SLIP-2a,
+        // now in the element-wise SoA body too (previously stencil + scalar only).
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            let builtin = math_intrinsic_wgsl(method, args.len()).ok_or_else(|| {
+                WgslError::UnsupportedBody(format!(
+                    "method `.{method}()` is not supported in a struct GPU kernel body"
+                ))
+            })?;
+            Ok(format!("{builtin}({})", lower_soa_expr(object, ctx)?))
+        }
+        // Numeric `as` cast (`e as f64` → `f32(e)`) — GPU-SLIP-2a.
+        ExprKind::Cast { expr, ty } => {
+            let ctor = cast_ctor(ty).ok_or_else(|| {
+                WgslError::UnsupportedBody(
+                    "unsupported `as` cast target in a struct GPU kernel body".to_string(),
+                )
+            })?;
+            Ok(format!("{ctor}({})", lower_soa_expr(expr, ctx)?))
+        }
         _ => Err(WgslError::UnsupportedBody(
             "unsupported expression in a struct GPU kernel body (field access, numeric \
-             literals, `+ - * / %`, unary `-`, comparisons, value `if`/`else`, helper calls)"
+             literals, `+ - * / %`, unary `-`, comparisons, value `if`/`else`, `.sqrt()` / \
+             `.abs()` / `.floor()` / `.ceil()`, `as` casts, helper calls)"
                 .to_string(),
         )),
     }
@@ -1689,6 +1714,35 @@ mod tests {
         assert!(wgsl.contains("let scaled = (s * om_u[0]);"), "{wgsl}");
         assert!(wgsl.contains("ga_out[i] = (x_a + scaled);"), "{wgsl}");
         assert!(wgsl.contains("gb_out[i] = scaled;"), "{wgsl}");
+    }
+
+    #[test]
+    fn emits_soa_math_intrinsic() {
+        // GPU-SLIP-4 residual: `.sqrt()` (and `.abs()`/`.floor()`/`.ceil()`) now
+        // lower in the element-wise SoA body too, not just the stencil + scalar
+        // paths — a common-case gap surfaced by the compute-heavy re-bench.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: Cell) -> Cell {\n\
+             \x20   let m = (x.a * x.a + x.b * x.b).sqrt();\n\
+             \x20   Cell { a: m, b: x.b }\n\
+             }\n",
+        );
+        let groups = vec![
+            SoaGpuGroup {
+                name: "ga".into(),
+                fields: vec!["a".into()],
+            },
+            SoaGpuGroup {
+                name: "gb".into(),
+                fields: vec!["b".into()],
+            },
+        ];
+        let wgsl = emit_kernel_soa(&func, &groups, &[]).unwrap();
+        assert!(
+            wgsl.contains("let m = sqrt(((x_a * x_a) + (x_b * x_b)));"),
+            "{wgsl}"
+        );
+        assert!(wgsl.contains("ga_out[i] = m;"), "{wgsl}");
     }
 
     #[test]
