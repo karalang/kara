@@ -559,7 +559,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                 })?;
             (fp, fty)
-        } else if let Some(st) = self.struct_types.get(&type_name).copied() {
+        } else if let Some(base_st) = self.struct_types.get(&type_name).copied() {
+            // B-2026-07-15-17: for a GENERIC struct instantiation the field GEP
+            // must use the per-monomorph struct type — the base `struct_types`
+            // entry erases every generic-param field to i64 (1 word), so a
+            // `Pair[Vec, Vec]` field-1 GEP would land at byte 8 (word 1 of the
+            // FIRST field's `{ptr,len,cap}`) instead of after field 0's full
+            // width. Read back through that misaligned pointer, `p.second.len()`
+            // silently returned the first field's length (a wrong value; the
+            // scalar-field print path uses the loaded mono VALUE and was
+            // correct, which is why single-wide-field cases passed). Prefer the
+            // mono type from the receiver's recorded instantiation; fall back to
+            // the base type for a non-generic struct.
+            let st = self
+                .enum_inst_type_of_expr(inner)
+                .and_then(|te| match &te.kind {
+                    TypeKind::Path(p) => {
+                        let args = p.generic_args.as_ref()?;
+                        self.mono_struct_type(p.segments.last()?, args)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(base_st);
             let fp = self
                 .builder
                 .build_struct_gep(

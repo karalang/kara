@@ -9745,6 +9745,45 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_struct_multi_heap_field_method_receiver() {
+        // B-2026-07-15-17: a `<generic-struct>.field.method()` receiver GEP'd the
+        // field using the BASE generic struct type (every generic-param field
+        // erased to i64 = 1 word) instead of the per-monomorph type. So for
+        // `Pair[Vec, Vec]` the field-1 GEP landed at byte 8 (word 1 of field 0's
+        // `{ptr,len,cap}`) — `p.second.len()` silently returned the FIRST field's
+        // length. A single wide field / scalar field was fine (the scalar-field
+        // read path uses the loaded mono VALUE); only the field-receiver
+        // method-dispatch GEP was wrong. Fixed by GEPing with the mono struct
+        // type. Covers read (`.len()`), mutate (`.push()` write-through), and a
+        // 3-field / 2-type-param interleave. (The struct itself leaks its heap
+        // fields at scope exit — the separate B-2026-07-15-11 generic-struct drop
+        // gap — so this is an output-only regression, not an asan test.)
+        if let Some(out) = run_program(
+            "struct Pair[A, B] { first: A, second: B }\n\
+             struct Rec[A, B] { a: A, b: B, c: A }\n\
+             fn main() {\n\
+                 let mut p: Pair[Vec[i64], Vec[i64]] = Pair { first: [10, 20], second: [1, 2, 3] };\n\
+                 println(p.first.len());\n\
+                 println(p.second.len());\n\
+                 p.second.push(99);\n\
+                 p.first.push(30);\n\
+                 println(p.first.len());\n\
+                 println(p.second.len());\n\
+                 println(p.second[3]);\n\
+                 println(p.first[2]);\n\
+                 let mut r: Rec[Vec[i64], String] = Rec { a: [1, 2], b: \"mid\", c: [7, 8, 9, 10] };\n\
+                 r.c.push(11);\n\
+                 println(r.a.len());\n\
+                 println(r.b.len());\n\
+                 println(r.c.len());\n\
+                 println(r.c[4]);\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n3\n3\n4\n99\n30\n2\n3\n5\n11\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_take_get_or_insert() {
         // B-2026-07-14-6 (mutating combinators): `take()` yields the receiver's
         // current value and leaves `None` in its slot (a second take yields
