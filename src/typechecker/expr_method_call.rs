@@ -766,6 +766,17 @@ impl<'a> super::TypeChecker<'a> {
             if module == "gpu" && method == "dispatch" {
                 return self.infer_gpu_dispatch(args, span);
             }
+            // GPU-SLIP-4b-2: resident device buffers. `gpu.upload(vec)` moves a
+            // SoA `Vec[S]` to the GPU and returns an owned `GpuBuffer[S]` handle;
+            // `gpu.download(buf)` moves the handle back to a `Vec[S]`. Both are
+            // magic-module method calls whose arg defaults to a move (the buffer
+            // is consumed), matching the owner-decided move semantics.
+            if module == "gpu" && method == "upload" {
+                return self.infer_gpu_upload(args, span);
+            }
+            if module == "gpu" && method == "download" {
+                return self.infer_gpu_download(args, span);
+            }
         }
 
         // Critical sections (design.md § Critical sections):
@@ -6860,6 +6871,167 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.record_expr_type(span, &guard);
         guard
+    }
+
+    /// `gpu.upload(vec)` (GPU-SLIP-4b-2): move a SoA `Vec[S]` to a resident GPU
+    /// buffer and return an owned `GpuBuffer[S]` handle. `vec` must be a bare
+    /// binding carrying a `layout` block over an all-`f32` struct `S` (the same
+    /// buffer shape `gpu.dispatch` accepts) — codegen reads its per-group
+    /// pointers and calls `karac_runtime_gpu_upload_soa`. The `Vec` is MOVED
+    /// (the magic-module arg default), so the host binding is consumed. No WGSL
+    /// is baked (a pure memory transfer, no kernel).
+    fn infer_gpu_upload(&mut self, args: &[CallArg], span: &Span) -> Type {
+        fn te_name(ty: &TypeExpr) -> Option<&str> {
+            match &ty.kind {
+                TypeKind::Path(p) if p.generic_args.is_none() && p.segments.len() == 1 => {
+                    Some(p.segments[0].as_str())
+                }
+                _ => None,
+            }
+        }
+        let gpu_buffer = |elem: Type| Type::Named {
+            name: "GpuBuffer".to_string(),
+            args: vec![elem],
+        };
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "error[E_GPU_UPLOAD_ARITY]: `gpu.upload` takes exactly one buffer — \
+                     `gpu.upload(vec)` (found {} argument(s))",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            return gpu_buffer(Type::Error);
+        }
+        let buf_ty = self.infer_expr(&args[0].value);
+        // Must be `Vec[S]` over a nullary struct name.
+        let struct_ty = match &buf_ty {
+            Type::Named { name, args: ta }
+                if name == "Vec"
+                    && ta.len() == 1
+                    && matches!(&ta[0], Type::Named { args: sa, .. } if sa.is_empty()) =>
+            {
+                ta[0].clone()
+            }
+            _ => {
+                self.type_error(
+                    "error[E_GPU_UPLOAD_BUFFER]: `gpu.upload` requires a `Vec[S]` over a struct \
+                     element with a `layout` block"
+                        .to_string(),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return gpu_buffer(Type::Error);
+            }
+        };
+        let Type::Named {
+            name: struct_name, ..
+        } = &struct_ty
+        else {
+            return gpu_buffer(Type::Error);
+        };
+        // The element must be an all-`f32` struct (the decided GPU precision).
+        let sdef = self.program.items.iter().find_map(|it| match it {
+            Item::StructDef(s) if s.name == *struct_name => Some(s),
+            _ => None,
+        });
+        match sdef {
+            Some(s) if s.fields.iter().all(|f| te_name(&f.ty) == Some("f32")) => {}
+            Some(_) => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_UPLOAD_BUFFER]: every field of `{struct_name}` must be `f32` \
+                         (the decided GPU precision) to `gpu.upload`"
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return gpu_buffer(struct_ty);
+            }
+            None => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_UPLOAD_BUFFER]: `gpu.upload` buffer element `{struct_name}` \
+                         is not a struct"
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return gpu_buffer(struct_ty);
+            }
+        }
+        // The buffer must be a bare binding with a matching `layout` block —
+        // codegen reads the per-group pointers by name (`active_soa_layout`).
+        let ExprKind::Identifier(buf_name) = &args[0].value.kind else {
+            self.type_error(
+                "error[E_GPU_UPLOAD_BUFFER]: `gpu.upload` requires a bare binding carrying a \
+                 `layout` block (bind the buffer to a `let` first)"
+                    .to_string(),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return gpu_buffer(struct_ty);
+        };
+        if !self
+            .program
+            .items
+            .iter()
+            .any(|it| matches!(it, Item::LayoutDef(l) if l.name == *buf_name))
+        {
+            self.type_error(
+                format!(
+                    "error[E_GPU_UPLOAD_BUFFER]: `gpu.upload` requires a `layout` block for \
+                     `{buf_name}` (each field group becomes a GPU buffer)"
+                ),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return gpu_buffer(struct_ty);
+        }
+        gpu_buffer(struct_ty)
+    }
+
+    /// `gpu.download(buf)` (GPU-SLIP-4b-2): move a `GpuBuffer[S]` handle back to
+    /// a host `Vec[S]`. The handle is MOVED (consumed) — the magic-module arg
+    /// default — so it cannot be used again and its scope-exit free is
+    /// suppressed. Returns `Vec[S]`; codegen calls `karac_runtime_gpu_download_soa`
+    /// and (if the receiving binding is a SoA `layout`) scatters the AoS result
+    /// into its per-group buffers, exactly like a `gpu.dispatch` result.
+    fn infer_gpu_download(&mut self, args: &[CallArg], span: &Span) -> Type {
+        let vec_of = |elem: Type| Type::Named {
+            name: "Vec".to_string(),
+            args: vec![elem],
+        };
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DOWNLOAD_ARITY]: `gpu.download` takes exactly one buffer handle — \
+                     `gpu.download(buf)` (found {} argument(s))",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            return vec_of(Type::Error);
+        }
+        let buf_ty = self.infer_expr(&args[0].value);
+        match &buf_ty {
+            Type::Named { name, args: ta } if name == "GpuBuffer" && ta.len() == 1 => {
+                vec_of(ta[0].clone())
+            }
+            _ => {
+                self.type_error(
+                    "error[E_GPU_DOWNLOAD_BUFFER]: `gpu.download` requires a `GpuBuffer[S]` handle \
+                     (the result of `gpu.upload` / `gpu.dispatch`)"
+                        .to_string(),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                vec_of(Type::Error)
+            }
+        }
     }
 
     fn infer_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Type {
