@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **460 surfaced · 7 open · 449 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **461 surfaced · 8 open · 449 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -102,6 +102,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **460 surfaced 
 | B-2026-07-15-1 | 2026-07-15 | codegen (Assign identifier-target path; reassigning a shared-typed local from a Vec[shared].pop() value) | medium | Reassigning a shared-struct local (`node = popped`) with a value bound out of `Vec[shared].pop()` does NOT release the local's OLD value (x86-visible; the iterative tree-from-stack `node = pop()` idiom) | none |
 | B-2026-07-15-2 | 2026-07-15 | codegen (drop lowering for a write-only single-element Vec[shared] local) | medium | A `Vec[shared]` local with EXACTLY ONE pushed element that is never read after the push leaks that element at scope-exit drop (two+ elements, or any subsequent read, is clean) | none |
 | B-2026-07-15-3 | 2026-07-15 | typechecker (reading/copying a `mut ref <scalar>` into a plain scalar) | low | No clean way to read a `mut ref i64` into a plain `i64` for indexing/arg-passing: `let ci: i64 = cur;`, passing `cur` to an `i64` param, and `cur as i64` all reject; only an arithmetic expression (`cur - 1i64`) auto-derefs | none |
+| B-2026-07-15-4 | 2026-07-15 | auto-par (parallelization cost model / granularity cutoff for recursive divide-and-conquer) | medium | Auto-par parallelizes an independent recursive divide-and-conquer (build left subtree, build right subtree) with NO minimum-granularity cutoff, spawning threads for ~15-node subtrees — a 160x wall-time regression vs KARAC_AUTO_PAR=0 (22.4s vs 0.138s @ K=200k), same correct output; a genuine data dependency (a shared cursor) correctly serializes | none |
 
 ### Fixed (449)
 
