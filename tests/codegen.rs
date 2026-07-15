@@ -52996,6 +52996,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_retain_scalar_heap_and_capture() {
+        // B-2026-07-15-19: `Vec[T].retain(|x| pred)` had no AOT codegen lowering
+        // (typechecked + ran under the interpreter since B-2026-07-15-16, but
+        // `karac build` loud-bailed "no handler for method 'retain'"). Now lowered
+        // as an in-place compaction with a write cursor, the inline predicate
+        // evaluated per element, and drop-glue on the filtered-out elements.
+        // Covers a scalar Vec (compaction only), a heap Vec[String] (filtered
+        // elements must be freed — verified leak-clean in the sibling LSan test),
+        // and a predicate that CAPTURES an outer variable (the param binds by
+        // shadowing so the capture stays visible).
+        let output = run_program(
+            "fn main() {\n\
+                 let mut a: Vec[i64] = Vec.new();\n\
+                 a.push(1); a.push(2); a.push(3); a.push(4); a.push(5); a.push(6);\n\
+                 a.retain(|x| x % 2 == 0);\n\
+                 println(a.len());\n\
+                 println(a[0]); println(a[1]); println(a[2]);\n\
+                 let mut s: Vec[String] = Vec.new();\n\
+                 s.push(\"a\"); s.push(\"bbb\"); s.push(\"cc\"); s.push(\"ddddd\");\n\
+                 s.retain(|w| w.len() >= 3);\n\
+                 println(s.len());\n\
+                 println(s[0]); println(s[1]);\n\
+                 let mut n: Vec[i64] = Vec.new();\n\
+                 n.push(10); n.push(5); n.push(20); n.push(3);\n\
+                 let threshold: i64 = 6;\n\
+                 n.retain(|x| x > threshold);\n\
+                 println(n.len());\n\
+                 println(n[0]); println(n[1]);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        // scalar: [2,4,6]; heap: [\"bbb\",\"ddddd\"]; capture>6: [10,20].
+        assert_eq!(output, "3\n2\n4\n6\n2\nbbb\nddddd\n2\n10\n20\n");
+    }
+
+    #[test]
     fn test_e2e_vec_prefix_literal_basic() {
         // `Vec[a, b, c]` at expression position now lowers via
         // `compile_vec_prefix_literal` — malloc + per-slot store +

@@ -4650,6 +4650,241 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(val)
             }
+            "retain" => {
+                // `Vec[T].retain(|x| pred)` — keep each element the inline
+                // predicate returns `true` for, compacting in place with a write
+                // cursor and freeing the filtered-out heap elements
+                // (B-2026-07-15-19). Interp-parity with method_call_seq.rs's
+                // snapshot-filter-writeback, lowered to a single linear IR pass:
+                //
+                //   w = 0
+                //   for r in 0..len:
+                //       x = data[r]
+                //       if pred(x): data[w] = x; w += 1     // byte-move forward
+                //       else:       drop_glue(data[r])      // free heap element
+                //   len = w
+                //
+                // Only the INLINE-closure form is lowered here (codegen owns the
+                // element drop glue, which a runtime callback couldn't emit); a
+                // captured-closure VALUE or fn-ref receiver falls through to the
+                // existing deferral bail. Compaction is drop-safe: a kept element
+                // moved from r→w (w<r) leaves a stale byte-duplicate at r, but
+                // `len = w` excludes [w, len) from every later drop, so the
+                // buffer is freed exactly once; a self-store at w==r is a no-op.
+                // The predicate reads `x` as a borrow (never frees it), matching
+                // the language's read-only retain semantics.
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Vec.retain expects 1 argument (predicate closure), got {}",
+                        args.len()
+                    ));
+                }
+                let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
+                    return Err(
+                        "codegen: Vec.retain is lowered only for an inline predicate \
+                         closure (`retain(|x| …)`); a captured-closure value is \
+                         deferred — run it under the interpreter (`karac run --interp`)"
+                            .to_string(),
+                    );
+                };
+                if params.len() != 1 {
+                    return Err(format!(
+                        "Vec.retain predicate takes 1 parameter, got {}",
+                        params.len()
+                    ));
+                }
+                let params = params.clone();
+                let body = (**body).clone();
+                let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+                let fn_val = self.current_fn.unwrap();
+
+                // Header: data buffer ptr + len.
+                let data_pp = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "ret.data.p")
+                    .unwrap();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "ret.len.p")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_pp, "ret.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_p, "ret.len")
+                    .unwrap()
+                    .into_int_value();
+
+                let zero = i64_t.const_zero();
+                let one = i64_t.const_int(1, false);
+                let r_slot = self.create_entry_alloca(fn_val, "ret.r", i64_t.into());
+                let w_slot = self.create_entry_alloca(fn_val, "ret.w", i64_t.into());
+                self.builder.build_store(r_slot, zero).unwrap();
+                self.builder.build_store(w_slot, zero).unwrap();
+
+                let cond_bb = self.context.append_basic_block(fn_val, "ret.cond");
+                let body_bb = self.context.append_basic_block(fn_val, "ret.body");
+                let keep_bb = self.context.append_basic_block(fn_val, "ret.keep");
+                let drop_bb = self.context.append_basic_block(fn_val, "ret.drop");
+                let step_bb = self.context.append_basic_block(fn_val, "ret.step");
+                let done_bb = self.context.append_basic_block(fn_val, "ret.done");
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                // cond: r < len ?
+                self.builder.position_at_end(cond_bb);
+                let r_cur = self
+                    .builder
+                    .build_load(i64_t, r_slot, "ret.r.cur")
+                    .unwrap()
+                    .into_int_value();
+                let r_lt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, r_cur, len, "ret.r.lt")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(r_lt, body_bb, done_bb)
+                    .unwrap();
+
+                // body: x = data[r]; bind param; keep = pred(x)?
+                self.builder.position_at_end(body_bb);
+                let r_v = self
+                    .builder
+                    .build_load(i64_t, r_slot, "ret.r.v")
+                    .unwrap()
+                    .into_int_value();
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(elem_ty, data, &[r_v], "ret.elem.p")
+                        .unwrap()
+                };
+                let elem_val = self
+                    .builder
+                    .build_load(elem_ty, elem_ptr, "ret.elem")
+                    .unwrap();
+                let param_name = match &params[0].pattern.kind {
+                    PatternKind::Binding(n) => n.clone(),
+                    _ => "__retain_x".to_string(),
+                };
+                // Bind the closure param by shadowing (the predicate may also
+                // capture outer variables, so the outer scope must stay visible).
+                // Snapshot the slot + per-name sidecar metadata so a param that
+                // shadows an outer binding of the same name is restored intact.
+                let saved_slot = self.variables.get(&param_name).copied();
+                let saved_meta = self.take_var_metadata(&param_name);
+                let palloca = self.create_entry_alloca(fn_val, &param_name, elem_ty);
+                self.builder.build_store(palloca, elem_val).unwrap();
+                self.variables.insert(
+                    param_name.clone(),
+                    VarSlot {
+                        ptr: palloca,
+                        ty: elem_ty,
+                    },
+                );
+                if let Some(te) = &elem_te {
+                    self.register_var_from_type_expr(&param_name, te);
+                    if let TypeKind::Path(p) = &te.kind {
+                        if let Some(seg) = p.segments.first() {
+                            if self.struct_types.contains_key(seg.as_str())
+                                || self.shared_types.contains_key(seg.as_str())
+                            {
+                                self.record_var_type_name(param_name.clone(), seg.clone());
+                            }
+                        }
+                    }
+                }
+                let keep_val = self.compile_expr(&body)?;
+                // Drop the param's own registrations, then reinstate any shadowed
+                // outer binding (slot + metadata) exactly as it was.
+                let _ = self.take_var_metadata(&param_name);
+                self.restore_var_metadata(&param_name, saved_meta);
+                match saved_slot {
+                    Some(slot) => {
+                        self.variables.insert(param_name.clone(), slot);
+                    }
+                    None => {
+                        self.variables.remove(&param_name);
+                    }
+                }
+                let keep_int = keep_val.into_int_value();
+                let keep_bool = if keep_int.get_type().get_bit_width() == 1 {
+                    keep_int
+                } else {
+                    self.builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            keep_int,
+                            keep_int.get_type().const_zero(),
+                            "ret.keep.b",
+                        )
+                        .unwrap()
+                };
+                self.builder
+                    .build_conditional_branch(keep_bool, keep_bb, drop_bb)
+                    .unwrap();
+
+                // keep: data[w] = x (byte-move forward; self-store when w==r); w += 1
+                self.builder.position_at_end(keep_bb);
+                let w_k = self
+                    .builder
+                    .build_load(i64_t, w_slot, "ret.w.k")
+                    .unwrap()
+                    .into_int_value();
+                let dst = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(elem_ty, data, &[w_k], "ret.dst")
+                        .unwrap()
+                };
+                self.builder.build_store(dst, elem_val).unwrap();
+                let w_next = self.builder.build_int_add(w_k, one, "ret.w.next").unwrap();
+                self.builder.build_store(w_slot, w_next).unwrap();
+                self.builder.build_unconditional_branch(step_bb).unwrap();
+
+                // drop: free the filtered-out heap element (skip trivially-copyable).
+                self.builder.position_at_end(drop_bb);
+                if let Some(te) = &elem_te {
+                    if !is_trivially_copyable_te(te) {
+                        let elem_drop = self.emit_drop_fn_for_type_expr(te);
+                        let r_d = self
+                            .builder
+                            .build_load(i64_t, r_slot, "ret.r.d")
+                            .unwrap()
+                            .into_int_value();
+                        let ep = unsafe {
+                            self.builder
+                                .build_in_bounds_gep(elem_ty, data, &[r_d], "ret.drop.p")
+                                .unwrap()
+                        };
+                        self.builder
+                            .build_call(elem_drop, &[ep.into()], "")
+                            .unwrap();
+                    }
+                }
+                self.builder.build_unconditional_branch(step_bb).unwrap();
+
+                // step: r += 1
+                self.builder.position_at_end(step_bb);
+                let r_s = self
+                    .builder
+                    .build_load(i64_t, r_slot, "ret.r.s")
+                    .unwrap()
+                    .into_int_value();
+                let r_ns = self.builder.build_int_add(r_s, one, "ret.r.ns").unwrap();
+                self.builder.build_store(r_slot, r_ns).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                // done: len = w. Buffer + cap unchanged (a later push reuses cap).
+                self.builder.position_at_end(done_bb);
+                let w_final = self
+                    .builder
+                    .build_load(i64_t, w_slot, "ret.w.final")
+                    .unwrap()
+                    .into_int_value();
+                self.builder.build_store(len_p, w_final).unwrap();
+                Ok(i64_t.const_zero().into())
+            }
             "sort_by" => {
                 if args.len() != 1 {
                     return Err(format!(

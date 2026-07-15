@@ -27584,4 +27584,51 @@ fn main() {
             "generic_struct_field_receiver_param_indexed_no_leak",
         );
     }
+
+    #[test]
+    fn asan_vec_retain_drops_filtered_heap_elements_no_leak() {
+        // B-2026-07-15-19: the AOT `Vec.retain` lowering must FREE the elements
+        // the predicate filters out (and must NOT double-free the kept ones that
+        // compact forward, nor the whole Vec at scope exit). Loop a heap
+        // `Vec[String]` (filtered `String` buffers must be freed each iteration)
+        // and a nested `Vec[Vec[i64]]` (filtered inner-Vec buffers must be freed)
+        // so any per-iteration strand accumulates into a visible LSan leak. The
+        // compaction is drop-safe only because `len = w` excludes the stale
+        // byte-duplicate tail from the Vec's own scope-exit drop — a bug there
+        // would surface as a double-free (SIGABRT) rather than a leak.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut v: Vec[String] = Vec.new();
+        v.push(i.to_string());
+        v.push("keepme".to_string());
+        v.push("x".to_string());
+        v.push("droplong".to_string());
+        v.retain(|s| s.len() >= 3);
+        let mut j: i64 = 0;
+        while j < v.len() {
+            acc = acc + v[j].len();
+            j = j + 1;
+        }
+        let mut nv: Vec[Vec[i64]] = Vec.new();
+        let mut p: Vec[i64] = Vec.new();
+        p.push(1);
+        let mut q: Vec[i64] = Vec.new();
+        q.push(1); q.push(2); q.push(3);
+        nv.push(p);
+        nv.push(q);
+        nv.retain(|inner| inner.len() > 1);
+        acc = acc + nv[0].len();
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["680"],
+            "vec_retain_drops_filtered_heap_elements_no_leak",
+        );
+    }
 }
