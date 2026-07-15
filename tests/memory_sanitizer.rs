@@ -27067,4 +27067,60 @@ fn main() {
             "generic_mono_bare_t_local_reassign_no_leak",
         );
     }
+
+    #[test]
+    fn asan_fstring_fresh_string_temp_interp_no_leak() {
+        // B-2026-07-15-12: a String-returning call/method/slice embedded
+        // DIRECTLY in an f-string interpolation (`f"{obj.describe()}"`,
+        // `f"{greet(x)}"`, `f"{s[a..b]}"`) leaked its buffer — the f-string
+        // append COPIES the bytes into the accumulator, leaving the temp
+        // unreferenced, and fstr_render_part's plain-String path (unlike the
+        // user-Display / enum / collection arms) never scope-tracked it. Scales
+        // with the interpolation count and is unbounded in a loop. Fixed by
+        // tracking the fresh-owned-temp String buffer for scope-exit free.
+        // This test ALSO pins the double-free boundary: an identifier String
+        // (owned elsewhere) and the f-string result moved into a Vec must NOT
+        // be freed twice.
+        assert_clean_asan_run(
+            r#"
+struct Dog { name: String }
+impl Dog {
+    fn describe(ref self) -> String { f"dog {self.name}" }
+}
+fn greet(n: String) -> String { f"hi {n}" }
+fn make(n: i64) -> String { f"item-{n}" }
+fn main() {
+    let d: Dog = Dog { name: "Rex" };
+    // method-call String temp, twice in one f-string
+    println(f"{d.describe()} and {d.describe()}");
+    // free-fn String temp
+    println(f"[{greet("bob")}]");
+    // identifier String (owned) must not double-free
+    let name: String = f"world";
+    println(f"hi {name}");
+    println(name);
+    // String slice temp
+    let s: String = "hello world";
+    println(f"[{s[0..5]}]");
+    // fresh-temp interp in a loop, result moved into a Vec (no double-free)
+    let mut v: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5 {
+        v.push(f"row {make(i)}");
+        i = i + 1;
+    }
+    println(f"{v.len()}");
+}
+"#,
+            &[
+                "dog Rex and dog Rex",
+                "[hi bob]",
+                "hi world",
+                "world",
+                "[hello]",
+                "5",
+            ],
+            "fstring_fresh_string_temp_interp_no_leak",
+        );
+    }
 }

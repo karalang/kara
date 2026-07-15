@@ -7150,6 +7150,42 @@ impl<'ctx> super::Codegen<'ctx> {
         if is_char {
             return Ok(self.emit_codepoint_to_utf8(val.into_int_value()));
         }
+        // A String-typed part that is a FRESH owned heap temp — a fn/method
+        // call returning `String` (`f"{obj.describe()}"`) or a `String[a..b]`
+        // slice — owns its buffer, which the f-string append COPIES into the
+        // accumulator, leaving the temp's buffer unreferenced. Without
+        // scope-tracking it leaks once per interpolation and scales with the
+        // count (`f"{a()} {b()}"` leaks twice) — B-2026-07-15-12. Store it in a
+        // tracked alloca (exactly like the user-Display / enum / collection
+        // arms above) so the buffer is freed once at scope exit. A PLACE-expr
+        // String (identifier / field) is owned elsewhere and must NOT be
+        // tracked here — its owner frees it, and a second free double-frees —
+        // so this gates strictly on the fresh-owned-temp predicates.
+        if val.is_struct_value()
+            && self.llvm_ty_is_vec_struct(val.into_struct_value().get_type().into())
+            && (self.expr_yields_fresh_owned_temp(e) || self.expr_is_fresh_owned_string_slice(e))
+        {
+            let sv = val.into_struct_value();
+            let acc = self.create_entry_alloca(
+                self.current_fn.unwrap(),
+                "fstr.str.acc",
+                sv.get_type().into(),
+            );
+            self.builder.build_store(acc, sv).unwrap();
+            let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
+            self.track_vec_var(acc, Some(u8_ty));
+            let data = self
+                .builder
+                .build_extract_value(sv, 0, "fstr.str.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(sv, 1, "fstr.str.len")
+                .unwrap()
+                .into_int_value();
+            return Ok((data, len));
+        }
         // A struct value that isn't the String `{ptr,i64,i64}` layout is a
         // user struct in a non-place interpolation position (`f"{make()}"`);
         // the place-expr struct path above didn't catch it. `compile_fstr_part_to_cstr`
