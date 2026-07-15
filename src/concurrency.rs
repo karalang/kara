@@ -730,6 +730,15 @@ pub struct ParallelGroup {
     /// are excluded — those flow through the return-slot mechanism
     /// already.
     pub captured_mutations: HashSet<String>,
+    /// The subset of `captured_mutations` naming HEAP-OWNING CONTAINER
+    /// locals (`Vec` / `String` / `Map` / `Set` / sorted variants). A lost
+    /// branch-local mutation of one of these is never a dead write even when
+    /// no later statement reads the name: the parent's scope-exit drop reads
+    /// the container header, and the branch's realloc'd buffer + pushed
+    /// elements are orphaned (B-2026-07-15-2 — the write-only single-push
+    /// `Vec[shared]` leak). Codegen falls back to sequential whenever this
+    /// set is non-empty, independent of the outside-reads check.
+    pub captured_container_mutations: HashSet<String>,
 }
 
 // ── Internal: Per-statement metadata ───────────────────────────
@@ -1374,7 +1383,11 @@ impl<'a> ConcurrencyChecker<'a> {
 
         // Step 3: Find maximal independent sets (greedy graph coloring approach)
         // We group statements that have no edges between them.
-        let parallel_groups = self.find_parallel_groups(&stmt_infos, &graph, total_statements);
+        // Names of locals whose declared/recorded type is a heap-owning
+        // container — feeds `captured_container_mutations` (B-2026-07-15-2).
+        let container_locals = self.collect_container_locals(&func.body);
+        let parallel_groups =
+            self.find_parallel_groups(&stmt_infos, &graph, total_statements, &container_locals);
 
         // Step 4: Recognize reductions in top-level loops. Independent of
         // the parallel-group / dependency machinery — a reduction loop
@@ -2566,11 +2579,161 @@ impl<'a> ConcurrencyChecker<'a> {
     /// Find groups of statements that can run in parallel.
     /// Uses a greedy approach: walk statements in order, grouping consecutive
     /// independent statements.
+    /// Collect the names of locals bound to a HEAP-OWNING CONTAINER type
+    /// (`Vec` / `String` / `Map` / `Set` / `SortedMap` / `SortedSet`) anywhere
+    /// in `block`, recursively. Classification prefers the `let`'s explicit
+    /// annotation; unannotated bindings use the typechecker's recorded pattern
+    /// type (`pattern_binding_types`, keyed by the pattern span). Name-based
+    /// on purpose: a same-named container binding in ANY scope conservatively
+    /// marks the name (over-marking only de-parallelizes — it can never
+    /// introduce a race). Feeds `ParallelGroup::captured_container_mutations`
+    /// (B-2026-07-15-2).
+    fn collect_container_locals(&self, block: &Block) -> HashSet<String> {
+        fn type_name_is_container(name: &str) -> bool {
+            let head = name.split(['[', ' ']).next().unwrap_or("");
+            matches!(
+                head,
+                "Vec" | "String" | "Map" | "Set" | "SortedMap" | "SortedSet"
+            )
+        }
+        fn type_expr_is_container(te: &TypeExpr) -> bool {
+            match &te.kind {
+                TypeKind::Path(p) => p.segments.last().is_some_and(|s| type_name_is_container(s)),
+                _ => false,
+            }
+        }
+        fn walk_block(this: &ConcurrencyChecker, block: &Block, out: &mut HashSet<String>) {
+            for stmt in &block.stmts {
+                walk_stmt(this, stmt, out);
+            }
+            if let Some(fe) = &block.final_expr {
+                walk_expr(this, fe, out);
+            }
+        }
+        fn classify_let(
+            this: &ConcurrencyChecker,
+            pattern: &Pattern,
+            ty: &Option<TypeExpr>,
+            out: &mut HashSet<String>,
+        ) {
+            let PatternKind::Binding(name) = &pattern.kind else {
+                return;
+            };
+            let is_container = match ty {
+                Some(te) => type_expr_is_container(te),
+                None => this
+                    .types
+                    .and_then(|t| {
+                        t.pattern_binding_types
+                            .get(&SpanKey::from_span(&pattern.span))
+                    })
+                    .is_some_and(|n| type_name_is_container(n)),
+            };
+            if is_container {
+                out.insert(name.clone());
+            }
+        }
+        fn walk_stmt(this: &ConcurrencyChecker, stmt: &Stmt, out: &mut HashSet<String>) {
+            match &stmt.kind {
+                StmtKind::Let {
+                    pattern, ty, value, ..
+                } => {
+                    classify_let(this, pattern, ty, out);
+                    walk_expr(this, value, out);
+                }
+                StmtKind::LetUninit { name, ty, .. } => {
+                    if type_expr_is_container(ty) {
+                        out.insert(name.clone());
+                    }
+                }
+                StmtKind::LetElse {
+                    pattern,
+                    ty,
+                    value,
+                    else_block,
+                    ..
+                } => {
+                    classify_let(this, pattern, ty, out);
+                    walk_expr(this, value, out);
+                    walk_block(this, else_block, out);
+                }
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    walk_block(this, body, out);
+                }
+                StmtKind::Assign { target, value } => {
+                    walk_expr(this, target, out);
+                    walk_expr(this, value, out);
+                }
+                StmtKind::MultiAssign { targets, values } => {
+                    for e in targets.iter().chain(values.iter()) {
+                        walk_expr(this, e, out);
+                    }
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
+                    walk_expr(this, target, out);
+                    walk_expr(this, value, out);
+                }
+                StmtKind::Expr(e) => walk_expr(this, e, out),
+            }
+        }
+        fn walk_expr(this: &ConcurrencyChecker, e: &Expr, out: &mut HashSet<String>) {
+            match &e.kind {
+                ExprKind::Block(b)
+                | ExprKind::Seq(b)
+                | ExprKind::Par(b)
+                | ExprKind::Unsafe(b)
+                | ExprKind::Try(b)
+                | ExprKind::Comptime(b) => walk_block(this, b, out),
+                ExprKind::LabeledBlock { body, .. } => walk_block(this, body, out),
+                ExprKind::If {
+                    condition,
+                    then_block,
+                    else_branch,
+                } => {
+                    walk_expr(this, condition, out);
+                    walk_block(this, then_block, out);
+                    if let Some(eb) = else_branch {
+                        walk_expr(this, eb, out);
+                    }
+                }
+                ExprKind::IfLet {
+                    value,
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    walk_expr(this, value, out);
+                    walk_block(this, then_block, out);
+                    if let Some(eb) = else_branch {
+                        walk_expr(this, eb, out);
+                    }
+                }
+                ExprKind::Match { scrutinee, arms } => {
+                    walk_expr(this, scrutinee, out);
+                    for arm in arms {
+                        walk_expr(this, &arm.body, out);
+                    }
+                }
+                ExprKind::While { body, .. }
+                | ExprKind::WhileLet { body, .. }
+                | ExprKind::For { body, .. }
+                | ExprKind::Loop { body, .. } => walk_block(this, body, out),
+                ExprKind::Lock { body, .. } => walk_block(this, body, out),
+                ExprKind::Providers { body, .. } => walk_block(this, body, out),
+                _ => {}
+            }
+        }
+        let mut out = HashSet::new();
+        walk_block(self, block, &mut out);
+        out
+    }
+
     fn find_parallel_groups(
         &self,
         infos: &[StmtInfo],
         graph: &ConflictGraph,
         n: usize,
+        container_locals: &HashSet<String>,
     ) -> Vec<ParallelGroup> {
         let mut groups: Vec<ParallelGroup> = Vec::new();
         let mut assigned = vec![false; n];
@@ -2735,11 +2898,16 @@ impl<'a> ConcurrencyChecker<'a> {
                         captured_mutations.insert(name.clone());
                     }
                 }
+                let captured_container_mutations = captured_mutations
+                    .intersection(container_locals)
+                    .cloned()
+                    .collect();
                 groups.push(ParallelGroup {
                     statement_indices: group_indices,
                     reason,
                     is_trivial,
                     captured_mutations,
+                    captured_container_mutations,
                 });
             }
         }

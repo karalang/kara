@@ -378,6 +378,7 @@ mod tests {
                     reason: "pure computations".to_string(),
                     is_trivial: true,
                     captured_mutations: std::collections::HashSet::new(),
+                    captured_container_mutations: std::collections::HashSet::new(),
                 }],
                 total_statements: 2,
                 statement_spans: Vec::new(),

@@ -172,6 +172,11 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         };
+        // Fresh-temp Option[shared] scrutinee — release the temp's
+        // transferred ref (B-2026-07-15-1; see the tracker's doc).
+        if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() && freshtemp_inline_res.is_none() {
+            self.track_freshtemp_shared_option_scrutinee(scrutinee, arms, scrut);
+        }
         // Detect borrow-returning scrutinees so pattern bindings don't
         // register a `FreeVecBuffer` against a buffer the container still
         // owns. `Map.get` is the canonical case (the returned `Option[V]`
@@ -4734,6 +4739,108 @@ impl<'ctx> super::Codegen<'ctx> {
     /// temp's buffer, and the temp is dead after the match). Returns the alloca
     /// for the arm loop's suppression, or `None` when it does not apply
     /// (non-fresh-temp, borrow, scalar payload, or a WIDE payload — boxed path).
+    /// Fresh-temp `Option[shared T]` scrutinee whose `Some` payload is a
+    /// SHARED HANDLE (an rc pointer in the first payload word):
+    /// `match stack.pop() { Some(popped) => … }` (B-2026-07-15-1). `Vec.pop`
+    /// TRANSFERS the vec's +1 ref into the returned Option temp, and the
+    /// payload-binding path takes its OWN +1 (balanced by the arm-exit
+    /// `RcDec`) — so without a release of the temp's transferred ref, every
+    /// popped shared element strands one count (the iterative
+    /// `node = stack.pop()` tree-builder leaked its whole tree; the minimal
+    /// repro leaks the popped node even with a plain
+    /// `Some(p) => println(p.val)` arm). Materialize the scrutinee value
+    /// into a slot and queue a tag-guarded `RcDecOption` at scope exit.
+    /// Count-based, so it is correct regardless of whether an arm binds the
+    /// payload, wildcards it, or moves it onward — each of those paths
+    /// manages its own +1 independently. The `None` arm is covered by the
+    /// action's tag guard. Boxed (>3-word) payloads take the boxed-enum
+    /// tracker instead (a shared handle is one word, so the two are
+    /// mutually exclusive); borrow-returning scrutinees (`Map.get`) never
+    /// owned a transferable ref and are excluded by the borrow gate.
+    pub(super) fn track_freshtemp_shared_option_scrutinee(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        val: BasicValueEnum<'ctx>,
+    ) {
+        if !self.expr_yields_fresh_owned_temp(scrutinee) {
+            return;
+        }
+        if self.scrutinee_is_borrow_call(scrutinee) {
+            return;
+        }
+        let BasicValueEnum::StructValue(sv) = val else {
+            return;
+        };
+        // Resolve the shared payload's heap type from any arm's
+        // `Some(<binding>)` sub-pattern (its span is in
+        // `pattern_binding_types`); bail when no arm proves a shared payload.
+        let mut heap_type = None;
+        for arm in arms {
+            if self.variant_pattern_enum_name(&arm.pattern).as_deref() != Some("Option") {
+                continue;
+            }
+            let PatternKind::TupleVariant { patterns, .. } = &arm.pattern.kind else {
+                continue;
+            };
+            let Some(sub) = patterns.first() else {
+                continue;
+            };
+            let key = (sub.span.offset, sub.span.length);
+            if let Some(tn) = self.pattern_binding_types.get(&key) {
+                if let Some(info) = self.shared_types.get(tn) {
+                    heap_type = Some(info.heap_type);
+                    break;
+                }
+            }
+        }
+        // Wildcard fallback (`Some(_) => {}` binds nothing, so no
+        // pattern-binding record exists): resolve the payload type from the
+        // scrutinee's recorded enum instance type (`Option[Node]`) — same
+        // route the inline-result tracker uses.
+        if heap_type.is_none() {
+            if let Some(te) = self.enum_inst_type_from_span(scrutinee) {
+                if let TypeKind::Path(pp) = &te.kind {
+                    if pp.segments.last().map(String::as_str) == Some("Option") {
+                        if let Some(crate::ast::GenericArg::Type(inner)) =
+                            pp.generic_args.as_ref().and_then(|a| a.first())
+                        {
+                            if let TypeKind::Path(ip) = &inner.kind {
+                                if let Some(tn) = ip.segments.last() {
+                                    if let Some(info) = self.shared_types.get(tn) {
+                                        heap_type = Some(info.heap_type);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let Some(heap_type) = heap_type else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Option") else {
+            return;
+        };
+        let option_ty = layout.llvm_type;
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let alloca = self.create_entry_alloca(fn_val, "__freshtemp_shared_opt", option_ty.into());
+        let _ = self.builder.build_store(alloca, sv);
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(crate::codegen::state::CleanupAction::RcDecOption {
+                name: "__freshtemp_shared_opt".to_string(),
+                option_slot: alloca,
+                option_ty,
+                heap_type,
+                some_tag,
+            });
+        }
+    }
+
     pub(super) fn track_freshtemp_inline_result_scrutinee(
         &mut self,
         scrutinee: &Expr,

@@ -957,6 +957,42 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
 
+        // 2.5b (B-2026-07-15-2): a captured mutation of a HEAP-OWNING
+        //      container local (Vec / String / Map / Set) is NEVER a dead
+        //      write even when no later statement reads the name — the
+        //      parent's scope-exit drop is an implicit read of the container
+        //      header that the analyzer's `refs` set cannot see. The branch
+        //      env bit-copies the `{ptr,len,cap}` header, so a branch-local
+        //      `v.push(...)` reallocs into a buffer only the branch observes:
+        //      the parent drops the stale pre-spawn header (often the empty
+        //      vec — a no-op free) and the branch's buffer plus every element
+        //      pushed inside the branch are orphaned (the write-only
+        //      single-push `Vec[shared]` repro leaked the element box + the
+        //      realloc'd buffer). Scalar captured mutations stay
+        //      parallelizable — losing a dead scalar write is semantically
+        //      inert and carries no allocation.
+        // 2.5b (B-2026-07-15-2): a captured mutation of a HEAP-OWNING
+        //      container local (Vec / String / Map / Set) is NEVER a dead
+        //      write even when no later statement reads the name — the
+        //      parent's scope-exit drop is an implicit read of the container
+        //      header that the analyzer's outside-reads set cannot see. The
+        //      branch env bit-copies the `{ptr,len,cap}` header, so a
+        //      branch-local `v.push(...)` reallocs into a buffer only the
+        //      branch observes: the parent drops the stale pre-spawn header
+        //      (often the empty vec — a no-op free) and the branch's buffer
+        //      plus every element pushed inside the branch are orphaned (the
+        //      write-only single-push `Vec[shared]` repro leaked the element
+        //      box + the realloc'd buffer). Classification lives in the
+        //      ANALYZER (`captured_container_mutations`, name-based via let
+        //      annotations + `pattern_binding_types`) because this decision
+        //      runs at group-planning time, BEFORE the lets compile — the
+        //      codegen registries are still empty here. Scalar captured
+        //      mutations stay parallelizable: losing a dead scalar write is
+        //      semantically inert and carries no allocation.
+        if !group.captured_container_mutations.is_empty() {
+            return None;
+        }
+
         // 2.6. Reject groups that destructure-bind a name read outside the
         //      group. A tuple/struct/slice `let` pattern produces several names
         //      of differing types from one statement, which the single-type-
@@ -5025,6 +5061,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // node before its inc, UAF. Same ordering bug class as
                     // the `Option[shared T]` field-store fix (25442e73);
                     // this is the variable-assign sibling.
+                    if std::env::var("KARAC_DEBUG_ASSIGN").is_ok() {
+                        eprintln!(
+                            "[assign] target={name} type_name={:?} shared={} b2_skip={} rhs_is_fresh={rhs_is_fresh}",
+                            self.var_type_names.get(name),
+                            self.var_type_names.get(name).map(|t| self.shared_types.contains_key(t)).unwrap_or(false),
+                            self.b2_skips_counts(name)
+                        );
+                    }
                     if let Some(type_name) = self.var_type_names.get(name).cloned() {
                         if let Some(info) = self.shared_types.get(&type_name).cloned() {
                             if let Some(slot) = self.variables.get(name).copied() {

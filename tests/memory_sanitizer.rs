@@ -26906,4 +26906,80 @@ fn main() {
             "fold_string_accumulator_over_map_no_leak",
         );
     }
+
+    #[test]
+    fn asan_vec_shared_pop_match_releases_temp_ref_no_leak() {
+        // B-2026-07-15-1: `Vec.pop` TRANSFERS the vec's +1 ref into the
+        // returned `Option[shared]` temp; the match payload binding takes its
+        // own +1 (balanced by the arm-exit dec), so without a release of the
+        // TEMP's transferred ref every popped shared element stranded one
+        // count. Covers the pop-reassign loop (the kata #105 iterative
+        // stack-builder shape), the `Some(_)` wildcard arm (no binding — the
+        // enum-inst-type fallback resolves the payload), a moved-out payload
+        // (must NOT double-free), and a read-only bind.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut next: Option[Node] }
+fn main() {
+    let mut stack: Vec[Node] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 50 {
+        stack.push(Node { val: i, next: None });
+        i = i + 1;
+    }
+    let mut node = Node { val: 0 - 1, next: None };
+    let mut sum: i64 = 0;
+    while stack.len() > 0 {
+        match stack.pop() {
+            None => {}
+            Some(popped) => { node = popped; }
+        }
+        sum = sum + node.val;
+    }
+    println(sum);
+    let mut s2: Vec[Node] = Vec.new();
+    s2.push(Node { val: 5, next: None });
+    match s2.pop() { None => {} Some(_) => { println("popped"); } }
+    let mut s4: Vec[Node] = Vec.new();
+    s4.push(Node { val: 42, next: None });
+    let mut kept: Vec[Node] = Vec.new();
+    match s4.pop() { None => {} Some(p) => { kept.push(p); } }
+    println(kept[0].val);
+    let mut s5: Vec[Node] = Vec.new();
+    s5.push(Node { val: 9, next: None });
+    match s5.pop() { None => {} Some(p) => { println(p.val); } }
+}
+"#,
+            &["1225", "popped", "42", "9"],
+            "vec_shared_pop_match_releases_temp_ref_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_write_only_vec_shared_single_push_no_leak() {
+        // B-2026-07-15-2: a `Vec[shared]` local with exactly ONE pushed
+        // element and NO read after the push leaked the element + the
+        // realloc'd buffer — auto-par branched the push (nothing read `v`
+        // afterward, so the captured-mutation gate saw no outside read), and
+        // the branch-local realloc never propagated back to the parent's
+        // header. The parent's scope-exit drop is an implicit read the
+        // analyzer now models via `captured_container_mutations`: any
+        // captured mutation of a heap-owning container local compiles the
+        // group sequentially. The linked payload deepens the walk.
+        assert_clean_asan_run(
+            r#"
+shared struct Item { val: i64, tag: i64 }
+shared struct Node { val: i64, mut next: Option[Node] }
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    v.push(Item { val: 1, tag: 2 });
+    let mut w: Vec[Node] = Vec.new();
+    w.push(Node { val: 1, next: Some(Node { val: 2, next: None }) });
+    println("done");
+}
+"#,
+            &["done"],
+            "write_only_vec_shared_single_push_no_leak",
+        );
+    }
 }
