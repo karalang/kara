@@ -27631,4 +27631,75 @@ fn main() {
             "vec_retain_drops_filtered_heap_elements_no_leak",
         );
     }
+
+    #[test]
+    fn asan_reassign_heap_field_and_map_set_var_no_leak_no_double_free() {
+        // B-2026-07-15-25: reassigning a struct's heap-owning FIELD (`h.v = …`,
+        // `h.s = …`, `h.m = …`) used to overwrite the slot with NO drop of the
+        // old value — leaking it for a fresh RHS and double-freeing / SIGSEGVing
+        // for a moved-binding RHS (the source's own cleanup then freed the
+        // now-shared buffer). Separately, Map/Set VARIABLE reassignment
+        // (`m = m2`, `set_a = set_b`) was uncovered by the Vec-only eager-free +
+        // move-suppression, so it leaked the old handle AND double-freed the
+        // source. Fixed by (a) dropping the old field value in
+        // `compile_field_store`'s plain-owned-struct-field branch + suppressing
+        // the moved source in the Assign FieldAccess arm, and (b) an eager
+        // old-handle free + source suppression for Map/Set vars in the Assign
+        // var-reassign arm. Loop every shape (fresh AND moved-binding RHS) so a
+        // per-iteration strand accumulates into a visible LSan leak, and a
+        // double-free surfaces as SIGABRT under ASAN.
+        assert_clean_asan_run(
+            r#"
+struct Hv { v: Vec[i64] }
+struct Hs { s: String }
+struct Hm { m: Map[i64, i64] }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut a: Vec[i64] = Vec.new();
+        a.push(i); a.push(i + 1);
+        let mut hv = Hv { v: a };
+        let mut b: Vec[i64] = Vec.new();
+        b.push(i); b.push(i + 1); b.push(i + 2);
+        hv.v = b;
+        hv.v = [i, i + 1, i + 2, i + 3];
+        acc = acc + hv.v.len();
+
+        let mut hs = Hs { s: i.to_string() };
+        let ns = (i * 100).to_string();
+        hs.s = ns;
+        acc = acc + hs.s.len();
+
+        let mut m1: Map[i64, i64] = Map.new();
+        m1.insert(1, i);
+        let mut hm = Hm { m: m1 };
+        let mut m2: Map[i64, i64] = Map.new();
+        m2.insert(2, i); m2.insert(3, i);
+        hm.m = m2;
+        acc = acc + hm.m.len();
+
+        let mut mv: Map[i64, i64] = Map.new();
+        mv.insert(9, i);
+        let mut mv2: Map[i64, i64] = Map.new();
+        mv2.insert(8, i); mv2.insert(7, i);
+        mv = mv2;
+        acc = acc + mv.len();
+
+        let mut sa: Set[i64] = Set.new();
+        sa.insert(i);
+        let mut sb: Set[i64] = Set.new();
+        sb.insert(i + 1); sb.insert(i + 2);
+        sa = sb;
+        acc = acc + sa.len();
+
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["548"],
+            "reassign_heap_field_and_map_set_var_no_leak_no_double_free",
+        );
+    }
 }

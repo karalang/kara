@@ -5327,6 +5327,19 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-07-15-25: Map/Set VARIABLE reassignment (`m = m2`,
+                    // `set_a = set_b`). The Vec/String eager-free above is gated on
+                    // `lhs_is_tracked_vec`, which is false for a Map/Set var, so the
+                    // old handle was neither freed (leak) nor the source suppressed
+                    // (double-free / SIGSEGV). Free the old handle eagerly with the
+                    // var's queued per-entry drop params (a no-op for `m = m`), then
+                    // suppress the moved source below. The var's own FreeMapHandle
+                    // stays and frees the NEW handle at scope exit.
+                    let lhs_is_tracked_map = self.map_key_types.contains_key(name.as_str())
+                        || self.set_elem_types.contains_key(name.as_str());
+                    if lhs_is_tracked_map && !rhs_is_self_alias {
+                        self.eager_free_old_map_var_handle(name);
+                    }
                     if let Some(slot) = self.variables.get(name).copied() {
                         // Coerce a scalar RHS to the slot's width before
                         // storing — narrow-int arithmetic computes at i64
@@ -5371,6 +5384,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.zero_vec_alloca_cap(acc);
                         }
                     }
+                    // B-2026-07-15-25: suppress the moved source's FreeMapHandle
+                    // for a Map/Set var reassignment (`m = m2`) — after the store
+                    // both slots hold the same handle; the LHS's own FreeMapHandle
+                    // frees it at scope exit, so the source must not free it too.
+                    // No-op for a fresh RHS (no source binding) or a self-alias.
+                    if lhs_is_tracked_map && !rhs_is_self_alias {
+                        if let ExprKind::Identifier(rhs_name) = &value.kind {
+                            self.suppress_map_cleanup_for_tail_identifier(rhs_name);
+                        }
+                    }
                 } else if let ExprKind::FieldAccess { object, field } = &target.kind {
                     // Heap-env closure FIELD reassignment (`r.f = make(j)` /
                     // `r.f = g`): drop r.f's CURRENT env, inc the new env on a
@@ -5383,6 +5406,29 @@ impl<'ctx> super::Codegen<'ctx> {
                         return Ok(());
                     }
                     self.compile_field_store(object, field, val, rhs_is_fresh)?;
+                    // B-2026-07-15-25: `compile_field_store` now drops the OLD
+                    // heap field value before overwriting it, so a moved-binding
+                    // RHS (`h.v = v2`, `h.s = heap_str`, `h.m = m2`) leaves the
+                    // field owning the source's buffer/handle — the source's own
+                    // scope-exit cleanup must be suppressed or it double-frees the
+                    // now-shared buffer. Mirror the Index arm's move-suppression
+                    // (`out[j] = nb`), gated on the field being a heap Vec/String
+                    // (FreeVecBuffer) or Map/Set (FreeMapHandle). Each suppressor
+                    // is itself a no-op for a non-Identifier / non-matching RHS, so
+                    // a fresh-value RHS (literal / fn-return) is untouched.
+                    if let Some(field_te) = self.plain_field_type_expr(object, field) {
+                        if self.is_string_type_expr(&field_te)
+                            || self.extract_vec_elem_type(&field_te).is_some()
+                        {
+                            self.suppress_source_vec_cleanup_for_arg(value);
+                        } else if let ExprKind::Identifier(src) = &value.kind {
+                            if self.map_key_types.contains_key(src.as_str())
+                                || self.set_elem_types.contains_key(src.as_str())
+                            {
+                                self.suppress_map_cleanup_for_tail_identifier(src);
+                            }
+                        }
+                    }
                     // B-2026-07-11-32 (with the `cells[i].name = f"…"` SoA case
                     // it generalises): a heap String field store whose RHS is an
                     // f-string (`p.name = f"…"`, `cells[i].name = f"…"`). The

@@ -53032,6 +53032,41 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_reassign_heap_field_and_map_var() {
+        // B-2026-07-15-25: reassigning a struct's heap field now drops the old
+        // value before overwriting (no leak) and suppresses a moved-binding
+        // source (no double-free); Map/Set VARIABLE reassignment frees the old
+        // handle and suppresses the moved source too. This output test guards the
+        // observable result across a moved-binding field RHS (`h.v = v2`), a
+        // fresh field RHS (`h.v = […]`), a String field reassign, and a Map var
+        // reassign; the sibling LSan test guards the memory safety.
+        let output = run_program(
+            "struct H { v: Vec[i64] }\n\
+             struct S { s: String }\n\
+             fn main() {\n\
+                 let mut h = H { v: [1, 2] };\n\
+                 let mut v2: Vec[i64] = Vec.new();\n\
+                 v2.push(5); v2.push(6); v2.push(7);\n\
+                 h.v = v2;\n\
+                 println(h.v.len());\n\
+                 h.v = [9, 8, 7, 6];\n\
+                 println(h.v.len());\n\
+                 let mut sh = S { s: (11).to_string() };\n\
+                 sh.s = (222222).to_string();\n\
+                 println(sh.s);\n\
+                 let mut m: Map[i64, i64] = Map.new();\n\
+                 m.insert(1, 10);\n\
+                 let mut m2: Map[i64, i64] = Map.new();\n\
+                 m2.insert(2, 20); m2.insert(3, 30);\n\
+                 m = m2;\n\
+                 println(m.len());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "3\n4\n222222\n2\n");
+    }
+
+    #[test]
     fn test_e2e_vec_prefix_literal_basic() {
         // `Vec[a, b, c]` at expression position now lowers via
         // `compile_vec_prefix_literal` — malloc + per-slot store +

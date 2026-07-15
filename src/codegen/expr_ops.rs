@@ -1329,6 +1329,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let BasicValueEnum::StructValue(sv) = obj_val {
                     let field_idx = self.field_index_for(object, field);
                     if let Some(idx) = field_idx {
+                        // B-2026-07-15-25: drop the OLD heap-owning field value
+                        // before overwriting it. This plain-owned-struct-field
+                        // store is the fall-through past every special-cased
+                        // branch above (shared struct, Option[shared], SoA, union,
+                        // indexed-shared — each returns early and manages its own
+                        // old-side release), so a Vec/String/Map/Set/enum/nested-
+                        // struct field here was simply clobbered: the old buffer /
+                        // handle leaked (`h.v = [9,8,7]` stranded 32B) and, for a
+                        // moved-binding RHS (`h.v = v2`), the source's own
+                        // scope-exit cleanup then double-freed the now-shared
+                        // buffer (the caller suppresses the source separately).
+                        // Drop in place through the same per-type drop machinery
+                        // struct-drop uses; trivially-copyable (scalar) fields are
+                        // a no-op. The generic-field subst resolves a bare-param
+                        // field (`Box[T]{v:T}`) to its concrete type first.
+                        self.drop_old_plain_struct_field(object, var_name, field, idx, slot);
                         // Field-store width coercion — see
                         // `coerce_to_struct_field_ty`.
                         let new_val = self.coerce_to_struct_field_ty(sv.get_type(), idx, new_val);
@@ -1342,6 +1358,82 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Ok(())
+    }
+
+    /// Drop the OLD value of a plain (non-shared, non-Option-shared, non-SoA)
+    /// owned-struct heap field before a reassignment overwrites it
+    /// (B-2026-07-15-25). GEPs the field slot in the struct's alloca and runs
+    /// the same per-type drop `struct`-drop uses (Vec/String buffer free, Map/Set
+    /// type-erased per-entry free, enum payload free, nested-struct recursive
+    /// drop). A scalar / otherwise trivially-copyable field is a no-op. The
+    /// field's declared TypeExpr is resolved through the receiver's generic
+    /// instantiation first, so a bare-param field on a monomorph
+    /// (`Box[String]{v: T}`) drops as its concrete type. Called ONLY from the
+    /// plain-owned-struct-field fall-through in `compile_field_store` — every
+    /// special-cased field shape returns before reaching it and manages its own
+    /// old-side release, so this never double-drops them.
+    fn drop_old_plain_struct_field(
+        &mut self,
+        object: &Expr,
+        var_name: &str,
+        field: &str,
+        idx: u32,
+        slot: super::state::VarSlot<'ctx>,
+    ) {
+        let Some(type_name) = self
+            .type_name_of_expr(object)
+            .or_else(|| self.var_type_names.get(var_name).cloned())
+        else {
+            return;
+        };
+        let Some(field_te) = self
+            .struct_field_type_exprs
+            .get(&type_name)
+            .and_then(|tes| tes.get(idx as usize))
+            .cloned()
+        else {
+            return;
+        };
+        let field_te = self.resolve_generic_field_te(object, &type_name, &field_te);
+        if super::vec_method::is_trivially_copyable_te(&field_te) {
+            return;
+        }
+        // A `struct`-typed alloca: GEP the field slot and drop it in place. The
+        // load in the caller already happened, but the drop reads the field's
+        // live {ptr,len,cap} / handle straight from the slot (the new value is
+        // stored only AFTER this returns), so it frees exactly the old value.
+        let BasicTypeEnum::StructType(struct_ty) = slot.ty else {
+            return;
+        };
+        let field_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, slot.ptr, idx, &format!("old_{field}_ptr"))
+            .unwrap();
+        let drop_fn = self.emit_drop_fn_for_type_expr(&field_te);
+        self.builder
+            .build_call(drop_fn, &[field_ptr.into()], "")
+            .unwrap();
+    }
+
+    /// Resolve the declared TypeExpr of `object.field` for a plain (named)
+    /// struct receiver, threaded through the receiver's generic instantiation
+    /// (so a bare-param field resolves to its concrete type). Returns `None`
+    /// when the receiver isn't a known struct or the field is absent — the
+    /// reassignment move-suppression caller then leaves the source untouched.
+    /// (B-2026-07-15-25.)
+    pub(super) fn plain_field_type_expr(&self, object: &Expr, field: &str) -> Option<TypeExpr> {
+        let type_name = self.type_name_of_expr(object)?;
+        let idx = self
+            .struct_field_names
+            .get(&type_name)?
+            .iter()
+            .position(|n| n == field)?;
+        let field_te = self
+            .struct_field_type_exprs
+            .get(&type_name)?
+            .get(idx)?
+            .clone();
+        Some(self.resolve_generic_field_te(object, &type_name, &field_te))
     }
 
     /// Place pointer for the parent of a nested field/index store

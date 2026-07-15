@@ -3724,6 +3724,59 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Eagerly free the OLD handle of a `Map`/`Set` VARIABLE before a
+    /// reassignment (`m = m2`) overwrites its slot (B-2026-07-15-25). The
+    /// var's queued `FreeMapHandle` carries the exact per-entry drop params
+    /// (key/val Vec flags, shared-half heap types, per-value drop fn); reuse
+    /// them via `emit_free_one_map_handle` on the currently-stored handle. The
+    /// var's own `FreeMapHandle` is LEFT in place — it frees the NEW handle at
+    /// scope exit — and the moved source's handle is suppressed separately, so
+    /// the shared handle is freed exactly once. A no-op when the var has no
+    /// queued map cleanup. `karac_map_free_*` is null-safe, so an empty/un-init
+    /// handle is harmless.
+    pub(super) fn eager_free_old_map_var_handle(&mut self, name: &str) {
+        let slot_ptr = match self.variables.get(name) {
+            Some(s) => s.ptr,
+            None => return,
+        };
+        let drop = self
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .find_map(|action| {
+                if let crate::codegen::state::CleanupAction::FreeMapHandle {
+                    map_alloca,
+                    key_is_vec,
+                    val_is_vec,
+                    val_shared_heap_type,
+                    key_shared_heap_type,
+                    val_drop_fn,
+                } = action
+                {
+                    if *map_alloca == slot_ptr {
+                        return Some(crate::codegen::state::MapElemDrop {
+                            key_is_vec: *key_is_vec,
+                            val_is_vec: *val_is_vec,
+                            val_shared_heap_type: *val_shared_heap_type,
+                            key_shared_heap_type: *key_shared_heap_type,
+                            val_drop_fn: *val_drop_fn,
+                        });
+                    }
+                }
+                None
+            });
+        let Some(drop) = drop else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let handle = self
+            .builder
+            .build_load(ptr_ty, slot_ptr, "reassign.old.map.handle")
+            .unwrap()
+            .into_pointer_value();
+        self.emit_free_one_map_handle(handle, &drop);
+    }
+
     /// SoA move-out cleanup suppression (per-layout-monomorphization slice 3)
     /// — drop any `FreeSoaGroups` whose `soa_alloca` matches the named
     /// binding's slot, so a SoA-laid-out Vec moved out as a return value is no
