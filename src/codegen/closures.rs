@@ -2845,6 +2845,25 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
         let saved_subst = std::mem::take(&mut self.type_subst);
         let saved_cfn = std::mem::take(&mut self.closure_fn_types);
+        // B-2026-07-15-8: a closure-VALUED free var (`let base = |x| x + 1;
+        // let composed = |x| base(x) * 10;`) is captured into the env by value
+        // (its `{fn_ptr, env_ptr}` fat pointer) and re-registered in
+        // `self.variables` by the capture-load below. But the `take` above just
+        // emptied `closure_fn_types`, so a call `base(x)` inside the body would
+        // miss the `closure_fn_types.contains_key` dispatch in `compile_call`
+        // and fall through to the unknown-callee const-0 stub — a SILENT wrong
+        // result (codegen returned 0 where the interpreter computed the real
+        // value). Re-register each captured free var's outer closure-value
+        // `FunctionType` into the fresh body-scope map so the indirect-call
+        // path (`compile_closure_call` → `load_variable` + `build_indirect_call`)
+        // fires. Both unpack paths (plain `free_vars` and the path-precise
+        // layout) register the root name in `self.variables`, so the
+        // `load_variable` in `compile_closure_call` resolves either way.
+        for name in &free_vars {
+            if let Some(ft) = saved_cfn.get(name).copied() {
+                self.closure_fn_types.insert(name.clone(), ft);
+            }
+        }
         let saved_pct = self.pending_closure_fn_type.take();
         // Isolate the f-string accumulator staging slot. A closure body
         // may stage an `fstr.acc` alloca (e.g. an f-string moved into
@@ -3609,6 +3628,24 @@ impl<'ctx> super::Codegen<'ctx> {
                             .get_type()
                             .get_return_type()
                             .unwrap_or_else(|| self.context.i64_type().into());
+                    }
+                    // B-2026-07-15-8: a call to a captured CLOSURE variable
+                    // (`|s| wrap(wrap(s))` where `wrap` is another closure) —
+                    // `wrap` is not a module fn, so the check above misses and
+                    // the body's real return type (`wrap`'s return, here a
+                    // `String`) fell to the i64 default. The enclosing closure
+                    // fn was then declared `-> i64` while its body returned the
+                    // `{ptr,i64,i64}` String → LLVM verifier "return type does
+                    // not match operand type of return inst". `closure_fn_types`
+                    // still holds the outer entries at inference time (the
+                    // body-scope `take` happens later in `compile_closure`), so
+                    // the callee's env-first `FunctionType` is visible here; its
+                    // real return type is the closure's declared result. `None`
+                    // return (a unit closure) keeps the i64 placeholder.
+                    if let Some(ft) = self.closure_fn_types.get(fname) {
+                        if let Some(ret) = ft.get_return_type() {
+                            return ret;
+                        }
                     }
                 }
                 // Lowered operator dispatch: `<Primitive>.<op>(args)` —

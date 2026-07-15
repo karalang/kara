@@ -4833,6 +4833,47 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_closure_captures_and_calls_another_closure() {
+        // B-2026-07-15-8: a closure that CAPTURES another closure and calls it
+        // (`let base = |x| x + 1; let composed = |x| base(x) * 10`). Compiling
+        // the closure body does `mem::take(&mut closure_fn_types)`, so the
+        // captured `base` — re-registered in `self.variables` by the
+        // capture-load — was NOT in the (emptied) `closure_fn_types` at the
+        // body-scope call site, so `base(x)` missed the indirect-call dispatch
+        // and fell to the const-0 stub: codegen printed 0 where the interpreter
+        // computed 50 — a SILENT wrong result. Fix re-registers captured
+        // closure-valued free vars' `FunctionType` into the body-scope map.
+        // Also covers a String-returning captured closure (`|s| wrap(wrap(s))`)
+        // whose return type must be inferred from the callee closure's
+        // `FunctionType` (else the enclosing closure fn is declared `-> i64`
+        // against a `{ptr,i64,i64}` String body → LLVM verifier failure).
+        if let Some(out) = run_program(
+            "fn make_adder(n: i64) -> Fn(i64) -> i64 {\n\
+                 |x| x + n\n\
+             }\n\
+             fn main() {\n\
+                 let base = |x: i64| x + 1;\n\
+                 let composed = |x: i64| base(x) * 10;\n\
+                 println(composed(4));\n\
+                 // 3-level capture chain\n\
+                 let mid = |x: i64| base(x) * 2;\n\
+                 let top = |x: i64| mid(x) + 100;\n\
+                 println(top(4));\n\
+                 // capture a returned closure and call it inside a closure\n\
+                 let add5 = make_adder(5);\n\
+                 let via = |x: i64| add5(x) + 1;\n\
+                 println(via(10));\n\
+                 // String-returning captured closure (return-type inference)\n\
+                 let wrap = |s: String| f\"[{s}]\";\n\
+                 let deco = |s: String| wrap(s);\n\
+                 println(deco(\"x\"));\n\
+             }",
+        ) {
+            assert_eq!(out, "50\n110\n16\n[x]\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_module_global_oncelock_config_pattern() {
         // The canonical late-bound global: `let CONFIG: OnceLock[T] =
         // OnceLock.new()` at module scope, `set` once in `main`, `get` from a
