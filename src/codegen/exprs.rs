@@ -2682,6 +2682,27 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
+    /// Whether `value` is a RESIDENT `gpu.dispatch(kernel, buf, …)` — a dispatch
+    /// whose buffer arg is a `GpuBuffer[S]` binding (GPU-SLIP-4b-2b). Its result is
+    /// a fresh `GpuBuffer[S]`, so its `let` binding must register a scope-exit free
+    /// exactly like `gpu.upload`.
+    pub(super) fn is_gpu_resident_dispatch_call(&self, value: &Expr) -> bool {
+        if !self.is_gpu_dispatch_call(value) {
+            return false;
+        }
+        if let ExprKind::MethodCall { args, .. } = &value.kind {
+            if let Some(a1) = args.get(1) {
+                if let ExprKind::Identifier(buf_name) = &a1.value.kind {
+                    return self
+                        .variables
+                        .get(buf_name)
+                        .is_some_and(|vs| vs.ty == self.gpu_buffer_type().into());
+                }
+            }
+        }
+        false
+    }
+
     /// GPU-SLIP-4b: bind `let buf = gpu.upload(vec)`. The value is a `GpuBuffer[S]`
     /// `{handle, n}`; store it into a fresh slot and register the binding for
     /// scope-exit free (`karac_runtime_gpu_free_soa`). The general let path would

@@ -7655,6 +7655,35 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_free_soa", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_dispatch_resident` (GPU-SLIP-4b-2b) — a
+    /// device→device dispatch against a resident input handle, producing a fresh
+    /// resident output handle (no host round-trip). Signature `(wgsl_ptr, wgsl_len,
+    /// in_handle, n_uniforms, uniform_ptrs, uniform_size) -> out_handle`. Borrows
+    /// the input handle (does not free it).
+    pub(super) fn gpu_dispatch_resident_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self
+            .module
+            .get_function("karac_runtime_gpu_dispatch_resident")
+        {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = i64_t.fn_type(
+            &[
+                ptr_t.into(), // wgsl_ptr
+                i64_t.into(), // wgsl_len
+                i64_t.into(), // in_handle
+                i64_t.into(), // n_uniforms
+                ptr_t.into(), // uniform_ptrs
+                i64_t.into(), // uniform_size
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_dispatch_resident", fn_ty, None)
+    }
+
     /// Render `fv` (widened to `f64` first — varargs/ABI parity and the
     /// formatter takes a `double`) into a fresh stack buffer via
     /// `karac_runtime_f64_to_str`; returns `(buf_ptr, len_i64)` for the

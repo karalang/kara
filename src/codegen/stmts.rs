@@ -2627,11 +2627,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
-                // GPU-SLIP-4b: `let buf = gpu.upload(vec)` — bind the GpuBuffer
+                // GPU-SLIP-4b: `let buf = gpu.upload(vec)` / `let coll =
+                // gpu.dispatch(kernel, buf, …)` (resident) — bind the GpuBuffer
                 // handle value and register its scope-exit free (the general let
                 // path would store the aggregate with no cleanup → leak).
                 if let PatternKind::Binding(var_name) = &pattern.kind {
-                    if self.is_gpu_upload_call(value) {
+                    if self.is_gpu_upload_call(value) || self.is_gpu_resident_dispatch_call(value) {
                         return self.compile_let_from_gpu_upload(var_name, value);
                     }
                 }

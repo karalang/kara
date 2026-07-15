@@ -14167,6 +14167,20 @@ impl<'ctx> super::Codegen<'ctx> {
             ));
         }
 
+        // GPU-SLIP-4b-2b: a `GpuBuffer[S]` argument (a `{i64 handle, i64 n}`
+        // binding) is a RESIDENT device→device dispatch — no host round-trip.
+        // Distinguished from a Vec-SoA / scalar buffer by the binding's LLVM slot
+        // type; the typechecker already proved the arg is a `GpuBuffer[S]`.
+        if let ExprKind::Identifier(buf_name) = &args[1].value.kind {
+            if self
+                .variables
+                .get(buf_name)
+                .is_some_and(|vs| vs.ty == self.gpu_buffer_type().into())
+            {
+                return self.compile_gpu_dispatch_resident(args);
+            }
+        }
+
         // CG-4: a struct buffer bound with a `layout` block dispatches multi-buffer
         // (one coalesced GPU buffer per group). Detect via the binding's SoA layout
         // — the typechecker is layout-blind, so codegen owns the per-group shader.
@@ -14549,6 +14563,173 @@ impl<'ctx> super::Codegen<'ctx> {
         agg = self
             .builder
             .build_insert_value(agg, n, 2, "gpu.soa.res.cap")
+            .unwrap()
+            .into_struct_value();
+        Ok(agg.into())
+    }
+
+    /// GPU-SLIP-4b-2b: lower a resident `gpu.dispatch(kernel, buf: GpuBuffer[S],
+    /// uniforms…)`. The input stays on the device; emit the kernel shader
+    /// (recovered from a `layout` block for the kernel's element struct `S` — the
+    /// same grouping the buffer was uploaded with), pass the resident input handle
+    /// to `karac_runtime_gpu_dispatch_resident`, and wrap the fresh output handle
+    /// as a `GpuBuffer[S]` `{handle, n}` (same element count). The input handle is
+    /// BORROWED (the runtime does not free it), so it survives for the next
+    /// dispatch or a download.
+    fn compile_gpu_dispatch_resident(
+        &mut self,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ExprKind::Identifier(kernel_name) = &args[0].value.kind else {
+            return Err("gpu.dispatch kernel must be a bare `#[gpu]` function name".to_string());
+        };
+        let program = self
+            .program_snapshot
+            .clone()
+            .ok_or("internal error: no program snapshot for gpu.dispatch")?;
+        let kernel = program
+            .items
+            .iter()
+            .find_map(|it| match it {
+                crate::ast::Item::Function(f) if &f.name == kernel_name && f.is_gpu => Some(f),
+                _ => None,
+            })
+            .ok_or_else(|| format!("internal error: gpu kernel `{kernel_name}` not found"))?;
+        // Element struct `S` = the kernel's return type (a bare struct name).
+        let struct_name = match kernel.return_type.as_ref().map(|t| &t.kind) {
+            Some(crate::ast::TypeKind::Path(p)) if p.segments.len() == 1 => p.segments[0].clone(),
+            _ => {
+                return Err(format!(
+                    "gpu.dispatch resident kernel `{kernel_name}` has no struct return type"
+                ));
+            }
+        };
+        // Recover the SoA group structure from a `layout` block for `S` (the same
+        // grouping the buffer was uploaded with).
+        let soa = self
+            .soa_layouts
+            .values()
+            .find(|l| l.struct_name == struct_name)
+            .cloned()
+            .ok_or_else(|| {
+                format!("gpu.dispatch resident: no `layout` block found for `{struct_name}`")
+            })?;
+        if soa.cold_group.is_some() {
+            return Err(
+                "gpu.dispatch resident: a `cold` layout group is not supported".to_string(),
+            );
+        }
+
+        let manifest: Vec<crate::gpu_wgsl::SoaGpuGroup> = soa
+            .groups
+            .iter()
+            .map(|g| crate::gpu_wgsl::SoaGpuGroup {
+                name: g.name.clone(),
+                fields: g.fields.clone(),
+            })
+            .collect();
+        let helpers: Vec<&crate::ast::Function> = program
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                crate::ast::Item::Function(f) if f.is_gpu && &f.name != kernel_name => Some(f),
+                _ => None,
+            })
+            .collect();
+        let wgsl = crate::gpu_wgsl::emit_kernel_soa(kernel, &manifest, &helpers).map_err(|e| {
+            format!(
+                "gpu.dispatch resident: cannot lower `{kernel_name}` to a GPU shader — {}",
+                e.reason()
+            )
+        })?;
+
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let wgsl_len = i64_t.const_int(wgsl.len() as u64, false);
+        let wgsl_ptr = self
+            .builder
+            .build_global_string_ptr(&wgsl, "gpu.wgsl.res")
+            .map_err(|e| format!("baking resident gpu.dispatch shader failed: {e}"))?
+            .as_pointer_value();
+
+        // Input handle + element count from the `GpuBuffer` arg `{handle, n}`.
+        let buf_sv = self.compile_expr(&args[1].value)?.into_struct_value();
+        let in_handle = self
+            .builder
+            .build_extract_value(buf_sv, 0, "gpu.res.in.handle")
+            .unwrap()
+            .into_int_value();
+        let n = self
+            .builder
+            .build_extract_value(buf_sv, 1, "gpu.res.in.n")
+            .unwrap()
+            .into_int_value();
+
+        // Uniforms (each f32), spilled to stack slots with a pointer array.
+        let f32_t = self.context.f32_type();
+        let n_uniforms = args.len().saturating_sub(2);
+        let u_arr_ty = ptr_ty.array_type(n_uniforms.max(1) as u32);
+        let uniform_ptrs = self
+            .builder
+            .build_alloca(u_arr_ty, "gpu.res.uniforms")
+            .unwrap();
+        for (u, ua) in args.iter().skip(2).enumerate() {
+            let v = self.compile_expr(&ua.value)?.into_float_value();
+            let v = if v.get_type() == f32_t {
+                v
+            } else {
+                self.builder
+                    .build_float_trunc(v, f32_t, "gpu.res.u.f32")
+                    .unwrap()
+            };
+            let slot = self.builder.build_alloca(f32_t, "gpu.res.u.slot").unwrap();
+            self.builder.build_store(slot, v).unwrap();
+            let arr_slot = unsafe {
+                self.builder
+                    .build_in_bounds_gep(
+                        u_arr_ty,
+                        uniform_ptrs,
+                        &[i64_t.const_zero(), i64_t.const_int(u as u64, false)],
+                        "gpu.res.u.k",
+                    )
+                    .unwrap()
+            };
+            self.builder.build_store(arr_slot, slot).unwrap();
+        }
+        let n_uniforms_v = i64_t.const_int(n_uniforms as u64, false);
+        let uniform_size = i64_t.const_int(4, false);
+
+        let dispatch_fn = self.gpu_dispatch_resident_fn();
+        let out_handle = self
+            .builder
+            .build_call(
+                dispatch_fn,
+                &[
+                    wgsl_ptr.into(),
+                    wgsl_len.into(),
+                    in_handle.into(),
+                    n_uniforms_v.into(),
+                    uniform_ptrs.into(),
+                    uniform_size.into(),
+                ],
+                "gpu.res.out",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // Wrap as `GpuBuffer[S]` `{out_handle, n}` (same element count).
+        let buf_ty = self.gpu_buffer_type();
+        let mut agg = buf_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, out_handle, 0, "gpu.res.buf.handle")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 1, "gpu.res.buf.n")
             .unwrap()
             .into_struct_value();
         Ok(agg.into())

@@ -7095,6 +7095,25 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // GPU-SLIP-4b-2b: a `GpuBuffer[S]` buffer arg is a RESIDENT dispatch —
+        // device→device, borrowing the handle and returning a fresh `GpuBuffer[S]`
+        // (no host round-trip). The kernel validation is the SoA path's; only the
+        // buffer form + result type differ.
+        if let Type::Named { name, args: ta } = &buf_ty {
+            if name == "GpuBuffer" && ta.len() == 1 {
+                if let Type::Named {
+                    name: sname,
+                    args: sa,
+                } = &ta[0]
+                {
+                    if sa.is_empty() {
+                        let struct_ty = ta[0].clone();
+                        let sname = sname.clone();
+                        return self.infer_gpu_dispatch_resident(args, span, &struct_ty, &sname);
+                    }
+                }
+            }
+        }
         // The scalar element-wise-map path takes no uniforms (GPU-LBM-2 is
         // struct-only) — extra arguments require a struct buffer.
         if args.len() != 2 {
@@ -7416,6 +7435,125 @@ impl<'a> super::TypeChecker<'a> {
         // `gpu_wgsl::emit_kernel_soa`.
         self.record_expr_type(span, &result_vec);
         result_vec
+    }
+
+    /// GPU-SLIP-4b-2b: `gpu.dispatch(kernel, buf: GpuBuffer[S], uniforms…)` — a
+    /// RESIDENT dispatch. The buffer stays on the device; the kernel runs
+    /// device→device and returns a fresh `GpuBuffer[S]` (no host round-trip). Same
+    /// kernel validation as the SoA round-trip path; only the buffer form + result
+    /// type differ. The buffer is BORROWED (owner-decided), so it can feed the
+    /// next dispatch or be downloaded. Codegen emits `karac_runtime_gpu_dispatch_resident`.
+    fn infer_gpu_dispatch_resident(
+        &mut self,
+        args: &[CallArg],
+        span: &Span,
+        struct_ty: &Type,
+        struct_name: &str,
+    ) -> Type {
+        fn te_name(ty: &TypeExpr) -> Option<&str> {
+            match &ty.kind {
+                TypeKind::Path(p) if p.generic_args.is_none() && p.segments.len() == 1 => {
+                    Some(p.segments[0].as_str())
+                }
+                _ => None,
+            }
+        }
+        fn te_vec_elem(ty: &TypeExpr) -> Option<&str> {
+            let TypeKind::Path(p) = &ty.kind else {
+                return None;
+            };
+            if p.segments.len() != 1 || p.segments[0] != "Vec" {
+                return None;
+            }
+            match p.generic_args.as_deref() {
+                Some([GenericArg::Type(elem)]) => te_name(elem),
+                _ => None,
+            }
+        }
+        let gpu_buffer = Type::Named {
+            name: "GpuBuffer".to_string(),
+            args: vec![struct_ty.clone()],
+        };
+        let program = self.program;
+        let ExprKind::Identifier(kernel_name) = &args[0].value.kind else {
+            self.type_error(
+                "error[E_GPU_DISPATCH_KERNEL]: the `gpu.dispatch` kernel must be a bare `#[gpu]` \
+                 function name"
+                    .to_string(),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return gpu_buffer;
+        };
+        let kernel = program.items.iter().find_map(|it| match it {
+            Item::Function(f) if f.name == *kernel_name && f.is_gpu => Some(f),
+            _ => None,
+        });
+        let Some(kernel) = kernel else {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_KERNEL]: no `#[gpu]` function named `{kernel_name}` is \
+                     in scope for `gpu.dispatch`"
+                ),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return gpu_buffer;
+        };
+        let first_is_elem = kernel.params.first().and_then(|p| te_name(&p.ty)) == Some(struct_name);
+        let is_stencil = !first_is_elem
+            && kernel.params.first().and_then(|p| te_vec_elem(&p.ty)) == Some(struct_name);
+        let uniform_start = if is_stencil { 2 } else { 1 };
+        let n_uniform_params = kernel.params.len().saturating_sub(uniform_start);
+        let index_ok = !is_stencil
+            || matches!(
+                kernel.params.get(1).and_then(|p| te_name(&p.ty)),
+                Some("i64" | "i32" | "u64" | "u32" | "usize" | "isize")
+            );
+        let shape_ok = first_is_elem || is_stencil;
+        let uniforms_ok = kernel
+            .params
+            .get(uniform_start..)
+            .unwrap_or(&[])
+            .iter()
+            .all(|p| te_name(&p.ty) == Some("f32"));
+        let ret_ok = kernel.return_type.as_ref().and_then(te_name) == Some(struct_name);
+        if !shape_ok || !index_ok || !uniforms_ok || !ret_ok {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_KERNEL]: kernel `{kernel_name}` must be `fn(S[, i]) -> S` \
+                     over `{struct_name}` with `f32` uniforms for a resident `gpu.dispatch`"
+                ),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return gpu_buffer;
+        }
+        if args.len().saturating_sub(2) != n_uniform_params {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_ARITY]: kernel `{kernel_name}` takes {n_uniform_params} \
+                     uniform(s) but got {}",
+                    args.len().saturating_sub(2)
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            return gpu_buffer;
+        }
+        for ua in args.iter().skip(2) {
+            let ut = self.infer_expr(&ua.value);
+            if !matches!(ut, Type::Float(_)) {
+                self.type_error(
+                    "error[E_GPU_DISPATCH_UNIFORM]: `gpu.dispatch` uniform arguments must be `f32`"
+                        .to_string(),
+                    ua.value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+        self.record_expr_type(span, &gpu_buffer);
+        gpu_buffer
     }
 
     // ── Field Access ────────────────────────────────────────────
