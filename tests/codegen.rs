@@ -3461,7 +3461,10 @@ fn main() {
     /// gracefully (like every E2E) when the runtime archive / linker is absent.
     #[test]
     fn regex_compile_is_match_runs() {
-        let out = run_program(
+        // Skips vacuously (like every E2E) when the runtime archive / linker is
+        // absent — including the opt-in `libkarac_runtime_regex.a`, without which
+        // `link_executable` returns Err and `run_program` yields None.
+        let Some(out) = run_program(
             "fn main() {\n\
              let re = Regex.compile(\"^a.c$\").unwrap();\n\
              let a = re.is_match(\"abc\");\n\
@@ -3469,28 +3472,32 @@ fn main() {
              let c = re.is_match(\"a-c\");\n\
              println(f\"{a} {b} {c}\");\n\
              }\n",
-        );
-        assert_eq!(out.as_deref(), Some("true false true\n"));
+        ) else {
+            return;
+        };
+        assert_eq!(out, "true false true\n");
     }
 
     /// The Err path — an invalid pattern yields `Result.Err(RegexError)`, so
     /// `is_err()` is true and `unwrap_or(false)` on the `is_match` never runs.
     #[test]
     fn regex_compile_invalid_pattern_is_err_runs() {
-        let out = run_program(
+        let Some(out) = run_program(
             "fn main() {\n\
              let r = Regex.compile(\"[unterminated\");\n\
              println(f\"{r.is_err()}\");\n\
              }\n",
-        );
-        assert_eq!(out.as_deref(), Some("true\n"));
+        ) else {
+            return;
+        };
+        assert_eq!(out, "true\n");
     }
 
     /// A digit-class pattern re-used across several subjects — exercises the
     /// per-call re-compile path (the `Regex` value carries only its pattern).
     #[test]
     fn regex_digit_class_multiple_subjects_runs() {
-        let out = run_program(
+        let Some(out) = run_program(
             "fn main() {\n\
              let re = Regex.compile(\"^[0-9]+$\").unwrap();\n\
              let a = re.is_match(\"12345\");\n\
@@ -3498,8 +3505,10 @@ fn main() {
              let c = re.is_match(\"\");\n\
              println(f\"{a} {b} {c}\");\n\
              }\n",
-        );
-        assert_eq!(out.as_deref(), Some("true false false\n"));
+        ) else {
+            return;
+        };
+        assert_eq!(out, "true false false\n");
     }
 
     /// Spawn a built kara test binary and capture stdout+stderr, with a
