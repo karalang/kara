@@ -1890,28 +1890,71 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(Some(sel));
                 }
                 "ok_or" => {
-                    // `Some(x)`[tag1,payload] → `Ok(x)`[tag1,payload] (receiver
-                    // as-is: Ok and Some share tag1 + payload); `None`[tag0] →
-                    // `Err(e)`[tag0, packed e].
+                    // `Some(x)` → `Ok(x)` (tag 1, x payload); `None` → `Err(e)`
+                    // (tag 0, packed e). B-2026-07-15-15: the result value MUST
+                    // be built in the RESULT layout `{tag, w0..w4}` (6 fields),
+                    // NOT the Option receiver's `{tag, w0..w2}` (4 fields). A
+                    // downstream `match r { Ok(v)/Err(e) }` reads Result's
+                    // field_word_offsets — `(0, 5)` for both arms — and extracts
+                    // 5 payload words; against a 4-field Option-shaped value that
+                    // `build_extract_value(sv, 5)` is ExtractOutOfRange → a
+                    // compiler ICE (pattern_binding.rs). Pre-fix `ok_or` handed
+                    // back the Option struct verbatim, so it crashed the backend
+                    // for EVERY payload type (i64 and String alike). Copy the
+                    // receiver's Some payload words into the Result's Ok slots and
+                    // pack `e` into the Err slots.
                     let err_arg = args.first().ok_or_else(|| {
                         "codegen: Option.ok_or expects 1 argument, found 0".to_string()
                     })?;
                     let e_val = self.compile_expr(&err_arg.value)?;
-                    let words = self.coerce_to_payload_words(e_val, 3)?;
-                    let mut err_agg = struct_ty.get_undef();
+                    let result_ty = self
+                        .enum_layouts
+                        .get("Result")
+                        .map(|l| l.llvm_type)
+                        .ok_or_else(|| {
+                            "codegen: Result layout unavailable for Option.ok_or".to_string()
+                        })?;
+                    let result_payload_words =
+                        (result_ty.count_fields() as usize).saturating_sub(1);
+                    // Err(e): tag 0, `e` packed into the payload area.
+                    let err_words = self.coerce_to_payload_words(e_val, result_payload_words)?;
+                    let mut err_agg = result_ty.get_undef();
                     err_agg = self
                         .builder
                         .build_insert_value(err_agg, zero, 0, "okor.errtag")
                         .unwrap()
                         .into_struct_value();
-                    for (i, w) in words.iter().enumerate() {
+                    for (i, w) in err_words.iter().enumerate() {
                         err_agg = self
                             .builder
                             .build_insert_value(err_agg, *w, (i + 1) as u32, "okor.errw")
                             .unwrap()
                             .into_struct_value();
                     }
-                    let ok_bv: BasicValueEnum<'ctx> = recv_struct.into();
+                    // Ok(x): tag 1, copy the receiver's Some payload words (Option
+                    // words 1..=option_payload) into the Result's Ok words. The Ok
+                    // binding reads only its natural width downstream, so the
+                    // trailing Result slots may stay undef.
+                    let option_payload = (struct_ty.count_fields() as usize).saturating_sub(1);
+                    let copy_words = option_payload.min(result_payload_words);
+                    let mut ok_agg = result_ty.get_undef();
+                    ok_agg = self
+                        .builder
+                        .build_insert_value(ok_agg, one, 0, "okor.oktag")
+                        .unwrap()
+                        .into_struct_value();
+                    for w in 1..=copy_words {
+                        let pw = self
+                            .builder
+                            .build_extract_value(recv_struct, w as u32, "okor.okw")
+                            .unwrap();
+                        ok_agg = self
+                            .builder
+                            .build_insert_value(ok_agg, pw, w as u32, "okor.okw.set")
+                            .unwrap()
+                            .into_struct_value();
+                    }
+                    let ok_bv: BasicValueEnum<'ctx> = ok_agg.into();
                     let err_bv: BasicValueEnum<'ctx> = err_agg.into();
                     let sel = self
                         .builder

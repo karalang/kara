@@ -9682,6 +9682,43 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_option_ok_or_builds_result_layout() {
+        // B-2026-07-15-15: `Option.ok_or(e)` built the result value in the
+        // OPTION layout `{tag, w0..w2}` (4 fields), but the value is typed
+        // `Result` whose layout is `{tag, w0..w4}` (6 fields) with Ok/Err at
+        // offset `(0, 5)`. A downstream `match r { Ok(v)/Err(e) }` extracted 5
+        // payload words from the 4-field value → `build_extract_value(sv, 5)`
+        // = ExtractOutOfRange, a compiler ICE — for EVERY payload type (i64 and
+        // String alike), so `ok_or` never worked under `karac build`. Fixed by
+        // building the result in the Result layout (copy the Some payload into
+        // the Ok slots, pack `e` into the Err slots).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: Option[i64] = Some(42);\n\
+                 match a.ok_or(\"no\") {\n\
+                     Ok(v) => println(f\"ok {v}\"),\n\
+                     Err(e) => println(f\"err {e}\"),\n\
+                 }\n\
+                 let b: Option[i64] = None;\n\
+                 match b.ok_or(\"missing value\") {\n\
+                     Ok(v) => println(f\"ok {v}\"),\n\
+                     Err(e) => println(f\"err {e}\"),\n\
+                 }\n\
+                 let c: Option[i64] = None;\n\
+                 match c.ok_or(0 - 99) {\n\
+                     Ok(v) => println(f\"ok {v}\"),\n\
+                     Err(e) => println(f\"errcode {e}\"),\n\
+                 }\n\
+                 // unwrap_or on the Ok/Err result\n\
+                 let d: Option[i64] = Some(7);\n\
+                 println(d.ok_or(\"x\").unwrap_or(0));\n\
+             }",
+        ) {
+            assert_eq!(out, "ok 42\nerr missing value\nerrcode -99\n7\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_take_get_or_insert() {
         // B-2026-07-14-6 (mutating combinators): `take()` yields the receiver's
         // current value and leaves `None` in its slot (a second take yields

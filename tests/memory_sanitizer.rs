@@ -27254,4 +27254,33 @@ fn main() {
             "closure_mut_captured_collection_no_leak",
         );
     }
+
+    #[test]
+    fn asan_option_ok_or_string_err_no_leak() {
+        // B-2026-07-15-15: `Option.ok_or(<String>)` on a `None` packs the String
+        // Err payload into the Result's Err slots. Verify the whole
+        // build → match → consume round-trip of the heap Err payload is
+        // leak-clean (and the fix that builds the Result layout doesn't strand
+        // the packed String buffer).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut errs: i64 = 0;
+    while i < 6 {
+        let o: Option[i64] = if i % 2 == 0 { Some(i * 10) } else { None };
+        let r: Result[i64, String] = o.ok_or(f"absent-{i}-padded-well-past-inline-width");
+        match r {
+            Ok(v) => println(v),
+            Err(e) => { errs = errs + e.len(); },
+        }
+        i = i + 1;
+    }
+    println(errs);
+}
+"#,
+            &["0", "20", "40", "114"],
+            "option_ok_or_string_err_no_leak",
+        );
+    }
 }
