@@ -89,19 +89,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **469 surfaced · 3 open · 462 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **471 surfaced · 4 open · 463 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-15-9 | 2026-07-15 | codegen (indirect closure call — closures.rs compile_closure_call / compile_closure_value_call argument compilation) | low | A nested indirect closure call whose inner call yields a fresh heap value consumed by the outer call (`|s| wrap(wrap(s))`) leaks the intermediate String — compile_closure_call compiles args via compile_expr without the fresh-owned-temp free the direct-call path (calls.rs is_fresh_heap_call_arg) performs | none |
 | B-2026-07-15-10 | 2026-07-15 | codegen (iterator adaptor lowering — zip feeding a map/collect pipeline; zip in a for-loop with a single (non-destructure) binding). control_flow_for.rs zip for-loop arm; method_call.rs try_compile_zip_pipeline_collect | medium | zip adaptor surface gaps in codegen: `zip().map(f).collect()` (a map over the zipped tuples) and single-binding `for pair in zip { pair.0 }` both loud-bail (`no handler for method 'zip' on non-identifier receiver`) while the interpreter runs them; `for (a,b) in zip` and identity `zip().collect()` work | coordinate-with-B-2026-07-14-8-adaptor-owner |
 | B-2026-07-15-11 | 2026-07-15 | codegen (per-monomorph struct-drop synthesis — synth_drop.rs emit_struct_drop_synthesis_impl field classifier; PAIRED move-suppression call_dispatch.rs zero_struct_move_caps) | medium | A monomorphized generic struct whose field IS a bare type param (`struct Box[T] { value: T }`, used as `Box[String]` / `Box[Vec[..]]`) never frees the heap field at scope exit — the mono struct-drop classifier reads the erased field name `T` (not Vec/String) and classifies it no-cleanup; the CONCRETE-field twin (`struct Box { value: String }`) is clean | none |
+| B-2026-07-15-14 | 2026-07-15 | ownership / use-classifier (method receiver-mode classification for compiler-builtin collection mutators: push_str / insert / …) | medium | `karac check` rejects calling a String/Map-mutating closure more than once (`append("a"); append("b")` → `value 'append' moved here, used again`) while the identical Vec-push closure is accepted — the ownership checker classifies push_str/insert as CONSUMING the receiver (once-callable closure) instead of `mut ref self` (multi-callable) | none |
 
-### Fixed (462)
+### Fixed (463)
 
-<details><summary>462 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>463 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -567,6 +568,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **469 surfaced 
 | B-2026-07-15-7 | interpreter (runtime-error propagation inside compound expressions) | low | Interpreter emits a spurious cascading second diagnostic after a runtime error inside a compound expression: `min / -1 + 0` reports the integer-overf… | b3be90d |
 | B-2026-07-15-8 | codegen (closure body compilation — closures.rs compile_closure closure_fn_types isolation; infer_closure_return_type Call arm) | high | A closure that captures and calls another closure (`let base = \|x\| x+1; let composed = \|x\| base(x)*10`) returns 0 in codegen (interp: 50) — the captu… | cb46eed |
 | B-2026-07-15-12 | codegen (f-string interpolation — runtime.rs fstr_render_part plain-String path) | medium | An f-string that embeds a String-returning call/method/slice DIRECTLY (`f"...{obj.describe()}"`, `f"...{greet(x)}"`, `f"...{s[a..b]}"`) leaks the fre… | 0e4875d |
+| B-2026-07-15-13 | codegen (closures.rs mutref_caps capture-mode inference) + interpreter (eval_expr.rs closure SharedCell wrap set); shared detection in ast.rs collect_mut_method_receiver_roots | high | A closure that mutates a captured collection through a mutating METHOD (`acc.push(x)`, `buf.push_str(s)`, `m.insert(k,v)`) does not write through to… | 25f43a1 |
 
 </details>
 
