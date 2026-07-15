@@ -3998,6 +3998,44 @@ impl<'ctx> super::Codegen<'ctx> {
         self.enum_inst_type_from_span(expr)
     }
 
+    /// Recover the concrete generic-struct/enum *instantiation* of a
+    /// field-receiver expression, extending [`Self::enum_inst_type_of_expr`]
+    /// with an INDEXED-receiver source (B-2026-07-15-20).
+    ///
+    /// A field-receiver method over an indexed element (`v[i].second.len()`
+    /// over `Vec[Pair[Vec, Vec]]`) has `inner == Index { object: v, .. }`, which
+    /// carries no name-keyed or span-keyed instantiation record, so plain
+    /// `enum_inst_type_of_expr` returns `None` and the field's bare param
+    /// (`second: B`) never resolves — the synth field-element then registers
+    /// as a non-Vec and `.len()` loud-bails. The instantiation of `v[i]` IS the
+    /// container's recorded element TypeExpr (`Pair[Vec, Vec]`), so read it from
+    /// `var_elem_type_exprs`. Gated to a genuine generic struct/enum
+    /// instantiation so a non-generic element element is a clean no-op (the
+    /// existing recorded-source path already covers identifier and monomorph
+    /// receivers, including the generic-struct PARAM record added in
+    /// `compile_function`). A range index (`v[a..b]`) is a sub-Vec, not an
+    /// element, so it is excluded.
+    pub(super) fn receiver_struct_inst(&self, expr: &Expr) -> Option<TypeExpr> {
+        if let Some(t) = self.enum_inst_type_of_expr(expr) {
+            return Some(t);
+        }
+        if let ExprKind::Index { object, index } = &expr.kind {
+            if matches!(&index.kind, ExprKind::Range { .. }) {
+                return None;
+            }
+            if let ExprKind::Identifier(name) = &object.kind {
+                if let Some(elem) = self.var_elem_type_exprs.get(name) {
+                    if self.is_generic_named_struct_type_expr(elem)
+                        || self.is_generic_named_enum_type_expr(elem)
+                    {
+                        return Some(elem.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Span-keyed instantiation lookup (the lowering pass's
     /// `enum_inst_type_exprs`), keyed on the now-absolute `(offset, length)`.
     /// See `enum_inst_type_of_expr`.

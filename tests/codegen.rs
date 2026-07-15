@@ -52941,6 +52941,61 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_struct_field_receiver_method_param_and_indexed() {
+        // B-2026-07-15-20: a field-receiver method on a GENERIC struct whose
+        // field is the bare type param loud-bailed in codegen ("no handler for
+        // method 'len' on variable '__field_elem_0'") for three receiver shapes
+        // that the direct-local B-2026-07-15-17/-18 fix didn't reach — the synth
+        // field-element binding was registered with the bare param type instead
+        // of the concrete instantiation because the receiver's instantiation was
+        // never recovered:
+        //   (1) a `ref` generic-struct PARAM (`p: ref Pair[Vec, Vec]` →
+        //       `p.second.len()`);
+        //   (2) an OWNED generic-struct param (`b: Box[String]` → `b.v.len()`);
+        //   (3) an INDEXED receiver over a Vec of generic structs
+        //       (`v[0].second.len()`).
+        // Fix: record a concretely-instantiated generic-struct param into
+        // `enum_inst_var_types` at bind time (covers 1+2, ref peeled), and add an
+        // indexed-container fallback (`receiver_struct_inst`) sourcing the
+        // element instantiation from `var_elem_type_exprs` (covers 3). Both the
+        // dispatch resolution and the mono-struct field GEP consult the same
+        // instantiation, so the field's `.len()` now resolves to the concrete
+        // `Vec`/`String`. The interpreter was already correct — this closes the
+        // AOT loud-bail (a build failure, not a miscompile).
+        let output = run_program(
+            "struct Pair[A, B] { first: A, second: B }\n\
+             struct Box[T] { v: T }\n\
+             fn show(p: ref Pair[Vec[i64], Vec[i64]]) -> i64 {\n\
+                 p.first.len() + p.second.len()\n\
+             }\n\
+             fn sink(b: Box[String]) -> i64 {\n\
+                 b.v.len()\n\
+             }\n\
+             fn main() {\n\
+                 let mut a: Vec[i64] = Vec.new();\n\
+                 a.push(1); a.push(2);\n\
+                 let mut b: Vec[i64] = Vec.new();\n\
+                 b.push(10); b.push(20); b.push(30);\n\
+                 let p = Pair { first: a, second: b };\n\
+                 println(show(p));\n\
+                 let bx = Box { v: (12345).to_string() };\n\
+                 println(sink(bx));\n\
+                 let mut a2: Vec[i64] = Vec.new();\n\
+                 a2.push(7);\n\
+                 let mut b2: Vec[i64] = Vec.new();\n\
+                 b2.push(8); b2.push(9);\n\
+                 let p2 = Pair { first: a2, second: b2 };\n\
+                 let mut v: Vec[Pair[Vec[i64], Vec[i64]]] = Vec.new();\n\
+                 v.push(p2);\n\
+                 println(v[0].second.len());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        // show: 2 + 3 = 5; sink: len(\"12345\") = 5; v[0].second.len() = 2.
+        assert_eq!(output, "5\n5\n2\n");
+    }
+
+    #[test]
     fn test_e2e_vec_prefix_literal_basic() {
         // `Vec[a, b, c]` at expression position now lowers via
         // `compile_vec_prefix_literal` — malloc + per-slot store +

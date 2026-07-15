@@ -572,7 +572,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // mono type from the receiver's recorded instantiation; fall back to
             // the base type for a non-generic struct.
             let st = self
-                .enum_inst_type_of_expr(inner)
+                .receiver_struct_inst(inner)
                 .and_then(|te| match &te.kind {
                     TypeKind::Path(p) => {
                         let args = p.generic_args.as_ref()?;

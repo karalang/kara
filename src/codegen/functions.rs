@@ -1533,7 +1533,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Record an instantiated generic-enum param (`opt: Option[String]`)
                     // by name for heap-payload `==` routing — collision-free across
                     // f-string interpolations, unlike the span-keyed table.
-                    if self.is_generic_named_enum_type_expr(te) {
+                    //
+                    // B-2026-07-15-20: also record a concretely-instantiated
+                    // generic-STRUCT param (`p: (ref) Pair[Vec, Vec]`, `b:
+                    // Box[String]`). A field-receiver method (`p.second.len()`)
+                    // resolves the field's bare-param TypeExpr through the
+                    // receiver's recorded instantiation; a non-generic function's
+                    // param was never recorded (the mono-path record at
+                    // `mono.rs` only fires for a param whose args bind a monomorph
+                    // subst, so a fully-concrete `Box[String]` was skipped), so
+                    // `p.second`/`b.v` stayed the bare param `B`/`T` and the
+                    // synth field-element registered as a non-Vec — `.len()`
+                    // loud-bailed with "no handler … __field_elem_0". Recording
+                    // the concrete instantiation feeds both the dispatch
+                    // resolution (`resolve_generic_field_te`) and the mono-struct
+                    // GEP type. `registration_te` already peeled `ref`/`mut ref`,
+                    // so a borrowed receiver is covered by the same record.
+                    if self.is_generic_named_enum_type_expr(te)
+                        || self.is_generic_named_struct_type_expr(te)
+                    {
                         self.enum_inst_var_types
                             .insert(param_name.clone(), te.clone());
                     }

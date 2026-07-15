@@ -27534,4 +27534,54 @@ fn main() {
             "struct_move_out_map_set_enum_field_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_generic_struct_field_receiver_param_indexed_no_leak() {
+        // B-2026-07-15-20: the field-receiver method dispatch fix (record a
+        // concrete generic-struct param's instantiation + an indexed-container
+        // fallback) added new codegen paths for three receiver shapes that used
+        // to loud-bail. Verify all three round-trip a heap `String` field
+        // leak-clean under ASAN/LSan (the fix is in dispatch resolution, but the
+        // synth field-element it registers drives the drop convention too, so a
+        // mis-resolution would strand or double-free the field buffer):
+        //   (1) `ref Box[String]` param receiver (`show(b: ref Box[String])` →
+        //       `b.v.len()`; the arg stays owned by the caller and drops there),
+        //   (2) OWNED `Box[String]` param receiver (`sink(b: Box[String])` →
+        //       `b.v.len()`; the callee owns and drops the moved-in box),
+        //   (3) INDEXED receiver over `Vec[Box[String]]` (`v[0].v.len()`; the
+        //       Vec drops its Box element, which drops the String).
+        // Single-field wrappers throughout so the (documented) B-2026-07-15-11
+        // multi-field offset-erasure residual doesn't confound the signal. Loops
+        // so any per-iteration strand accumulates into a visible LSan leak.
+        assert_clean_asan_run(
+            r#"
+struct Box[T] {
+    v: T,
+}
+fn show(b: ref Box[String]) -> i64 {
+    b.v.len()
+}
+fn sink(b: Box[String]) -> i64 {
+    b.v.len()
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let r = Box { v: i.to_string() };
+        acc = acc + show(r);
+        let s = Box { v: i.to_string() };
+        acc = acc + sink(s);
+        let mut v: Vec[Box[String]] = Vec.new();
+        v.push(Box { v: i.to_string() });
+        acc = acc + v[0].v.len();
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["210"],
+            "generic_struct_field_receiver_param_indexed_no_leak",
+        );
+    }
 }

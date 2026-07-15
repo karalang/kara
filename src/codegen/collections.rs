@@ -2271,7 +2271,7 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         field_te: &TypeExpr,
     ) -> TypeExpr {
-        if let Some(inst) = self.enum_inst_type_of_expr(container) {
+        if let Some(inst) = self.receiver_struct_inst(container) {
             if let TypeKind::Path(p) = &inst.kind {
                 if p.segments.last().map(String::as_str) == Some(struct_name) {
                     if let (Some(params), Some(args)) = (
