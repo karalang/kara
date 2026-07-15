@@ -3915,6 +3915,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Value structs cannot be self-referential by value, so the recursion
     /// terminates. `&self` — pure IR emission.
     pub(super) fn zero_struct_move_caps(&self, base_ptr: PointerValue<'ctx>, struct_name: &str) {
+        self.zero_struct_move_caps_mono(base_ptr, struct_name, None);
+    }
+
+    /// `zero_struct_move_caps` with an explicit generic instantiation subst, so
+    /// a SINGLE-field generic wrapper `W[T] { f: T }` whose mono drop now frees
+    /// a bare-T Vec/String field (B-2026-07-15-11) gets that field's `cap`/`len`
+    /// zeroed on a whole-struct move — keeping the moved-out source's drop a
+    /// no-op (the consumer is the sole owner). Same single-field offset gate as
+    /// the drop classifier: `struct_types[W]` erases a bare-T field to one i64
+    /// word, so reinterpreting field 0 as a `{ptr,len,cap}` is offset-correct
+    /// only at offset 0. `None`/empty subst reproduces the name-keyed behavior
+    /// exactly (non-generic structs pass `None`).
+    pub(super) fn zero_struct_move_caps_mono(
+        &self,
+        base_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+        subst: Option<&std::collections::HashMap<String, TypeExpr>>,
+    ) {
         let Some(&st) = self.struct_types.get(struct_name) else {
             return;
         };
@@ -3924,6 +3942,56 @@ impl<'ctx> super::Codegen<'ctx> {
         let field_tes = self.struct_field_type_exprs.get(struct_name).cloned();
         let vec_ty = self.vec_struct_type();
         let zero = self.context.i64_type().const_int(0, false);
+        // B-2026-07-15-11 — single-field generic wrapper `W[T] { f: T }` moved
+        // whole: the mono drop frees field 0 when T binds to a direct Vec/String,
+        // so zero its `len`+`cap` (mirroring the Vec/String field arm below) to
+        // keep the source drop a no-op. Same single-field offset gate as the
+        // drop classifier (layout erasure). A no-op unless a real subst binds the
+        // sole field's bare param to a direct heap type.
+        if let Some(subst) = subst {
+            if field_names.len() == 1 {
+                if let Some(fte) = self
+                    .struct_field_type_exprs
+                    .get(struct_name)
+                    .and_then(|v| v.first())
+                {
+                    let is_bare_param = matches!(
+                        &fte.kind,
+                        TypeKind::Path(p)
+                            if p.segments.len() == 1
+                                && p.generic_args.is_none()
+                                && subst.contains_key(&p.segments[0])
+                    );
+                    if is_bare_param {
+                        let cte =
+                            crate::codegen::helpers::subst_type_params_in_type_expr(fte, subst);
+                        let is_vec_head = matches!(
+                            &cte.kind,
+                            TypeKind::Path(p)
+                                if matches!(
+                                    p.segments.last().map(|s| s.as_str()),
+                                    Some("Vec") | Some("VecDeque")
+                                )
+                        );
+                        if self.is_string_type_expr(&cte) || is_vec_head {
+                            if let Ok(field_ptr) =
+                                self.builder.build_struct_gep(st, base_ptr, 0, "smv.bt.p")
+                            {
+                                for word in [1u32, 2u32] {
+                                    if let Ok(wp) = self
+                                        .builder
+                                        .build_struct_gep(vec_ty, field_ptr, word, "smv.bt.w")
+                                    {
+                                        let _ = self.builder.build_store(wp, zero);
+                                    }
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         for (i, opt_name) in field_names.iter().enumerate() {
             let fname = opt_name.as_deref().unwrap_or("");
             let Ok(field_ptr) =
@@ -3971,7 +4039,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else if self.struct_types.contains_key(fname)
                     && !self.shared_types.contains_key(fname)
                 {
-                    self.zero_struct_move_caps(field_ptr, fname);
+                    // B-2026-07-15-11 — recurse with the nested struct's own mono
+                    // subst (derived from the field's declared `Box[String]`,
+                    // resolving the parent's subst first), so a nested single-
+                    // field generic wrapper's bare-T Vec/String field cap is
+                    // zeroed on a whole-parent move — matching the nested mono
+                    // drop and preventing a double-free. Empty subst → the
+                    // name-shared recursion, unchanged.
+                    let nsub = self.nested_struct_field_subst(struct_name, i, subst, fname);
+                    self.zero_struct_move_caps_mono(field_ptr, fname, Some(&nsub));
                 } else if let Some(crate::ast::TypeKind::Tuple(elems)) = field_tes
                     .as_ref()
                     .and_then(|tes| tes.get(i))
@@ -4359,7 +4435,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // — #18's `Wrap { sp: Span { tok } }`) + the HTTP handle, so the
                 // source struct's `StructDrop` no-ops and the consumer (caller /
                 // new binding / struct or enum literal) is the sole owner.
-                self.zero_struct_move_caps(slot.ptr, &type_name);
+                // B-2026-07-15-11 — thread the source binding's recorded generic
+                // instantiation so a single-field bare-T Vec/String wrapper's
+                // mono drop (now freeing that field) is matched by a cap-zero
+                // here; otherwise a `let c = b` / `return b` whole-move
+                // double-frees against the added scope-exit drop.
+                let subst = self
+                    .enum_inst_var_types
+                    .get(var_name)
+                    .map(|i| self.generic_struct_subst_from_inst(&type_name, i));
+                self.zero_struct_move_caps_mono(slot.ptr, &type_name, subst.as_ref());
             }
         }
         // Tuple / anonymous-aggregate binding (B-2026-06-11-4 part a): a moved

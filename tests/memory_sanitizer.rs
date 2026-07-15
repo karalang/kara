@@ -27335,4 +27335,138 @@ fn main() {
             "nested_struct_field_move_out_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_generic_wrapper_bare_t_field_scope_exit_no_leak() {
+        // B-2026-07-15-11 — a monomorphized single-field generic wrapper
+        // `Box[T] { v: T }` whose field IS the bare type param, bound to a heap
+        // type (`String` / `Vec[..]` / `Vec[String]`), leaked the whole field
+        // buffer at scope exit: the mono struct-drop classifier read the erased
+        // declared field name `T` (matching none of Vec/String/Map) and skipped
+        // it. The fix resolves the field's declared TypeExpr through the mono
+        // subst and classifies a Vec/String monomorph for the buffer free (and a
+        // `Vec[String]` monomorph drains its elements). Loop so any per-iteration
+        // strand shows up as a large leak under LSan.
+        assert_clean_asan_run(
+            r#"
+struct Box[T] {
+    v: T,
+}
+fn mkvec() -> Vec[String] {
+    let mut v = Vec.new();
+    v.push((1).to_string());
+    v.push((2).to_string());
+    v
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 50 {
+        let bs = Box { v: i.to_string() };
+        acc = acc + bs.v.len();
+        let bv = Box { v: [i, i + 1, i + 2] };
+        acc = acc + bv.v.len();
+        let bvs = Box { v: mkvec() };
+        acc = acc + bvs.v.len();
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["340"],
+            "generic_wrapper_bare_t_field_scope_exit_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_generic_wrapper_accessor_and_move_no_double_free() {
+        // B-2026-07-15-11 — the coupled double-free half. Once the mono drop
+        // frees the bare-T field at scope exit, three sites would double-free
+        // against it without the paired fixes: (1) a borrowed-receiver
+        // field-return accessor `get(ref self) -> T { self.v }` (must deep-clone
+        // with the CONCRETE resolved field type, not the shallow last-writer-wins
+        // `karac_clone_T`); (2) a whole-struct move `let c = b` / `return b`
+        // (`zero_struct_move_caps` must zero the mono field's cap+len); (3) a
+        // by-value consume `sink(b)`. Exercises all three across TWO
+        // instantiations (`Box[String]` + `Box[Vec[i64]]`) so a colliding shared
+        // clone/drop symbol surfaces.
+        assert_clean_asan_run(
+            r#"
+struct Box[T] {
+    v: T,
+}
+impl[T] Box[T] {
+    fn get(ref self) -> T {
+        self.v
+    }
+}
+fn sink(b: Box[String]) -> i64 {
+    let s = b.v;
+    s.len()
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = Box { v: i.to_string() };
+        let sa = a.get();
+        acc = acc + sa.len();
+        let b = Box { v: [i, i + 1, i + 2, i + 3] };
+        let sb = b.get();
+        acc = acc + sb.len();
+        let c = Box { v: i.to_string() };
+        let d = c;
+        let sd = d.v;
+        acc = acc + sd.len();
+        let e = Box { v: i.to_string() };
+        acc = acc + sink(e);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["370"],
+            "generic_wrapper_accessor_and_move_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_generic_wrapper_nested_struct_field_no_leak() {
+        // B-2026-07-15-11 (nested leg) — a non-generic `Outer { inner:
+        // Box[String] }` and a generic `Gen[U] { inner: Box[U] }` recurse the
+        // parent's drop through the nested `Box`. Before the fix that recursion
+        // used the NAME-SHARED `Box` drop (no subst), leaking the bare-T field;
+        // the fix threads the nested struct's own mono subst (derived from the
+        // declared `Box[String]` field, resolving the parent's subst first)
+        // through both the nested drop and the whole-parent move-suppression, so
+        // scope-exit AND `let o2 = o` are leak- and double-free-clean.
+        assert_clean_asan_run(
+            r#"
+struct Box[T] {
+    v: T,
+}
+struct Outer {
+    inner: Box[String],
+}
+struct Gen[U] {
+    inner: Box[U],
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let o = Outer { inner: Box { v: i.to_string() } };
+        let o2 = o;
+        acc = acc + o2.inner.v.len();
+        let g = Gen { inner: Box { v: i.to_string() } };
+        acc = acc + g.inner.v.len();
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["140"],
+            "generic_wrapper_nested_struct_field_no_leak",
+        );
+    }
 }

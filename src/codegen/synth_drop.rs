@@ -972,6 +972,38 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_struct_drop_synthesis_impl(struct_name, Some(subst))
     }
 
+    /// B-2026-07-15-11 — derive a NESTED struct field's own mono subst from its
+    /// declared TypeExpr (`Outer { inner: Box[String] }` → `{T: String}` for
+    /// `Box`), resolving the parent's active subst FIRST so a generic
+    /// `Outer[U] { inner: Box[U] }` propagates `U` → the parent's concrete arg.
+    /// Empty when the field type carries no generic args (a non-generic nested
+    /// struct) — `emit_struct_drop_synthesis_mono` then falls back to the
+    /// name-shared drop, byte-for-byte unchanged. Used to (a) classify and (b)
+    /// emit `NestedStruct` fields through the per-monomorph nested drop that
+    /// actually frees a bare-T Vec/String field, and (c) match the whole-parent
+    /// move-suppression recursion (`zero_struct_move_caps`) so the added nested
+    /// drop never double-frees a moved-out parent.
+    pub(super) fn nested_struct_field_subst(
+        &self,
+        struct_name: &str,
+        field_idx: usize,
+        parent_subst: Option<&std::collections::HashMap<String, TypeExpr>>,
+        nested_name: &str,
+    ) -> std::collections::HashMap<String, TypeExpr> {
+        let Some(fte) = self
+            .struct_field_type_exprs
+            .get(struct_name)
+            .and_then(|v| v.get(field_idx))
+        else {
+            return std::collections::HashMap::new();
+        };
+        let resolved = match parent_subst {
+            Some(s) => crate::codegen::helpers::subst_type_params_in_type_expr(fte, s),
+            None => fte.clone(),
+        };
+        self.generic_struct_subst_from_inst(nested_name, &resolved)
+    }
+
     /// Recursively mangle a concrete type arg into a drop-fn symbol suffix
     /// component — `String`, `i64`, `Vec_i64`, `Box_String`, `tup_i64_String`.
     /// Unlike `mangled_type_name` (head-only, so `Vec[i64]` and `Vec[String]`
@@ -1149,6 +1181,65 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => FieldDrop::None,
             })
             .collect();
+        // B-2026-07-15-11 — a SINGLE-field generic wrapper `W[T] { f: T }`
+        // whose sole field IS a bare type param that THIS monomorph binds to a
+        // direct heap type (`String` / `Vec[..]` / `VecDeque[..]`). The
+        // name-based classifier above reads the erased declared name `T`
+        // (matches no arm) and leaves it `None`, so the field's heap buffer
+        // leaked at scope exit (the concrete-field twin `W { f: String }` is
+        // clean). Resolve the field's declared TypeExpr through the active mono
+        // `subst`; if it is a direct Vec/String monomorph, classify
+        // `VecOrString` (the VecOrString emit arm below substitutes the field
+        // TypeExpr too, so a `Vec[String]` monomorph also drains its elements).
+        //
+        // GATED to a single field on PURPOSE: `struct_types[W]` lowers a bare-T
+        // field to one erased i64 WORD (declaration-time lowering, no active
+        // subst), while the instance is the monomorphized `{ {ptr,len,cap} }`.
+        // The VecOrString GEP reinterprets field 0 as a `{ptr,len,cap}` Vec
+        // struct, which is offset-correct ONLY for a field at offset 0 — a
+        // multi-field wrapper with a mid bare-T heap field would mis-offset
+        // every field after it (LLVM-layout erasure). A concrete (non-generic)
+        // struct passes `subst == None` and is untouched. The PAIRED move sites
+        // (borrowed-receiver field-return deep-clone in runtime.rs, move-cap
+        // zeroing) are mono-aware for this shape so the added scope-exit drop
+        // does not double-free a moved-out / accessor-returned field.
+        if let Some(subst) = subst {
+            if kinds.len() == 1 && kinds[0] == FieldDrop::None {
+                if let Some(fte) = self
+                    .struct_field_type_exprs
+                    .get(struct_name)
+                    .and_then(|v| v.first())
+                    .cloned()
+                {
+                    let is_bare_param = matches!(
+                        &fte.kind,
+                        TypeKind::Path(p)
+                            if p.segments.len() == 1
+                                && p.generic_args.is_none()
+                                && subst.contains_key(&p.segments[0])
+                    );
+                    if is_bare_param {
+                        let cte =
+                            crate::codegen::helpers::subst_type_params_in_type_expr(&fte, subst);
+                        // A direct heap buffer: `String`/`str` (the typechecker's
+                        // two spellings — `is_string_type_expr` unifies them) or a
+                        // `Vec`/`VecDeque` head. Both lower to the `{ptr,len,cap}`
+                        // Vec-struct layout the `VecOrString` arm frees.
+                        let is_vec_head = matches!(
+                            &cte.kind,
+                            TypeKind::Path(p)
+                                if matches!(
+                                    p.segments.last().map(|s| s.as_str()),
+                                    Some("Vec") | Some("VecDeque")
+                                )
+                        );
+                        if self.is_string_type_expr(&cte) || is_vec_head {
+                            kinds[0] = FieldDrop::VecOrString;
+                        }
+                    }
+                }
+            }
+        }
         // Nested-aggregate / nested-struct detection: a field the name-based
         // pass left `None` whose LLVM type is a struct/tuple (not the Vec
         // struct). A *named* non-shared user struct (#18) routes through its
@@ -1215,9 +1306,15 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // Phase 2: synthesize each named nested struct's drop fn; mark
             // `NestedStruct` only when one is actually needed (`Some`).
+            // B-2026-07-15-11 — synthesize the per-monomorph nested drop
+            // (subst derived from the field's declared `Box[String]` instance)
+            // so a nested single-field generic wrapper's bare-T Vec/String field
+            // is freed; a non-generic nested struct yields an empty subst and
+            // the name-shared drop, unchanged.
             for idx in named_struct_fields {
                 if let Some(Some(name)) = field_kinds.get(idx).cloned() {
-                    if self.emit_struct_drop_synthesis(&name).is_some() {
+                    let nsub = self.nested_struct_field_subst(struct_name, idx, subst, &name);
+                    if self.emit_struct_drop_synthesis_mono(&name, &nsub).is_some() {
                         kinds[idx] = FieldDrop::NestedStruct;
                     }
                 }
@@ -1398,6 +1495,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         .get(struct_name)
                         .and_then(|v| v.get(field_idx))
                         .cloned()
+                        // B-2026-07-15-11 — resolve the WHOLE field TypeExpr
+                        // through the mono subst FIRST, so a bare-T field bound
+                        // to `Vec[String]` (`W[T] { f: T }`, T = Vec[String])
+                        // reads as a `Vec[String]` and its element drain fires.
+                        // For the pre-existing `Vec[T]` field this maps
+                        // `Vec[T]` -> `Vec[String]`, and the element-level subst
+                        // below is then an identity no-op — behavior-preserving.
+                        .map(|fte| match subst {
+                            Some(subst) => {
+                                crate::codegen::helpers::subst_type_params_in_type_expr(&fte, subst)
+                            }
+                            None => fte,
+                        })
                         .and_then(|fte| crate::codegen::helpers::vec_inner_type_expr(&fte))
                         // B-2026-07-11-35 (push leg) — resolve a generic `Vec[T]`
                         // field's element (`T`) to the concrete monomorph type
@@ -1792,8 +1902,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap();
                     // Memoized — the synth in phase 2 of detection already
                     // emitted it; this is a cache hit that touches no IR until
-                    // the call below.
-                    if let Some(nested_drop_fn) = self.emit_struct_drop_synthesis(&nested_name) {
+                    // the call below. B-2026-07-15-11 — same per-monomorph subst
+                    // as phase 2, so a nested generic wrapper routes through its
+                    // `__karac_drop_struct_Box$str` (which frees the bare-T field)
+                    // rather than the name-shared drop that leaks it.
+                    let nsub =
+                        self.nested_struct_field_subst(struct_name, field_idx, subst, &nested_name);
+                    if let Some(nested_drop_fn) =
+                        self.emit_struct_drop_synthesis_mono(&nested_name, &nsub)
+                    {
                         self.builder
                             .build_call(nested_drop_fn, &[field_ptr.into()], "")
                             .unwrap();

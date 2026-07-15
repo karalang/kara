@@ -3203,7 +3203,44 @@ impl<'ctx> super::Codegen<'ctx> {
                             {
                                 if let Some(fn_val) = self.current_fn {
                                     let val_ty = val.get_type();
-                                    let clone_fn = self.emit_clone_fn_for_type_expr(&field_te);
+                                    // B-2026-07-15-11 — for a SINGLE-field generic
+                                    // wrapper `W[T] { f: T }` whose mono drop now
+                                    // frees the bare-T Vec/String field at the
+                                    // receiver's scope exit, cloning with the bare
+                                    // declared `T` produces the last-writer-wins
+                                    // `karac_clone_T` (a shallow `{ptr,len,cap}`
+                                    // copy for a heap param), so the returned alias
+                                    // double-frees against that drop. Emit with the
+                                    // CONCRETE resolved field type instead
+                                    // (`karac_clone_str` / `karac_clone_Vec_*`), so
+                                    // the caller owns an INDEPENDENT buffer. Gated
+                                    // to a single-field wrapper: a multi-field
+                                    // wrapper gets no mono drop (LLVM-layout
+                                    // erasure limits the drop to offset 0), so a
+                                    // deep clone there would leak the un-dropped
+                                    // original — keep its shallow declared-`T` path.
+                                    // A concrete (non-generic) struct has
+                                    // `field_te == field_te_concrete`, so `emit_te`
+                                    // is unchanged for it.
+                                    let single_field_heap_wrapper = self
+                                        .struct_field_type_exprs
+                                        .get(&struct_name)
+                                        .map(|v| v.len() == 1)
+                                        .unwrap_or(false)
+                                        && (self.is_string_type_expr(&field_te_concrete)
+                                            || matches!(
+                                                &field_te_concrete.kind,
+                                                TypeKind::Path(p) if matches!(
+                                                    p.segments.last().map(|s| s.as_str()),
+                                                    Some("Vec") | Some("VecDeque")
+                                                )
+                                            ));
+                                    let emit_te = if single_field_heap_wrapper {
+                                        &field_te_concrete
+                                    } else {
+                                        &field_te
+                                    };
+                                    let clone_fn = self.emit_clone_fn_for_type_expr(emit_te);
                                     // `emit_clone_fn_*` / `create_entry_alloca`
                                     // may move the builder — re-anchor to the
                                     // tail block before emitting the copy.
