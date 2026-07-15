@@ -445,6 +445,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // Single-binding zip (`for pair in xs.iter().zip(ys.iter()) {
+                // pair.0 … }`, B-2026-07-15-10): bind the whole `(EA, EB)` tuple
+                // to one variable and let the body read `.0`/`.1`, the enumerate
+                // single-var precedent above. Scalar sources only (both peel to
+                // trivially-copyable Vecs) — a heap-element tuple would copy the
+                // element headers into the tuple with no borrow-marking, so those
+                // stay on the two-sub-pattern destructure path (which
+                // borrow-marks each side); a heap single-binding still bails loud.
+                if matches!(&pattern.kind, PatternKind::Binding(_)) {
+                    let lhs = self.peel_iter_to_scalar_vec_ident(object);
+                    let rhs = self.peel_iter_to_scalar_vec_ident(&args[0].value);
+                    if let (Some(va), Some(vb)) = (lhs, rhs) {
+                        return self.compile_for_zip_single_var(label, pattern, &va, &vb, body);
+                    }
+                }
             }
             // (The `skip`/`take` index-window dispatch moved ABOVE the fused
             // desugar gate — see the top of this MethodCall block; chains it
@@ -2361,6 +2376,154 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         let one = i64_t.const_int(1, false);
         let next = self.builder.build_int_add(cur, one, "zip.next").unwrap();
+        self.builder.build_store(counter, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// `for pair in va.iter().zip(vb.iter())` over two named SCALAR-element Vecs
+    /// (B-2026-07-15-10, single-binding zip leg): the lockstep `0..min(lenA,
+    /// lenB)` loop of `compile_for_zip_vec_vars`, but instead of destructuring
+    /// into two sub-patterns it binds the WHOLE `(EA, EB)` tuple to `pattern`,
+    /// so a body reading `pair.0` / `pair.1` works — the two-source sibling of
+    /// `compile_for_enumerate_single_var`. Scalar elements only (caller-gated
+    /// via `peel_iter_to_scalar_vec_ident`), so the by-value tuple binds need no
+    /// loop-borrow / defensive-copy machinery.
+    fn compile_for_zip_single_var(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        va: &str,
+        vb: &str,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+
+        let load_parts = |me: &Self,
+                          name: &str,
+                          tag: &str|
+         -> Result<
+            (IntValue<'ctx>, PointerValue<'ctx>, BasicTypeEnum<'ctx>),
+            String,
+        > {
+            let elem_ty = me.vec_elem_type_for_var(name);
+            let vptr = me
+                .get_data_ptr(name)
+                .ok_or_else(|| format!("codegen: zip source '{name}' has no storage"))?;
+            let len_ptr = me
+                .builder
+                .build_struct_gep(vec_ty, vptr, 1, &format!("zip1.{tag}.len.ptr"))
+                .unwrap();
+            let data_ptr_ptr = me
+                .builder
+                .build_struct_gep(vec_ty, vptr, 0, &format!("zip1.{tag}.data.ptr"))
+                .unwrap();
+            let len = me
+                .builder
+                .build_load(i64_t, len_ptr, &format!("zip1.{tag}.len"))
+                .unwrap()
+                .into_int_value();
+            let data = me
+                .builder
+                .build_load(ptr_ty, data_ptr_ptr, &format!("zip1.{tag}.data"))
+                .unwrap()
+                .into_pointer_value();
+            Ok((len, data, elem_ty))
+        };
+        let (len_a, data_a, elem_ty_a) = load_parts(self, va, "a")?;
+        let (len_b, data_b, elem_ty_b) = load_parts(self, vb, "b")?;
+        let tup_ty = self.context.struct_type(&[elem_ty_a, elem_ty_b], false);
+        // n = min(lenA, lenB) — zip stops at the shorter source.
+        let a_lt_b = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, len_a, len_b, "zip1.minsel")
+            .unwrap();
+        let n = self
+            .builder
+            .build_select(a_lt_b, len_a, len_b, "zip1.n")
+            .unwrap()
+            .into_int_value();
+
+        let counter = self.create_entry_alloca(fn_val, "zip1.i", i64_t.into());
+        self.builder
+            .build_store(counter, i64_t.const_int(0, false))
+            .unwrap();
+
+        let cond_bb = self.context.append_basic_block(fn_val, "zip1.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "zip1.body");
+        let incr_bb = self.context.append_basic_block(fn_val, "zip1.incr");
+        let exit_bb = self.context.append_basic_block(fn_val, "zip1.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            label: label.map(str::to_string),
+            continue_bb: incr_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
+        });
+
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "zip1.i.cur")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, cur, n, "zip1.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "zip1.i.body")
+            .unwrap()
+            .into_int_value();
+        let a_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty_a, data_a, &[cur], "zip1.a.ptr")
+                .unwrap()
+        };
+        let a_val = self.builder.build_load(elem_ty_a, a_ptr, "zip1.a").unwrap();
+        let b_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty_b, data_b, &[cur], "zip1.b.ptr")
+                .unwrap()
+        };
+        let b_val = self.builder.build_load(elem_ty_b, b_ptr, "zip1.b").unwrap();
+        let mut tup = tup_ty.get_undef();
+        tup = self
+            .builder
+            .build_insert_value(tup, a_val, 0, "zip1.tup.a")
+            .unwrap()
+            .into_struct_value();
+        tup = self
+            .builder
+            .build_insert_value(tup, b_val, 1, "zip1.tup.b")
+            .unwrap()
+            .into_struct_value();
+        self.bind_pattern(pattern, tup.into())?;
+        self.compile_loop_body_with_cleanup(body, incr_bb)?;
+
+        self.builder.position_at_end(incr_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "zip1.i.incr")
+            .unwrap()
+            .into_int_value();
+        let one = i64_t.const_int(1, false);
+        let next = self.builder.build_int_add(cur, one, "zip1.next").unwrap();
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 

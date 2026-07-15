@@ -6306,6 +6306,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-07-15-10 (zip→map): `A.iter().zip(B.iter()).map(f).collect()`
+            // — a `map` whose base iterable is a `zip`. The general adaptor walk
+            // below only accepts a plain-`.iter()`/range base, so a `zip` base
+            // bailed loud. Reuse the (now-supported) for-loop over `zip` by
+            // rewriting to `{ let mut acc: Vec[R] = Vec.new(); for <p> in <zip>
+            // { acc.push(<f body>); } acc }`, binding the map closure's param
+            // over the zipped tuple. Gated to a `zip(iter, iter)` base whose two
+            // sides are `.iter()`/`.into_iter()` calls (what the for-loop zip
+            // arm accepts); any other base falls through to the general walk /
+            // loud bail (never a miscompile).
+            if method == "map" && args.len() == 1 {
+                if let ExprKind::MethodCall {
+                    method: zmethod,
+                    args: zargs,
+                    ..
+                } = &object.kind
+                {
+                    if zmethod == "zip" && zargs.len() == 1 {
+                        if let Some(v) = self.try_compile_zip_map_collect(
+                            object.as_ref(),
+                            &args[0].value,
+                            call_span,
+                        )? {
+                            return Ok(Some(v));
+                        }
+                    }
+                }
+            }
             // B-2026-07-04-2 sub-part 1 (cycle+take): `<src>.cycle().take(n)
             // .collect()` repeats the source until `n` elements are collected.
             // A BARE `cycle()` (no bounding `take`) is unbounded and never
@@ -7566,6 +7594,144 @@ impl<'ctx> super::Codegen<'ctx> {
                     let_side(&zb, &eb, side_b, &span_b),
                 ],
                 final_expr: Some(Box::new(inner_zip_collect)),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `<zip>.map(f).collect()` where `<zip>` is `A.iter().zip(B.iter())`
+    /// (B-2026-07-15-10). The map transforms the zipped `(EA, EB)` tuples, so
+    /// the collect result is `Vec[R]` (R ≠ a 2-tuple) and
+    /// `try_compile_zip_pipeline_collect`'s identity gate rejects it, while the
+    /// general adaptor walk rejects a `zip` base. Rewrite to a for-loop over the
+    /// zip (the for-loop zip arm binds the closure's param — a single-var tuple
+    /// or a 2-sub destructure — to each pair) that pushes the mapped body:
+    ///
+    /// ```text
+    /// { let mut __zmc: Vec[R] = Vec.new();
+    ///   for <f.param> in A.iter().zip(B.iter()) { __zmc.push(<f.body>); }
+    ///   __zmc }
+    /// ```
+    ///
+    /// `R` comes from the collect's `owned_temp_drops` result type (`Vec[R]`).
+    /// The map arg must be a single-param closure; anything else returns `None`
+    /// (the caller falls through to the loud dispatch-fail).
+    fn try_compile_zip_map_collect(
+        &mut self,
+        zip_recv: &Expr,
+        map_closure: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Result element type R from `Vec[R]` at the collect span.
+        let vec_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        let r_elem = match &vec_te.kind {
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec") => {
+                match p.generic_args.as_ref().and_then(|ga| ga.first()) {
+                    Some(GenericArg::Type(t)) => t.clone(),
+                    _ => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+        // Single-param closure `|p| body` (p is a Binding or a 2-tuple pattern —
+        // the for-loop zip arm handles both).
+        let (param_pat, body) = match &map_closure.kind {
+            ExprKind::Closure { params, body, .. } if params.len() == 1 => {
+                (params[0].pattern.clone(), (**body).clone())
+            }
+            _ => return Ok(None),
+        };
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let acc = format!("__zmc_{}", uid);
+
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let vec_r = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![GenericArg::Type(r_elem)]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        // `let mut __zmc: Vec[R] = Vec.new();`
+        let let_acc = Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(acc.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(vec_r),
+                value: Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(Expr {
+                            kind: ExprKind::Path {
+                                segments: vec!["Vec".to_string(), "new".to_string()],
+                                generic_args: None,
+                            },
+                            span: sp.clone(),
+                        }),
+                        args: vec![],
+                    },
+                    span: sp.clone(),
+                },
+            },
+            span: sp.clone(),
+        };
+        // `for <param_pat> in <zip_recv> { __zmc.push(<body>); }`
+        let push_stmt = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(ident(&acc)),
+                    method: "push".to_string(),
+                    turbofish: None,
+                    args: vec![CallArg {
+                        label: None,
+                        mut_marker: false,
+                        value: body,
+                        span: sp.clone(),
+                    }],
+                    args_close_span: sp.clone(),
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: param_pat,
+                    iterable: Box::new(zip_recv.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: vec![push_stmt],
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_acc, for_loop],
+                final_expr: Some(Box::new(ident(&acc))),
                 span: sp.clone(),
             }),
             span: sp.clone(),

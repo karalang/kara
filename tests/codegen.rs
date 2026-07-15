@@ -9497,6 +9497,54 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_zip_single_var() {
+        // B-2026-07-15-10: `for pair in xs.iter().zip(ys.iter()) { pair.0 … }`
+        // — a single-binding (non-destructure) zip over two named scalar Vecs
+        // binds the whole `(EA, EB)` tuple, the body reads `.0`/`.1`. Covers the
+        // shorter-source min-length stop.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: Vec[i64] = [1, 2, 3, 4];\n\
+                 let b: Vec[i64] = [10, 20, 30];\n\
+                 let mut s: i64 = 0;\n\
+                 for pair in a.iter().zip(b.iter()) {\n\
+                     s = s + pair.0 * pair.1;\n\
+                 }\n\
+                 println(s);\n\
+             }",
+        ) {
+            // (1*10)+(2*20)+(3*30) = 140 (b is shorter, len 3)
+            assert_eq!(out, "140\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_zip_map_collect() {
+        // B-2026-07-15-10: `A.iter().zip(B.iter()).map(f).collect()` — a map
+        // over the zipped tuples (result `Vec[R]`, R not a 2-tuple) lowers to a
+        // for-loop over the zip pushing the mapped body. Covers a single-var
+        // closure param (`|p| p.0 + p.1`), a destructuring param (`|(x, y)|
+        // x * y`) over a shorter source, and a String-producing map.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: Vec[i64] = [10, 10, 10];\n\
+                 let b: Vec[i64] = [1, 2, 3];\n\
+                 let c: Vec[i64] = a.iter().zip(b.iter()).map(|p| p.0 + p.1).collect();\n\
+                 let mut i = 0;\n\
+                 while i < c.len() { println(c[i]); i = i + 1; }\n\
+                 let d: Vec[i64] = [5, 5, 5, 5];\n\
+                 let e: Vec[i64] = [2, 3];\n\
+                 let g: Vec[i64] = d.iter().zip(e.iter()).map(|(x, y)| x * y).collect();\n\
+                 println(g.len());\n\
+                 let s: Vec[String] = a.iter().zip(b.iter()).map(|p| f\"{p.0}:{p.1}\").collect();\n\
+                 println(s[0]);\n\
+             }",
+        ) {
+            assert_eq!(out, "11\n12\n13\n2\n10:1\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_mut_ref_scalar_value_reads() {
         // B-2026-07-15-3: a `mut ref` scalar param reads as its value type in
         // an annotated let, an index expression, an argument, and a cast —
@@ -12471,15 +12519,18 @@ fn main() {
                  println(f\"{s}\");",
             ),
             (
-                // Heap-element zip is now LOWERED (the loop-borrow marking,
-                // test_e2e_for_adaptor_tail_complete), so the bail contract
-                // covers a still-unsupported zip shape: a SINGLE-var binding
-                // (the pair would need tuple materialization like enumerate).
-                "zip (single-var binding)",
-                "let a: Vec[i64] = Vec[1i64, 2i64];\n\
+                // Scalar single-var zip is now LOWERED
+                // (test_e2e_for_zip_single_var, B-2026-07-15-10), so the bail
+                // contract covers a still-unsupported single-var zip shape: HEAP
+                // (String) elements, whose tuple materialization would copy the
+                // element headers into the pair with no borrow-marking (the
+                // two-sub-pattern destructure path handles heap; a single-var
+                // heap binding still bails). The interpreter handles it.
+                "zip (single-var binding, heap elements)",
+                "let a: Vec[String] = Vec[f\"x\", f\"y\"];\n\
                  let b: Vec[i64] = Vec[3i64, 4i64];\n\
                  let mut s = 0i64;\n\
-                 for p in a.iter().zip(b.iter()) { s = s + p.0; }\n\
+                 for p in a.iter().zip(b.iter()) { s = s + p.1; }\n\
                  println(f\"{s}\");",
             ),
             (
