@@ -9497,6 +9497,32 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_closure_option_returning_method_tail() {
+        // B-2026-07-15-17: a closure whose tail is an Option-returning method
+        // call (`|k, v| m.insert(k, v)` — Map.insert -> Option[V]; `|vv|
+        // vv.pop()` — Vec.pop -> Option[T]) must declare its fn return type as
+        // the 4-word Option layout, not the i64 fallback (which failed the LLVM
+        // verifier "return type does not match operand type of return inst").
+        // Covers building the closure AND consuming the returned Option.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 m.insert(\"a\".to_string(), 1);\n\
+                 let put = |k: String, v: i64| m.insert(k, v);\n\
+                 let old = put(\"a\".to_string(), 9);\n\
+                 match old { Some(x) => println(x), None => println(0), }\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(7); v.push(8);\n\
+                 let take_last = |vv: Vec[i64]| vv.pop();\n\
+                 match take_last(v) { Some(x) => println(x), None => println(-1), }\n\
+             }",
+        ) {
+            // insert over an existing key returns the old value Some(1); pop → Some(8)
+            assert_eq!(out, "1\n8\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_zip_single_var() {
         // B-2026-07-15-10: `for pair in xs.iter().zip(ys.iter()) { pair.0 … }`
         // — a single-binding (non-destructure) zip over two named scalar Vecs

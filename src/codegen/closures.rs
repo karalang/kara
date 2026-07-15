@@ -3610,6 +3610,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         .struct_type(&[self.context.i64_type().into()], false)
                         .into()
                 }),
+            // A general method-call tail whose result the lowering pass
+            // recorded as an ENUM instantiation (`Option[V]` / `Result[T, E]` /
+            // a user enum) — e.g. `|k, v| m.insert(k, v)` where
+            // `Map.insert -> Option[V]`, or `|v| v.pop()`. The closure then
+            // returns that enum's type-erased layout, NOT the `i64` fallback
+            // below — which declared the closure fn `-> i64` against the 4-word
+            // Option body and failed the LLVM verifier ("return type does not
+            // match operand type of return inst", B-2026-07-15-17). Mirrors the
+            // `Some`/`Ok`/`Err` constructor arms; keyed on the span-recorded
+            // `enum_inst_type_exprs`. A non-enum method result (a scalar, or a
+            // String/Vec — the latter a separate un-recorded shape) keeps the
+            // `i64` default below, unchanged.
+            ExprKind::MethodCall { .. } => {
+                if let Some(te) = self.enum_inst_type_from_span(expr) {
+                    if let TypeKind::Path(p) = &te.kind {
+                        if let Some(name) = p.segments.last() {
+                            if let Some(l) = self.enum_layouts.get(name.as_str()) {
+                                return l.llvm_type.into();
+                            }
+                        }
+                    }
+                }
+                self.context.i64_type().into()
+            }
             ExprKind::Cast { ty, .. } => self.llvm_type_for_type_expr(ty),
             ExprKind::Block(block) | ExprKind::Seq(block) => {
                 if let Some(final_expr) = &block.final_expr {
