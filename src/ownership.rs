@@ -1784,6 +1784,27 @@ impl<'a> OwnershipChecker<'a> {
             // before the name reaches `rc_values` — codegen looks up RC-boxing
             // decisions by the *original* binding name, and `binding_type_names`
             // is keyed by it too, so this is correctness, not just display.
+            // GPU-SLIP-4b: a `GpuBuffer[S]` is a non-shareable device handle
+            // (move-only; codegen frees it explicitly on drop / reassignment) —
+            // it cannot be Rc-wrapped, so an RC fallback on it is a false
+            // positive. The resident sim loop `grid = gpu.dispatch(step, grid)`
+            // reassigns a `GpuBuffer` each iteration, which is correct linear
+            // ownership handled by `compile_gpu_buffer_assign`; skip it so the
+            // (misleading) `perf[rc-fallback]` note never enters `rc_values`.
+            // `binding_type_names` is params-only and locals are not recorded
+            // until the body walk (which runs *after* this pass), so classify by
+            // the typechecker's per-span types at the RC witness's use sites.
+            let is_gpu_buffer = [&w.other_use_span, &w.consume_span].iter().any(|sp| {
+                matches!(
+                    self.typecheck_result
+                        .expr_types
+                        .get(&SpanKey::from_span(sp)),
+                    Some(Type::Named { name, .. }) if name == "GpuBuffer"
+                )
+            });
+            if is_gpu_buffer {
+                continue;
+            }
             let binding = demangle_binding(&binding).to_string();
             let type_name = self.binding_type_names.get(&binding).cloned();
             let entry = RcEntry {
