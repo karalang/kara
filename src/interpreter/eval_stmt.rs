@@ -984,7 +984,24 @@ impl<'a> super::Interpreter<'a> {
         if let Some(op) = bin_op {
             if args.len() == 2 {
                 let lhs = self.eval_expr_inner(&args[0].value);
+                // A faulted lhs (integer overflow, div-by-zero, index OOB,
+                // unwrap of None, …) sets `pending_cf` and yields a poison
+                // `Unit`; propagate it immediately. Without this guard the
+                // `rhs` eval short-circuits to `Unit` via `check_cf`, and
+                // `eval_binary(op, Unit, Unit)` then records a SPURIOUS second
+                // "operator not defined for Unit and Unit" diagnostic on top
+                // of the real fault (B-2026-07-15-7). This lowered-operator
+                // path is where scalar binops reach the interpreter after
+                // `karac::lower` rewrites `a + b` into `<type>.add(a, b)`, so
+                // it needs the same per-operand short-circuit the
+                // `ExprKind::Binary` arm already performs.
+                if self.pending_cf.is_some() {
+                    return Some(lhs);
+                }
                 let rhs = self.eval_expr_inner(&args[1].value);
+                if self.pending_cf.is_some() {
+                    return Some(rhs);
+                }
                 // Q4 literal promotion (B-2026-07-04-12): the operator lowering
                 // rewrites `a + 1` into `<type>.add(a, 1)`, so scalar binops
                 // reach the interpreter HERE, not via the `ExprKind::Binary`
@@ -1008,12 +1025,20 @@ impl<'a> super::Interpreter<'a> {
         }
         if method == "neg" && args.len() == 1 {
             let val = self.eval_expr_inner(&args[0].value);
+            // Same fault short-circuit as the binary arm — a faulted operand
+            // must not reach `eval_unary` on its `Unit` poison (B-2026-07-15-7).
+            if self.pending_cf.is_some() {
+                return Some(val);
+            }
             return Some(self.eval_unary(&UnaryOp::Neg, val, span));
         }
         if method == "not" && args.len() == 1 {
             // `not` covers both `!bool` (UnaryOp::Not) and `~int` (UnaryOp::BitNot).
             // Kāra disjointly types these, so the runtime value shape is unambiguous.
             let val = self.eval_expr_inner(&args[0].value);
+            if self.pending_cf.is_some() {
+                return Some(val);
+            }
             let op = match &val {
                 Value::Bool(_) => UnaryOp::Not,
                 _ => UnaryOp::BitNot,

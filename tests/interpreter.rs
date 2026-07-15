@@ -547,6 +547,59 @@ fn test_abs_int_min_traps() {
 }
 
 #[test]
+fn test_no_cascading_diagnostic_after_fault_in_compound_expr() {
+    // B-2026-07-15-7: a runtime fault in a SUB-expression of a compound
+    // operator expression must not cascade into a spurious second diagnostic.
+    // `min / -1 + 0` lowers to `i64.add(i64.div(min, -1), 0)`; the div
+    // overflows and sets `pending_cf`, but the lowered-operator dispatch used
+    // to evaluate the `add`'s rhs anyway (short-circuiting it to `Unit` via
+    // check_cf) and then run `eval_binary(Add, Unit, Unit)`, emitting a bogus
+    // "operator 'Add' is not defined for operands of type 'Unit' and 'Unit'".
+    // The fix short-circuits after the faulted operand, so exactly one error —
+    // the real `integer overflow` — is reported.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let m: i64 = -9223372036854775807i64 - 1i64;\n\
+             let x: i64 = m / -1i64 + 0i64;\n\
+             println(x);\n\
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected exactly one runtime error (no cascade), got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        errors[0].message.contains("integer overflow"),
+        "expected the sole error to be integer overflow, got: {:?}",
+        errors[0].message
+    );
+    assert!(
+        !errors[0].message.contains("is not defined for operands"),
+        "must not surface the spurious operator-on-Unit cascade, got: {:?}",
+        errors[0].message
+    );
+
+    // Same guarantee for a div-by-zero fault nested in a compound expression
+    // (the other common sub-expression fault), and inside an f-string
+    // interpolation (the original repro shape).
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let a: i64 = 10i64; let b: i64 = 0i64;\n\
+             print(f\"{a / b + 5i64}\");\n\
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "div-by-zero in an f-string compound must not cascade, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(errors[0].message.contains("division by zero"));
+}
+
+#[test]
 fn test_i64_div_rem_euclid() {
     // `i64::{div_euclid, rem_euclid}` — the remainder is always non-negative,
     // so the quotient rounds toward negative infinity. Exercises all four
