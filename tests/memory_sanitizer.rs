@@ -27283,4 +27283,56 @@ fn main() {
             "option_ok_or_string_err_no_leak",
         );
     }
+
+    #[test]
+    fn asan_nested_struct_field_move_out_no_double_free() {
+        // B-2026-07-15-22: `let bound = o.inner` moving a struct-typed heap-bearing
+        // field out of an owned struct double-freed the inner Vec buffer at scope
+        // exit (both `bound`'s and `o`'s StructDrop freed it → `free(): double free
+        // detected`, exit 134). The struct-var tracking path suppressed only
+        // `Identifier` / `TupleIndex` move-out RHS, never a `FieldAccess` struct-typed
+        // field, so nothing cap-zeroed the source's drop. Fixed by calling
+        // `suppress_struct_field_move_into_literal` (its nested-aggregate arm recurses
+        // into the moved-out struct's Vec/String leaves) for the FieldAccess RHS.
+        // Verify the whole round-trip is clean under ASAN/LSan (no double-free AND no
+        // leak — the delicate move-suppression tension: over-suppressing would strand
+        // the buffer). Loops so a leak accumulates. Non-generic + generic + a sibling
+        // heap field that must still free. NOTE: the reproducing construction is
+        // `Vec.new()+push` moved into the struct field — an inline array-literal field
+        // (`Inner { data: [1, 2, 3] }`) does NOT reproduce (its temp is materialized
+        // directly into the field on a different move path, already cap-balanced), so
+        // this test builds each Vec via a tracked local first, exactly as the df3/df4
+        // repro did. Was output-clean but ASAN-dirty pre-fix — the double-free fires
+        // at scope-exit AFTER the prints, so an output-only harness can't see it.
+        assert_clean_asan_run(
+            r#"
+struct Inner { data: Vec[i64] }
+struct Outer { inner: Inner, extra: Vec[i64] }
+struct GInner[T] { data: Vec[T] }
+struct GOuter[T] { inner: GInner[T] }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 200 {
+        let mut d: Vec[i64] = Vec.new();
+        d.push(i); d.push(i + 1); d.push(i + 2);
+        let mut ex: Vec[i64] = Vec.new();
+        ex.push(i * 10); ex.push(i * 20);
+        let o: Outer = Outer { inner: Inner { data: d }, extra: ex };
+        let bound: Inner = o.inner;
+        total = total + bound.data.len() + o.extra.len();
+        let mut gd: Vec[i64] = Vec.new();
+        gd.push(i); gd.push(i + 1); gd.push(i + 2); gd.push(i + 3);
+        let g: GOuter[i64] = GOuter { inner: GInner { data: gd } };
+        let gb: GInner[i64] = g.inner;
+        total = total + gb.data.len();
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["1800"],
+            "nested_struct_field_move_out_no_double_free",
+        );
+    }
 }

@@ -9784,6 +9784,81 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_nested_struct_field_move_out_no_double_free() {
+        // B-2026-07-15-22: `let bound = o.inner` — moving a STRUCT-typed field out
+        // of an owned struct where that field's type carries heap (a `Vec`). Before
+        // the fix, `bound`'s scope-exit StructDrop AND `o`'s StructDrop both freed
+        // the same inner `Vec` buffer → `free(): double free detected` (exit 134).
+        // The struct-var tracking path suppressed only `Identifier` (`let g = f`)
+        // and `TupleIndex` (`let inr = h.ps.0`) RHS move-outs, never a `FieldAccess`
+        // struct-typed field — so no cap-zero disarmed the source's drop. Fixed by
+        // calling `suppress_struct_field_move_into_literal` (its nested-aggregate arm
+        // recurses into the moved-out struct's Vec/String leaves) for the FieldAccess
+        // RHS. Both generic and non-generic reproduced; both are `karac check`-clean.
+        // Covers: non-generic, generic, deep (two-level) nesting, multi-heap-field
+        // moved-out struct, `self.field` move-out in a consuming method, and a
+        // sibling heap field of the outer struct that must STILL free (not
+        // over-suppressed). This is the OUTPUT-correctness guard (the cap-zero must
+        // not corrupt the `.len()` reads); the double-free/leak itself is caught by
+        // the ASAN sibling `asan_nested_struct_field_move_out_no_double_free` — the
+        // abort fires at scope exit AFTER these prints, so `run_program`'s captured
+        // stdout can't witness it. Each Vec is built via a tracked local
+        // (`Vec.new()+push`) rather than an inline array literal, because only that
+        // construction takes the move path that reproduced.
+        if let Some(out) = run_program(
+            "struct Inner { data: Vec[i64] }\n\
+             struct Outer { inner: Inner, extra: Vec[i64] }\n\
+             struct GInner[T] { data: Vec[T] }\n\
+             struct GOuter[T] { inner: GInner[T] }\n\
+             struct Mid { inner: Inner }\n\
+             struct Deep { mid: Mid }\n\
+             struct Multi { a: Vec[i64], b: String }\n\
+             struct MOuter { m: Multi }\n\
+             struct Con { inner: Inner, tag: i64 }\n\
+             impl Con {\n\
+                 fn take(self) -> Inner {\n\
+                     let x: Inner = self.inner;\n\
+                     x\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut d0: Vec[i64] = Vec.new();\n\
+                 d0.push(1); d0.push(2); d0.push(3);\n\
+                 let mut e0: Vec[i64] = Vec.new();\n\
+                 e0.push(100); e0.push(200);\n\
+                 let o: Outer = Outer { inner: Inner { data: d0 }, extra: e0 };\n\
+                 let bound: Inner = o.inner;\n\
+                 println(bound.data.len());\n\
+                 println(o.extra.len());\n\
+                 let mut gd: Vec[i64] = Vec.new();\n\
+                 gd.push(7); gd.push(8); gd.push(9); gd.push(10);\n\
+                 let g: GOuter[i64] = GOuter { inner: GInner { data: gd } };\n\
+                 let gb: GInner[i64] = g.inner;\n\
+                 println(gb.data.len());\n\
+                 let mut dd: Vec[i64] = Vec.new();\n\
+                 dd.push(5); dd.push(6);\n\
+                 let d: Deep = Deep { mid: Mid { inner: Inner { data: dd } } };\n\
+                 let m: Mid = d.mid;\n\
+                 let mi: Inner = m.inner;\n\
+                 println(mi.data.len());\n\
+                 let mut ma: Vec[i64] = Vec.new();\n\
+                 ma.push(1); ma.push(2); ma.push(3); ma.push(4); ma.push(5);\n\
+                 let mo: MOuter = MOuter { m: Multi { a: ma, b: \"tag\" } };\n\
+                 let mm: Multi = mo.m;\n\
+                 println(mm.a.len());\n\
+                 println(mm.b.len());\n\
+                 let mut cd: Vec[i64] = Vec.new();\n\
+                 cd.push(11); cd.push(22); cd.push(33);\n\
+                 let c: Con = Con { inner: Inner { data: cd }, tag: 9 };\n\
+                 let got: Inner = c.take();\n\
+                 println(got.data.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n2\n4\n2\n5\n3\n3\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_take_get_or_insert() {
         // B-2026-07-14-6 (mutating combinators): `take()` yields the receiver's
         // current value and leaves `None` in its slot (a second take yields

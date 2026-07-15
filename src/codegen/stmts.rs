@@ -4536,6 +4536,34 @@ impl<'ctx> super::Codegen<'ctx> {
                         if matches!(&value.kind, ExprKind::TupleIndex { .. }) {
                             self.suppress_tuple_index_move_source(value);
                         }
+                        // B-2026-07-15-22 — a heap-bearing STRUCT moved OUT of an
+                        // owned struct's FIELD (`let bound = o.inner` where
+                        // `inner: Inner` and `Inner` owns heap, e.g. a `Vec`).
+                        // `bound` is tracked below (`track_struct_var_inst`) and now
+                        // owns the buffers; cap-zero the SOURCE struct field's heap in
+                        // the owning struct's slot so its `StructDrop` skips them —
+                        // else BOTH `bound`'s drop and `o`'s drop free the same
+                        // buffer (the double-free df3/df4 repro, both generic and
+                        // non-generic, `karac check`-clean). The struct-typed-field
+                        // sibling of the Vec/String-field (#17 gap 2, line ~3925) and
+                        // enum-field (#19, line ~4149) FieldAccess suppressions in the
+                        // Vec/enum tracking paths; `suppress_struct_field_move_into_literal`'s
+                        // nested-aggregate arm (`zero_aggregate_field_caps`) recurses
+                        // into the moved-out struct's Vec/String leaves. Skip a
+                        // caller-retains `owned_struct_params` source (its deep-copy
+                        // path owns the buffer), mirroring the peer sites' guard.
+                        if let ExprKind::FieldAccess { object, .. } = &value.kind {
+                            let obj_name = match &object.kind {
+                                ExprKind::Identifier(o) => Some(o.as_str()),
+                                ExprKind::SelfValue => Some("self"),
+                                _ => None,
+                            };
+                            if let Some(obj) = obj_name {
+                                if !self.owned_struct_params.contains(obj) {
+                                    self.suppress_struct_field_move_into_literal(value);
+                                }
+                            }
+                        }
                         // B-2026-07-14-16 (struct leg): `let p = v.get(i).unwrap()`
                         // on a `Vec[Struct]` whose Struct owns heap. `Vec.get`
                         // returns `Option[ref Struct]` packing the element VALUE,
