@@ -426,18 +426,13 @@ fn run_compute(
     elem_count: usize,
 ) -> Vec<wgpu::Buffer> {
     let n_buffers = input_bufs.len();
+    // GPU-SLIP-4 buffer pooling: reuse a freed grid's output buffers (from the
+    // pool) rather than allocating fresh ones each dispatch — the per-substep
+    // output allocation was the dominant per-dispatch CPU cost once the transfer
+    // was gone (4c re-bench). A miss creates a new buffer.
     let output_bufs: Vec<wgpu::Buffer> = sizes
         .iter()
-        .map(|&sz| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("gpu-cg4-output"),
-                size: sz,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
-        })
+        .map(|&sz| alloc_output_buffer(device, sz))
         .collect();
     // Read-only scalar uniforms (GPU-LBM-2): one storage buffer each, bound after
     // the group in/out buffers. Storage (not `uniform`) avoids the 16-byte
@@ -590,6 +585,54 @@ fn resident_registry() -> &'static Mutex<HashMap<u64, ResidentSoa>> {
 fn next_resident_handle() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Process-wide pool of reusable device output buffers, keyed by byte size
+/// (GPU-SLIP-4 buffer pooling). A resident sim loop `grid = gpu.dispatch(step,
+/// grid)` frees the displaced grid every substep and allocates a fresh output —
+/// and the 4c re-bench measured that per-dispatch allocation as the dominant CPU
+/// cost once the host↔device transfer was gone. Recycling the freed buffers as
+/// the next dispatch's output removes it. **Safe with the per-dispatch submit
+/// model:** a recycled buffer's prior use is queued before its reuse-as-output,
+/// and the queue executes submissions in order, so the earlier read completes
+/// before the later write (no in-flight aliasing). Buffers are all
+/// `STORAGE|COPY_SRC|COPY_DST` and the kernel overwrites every element, so a
+/// pooled buffer needs no clear.
+fn buffer_pool() -> &'static Mutex<HashMap<u64, Vec<wgpu::Buffer>>> {
+    static POOL: OnceLock<Mutex<HashMap<u64, Vec<wgpu::Buffer>>>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Take a `size`-byte STORAGE output buffer from the pool, or create one on a miss.
+fn alloc_output_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    if let Some(buf) = buffer_pool()
+        .lock()
+        .unwrap()
+        .get_mut(&size)
+        .and_then(|v| v.pop())
+    {
+        return buf;
+    }
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("gpu-cg4-output"),
+        size,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+/// Return device buffers to the pool for reuse (keyed by byte size). Called when
+/// a resident handle is freed (the loop's displaced grid) or downloaded.
+fn recycle_buffers(bufs: Vec<wgpu::Buffer>, sizes: &[u64]) {
+    if bufs.is_empty() {
+        return;
+    }
+    let mut pool = buffer_pool().lock().unwrap();
+    for (buf, &sz) in bufs.into_iter().zip(sizes.iter()) {
+        pool.entry(sz).or_default().push(buf);
+    }
 }
 
 /// Upload N group-arrays to the GPU as one resident SoA buffer set (GPU-SLIP-4b).
@@ -807,6 +850,9 @@ pub unsafe extern "C" fn karac_runtime_gpu_download_soa(
             );
         }
     }
+    // The device buffers are fully read (the readback poll waited); recycle them
+    // for a subsequent frame's upload/dispatch (GPU-SLIP-4 buffer pooling).
+    recycle_buffers(resident.bufs, &resident.sizes);
     out
 }
 
@@ -820,7 +866,13 @@ pub unsafe extern "C" fn karac_runtime_gpu_download_soa(
 /// Safe to call with any `u64`; only touches the process-wide registry.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_gpu_free_soa(handle: u64) {
-    resident_registry().lock().unwrap().remove(&handle);
+    // Recycle the freed grid's device buffers into the pool (GPU-SLIP-4) so the
+    // next dispatch reuses them instead of allocating. The registry lock is
+    // released before touching the pool (no nested lock).
+    let freed = resident_registry().lock().unwrap().remove(&handle);
+    if let Some(r) = freed {
+        recycle_buffers(r.bufs, &r.sizes);
+    }
 }
 
 #[cfg(test)]
