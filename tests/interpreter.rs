@@ -15260,6 +15260,46 @@ fn main() {
 }
 
 #[test]
+fn test_closure_mutates_captured_collection_via_method() {
+    // B-2026-07-15-13: a closure that mutates a captured collection through a
+    // mutating METHOD (`buf.push_str`, `m.insert`, `acc.push`) captures the
+    // receiver by mut-ref (design.md Rule 2 / § Closures line 4940: a
+    // `mut ref self` method call captures its receiver by mut-ref), so the
+    // mutation must write through to the outer binding. The interpreter's
+    // wrap-set used `collect_assigned_roots` only (which catches `=` / `[i]=`
+    // targets, not method mutation), so it snapshot-copied the receiver and
+    // dropped the mutation for a non-Rc-shared value — String and Map both
+    // read back EMPTY (Vec happened to propagate via its Rc-shared buffer,
+    // masking the gap). Now String / Map / Vec all propagate, matching
+    // codegen.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let mut buf: String = "";
+    let mut append = |s: String| { buf.push_str(s); };
+    append("a");
+    append("bc");
+    println(buf);
+
+    let mut m: Map[String, i64] = Map.new();
+    let mut record = |k: String, v: i64| { m.insert(k, v); };
+    record("x", 1);
+    record("y", 2);
+    println(m.len());
+
+    let mut acc: Vec[i64] = Vec.new();
+    let mut push = |x: i64| { acc.push(x); };
+    push(10);
+    push(20);
+    push(30);
+    println(acc.len());
+}
+"#,
+    );
+    assert_eq!(output, "abc\n2\n3\n");
+}
+
+#[test]
 fn test_iter_take_while_first_element_fails_yields_nothing() {
     let output = run_no_errors(
         r#"

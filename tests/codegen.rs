@@ -4874,6 +4874,61 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_closure_mutates_captured_collection_via_method() {
+        // B-2026-07-15-13: a closure that mutates a captured collection through
+        // a mutating METHOD (`acc.push`, `buf.push_str`, `m.insert`) captures
+        // the receiver by mut-ref (design.md § Closures line 4940 — a
+        // `mut ref self` method call captures its receiver mut-ref), so the
+        // mutation must write through to the outer binding. Codegen's
+        // `mutref_caps` was computed from `collect_assigned_roots` (which sees
+        // `=` / `[i] =` targets only, NOT method mutation), so the collection
+        // was captured BY VALUE and the closure grew a private copy — the outer
+        // binding stayed stale (`acc.len()` read back 0; interp propagated Vec
+        // via Rc-sharing). Fixed by the shared
+        // `ast::collect_mut_method_receiver_roots` marking the receiver mut-ref
+        // in both backends. A read-only capture (`data.iter()`) must NOT be
+        // over-marked — verified by the `count_big` closure still capturing by
+        // value.
+        // Vec uses MULTI-call (accumulation across calls) — `karac check`-clean.
+        // String / Map use a SINGLE call: multi-call of a `push_str` / `insert`
+        // closure currently trips a separate ownership over-strictness
+        // (push_str / insert classified consuming → once-callable, B-2026-07-15-14),
+        // so a single mutating call keeps the program check-clean while still
+        // proving the mutation writes through to the outer binding.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut acc: Vec[i64] = Vec.new();\n\
+                 let mut push = |x: i64| { acc.push(x); };\n\
+                 push(1);\n\
+                 push(2);\n\
+                 push(3);\n\
+                 println(acc.len());\n\
+                 let mut sum: i64 = 0;\n\
+                 for x in acc.iter() { sum = sum + x; }\n\
+                 println(sum);\n\
+                 let mut buf: String = \"\";\n\
+                 let mut append = |s: String| { buf.push_str(s); };\n\
+                 append(\"hello\");\n\
+                 println(buf);\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 let mut record = |k: String, v: i64| { m.insert(k, v); };\n\
+                 record(\"x\", 10);\n\
+                 println(m.len());\n\
+                 // read-only capture stays by-value (no over-mark / no crash)\n\
+                 let data: Vec[i64] = [1, 2, 3, 4];\n\
+                 let count_big = |t: i64| {\n\
+                     let mut c: i64 = 0;\n\
+                     for x in data.iter() { if x > t { c = c + 1; } }\n\
+                     c\n\
+                 };\n\
+                 println(count_big(2));\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n6\nhello\n1\n2\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_module_global_oncelock_config_pattern() {
         // The canonical late-bound global: `let CONFIG: OnceLock[T] =
         // OnceLock.new()` at module scope, `set` once in `main`, `get` from a

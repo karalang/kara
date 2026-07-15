@@ -2608,6 +2608,20 @@ impl<'ctx> super::Codegen<'ctx> {
         let mutref_caps: HashSet<String> = {
             let mut assigned: HashSet<String> = HashSet::new();
             collect_assigned_roots_expr(body, &mut assigned);
+            // B-2026-07-15-13: a captured COLLECTION mutated through a mutating
+            // METHOD (`acc.push(x)`, `m.insert(k, v)`) must ALSO capture by
+            // mut-ref so the mutation writes through to the outer binding — the
+            // method-mutation sibling of the direct-assignment /
+            // `acc[i] = ...` (index-assign root) detection above.
+            // `collect_assigned_roots_expr` never marks a method receiver, so a
+            // closure that pushes to a captured Vec silently mutated a by-value
+            // COPY under codegen (`acc.len()` read back 0), while the
+            // interpreter — whose Vec is reference-semantics — mutated through.
+            // Restricted to a curated set of DEFINITELY-mutating built-in
+            // collection methods so a read-only receiver (`len`/`get`/`iter`)
+            // never over-marks — over-marking would wrongly force a by-ref
+            // capture and trip the escaping-closure rejection just below.
+            collect_mut_method_receiver_roots_expr(body, &mut assigned);
             free_vars
                 .iter()
                 .filter(|n| assigned.contains(n.as_str()))

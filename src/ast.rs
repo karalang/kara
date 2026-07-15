@@ -1065,3 +1065,209 @@ pub fn collect_assigned_roots_expr(expr: &Expr, out: &mut std::collections::Hash
         }
     }
 }
+
+/// The curated set of built-in collection methods that DEFINITELY mutate their
+/// receiver in place. Used by closure capture-mode inference (design.md § Closures
+/// Rule 2: a `mut ref self` method call captures its receiver by mut-ref) in BOTH
+/// backends — codegen's `mutref_caps` and the interpreter's `SharedCell` wrap set.
+/// Deliberately conservative: every entry provably writes the receiver, and a
+/// read-only method (`len` / `get` / `iter` / `contains` / `first` / …) is absent,
+/// so it never over-marks a capture (which would wrongly force a by-reference
+/// capture and, in codegen, trip the escaping-closure rejection). B-2026-07-15-13.
+pub fn is_mutating_collection_method(method: &str) -> bool {
+    matches!(
+        method,
+        "push"
+            | "pop"
+            | "push_back"
+            | "push_front"
+            | "pop_back"
+            | "pop_front"
+            | "push_str"
+            | "insert"
+            | "insert_str"
+            | "remove"
+            | "swap_remove"
+            | "clear"
+            | "truncate"
+            | "reverse"
+            | "sort"
+            | "sort_by"
+            | "sort_by_key"
+            | "swap"
+            | "extend"
+            | "retain"
+            | "dedup"
+            | "resize"
+            | "append"
+            | "fill"
+    )
+}
+
+/// Collect the root identifier of every collection mutated in `block` through a
+/// mutating built-in method (`acc.push(x)` → `acc`). Companion to
+/// [`collect_assigned_roots_block`] (which handles `=` / `[i] =` targets only);
+/// closure capture-mode inference unions both and intersects with the closure's
+/// free-variable set so a captured collection touched by `push` / `insert` / …
+/// is classified `mut ref` (design.md Rule 2) — the method-mutation sibling of
+/// the direct-assignment detection. Walks nested blocks / control flow /
+/// closures. B-2026-07-15-13.
+pub fn collect_mut_method_receiver_roots_block(
+    block: &Block,
+    out: &mut std::collections::HashSet<String>,
+) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                collect_mut_method_receiver_roots_expr(target, out);
+                collect_mut_method_receiver_roots_expr(value, out);
+            }
+            StmtKind::Let { value, .. } => collect_mut_method_receiver_roots_expr(value, out),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                collect_mut_method_receiver_roots_expr(value, out);
+                collect_mut_method_receiver_roots_block(else_block, out);
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                collect_mut_method_receiver_roots_block(body, out)
+            }
+            StmtKind::Expr(e) => collect_mut_method_receiver_roots_expr(e, out),
+            StmtKind::LetUninit { .. } | StmtKind::MultiAssign { .. } => {}
+        }
+    }
+    if let Some(final_expr) = &block.final_expr {
+        collect_mut_method_receiver_roots_expr(final_expr, out);
+    }
+}
+
+/// Expression sibling of [`collect_mut_method_receiver_roots_block`].
+pub fn collect_mut_method_receiver_roots_expr(
+    expr: &Expr,
+    out: &mut std::collections::HashSet<String>,
+) {
+    match &expr.kind {
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            if is_mutating_collection_method(method) {
+                if let Some(root) = assign_target_root(object) {
+                    out.insert(root);
+                }
+            }
+            collect_mut_method_receiver_roots_expr(object, out);
+            for arg in args {
+                collect_mut_method_receiver_roots_expr(&arg.value, out);
+            }
+        }
+        ExprKind::InterpolatedStringLit(parts) => {
+            for part in parts {
+                if let ParsedInterpolationPart::Expr(e, _) = part {
+                    collect_mut_method_receiver_roots_expr(e, out);
+                }
+            }
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::NilCoalesce { left, right }
+        | ExprKind::Pipe { left, right } => {
+            collect_mut_method_receiver_roots_expr(left, out);
+            collect_mut_method_receiver_roots_expr(right, out);
+        }
+        ExprKind::Unary { operand, .. } => collect_mut_method_receiver_roots_expr(operand, out),
+        ExprKind::Call { callee, args } => {
+            collect_mut_method_receiver_roots_expr(callee, out);
+            for arg in args {
+                collect_mut_method_receiver_roots_expr(&arg.value, out);
+            }
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            collect_mut_method_receiver_roots_expr(object, out);
+        }
+        ExprKind::Index { object, index } => {
+            collect_mut_method_receiver_roots_expr(object, out);
+            collect_mut_method_receiver_roots_expr(index, out);
+        }
+        ExprKind::Block(b)
+        | ExprKind::Comptime(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Try(b)
+        | ExprKind::Par(b)
+        | ExprKind::Seq(b) => collect_mut_method_receiver_roots_block(b, out),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_mut_method_receiver_roots_expr(condition, out);
+            collect_mut_method_receiver_roots_block(then_block, out);
+            if let Some(eb) = else_branch {
+                collect_mut_method_receiver_roots_expr(eb, out);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            collect_mut_method_receiver_roots_expr(value, out);
+            collect_mut_method_receiver_roots_block(then_block, out);
+            if let Some(eb) = else_branch {
+                collect_mut_method_receiver_roots_expr(eb, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_mut_method_receiver_roots_expr(condition, out);
+            collect_mut_method_receiver_roots_block(body, out);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            collect_mut_method_receiver_roots_expr(value, out);
+            collect_mut_method_receiver_roots_block(body, out);
+        }
+        ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
+            collect_mut_method_receiver_roots_block(body, out)
+        }
+        ExprKind::For { iterable, body, .. } => {
+            collect_mut_method_receiver_roots_expr(iterable, out);
+            collect_mut_method_receiver_roots_block(body, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_mut_method_receiver_roots_expr(scrutinee, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    collect_mut_method_receiver_roots_expr(g, out);
+                }
+                collect_mut_method_receiver_roots_expr(&arm.body, out);
+            }
+        }
+        ExprKind::Closure { body, .. } => collect_mut_method_receiver_roots_expr(body, out),
+        ExprKind::Question(inner) | ExprKind::Cast { expr: inner, .. } => {
+            collect_mut_method_receiver_roots_expr(inner, out);
+        }
+        ExprKind::Lock { mutex, body, .. } => {
+            collect_mut_method_receiver_roots_expr(mutex, out);
+            collect_mut_method_receiver_roots_block(body, out);
+        }
+        ExprKind::Tuple(items)
+        | ExprKind::ArrayLiteral(items)
+        | ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for it in items {
+                collect_mut_method_receiver_roots_expr(it, out);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                collect_mut_method_receiver_roots_expr(&f.value, out);
+            }
+            if let Some(s) = spread {
+                collect_mut_method_receiver_roots_expr(s, out);
+            }
+        }
+        _ => {}
+    }
+}

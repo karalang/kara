@@ -27123,4 +27123,43 @@ fn main() {
             "fstring_fresh_string_temp_interp_no_leak",
         );
     }
+
+    #[test]
+    fn asan_closure_mut_captured_collection_no_leak() {
+        // B-2026-07-15-13: a closure mutating a captured collection via a
+        // mutating method (`acc.push`, `buf.push_str`, `m.insert`) now captures
+        // the receiver by mut-ref and writes through. The env stores a POINTER
+        // to the outer slot (not a value), so the closure's push/realloc updates
+        // the outer `{ptr,len,cap}` in place — verify no leak (the by-value copy
+        // that leaked pre-fix left the closure's grown buffer unreferenced) and
+        // no double-free (the outer binding stays the sole owner; the env holds
+        // a pointer, excluded from the env-drop's buffer free).
+        // Vec MULTI-call (accumulation) is check-clean; String / Map use a
+        // SINGLE mutating call to stay clear of the separate multi-call
+        // push_str/insert ownership over-strictness (B-2026-07-15-14).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut acc: Vec[i64] = Vec.new();
+    let mut push = |x: i64| { acc.push(x); };
+    let mut i: i64 = 0;
+    while i < 20 {
+        push(i);
+        i = i + 1;
+    }
+    println(acc.len());
+    let mut buf: String = "";
+    let mut append = |s: String| { buf.push_str(s); };
+    append("alpha beta gamma delta epsilon zeta well past inline");
+    println(buf.len());
+    let mut m: Map[String, i64] = Map.new();
+    let mut record = |k: String, v: i64| { m.insert(k, v); };
+    record("one", 1);
+    println(m.len());
+}
+"#,
+            &["20", "52", "1"],
+            "closure_mut_captured_collection_no_leak",
+        );
+    }
 }

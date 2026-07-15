@@ -1204,6 +1204,18 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         let mut assigned: HashSet<String> = HashSet::new();
                         collect_assigned_roots_expr(body, &mut assigned);
+                        // B-2026-07-15-13: a captured collection mutated through a
+                        // mutating METHOD (`buf.push_str(s)`, `m.insert(k, v)`)
+                        // must alias too (design.md Rule 2: a `mut ref self` method
+                        // captures its receiver by mut-ref). `collect_assigned_roots`
+                        // catches only `=` / `[i] =` targets, so without this the
+                        // interpreter snapshot-copied the receiver and the mutation
+                        // was lost for a NON-reference-semantics value (String / Map
+                        // — Vec happened to propagate via its Rc-shared buffer, which
+                        // masked the gap). Codegen's `mutref_caps` uses the same
+                        // `ast::collect_mut_method_receiver_roots_expr`, so both
+                        // backends now agree and match the spec.
+                        crate::ast::collect_mut_method_receiver_roots_expr(body, &mut assigned);
                         free.into_iter().filter(|n| assigned.contains(n)).collect()
                     }
                 } else {
