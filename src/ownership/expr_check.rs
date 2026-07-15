@@ -178,6 +178,39 @@ impl<'a> super::OwnershipChecker<'a> {
         matches!(ty, Some(Type::Ref(_)) | Some(Type::MutRef(_)))
     }
 
+    /// GPU-SLIP-4b-2b: the buffer argument (index 1) of a resident
+    /// `gpu.dispatch(kernel, buf: GpuBuffer[S], …)` is BORROWED, not consumed
+    /// (owner-decided) — so a fixed-binding sim loop `grid = gpu.dispatch(k, grid,
+    /// …)` reads `grid` and reassigns it as clean linear ownership, rather than
+    /// hitting the consume-then-reuse RC fallback (a `GpuBuffer` is not a
+    /// shareable/refcounted type). Scoped to a `GpuBuffer` arg so the existing
+    /// `Vec[S]` (GPU-SLIP-3) dispatch — whose buffer is consumed — is untouched.
+    fn is_gpu_dispatch_buffer_borrow(&self, method_call: &Expr, arg_index: usize) -> bool {
+        if arg_index != 1 {
+            return false;
+        }
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &method_call.kind
+        else {
+            return false;
+        };
+        if method != "dispatch" || !matches!(&object.kind, ExprKind::Identifier(n) if n == "gpu") {
+            return false;
+        }
+        let Some(arg) = args.get(1) else {
+            return false;
+        };
+        let ty = self
+            .typecheck_result
+            .expr_types
+            .get(&SpanKey::from_span(&arg.value.span));
+        matches!(ty, Some(Type::Named { name, .. }) if name == "GpuBuffer")
+    }
+
     pub(crate) fn root_identifier(expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Identifier(name) => Some(name.clone()),
@@ -654,7 +687,10 @@ impl<'a> super::OwnershipChecker<'a> {
                     // free-fn args mark). Mirrors the `Call` arm's
                     // `arg_is_borrow_position` check; without it a borrowed
                     // struct arg was consumed and RC-promoted (B-2026-06-12-8).
-                    if arg.mut_marker || self.method_arg_is_borrow_position(expr, i) {
+                    if arg.mut_marker
+                        || self.method_arg_is_borrow_position(expr, i)
+                        || self.is_gpu_dispatch_buffer_borrow(expr, i)
+                    {
                         self.check_expr_reading(&arg.value, states, param_types, param_usage);
                     } else {
                         self.check_expr_consuming(&arg.value, states, param_types, param_usage);

@@ -2682,6 +2682,42 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
+    /// GPU-SLIP-4b-2b-ii: `grid = <gpu buffer expr>` where `grid` is a `GpuBuffer`
+    /// binding — the resident sim-loop double-buffer move (`grid =
+    /// gpu.dispatch(collide, grid, om)`). Compile the RHS FIRST (it borrows the
+    /// OLD buffer, so the old device buffers must still be live), THEN free the
+    /// displaced OLD handle, THEN store the new `{handle, n}`. Ordering is
+    /// load-bearing: `dispatch_resident` reads the old buffers (synchronously), so
+    /// the free is safe only after the RHS has run.
+    pub(super) fn compile_gpu_buffer_assign(
+        &mut self,
+        var_name: &str,
+        value: &Expr,
+    ) -> Result<(), String> {
+        let buf_ty = self.gpu_buffer_type();
+        let i64_t = self.context.i64_type();
+        let new_sv = self.compile_expr(value)?.into_struct_value();
+        let slot = *self
+            .variables
+            .get(var_name)
+            .ok_or_else(|| format!("gpu buffer var '{var_name}' missing on reassign"))?;
+        let old_field = self
+            .builder
+            .build_struct_gep(buf_ty, slot.ptr, 0, "gpu.reassign.old.p")
+            .unwrap();
+        let old_handle = self
+            .builder
+            .build_load(i64_t, old_field, "gpu.reassign.old")
+            .unwrap()
+            .into_int_value();
+        let free_fn = self.gpu_free_soa_fn();
+        self.builder
+            .build_call(free_fn, &[old_handle.into()], "")
+            .unwrap();
+        self.builder.build_store(slot.ptr, new_sv).unwrap();
+        Ok(())
+    }
+
     /// Whether `value` is a RESIDENT `gpu.dispatch(kernel, buf, …)` — a dispatch
     /// whose buffer arg is a `GpuBuffer[S]` binding (GPU-SLIP-4b-2b). Its result is
     /// a fresh `GpuBuffer[S]`, so its `let` binding must register a scope-exit free

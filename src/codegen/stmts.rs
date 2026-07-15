@@ -4959,6 +4959,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // GPU-SLIP-4b-2b-ii: `grid = <gpu buffer expr>` where `grid` is a
+                // `GpuBuffer` binding (no SoA layout) — the resident sim-loop
+                // double-buffer move. Free the displaced handle + store the new
+                // one (the general store would leak the old device buffers).
+                if let ExprKind::Identifier(name) = &target.kind {
+                    if self
+                        .variables
+                        .get(name)
+                        .is_some_and(|vs| vs.ty == self.gpu_buffer_type().into())
+                    {
+                        let name = name.clone();
+                        return self.compile_gpu_buffer_assign(&name, value);
+                    }
+                }
                 // Mirror the let-site convention: when the RHS is a
                 // `StructLiteral` (`emit_rc_alloc` returns rc=1) or a
                 // `Call` / `MethodCall` (callee transfers +1 via the
