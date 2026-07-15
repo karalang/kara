@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **467 surfaced · 4 open · 459 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **468 surfaced · 5 open · 459 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -99,6 +99,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **467 surfaced 
 | B-2026-07-15-7 | 2026-07-15 | interpreter (runtime-error propagation inside compound expressions) | low | Interpreter emits a spurious cascading second diagnostic after a runtime error inside a compound expression: `min / -1 + 0` reports the integer-overflow error, then continues evaluating the enclosing `+` with the error placeholder and adds "operator 'Add' is not defined for operands of type 'Unit' and 'Unit'" | none |
 | B-2026-07-15-9 | 2026-07-15 | codegen (indirect closure call — closures.rs compile_closure_call / compile_closure_value_call argument compilation) | low | A nested indirect closure call whose inner call yields a fresh heap value consumed by the outer call (`|s| wrap(wrap(s))`) leaks the intermediate String — compile_closure_call compiles args via compile_expr without the fresh-owned-temp free the direct-call path (calls.rs is_fresh_heap_call_arg) performs | none |
 | B-2026-07-15-10 | 2026-07-15 | codegen (iterator adaptor lowering — zip feeding a map/collect pipeline; zip in a for-loop with a single (non-destructure) binding). control_flow_for.rs zip for-loop arm; method_call.rs try_compile_zip_pipeline_collect | medium | zip adaptor surface gaps in codegen: `zip().map(f).collect()` (a map over the zipped tuples) and single-binding `for pair in zip { pair.0 }` both loud-bail (`no handler for method 'zip' on non-identifier receiver`) while the interpreter runs them; `for (a,b) in zip` and identity `zip().collect()` work | coordinate-with-B-2026-07-14-8-adaptor-owner |
+| B-2026-07-15-11 | 2026-07-15 | codegen (per-monomorph struct-drop synthesis — synth_drop.rs emit_struct_drop_synthesis_impl field classifier; PAIRED move-suppression call_dispatch.rs zero_struct_move_caps) | medium | A monomorphized generic struct whose field IS a bare type param (`struct Box[T] { value: T }`, used as `Box[String]` / `Box[Vec[..]]`) never frees the heap field at scope exit — the mono struct-drop classifier reads the erased field name `T` (not Vec/String) and classifies it no-cleanup; the CONCRETE-field twin (`struct Box { value: String }`) is clean | none |
 
 ### Fixed (459)
 
