@@ -63750,6 +63750,51 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_matmul_and_transpose() {
+        // B-2026-07-14-18 (was a phantom method pair: typechecker accepted
+        // matmul/transpose, neither backend implemented them). matmul:
+        // [[1,2],[3,4]] @ [[5,6],[7,8]] = [[19,22],[43,50]]; non-square
+        // [2x3] @ [3x2] = [[58,64],[139,154]]; integer elements accumulate
+        // in the integer domain. transpose reverses the axes (rank 2 and 3;
+        // rank-1 identity), and chains with matmul (the chained receiver is
+        // a fresh temp that must be freed — ASAN twin covers the leak side).
+        let out = run_program(
+            "fn main() {\n\
+                 let a = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+                 let b = Tensor.from([[5.0, 6.0], [7.0, 8.0]]);\n\
+                 let c = a.matmul(b);\n\
+                 println(c[0, 0]); println(c[0, 1]); println(c[1, 0]); println(c[1, 1]);\n\
+                 let w = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);\n\
+                 let x = Tensor.from([[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]]);\n\
+                 let y = w.matmul(x);\n\
+                 println(y[0, 0]); println(y[0, 1]); println(y[1, 0]); println(y[1, 1]);\n\
+                 let ia = Tensor.from([[1, 2], [3, 4]]);\n\
+                 let ib = Tensor.from([[5, 6], [7, 8]]);\n\
+                 let ic = ia.matmul(ib);\n\
+                 println(ic[0, 0]); println(ic[1, 1]);\n\
+                 let t = w.transpose();\n\
+                 let ts = t.shape();\n\
+                 println(ts[0]); println(ts[1]);\n\
+                 println(t[0, 0]); println(t[0, 1]); println(t[2, 1]);\n\
+                 let t3 = Tensor.from([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]);\n\
+                 let t3t = t3.transpose();\n\
+                 println(t3t[0, 0, 0]); println(t3t[1, 0, 0]); println(t3t[0, 1, 1]);\n\
+                 let chained = a.matmul(b).transpose();\n\
+                 println(chained[0, 1]); println(chained[1, 0]);\n\
+                 let v = Tensor.from([9.0, 8.0]);\n\
+                 let vt = v.transpose();\n\
+                 println(vt[1]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "19\n22\n43\n50\n58\n64\n139\n154\n19\n50\n3\n2\n1\n4\n6\n1\n2\n7\n43\n22\n8\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_tensor_shape_transforms() {
         // All four transforms in one program — AOT output is verified
         // byte-identical to `karac run` (the interpreter twins). Covers

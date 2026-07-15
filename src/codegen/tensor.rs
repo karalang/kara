@@ -690,7 +690,10 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
         call_span: &Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        if !matches!(method, "reshape" | "permute" | "slice" | "squeeze") {
+        if !matches!(
+            method,
+            "reshape" | "permute" | "slice" | "squeeze" | "transpose" | "matmul"
+        ) {
             return Ok(None);
         }
         // A receiver that is a fresh OWNED tensor temporary — a chained
@@ -717,16 +720,45 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => return Ok(None),
         };
+        // matmul's right-hand tensor: resolve its pointer the same two ways
+        // as the receiver (identifier binding slot / compiled value expr),
+        // and free it after the copy when it is a fresh owned temp — the
+        // same ownership line the receiver draws.
+        let mut matmul_arg: Option<(PointerValue<'ctx>, bool)> = None;
+        if method == "matmul" {
+            let arg_expr = args
+                .first()
+                .map(|a| &a.value)
+                .ok_or_else(|| "matmul takes exactly 1 argument".to_string())?;
+            let arg_is_fresh_temp = self.tensor_receiver_is_owned_fresh_temp(arg_expr);
+            let o_ptr = match &arg_expr.kind {
+                ExprKind::Identifier(name) if self.tensor_var_infos.contains_key(name.as_str()) => {
+                    self.tensor_ptr_for_var(name)?
+                }
+                _ => self.compile_expr(arg_expr)?.into_pointer_value(),
+            };
+            matmul_arg = Some((o_ptr, arg_is_fresh_temp));
+        }
         let v = match method {
             "reshape" => self.compile_tensor_reshape(t_ptr, args, call_span)?,
             "permute" => self.compile_tensor_permute(t_ptr, args, call_span)?,
             "slice" => self.compile_tensor_slice(t_ptr, args, call_span)?,
             "squeeze" => self.compile_tensor_squeeze(t_ptr, args, call_span)?,
+            "transpose" => self.compile_tensor_transpose(t_ptr, args, call_span)?,
+            "matmul" => {
+                let (o_ptr, _) = matmul_arg.expect("matmul arg resolved above");
+                self.compile_tensor_matmul(t_ptr, o_ptr, call_span)?
+            }
             _ => unreachable!(),
         };
         if receiver_is_fresh_temp {
             self.builder
                 .build_call(self.free_fn, &[t_ptr.into()], "")
+                .unwrap();
+        }
+        if let Some((o_ptr, true)) = matmul_arg {
+            self.builder
+                .build_call(self.free_fn, &[o_ptr.into()], "")
                 .unwrap();
         }
         Ok(Some(v))
@@ -754,7 +786,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // block (the transforms never return a borrow), so it is owned
             // regardless of any side-table entry.
             ExprKind::MethodCall { method: m, .. }
-                if matches!(m.as_str(), "reshape" | "permute" | "slice" | "squeeze") =>
+                if matches!(
+                    m.as_str(),
+                    "reshape" | "permute" | "slice" | "squeeze" | "transpose" | "matmul"
+                ) =>
             {
                 true
             }
@@ -1021,10 +1056,6 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
         call_span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let elem = self.tensor_transform_elem(call_span)?;
-        let elem_size = self.tensor_elem_size(elem)?;
-        let i64_t = self.context.i64_type();
-        let fn_val = self.current_fn.unwrap();
         let entries = match args.first().map(|a| &a.value.kind) {
             Some(ExprKind::ArrayLiteral(e)) if !e.is_empty() => e.clone(),
             _ => return Err("permute requires a non-empty literal axis-list".to_string()),
@@ -1045,6 +1076,55 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        self.compile_tensor_permute_with_perm(t_ptr, &perm, call_span)
+    }
+
+    /// `t.transpose()` — reverse the axes: `permute([rank-1, …, 0])` with
+    /// no axis list to write. The static rank comes from the lowering
+    /// side-table's RESULT entry at the call span (transpose preserves
+    /// rank, so result rank == receiver rank). B-2026-07-14-18 (was a
+    /// phantom method: typechecker accepted it, no backend implemented it).
+    pub(super) fn compile_tensor_transpose(
+        &mut self,
+        t_ptr: PointerValue<'ctx>,
+        args: &[CallArg],
+        call_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if !args.is_empty() {
+            return Err(format!(
+                "transpose takes no arguments, found {}",
+                args.len()
+            ));
+        }
+        let key = (call_span.offset, call_span.length);
+        let rank = self
+            .tensor_typed_exprs
+            .get(&key)
+            .map(|ti| ti.dims.len())
+            .ok_or_else(|| {
+                "transpose result type is not statically known \
+                 (missing lowering side-table entry)"
+                    .to_string()
+            })?;
+        let perm: Vec<usize> = (0..rank).rev().collect();
+        self.compile_tensor_permute_with_perm(t_ptr, &perm, call_span)
+    }
+
+    /// Shared core of `permute`/`transpose`: reorder the axes by `perm`
+    /// (result dim `i` is the receiver's dim `perm[i]`), copying into a
+    /// fresh result block. Rank is static (= `perm.len()`), so the
+    /// coord-decompose loop unrolls.
+    fn compile_tensor_permute_with_perm(
+        &mut self,
+        t_ptr: PointerValue<'ctx>,
+        perm: &[usize],
+        call_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let elem = self.tensor_transform_elem(call_span)?;
+        let elem_size = self.tensor_elem_size(elem)?;
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        let rank = perm.len();
         // Receiver dims (rank is static = perm length).
         let rdims: Vec<IntValue<'ctx>> =
             (0..rank).map(|i| self.tensor_load_dim(t_ptr, i)).collect();
@@ -1135,6 +1215,201 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(fv, nf).unwrap();
         self.builder.build_unconditional_branch(head).unwrap();
         self.builder.position_at_end(exit);
+        Ok(res.into())
+    }
+
+    /// `a.matmul(b)` — rank-2 matrix multiplication: `[m, k] × [k, n] →
+    /// [m, n]`, C-order data, standard triple loop over runtime dims. The
+    /// typechecker enforces rank-2 × rank-2 with matching numeric element
+    /// types and statically-checkable inner dims; per module policy every
+    /// compile-time check is re-emitted as a runtime guard (rank == 2 on
+    /// both operands, inner dims equal). Element arithmetic follows the
+    /// element LLVM type (float vs int). B-2026-07-14-18 (was a phantom
+    /// method: typechecker accepted it, no backend implemented it).
+    pub(super) fn compile_tensor_matmul(
+        &mut self,
+        t_ptr: PointerValue<'ctx>,
+        o_ptr: PointerValue<'ctx>,
+        call_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let elem = self.tensor_transform_elem(call_span)?;
+        let elem_size = self.tensor_elem_size(elem)?;
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        let two = i64_t.const_int(2, false);
+
+        // Runtime guards: both operands rank-2, inner dims equal.
+        let a_rank = self.tensor_load_rank(t_ptr);
+        let a_rank_ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, a_rank, two, "t.mm.arank.ok")
+            .unwrap();
+        self.emit_tensor_guard(a_rank_ok, "matmul requires a rank-2 receiver")?;
+        let b_rank = self.tensor_load_rank(o_ptr);
+        let b_rank_ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, b_rank, two, "t.mm.brank.ok")
+            .unwrap();
+        self.emit_tensor_guard(b_rank_ok, "matmul requires a rank-2 argument")?;
+        let m = self.tensor_load_dim(t_ptr, 0);
+        let k = self.tensor_load_dim(t_ptr, 1);
+        let k2 = self.tensor_load_dim(o_ptr, 0);
+        let n = self.tensor_load_dim(o_ptr, 1);
+        let inner_ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, k, k2, "t.mm.inner.ok")
+            .unwrap();
+        self.emit_tensor_guard(inner_ok, "matmul inner dimensions mismatch")?;
+
+        // Result: rank-2 [m, n].
+        let count = self.builder.build_int_mul(m, n, "t.mm.cnt").unwrap();
+        let (res, res_data) = self.tensor_alloc_runtime(two, count, elem_size);
+        let m_slot = self.tensor_header_slot(res, 1, "t.mm.d0.p");
+        self.builder.build_store(m_slot, m).unwrap();
+        let n_slot = self.tensor_header_slot(res, 2, "t.mm.d1.p");
+        self.builder.build_store(n_slot, n).unwrap();
+        let a_data = self.tensor_data_ptr_dyn(t_ptr, two, "t.mm.adata");
+        let b_data = self.tensor_data_ptr_dyn(o_ptr, two, "t.mm.bdata");
+
+        // Triple loop: for i in 0..m { for j in 0..n { acc = Σp a[i,p]*b[p,j] } }.
+        let is_float = elem.is_float_type();
+        let iv = self.create_entry_alloca(fn_val, "t.mm.i", i64_t.into());
+        let jv = self.create_entry_alloca(fn_val, "t.mm.j", i64_t.into());
+        let pv = self.create_entry_alloca(fn_val, "t.mm.p", i64_t.into());
+        let accv = self.create_entry_alloca(fn_val, "t.mm.acc", elem);
+        let zero = i64_t.const_int(0, false);
+        let one = i64_t.const_int(1, false);
+        let elem_zero: BasicValueEnum<'ctx> = if is_float {
+            elem.into_float_type().const_zero().into()
+        } else {
+            elem.into_int_type().const_zero().into()
+        };
+
+        let i_head = self.context.append_basic_block(fn_val, "t.mm.i.head");
+        let i_body = self.context.append_basic_block(fn_val, "t.mm.i.body");
+        let i_exit = self.context.append_basic_block(fn_val, "t.mm.i.exit");
+        let j_head = self.context.append_basic_block(fn_val, "t.mm.j.head");
+        let j_body = self.context.append_basic_block(fn_val, "t.mm.j.body");
+        let j_exit = self.context.append_basic_block(fn_val, "t.mm.j.exit");
+        let p_head = self.context.append_basic_block(fn_val, "t.mm.p.head");
+        let p_body = self.context.append_basic_block(fn_val, "t.mm.p.body");
+        let p_exit = self.context.append_basic_block(fn_val, "t.mm.p.exit");
+
+        self.builder.build_store(iv, zero).unwrap();
+        self.builder.build_unconditional_branch(i_head).unwrap();
+        self.builder.position_at_end(i_head);
+        let i = self
+            .builder
+            .build_load(i64_t, iv, "t.mm.iv")
+            .unwrap()
+            .into_int_value();
+        let i_cont = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, i, m, "t.mm.i.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(i_cont, i_body, i_exit)
+            .unwrap();
+
+        self.builder.position_at_end(i_body);
+        self.builder.build_store(jv, zero).unwrap();
+        self.builder.build_unconditional_branch(j_head).unwrap();
+        self.builder.position_at_end(j_head);
+        let j = self
+            .builder
+            .build_load(i64_t, jv, "t.mm.jv")
+            .unwrap()
+            .into_int_value();
+        let j_cont = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, j, n, "t.mm.j.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(j_cont, j_body, j_exit)
+            .unwrap();
+
+        self.builder.position_at_end(j_body);
+        self.builder.build_store(accv, elem_zero).unwrap();
+        self.builder.build_store(pv, zero).unwrap();
+        self.builder.build_unconditional_branch(p_head).unwrap();
+        self.builder.position_at_end(p_head);
+        let p = self
+            .builder
+            .build_load(i64_t, pv, "t.mm.pv")
+            .unwrap()
+            .into_int_value();
+        let p_cont = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, p, k, "t.mm.p.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(p_cont, p_body, p_exit)
+            .unwrap();
+
+        self.builder.position_at_end(p_body);
+        // a[i*k + p], b[p*n + j]
+        let ik = self.builder.build_int_mul(i, k, "t.mm.ik").unwrap();
+        let a_idx = self.builder.build_int_add(ik, p, "t.mm.aidx").unwrap();
+        let pn = self.builder.build_int_mul(p, n, "t.mm.pn").unwrap();
+        let b_idx = self.builder.build_int_add(pn, j, "t.mm.bidx").unwrap();
+        let a_slot = unsafe {
+            self.builder
+                .build_gep(elem, a_data, &[a_idx], "t.mm.ap")
+                .unwrap()
+        };
+        let b_slot = unsafe {
+            self.builder
+                .build_gep(elem, b_data, &[b_idx], "t.mm.bp")
+                .unwrap()
+        };
+        let av = self.builder.build_load(elem, a_slot, "t.mm.av").unwrap();
+        let bv = self.builder.build_load(elem, b_slot, "t.mm.bv").unwrap();
+        let acc = self.builder.build_load(elem, accv, "t.mm.accv").unwrap();
+        let new_acc: BasicValueEnum<'ctx> = if is_float {
+            let prod = self
+                .builder
+                .build_float_mul(av.into_float_value(), bv.into_float_value(), "t.mm.prod")
+                .unwrap();
+            self.builder
+                .build_float_add(acc.into_float_value(), prod, "t.mm.nacc")
+                .unwrap()
+                .into()
+        } else {
+            let prod = self
+                .builder
+                .build_int_mul(av.into_int_value(), bv.into_int_value(), "t.mm.prod")
+                .unwrap();
+            self.builder
+                .build_int_add(acc.into_int_value(), prod, "t.mm.nacc")
+                .unwrap()
+                .into()
+        };
+        self.builder.build_store(accv, new_acc).unwrap();
+        let np = self.builder.build_int_add(p, one, "t.mm.np").unwrap();
+        self.builder.build_store(pv, np).unwrap();
+        self.builder.build_unconditional_branch(p_head).unwrap();
+
+        self.builder.position_at_end(p_exit);
+        // out[i*n + j] = acc
+        let in_ = self.builder.build_int_mul(i, n, "t.mm.in").unwrap();
+        let out_idx = self.builder.build_int_add(in_, j, "t.mm.oidx").unwrap();
+        let out_slot = unsafe {
+            self.builder
+                .build_gep(elem, res_data, &[out_idx], "t.mm.op")
+                .unwrap()
+        };
+        let final_acc = self.builder.build_load(elem, accv, "t.mm.facc").unwrap();
+        self.builder.build_store(out_slot, final_acc).unwrap();
+        let nj = self.builder.build_int_add(j, one, "t.mm.nj").unwrap();
+        self.builder.build_store(jv, nj).unwrap();
+        self.builder.build_unconditional_branch(j_head).unwrap();
+
+        self.builder.position_at_end(j_exit);
+        let ni = self.builder.build_int_add(i, one, "t.mm.ni").unwrap();
+        self.builder.build_store(iv, ni).unwrap();
+        self.builder.build_unconditional_branch(i_head).unwrap();
+
+        self.builder.position_at_end(i_exit);
         Ok(res.into())
     }
 

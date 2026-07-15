@@ -28361,6 +28361,58 @@ fn test_tensor_permute_static_dims_move_with_axis() {
 }
 
 #[test]
+fn test_tensor_transpose_and_matmul_types() {
+    // B-2026-07-14-18: `transpose` / `matmul` were PHANTOM methods — the
+    // prelude silent fall-through accepted them with a poison type and both
+    // backends failed at runtime/compile. Now properly typed: transpose
+    // reverses the dims (any rank); matmul is rank-2 × rank-2 → [m, n] with
+    // static dims carried through.
+    typecheck_ok(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let tt: Tensor[i64, [3, 2]] = t.transpose();\n\
+             let t3 = Tensor.from([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]);\n\
+             let t3t: Tensor[i64, [2, 2, 2]] = t3.transpose();\n\
+             let v = Tensor.from([1.0, 2.0]);\n\
+             let vt: Tensor[f64, [2]] = v.transpose();\n\
+             let a = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);\n\
+             let b = Tensor.from([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]);\n\
+             let c: Tensor[f64, [2, 2]] = a.matmul(b);\n\
+             let s: f64 = c[0, 0];\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_tensor_matmul_static_rejections() {
+    // Inner-dim mismatch, rank != 2 (either side), element-type mismatch,
+    // and transpose-with-args are all compile-time rejections.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let a = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let tall = Tensor.from([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]);\n\
+             let bad_inner = a.matmul(tall);\n\
+             let v = Tensor.from([1.0, 2.0]);\n\
+             let bad_rank = v.matmul(a);\n\
+             let ints = Tensor.from([[1, 2], [3, 4]]);\n\
+             let bad_elem = a.matmul(ints);\n\
+             let bad_args = a.transpose(0);\n\
+         }\n",
+    );
+    for needle in [
+        "matmul inner dimensions mismatch",
+        "matmul requires a rank-2 receiver",
+        "matmul element types must match",
+        "transpose takes no arguments",
+    ] {
+        assert!(
+            errors.iter().any(|e| e.message.contains(needle)),
+            "missing '{needle}' in {errors:?}",
+        );
+    }
+}
+
+#[test]
 fn test_tensor_permute_invalid_lists_rejected() {
     let errors = typecheck_errors(
         "fn main() {\n\

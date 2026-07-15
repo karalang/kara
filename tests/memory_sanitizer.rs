@@ -19126,6 +19126,59 @@ fn main() {
         );
     }
 
+    /// Tensor matmul + transpose heap lifecycle (B-2026-07-14-18). Each
+    /// call mallocs a fresh result block reclaimed by the let-binding
+    /// `FreeTensor`; identifier receivers/args are borrowed (keep their own
+    /// frees); the CHAINED forms (`a.matmul(b).transpose()`,
+    /// `a.transpose().matmul(b)`) exercise the fresh-temp intermediate free
+    /// (receiver leg) and the matmul-ARG fresh-temp free
+    /// (`b.transpose()` as the right-hand side) — a missing free leaks
+    /// (Linux detect_leaks), a wrong free double-frees (caught everywhere).
+    /// Receiver + argument reuse after the ops pins borrow-not-move.
+    #[test]
+    fn asan_tensor_matmul_transpose_lifecycle_clean() {
+        let label = "tensor_matmul_transpose_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let a = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    let b = Tensor.from([[5.0, 6.0], [7.0, 8.0]]);
+    let c = a.matmul(b);
+    println(c[0, 0]);
+    let t = a.transpose();
+    println(t[0, 1]);
+    let chained = a.matmul(b).transpose();
+    println(chained[0, 1]);
+    let arg_temp = a.matmul(b.transpose());
+    println(arg_temp[0, 0]);
+    let both = a.transpose().matmul(b.transpose());
+    println(both[1, 0]);
+    println(a[0, 0]);
+    println(b[1, 1]);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the matmul/transpose fresh-temp free paths",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["19", "3", "43", "17", "34", "1", "8"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor broadcasting heap lifecycle (phase-11 "Explicit broadcasting
     /// methods"). Each `broadcast_*` mallocs a fresh result block the
     /// let-binding `FreeTensor` reclaims; the identifier receiver and an

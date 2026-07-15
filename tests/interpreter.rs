@@ -19578,6 +19578,45 @@ fn test_tensor_permute_transpose_and_rank3() {
 }
 
 #[test]
+fn test_tensor_matmul_and_transpose_values() {
+    // B-2026-07-14-18 (was a phantom method pair). matmul:
+    // [[1,2],[3,4]] @ [[5,6],[7,8]] = [[19,22],[43,50]]; non-square
+    // [2x3] @ [3x2]; integer elements accumulate in i64. transpose:
+    // reversed axes for rank 2 and 3; rank-1 is the identity.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let a = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);\n\
+             let b = Tensor.from([[5.0, 6.0], [7.0, 8.0]]);\n\
+             let c = a.matmul(b);\n\
+             println(c[0, 0]);\n\
+             println(c[0, 1]);\n\
+             println(c[1, 0]);\n\
+             println(c[1, 1]);\n\
+             let w = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);\n\
+             let x = Tensor.from([[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]]);\n\
+             let y = w.matmul(x);\n\
+             println(y[0, 0]);\n\
+             println(y[1, 1]);\n\
+             let ia = Tensor.from([[1, 2], [3, 4]]);\n\
+             let ib = Tensor.from([[5, 6], [7, 8]]);\n\
+             let ic = ia.matmul(ib);\n\
+             println(ic[0, 0]);\n\
+             println(ic[1, 1]);\n\
+             let t = w.transpose();\n\
+             println(t.shape()[0]);\n\
+             println(t[0, 1]);\n\
+             println(t[2, 0]);\n\
+             let chained = a.matmul(b).transpose();\n\
+             println(chained[0, 1]);\n\
+             let v = Tensor.from([9.0, 8.0]);\n\
+             let vt = v.transpose();\n\
+             println(vt[1]);\n\
+         }",
+    );
+    assert_eq!(out, "19\n22\n43\n50\n58\n154\n19\n50\n3\n4\n3\n43\n8\n");
+}
+
+#[test]
 fn test_tensor_slice_values_and_runtime_bounds() {
     let out = run_no_errors(
         "fn main() {\n\

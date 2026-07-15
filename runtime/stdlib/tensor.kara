@@ -268,6 +268,25 @@ impl[T, ...S] Tensor[T, S] {
     fn broadcast_div(ref self, other: ref Tensor[T, S]) -> Tensor[T, S] {
         Tensor { handle_id: 0 }
     }
+
+    // `transpose()` — reverse the axes (NumPy `.T`): a rank-2 `[m, n]`
+    // becomes `[n, m]`; sugar for `permute([rank-1, …, 0])`. `matmul(b)` —
+    // rank-2 matrix multiplication `[m, k] × [k, n] → [m, n]` (batched /
+    // rank-N contraction is v1.5). Both result shapes are computed by the
+    // typechecker (`infer_tensor_transpose` / `infer_tensor_matmul`), so
+    // the `Tensor[T, S]` types here are doc-only (the methods intercept
+    // before impl dispatch, like the broadcast family above). Both operands
+    // are read, not moved; the result is a fresh value-semantics tensor.
+    // B-2026-07-14-18.
+    #[compiler_builtin]
+    fn transpose(ref self) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
+    #[compiler_builtin]
+    fn matmul(ref self, other: ref Tensor[T, S]) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
 }
 
 // Element-wise arithmetic on `Tensor[T, Shape]` (design.md § Numerical

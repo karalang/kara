@@ -147,7 +147,187 @@ impl<'a> super::TypeChecker<'a> {
             "permute" => self.infer_tensor_permute(elem_ty, &shape, args, span),
             "slice" => self.infer_tensor_slice(elem_ty, &shape, args, span),
             "squeeze" => self.infer_tensor_squeeze(elem_ty, &shape, args, span),
+            "transpose" => self.infer_tensor_transpose(elem_ty, &shape, args, span),
+            "matmul" => self.infer_tensor_matmul(elem_ty, &shape, args, span),
             _ => unreachable!("infer_tensor_shape_method: unrouted method '{method}'"),
+        }
+    }
+
+    /// `t.transpose()` — reverse the axes (NumPy `.T`): result dim `i` is
+    /// the receiver's dim `rank-1-i`, so a rank-2 `[m, n]` becomes `[n, m]`.
+    /// Sugar for `permute([rank-1, …, 0])` with no axis list to write.
+    /// Rank-1 transpose is the identity (still allowed — NumPy semantics).
+    /// B-2026-07-14-18: previously a PHANTOM method — the prelude silent
+    /// fall-through accepted it with a poison type and both backends then
+    /// failed at runtime/compile.
+    fn infer_tensor_transpose(
+        &mut self,
+        elem_ty: Type,
+        shape: &[DimArg],
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        if !args.is_empty() {
+            self.type_error(
+                format!("transpose takes no arguments, found {}", args.len()),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        let new_dims: Vec<DimArg> = shape.iter().rev().cloned().collect();
+        Type::Named {
+            name: "Tensor".to_string(),
+            args: vec![elem_ty, Type::Shape(new_dims)],
+        }
+    }
+
+    /// `a.matmul(b)` — rank-2 matrix multiplication: `Tensor[T, [m, k]]` ×
+    /// `Tensor[T, [k, n]]` → `Tensor[T, [m, n]]`. v1 is strictly 2-D × 2-D
+    /// (batched / rank-N contraction is v1.5); the element types must match
+    /// and be numeric. The inner dims are checked at compile time when both
+    /// are concrete literals; both backends also guard at runtime (module
+    /// policy: every compile-time check re-emitted as a runtime guard).
+    /// B-2026-07-14-18: previously a PHANTOM method (see transpose above).
+    fn infer_tensor_matmul(
+        &mut self,
+        elem_ty: Type,
+        shape: &[DimArg],
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        if !is_numeric(&elem_ty) && !self.type_param_has_numeric_bound(&elem_ty) {
+            self.type_error(
+                format!(
+                    "matmul requires a numeric element type, found '{}'",
+                    type_display(&elem_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        if shape.len() != 2 {
+            self.type_error(
+                format!(
+                    "matmul requires a rank-2 receiver, found rank {} (shape {}) — \
+                     batched matmul is v1.5",
+                    shape.len(),
+                    shape_display(shape)
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "matmul takes exactly 1 argument (the right-hand tensor), found {}",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        let other_ty = self.infer_expr(&args[0].value);
+        if other_ty == Type::Error {
+            return Type::Error;
+        }
+        let other_core = match &other_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        let other_args = match other_core {
+            Type::Named { name, args } if name == "Tensor" && args.len() == 2 => args.clone(),
+            _ => {
+                self.type_error(
+                    format!(
+                        "matmul expects a tensor argument, found '{}'",
+                        type_display(&other_ty)
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+        };
+        let (other_elem, other_shape) = match &other_args[..] {
+            [elem, Type::Shape(dims)] => (elem.clone(), dims.clone()),
+            _ => {
+                self.type_error(
+                    "matmul requires the argument tensor's rank to be statically known".to_string(),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+        };
+        if other_shape.len() != 2 {
+            self.type_error(
+                format!(
+                    "matmul requires a rank-2 argument, found rank {} (shape {}) — \
+                     batched matmul is v1.5",
+                    other_shape.len(),
+                    shape_display(&other_shape)
+                ),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return Type::Error;
+        }
+        if elem_ty != other_elem {
+            self.type_error(
+                format!(
+                    "matmul element types must match: receiver is '{}', argument is '{}'",
+                    type_display(&elem_ty),
+                    type_display(&other_elem)
+                ),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return Type::Error;
+        }
+        // Static inner-dim check when both are concrete literals: `[m, k] ×
+        // [k2, n]` requires `k == k2`.
+        if let (DimArg::Const(ConstArg::Literal(k)), DimArg::Const(ConstArg::Literal(k2))) =
+            (&shape[1], &other_shape[0])
+        {
+            if k != k2 {
+                self.type_error(
+                    format!(
+                        "matmul inner dimensions mismatch: receiver shape {} has inner \
+                         dim {}, argument shape {} has inner dim {}",
+                        shape_display(shape),
+                        k,
+                        shape_display(&other_shape),
+                        k2
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+        }
+        Type::Named {
+            name: "Tensor".to_string(),
+            args: vec![
+                elem_ty,
+                Type::Shape(vec![shape[0].clone(), other_shape[1].clone()]),
+            ],
         }
     }
 

@@ -975,6 +975,20 @@ impl<'a> UseClassifier<'a> {
         if is_relational_method_call(method_call) {
             return true;
         }
+        // The tensor binary methods (`matmul`, `broadcast_*`) borrow their
+        // tensor argument — `other: ref Tensor[T, S]` in the stdlib surface
+        // signature. That signature IS in `method_param_modes` (via the baked
+        // stdlib walk), but the resolved-key lookup below is defeated by the
+        // parser's `MethodCall.span == receiver.span` aliasing in a CHAIN:
+        // in `a.matmul(b).transpose()` the outer call clobbers the inner's
+        // `method_callee_types` entry at the shared span, the lookup then
+        // resolves the inner matmul to `Tensor.transpose` (zero params), and
+        // `modes.get(0)` → None → consume — `b` false-rejects as moved
+        // (B-2026-07-14-18). Match on the AST method NAME instead (immune to
+        // the span collision), like the relational short-circuit above.
+        if is_tensor_borrow_arg_method_call(method_call) {
+            return true;
+        }
         let Some(key) = self.resolved_method_mode_key(method_call) else {
             return false;
         };
@@ -1035,6 +1049,25 @@ fn is_relational_method_call(expr: &Expr) -> bool {
     matches!(
         &expr.kind,
         ExprKind::MethodCall { method, .. } if crate::lowering::is_relational_operator_method(method)
+    )
+}
+
+/// The tensor binary methods whose argument is declared `ref Tensor[T, S]`
+/// in `runtime/stdlib/tensor.kara` — both operands are read, never moved.
+/// Name-matched (not resolved-key-matched) so a chained outer call sharing
+/// the span can't clobber the classification; see the call site in
+/// `method_arg_is_borrow_position`. These names are tensor-intercept
+/// methods in the typechecker, so a user type reusing one of the names on
+/// an OWNED arg would be mis-read here — acceptable conservatism (a read
+/// where a consume happens can only under-reject, and the RC-fallback
+/// machinery keeps such a value alive).
+fn is_tensor_borrow_arg_method_call(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::MethodCall { method, .. } if matches!(
+            method.as_str(),
+            "matmul" | "broadcast_add" | "broadcast_sub" | "broadcast_mul" | "broadcast_div"
+        )
     )
 }
 

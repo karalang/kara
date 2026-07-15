@@ -362,6 +362,8 @@ impl<'a> super::Interpreter<'a> {
             "permute" => Some(self.eval_tensor_permute(dims, data, args, span)),
             "slice" => Some(self.eval_tensor_slice(dims, data, args, span)),
             "squeeze" => Some(self.eval_tensor_squeeze(dims, data, args, span)),
+            "transpose" => Some(self.eval_tensor_transpose(dims, data, args, span)),
+            "matmul" => Some(self.eval_tensor_matmul(dims, data, args, span)),
             "sum" | "mean" | "prod" | "min" | "max" | "range" => {
                 Some(self.eval_tensor_reduce(method, data, span))
             }
@@ -1066,6 +1068,153 @@ impl<'a> super::Interpreter<'a> {
         }
         Value::Tensor {
             dims: Arc::new(new_dims),
+            data: Arc::new(RwLock::new(out)),
+        }
+    }
+
+    /// `t.transpose()` — reverse the axes (NumPy `.T`): `permute([rank-1,
+    /// …, 0])` with no axis list to write. Rank-1 transpose is the
+    /// identity copy. B-2026-07-14-18 (was a phantom method).
+    fn eval_tensor_transpose(
+        &mut self,
+        dims: &[i64],
+        data: &Arc<RwLock<Vec<Value>>>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Value {
+        if !args.is_empty() {
+            return self.record_runtime_error(
+                format!("transpose takes no arguments, found {}", args.len()),
+                span,
+            );
+        }
+        let rank = dims.len();
+        let perm: Vec<usize> = (0..rank).rev().collect();
+        // Source strides (C-order): stride[k] = product of dims[k+1..].
+        let mut src_strides = vec![1usize; rank];
+        for k in (0..rank.saturating_sub(1)).rev() {
+            src_strides[k] = src_strides[k + 1] * (dims[k + 1] as usize);
+        }
+        let new_dims: Vec<i64> = perm.iter().map(|&p| dims[p]).collect();
+        let guard = data.read().unwrap();
+        let total = guard.len();
+        let mut out: Vec<Value> = Vec::with_capacity(total);
+        for f in 0..total {
+            // Decompose f into output coords (C-order over new_dims),
+            // accumulating the source flat index: output coord i indexes
+            // source axis perm[i] — same walk as permute.
+            let mut rem = f;
+            let mut src = 0usize;
+            for (i, &nd) in new_dims.iter().enumerate().rev() {
+                let coord = rem % (nd as usize);
+                rem /= nd as usize;
+                src += coord * src_strides[perm[i]];
+            }
+            out.push(guard[src].clone());
+        }
+        Value::Tensor {
+            dims: Arc::new(new_dims),
+            data: Arc::new(RwLock::new(out)),
+        }
+    }
+
+    /// `a.matmul(b)` — rank-2 matrix multiplication: `[m, k] × [k, n] →
+    /// [m, n]`, C-order data, standard triple loop. The typechecker
+    /// enforces rank-2 × rank-2 with matching numeric element types and
+    /// statically-checkable inner dims; every check is re-emitted here as
+    /// a runtime guard (module policy — a bypassed typecheck must trap,
+    /// not corrupt). Element arithmetic follows the element kind: all-Int
+    /// tensors accumulate in i64, otherwise f64. B-2026-07-14-18 (was a
+    /// phantom method).
+    fn eval_tensor_matmul(
+        &mut self,
+        dims: &[i64],
+        data: &Arc<RwLock<Vec<Value>>>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Value {
+        let Some(arg) = args.first().map(|a| &a.value) else {
+            return self.record_runtime_error(
+                "matmul takes exactly 1 argument (the right-hand tensor)".to_string(),
+                span,
+            );
+        };
+        let other = self.eval_expr_inner(arg);
+        let Value::Tensor {
+            dims: odims,
+            data: odata,
+        } = &other
+        else {
+            return self.record_runtime_error(
+                format!(
+                    "matmul expects a tensor argument, found {}",
+                    other.variant_name()
+                ),
+                span,
+            );
+        };
+        if dims.len() != 2 || odims.len() != 2 {
+            return self.record_runtime_error(
+                format!(
+                    "matmul requires rank-2 × rank-2, found rank {} × rank {}",
+                    dims.len(),
+                    odims.len()
+                ),
+                span,
+            );
+        }
+        let (m, k) = (dims[0] as usize, dims[1] as usize);
+        let (k2, n) = (odims[0] as usize, odims[1] as usize);
+        if k != k2 {
+            return self.record_runtime_error(
+                format!(
+                    "matmul inner dimensions mismatch: [{}x{}] × [{}x{}]",
+                    m, k, k2, n
+                ),
+                span,
+            );
+        }
+        let a = data.read().unwrap();
+        let b = odata.read().unwrap();
+        // Integer tensors accumulate in i64; anything else in f64 (the
+        // typechecker guarantees uniform numeric elements on both sides).
+        let int_elems =
+            matches!(a.first(), Some(Value::Int(_))) && matches!(b.first(), Some(Value::Int(_)));
+        let num = |v: &Value| -> f64 {
+            match v {
+                Value::Int(i) => *i as f64,
+                Value::Float(f) => *f,
+                _ => 0.0,
+            }
+        };
+        let mut out: Vec<Value> = Vec::with_capacity(m * n);
+        for i in 0..m {
+            for j in 0..n {
+                if int_elems {
+                    let mut acc: i64 = 0;
+                    for p in 0..k {
+                        let x = match &a[i * k + p] {
+                            Value::Int(v) => *v,
+                            _ => 0,
+                        };
+                        let y = match &b[p * n + j] {
+                            Value::Int(v) => *v,
+                            _ => 0,
+                        };
+                        acc += x * y;
+                    }
+                    out.push(Value::Int(acc));
+                } else {
+                    let mut acc: f64 = 0.0;
+                    for p in 0..k {
+                        acc += num(&a[i * k + p]) * num(&b[p * n + j]);
+                    }
+                    out.push(Value::Float(acc));
+                }
+            }
+        }
+        Value::Tensor {
+            dims: Arc::new(vec![m as i64, n as i64]),
             data: Arc::new(RwLock::new(out)),
         }
     }

@@ -2124,7 +2124,7 @@ impl<'a> super::TypeChecker<'a> {
         // rules in `src/typechecker/expr_method_tensor.rs`.
         if matches!(
             method,
-            "iter_axis" | "reshape" | "permute" | "slice" | "squeeze"
+            "iter_axis" | "reshape" | "permute" | "slice" | "squeeze" | "transpose" | "matmul"
         ) {
             let tensor_args = match &obj_ty {
                 Type::Named { name, args } if name == "Tensor" => Some(args),
