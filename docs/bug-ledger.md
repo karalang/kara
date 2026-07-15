@@ -89,20 +89,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **482 surfaced · 4 open · 474 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **482 surfaced · 3 open · 475 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-15-19 | 2026-07-15 | codegen (Vec/VecDeque.retain in-place predicate filter — no LLVM lowering) | low | `Vec[T]/VecDeque[T].retain(|x| pred)` has no AOT codegen lowering — typechecks and runs correctly in the interpreter (B-2026-07-15-16 added both), but `karac build` loud-bails 'method retain not yet supported in codegen'; needs the same snapshot-filter-writeback shape the interpreter uses, lowered to LLVM (allocate kept-buffer, invoke the predicate closure per element, compact in place) | none |
 | B-2026-07-15-21 | 2026-07-15 | codegen (per-node Option[shared] traversal lowering: niche-match + field GEP + recursion) | low | Read-only `Option[shared]` tree traversal runs ~1.45x behind equal-safety Rust (rustc -O -C overflow-checks=on) on a pure per-node walk — the residual is Option[shared] match/field/recursion lowering, NOT refcount traffic (retain/release is already elided; by-value == ref-borrow to the millisecond) | none |
 | B-2026-07-15-24 | 2026-07-15 | codegen (call_dispatch.rs `zero_struct_move_caps` GEPs the Map handle field using the BASE erased struct layout, not the per-monomorph layout — the mono-blindness class, cf. B-2026-07-15-11) | low | `zero_struct_move_caps` GEPs a Map/Set handle field at the BASE struct-layout offset; when a PRECEDING field is a bare generic param mono'd to a wider heap type (e.g. `Inner[T]{a: T, m: Map[i64,i64]}`, T=Vec[i64]), the base layout erases `a` to i64 (1 word) but the mono widens it (Vec = 3 words), so the Map handle's null-store (B-23) lands at the wrong offset and the real handle stays live → double-free / SIGSEGV on move-out. | none |
 | B-2026-07-15-25 | 2026-07-15 | codegen (expr_ops.rs `compile_field_store` never drops the old field value for a plain-struct heap field; stmts.rs Assign arm eager-free + `suppress_source_vec_cleanup_for_arg` are gated to `lhs_is_tracked_vec` only, so Map/Set var reassignment is uncovered) | high | Reassigning a struct's heap-owning field (`o.f = x`) never drops the OLD field value: leaks it for a fresh RHS (`h.v = [9,8,7]` strands the old Vec buffer), or double-frees / SIGSEGVs for a moved-binding RHS (`h.v = v2`, `h.s = heap_str`, `h.m = m2`) because the source's own scope-exit cleanup isn't suppressed. Separately, Map/Set VARIABLE reassignment (`m = m2`, `set_a = set_b`) leaks the old handle AND double-frees the source — the Assign arm's eager-free + move-suppression are Vec/String-only (`lhs_is_tracked_vec`); Vec/String var reassignment works. | none |
 
-### Fixed (474)
+### Fixed (475)
 
-<details><summary>474 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>475 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -577,6 +576,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **482 surfaced 
 | B-2026-07-15-16 | typechecker (closure-parameter type inference for direct collection / Result methods that take a predicate/mapper closure) | low | Closure-param inference is missing for direct collection/Result methods that take a closure (`Vec.retain(\|x\| …)`, `Result.and_then(\|x\| …)`) — the par… | c4820b1 |
 | B-2026-07-15-17 | codegen (closure return-type inference — a closure whose body/tail is a method call returning Option, e.g. Map.insert -> Option[V]) | low | A closure whose tail expression is an Option-returning method call miscompiles: `let put = \|k, v\| m.insert(k, v)` (Map.insert -> Option[V]) fails cod… | 286636f |
 | B-2026-07-15-18 | codegen (field-receiver method dispatch — calls.rs lower_field_access_ptr plain-struct GEP) | high | A `<generic-struct>.field.method()` receiver reads the WRONG field for a multi-heap-field generic struct: `Pair[Vec,Vec].second.len()` returns the fi… | bf4b002 |
+| B-2026-07-15-19 | codegen (Vec/VecDeque.retain in-place predicate filter — no LLVM lowering) | low | `Vec[T]/VecDeque[T].retain(\|x\| pred)` has no AOT codegen lowering — typechecks and runs correctly in the interpreter (B-2026-07-15-16 added both), bu… | 93c8c0d |
 | B-2026-07-15-20 | codegen (field-receiver method dispatch over a GENERIC struct — calls.rs lower_field_access_ptr / resolve_generic_field_te instantiation resolution for ref-param and indexed receivers) | medium | A generic-struct field-receiver method loud-bails for a ref-param receiver (`p: ref Pair[Vec,Vec]` → `p.second.len()`) or an indexed receiver (`v[i].… | 355d5da |
 | B-2026-07-15-22 | codegen (stmts.rs Let-arm struct-var move-suppression — the FieldAccess RHS case was missing) | high | `let bound = o.inner` moving a struct-typed heap-bearing field out of an owned struct double-frees the inner Vec buffer at scope exit — both `bound`'… | 8a02f75 |
 | B-2026-07-15-23 | codegen (call_dispatch.rs `zero_struct_move_caps` had no Map/Set arm; param_own.rs `suppress_struct_field_move_into_literal` relied on LLVM-type-driven `zero_aggregate_field_caps` blind to Map/Set ptr handles and enum all-i64 leaves) | high | Moving a struct with a Map/Set handle field or an enum-with-heap-payload field double-frees the handle/enum buffer at scope exit (SIGSEGV for Map/Set… | 50b2945 |
