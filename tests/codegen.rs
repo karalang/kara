@@ -9859,6 +9859,79 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_move_out_map_set_enum_field_no_crash() {
+        // B-2026-07-15-23: moving a struct that carries a Map/Set handle field or
+        // an enum-with-heap-payload field — either a whole-struct move (`let g = f`)
+        // or a nested-field move-out (`let bound = o.inner`) — double-freed the
+        // handle / enum buffer at scope exit (SIGSEGV for Map/Set, `free(): double
+        // free` for enum). `zero_struct_move_caps` had no Map/Set arm (a Map/Set
+        // field is a bare `ptr` the drop frees UNCONDITIONALLY via
+        // `karac_map_free_with_drop_vec`, which is null-safe), and the nested-field
+        // suppressor's LLVM-type-driven `zero_aggregate_field_caps` sees neither a
+        // Map/Set ptr nor an enum's all-i64 words. Fixed by (1) a Map/Set null-the-
+        // handle arm in `zero_struct_move_caps` and (2) routing named-struct fields
+        // through `zero_struct_move_caps` in `suppress_struct_field_move_into_literal`.
+        // Output-correctness guard (the null-store must not corrupt the `.len()`
+        // reads); the crash itself is caught by the ASAN sibling
+        // `asan_struct_move_out_map_set_enum_field_no_double_free`. Covers Map + Set
+        // whole-struct move, Map nested-field move (non-generic + generic), Vec+Map
+        // mixed, and an enum-with-String-payload nested-field move.
+        if let Some(out) = run_program(
+            "enum Tok { Word(String), Num(i64) }\n\
+             struct MHolder { m: Map[i64, i64] }\n\
+             struct SHolder { s: Set[i64] }\n\
+             struct MInner { m: Map[i64, i64] }\n\
+             struct MOuter { inner: MInner }\n\
+             struct GMInner[K, V] { m: Map[K, V] }\n\
+             struct GMOuter[K, V] { inner: GMInner[K, V] }\n\
+             struct VecMap { v: Vec[i64], m: Map[i64, i64] }\n\
+             struct VecMapOuter { inner: VecMap }\n\
+             struct EInner { t: Tok }\n\
+             struct EOuter { inner: EInner }\n\
+             fn main() {\n\
+                 let mut mp: Map[i64, i64] = Map.new();\n\
+                 mp.insert(1, 10); mp.insert(2, 20);\n\
+                 let f: MHolder = MHolder { m: mp };\n\
+                 let g: MHolder = f;\n\
+                 println(g.m.len());\n\
+                 let mut mp2: Map[i64, i64] = Map.new();\n\
+                 mp2.insert(1, 1); mp2.insert(2, 2); mp2.insert(3, 3);\n\
+                 let o: MOuter = MOuter { inner: MInner { m: mp2 } };\n\
+                 let bound: MInner = o.inner;\n\
+                 println(bound.m.len());\n\
+                 let mut st: Set[i64] = Set.new();\n\
+                 st.insert(7); st.insert(8);\n\
+                 let sf: SHolder = SHolder { s: st };\n\
+                 let sg: SHolder = sf;\n\
+                 println(sg.s.len());\n\
+                 let mut gm: Map[i64, i64] = Map.new();\n\
+                 gm.insert(5, 50); gm.insert(6, 60); gm.insert(7, 70); gm.insert(8, 80);\n\
+                 let go: GMOuter[i64, i64] = GMOuter { inner: GMInner { m: gm } };\n\
+                 let gb: GMInner[i64, i64] = go.inner;\n\
+                 println(gb.m.len());\n\
+                 let mut vv: Vec[i64] = Vec.new();\n\
+                 vv.push(1); vv.push(2); vv.push(3);\n\
+                 let mut vm: Map[i64, i64] = Map.new();\n\
+                 vm.insert(9, 90);\n\
+                 let vmo: VecMapOuter = VecMapOuter { inner: VecMap { v: vv, m: vm } };\n\
+                 let vb: VecMap = vmo.inner;\n\
+                 println(vb.v.len());\n\
+                 println(vb.m.len());\n\
+                 let mut b: String = String.new();\n\
+                 b.push_str(\"padded well past inline width to force heap alloc here\");\n\
+                 let eo: EOuter = EOuter { inner: EInner { t: Tok.Word(b) } };\n\
+                 let eb: EInner = eo.inner;\n\
+                 match eb.t {\n\
+                     Tok.Word(w) => println(w.len()),\n\
+                     Tok.Num(n) => println(n),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n3\n2\n4\n3\n1\n54\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_take_get_or_insert() {
         // B-2026-07-14-6 (mutating combinators): `take()` yields the receiver's
         // current value and leaves `None` in its slot (a second take yields

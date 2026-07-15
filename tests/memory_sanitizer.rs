@@ -27469,4 +27469,69 @@ fn main() {
             "generic_wrapper_nested_struct_field_no_leak",
         );
     }
+
+    #[test]
+    fn asan_struct_move_out_map_set_enum_field_no_double_free() {
+        // B-2026-07-15-23: moving a struct carrying a Map/Set handle field or an
+        // enum-with-heap-payload field double-freed the handle / enum buffer at
+        // scope exit — SIGSEGV (Map/Set) or `free(): double free` (enum). A Map/Set
+        // field is a bare `ptr` the struct's `FieldDrop::MapOrSet` frees
+        // UNCONDITIONALLY (`karac_map_free_with_drop_vec`, null-safe), but neither
+        // `zero_struct_move_caps` (whole-struct move `let g = f`) nor the nested-
+        // field suppressor's LLVM-type-driven `zero_aggregate_field_caps`
+        // (`let bound = o.inner`) nulled it; the enum leaf was likewise invisible to
+        // the LLVM-type walk. Fixed by (1) a Map/Set null-the-handle arm in
+        // `zero_struct_move_caps` and (2) routing named-struct fields through
+        // `zero_struct_move_caps` in `suppress_struct_field_move_into_literal`.
+        // Verify the whole round-trip is double-free AND leak clean under ASAN/LSan
+        // (the delicate move-suppression tension: nulling too eagerly would strand
+        // the map storage). Loops so a leak accumulates. Covers Map + Set whole-
+        // struct move, Map nested-field move, and an enum-with-String-payload
+        // nested-field move. Was ASAN-dirty (2500 errors) pre-fix — the double-free
+        // fires at scope exit AFTER the prints, invisible to an output-only harness.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Word(String), Num(i64) }
+struct MHolder { m: Map[i64, i64] }
+struct SHolder { s: Set[i64] }
+struct EInner { t: Tok }
+struct EOuter { inner: EInner }
+struct MInner { m: Map[i64, i64] }
+struct MOuter { inner: MInner }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let mut mp: Map[i64, i64] = Map.new();
+        mp.insert(i, i * 10); mp.insert(i + 1, i * 20);
+        let f: MHolder = MHolder { m: mp };
+        let g: MHolder = f;
+        total = total + g.m.len();
+        let mut mp2: Map[i64, i64] = Map.new();
+        mp2.insert(i, 1); mp2.insert(i + 1, 2); mp2.insert(i + 2, 3);
+        let o: MOuter = MOuter { inner: MInner { m: mp2 } };
+        let bound: MInner = o.inner;
+        total = total + bound.m.len();
+        let mut st: Set[i64] = Set.new();
+        st.insert(i); st.insert(i + 1);
+        let sf: SHolder = SHolder { s: st };
+        let sg: SHolder = sf;
+        total = total + sg.s.len();
+        let mut b: String = String.new();
+        b.push_str("padded well past inline width to force heap alloc here");
+        let eo: EOuter = EOuter { inner: EInner { t: Tok.Word(b) } };
+        let eb: EInner = eo.inner;
+        match eb.t {
+            Tok.Word(w) => { total = total + w.len(); },
+            Tok.Num(n) => { total = total + n; },
+        }
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["6100"],
+            "struct_move_out_map_set_enum_field_no_double_free",
+        );
+    }
 }

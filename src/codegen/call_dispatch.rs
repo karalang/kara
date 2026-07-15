@@ -4031,6 +4031,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Option field is now owned by the destination; zero the source
                 // tag so its struct-drop `OptionInline` skips it.
                 self.zero_option_field_tag_at(field_ptr);
+            } else if matches!(fname, "Map" | "HashMap" | "Set" | "HashSet") {
+                // B-2026-07-15-23 — a Map/Set field is a single opaque `ptr`
+                // handle stored inline. The struct's `StructDrop` (`FieldDrop::
+                // MapOrSet`) frees it UNCONDITIONALLY via `karac_map_free_with_
+                // drop_vec(handle, ..)` — no `handle != 0` guard, unlike the HTTP
+                // handle arm. So a whole-struct move (`let g = f`) or a struct-
+                // field move-out that leaves the SOURCE handle live double-frees
+                // the map storage against the destination's own drop (SIGSEGV /
+                // `free(): double free`). Null the source handle so the drop's
+                // free no-ops: `karac_map_free_with_drop_vec` (and every map-free
+                // variant) early-returns on `map.is_null()`. This closes the gap
+                // the line-4350 comment flagged as "needs a separate runtime
+                // change" — stale: the runtime null-guard already exists, so it's
+                // a pure codegen null-store, exactly parallel to the Vec cap-zero.
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
             } else if fname != "Result" {
                 if let Some(layout) = self.enum_layouts.get(fname).cloned() {
                     if !layout.is_shared {

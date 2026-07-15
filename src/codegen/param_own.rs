@@ -1566,6 +1566,19 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        // The field's declared type name (`inner: Inner` → "Inner"), used to
+        // route named-struct / enum fields to the type-name-driven suppressors
+        // that the LLVM-type-only match below can't classify (a Map/Set handle
+        // and an enum's payload are both bare-word/ptr layouts indistinguishable
+        // from other fields by LLVM type alone).
+        let field_type_name: Option<String> = self
+            .struct_field_type_exprs
+            .get(sname.as_str())
+            .and_then(|ftes| ftes.get(idx))
+            .and_then(|fte| match &fte.kind {
+                TypeKind::Path(p) => p.segments.first().cloned(),
+                _ => None,
+            });
         match field_llvm {
             // Direct Vec/String field → zero its cap (drop's `cap > 0` skips).
             Some(BasicTypeEnum::StructType(fst)) if fst == vec_ty => {
@@ -1578,36 +1591,46 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_store(cap_ptr, self.context.i64_type().const_int(0, false));
                 }
             }
-            // Nested aggregate field → recursively zero its Vec/String caps.
-            Some(BasicTypeEnum::StructType(fst)) if self.aggregate_has_heap_field(fst) => {
-                self.zero_aggregate_field_caps(field_ptr, fst);
-            }
-            // Enum field (#19) → cap-zero its `VecOrString` payload words so the
-            // owning struct's drop skips the buffer the moved-out binding now owns
-            // (`let tk = t.token` of an entry-copied SpannedToken — the bootstrap
-            // lexer's `render()` shape). The enum's LLVM type is all-i64 words, so
-            // it matches neither the Vec arm (`== vec_ty`) nor
-            // `aggregate_has_heap_field` (no `vec_struct` field) — it would
-            // otherwise fall through unsuppressed. Resolve the enum by the field's
-            // declared type; shared enums carry RC (no `VecOrString` kind) and
-            // self-skip, Option/Result have no static kind and `zero_enum_payload_caps`
-            // no-ops for them.
-            Some(BasicTypeEnum::StructType(_)) => {
-                if let Some(ename) = self
-                    .struct_field_type_exprs
-                    .get(sname.as_str())
-                    .and_then(|ftes| ftes.get(idx))
-                    .and_then(|fte| match &fte.kind {
-                        TypeKind::Path(p) => p.segments.first().cloned(),
-                        _ => None,
-                    })
-                {
-                    if let Some(layout) = self.enum_layouts.get(ename.as_str()) {
+            // A nested aggregate field: a named non-shared STRUCT, an ENUM, or a
+            // tuple whose drop frees heap leaves the moved-out binding now owns.
+            Some(BasicTypeEnum::StructType(fst)) => {
+                // Named non-shared struct field (`inner: Inner`) — route through
+                // the type-name-driven `zero_struct_move_caps`, which uniformly
+                // disarms Vec/String (cap+len), Map/Set (null the handle —
+                // B-2026-07-15-23), enum payloads, and nested structs. The
+                // LLVM-type-driven `aggregate_has_heap_field` /
+                // `zero_aggregate_field_caps` path below sees NEITHER a Map/Set
+                // handle (a bare `ptr`, not the vec-struct) NOR an enum leaf (all
+                // -i64 words), so a moved-out struct carrying only a Map/Set or an
+                // enum field would otherwise leave the SOURCE live and double-free
+                // it against `bound`'s drop (df9/dfB/dfC Map-SIGSEGV, dfD enum
+                // double-free — all `karac check`-clean). `zero_struct_move_caps`
+                // uses the base struct layout; for a generic monomorph whose base
+                // erases a bare-`T` heap field the Vec/String path below (mono
+                // LLVM type) is the precise one — the two overlap idempotently on
+                // Vec, so run both.
+                if let Some(name) = field_type_name.as_deref() {
+                    if self.struct_types.contains_key(name) && !self.shared_types.contains_key(name)
+                    {
+                        self.zero_struct_move_caps(field_ptr, name);
+                    } else if let Some(layout) = self.enum_layouts.get(name) {
+                        // Enum field (#19) — cap-zero its `VecOrString` payload
+                        // words so the owning struct's drop skips the buffer the
+                        // moved-out binding now owns (`let tk = t.token`). Shared
+                        // enums carry RC (no `VecOrString` kind) and self-skip;
+                        // Option/Result have no static kind and `zero_enum_payload_caps`
+                        // no-ops for them.
                         if !layout.is_shared {
                             let layout = layout.clone();
                             self.zero_enum_payload_caps(field_ptr, &layout);
                         }
                     }
+                }
+                // Mono-correct Vec/String cap-zero for a nested aggregate whose
+                // heap is a directly-visible (possibly bare-`T`-monomorphized)
+                // Vec/String field.
+                if self.aggregate_has_heap_field(fst) {
+                    self.zero_aggregate_field_caps(field_ptr, fst);
                 }
             }
             _ => {}
