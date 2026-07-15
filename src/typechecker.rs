@@ -1681,6 +1681,17 @@ pub struct TypeChecker<'a> {
     /// `E_ONCE_FN_INTO_FN_SLOT` can name the consumed binding when a closure
     /// literal is rejected at a `Fn` slot. Round 12.45 (Step 3).
     pub(super) closure_once_reasons: HashMap<SpanKey, OnceReason>,
+    /// B-2026-07-15-16 — pre-seeds for a closure literal's UN-annotated
+    /// params, keyed by the closure expression's span. Set just before
+    /// `infer_expr` on a closure argument of a direct collection/Result method
+    /// (`Vec.retain(|x| …)`, `Result.and_then(|x| …)`) whose param type is
+    /// known from the receiver's element/payload type but which is checked in
+    /// SYNTH mode (so the body can infer its return freely). The synth-mode
+    /// closure arm consults this by index instead of minting a fresh var, so
+    /// the body sees the concrete param type — the same effect the check-mode
+    /// `Fn(A) -> R` pushdown gives, without forcing a return-type expectation.
+    /// An explicit param annotation still wins.
+    pub(super) closure_param_seeds: HashMap<SpanKey, Vec<Type>>,
     /// `stdlib_origin` of the function whose body we're currently
     /// checking. Saved/restored across `check_function` so nested
     /// item-checks (e.g. impl method bodies inside a stdlib-origin
@@ -1831,6 +1842,7 @@ impl<'a> TypeChecker<'a> {
             enclosing_bounds: HashMap::new(),
             enclosing_trait: None,
             closure_once_reasons: HashMap::new(),
+            closure_param_seeds: HashMap::new(),
             current_fn_stdlib_origin: false,
             compiling_stdlib: false,
             lint_override_stack: Vec::new(),

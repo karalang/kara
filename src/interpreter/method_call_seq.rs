@@ -1130,6 +1130,42 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Unit);
                 }
             }
+            "retain" => {
+                // retain(|x| -> bool) — keep each element for which the
+                // predicate holds, mutating in place (B-2026-07-15-16). Snapshot
+                // first so the predicate can re-enter the interpreter freely (the
+                // per-Vec RwLock is non-reentrant on this thread), filter, then
+                // write the kept elements back.
+                if args.len() != 1 {
+                    panic!(
+                        "retain expects 1 argument (predicate closure), got {}",
+                        args.len()
+                    );
+                }
+                let pred = self.eval_expr_inner(&args[0].value);
+                if self.pending_cf.is_some() {
+                    return Some(Value::Unit);
+                }
+                if let Value::Array(ref rc) = obj {
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    let snapshot = rc.read().unwrap().clone();
+                    let mut kept: Vec<Value> = Vec::with_capacity(snapshot.len());
+                    for elem in snapshot {
+                        let keep = self.invoke_function_value(pred.clone(), vec![elem.clone()]);
+                        if self.pending_cf.is_some() {
+                            return Some(Value::Unit);
+                        }
+                        if matches!(keep, Value::Bool(true)) {
+                            kept.push(elem);
+                        }
+                    }
+                    *try_write_or_panic(rc, &label) = kept;
+                    return Some(Value::Unit);
+                }
+            }
             "sort_by" => {
                 // sort_by(|a, b| -> Ordering) — snapshot the vec so the user
                 // closure can re-enter the interpreter freely (std::sync::RwLock

@@ -3347,6 +3347,42 @@ fn test_closure_pullside_param_inferred_from_arith_body() {
 }
 
 #[test]
+fn test_closure_param_inferred_for_direct_collection_result_methods() {
+    // B-2026-07-15-16: a closure argument of a DIRECT collection/Result method
+    // whose param type is known from the receiver (`Vec.retain`,
+    // `Result.and_then`, `Option.and_then`, `Result.or_else`) must seed the
+    // param before the body is checked — an un-annotated `|x| x != 3` /
+    // `|x| x > 0` was failing "cannot compare '?T0' and 'i64'" while the
+    // `.iter().filter(..)` adaptor path inferred fine.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1); v.push(2); v.push(3);\n\
+             v.retain(|x| x != 3);\n\
+         }",
+    );
+    typecheck_ok(
+        "fn f(r: Result[i64, String]) -> Result[i64, String] {\n\
+             r.and_then(|x| if x > 0 { Ok(x * 2) } else { Err(\"neg\".to_string()) })\n\
+         }\n\
+         fn main() { let _ = f(Ok(5)); }",
+    );
+    typecheck_ok(
+        "fn main() {\n\
+             let o: Option[i64] = Some(5);\n\
+             let _r: Option[i64] = o.and_then(|x| if x > 0 { Some(x + 1) } else { None });\n\
+             let _m: Option[i64] = o.map(|x| x + 1);\n\
+         }",
+    );
+    typecheck_ok(
+        "fn main() {\n\
+             let r: Result[i64, i64] = Err(3);\n\
+             let _o: Result[i64, i64] = r.or_else(|e| if e > 0 { Ok(e) } else { Err(0) });\n\
+         }",
+    );
+}
+
+#[test]
 fn test_closure_param_inferred_from_call_site() {
     // B-2026-07-12-20: a let-bound closure with an un-annotated param and NO
     // body constraint infers the param from the monomorphic call site.

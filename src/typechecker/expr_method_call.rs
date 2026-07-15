@@ -2730,27 +2730,35 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 let infer_closure_ret =
                     |s: &mut Self, arg: &CallArg, seed: Option<&Type>| -> Type {
+                        // B-2026-07-15-16: publish the param seed for the
+                        // closure's un-annotated param, then infer the body
+                        // FREELY (no return-type expectation). Seeding-then-
+                        // free-infer binds a `?T` param to the receiver's payload
+                        // up front — so `r.and_then(|x| x > 0)` /
+                        // `v.retain(|x| x != 3)` stop failing "cannot compare
+                        // '?T0' and 'i64'" — while a wrapper-returning body
+                        // (`Ok(..)` / `Some(..)`) still infers its own payload and
+                        // the enclosing context binds the rest. (Check-mode with a
+                        // fresh return var leaves a bare constructor body
+                        // un-adoptable.) An explicit param annotation wins in the
+                        // synth-mode closure arm. No seed (a zero-param
+                        // absent-branch closure, `Option.or_else(|| …)`) → the
+                        // seed insert is skipped and the body infers as before.
+                        if let (ExprKind::Closure { .. }, Some(seed)) = (&arg.value.kind, seed) {
+                            s.closure_param_seeds
+                                .insert(SpanKey::from_span(&arg.value.span), vec![seed.clone()]);
+                        }
                         let f_actual = s.infer_expr(&arg.value);
                         let f_resolved = resolve_type_var_top(&f_actual, &s.env.substitutions);
                         match &f_resolved {
                             Type::Function {
-                                params,
+                                params: _,
                                 return_type,
                             }
                             | Type::OnceFunction {
-                                params,
+                                params: _,
                                 return_type,
-                            } => {
-                                if let (Some(p0), Some(seed)) = (params.first(), seed) {
-                                    unify_types(
-                                        p0,
-                                        seed,
-                                        &mut s.env.substitutions,
-                                        &mut s.env.const_substitutions,
-                                    );
-                                }
-                                resolve_type_var_top(return_type, &s.env.substitutions)
-                            }
+                            } => resolve_type_var_top(return_type, &s.env.substitutions),
                             _ => Type::Error,
                         }
                     };
@@ -4037,6 +4045,55 @@ impl<'a> super::TypeChecker<'a> {
         // mutability is enforced at the binding layer (calling `.sort_by`
         // on a non-`mut` binding errors there), so no explicit mutability
         // gate is duplicated here.
+        // `Vec[T].retain(pred)` / `VecDeque[T].retain(pred)` — keep each element
+        // for which `pred: Fn(T) -> bool` holds; mutates in place, returns Unit.
+        // Vec has no stdlib impl, so an unhandled `retain` fell to the silent
+        // prelude path that infers the closure arg with an UN-seeded `?T` param
+        // — `v.retain(|x| x != 3)` then failed "cannot compare '?T0' and 'i64'"
+        // (B-2026-07-15-16). Seed the param via the concrete-return `Fn(T) ->
+        // bool` check-mode pushdown, exactly as `Option.filter` / the
+        // `.iter().filter(..)` adaptor already do. (Map/Set `retain` take a
+        // 2-arg `Fn(K, V) -> bool` — a separate arity, not covered here.)
+        if method == "retain" {
+            let elem_for_vec: Option<Type> = match &obj_ty {
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                {
+                    Some(args[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args }
+                        if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                    {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = elem_for_vec {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Vec.retain() expects 1 argument (predicate closure), found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let f_ty = Type::Function {
+                        params: vec![elem],
+                        return_type: Box::new(Type::Bool),
+                    };
+                    self.check_expr(&args[0].value, &f_ty);
+                }
+                return Type::Unit;
+            }
+        }
         if matches!(
             method,
             "sort_by" | "sorted_by" | "sort_by_key" | "sorted_by_key"

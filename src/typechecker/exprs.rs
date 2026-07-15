@@ -3136,14 +3136,25 @@ impl<'a> super::TypeChecker<'a> {
                 // single-phase typechecker tests). Closure bodies start
                 // with a fresh empty stack; restored on exit.
                 let saved_break_values = std::mem::take(&mut self.break_value_types);
+                // B-2026-07-15-16 — pre-seeds for un-annotated params, published
+                // by a direct collection/Result method dispatch (`retain`,
+                // `and_then`, …) that knows the param type from the receiver but
+                // wants free body inference. Consumed here (removed) so a nested
+                // closure at the same span can't re-read a stale seed.
+                let param_seeds = self
+                    .closure_param_seeds
+                    .remove(&SpanKey::from_span(&expr.span));
                 self.local_scope.push();
                 let param_types: Vec<Type> = params
                     .iter()
-                    .map(|p| {
-                        let ty =
-                            p.ty.as_ref()
-                                .map(|t| self.lower_type_expr(t, &[]))
-                                .unwrap_or_else(|| self.env.fresh_type_var());
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let ty = p
+                            .ty
+                            .as_ref()
+                            .map(|t| self.lower_type_expr(t, &[]))
+                            .or_else(|| param_seeds.as_ref().and_then(|s| s.get(i).cloned()))
+                            .unwrap_or_else(|| self.env.fresh_type_var());
                         if !self.is_irrefutable_pattern(&p.pattern, &ty) {
                             self.type_error(
                                 "refutable pattern in closure parameter; use `if let` or `match` for patterns that may not match".to_string(),

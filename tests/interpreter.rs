@@ -13075,6 +13075,25 @@ fn test_string_sorted_by_cmp_descending() {
 }
 
 #[test]
+fn test_vec_retain_predicate() {
+    // B-2026-07-15-16: `Vec.retain(|x| pred)` keeps each element for which the
+    // predicate holds, mutating in place. The un-annotated closure param is
+    // seeded from the element type (`i64`) so `x != 3` / `x % 2 == 0` type.
+    let output = run("fn main() {
+            let mut xs: Vec[i64] = Vec.new();
+            xs.push(1i64); xs.push(2i64); xs.push(3i64); xs.push(4i64); xs.push(5i64);
+            xs.retain(|x| x != 3i64);
+            println(xs.len());
+            for x in xs.iter() { println(x); }
+            xs.retain(|x| x % 2i64 == 0i64);
+            println(xs.len());
+            for x in xs.iter() { println(x); }
+        }");
+    // after removing 3: [1,2,4,5] (len 4); after keeping evens: [2,4] (len 2)
+    assert_eq!(output, "4\n1\n2\n4\n5\n2\n2\n4\n");
+}
+
+#[test]
 fn test_vec_sort_by_closure_descending() {
     let output = run(
         "fn main() {
