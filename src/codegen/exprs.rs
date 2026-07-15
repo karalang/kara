@@ -2670,6 +2670,153 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok((aos_ptr, aos_len))
     }
 
+    /// Whether `value` is a `gpu.upload(vec)` call (GPU-SLIP-4b).
+    pub(super) fn is_gpu_upload_call(&self, value: &Expr) -> bool {
+        if let ExprKind::MethodCall { object, method, .. } = &value.kind {
+            if method == "upload" {
+                if let ExprKind::Identifier(name) = &object.kind {
+                    return name == "gpu" && !self.variables.contains_key("gpu");
+                }
+            }
+        }
+        false
+    }
+
+    /// GPU-SLIP-4b: bind `let buf = gpu.upload(vec)`. The value is a `GpuBuffer[S]`
+    /// `{handle, n}`; store it into a fresh slot and register the binding for
+    /// scope-exit free (`karac_runtime_gpu_free_soa`). The general let path would
+    /// otherwise store the aggregate with no cleanup — leaking the device buffers
+    /// if the buffer is never downloaded.
+    pub(super) fn compile_let_from_gpu_upload(
+        &mut self,
+        var_name: &str,
+        value: &Expr,
+    ) -> Result<(), String> {
+        let fn_val = self.current_fn.unwrap();
+        let buf_ty = self.gpu_buffer_type();
+        let sv = self.compile_expr(value)?.into_struct_value();
+        let alloca = self.create_entry_alloca(fn_val, var_name, buf_ty.into());
+        self.builder.build_store(alloca, sv).unwrap();
+        self.variables.insert(
+            var_name.to_string(),
+            super::state::VarSlot {
+                ptr: alloca,
+                ty: buf_ty.into(),
+            },
+        );
+        self.track_gpu_buffer_var(alloca);
+        Ok(())
+    }
+
+    /// Whether `value` is a `gpu.download(buf)` call (GPU-SLIP-4b) — the sibling
+    /// of [`is_gpu_dispatch_call`]; routes `let <soa> = gpu.download(buf)` through
+    /// the AoS→SoA scatter path.
+    pub(super) fn is_gpu_download_call(&self, value: &Expr) -> bool {
+        if let ExprKind::MethodCall { object, method, .. } = &value.kind {
+            if method == "download" {
+                if let ExprKind::Identifier(name) = &object.kind {
+                    return name == "gpu" && !self.variables.contains_key("gpu");
+                }
+            }
+        }
+        false
+    }
+
+    /// GPU-SLIP-4b: bind `let <var>: Vec[S] = gpu.download(buf)` where `<var>` is
+    /// SoA-laid-out. `gpu.download` moves the resident handle back to an AoS
+    /// `Vec[S]` (the runtime interleaves the per-group device buffers), scattered
+    /// into the SoA groups — the same shape as
+    /// [`compile_soa_let_from_gpu_dispatch`], only the AoS producer differs.
+    pub(super) fn compile_soa_let_from_gpu_download(
+        &mut self,
+        var_name: &str,
+        soa: &SoaLayout,
+        value: &Expr,
+    ) -> Result<(), String> {
+        let (aos_ptr, aos_len) = self.compile_gpu_download_aos(value, soa)?;
+        self.compile_soa_new(var_name, soa)?;
+        let slot = *self
+            .variables
+            .get(var_name)
+            .ok_or_else(|| format!("SoA variable '{var_name}' missing after new"))?;
+        self.soa_scatter_aos_into(slot.ptr, soa, aos_ptr, aos_len)
+    }
+
+    /// Compile a `gpu.download(buf)` into its AoS result `(ptr, len)`. Extracts
+    /// the `{handle, n}` from the buffer value, builds the field-scatter
+    /// descriptors from the receiving SoA layout (the device group structure —
+    /// for the MVP the download target's layout grouping must match the uploaded
+    /// buffer's), and calls `karac_runtime_gpu_download_soa`, which consumes and
+    /// frees the handle.
+    fn compile_gpu_download_aos(
+        &mut self,
+        value: &Expr,
+        soa: &SoaLayout,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        let ExprKind::MethodCall { args, .. } = &value.kind else {
+            return Err("compile_gpu_download_aos: expected a gpu.download call".to_string());
+        };
+        if soa.cold_group.is_some() {
+            return Err(
+                "gpu.download: a `cold` layout group is not supported (CG-4 Path A)".to_string(),
+            );
+        }
+        // Extract `{handle, n}` from the buffer value.
+        let buf_sv = self.compile_expr(&args[0].value)?.into_struct_value();
+        let handle = self
+            .builder
+            .build_extract_value(buf_sv, 0, "gpu.dl.handle")
+            .unwrap()
+            .into_int_value();
+        let n = self
+            .builder
+            .build_extract_value(buf_sv, 1, "gpu.dl.n")
+            .unwrap()
+            .into_int_value();
+
+        let i64_t = self.context.i64_type();
+        let mut fld_group: Vec<u64> = Vec::new();
+        let mut fld_src: Vec<u64> = Vec::new();
+        let mut fld_dst: Vec<u64> = Vec::new();
+        for (k, g) in soa.groups.iter().enumerate() {
+            for (j, &struct_idx) in g.field_indices.iter().enumerate() {
+                fld_group.push(k as u64);
+                fld_src.push((j * 4) as u64);
+                fld_dst.push((struct_idx * 4) as u64);
+            }
+        }
+        let n_fields = fld_group.len();
+        let fgroup_arr = self.build_i64_stack_array(&fld_group, "gpu.dl.fgroup");
+        let fsrc_arr = self.build_i64_stack_array(&fld_src, "gpu.dl.fsrc");
+        let fdst_arr = self.build_i64_stack_array(&fld_dst, "gpu.dl.fdst");
+        let field_size = i64_t.const_int(4, false);
+        let aos_stride = i64_t.const_int((n_fields * 4) as u64, false);
+        let n_fields_v = i64_t.const_int(n_fields as u64, false);
+
+        let download_fn = self.gpu_download_soa_fn();
+        let aos_ptr = self
+            .builder
+            .build_call(
+                download_fn,
+                &[
+                    handle.into(),
+                    n_fields_v.into(),
+                    fgroup_arr.into(),
+                    fsrc_arr.into(),
+                    fdst_arr.into(),
+                    field_size.into(),
+                    aos_stride.into(),
+                    n.into(),
+                ],
+                "gpu.dl.out",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        Ok((aos_ptr, n))
+    }
+
     /// Store a fresh zeroed SoA header (null group pointers, len = cap = 0) into
     /// an EXISTING slot — the reassignment reset before a scatter. Unlike
     /// [`compile_soa_new`], allocates no slot and registers no cleanup (the

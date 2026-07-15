@@ -3446,6 +3446,16 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// GPU-SLIP-4b: register a `GpuBuffer[S]` binding for scope-exit free. The
+    /// drain frees the resident device buffers via `karac_runtime_gpu_free_soa`
+    /// (idempotent — a no-op if the handle was already consumed by
+    /// `gpu.download`), so no move-suppression is needed at the download site.
+    pub(super) fn track_gpu_buffer_var(&mut self, buf_alloca: PointerValue<'ctx>) {
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeGpuBuffer { buf_alloca });
+        }
+    }
+
     /// Phase 6 "Channel AOT codegen lowering": register a channel-end
     /// (`Sender`/`Receiver`) binding for scope-exit drop. Pushed from
     /// `bind_pattern`'s `Binding` arm when the typechecker's
@@ -4827,6 +4837,7 @@ impl<'ctx> super::Codegen<'ctx> {
             CleanupAction::FreeDataFrame { df_alloca } => Some(name_of(*df_alloca)),
             CleanupAction::FreeSoaGroups { soa_alloca, .. } => Some(name_of(*soa_alloca)),
             CleanupAction::FreeFileHandle { file_alloca } => Some(name_of(*file_alloca)),
+            CleanupAction::FreeGpuBuffer { buf_alloca } => Some(name_of(*buf_alloca)),
             CleanupAction::FreeOnceHandle { once_alloca, .. } => Some(name_of(*once_alloca)),
             CleanupAction::FreeClosureEnv { fat_alloca } => Some(name_of(*fat_alloca)),
             CleanupAction::DropChannelEnd { chan_alloca, .. } => Some(name_of(*chan_alloca)),
@@ -6163,6 +6174,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     .expect("karac_runtime_file_close declared in Codegen::new");
                 self.builder
                     .build_call(close_fn, &[handle.into()], "")
+                    .unwrap();
+            }
+            CleanupAction::FreeGpuBuffer { buf_alloca } => {
+                // Load field 0 (the i64 resident handle) of the `{handle, n}`
+                // buffer value and free it. `karac_runtime_gpu_free_soa` is
+                // idempotent (no-op on an already-downloaded/freed handle), so no
+                // `handle != 0` guard is needed.
+                let i64_t = self.context.i64_type();
+                let buf_ty = self.gpu_buffer_type();
+                let handle_field = self
+                    .builder
+                    .build_struct_gep(buf_ty, *buf_alloca, 0, "cleanup.gpu.handle.p")
+                    .unwrap();
+                let handle = self
+                    .builder
+                    .build_load(i64_t, handle_field, "cleanup.gpu.handle")
+                    .unwrap()
+                    .into_int_value();
+                let free_fn = self.gpu_free_soa_fn();
+                self.builder
+                    .build_call(free_fn, &[handle.into()], "")
                     .unwrap();
             }
             CleanupAction::FreeOnceHandle {
@@ -7557,6 +7589,70 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         self.module
             .add_function("karac_runtime_gpu_dispatch_soa", fn_ty, None)
+    }
+
+    /// Lazily declare `karac_runtime_gpu_upload_soa` (GPU-SLIP-4b) — move a SoA
+    /// `Vec[S]` to a resident GPU buffer. Signature `(n_groups, in_ptrs,
+    /// group_strides, n) -> handle`: uploads `n_groups` coalesced group-arrays
+    /// (`in_ptrs[k]`, each element `group_strides[k]` bytes) and returns an opaque
+    /// `u64` handle (never 0). The `gpu.Buffer[S]` value carries this handle.
+    pub(super) fn gpu_upload_soa_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_upload_soa") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = i64_t.fn_type(
+            &[
+                i64_t.into(), // n_groups
+                ptr_t.into(), // in_ptrs
+                ptr_t.into(), // group_strides
+                i64_t.into(), // n
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_upload_soa", fn_ty, None)
+    }
+
+    /// Lazily declare `karac_runtime_gpu_download_soa` (GPU-SLIP-4b) — move a
+    /// resident handle back to host AoS + free the handle. Same field-scatter
+    /// descriptor scheme as `gpu_dispatch_soa`: `(handle, n_fields, field_group,
+    /// field_src, field_dst, field_size, aos_stride, n) -> aos_ptr`.
+    pub(super) fn gpu_download_soa_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_download_soa") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = ptr_t.fn_type(
+            &[
+                i64_t.into(), // handle
+                i64_t.into(), // n_fields
+                ptr_t.into(), // field_group
+                ptr_t.into(), // field_src
+                ptr_t.into(), // field_dst
+                i64_t.into(), // field_size
+                i64_t.into(), // aos_stride
+                i64_t.into(), // n
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_download_soa", fn_ty, None)
+    }
+
+    /// Lazily declare `karac_runtime_gpu_free_soa(handle) -> void` (GPU-SLIP-4b) —
+    /// the scope-exit drop-glue for a `gpu.Buffer` that leaves scope without being
+    /// downloaded. Idempotent (a no-op for a freed/zero handle).
+    pub(super) fn gpu_free_soa_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_free_soa") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let fn_ty = self.context.void_type().fn_type(&[i64_t.into()], false);
+        self.module
+            .add_function("karac_runtime_gpu_free_soa", fn_ty, None)
     }
 
     /// Render `fv` (widened to `f64` first — varargs/ABI parity and the

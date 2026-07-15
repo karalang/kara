@@ -658,6 +658,17 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Alloca that holds the opaque `*mut KaracFile` pointer.
         file_alloca: PointerValue<'ctx>,
     },
+    /// GPU-SLIP-4b: scope-exit free for a `GpuBuffer[S]` binding that leaves
+    /// scope without being downloaded. The alloca holds the `{ i64 handle, i64 n }`
+    /// buffer value; the drain loads field 0 (the resident handle) and emits
+    /// `karac_runtime_gpu_free_soa(handle)`. That runtime free is **idempotent**
+    /// (a no-op for a handle already consumed by `gpu.download`, and handles are
+    /// never reused), so no move-suppression is needed — the free after a download
+    /// is a harmless no-op, and an un-downloaded buffer is freed exactly once.
+    FreeGpuBuffer {
+        /// Alloca holding the `{ i64 handle, i64 n }` `GpuBuffer` value.
+        buf_alloca: PointerValue<'ctx>,
+    },
     /// Scope-exit free for a local `OnceLock`/`OnceCell` binding. The alloca
     /// holds the opaque `*mut KaracOnce` handle from `OnceLock.new()`. The
     /// drain runs the element drop (if any) on the sealed value, then emits

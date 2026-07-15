@@ -2618,6 +2618,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         if self.is_gpu_dispatch_call(value) {
                             return self.compile_soa_let_from_gpu_dispatch(var_name, &soa, value);
                         }
+                        // GPU-SLIP-4b: `let <soa> = gpu.download(buf)`. The
+                        // download moves the resident handle back to an AoS
+                        // `Vec[S]`; scatter it into the SoA groups, same as the
+                        // dispatch result.
+                        if self.is_gpu_download_call(value) {
+                            return self.compile_soa_let_from_gpu_download(var_name, &soa, value);
+                        }
+                    }
+                }
+                // GPU-SLIP-4b: `let buf = gpu.upload(vec)` — bind the GpuBuffer
+                // handle value and register its scope-exit free (the general let
+                // path would store the aggregate with no cleanup → leak).
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if self.is_gpu_upload_call(value) {
+                        return self.compile_let_from_gpu_upload(var_name, value);
                     }
                 }
                 // Map.new(): emit karac_map_new with sizes and (stub) fn pointers.

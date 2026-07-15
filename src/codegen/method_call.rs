@@ -513,6 +513,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // GPU-SLIP-4b: `gpu.upload(vec)` moves a SoA `Vec[S]` to a resident device
+        // buffer, yielding a `GpuBuffer[S]` handle value `{i64 handle, i64 n}`;
+        // `gpu.download(buf)` moves the handle back to a host AoS `Vec[S]`. Same
+        // `gpu`-not-a-local guard as dispatch.
+        if (method == "upload" || method == "download")
+            && matches!(&object.kind, ExprKind::Identifier(n) if n == "gpu")
+            && !self.variables.contains_key("gpu")
+        {
+            if method == "upload" {
+                return self.compile_gpu_upload(args);
+            }
+            return self.compile_gpu_download(args);
+        }
 
         // Raw-pointer instance methods (`*const T` / `*mut T`): `.offset` /
         // `.add` (arithmetic), `.read` / `.write` (+ `_unaligned` /
@@ -14273,7 +14286,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Materialize `vals` as an `[N x i64]` stack array (alloca + element stores)
     /// and return its pointer — used to pass the GPU-dispatch interleave descriptor
     /// arrays (`group_strides`, `field_group/src/dst`) to the runtime.
-    fn build_i64_stack_array(
+    pub(super) fn build_i64_stack_array(
         &self,
         vals: &[u64],
         name: &str,
@@ -14539,6 +14552,139 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_struct_value();
         Ok(agg.into())
+    }
+
+    /// The LLVM representation of a `GpuBuffer[S]` value (GPU-SLIP-4b): the opaque
+    /// resident handle plus the element count `{ i64 handle, i64 n }`. `n` is
+    /// carried so `gpu.download` can build the host `Vec[S]` (length `n`) and the
+    /// AoS→SoA scatter loop without a runtime round-trip to query it.
+    pub(super) fn gpu_buffer_type(&self) -> inkwell::types::StructType<'ctx> {
+        let i64_t = self.context.i64_type();
+        self.context
+            .struct_type(&[i64_t.into(), i64_t.into()], false)
+    }
+
+    /// GPU-SLIP-4b: lower `gpu.upload(vec)` — move a SoA `Vec[S]` to a resident
+    /// GPU buffer, returning a `GpuBuffer[S]` value `{handle, n}`. Reuses the SoA
+    /// dispatch path's group-pointer read + `in_ptrs` + `group_strides`; the
+    /// runtime keeps the buffers resident and returns an opaque handle.
+    fn compile_gpu_upload(&mut self, args: &[CallArg]) -> Result<BasicValueEnum<'ctx>, String> {
+        let ExprKind::Identifier(vec_name) = &args[0].value.kind else {
+            return Err("gpu.upload buffer must be a bare `layout` binding".to_string());
+        };
+        let soa = self
+            .active_soa_layout(vec_name)
+            .ok_or_else(|| format!("gpu.upload: `{vec_name}` has no active SoA layout"))?;
+        if soa.cold_group.is_some() {
+            return Err(
+                "gpu.upload: a `cold` layout group is not supported (CG-4 Path A)".to_string(),
+            );
+        }
+        let num_groups = soa.num_groups;
+        if num_groups == 0 {
+            return Err("gpu.upload: the layout has no field groups".to_string());
+        }
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        // Read the SoA buffer's per-group pointers + len (spill + struct_gep).
+        let sv = self.compile_expr(&args[0].value)?.into_struct_value();
+        let vec_ty = sv.get_type();
+        let spill = self.builder.build_alloca(vec_ty, "gpu.up.buf").unwrap();
+        self.builder.build_store(spill, sv).unwrap();
+        let mut group_ptrs = Vec::with_capacity(num_groups);
+        for k in 0..num_groups {
+            let gp_field = self
+                .builder
+                .build_struct_gep(vec_ty, spill, k as u32, "gpu.up.gp")
+                .unwrap();
+            let gp = self
+                .builder
+                .build_load(ptr_ty, gp_field, "gpu.up.g")
+                .unwrap()
+                .into_pointer_value();
+            group_ptrs.push(gp);
+        }
+        let len_idx = Self::soa_len_index(num_groups, false);
+        let len_field = self
+            .builder
+            .build_struct_gep(vec_ty, spill, len_idx, "gpu.up.len.p")
+            .unwrap();
+        let n = self
+            .builder
+            .build_load(i64_t, len_field, "gpu.up.n")
+            .unwrap()
+            .into_int_value();
+
+        let arr_ty = ptr_ty.array_type(num_groups as u32);
+        let in_ptrs = self.builder.build_alloca(arr_ty, "gpu.up.in_ptrs").unwrap();
+        for (k, gp) in group_ptrs.iter().enumerate() {
+            let slot = unsafe {
+                self.builder
+                    .build_in_bounds_gep(
+                        arr_ty,
+                        in_ptrs,
+                        &[i64_t.const_zero(), i64_t.const_int(k as u64, false)],
+                        "gpu.up.in.k",
+                    )
+                    .unwrap()
+            };
+            self.builder.build_store(slot, *gp).unwrap();
+        }
+        let group_strides: Vec<u64> = soa
+            .groups
+            .iter()
+            .map(|g| (g.fields.len() * 4) as u64)
+            .collect();
+        let strides_arr = self.build_i64_stack_array(&group_strides, "gpu.up.strides");
+        let n_groups_v = i64_t.const_int(num_groups as u64, false);
+
+        let upload_fn = self.gpu_upload_soa_fn();
+        let handle = self
+            .builder
+            .build_call(
+                upload_fn,
+                &[
+                    n_groups_v.into(),
+                    in_ptrs.into(),
+                    strides_arr.into(),
+                    n.into(),
+                ],
+                "gpu.up.handle",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // Wrap as the `GpuBuffer[S]` value `{handle, n}`.
+        let buf_ty = self.gpu_buffer_type();
+        let mut agg = buf_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, handle, 0, "gpu.buf.handle")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 1, "gpu.buf.n")
+            .unwrap()
+            .into_struct_value();
+        Ok(agg.into())
+    }
+
+    /// GPU-SLIP-4b: lower a `gpu.download(buf)` that is NOT bound to a SoA
+    /// `layout` variable. The AoS-target reconstruction needs the buffer's group
+    /// structure, which the MVP recovers only from the receiving SoA binding, so
+    /// the supported form is `let <soa> = gpu.download(buf)` — handled at the
+    /// let-site by `compile_soa_let_from_gpu_download`. Any other position is an
+    /// error until the general AoS-target path lands.
+    fn compile_gpu_download(&mut self, _args: &[CallArg]) -> Result<BasicValueEnum<'ctx>, String> {
+        Err(
+            "gpu.download result must bind directly to a SoA `layout` variable \
+             (`let grid = gpu.download(buf)`) in this build"
+                .to_string(),
+        )
     }
 }
 
