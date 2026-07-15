@@ -145,14 +145,19 @@ the compiler — the demo uses the natural shared-read fan-out, not a workaround
   in `verify_browser.mjs` drags the range input over CDP and asserts the wing
   responds (steep → flat). Producer round-trip pinned by
   `tests/cli.rs::wasm_threads_input_payload_recv_e2e`.
-- The native **CPU SDL2** edition and the **GPU** path described in the roster
-  remain Phase-11 / Phase-10 work; this is the browser edition, which the
-  front-end spine already unblocks. The GPU path in particular has a deeper
-  blocker than "unbuilt codegen": this kernel is `f64`, and **WGSL has no
-  native `f64`**, so a GPU target needs a separate `f32` kernel variant — a
-  source fork that the "one source, byte-identical" checksum oracle can't span
-  (f32≠f64). The honest way to prove Kāra's CPU/GPU story is a purpose-built
-  `f32` kernel, not a retrofit of this f64 fluid solver. Tracked in
-  [`docs/dogfooding.md`](../../docs/dogfooding.md) (Slipstream GPU note).
+- The native **CPU SDL2** edition remains Phase-11 work; this is the browser
+  edition, which the front-end spine already unblocks. The **GPU** path,
+  however, is **BUILT**: the f32 LBM `collide`+`stream`+substep run on Metal
+  (GPU-LBM + GPU-SLIP clusters, 2026-07-11), validated vs the CPU reference by
+  the standard CFD tolerance check. The GPU leg is `f32` by deliberate decision
+  (WGSL has no native `f64`) — and that is *not* a hole in the "one source"
+  claim: CPU↔GPU bit-identity is impossible for FP at any precision, so the
+  byte-identical oracle here (a same-precision CPU↔CPU property) is untouched.
+  What this shipped example doesn't yet include is a C/G toggle in `sim.kara`
+  (kept out to avoid regressing the green f64 demo); the open GPU frontier is
+  perf (GPU-SLIP-4b, persistent on-device buffers). Tracked in
+  [`docs/dogfooding.md`](../../docs/dogfooding.md) and
+  [`docs/implementation_checklist/phase-10-targets.md`](../../docs/implementation_checklist/phase-10-targets.md)
+  (GPU-LBM / GPU-SLIP / GPU-GATE-1).
 - `sin`/`cos`/`atan2` remain a tracked stdlib gap, so the wing is parameterised
   by slope rather than a true angle.

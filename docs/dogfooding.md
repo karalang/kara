@@ -51,7 +51,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 |---|---|---|---|---|
 | **Parallax** | Auto-concurrency without `async`/coloring (fan-out + join) | ✅ shipped | auto-par codegen + HTTP FFI | 1 |
 | **Mend** | AI-first: structured compiler output as a machine fix-loop | ✅ shipped | `karac … --output=json` + `karac fix` | 1 |
-| **Slipstream** | Auto-concurrency + SoA layout + one source, native + browser (no port) | ✅ shipped (all billed caps) | browser LBM wind tunnel (stateful grid + worker-pool fan-out + live angle-of-attack → stall) built — `examples/slipstream/`; **carried grid is an SoA `layout` block, byte-identical AoS↔SoA native + runs SoA in-browser** (per-layout-monomorphization slice 6); native-SDL2 CPU Phase 11; GPU **slice-0 spine landed** (`#[gpu]` element-wise map runs on Metal, 2026-07-03 — see `docs/spikes/gpu-wgsl-slice0.md`), but Slipstream's LBM GPU path is still unbuilt (needs CG-4 layout-group→buffer + struct/control-flow kernel bodies — **and the kernel is `f64`, which WGSL has no native type for**, so a GPU target requires an `f32` kernel variant, a source fork that partly undercuts the "one source" claim; see the GPU note in the section) | 1 |
+| **Slipstream** | Auto-concurrency + SoA layout + one source on CPU/GPU | ✅ shipped | browser LBM wind tunnel (stateful grid + worker-pool fan-out + live angle-of-attack → stall) built — `examples/slipstream/`; **carried grid is an SoA `layout` block, byte-identical AoS↔SoA native + runs SoA in-browser** (per-layout-monomorphization slice 6); native-SDL2 CPU edition still Phase 11; **the f32 GPU LBM path is BUILT and validated on Metal** — the full `collide`+`stream`+multi-step substep run on the GPU (GPU-LBM + GPU-SLIP clusters complete 2026-07-11; f64→f32 was a deliberate decision, GPU-LBM-1 2026-07-10, not a blocker — CPU↔GPU bit-identity is a category error at any FP precision), and **GPU-GATE-1 (the v1-P1 GPU gate) is MET**. The shipped example itself hasn't wired a C/G toggle (kept out of the green f64 demo); the open GPU frontier is **GPU-SLIP-4b** (persistent on-device buffers, perf) | 1 |
 | **Cartographer** | Effect graph as a live architecture artifact | ✅ shipped | whole-program query + live WASM studio (D3 + Monaco) + per-callee blocking attribution — all design points covered | 2 |
 | **Husk** | `kernel` profile — no heap/panic/std, MMIO, ISRs | ⬜ planned | v8 hardware gaps (`#[repr]`, `#[interrupt]`, asm) | 2 |
 | **Weave** | Refinement types + contracts + effects together | ✅ shipped (CSV cut) | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
@@ -359,12 +359,16 @@ examples that show the interesting cases without being contrived.
 > user-memory `soa_cross_function_partial`.
 
 **Primary capability:** Auto-concurrency of sequential code; layout blocks for
-cache-efficient SoA access; one source runs native and in the browser
-(cross-target, no port — the Iris story applied to the flagship). *(A CPU/GPU
-path was originally billed here but is re-scoped out: the kernel is `f64` and
-WGSL has no `f64`, so a GPU target needs an `f32` kernel fork — a source split
-the "one source" claim is meant to disprove. Prove CPU/GPU with a purpose-built
-`f32` kernel instead; see the `#[gpu]` NOTE below.)*
+cache-efficient SoA access; one source runs native, in the browser, **and on
+the GPU**. *(The GPU leg is f32: WGSL has no native f64, so the f64→f32 choice
+was made deliberately — GPU-LBM-1, 2026-07-10 — and the full f32 LBM
+`collide`+`stream`+substep is validated on Metal against the CPU reference by
+the standard CFD tolerance check, not bit-identity (which is a category error
+for CPU↔GPU FP at any precision; Slipstream's byte-identical oracle is a
+same-precision CPU↔CPU property and is untouched). The shipped example keeps its
+green f64 CPU/browser path and hasn't wired a C/G toggle; the open GPU frontier
+is perf — GPU-SLIP-4b, persistent on-device buffers. See the `#[gpu]` NOTE
+below.)*
 
 **What it is:** A real-time 2D wind tunnel simulator. Air flows left to right
 around a NACA wing cross-section; the user rotates the wing and watches
@@ -402,20 +406,22 @@ fn simulate_tick(world: mut ref World) with writes(FluidGrid) {
 
 // GPU path: identical kernel, dispatched to the GPU.
 // Same source — no rewrite, no port.
-// NOTE: illustrative target — NOT yet implemented in the example, and note
-// the fields below are `f32`, NOT the `f64` the shipped `sim.kara` uses. The
-// GPU slice-0 spine exists (a single-scalar `#[gpu]` element-wise map runs on
-// Metal today), but this struct-valued, control-flow kernel is beyond it on
-// FOUR axes: (1) CG-4 (layout-group→GPU-buffer coalescing + multi-buffer
-// dispatch), (2) struct-valued kernel bodies, (3) control flow + local
-// bindings + intra-kernel calls in `#[gpu]` bodies, and (4) — the deepest —
-// **WGSL has no `f64`**, so the real `f64` kernel cannot target the GPU at
-// all; a GPU path needs a separate `f32` kernel variant (and an `f32` arm on
-// the native oracle for its A/B reference). That last point is a design fork,
-// not just compiler work: an `f32`-for-GPU / `f64`-for-CPU split weakens the
-// "one source, byte-identical" form of the CPU/GPU claim, since the checksum
-// oracle that proves "genuinely one kernel" cannot be byte-identical across
-// an f32/f64 divide. See `docs/spikes/gpu-wgsl-slice0.md`.
+// NOTE: illustrative target — the shipped example does not yet wire a C/G
+// toggle, but the GPU codegen this needs is BUILT. The `#[gpu]` emitter now
+// supports struct-valued kernels over `layout`-blocked SoA buffers (CG-4),
+// scalar uniforms, control flow, helper fns, and stencil / neighbour reads —
+// and the real f32 LBM `collide`+`stream`+substep run on Metal (GPU-LBM +
+// GPU-SLIP clusters, 2026-07-11), validated vs the CPU reference. The fields
+// below are `f32`, NOT the `f64` the shipped `sim.kara` uses: WGSL has no
+// native f64, so the GPU leg is f32 by deliberate decision (GPU-LBM-1,
+// 2026-07-10). That is NOT a hole in the "one source" claim — CPU↔GPU
+// bit-identity is impossible for FP at any precision (a category error), so a
+// GPU port validates by tolerance / field-equivalence (the standard CFD
+// check), and Slipstream's byte-identical oracle (a same-precision CPU↔CPU
+// property) is untouched. What's NOT wired: a C/G toggle in this shipped
+// example (kept out of the green f64 demo). Open GPU frontier: perf
+// (GPU-SLIP-4b, persistent on-device buffers). See
+// docs/implementation_checklist/phase-10-targets.md (GPU-LBM / GPU-SLIP).
 #[gpu]
 fn lbm_step_gpu(grid: ref Vec[LbmNode], viscosity: f32) -> Vec[LbmNode]
     with reads(FluidGrid), allocates(GpuBuffer)
@@ -455,22 +461,24 @@ implementations (Dan Schroeder's JavaScript version is ~300 lines). The CPU
 demo is unblocked after Phase 11 completes (auto-concurrency codegen lands in
 Phase 8 floor, but the full stdlib + FFI for SDL2 rendering need the long-tail
 in Phase 11). The GPU path can be added later without changing the Kāra
-source — only the dispatch call changes. The Phase-10 GPU **spine has landed**
-(`#[gpu]` element-wise map runs on Metal via `gpu.dispatch`; front-end contract
-FE-1–4 + SL-1/2 and runtime CG-1/2/3 all done — `docs/spikes/gpu-wgsl-slice0.md`),
-but this demo's LBM kernel is still gated on the broader surface: **CG-4**
-(layout `group`s → coalesced GPU buffers, multi-buffer dispatch) and `#[gpu]`
-kernel bodies with structs + control flow, none of which the current
-single-scalar map floor supports — **and, more fundamentally, the kernel is
-`f64` and WGSL has no `f64` type**, so a GPU path is not a pure "same source"
-port: it needs an `f32` kernel variant (a design fork, not just codegen —
-see the `#[gpu]` NOTE above). Net: the GPU billing is the only one of
-Slipstream's three roster capabilities that is neither built nor a bounded
-build. **Recommendation: prove the CPU/GPU story with a purpose-built `f32`
-kernel (or Fathom's Mandelbrot) where "one source, both targets" is
-f32-on-both-sides honest, and re-scope Slipstream's billing to its two proven
-differentiators (auto-concurrency + SoA) plus the one-source native+browser
-cross-target story.**
+source (only the dispatch call changes), modulo the f32/f64 note below. The
+Phase-10 GPU backend is **fully built for this kernel**: beyond the slice-0
+element-wise spine, the `#[gpu]` emitter now handles struct-valued kernels over
+`layout`-blocked SoA buffers (**CG-4**), scalar uniforms, control flow, helper
+functions, and stencil / neighbour reads — and the real **f32 LBM `collide` +
+`stream` + multi-step substep run on Metal** (GPU-LBM + GPU-SLIP clusters
+complete 2026-07-11), validated against the CPU reference by the standard CFD
+tolerance check. The f64→f32 choice was a deliberate decision (GPU-LBM-1,
+2026-07-10), not a blocker: WGSL has no native f64, and CPU↔GPU bit-identity is
+a category error at any FP precision, so the byte-identical oracle (a
+same-precision CPU↔CPU property) is untouched. **GPU-GATE-1** (the v1-P1 GPU
+gate) is MET. What remains for *this shipped example* is engineering polish, not
+a capability gap: wiring a C/G toggle into `sim.kara` (kept out to avoid
+regressing the green f64 demo) and the perf frontier **GPU-SLIP-4b** (persistent
+on-device buffers — the current per-substep host↔device round-trip makes GPU
+slower than CPU until the grid stays resident). Tracker:
+[`phase-10-targets.md`](implementation_checklist/phase-10-targets.md)
+(GPU-LBM / GPU-SLIP / GPU-GATE-1).
 
 **Browser edition (cross-target capstone).** The same `simulate_tick` source
 also targets the browser: `--target=wasm_browser --features wasm-threads` runs
@@ -1264,7 +1272,7 @@ the "Ready when" column notes the compiler capability each is gated on.
 | 4 | **Tangle** | Now (ownership inference + `karac query ownership` exist) | Proves the no-`'a` safety claim at the hard shapes. Cheap, pure Kāra, backs the README ownership section directly. |
 | 5 | **Weave** | ✅ CSV cut built 2026-06-13 (`examples/weave/`) — runs under `karac run` (interpreter) **and** `karac build`s to a native binary, output byte-identical. Service cut still gated on `Pool[T]` + TLS + tracing | Correctness story for data engineers. Complements the concurrency story. |
 | 6 | **Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |
-| 7 | **Slipstream** | Browser edition ✅ built 2026-06-19 (`examples/slipstream/`); native-SDL2 CPU path after Phase 11 (long-tail stdlib + FFI); GPU spine landed 2026-07-03 (`#[gpu]` element-wise map on Metal), but Slipstream's LBM GPU path still unbuilt — gated on CG-4 (layout-group→buffer) + struct/control-flow `#[gpu]` bodies + the `f64`/WGSL blocker (no native `f64`; needs an `f32` kernel fork). Recommend re-scoping the GPU billing off Slipstream (prove CPU/GPU with an `f32` kernel) — see the section's GPU note | Visually striking, instantly explainable. |
+| 7 | **Slipstream** | Browser edition ✅ built 2026-06-19 (`examples/slipstream/`); native-SDL2 CPU path after Phase 11 (long-tail stdlib + FFI); f32 GPU LBM path BUILT + validated on Metal (GPU-LBM + GPU-SLIP clusters, 2026-07-11; f64→f32 decided GPU-LBM-1, not a blocker); GPU-GATE-1 (v1-P1 GPU gate) MET. Shipped example lacks a C/G toggle (kept out of the green f64 demo); open GPU frontier = GPU-SLIP-4b (persistent on-device buffers, perf) | Visually striking, instantly explainable. |
 | 8 | **Husk** | Hardware gaps from v8 (`#[repr]`, `#[interrupt]`, inline asm, `no_std`) | Systems credibility. Validates the `kernel` profile. |
 
 **Parallax** and **Mend** together are the minimum viable showcase — they
@@ -1298,18 +1306,20 @@ read-only heap value captured by multiple sibling `spawn` tasks was a
 double-free). The SIMD-128 inner kernel landed 2026-07-11: the collide pass is now
 a `Vector[f64, 2]` two-cells-per-lane kernel, byte-identical output, which drove
 the ownership `Copy`-classification fix for SIMD vectors (**B-2026-07-11-1**). The
-only remaining Slipstream gates are the native-SDL2 CPU edition (Phase 11) and the
-GPU path. The GPU **slice-0 spine has landed** (2026-07-03 — a `#[gpu]`
-element-wise map runs on Metal via `gpu.dispatch`; front-end FE-1–4 + SL-1/2 and
-runtime CG-1/2/3, see `docs/spikes/gpu-wgsl-slice0.md`), but Slipstream's LBM GPU
-path remains unbuilt: its struct-valued, control-flow kernel is beyond the current
-single-scalar map floor, gated on **CG-4** (layout `group`s → coalesced GPU
-buffers) plus richer `#[gpu]` kernel bodies — **and, deeper still, the kernel is
-`f64` and WGSL has no `f64` type**, so a GPU target is not a pure "same source"
-port but needs an `f32` kernel fork. Because that fork weakens the "one source,
-byte-identical" claim, the recommendation is to re-scope the CPU/GPU billing off
-Slipstream and prove it with a purpose-built `f32` kernel (or Fathom); see the
-Slipstream section's `#[gpu]` NOTE.
+only remaining Slipstream gate in the shipped example is the native-SDL2 CPU
+edition (Phase 11). The GPU path is **BUILT**: beyond the slice-0 spine, the
+`#[gpu]` backend now handles struct-valued kernels over `layout`-blocked SoA
+buffers (**CG-4**), scalar uniforms, control flow, helper fns, and stencil /
+neighbour reads, and the real **f32 LBM `collide`+`stream`+substep run on Metal**
+(GPU-LBM + GPU-SLIP clusters complete 2026-07-11), validated vs the CPU reference
+by the standard CFD tolerance check. The f64→f32 choice was deliberate
+(GPU-LBM-1, not a blocker — CPU↔GPU bit-identity is a category error at any FP
+precision, so the byte-identical oracle is untouched), and **GPU-GATE-1** (the
+v1-P1 GPU gate) is MET. What is not yet done is engineering polish, not a
+capability: a C/G toggle in the shipped `sim.kara` (kept out of the green f64
+demo) and the perf frontier **GPU-SLIP-4b** (persistent on-device buffers). See
+the Slipstream section's `#[gpu]` NOTE and
+[`phase-10-targets.md`](implementation_checklist/phase-10-targets.md).
 
 ---
 
