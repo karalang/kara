@@ -977,6 +977,59 @@ fn test_closure_capturing_only_copy_is_not_once_callable() {
     );
 }
 
+#[test]
+fn test_closure_consuming_own_non_copy_param_is_multi_callable() {
+    // B-2026-07-15-14: a closure whose body CONSUMES its OWN non-Copy PARAM
+    // (`s: String` flowing by value into a mutating collection method) is
+    // multi-callable — the param is fresh each call, not a capture. The
+    // `push_str` receiver `buf` is mut-ref-captured (mutated in place), and
+    // the only consume is `s`, the closure's own param. Was rejected as
+    // once-callable; must now pass repeated calls. The `Map.insert` twin (a
+    // non-Copy KEY param) is the same shape.
+    ownership_ok(
+        "fn main() {\n\
+             let mut buf: String = String.from(\"\");\n\
+             let mut append = |s: String| buf.push_str(s);\n\
+             append(String.from(\"a\"));\n\
+             append(String.from(\"b\"));\n\
+             println(buf);\n\
+         }",
+    );
+    ownership_ok(
+        "fn main() {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             let mut put = |k: String, v: i64| m.insert(k, v);\n\
+             put(String.from(\"a\"), 1);\n\
+             put(String.from(\"b\"), 2);\n\
+             println(m.len());\n\
+         }",
+    );
+}
+
+#[test]
+fn test_closure_consuming_outer_non_copy_capture_still_once_callable() {
+    // The dual of the fix above — the once-callable guarantee must survive:
+    // a closure that CONSUMES an OUTER non-Copy binding (not its own param)
+    // stays once-callable, so a second call is still UseAfterMove
+    // (B-2026-07-15-14 must not over-relax).
+    let errors = ownership_errors(
+        "fn sink(s: String) -> i64 { s.len() }\n\
+         fn main() {\n\
+             let outer: String = String.from(\"hello\");\n\
+             let once = || sink(outer);\n\
+             let a = once();\n\
+             let b = once();\n\
+             println(a + b);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "a closure consuming an OUTER capture must stay once-callable, got: {errors:?}"
+    );
+}
+
 // ── Consume predicate: partial move through field projection ────
 
 #[test]

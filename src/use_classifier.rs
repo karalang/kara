@@ -125,6 +125,7 @@ pub fn classify_function_body_with(
         consume_origin_ctx: ConsumeOrigin::Direct,
         once_callable_closures: HashSet::new(),
         closure_span_stack: Vec::new(),
+        closure_local_stack: Vec::new(),
     };
     classifier.walk_block(body, Mode::Reading);
     classifier.classification
@@ -176,6 +177,16 @@ struct UseClassifier<'a> {
     /// `closure_capture_consumes` row each Consume identifier-leaf
     /// inside the body contributes to.
     closure_span_stack: Vec<SpanKey>,
+    /// B-2026-07-15-14 — stack of the binding names LOCAL to each currently-
+    /// open closure body: its own params, plus any `let` declared inside it.
+    /// Consuming one of these is a fresh-per-call move of a closure-local
+    /// value, NOT a capture of an outer binding, so it must not be tagged
+    /// `ClosureCapture` (which would falsely mark the closure once-callable —
+    /// a `|s: String| buf.push_str(s)` whose non-Copy param `s` is consumed by
+    /// the mutator's by-value arg was rejected on a second call, while the
+    /// `|x: i64| acc.push(x)` twin passed only because `i64` is Copy and never
+    /// consumed). Pushed on entry to a `Closure` arm, popped on exit.
+    closure_local_stack: Vec<HashSet<String>>,
 }
 
 impl<'a> UseClassifier<'a> {
@@ -206,13 +217,33 @@ impl<'a> UseClassifier<'a> {
     }
 
     fn record(&mut self, span: &crate::token::Span, kind: UseKind) {
+        self.record_named(span, kind, None);
+    }
+
+    /// [`record`] with the consumed identifier's NAME (when the leaf is a bare
+    /// identifier), so a consume of a closure-LOCAL binding (the closure's own
+    /// param / an inner `let`) is not stamped `ClosureCapture` — that origin
+    /// drives the once-callable classification, and consuming a fresh local is
+    /// not a capture of an outer binding (B-2026-07-15-14).
+    fn record_named(&mut self, span: &crate::token::Span, kind: UseKind, name: Option<&str>) {
         let key = SpanKey::from_span(span);
         self.classification.kinds.insert(key, kind);
         if kind == UseKind::Consume && self.consume_origin_ctx != ConsumeOrigin::Direct {
+            if self.consume_origin_ctx == ConsumeOrigin::ClosureCapture
+                && name.is_some_and(|n| self.is_closure_local(n))
+            {
+                return;
+            }
             self.classification
                 .consume_origins
                 .insert(key, self.consume_origin_ctx);
         }
+    }
+
+    /// Whether `name` is a binding local to any currently-open closure body
+    /// (its param or an inner `let`) — see `closure_local_stack`.
+    fn is_closure_local(&self, name: &str) -> bool {
+        self.closure_local_stack.iter().any(|s| s.contains(name))
     }
 
     /// Phase-7-codegen.md line 45 — when an identifier-leaf is
@@ -234,6 +265,12 @@ impl<'a> UseClassifier<'a> {
             return;
         }
         if self.consume_origin_ctx != ConsumeOrigin::ClosureCapture {
+            return;
+        }
+        // A consume of the closure's OWN param / inner local is a fresh move,
+        // not a capture — don't record it for the ownership-pass capture
+        // classifier either (B-2026-07-15-14).
+        if self.is_closure_local(binding) {
             return;
         }
         let closure_key = match self.closure_span_stack.last() {
@@ -288,6 +325,15 @@ impl<'a> UseClassifier<'a> {
                     // again" (B-2026-06-14-27).
                     let rhs_ty = rhs_ty.clone();
                     self.assign_binding_types(pattern, &rhs_ty);
+                }
+                // B-2026-07-15-14 — a `let` declared INSIDE a closure body is a
+                // closure-local binding; consuming it later is a fresh move, not
+                // a capture. No-op at function scope (empty stack), so an outer
+                // `let name = closure` is unaffected.
+                if let Some(locals) = self.closure_local_stack.last_mut() {
+                    for n in pattern.binding_names() {
+                        locals.insert(n);
+                    }
                 }
                 // Round 12.20: detect once-callable closure bindings.
                 // A closure RHS that produces at least one
@@ -381,12 +427,12 @@ impl<'a> UseClassifier<'a> {
         match &expr.kind {
             ExprKind::Identifier(name) => {
                 let kind = self.classify_identifier(name, &expr.span, mode);
-                self.record(&expr.span, kind);
+                self.record_named(&expr.span, kind, Some(name));
                 self.record_closure_capture_consume(name, kind, &expr.span);
             }
             ExprKind::SelfValue => {
                 let kind = self.classify_identifier("self", &expr.span, mode);
-                self.record(&expr.span, kind);
+                self.record_named(&expr.span, kind, Some("self"));
                 self.record_closure_capture_consume("self", kind, &expr.span);
             }
 
@@ -652,7 +698,7 @@ impl<'a> UseClassifier<'a> {
             // the trigger-2 origin tag. Save/restore preserves outer
             // context (relevant for closures expressed inside another
             // closure / sink-arg).
-            ExprKind::Closure { body, .. } => {
+            ExprKind::Closure { params, body, .. } => {
                 let saved = self.consume_origin_ctx;
                 self.consume_origin_ctx = ConsumeOrigin::ClosureCapture;
                 // Phase-7-codegen.md line 45 — push this closure's
@@ -660,7 +706,19 @@ impl<'a> UseClassifier<'a> {
                 // leaves walked inside `body` route into the right
                 // `closure_capture_consumes` row.
                 self.closure_span_stack.push(SpanKey::from_span(&expr.span));
+                // B-2026-07-15-14 — seed the closure-local set with this
+                // closure's own param names so a consume of a (non-Copy) param
+                // inside the body (`push_str(s)` moving `s`) is not mistaken for
+                // a capture consume. Inner `let`s add themselves in `walk_stmt`.
+                let mut locals = HashSet::new();
+                for p in params {
+                    for n in p.pattern.binding_names() {
+                        locals.insert(n);
+                    }
+                }
+                self.closure_local_stack.push(locals);
                 self.walk_expr(body, Mode::Reading);
+                self.closure_local_stack.pop();
                 self.closure_span_stack.pop();
                 self.consume_origin_ctx = saved;
             }
