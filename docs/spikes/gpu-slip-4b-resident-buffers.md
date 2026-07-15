@@ -118,6 +118,45 @@ the drop-old is `free_soa(old_handle)` before storing the new handle.
   GpuBuffer[S]` (emit `dispatch_resident`), the `ref`-borrow override for arg 1
   in `ownership.rs`, and the double-buffer ping-pong reassignment (drop-old).
 
+## 4b-2 Part 2 — codegen design (finalized after mapping the pipeline)
+
+`compile_gpu_dispatch_soa` (`method_call.rs:14308`) is the template; the reuse is
+exact:
+
+- **`GpuBuffer[S]` codegen representation = `{ i64 handle, i64 n }`** — the handle
+  plus the element count `n`. Download needs `n` at the call site (for the result
+  `Vec` + the scatter loop) and the bare handle doesn't carry it, so carry it in
+  the value. (This keeps the 4b-1 runtime signatures untouched — no re-landing;
+  the alternative, storing descriptors+n in the runtime and returning `n` via an
+  out-param, was considered but rejected to avoid churning the landed runtime.)
+- **`compile_gpu_upload(args)`** (route from `compile_method_call` `method ==
+  "upload"`): `active_soa_layout(vec_name)` → reuse the dispatch template's
+  group-pointer GEP walk + `in_ptrs` array + `group_strides`
+  (`method_call.rs:14380–14453`) → call `gpu_upload_soa_fn` → build the
+  `{handle, n}` struct value (`n` = the SoA `len` read at `14400`).
+- **`compile_gpu_download`** at the `let`-site: a dedicated
+  `compile_soa_let_from_gpu_download(var, soa_lhs, value)` (sibling of
+  `compile_soa_let_from_gpu_dispatch`, `exprs.rs:2606`) — extract `{handle, n}`
+  from the buffer arg, build the field-scatter descriptors from the **LHS**
+  `SoaLayout` (`field_group/src/dst/size`, `aos_stride`), call the existing
+  `karac_runtime_gpu_download_soa(handle, …descriptors…, n)` → AoS ptr → then
+  `compile_soa_new` + `soa_scatter_aos_into` (the GPU-SLIP-3 path). Constraint for
+  this MVP: the download target's layout grouping must match the uploaded buffer's
+  (holds for the same struct `S` / the ping-pong; a typecheck guard hardens it
+  later). An AoS-target download (`back` with no `layout`) uses a plain
+  `compile_gpu_download` returning the AoS `Vec[S]`.
+- **Runtime decls** (`runtime.rs`, near `gpu_dispatch_soa_fn` `:7532`):
+  `gpu_upload_soa_fn = (i64,ptr,ptr,i64)->i64`, `gpu_free_soa_fn = (i64)->void`
+  (the existing `gpu_dispatch_soa`/`download_soa` signatures are reused for
+  download).
+
+**Split:** *Part 2a-i* — the happy-path round-trip (`upload` → `download`,
+byte-identical to the input). A buffer that is always downloaded is consumed by
+`download_soa` (which frees the device buffers), so this path is leak-free
+without the drop wiring. *Part 2a-ii* — the scope-exit free
+(`CleanupAction::FreeGpuBuffer` on the handle field + zero-sentinel move-suppress)
+for the un-downloaded / reassigned / dropped case, validated with a leak check.
+
 ## 4b-3 (after 4b-2)
 
 Validate the full resident sim on Metal + re-bench vs CPU 17.5 ms and the 218 ms
