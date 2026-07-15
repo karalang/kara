@@ -709,56 +709,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // the subject String, call the runtime `karac_regex_is_match` (which
         // re-compiles `pattern` per call, matching the interpreter). Gated on
         // the receiver's static type being `Regex`, so a same-named user method
-        // never routes here. `find` / `find_all` / `replace_all` stay
-        // interp-only (later slices).
+        // never routes here. `find` / `find_all` / `replace_all` are the
+        // slice-2 siblings just below.
         if method == "is_match"
             && args.len() == 1
             && self.type_name_of_expr(object).as_deref() == Some("Regex")
         {
             let recv = self.compile_expr(object)?;
-            let recv_sv = recv.into_struct_value();
-            // `Regex { pattern: String }` may lower flattened (`{ptr,len,cap}`)
-            // or nested (`{ String }`) — extract field 0 and branch on whether
-            // it is the ptr itself or the nested String struct.
-            let field0 = self
-                .builder
-                .build_extract_value(recv_sv, 0, "rx.recv.f0")
-                .unwrap();
-            let (pat_data, pat_len) = if field0.is_struct_value() {
-                let ssv = field0.into_struct_value();
-                let d = self
-                    .builder
-                    .build_extract_value(ssv, 0, "rx.recv.pat.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let l = self
-                    .builder
-                    .build_extract_value(ssv, 1, "rx.recv.pat.len")
-                    .unwrap()
-                    .into_int_value();
-                (d, l)
-            } else {
-                let d = field0.into_pointer_value();
-                let l = self
-                    .builder
-                    .build_extract_value(recv_sv, 1, "rx.recv.pat.len")
-                    .unwrap()
-                    .into_int_value();
-                (d, l)
-            };
-
+            let (pat_data, pat_len) = self.regex_pattern_data_len(recv.into_struct_value());
             let s_val = self.compile_expr(&args[0].value)?;
-            let s_sv = s_val.into_struct_value();
-            let s_data = self
-                .builder
-                .build_extract_value(s_sv, 0, "rx.subj.data")
-                .unwrap()
-                .into_pointer_value();
-            let s_len = self
-                .builder
-                .build_extract_value(s_sv, 1, "rx.subj.len")
-                .unwrap()
-                .into_int_value();
+            let (s_data, s_len) = self.str_data_len(s_val.into_struct_value());
 
             let is_match_fn = self
                 .module
@@ -786,6 +746,287 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
                 .unwrap();
             return Ok(bool_val.into());
+        }
+
+        // `re.find(s) -> Option[Match]` / `re.find_all(s) -> Vec[Match]`
+        // (B-2026-07-14-19 slice 2) — the AOT backend for regex.kara's
+        // remaining `#[compiler_builtin]` stubs. Each recompiles the receiver's
+        // pattern per call (matching the interpreter) through a `karac_regex_*`
+        // entrypoint that returns primitive byte offsets; codegen owns all
+        // `Match` / `Vec` / `String` layout and slices the subject for each
+        // `Match.text` via `build_owned_string_from_parts` (a fresh owned copy,
+        // so the text never aliases the soon-dropped subject buffer).
+        if (method == "find" || method == "find_all")
+            && args.len() == 1
+            && self.type_name_of_expr(object).as_deref() == Some("Regex")
+        {
+            let recv = self.compile_expr(object)?;
+            let (pat_data, pat_len) = self.regex_pattern_data_len(recv.into_struct_value());
+            let s_val = self.compile_expr(&args[0].value)?;
+            let (s_data, s_len) = self.str_data_len(s_val.into_struct_value());
+            let i64_t = self.context.i64_type();
+            let fn_val = self.current_fn.unwrap();
+
+            if method == "find" {
+                let start_slot = self.create_entry_alloca(fn_val, "rx.find.start", i64_t.into());
+                let end_slot = self.create_entry_alloca(fn_val, "rx.find.end", i64_t.into());
+                let find_fn = self
+                    .module
+                    .get_function("karac_regex_find")
+                    .expect("karac_regex_find declared in Codegen::new");
+                let res = self
+                    .builder
+                    .build_call(
+                        find_fn,
+                        &[
+                            pat_data.into(),
+                            pat_len.into(),
+                            s_data.into(),
+                            s_len.into(),
+                            start_slot.into(),
+                            end_slot.into(),
+                        ],
+                        "rx.find",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let found = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        res,
+                        self.context.i8_type().const_zero(),
+                        "rx.find.found",
+                    )
+                    .unwrap();
+                let some_bb = self.context.append_basic_block(fn_val, "rx.find.some");
+                let none_bb = self.context.append_basic_block(fn_val, "rx.find.none");
+                let merge_bb = self.context.append_basic_block(fn_val, "rx.find.merge");
+                self.builder
+                    .build_conditional_branch(found, some_bb, none_bb)
+                    .unwrap();
+
+                // Some(Match { text: s[start..end], start, end }).
+                self.builder.position_at_end(some_bb);
+                let start_iv = self
+                    .builder
+                    .build_load(i64_t, start_slot, "rx.find.start.v")
+                    .unwrap()
+                    .into_int_value();
+                let end_iv = self
+                    .builder
+                    .build_load(i64_t, end_slot, "rx.find.end.v")
+                    .unwrap()
+                    .into_int_value();
+                let text = self.build_regex_match_text(s_data, start_iv, end_iv);
+                let m = self.build_match_struct(text, start_iv, end_iv)?;
+                let some_val = self.build_nonshared_enum_value("Option", "Some", &[m])?;
+                let some_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // None.
+                self.builder.position_at_end(none_bb);
+                let none_val = self.build_nonshared_enum_value("Option", "None", &[])?;
+                let none_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(merge_bb);
+                let phi = self
+                    .builder
+                    .build_phi(some_val.get_type(), "rx.find.result")
+                    .unwrap();
+                phi.add_incoming(&[(&some_val, some_end), (&none_val, none_end)]);
+                return Ok(phi.as_basic_value());
+            }
+
+            // find_all -> Vec[Match]. The runtime hands back a malloc'd
+            // `[start0,end0,…]` offset array (or null when empty) plus a count;
+            // codegen builds each `Match` into a fresh `Vec` buffer, then frees
+            // the offset array (`free(null)` is a no-op for the empty case).
+            let match_ty = self.struct_types.get("Match").copied().ok_or_else(|| {
+                "codegen: Regex.find_all needs the `Match` struct layout \
+                 (regex.kara not registered in compiled_stdlib_programs)"
+                    .to_string()
+            })?;
+            let count_slot = self.create_entry_alloca(fn_val, "rx.fa.count", i64_t.into());
+            self.builder
+                .build_store(count_slot, i64_t.const_zero())
+                .unwrap();
+            let fa_fn = self
+                .module
+                .get_function("karac_regex_find_all")
+                .expect("karac_regex_find_all declared in Codegen::new");
+            let arr = self
+                .builder
+                .build_call(
+                    fa_fn,
+                    &[
+                        pat_data.into(),
+                        pat_len.into(),
+                        s_data.into(),
+                        s_len.into(),
+                        count_slot.into(),
+                    ],
+                    "rx.fa.arr",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let count = self
+                .builder
+                .build_load(i64_t, count_slot, "rx.fa.count.v")
+                .unwrap()
+                .into_int_value();
+
+            // buf = alloc(count * sizeof(Match)).
+            let match_size = match_ty.size_of().unwrap();
+            let alloc_bytes = self
+                .builder
+                .build_int_mul(count, match_size, "rx.fa.bytes")
+                .unwrap();
+            let buf = self
+                .builder
+                .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "rx.fa.buf")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+
+            // for i in 0..count { buf[i] = Match { s[arr[2i]..arr[2i+1]], .. } }
+            let counter = self.create_entry_alloca(fn_val, "rx.fa.i", i64_t.into());
+            self.builder
+                .build_store(counter, i64_t.const_zero())
+                .unwrap();
+            let cond_bb = self.context.append_basic_block(fn_val, "rx.fa.cond");
+            let body_bb = self.context.append_basic_block(fn_val, "rx.fa.body");
+            let exit_bb = self.context.append_basic_block(fn_val, "rx.fa.exit");
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.builder.position_at_end(cond_bb);
+            let cur = self
+                .builder
+                .build_load(i64_t, counter, "rx.fa.cur")
+                .unwrap()
+                .into_int_value();
+            let cond = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, cur, count, "rx.fa.lt")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(cond, body_bb, exit_bb)
+                .unwrap();
+
+            self.builder.position_at_end(body_bb);
+            let two = i64_t.const_int(2, false);
+            let one = i64_t.const_int(1, false);
+            let base = self.builder.build_int_mul(cur, two, "rx.fa.base").unwrap();
+            let end_idx = self
+                .builder
+                .build_int_add(base, one, "rx.fa.end.idx")
+                .unwrap();
+            let start_ptr = unsafe {
+                self.builder
+                    .build_gep(i64_t, arr, &[base], "rx.fa.start.ptr")
+                    .unwrap()
+            };
+            let end_ptr = unsafe {
+                self.builder
+                    .build_gep(i64_t, arr, &[end_idx], "rx.fa.end.ptr")
+                    .unwrap()
+            };
+            let start_iv = self
+                .builder
+                .build_load(i64_t, start_ptr, "rx.fa.start.v")
+                .unwrap()
+                .into_int_value();
+            let end_iv = self
+                .builder
+                .build_load(i64_t, end_ptr, "rx.fa.end.v")
+                .unwrap()
+                .into_int_value();
+            let text = self.build_regex_match_text(s_data, start_iv, end_iv);
+            let m = self.build_match_struct(text, start_iv, end_iv)?;
+            let dst = unsafe {
+                self.builder
+                    .build_gep(match_ty, buf, &[cur], "rx.fa.dst")
+                    .unwrap()
+            };
+            self.builder.build_store(dst, m).unwrap();
+            let next = self.builder.build_int_add(cur, one, "rx.fa.next").unwrap();
+            self.builder.build_store(counter, next).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.builder.position_at_end(exit_bb);
+            self.builder
+                .build_call(self.free_fn, &[arr.into()], "")
+                .unwrap();
+            return Ok(self.build_vec_value(buf, count, count));
+        }
+
+        // `re.replace_all(s, repl) -> String` (B-2026-07-14-19 slice 2). The
+        // runtime returns a fresh malloc'd result buffer + byte length; codegen
+        // adopts it as an owned `String` (`cap = max(len, 1) > 0`) so the
+        // scope-exit `free` matches the runtime's allocator.
+        if method == "replace_all"
+            && args.len() == 2
+            && self.type_name_of_expr(object).as_deref() == Some("Regex")
+        {
+            let recv = self.compile_expr(object)?;
+            let (pat_data, pat_len) = self.regex_pattern_data_len(recv.into_struct_value());
+            let s_val = self.compile_expr(&args[0].value)?;
+            let (s_data, s_len) = self.str_data_len(s_val.into_struct_value());
+            let r_val = self.compile_expr(&args[1].value)?;
+            let (r_data, r_len) = self.str_data_len(r_val.into_struct_value());
+            let i64_t = self.context.i64_type();
+            let fn_val = self.current_fn.unwrap();
+
+            let len_slot = self.create_entry_alloca(fn_val, "rx.ra.len", i64_t.into());
+            self.builder
+                .build_store(len_slot, i64_t.const_zero())
+                .unwrap();
+            let ra_fn = self
+                .module
+                .get_function("karac_regex_replace_all")
+                .expect("karac_regex_replace_all declared in Codegen::new");
+            let ptr = self
+                .builder
+                .build_call(
+                    ra_fn,
+                    &[
+                        pat_data.into(),
+                        pat_len.into(),
+                        s_data.into(),
+                        s_len.into(),
+                        r_data.into(),
+                        r_len.into(),
+                        len_slot.into(),
+                    ],
+                    "rx.ra.ptr",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_load(i64_t, len_slot, "rx.ra.len.v")
+                .unwrap()
+                .into_int_value();
+            // cap = max(len, 1) — the runtime always allocated max(len,1) bytes.
+            let one = i64_t.const_int(1, false);
+            let len_pos = self
+                .builder
+                .build_int_compare(IntPredicate::UGT, len, i64_t.const_zero(), "rx.ra.pos")
+                .unwrap();
+            let cap = self
+                .builder
+                .build_select(len_pos, len, one, "rx.ra.cap")
+                .unwrap()
+                .into_int_value();
+            return Ok(self.build_vec_value(ptr, len, cap));
         }
 
         // Tensor shape-transform family (`reshape` / `permute` / `slice`
@@ -5279,6 +5520,126 @@ impl<'ctx> super::Codegen<'ctx> {
              or mark the test `#[ignore]` if the method is genuinely deferred)",
             method, receiver_desc
         ))
+    }
+
+    /// Extract `(data, len)` of a `Regex` receiver's pattern `String`.
+    /// `Regex { pattern: String }` lowers either flattened (field 0 is the data
+    /// pointer, field 1 the len) or nested (field 0 is the `{ptr,len,cap}`
+    /// String sub-struct); handle both. Shared by every `karac_regex_*` method
+    /// arm (B-2026-07-14-19).
+    fn regex_pattern_data_len(
+        &self,
+        recv_sv: inkwell::values::StructValue<'ctx>,
+    ) -> (
+        inkwell::values::PointerValue<'ctx>,
+        inkwell::values::IntValue<'ctx>,
+    ) {
+        let field0 = self
+            .builder
+            .build_extract_value(recv_sv, 0, "rx.recv.f0")
+            .unwrap();
+        if field0.is_struct_value() {
+            let ssv = field0.into_struct_value();
+            let d = self
+                .builder
+                .build_extract_value(ssv, 0, "rx.recv.pat.data")
+                .unwrap()
+                .into_pointer_value();
+            let l = self
+                .builder
+                .build_extract_value(ssv, 1, "rx.recv.pat.len")
+                .unwrap()
+                .into_int_value();
+            (d, l)
+        } else {
+            let d = field0.into_pointer_value();
+            let l = self
+                .builder
+                .build_extract_value(recv_sv, 1, "rx.recv.pat.len")
+                .unwrap()
+                .into_int_value();
+            (d, l)
+        }
+    }
+
+    /// Extract `(data, len)` (fields 0 and 1) of a `String` / `Vec`
+    /// `{ptr, len, cap}` struct value — the subject / replacement arguments of
+    /// the regex method arms.
+    fn str_data_len(
+        &self,
+        sv: inkwell::values::StructValue<'ctx>,
+    ) -> (
+        inkwell::values::PointerValue<'ctx>,
+        inkwell::values::IntValue<'ctx>,
+    ) {
+        let d = self
+            .builder
+            .build_extract_value(sv, 0, "rx.str.data")
+            .unwrap()
+            .into_pointer_value();
+        let l = self
+            .builder
+            .build_extract_value(sv, 1, "rx.str.len")
+            .unwrap()
+            .into_int_value();
+        (d, l)
+    }
+
+    /// Build an owned `String` holding a fresh heap copy of the subject byte
+    /// range `s_data[start..end]` — the `text` field of a regex `Match`. The
+    /// copy (never an alias into the subject buffer, which drops at the call's
+    /// statement end) is what keeps `find` / `find_all` memory-clean.
+    fn build_regex_match_text(
+        &mut self,
+        s_data: inkwell::values::PointerValue<'ctx>,
+        start: inkwell::values::IntValue<'ctx>,
+        end: inkwell::values::IntValue<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let i8_t = self.context.i8_type();
+        let text_ptr = unsafe {
+            self.builder
+                .build_gep(i8_t, s_data, &[start], "rx.match.text.ptr")
+                .unwrap()
+        };
+        let text_len = self
+            .builder
+            .build_int_sub(end, start, "rx.match.text.len")
+            .unwrap();
+        self.build_owned_string_from_parts(text_ptr, text_len)
+    }
+
+    /// Assemble a `Match { text, start, end }` struct value from SSA fields.
+    /// `Match` lowers to the nested `{ {i8*,i64,i64}, i64, i64 }` aggregate
+    /// (String kept as field 0's sub-struct), so `text` inserts whole; the
+    /// layout is registered because regex.kara is in `compiled_stdlib_programs`.
+    fn build_match_struct(
+        &mut self,
+        text: BasicValueEnum<'ctx>,
+        start: inkwell::values::IntValue<'ctx>,
+        end: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let match_ty = self.struct_types.get("Match").copied().ok_or_else(|| {
+            "codegen: Regex.find needs the `Match` struct layout \
+             (regex.kara not registered in compiled_stdlib_programs)"
+                .to_string()
+        })?;
+        let mut m = match_ty.get_undef();
+        m = self
+            .builder
+            .build_insert_value(m, text, 0, "rx.match.text")
+            .unwrap()
+            .into_struct_value();
+        m = self
+            .builder
+            .build_insert_value(m, start, 1, "rx.match.start")
+            .unwrap()
+            .into_struct_value();
+        m = self
+            .builder
+            .build_insert_value(m, end, 2, "rx.match.end")
+            .unwrap()
+            .into_struct_value();
+        Ok(m.into())
     }
 
     /// For a handle-backed container receiver (`Column[T]` / `Tensor[T, S]`)

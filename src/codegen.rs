@@ -4314,6 +4314,62 @@ impl<'ctx> Codegen<'ctx> {
             ),
             Some(Linkage::External),
         );
+        //   `u8 karac_regex_find(*const u8 pat, i64 pat_len, *const u8 s,
+        //    i64 s_len, *mut i64 out_start, *mut i64 out_end)` — 1 (writing the
+        //    leftmost match's byte offsets) or 0; backs `find`'s `Option[Match]`.
+        module.add_function(
+            "karac_regex_find",
+            context.i8_type().fn_type(
+                &[
+                    ptr_type.into(),
+                    i64_type.into(),
+                    ptr_type.into(),
+                    i64_type.into(),
+                    ptr_type.into(),
+                    ptr_type.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+        //   `*mut i64 karac_regex_find_all(*const u8 pat, i64 pat_len,
+        //    *const u8 s, i64 s_len, *mut i64 out_count)` — a malloc'd
+        //    `[start0,end0,…]` offset array (caller frees) + count; backs
+        //    `find_all`'s `Vec[Match]`.
+        module.add_function(
+            "karac_regex_find_all",
+            ptr_type.fn_type(
+                &[
+                    ptr_type.into(),
+                    i64_type.into(),
+                    ptr_type.into(),
+                    i64_type.into(),
+                    ptr_type.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+        //   `*mut u8 karac_regex_replace_all(*const u8 pat, i64 pat_len,
+        //    *const u8 s, i64 s_len, *const u8 repl, i64 repl_len,
+        //    *mut i64 out_len)` — a malloc'd result buffer (caller owns as an
+        //    owned `String`) + byte length; backs `replace_all`.
+        module.add_function(
+            "karac_regex_replace_all",
+            ptr_type.fn_type(
+                &[
+                    ptr_type.into(),
+                    i64_type.into(),
+                    ptr_type.into(),
+                    i64_type.into(),
+                    ptr_type.into(),
+                    i64_type.into(),
+                    ptr_type.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
         // Unicode `char` classification predicates (phase-12 #13): `char`
         // lowers to `i32`, so each takes the codepoint as `i32` and returns
         // `i8` (0/1). Backs `char.is_alphabetic()` / `is_numeric()` /

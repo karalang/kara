@@ -3511,6 +3511,68 @@ fn main() {
         assert_eq!(out, "true false false\n");
     }
 
+    /// `re.find(s) -> Option[Match]` (B-2026-07-14-19 slice 2). The `Some`
+    /// arm carries a `Match { text, start, end }` (a wide payload boxed into
+    /// the `Option`); the `None` arm is a no-match. Byte offsets match the
+    /// interpreter's `find`. Value parity is the oracle.
+    #[test]
+    fn regex_find_some_and_none_runs() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             let re = Regex.compile(\"[0-9]+\").unwrap();\n\
+             match re.find(\"abc123def\") {\n\
+             Some(m) => { println(f\"{m.text} {m.start} {m.end}\"); }\n\
+             None => { println(\"none\"); }\n\
+             }\n\
+             match re.find(\"no digits\") {\n\
+             Some(m) => { println(f\"{m.text}\"); }\n\
+             None => { println(\"none\"); }\n\
+             }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "123 3 6\nnone\n");
+    }
+
+    /// `re.find_all(s) -> Vec[Match]` (B-2026-07-14-19 slice 2). Codegen loops
+    /// the runtime's offset array to build each `Match` into a fresh `Vec`
+    /// buffer; every `Match.text` is an owned substring copy. Mirrors the
+    /// interpreter's `find_iter`.
+    #[test]
+    fn regex_find_all_collects_matches_runs() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             let re = Regex.compile(\"[0-9]+\").unwrap();\n\
+             let ms = re.find_all(\"a1b22c333\");\n\
+             println(ms.len().to_string());\n\
+             for m in ms {\n\
+             println(f\"{m.text}@{m.start}\");\n\
+             }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "3\n1@1\n22@3\n333@6\n");
+    }
+
+    /// `re.replace_all(s, repl) -> String` (B-2026-07-14-19 slice 2). The
+    /// runtime produces the whole replaced buffer; codegen adopts it as an
+    /// owned `String`. The no-match subject returns a fresh copy unchanged.
+    #[test]
+    fn regex_replace_all_substitutes_runs() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             let re = Regex.compile(\"[0-9]+\").unwrap();\n\
+             println(re.replace_all(\"a1b22c333\", \"#\"));\n\
+             println(re.replace_all(\"no digits\", \"#\"));\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a#b#c#\nno digits\n");
+    }
+
     /// Spawn a built kara test binary and capture stdout+stderr, with a
     /// per-spawn 15s hang watchdog. Thin wrapper over the shared helper
     /// in `tests/common/mod.rs` — see the module doc there for the full

@@ -4159,6 +4159,101 @@ fn main() {
         );
     }
 
+    /// Regex slice 2 (B-2026-07-14-19) — `re.find(s) -> Option[Match]` looped
+    /// over a heap pattern. The riskiest ownership path: the `Match` (a wide,
+    /// String-bearing struct) is heap-BOXED into the `Option` payload
+    /// (`coerce_to_payload_words`), and the `Some(m)` destructure unboxes it,
+    /// so the box, the extracted `Match`, and its owned `text` copy must each
+    /// be freed exactly once. No leak (LSan) + no double-free / UAF (ASAN)
+    /// across 40 iterations.
+    #[test]
+    fn asan_regex_find_option_match_heap_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    while i < 40i64 {
+        let mut p = String.from("[0-9]");
+        p.push_str("+");
+        let re = Regex.compile(p).unwrap();
+        match re.find("abc123def456") {
+            Some(m) => { total = total + m.text.len(); }
+            None => {}
+        }
+        i = i + 1i64;
+    }
+    println(f"{total}");
+}
+"#,
+            // first match "123" (len 3) each iter: 40 * 3 = 120
+            &["120"],
+            "asan_regex_find_option_match_heap_no_leak",
+        );
+    }
+
+    /// Regex slice 2 — `re.find_all(s) -> Vec[Match]` looped over a heap
+    /// pattern. Every `Match.text` is an owned substring copy stored in the
+    /// `Vec` buffer; the `Vec[Match]` drop must recursively free each element's
+    /// `text` (the B-2026-06-10-5 Vec-of-struct-with-String free machinery).
+    /// No per-iteration leak of the buffer or any element String.
+    #[test]
+    fn asan_regex_find_all_vec_match_heap_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    while i < 40i64 {
+        let mut p = String.from("[0-9]");
+        p.push_str("+");
+        let re = Regex.compile(p).unwrap();
+        let ms = re.find_all("a1b22c333");
+        for m in ms {
+            total = total + m.text.len();
+        }
+        i = i + 1i64;
+    }
+    println(f"{total}");
+}
+"#,
+            // matches "1"+"22"+"333" = 1+2+3 = 6 per iter: 40 * 6 = 240
+            &["240"],
+            "asan_regex_find_all_vec_match_heap_no_leak",
+        );
+    }
+
+    /// Regex slice 2 — `re.replace_all(s, repl) -> String` looped over a heap
+    /// pattern. Codegen adopts the runtime's fresh malloc'd result buffer as an
+    /// owned `String` (`cap = max(len, 1) > 0`), freed at scope exit; the extra
+    /// empty-result call exercises the `len == 0` (`cap = 1`) free path — the
+    /// runtime always allocates `max(len, 1)` so the drop's `free` still fires.
+    #[test]
+    fn asan_regex_replace_all_owned_string_heap_no_leak() {
+        assert_clean_asan_run(
+            r##"
+fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    while i < 40i64 {
+        let mut p = String.from("[0-9]");
+        p.push_str("+");
+        let re = Regex.compile(p).unwrap();
+        let out = re.replace_all("a1b22c333", "#");
+        total = total + out.len();
+        let empty = re.replace_all("999", "");
+        total = total + empty.len();
+        i = i + 1i64;
+    }
+    println(f"{total}");
+}
+"##,
+            // "a#b#c#" (6) + "" (0) per iter: 40 * 6 = 240
+            &["240"],
+            "asan_regex_replace_all_owned_string_heap_no_leak",
+        );
+    }
+
     /// Return-again move-out (B-2026-06-22-2): a relay RE-RETURNS a bound
     /// heap-env closure (explicit `return f`, bare-identifier tail, relay-of-a-
     /// relay, and copy-then-return). The RC env box MOVES OUT of each relay to
