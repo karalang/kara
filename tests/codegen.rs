@@ -53151,6 +53151,57 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_field_map_get_unwrap_heap_value() {
+        // B-2026-07-16-1: `<struct-field-map>.get(k).unwrap()` of a heap value
+        // (`Map[_, String]` / `Map[_, Vec]` FIELD) double-freed the value buffer —
+        // both inline (`println(h.ms.get(1).unwrap())`) AND bound
+        // (`let v = h.ms.get(1).unwrap()`) — against the struct's scope-exit map
+        // drop. The get/unwrap borrow-elision detectors (B-2026-07-14-15 bound,
+        // B-2026-07-15-26 inline cap-zero) only recognised a bare-IDENTIFIER map
+        // receiver; a field-access receiver (`h.ms`, `self.ms`) fell through, so
+        // the unwrapped value kept its real `cap` and its consumer's free-guard
+        // freed the map's stored buffer. Fixed by resolving the field-access map's
+        // value type from the struct field (with the owning struct's mono subst)
+        // in the shared `map_receiver_value_type_expr`, so the unwrap zeroes the
+        // borrow view's `cap` uniformly. Covers a `String` value across an inline
+        // println / a `[i].method()` receiver / a fn arg / a bound read, a `Vec`
+        // value indexed inline (`h.mv.get(1).unwrap()[i]`) and bound, and a
+        // `self.field` receiver via a method. Sibling LSan test guards the memory
+        // safety.
+        let output = run_program(
+            "struct Holder { tag: i64, ms: Map[i64, String], mv: Map[i64, Vec[i64]] }\n\
+             impl Holder {\n\
+                 fn probe(ref self) -> i64 {\n\
+                     let a = self.ms.get(1).unwrap().len();\n\
+                     let b = self.mv.get(1).unwrap()[0];\n\
+                     return a + b;\n\
+                 }\n\
+             }\n\
+             fn takes(s: String) -> i64 { s.len() }\n\
+             fn main() {\n\
+                 let mut ms: Map[i64, String] = Map.new();\n\
+                 ms.insert(1, \"hello\");\n\
+                 ms.insert(2, \"worldwide\");\n\
+                 let mut mv: Map[i64, Vec[i64]] = Map.new();\n\
+                 mv.insert(1, [10, 20, 30]);\n\
+                 let h = Holder { tag: 7, ms: ms, mv: mv };\n\
+                 println(h.ms.get(1).unwrap());\n\
+                 println(h.ms.get(2).unwrap().len());\n\
+                 println(takes(h.ms.get(1).unwrap()));\n\
+                 let v = h.ms.get(2).unwrap();\n\
+                 println(v);\n\
+                 println(h.mv.get(1).unwrap()[1]);\n\
+                 let row = h.mv.get(1).unwrap();\n\
+                 println(row[2]);\n\
+                 println(h.probe());\n\
+                 println(h.ms.get(1).unwrap());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "hello\n9\n5\nworldwide\n20\n30\n15\nhello\n");
+    }
+
+    #[test]
     fn test_e2e_inline_index_map_get_unwrap_vec_value() {
         // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
         // (`m.get(k).unwrap()[i]`) used to loud-bail "Index operator applied to

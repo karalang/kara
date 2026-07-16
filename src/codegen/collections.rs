@@ -2098,10 +2098,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if get_method != "get" {
             return None;
         }
-        let ExprKind::Identifier(map_var) = &map_recv.kind else {
-            return None;
-        };
-        let te = self.var_elem_type_exprs.get(map_var)?;
+        // Bare-identifier OR struct-field map receiver (`m.get(k)` /
+        // `mv.sm.get(k)`) — the shared resolver applies the owning struct's mono
+        // subst for a generic field (B-2026-07-16-1).
+        let te = self.map_receiver_value_type_expr(map_recv)?;
         let is_shared = matches!(&te.kind,
             TypeKind::Path(p)
                 if p.segments.last().is_some_and(|s| self.shared_types.contains_key(s.as_str())));
@@ -2110,7 +2110,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // Only a `Vec` value is indexable via `[i]`; a `String` value is a
         // different (char-index) path, and a scalar owns no buffer.
-        self.extract_vec_elem_type(te).is_some().then(|| te.clone())
+        self.extract_vec_elem_type(&te).is_some().then_some(te)
     }
 
     /// Index an inline `Vec` temporary (`a.shape()[k]`, `make_vec()[i]`,

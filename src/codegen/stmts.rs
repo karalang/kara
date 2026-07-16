@@ -7484,6 +7484,55 @@ impl<'ctx> super::Codegen<'ctx> {
     /// double-free (B-2026-07-15-26). The unwrap lowering zeroes the borrow
     /// view's `cap` so every consumer's free-guard skips it, leaving the map the
     /// sole owner (reads use ptr+len, unaffected).
+    /// The VALUE `TypeExpr` of the Map/SortedMap a `<map>.get(k)` receiver
+    /// denotes — for either a bare-identifier map var (`m.get(k)`, whose value
+    /// type `var_elem_type_exprs` records directly) or a struct-FIELD map
+    /// (`mv.sm.get(k)` / `self.sm.get(k)`, resolved from the field's declared
+    /// `Map[K, V]` type, with the owning struct's mono subst applied so a
+    /// generic `Map[K, V]` field resolves to the concrete value type). `None`
+    /// when the receiver isn't a recognised map place or the field isn't a Map.
+    /// Shared by the get/unwrap borrow-elision detectors so a field-access map
+    /// receiver gets the SAME `{ptr,len,0}` borrow-view cap-zero as a
+    /// bare-identifier one (B-2026-07-16-1 — the field-receiver sibling of
+    /// B-2026-07-15-26 / B-2026-07-14-15; without it `mv.sm.get(k).unwrap()` of
+    /// a `Map[_, String]`/`Map[_, Vec]` field double-frees the value buffer,
+    /// both bound and inline, against the struct's scope-exit map drop).
+    pub(super) fn map_receiver_value_type_expr(&self, map_recv: &Expr) -> Option<TypeExpr> {
+        match &map_recv.kind {
+            ExprKind::Identifier(map_var) => self.var_elem_type_exprs.get(map_var).cloned(),
+            ExprKind::FieldAccess { object, field } => {
+                let obj_name = match &object.kind {
+                    ExprKind::Identifier(o) => o.as_str(),
+                    ExprKind::SelfValue => "self",
+                    _ => return None,
+                };
+                let sname = self.var_type_names.get(obj_name)?.clone();
+                let idx = self
+                    .struct_field_names
+                    .get(&sname)?
+                    .iter()
+                    .position(|n| n == field)?;
+                let fte = self.struct_field_type_exprs.get(&sname)?.get(idx)?.clone();
+                // Resolve a generic `Map[K, V]` field through the owning struct's
+                // recorded mono instantiation (`Map[i64, String]`); a concrete
+                // field passes through unchanged (empty subst).
+                let resolved = match self.enum_inst_var_types.get(obj_name) {
+                    Some(inst) => {
+                        let subst = self.generic_struct_subst_from_inst(&sname, inst);
+                        if subst.is_empty() {
+                            fte
+                        } else {
+                            crate::codegen::helpers::subst_type_params_in_type_expr(&fte, &subst)
+                        }
+                    }
+                    None => fte,
+                };
+                super::helpers::map_kv_type_exprs(&resolved).map(|(_, v)| v)
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn unwrap_receiver_is_nonshared_heap_value_map_get(&self, object: &Expr) -> bool {
         let ExprKind::MethodCall {
             method,
@@ -7496,10 +7545,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if method != "get" {
             return false;
         }
-        let ExprKind::Identifier(map_var) = &map_recv.kind else {
-            return false;
-        };
-        let Some(te) = self.var_elem_type_exprs.get(map_var) else {
+        let Some(te) = self.map_receiver_value_type_expr(map_recv) else {
             return false;
         };
         let is_shared = matches!(&te.kind,
@@ -7508,7 +7554,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if is_shared {
             return false;
         }
-        self.is_string_type_expr(te) || self.extract_vec_elem_type(te).is_some()
+        self.is_string_type_expr(&te) || self.extract_vec_elem_type(&te).is_some()
     }
 
     fn unwrap_receiver_is_shared_value_map_get(&self, object: &Expr) -> bool {

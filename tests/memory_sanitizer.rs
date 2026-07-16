@@ -27809,6 +27809,57 @@ fn main() {
     }
 
     #[test]
+    fn asan_field_map_get_unwrap_heap_value_no_double_free() {
+        // B-2026-07-16-1: `<struct-field-map>.get(k).unwrap()` of a heap value
+        // (`Map[_, String]` / `Map[_, Vec]` FIELD) double-freed the value buffer,
+        // both bound AND inline, against the struct's scope-exit map drop. The
+        // get/unwrap borrow-elision detectors (B-2026-07-14-15 bound registration,
+        // B-2026-07-15-26 inline cap-zero) recognised only a bare-identifier map
+        // receiver; a field-access receiver (`h.ms`, `self.ms`) fell through, so
+        // the unwrapped value kept its real `cap` and its consumer's free-guard
+        // released the map's stored buffer — freed again by the map drop. Fixed by
+        // resolving the field-access map's value type from the struct field
+        // (`map_receiver_value_type_expr`, mono-subst aware) so the unwrap zeroes
+        // the borrow view's `cap`. Loops so a per-iteration double-free trips ASAN
+        // and any strand accumulates as a leak. Exercises a `String` value across
+        // a method receiver / a by-value fn arg / a bound read, and a `Vec` value
+        // indexed inline + bound — all through a struct-field map. Only the
+        // double-free surfaces at scope exit AFTER the reads.
+        assert_clean_asan_run(
+            r#"
+struct Holder { tag: i64, ms: Map[i64, String], mv: Map[i64, Vec[i64]] }
+fn takes(s: String) -> i64 {
+    s.len()
+}
+fn main() {
+    let mut ms: Map[i64, String] = Map.new();
+    ms.insert(1, "padded aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    ms.insert(2, "padded bbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let mut mv: Map[i64, Vec[i64]] = Map.new();
+    mv.insert(1, [10, 20, 30]);
+    let h = Holder { tag: 7, ms: ms, mv: mv };
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 100 {
+        acc = acc + h.ms.get(1).unwrap().len();
+        acc = acc + takes(h.ms.get(2).unwrap());
+        let v = h.ms.get(1).unwrap();
+        acc = acc + v.len();
+        acc = acc + h.mv.get(1).unwrap()[1];
+        let row = h.mv.get(1).unwrap();
+        acc = acc + row[2];
+        i = i + 1;
+    }
+    println(acc);
+    println(h.ms.get(1).unwrap());
+}
+"#,
+            &["15500", "padded aaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+            "field_map_get_unwrap_heap_value_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_inline_index_map_get_unwrap_vec_value_no_leak() {
         // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
         // (`m.get(k).unwrap()[i]`) is lowered by materializing the `{ptr,len,
