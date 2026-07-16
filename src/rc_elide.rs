@@ -974,14 +974,14 @@ fn collect_shared_carrying_types(program: &Program) -> HashSet<String> {
         let mut grew = false;
         for item in &program.items {
             match item {
-                Item::StructDef(s) if !set.contains(&s.name) => {
-                    if s.fields
-                        .iter()
-                        .any(|f| type_shared_payload(&f.ty, &set).is_some())
-                    {
-                        set.insert(s.name.clone());
-                        grew = true;
-                    }
+                Item::StructDef(s)
+                    if !set.contains(&s.name)
+                        && s.fields
+                            .iter()
+                            .any(|f| type_shared_payload(&f.ty, &set).is_some()) =>
+                {
+                    set.insert(s.name.clone());
+                    grew = true;
                 }
                 Item::EnumDef(e) if !set.contains(&e.name) => {
                     let mentions = e.variants.iter().any(|v| match &v.kind {
