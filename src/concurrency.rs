@@ -222,6 +222,103 @@ fn expr_has_early_exit(expr: &Expr) -> bool {
     }
 }
 
+/// `true` iff the function body contains a user `defer` / `errdefer`
+/// statement at ANY nesting depth. Used by [`ConcurrencyAnalyzer::analyze_function`]
+/// to BAIL the whole function's auto-parallelization to sequential codegen
+/// (B-2026-07-16-10).
+///
+/// Rationale: user `defer` semantics — reverse-declaration-order (LIFO) at
+/// scope exit, design.md § *defer* — are NOT preserved by the auto-par
+/// whole-function lowering. When any statement in the body forms a parallel
+/// group (or a reduction), the entire body is lowered through the `par_run`
+/// wrapper, and function-scope `defer` blocks are then materialized in-place
+/// (FIFO, at their declaration point) instead of being registered on the true
+/// function-scope cleanup frame — so they run before the sequential remainder
+/// of the body and in the wrong order (a use-after-cleanup hazard for a
+/// resource-releasing defer). Auto-par is only an optimization: falling back
+/// to the sequential lowering (which drains defers LIFO correctly) is always
+/// sound. Explicit `par {}` (`compile_par_block`) is a separate path and is
+/// unaffected — it drains defers correctly and is not gated by this analysis.
+fn block_has_user_defer(block: &Block) -> bool {
+    block.stmts.iter().any(stmt_has_user_defer)
+        || block
+            .final_expr
+            .as_ref()
+            .is_some_and(|e| expr_has_user_defer(e))
+}
+
+fn stmt_has_user_defer(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Defer { .. } | StmtKind::ErrDefer { .. } => true,
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
+        StmtKind::Let { value, .. }
+        | StmtKind::Assign { value, .. }
+        | StmtKind::CompoundAssign { value, .. }
+        | StmtKind::Expr(value) => expr_has_user_defer(value),
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => expr_has_user_defer(value) || block_has_user_defer(else_block),
+        StmtKind::LetUninit { .. } => false,
+    }
+}
+
+fn expr_has_user_defer(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Block(b) => block_has_user_defer(b),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            expr_has_user_defer(condition)
+                || block_has_user_defer(then_block)
+                || else_branch.as_ref().is_some_and(|e| expr_has_user_defer(e))
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            expr_has_user_defer(value)
+                || block_has_user_defer(then_block)
+                || else_branch.as_ref().is_some_and(|e| expr_has_user_defer(e))
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            expr_has_user_defer(scrutinee) || arms.iter().any(|a| expr_has_user_defer(&a.body))
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => expr_has_user_defer(condition) || block_has_user_defer(body),
+        ExprKind::For { iterable, body, .. } => {
+            expr_has_user_defer(iterable) || block_has_user_defer(body)
+        }
+        ExprKind::Loop { body, .. } => block_has_user_defer(body),
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Pipe { left, right }
+        | ExprKind::NilCoalesce { left, right } => {
+            expr_has_user_defer(left) || expr_has_user_defer(right)
+        }
+        ExprKind::Unary { operand, .. } => expr_has_user_defer(operand),
+        ExprKind::Call { callee, args } => {
+            expr_has_user_defer(callee) || args.iter().any(|a| expr_has_user_defer(&a.value))
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            expr_has_user_defer(object) || args.iter().any(|a| expr_has_user_defer(&a.value))
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            expr_has_user_defer(object)
+        }
+        ExprKind::Index { object, index } => {
+            expr_has_user_defer(object) || expr_has_user_defer(index)
+        }
+        ExprKind::Tuple(elems) => elems.iter().any(expr_has_user_defer),
+        _ => false,
+    }
+}
+
 /// `true` iff this statement performs a channel operation — `Channel.new()`,
 /// or a `Sender.send` / `Receiver.recv` / `Receiver.try_recv` method call
 /// anywhere in its expression tree. Used by `find_parallel_groups` to keep
@@ -1372,10 +1469,17 @@ impl<'a> ConcurrencyChecker<'a> {
         let stmts = &func.body.stmts;
         let total_statements = stmts.len();
 
-        if total_statements == 0 {
+        // B-2026-07-16-10: a function containing any user `defer` / `errdefer`
+        // is not auto-parallelized — the par_run whole-function lowering does
+        // not preserve LIFO-at-scope-exit defer semantics (it emits function-
+        // scope defers FIFO-inline). Return an empty decision so codegen falls
+        // back to the sequential lowering, which drains defers correctly. See
+        // `block_has_user_defer` for the full rationale. (Explicit `par {}` is
+        // a separate codegen path and is unaffected.)
+        if total_statements == 0 || block_has_user_defer(&func.body) {
             return FunctionConcurrency {
                 parallel_groups: Vec::new(),
-                total_statements: 0,
+                total_statements,
                 statement_spans: Vec::new(),
                 loop_reductions: Vec::new(),
                 serialization_points: Vec::new(),

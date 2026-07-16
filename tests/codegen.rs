@@ -51620,6 +51620,57 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_defer_lifo_when_body_would_auto_parallelize() {
+        // B-2026-07-16-10: a function body that triggers auto-parallelization
+        // (here a `Vec.new()` + `push` / a Vec-building loop makes the auto-par
+        // heuristic wrap the body in `karac_par_run`) must STILL run user
+        // `defer` blocks LIFO at scope exit — design.md § *defer*. Before the
+        // fix, the par_run whole-function lowering emitted function-scope defers
+        // FIFO-inline at their declaration point (native+JIT printed
+        // "1","2","3","0" — defers before the body's "0"), diverging from the
+        // interpreter. Fixed by bailing auto-par to sequential codegen whenever
+        // the function contains a `defer`/`errdefer` (concurrency.rs
+        // `block_has_user_defer` gate); the sequential lowering drains defers
+        // correctly. Two shapes: a straight-line Vec.push body, and a
+        // Vec-building `while` loop (the collect/tabulate auto-par trigger).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut log: Vec[i64] = Vec.new();
+    defer { println("1"); }
+    defer { println("2"); }
+    defer { println("3"); }
+    log.push(99);
+    println("0");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "3", "2", "1"]);
+        }
+        let out2 = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    defer { println("100"); }
+    defer { println("200"); }
+    let mut i: i64 = 0;
+    while i < 4 {
+        v.push(i * i);
+        i = i + 1;
+    }
+    println(v.len());
+}
+"#,
+        );
+        if let Some(out2) = out2 {
+            let lines: Vec<&str> = out2.trim().lines().collect();
+            assert_eq!(lines, vec!["4", "200", "100"]);
+        }
+    }
+
     // --- Phase 7 § *defer codegen* slice 1.5: block-scope + runtime-reachability ---
     //
     // Slice 1 ships function-scoped, compile-time-registered defer:
