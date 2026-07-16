@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **485 surfaced · 1 open · 480 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **486 surfaced · 1 open · 481 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -97,9 +97,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **485 surfaced 
 |---|---|---|---|---|---|
 | B-2026-07-15-21 | 2026-07-15 | codegen (per-node Option[shared] traversal lowering: niche-match + field GEP + recursion) | low | Read-only `Option[shared]` tree traversal runs ~1.45x behind equal-safety Rust (rustc -O -C overflow-checks=on) on a pure per-node walk — the residual is Option[shared] match/field/recursion lowering, NOT refcount traffic (retain/release is already elided; by-value == ref-borrow to the millisecond) | none |
 
-### Fixed (480)
+### Fixed (481)
 
-<details><summary>480 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>481 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -583,6 +583,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **485 surfaced 
 | B-2026-07-15-26 | codegen (Map `get(k).unwrap()` inline-temporary path for a heap value — the unwrapped value aliases the map's live bucket buffer instead of cloning, so the inline temp's drop AND the map's scope-exit per-entry free hit the same buffer) | high | An INLINE `map.get(k).unwrap()` whose value is heap-owning (`Map[i64, String]` / `Map[i64, Vec[..]]`) double-frees: `println(m.get(2).unwrap())` and… | e465acb |
 | B-2026-07-15-27 | codegen (index operator on a non-identifier temporary — `<expr>[i]` where <expr> is a method-call chain like `m.get(k).unwrap()`) | low | Inline-indexing a temporary Vec (`m.get(k).unwrap()[i]`, and likely any `<method-chain>[i]`) loud-bails 'Index operator applied to non-array type'; b… | 354b4df |
 | B-2026-07-16-1 | codegen (`<struct-field-map>.get(k).unwrap()` of a heap value — the get/unwrap borrow-elision detectors recognised only a bare-IDENTIFIER map receiver, so a field-access receiver `h.ms`/`self.ms` kept its real `cap` and double-freed the borrowed bucket buffer against the struct's scope-exit map drop) | high | `<struct-field-map>.get(k).unwrap()` of a heap value (a `Map[_, String]`/`Map[_, Vec]` FIELD) double-frees the value buffer, both bound (`let v = h.m… | 3a44455 |
+| B-2026-07-16-2 | runtime | high | Three recent runtime-symbol surfaces missing from the JIT keep-list — critical_section acquire/release (b6ea37a1), the tracing span/exporter octet, a… | 4d7be898 |
 
 </details>
 
