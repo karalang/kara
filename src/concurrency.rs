@@ -704,6 +704,16 @@ pub struct LoopReduction {
     pub op: ReductionOp,
     pub stmt_index: usize,
     pub loop_line: usize,
+    /// Collect-only: the body pushes EXACTLY one element per iteration,
+    /// unconditionally, and mentions the accumulator nowhere else. This
+    /// licenses the tabulate lowering — output length is exactly
+    /// `iter_total` and iteration `i` owns output slot `i`, so workers
+    /// write elements in place into one presized shared buffer (no
+    /// per-worker partial Vecs, no combine memcpy). The gate must be
+    /// exact: an extra or skipped push under tabulate overflows a
+    /// worker's chunk view and the push grow-path would free an interior
+    /// pointer. See `collect_is_tabulate_shape`.
+    pub collect_tabulate: bool,
 }
 
 /// A set of statements that can safely run in parallel.
@@ -1804,11 +1814,14 @@ impl<'a> ConcurrencyChecker<'a> {
                 // constant and turns the crash into the useful case: a
                 // backtracking search parallelized at its independent top-level
                 // branches. The cost/shape gates in codegen still apply.
+                let collect_tabulate = op == ReductionOp::Collect
+                    && self.collect_is_tabulate_shape(body, &accumulator);
                 out.push(LoopReduction {
                     accumulator,
                     op,
                     stmt_index: idx,
                     loop_line: expr.span.line,
+                    collect_tabulate,
                 });
             }
         }
@@ -2169,6 +2182,115 @@ impl<'a> ConcurrencyChecker<'a> {
             return None;
         };
         collect_push_shape(inner)
+    }
+
+    /// Is a Collect-classified loop body **tabulate-shaped**: exactly one
+    /// top-level bare `acc.push(EXPR)` per iteration — no conditional
+    /// pushes, no second push, and `acc` mentioned nowhere else in the
+    /// body (including `let` initializers and the push's own argument)?
+    ///
+    /// Tabulate lets workers write elements directly into a shared
+    /// presized buffer at their global iteration index, so the invariant
+    /// "iteration i produces exactly output element i" must be airtight:
+    /// a body that could push more than once per iteration overflows its
+    /// chunk view (and the push grow-path would `free` an interior
+    /// pointer), and one that could skip a push leaves garbage holes.
+    /// Skips can't happen — `continue` anywhere in the body already
+    /// rejects the whole lowering via `block_has_early_exit` — so this
+    /// check only has to bound the push count from above, which it does
+    /// by requiring the single bare push to be the ONLY mention of `acc`.
+    /// Mention-detection over-approximates via `collect_expr_reads` ∪
+    /// `collect_expr_inner_writes` (an `Identifier(acc)` anywhere,
+    /// receiver positions included, registers as a read). Any shape this
+    /// declines still lowers through the partial-Vecs path — declining
+    /// costs performance, never correctness.
+    fn collect_is_tabulate_shape(&self, body: &Block, acc: &str) -> bool {
+        // A body-local rebinding of the accumulator name makes every
+        // later mention ambiguous between the two; decline outright.
+        let mut let_introduced: HashSet<String> = HashSet::new();
+        for stmt in &body.stmts {
+            match &stmt.kind {
+                StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                    self.collect_pattern_bindings(pattern, &mut let_introduced);
+                }
+                StmtKind::LetUninit { name, .. } => {
+                    let_introduced.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+        if let_introduced.contains(acc) {
+            return false;
+        }
+
+        let mentions_acc = |e: &Expr| -> bool {
+            let mut names = HashSet::new();
+            self.collect_expr_reads(e, &mut names);
+            self.collect_expr_inner_writes(e, &mut names);
+            names.contains(acc)
+        };
+
+        let mut bare_pushes = 0usize;
+        for stmt in &body.stmts {
+            match &stmt.kind {
+                StmtKind::Expr(expr) => {
+                    if collect_push_shape(expr).as_deref() == Some(acc) {
+                        bare_pushes += 1;
+                        let ExprKind::MethodCall { args, .. } = &expr.kind else {
+                            return false;
+                        };
+                        if mentions_acc(&args[0].value) {
+                            return false;
+                        }
+                        continue;
+                    }
+                    // A conditional push means a variable per-iter count.
+                    if self.conditional_collect_shape(expr).as_deref() == Some(acc) {
+                        return false;
+                    }
+                    if mentions_acc(expr) {
+                        return false;
+                    }
+                }
+                StmtKind::Let { value, .. } => {
+                    if mentions_acc(value) {
+                        return false;
+                    }
+                }
+                StmtKind::Assign { target, value }
+                | StmtKind::CompoundAssign { target, value, .. } => {
+                    if mentions_acc(target) || mentions_acc(value) {
+                        return false;
+                    }
+                }
+                // LetElse's else-block diverges (break/return), which
+                // `block_has_early_exit` rejects downstream anyway;
+                // Defer never reaches here (classify_loop_body returns
+                // None); MultiAssign is desugared away. Decline all
+                // three defensively rather than reasoning about them.
+                StmtKind::LetElse { .. }
+                | StmtKind::LetUninit { .. }
+                | StmtKind::Defer { .. }
+                | StmtKind::ErrDefer { .. }
+                | StmtKind::MultiAssign { .. } => return false,
+            }
+        }
+        if let Some(e) = &body.final_expr {
+            if collect_push_shape(e).as_deref() == Some(acc) {
+                bare_pushes += 1;
+                let ExprKind::MethodCall { args, .. } = &e.kind else {
+                    return false;
+                };
+                if mentions_acc(&args[0].value) {
+                    return false;
+                }
+            } else if self.conditional_collect_shape(e).as_deref() == Some(acc) || mentions_acc(e) {
+                // A conditional push (variable count) or any other
+                // accumulator mention — decline.
+                return false;
+            }
+        }
+        bare_pushes == 1
     }
 
     /// Recognize the conditional-accumulator-update shape:

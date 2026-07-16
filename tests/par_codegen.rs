@@ -5877,6 +5877,315 @@ fn main() {
         );
     }
 
+    // ── Collect tabulate specialization (2026-07-16) ─────────────────────
+    //
+    // When the loop body pushes EXACTLY one element per iteration,
+    // unconditionally, and mentions the accumulator nowhere else, the
+    // lowering upgrades from per-worker partial Vecs (grow/realloc per
+    // worker + a combine memcpy of every element) to TABULATE: the caller
+    // preallocates `iter_total × elem_size` and each worker's accumulator
+    // is a view into its chunk — every element is written once, directly
+    // into its final slot. The recognizer gate
+    // (`concurrency.rs::collect_is_tabulate_shape`) must be exact: an
+    // extra push per iteration would overflow the chunk view and the push
+    // grow-path would `free` an interior pointer. These tests pin the
+    // gate from both sides plus the caller-side install semantics.
+
+    /// Compile to IR text via the standard pipeline (shared by the
+    /// tabulate IR pins below).
+    fn ir_for_par(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed")
+    }
+
+    #[test]
+    fn test_ir_collect_tabulate_worker_for_bare_push() {
+        // The canonical map shape — one unconditional push per iteration —
+        // must take the tabulate lowering (worker named
+        // `__karac_reduce_worker_collect_tab_<N>`), not the partials one.
+        let ir = ir_for_par(
+            r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..1000i64 {
+        out.push(k * 2i64);
+    }
+    println(out.len());
+}
+"#,
+        );
+        assert!(
+            ir.contains("__karac_reduce_worker_collect_tab_"),
+            "bare-push collect must lower to the tabulate worker; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "tabulate still dispatches through karac_par_reduce; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_collect_conditional_push_stays_partials() {
+        // A conditional push has a variable per-iteration element count —
+        // tabulate's "iteration i owns slot i" invariant doesn't hold, so
+        // the shape must stay on the partial-Vecs path.
+        let ir = ir_for_par(
+            r#"
+fn main() {
+    let mut hits: Vec[i64] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..1000i64 {
+        if (k % 3i64) == 0i64 {
+            hits.push(k);
+        }
+    }
+    println(hits.len());
+}
+"#,
+        );
+        assert!(
+            !ir.contains("__karac_reduce_worker_collect_tab_"),
+            "conditional push must NOT tabulate; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("__karac_reduce_worker_collect_"),
+            "conditional push still fans out via the partials path; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_collect_multi_push_and_acc_read_stay_partials() {
+        // Two pushes per iteration → 2·iter_total elements; tabulate must
+        // decline (its chunk views are sized for one push per iteration —
+        // an overflow would hit the push grow-path and free an interior
+        // pointer). The classifier itself accepts the shape (same acc,
+        // same op), so this pins the tabulate gate specifically.
+        let two_push = ir_for_par(
+            r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..100i64 {
+        out.push(k);
+        out.push(k);
+    }
+    println(out.len());
+}
+"#,
+        );
+        assert!(
+            !two_push.contains("__karac_reduce_worker_collect_tab_"),
+            "two pushes per iteration must NOT tabulate; got:\n{two_push}"
+        );
+        assert!(
+            two_push.contains("__karac_reduce_worker_collect_"),
+            "two-push shape still fans out via partials; got:\n{two_push}"
+        );
+
+        // Any OTHER mention of the accumulator (here: a `let` initializer
+        // reading `out.len()`) makes the per-iteration push count
+        // unprovable to the tabulate gate; must stay partials.
+        let acc_read = ir_for_par(
+            r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..100i64 {
+        let l = out.len();
+        out.push(k + l);
+    }
+    println(out.len());
+}
+"#,
+        );
+        assert!(
+            !acc_read.contains("__karac_reduce_worker_collect_tab_"),
+            "acc mention outside the push must NOT tabulate; got:\n{acc_read}"
+        );
+    }
+
+    #[test]
+    fn test_ir_collect_padded_struct_combine_keyed_by_alloc_size() {
+        // B-2026-07-16-3 regression pin: a `{i64, i32}` element has LLVM
+        // store size 12 but ALLOC size 16 — and Vec's push/index GEPs
+        // stride by alloc size. The size-keyed combine helper must be
+        // keyed (and offset) by the alloc size (`b16`), not the store
+        // size (`b12`), or every element past the first chunk lands
+        // misaligned by 4·chunk_index bytes.
+        let ir = ir_for_par(
+            r#"
+struct Q { a: i64, b: i32 }
+fn main() {
+    let mut out: Vec[Q] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..1000i64 {
+        out.push(Q { a: k, b: 7i32 });
+    }
+    println(out.len());
+}
+"#,
+        );
+        assert!(
+            ir.contains("__karac_reduce_combine_collect_b16"),
+            "padded {{i64,i32}} elem must key combine by ALLOC size 16; got:\n{ir}"
+        );
+        assert!(
+            !ir.contains("__karac_reduce_combine_collect_b12"),
+            "store-size keying (b12) is the B-2026-07-16-3 bug; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_collect_padded_struct_elems_append_path() {
+        // E2E for B-2026-07-16-3, routed through the byte-offset code the
+        // IR pin can't validate: the accumulator is PRE-SEEDED, so the
+        // caller-side install takes combine's append path (memcpy at
+        // `dst.len · elem_size`). Under store-size keying the copy strides
+        // 12 bytes over 16-byte elements — every field after the seed
+        // element would be garbage. Verifies each slot against its index
+        // formula, seed included.
+        let src = r#"
+struct Q { a: i64, b: i32 }
+fn main() {
+    let mut out: Vec[Q] = Vec.new();
+    out.push(Q { a: 0i64 - 5i64, b: 9i32 });
+    #[par_unordered]
+    for k in 0i64..1000i64 {
+        out.push(Q { a: k * 3i64, b: (k % 100i64) as i32 });
+    }
+    let mut ok: i64 = 1i64;
+    if out[0i64].a != 0i64 - 5i64 { ok = 0i64; }
+    if out[0i64].b != 9i32 { ok = 0i64; }
+    let mut i: i64 = 0i64;
+    while i < 1000i64 {
+        if out[i + 1i64].a != i * 3i64 { ok = 0i64; }
+        if out[i + 1i64].b != ((i % 100i64) as i32) { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2, "expected two lines, got:\n{}", out);
+        assert_eq!(lines[0], "1001", "seed + 1000 pushed elements");
+        assert_eq!(
+            lines[1], "1",
+            "padded-struct element bytes corrupted (stride/keying bug)"
+        );
+    }
+
+    #[test]
+    fn test_e2e_collect_tabulate_nonzero_lo_ordered() {
+        // Tabulate with a non-zero range start: output slot i must hold
+        // f(lo + i) — validates the worker's lo-shift against its
+        // relative-index chunk view.
+        let src = r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    #[par_unordered]
+    for k in 100i64..1100i64 {
+        out.push(k * 7i64);
+    }
+    let mut ok: i64 = 1i64;
+    let mut i: i64 = 0i64;
+    while i < out.len() {
+        if out[i] != (100i64 + i) * 7i64 { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "1000");
+        assert_eq!(lines[1], "1", "slot i must hold f(lo + i) under tabulate");
+    }
+
+    #[test]
+    fn test_e2e_collect_tabulate_while_counter_form() {
+        // The LBM-substep source shape: a `while c < n` loop with a manual
+        // `c = c + 1` counter step. The induction-step Assign must not
+        // spook the tabulate gate (it never mentions the accumulator).
+        let src = r#"
+fn main() {
+    let n: i64 = 500i64;
+    let mut out: Vec[i64] = Vec.new();
+    let mut c: i64 = 0i64;
+    #[par_unordered]
+    while c < n {
+        out.push(c * 3i64);
+        c = c + 1i64;
+    }
+    let mut ok: i64 = 1i64;
+    let mut i: i64 = 0i64;
+    while i < out.len() {
+        if out[i] != i * 3i64 { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "500");
+        assert_eq!(lines[1], "1", "while-counter tabulate order mismatch");
+    }
+
+    #[test]
+    fn test_e2e_collect_tabulate_zero_and_reversed_ranges() {
+        // Zero-iteration and reversed ranges: the tabulate dispatch is
+        // guarded by `iter_total > 0` (signed) — no malloc, no install,
+        // accumulator left exactly as it was. A reversed range must not
+        // zext into a huge byte count.
+        let src = r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    out.push(41i64);
+    out.push(42i64);
+    #[par_unordered]
+    for k in 0i64..0i64 {
+        out.push(k);
+    }
+    #[par_unordered]
+    for k in 5i64..3i64 {
+        out.push(k);
+    }
+    println(out.len());
+    println(out[0i64]);
+    println(out[1i64]);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(
+            lines[0], "2",
+            "empty/reversed ranges must leave acc untouched"
+        );
+        assert_eq!(lines[1], "41");
+        assert_eq!(lines[2], "42");
+    }
+
     // --- Par codegen slice 4: defer / errdefer on the cancel path ---
     //
     // Slice 4 of the Phase 7 § *Par codegen: cancellation and error

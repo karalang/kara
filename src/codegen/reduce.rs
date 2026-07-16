@@ -1546,7 +1546,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if !llvm_ty_is_pod(elem_ty) {
             return Ok(None);
         }
-        let elem_size = self.ensure_target_data()?.get_store_size(&elem_ty);
+        // ABI (alloc) size, NOT store size: Vec's push/index GEPs stride by
+        // `elem_ty.size_of()` = alloc size (tail padding included), so the
+        // combine's byte offsets must match. A padded struct element
+        // (`{i64, i32}` → alloc 16, store 12) corrupts every element past
+        // the first worker's chunk under store-size keying (B-2026-07-16-3).
+        let elem_size = self.ensure_target_data()?.get_abi_size(&elem_ty);
         if elem_size == 0 {
             return Ok(None);
         }
@@ -1599,6 +1604,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let (runtime_captures, const_int_captures) =
             self.partition_const_int_captures(&captures, parent_body, stmt_index);
 
+        // Tabulate: recognizer-proven "exactly one unconditional push per
+        // iteration" upgrades the lowering — workers write elements in
+        // place into one shared presized buffer instead of building
+        // per-worker partial Vecs that the combine chain memcpys. Same
+        // runtime entry, same helpers; only the worker's accumulator
+        // init (buffer view) and the caller's install differ.
+        let tabulate_elem_size = reduction.collect_tabulate.then_some(elem_size);
+
         let worker_fn = self.emit_reduce_collect_worker_fn(
             reduction,
             loop_var_int_ty,
@@ -1608,6 +1621,7 @@ impl<'ctx> super::Codegen<'ctx> {
             &runtime_captures,
             &const_int_captures,
             lo_val.is_some(),
+            tabulate_elem_size,
         )?;
 
         self.emit_reduce_collect_call(
@@ -1621,6 +1635,7 @@ impl<'ctx> super::Codegen<'ctx> {
             &runtime_captures,
             lo_val,
             per_iter_cost,
+            tabulate_elem_size,
         )?;
 
         Ok(Some(()))
@@ -1953,6 +1968,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// for cleanup — its buffer ownership transfers to the slot at
     /// function exit; the next combine_fn call takes responsibility for
     /// freeing it. Body-local lets register their own cleanup as usual.
+    /// `tabulate_elem_size`: when `Some(elem_size)`, emit the TABULATE
+    /// variant — the env struct's first field is the shared presized
+    /// output buffer's base pointer, and the worker's local accumulator
+    /// is initialized as a *view* into it (`{base + start·elem_size,
+    /// len 0, cap end-start}`) instead of an empty Vec. The body's
+    /// `acc.push` codegen is reused untouched: with exactly one push per
+    /// iteration (the recognizer's tabulate gate) the pushes fill the
+    /// view to exactly its capacity, so the grow path never fires and
+    /// every element lands directly in its final position. The worker
+    /// does NOT publish to its slot — the slot keeps init's `{null,0,0}`
+    /// so the runtime's combine chain is a no-op; the caller installs
+    /// the shared buffer into the accumulator after the call.
     #[allow(clippy::result_large_err)]
     #[allow(clippy::too_many_arguments)]
     fn emit_reduce_collect_worker_fn(
@@ -1965,10 +1992,15 @@ impl<'ctx> super::Codegen<'ctx> {
         captures: &[String],
         const_int_captures: &[(String, i64, Option<IntSuffix>)],
         has_lo: bool,
+        tabulate_elem_size: Option<u64>,
     ) -> Result<FunctionValue<'ctx>, String> {
         let worker_id = self.par_counter;
         self.par_counter += 1;
-        let name = format!("__karac_reduce_worker_collect_{worker_id}");
+        let name = if tabulate_elem_size.is_some() {
+            format!("__karac_reduce_worker_collect_tab_{worker_id}")
+        } else {
+            format!("__karac_reduce_worker_collect_{worker_id}")
+        };
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
@@ -2003,11 +2035,18 @@ impl<'ctx> super::Codegen<'ctx> {
         let entry = self.context.append_basic_block(worker_fn, "entry");
         self.builder.position_at_end(entry);
 
-        // Env-struct unpack (mirror of scalar): lo + captures by value.
-        let env_struct_ty: Option<StructType<'ctx>> = if !has_lo && captures.is_empty() {
+        // Env-struct unpack (mirror of scalar): [tabulate buf?] + lo +
+        // captures by value. Field order must mirror
+        // `emit_reduce_collect_call`'s env build exactly.
+        let tabulate = tabulate_elem_size.is_some();
+        let env_struct_ty: Option<StructType<'ctx>> = if !tabulate && !has_lo && captures.is_empty()
+        {
             None
         } else {
-            let mut field_tys: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(captures.len() + 1);
+            let mut field_tys: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(captures.len() + 2);
+            if tabulate {
+                field_tys.push(ptr_ty.into());
+            }
             if has_lo {
                 field_tys.push(loop_var_int_ty.into());
             }
@@ -2024,6 +2063,7 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(self.context.struct_type(&field_tys, false))
         };
         let mut lo_in_worker: Option<IntValue<'ctx>> = None;
+        let mut tab_buf: Option<PointerValue<'ctx>> = None;
         if let Some(env_ty) = env_struct_ty {
             let ctx_ptr = worker_fn.get_nth_param(3).unwrap().into_pointer_value();
             let env_val = self
@@ -2031,16 +2071,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load::<BasicTypeEnum<'ctx>>(env_ty.into(), ctx_ptr, "__reduce_env_load")
                 .unwrap()
                 .into_struct_value();
+            let mut next_field: u32 = 0;
+            if tabulate {
+                let buf_field = self
+                    .builder
+                    .build_extract_value(env_val, next_field, "__tab_buf")
+                    .unwrap()
+                    .into_pointer_value();
+                tab_buf = Some(buf_field);
+                next_field += 1;
+            }
             let capture_field_base = if has_lo {
                 let lo_field = self
                     .builder
-                    .build_extract_value(env_val, 0, "__reduce_lo")
+                    .build_extract_value(env_val, next_field, "__reduce_lo")
                     .unwrap()
                     .into_int_value();
                 lo_in_worker = Some(lo_field);
-                1
+                next_field as usize + 1
             } else {
-                0
+                next_field as usize
             };
             for (i, var_name) in captures.iter().enumerate() {
                 let cap_ty = saved_vars[var_name].ty;
@@ -2100,32 +2150,65 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // Allocate the local Vec accumulator, init to `{null, 0, 0}`,
-        // register under the source-level acc name so the body's
-        // `acc.push(x)` dispatches into `compile_vec_method` against
-        // this alloca. NOT registered for cleanup — the slot inherits
-        // ownership at function exit.
+        // Allocate the local Vec accumulator, register under the
+        // source-level acc name so the body's `acc.push(x)` dispatches
+        // into `compile_vec_method` against this alloca. NOT registered
+        // for cleanup — ownership of the heap lands with the caller
+        // (partials path: via the slot publish + combine chain; tabulate
+        // path: the caller owns the shared buffer outright).
+        //
+        // Partials init: the empty Vec `{null, 0, 0}`.
+        // Tabulate init: a VIEW into the shared output buffer —
+        // `{buf + start·elem_size, len 0, cap end-start}`. The chunk gets
+        // exactly `end-start` pushes (recognizer gate), so push fills the
+        // view to exactly its capacity and the grow path (which would
+        // `free` this interior pointer) is statically unreachable.
         let vec_ty = self.vec_struct_type();
         let acc_alloca = self.create_entry_alloca(worker_fn, &reduction.accumulator, vec_ty.into());
         let null_ptr = ptr_ty.const_null();
         let zero = i64_t.const_zero();
-        let mut empty = vec_ty.get_undef();
-        empty = self
+        let (acc_data, acc_cap): (PointerValue<'ctx>, IntValue<'ctx>) = match tab_buf {
+            Some(buf) => {
+                let raw_start_i64 = worker_fn.get_nth_param(1).unwrap().into_int_value();
+                let raw_end_i64 = worker_fn.get_nth_param(2).unwrap().into_int_value();
+                let elem_size = i64_t.const_int(
+                    tabulate_elem_size.expect("tab_buf implies tabulate_elem_size"),
+                    false,
+                );
+                let byte_off = self
+                    .builder
+                    .build_int_mul(raw_start_i64, elem_size, "tab.byte.off")
+                    .unwrap();
+                let view = unsafe {
+                    self.builder
+                        .build_gep(self.context.i8_type(), buf, &[byte_off], "tab.view")
+                        .unwrap()
+                };
+                let chunk_len = self
+                    .builder
+                    .build_int_sub(raw_end_i64, raw_start_i64, "tab.chunk.len")
+                    .unwrap();
+                (view, chunk_len)
+            }
+            None => (null_ptr, zero),
+        };
+        let mut acc_init = vec_ty.get_undef();
+        acc_init = self
             .builder
-            .build_insert_value(empty, null_ptr, 0, "acc.data")
+            .build_insert_value(acc_init, acc_data, 0, "acc.data")
             .unwrap()
             .into_struct_value();
-        empty = self
+        acc_init = self
             .builder
-            .build_insert_value(empty, zero, 1, "acc.len")
+            .build_insert_value(acc_init, zero, 1, "acc.len")
             .unwrap()
             .into_struct_value();
-        empty = self
+        acc_init = self
             .builder
-            .build_insert_value(empty, zero, 2, "acc.cap")
+            .build_insert_value(acc_init, acc_cap, 2, "acc.cap")
             .unwrap()
             .into_struct_value();
-        self.builder.build_store(acc_alloca, empty).unwrap();
+        self.builder.build_store(acc_alloca, acc_init).unwrap();
         self.variables.insert(
             reduction.accumulator.clone(),
             VarSlot {
@@ -2218,15 +2301,21 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.builder.position_at_end(exit_bb);
-        // Publish: load the local Vec struct and store into the slot.
-        // The slot now owns the heap buffer. Body-local lets get their
-        // cleanup via emit_scope_cleanup (acc was never registered).
-        let final_vec = self
-            .builder
-            .build_load(vec_ty, acc_alloca, "acc.final")
-            .unwrap();
-        let slot_ptr = worker_fn.get_nth_param(0).unwrap().into_pointer_value();
-        self.builder.build_store(slot_ptr, final_vec).unwrap();
+        // Publish (partials path only): load the local Vec struct and
+        // store into the slot — the slot now owns the heap buffer.
+        // Tabulate publishes NOTHING: the slot keeps init's `{null,0,0}`
+        // (publishing the view would hand the combine chain interior
+        // pointers to adopt/free), and the caller installs the shared
+        // buffer directly. Body-local lets get their cleanup via
+        // emit_scope_cleanup (acc was never registered).
+        if !tabulate {
+            let final_vec = self
+                .builder
+                .build_load(vec_ty, acc_alloca, "acc.final")
+                .unwrap();
+            let slot_ptr = worker_fn.get_nth_param(0).unwrap().into_pointer_value();
+            self.builder.build_store(slot_ptr, final_vec).unwrap();
+        }
         self.emit_scope_cleanup();
         self.builder.build_return(None).unwrap();
 
@@ -2265,6 +2354,7 @@ impl<'ctx> super::Codegen<'ctx> {
         captures: &[String],
         lo_val: Option<IntValue<'ctx>>,
         per_iter_cost_units: u64,
+        tabulate_elem_size: Option<u64>,
     ) -> Result<(), String> {
         let parent_fn = self
             .current_fn
@@ -2272,11 +2362,68 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
 
-        // Env struct: lo (if present) + captures by value.
-        let env_ctx_ptr: PointerValue<'ctx> = if lo_val.is_none() && captures.is_empty() {
+        // Tabulate: the entire dispatch is guarded by `iter_total > 0`
+        // (signed, in the loop var's own width — a reversed range like
+        // `5..3` must not zext into a huge positive byte count). The
+        // guard also owns the leak story: malloc only happens when the
+        // buffer is guaranteed to be installed into the accumulator on
+        // the same path; a zero-iteration loop leaves the accumulator
+        // untouched, exactly like its sequential form.
+        let mut tab_state: Option<(
+            inkwell::basic_block::BasicBlock<'ctx>,
+            PointerValue<'ctx>,
+            IntValue<'ctx>,
+        )> = None;
+        if let Some(elem_size_bytes) = tabulate_elem_size {
+            let zero_w = iter_total.get_type().const_zero();
+            let is_pos = self
+                .builder
+                .build_int_compare(IntPredicate::SGT, iter_total, zero_w, "tab.total.pos")
+                .unwrap();
+            let then_bb = self.context.append_basic_block(parent_fn, "tab.run");
+            let cont_bb = self.context.append_basic_block(parent_fn, "tab.cont");
+            self.builder
+                .build_conditional_branch(is_pos, then_bb, cont_bb)
+                .unwrap();
+            self.builder.position_at_end(then_bb);
+            // Positive on this path, so zext == sext.
+            let total64 = if iter_total.get_type().get_bit_width() < 64 {
+                self.builder
+                    .build_int_z_extend(iter_total, i64_t, "tab.total.widen")
+                    .unwrap()
+            } else {
+                iter_total
+            };
+            let bytes = self
+                .builder
+                .build_int_mul(
+                    total64,
+                    i64_t.const_int(elem_size_bytes, false),
+                    "tab.bytes",
+                )
+                .unwrap();
+            let buf = self
+                .builder
+                .build_call(self.malloc_fn, &[bytes.into()], "tab.buf")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            tab_state = Some((cont_bb, buf, total64));
+        }
+
+        // Env struct: [tabulate buf?] + lo (if present) + captures by
+        // value. Field order mirrors `emit_reduce_collect_worker_fn`.
+        let env_ctx_ptr: PointerValue<'ctx> = if tab_state.is_none()
+            && lo_val.is_none()
+            && captures.is_empty()
+        {
             ptr_ty.const_null()
         } else {
-            let mut field_tys: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(captures.len() + 1);
+            let mut field_tys: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(captures.len() + 2);
+            if tab_state.is_some() {
+                field_tys.push(ptr_ty.into());
+            }
             if lo_val.is_some() {
                 field_tys.push(loop_var_int_ty.into());
             }
@@ -2292,15 +2439,24 @@ impl<'ctx> super::Codegen<'ctx> {
             let env_ty = self.context.struct_type(&field_tys, false);
             let env_alloca = self.create_entry_alloca(parent_fn, "__reduce_env", env_ty.into());
             let mut env_agg = env_ty.get_undef();
+            let mut next_field: u32 = 0;
+            if let Some((_, buf, _)) = &tab_state {
+                env_agg = self
+                    .builder
+                    .build_insert_value(env_agg, *buf, next_field, "__tab_env_buf")
+                    .unwrap()
+                    .into_struct_value();
+                next_field += 1;
+            }
             let capture_base = if let Some(lo) = lo_val {
                 env_agg = self
                     .builder
-                    .build_insert_value(env_agg, lo, 0, "__reduce_env_lo")
+                    .build_insert_value(env_agg, lo, next_field, "__reduce_env_lo")
                     .unwrap()
                     .into_struct_value();
-                1
+                next_field as usize + 1
             } else {
-                0
+                next_field as usize
             };
             for (i, name) in captures.iter().enumerate() {
                 let slot = self.variables[name];
@@ -2345,12 +2501,18 @@ impl<'ctx> super::Codegen<'ctx> {
         let slot_size = i64_t.const_int(24, false);
         let slot_align = i64_t.const_int(8, false);
 
-        let iter_total_widened = if iter_total.get_type().get_bit_width() < 64 {
-            self.builder
-                .build_int_z_extend(iter_total, i64_t, "iter.widen")
-                .unwrap()
-        } else {
-            iter_total
+        let iter_total_widened = match &tab_state {
+            // Tabulate already widened inside the guard's then-block.
+            Some((_, _, total64)) => *total64,
+            None => {
+                if iter_total.get_type().get_bit_width() < 64 {
+                    self.builder
+                        .build_int_z_extend(iter_total, i64_t, "iter.widen")
+                        .unwrap()
+                } else {
+                    iter_total
+                }
+            }
         };
 
         let mut desc_agg = desc_ty.get_undef();
@@ -2418,16 +2580,55 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap();
 
-        // Post-call fold: extend out_slot's Vec into the parent's
-        // existing accumulator. `combine_fn` takes (dst, src) and
-        // transfers src's elements into dst, freeing both old buffers
-        // and zeroing src. The parent's pre-existing items (e.g. a
-        // `let mut results = Vec.new(); results.push(-1);` before the
-        // loop) appear first in the final dst; runtime-folded
-        // contributions follow.
-        self.builder
-            .build_call(combine_fn, &[acc_slot.ptr.into(), out_slot.into()], "")
-            .unwrap();
+        // Post-call fold.
+        //
+        // Partials path: extend out_slot's Vec into the parent's existing
+        // accumulator. `combine_fn` takes (dst, src) and transfers src's
+        // elements into dst, freeing both old buffers and zeroing src.
+        // The parent's pre-existing items (e.g. a `let mut results =
+        // Vec.new(); results.push(-1);` before the loop) appear first in
+        // the final dst; runtime-folded contributions follow.
+        //
+        // Tabulate path: out_slot is empty by construction (workers never
+        // publish), so it is ignored. The fully-written shared buffer is
+        // wrapped as `{buf, total, total}` and folded into the accumulator
+        // through the SAME combine_fn — empty accumulator (the common
+        // `let mut out = Vec.new()` shape) hits combine's adopt fast-path
+        // and takes ownership of `buf` with zero copies; a non-empty one
+        // gets the correct append semantics (elements copied after the
+        // pre-existing items, `buf` freed).
+        match tab_state {
+            Some((cont_bb, buf, total64)) => {
+                let temp_slot = self.create_entry_alloca(parent_fn, "__tab_result", vec_ty.into());
+                let mut result = vec_ty.get_undef();
+                result = self
+                    .builder
+                    .build_insert_value(result, buf, 0, "tab.res.data")
+                    .unwrap()
+                    .into_struct_value();
+                result = self
+                    .builder
+                    .build_insert_value(result, total64, 1, "tab.res.len")
+                    .unwrap()
+                    .into_struct_value();
+                result = self
+                    .builder
+                    .build_insert_value(result, total64, 2, "tab.res.cap")
+                    .unwrap()
+                    .into_struct_value();
+                self.builder.build_store(temp_slot, result).unwrap();
+                self.builder
+                    .build_call(combine_fn, &[acc_slot.ptr.into(), temp_slot.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+                self.builder.position_at_end(cont_bb);
+            }
+            None => {
+                self.builder
+                    .build_call(combine_fn, &[acc_slot.ptr.into(), out_slot.into()], "")
+                    .unwrap();
+            }
+        }
 
         Ok(())
     }
