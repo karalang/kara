@@ -129,6 +129,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 // existing non-identifier diagnostic fires below.
                 None => None,
             }
+        } else if let Some(vec_te) = self.map_get_unwrap_vec_value_te(inner) {
+            // B-2026-07-15-27: hoist a `<map>.get(k).unwrap()` Vec-value BORROW
+            // container — `m.get(k).unwrap()[i].method()` — to a synth Vec
+            // identifier so the identifier-keyed indexed-receiver lowering
+            // below applies unchanged. Unlike the FieldAccess arm (which points
+            // the synth at live field storage), the borrow is a VALUE, so we
+            // materialize the `{ptr,len,cap=0}` view (B-2026-07-15-26 zeroed the
+            // cap) into a synth Vec local. No teardown drop: the map owns the
+            // buffer AND its elements, and the element pointer the recursion
+            // GEPs aliases the map's live bucket (MR3), so a read method reads
+            // it in place — matching the interpreter's `ref`-borrow semantics.
+            let vec_val = self.compile_expr(inner)?;
+            if self.llvm_ty_is_vec_struct(vec_val.get_type()) {
+                let fn_val = self.current_fn.unwrap();
+                let synth = format!("__mapget_container_{}", self.indexed_elem_counter);
+                self.indexed_elem_counter += 1;
+                let slot = self.create_entry_alloca(fn_val, "mapget.vec.tmp", vec_val.get_type());
+                self.builder.build_store(slot, vec_val).unwrap();
+                self.variables.insert(
+                    synth.clone(),
+                    VarSlot {
+                        ptr: slot,
+                        ty: vec_val.get_type(),
+                    },
+                );
+                self.register_var_from_type_expr(&synth, &vec_te);
+                let expr = Expr {
+                    kind: ExprKind::Identifier(synth.clone()),
+                    span: inner.span.clone(),
+                };
+                hoisted_container = Some(synth);
+                Some(expr)
+            } else {
+                // Not actually a Vec struct — leave for the diagnostic below.
+                None
+            }
         } else {
             None
         };

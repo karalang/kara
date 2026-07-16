@@ -53094,6 +53094,41 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_inline_index_map_get_unwrap_vec_value() {
+        // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
+        // (`m.get(k).unwrap()[i]`) used to loud-bail "Index operator applied to
+        // non-array type" — codegen recognised only named-binding / free-fn-call
+        // Vec receivers, not a `.get().unwrap()` method chain. Now the borrow
+        // view is materialized into a synth Vec local and indexed; heap elements
+        // are deep-cloned so the read stands alone, and the temp is NOT dropped
+        // (the map owns the buffer, cf. B-2026-07-15-26). Covers a scalar-elem
+        // value (`Vec[i64]`, the reported repro), a heap-elem value
+        // (`Vec[String]`) across a println arg + a bound read, a `[i].method()`
+        // indexed-receiver call, and a nested `Vec[Vec[i64]]`. Sibling LSan test
+        // guards the memory safety.
+        let output = run_program(
+            "fn main() {\n\
+                 let mut m: Map[i64, Vec[i64]] = Map.new();\n\
+                 m.insert(1, [10, 20, 30]);\n\
+                 println(m.get(1).unwrap()[1]);\n\
+                 let mut s: Map[i64, Vec[String]] = Map.new();\n\
+                 s.insert(1, [\"alpha\", \"beta\", \"gamma\"]);\n\
+                 println(s.get(1).unwrap()[0]);\n\
+                 println(s.get(1).unwrap()[2].len());\n\
+                 let w = s.get(1).unwrap()[1];\n\
+                 println(w);\n\
+                 let mut n: Map[i64, Vec[Vec[i64]]] = Map.new();\n\
+                 n.insert(7, [[1, 2], [3, 4, 5]]);\n\
+                 let inner = n.get(7).unwrap()[1];\n\
+                 println(inner[2]);\n\
+                 println(m.get(1).unwrap()[0]);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "20\nalpha\n5\nbeta\n5\n10\n");
+    }
+
+    #[test]
     fn test_e2e_vec_prefix_literal_basic() {
         // `Vec[a, b, c]` at expression position now lowers via
         // `compile_vec_prefix_literal` — malloc + per-slot store +

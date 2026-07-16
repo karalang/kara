@@ -27745,4 +27745,54 @@ fn main() {
             "inline_map_get_unwrap_heap_value_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_inline_index_map_get_unwrap_vec_value_no_leak() {
+        // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
+        // (`m.get(k).unwrap()[i]`) is lowered by materializing the `{ptr,len,
+        // cap=0}` borrow view (B-2026-07-15-26) into a synth Vec local, reading
+        // the element, deep-cloning it when heap, and — crucially — NOT dropping
+        // the temp (the map owns the buffer + elements). Two failure modes this
+        // guards, both in a loop so they accumulate/trip:
+        //   * dropping the borrow temp would re-drain the map's elements
+        //     (`emit_vec_drop_fn` walks 0..len before the cap-guarded free) →
+        //     double-free (ASAN trips);
+        //   * the deep-cloned heap element handed to a by-value consumer (a
+        //     `takes(String)` call arg, a let-binding) must be freed by that
+        //     consumer, or it leaks once per iteration (LSan catches the strand).
+        // Covers a scalar-elem value (`Vec[i64]`), a heap-elem value
+        // (`Vec[String]`) as a `[i].method()` receiver / a by-value fn-call arg /
+        // a let-binding, and a nested `Vec[Vec[i64]]`.
+        assert_clean_asan_run(
+            r#"
+fn takes(s: String) -> i64 {
+    s.len()
+}
+fn main() {
+    let mut m: Map[i64, Vec[i64]] = Map.new();
+    m.insert(1, [10, 20, 30]);
+    let mut s: Map[i64, Vec[String]] = Map.new();
+    s.insert(1, ["alpha", "beta", "gamma"]);
+    let mut n: Map[i64, Vec[Vec[i64]]] = Map.new();
+    n.insert(7, [[1, 2], [3, 4, 5]]);
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 60 {
+        acc = acc + m.get(1).unwrap()[1];
+        acc = acc + s.get(1).unwrap()[0].len();
+        acc = acc + takes(s.get(1).unwrap()[2]);
+        let w = s.get(1).unwrap()[1];
+        acc = acc + w.len();
+        let inner = n.get(7).unwrap()[1];
+        acc = acc + inner[2];
+        i = i + 1;
+    }
+    println(acc);
+    println(s.get(1).unwrap()[0]);
+}
+"#,
+            &["2340", "alpha"],
+            "inline_index_map_get_unwrap_vec_value_no_leak",
+        );
+    }
 }

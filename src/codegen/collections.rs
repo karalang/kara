@@ -1873,8 +1873,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // hence in `owned_temp_drops`). The signature lookup sidesteps the
         // collision entirely. (Phase-11 longtail: shape-generic `matmul`
         // reading dims via `a.shape()[k]`, 2026-06-09.)
+        // Inline index of a `<map>.get(k).unwrap()` Vec-value BORROW
+        // (`m.get(k).unwrap()[i]`, B-2026-07-15-27): the unwrap yields a
+        // `{ptr, len, cap=0}` borrow view of the map's bucket buffer
+        // (B-2026-07-15-26 zeroed the cap), so the map — not this temporary —
+        // owns the buffer AND every element. Materialize + read exactly like
+        // the fresh-owned temp path, but pass `owns_temp = false` so the temp
+        // Vec is NOT dropped (dropping it would double-free the map's buffer,
+        // and — because `emit_vec_drop_fn` drains elements *before* the
+        // cap-guarded buffer free — also double-free each heap element). Heap
+        // elements are still deep-cloned so the returned value stands alone.
+        // Checked BEFORE `inline_temp_vec_te` because that helper's `Call`
+        // arm never matches a `.unwrap()` method chain anyway; keeping it
+        // first documents the borrow-vs-owned split at the dispatch site.
+        if let Some(vec_te) = self.map_get_unwrap_vec_value_te(object) {
+            return self.compile_inline_temp_vec_index_ex(object, index, &vec_te, false);
+        }
         if let Some(vec_te) = self.inline_temp_vec_te(object) {
-            return self.compile_inline_temp_vec_index(object, index, &vec_te);
+            return self.compile_inline_temp_vec_index_ex(object, index, &vec_te, true);
         }
 
         let idx_raw = self.compile_expr(index)?;
@@ -2048,21 +2064,79 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Index a freshly-produced, owned `Vec` temporary (`a.shape()[k]`,
-    /// `make_vec()[i]`) — the value `object` evaluates to is a `Vec`
+    /// The `Vec[E]` value `TypeExpr` produced by `<map>.get(k).unwrap()` /
+    /// `.expect()` when the map's VALUE type is a `Vec` — i.e. the shape
+    /// `m.get(k).unwrap()[i]` indexes (B-2026-07-15-27). `None` for any other
+    /// RHS. The unwrapped value is a BORROW of the map's bucket buffer
+    /// (`map.get(k)` returns `Option[ref V]`; B-2026-07-15-26 zeroes its `cap`
+    /// to a `{ptr,len,0}` read-only view), so `compile_index` routes it through
+    /// `compile_inline_temp_vec_index_ex(.., owns_temp = false)`: materialize +
+    /// read, deep-clone heap elements, but leave the buffer for the map to
+    /// free. A SHARED value is the rc path's business and a scalar value is not
+    /// indexable, so both are excluded — bare-identifier map receiver only,
+    /// mirroring `is_nonshared_heap_value_map_get_unwrap`.
+    pub(super) fn map_get_unwrap_vec_value_te(&self, object: &Expr) -> Option<TypeExpr> {
+        let ExprKind::MethodCall {
+            method,
+            object: get_call,
+            ..
+        } = &object.kind
+        else {
+            return None;
+        };
+        if !matches!(method.as_str(), "unwrap" | "expect") {
+            return None;
+        }
+        let ExprKind::MethodCall {
+            method: get_method,
+            object: map_recv,
+            ..
+        } = &get_call.kind
+        else {
+            return None;
+        };
+        if get_method != "get" {
+            return None;
+        }
+        let ExprKind::Identifier(map_var) = &map_recv.kind else {
+            return None;
+        };
+        let te = self.var_elem_type_exprs.get(map_var)?;
+        let is_shared = matches!(&te.kind,
+            TypeKind::Path(p)
+                if p.segments.last().is_some_and(|s| self.shared_types.contains_key(s.as_str())));
+        if is_shared {
+            return None;
+        }
+        // Only a `Vec` value is indexable via `[i]`; a `String` value is a
+        // different (char-index) path, and a scalar owns no buffer.
+        self.extract_vec_elem_type(te).is_some().then(|| te.clone())
+    }
+
+    /// Index an inline `Vec` temporary (`a.shape()[k]`, `make_vec()[i]`,
+    /// `m.get(k).unwrap()[i]`) — the value `object` evaluates to is a `Vec`
     /// `{ptr, len, cap}` struct, not a named binding the identifier-keyed
     /// Vec path can dispatch on. Materializes the value into a synth Vec
     /// local (so the existing `compile_vec_index` lowering runs unchanged),
     /// reads the element, deep-clones it when the element type isn't
-    /// trivially Copy (the read shallow-aliases the about-to-be-freed
-    /// buffer otherwise), then drops the temp Vec (buffer + every nested
-    /// element's heap) via the Vec drop fn. `vec_te` is the temporary's
-    /// `Vec[T]` / `VecDeque[T]` `TypeExpr` (from `inline_temp_vec_te`).
-    fn compile_inline_temp_vec_index(
+    /// trivially Copy (the read shallow-aliases the buffer otherwise), then —
+    /// when `owns_temp` — drops the temp Vec (buffer + every nested element's
+    /// heap) via the Vec drop fn. `vec_te` is the temporary's `Vec[T]` /
+    /// `VecDeque[T]` `TypeExpr` (from `inline_temp_vec_te` /
+    /// `map_get_unwrap_vec_value_te`).
+    ///
+    /// `owns_temp == false` is the BORROW case (`<map>.get(k).unwrap()[i]`,
+    /// B-2026-07-15-27): the value is a `{ptr,len,cap=0}` view aliasing the
+    /// map's bucket buffer, which the map's scope-exit per-entry drop owns, so
+    /// the temp is NOT dropped here. The heap-element deep-clone still runs, so
+    /// the returned value stands alone even though the buffer is left to the
+    /// map.
+    fn compile_inline_temp_vec_index_ex(
         &mut self,
         object: &Expr,
         index: &Expr,
         vec_te: &TypeExpr,
+        owns_temp: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let vec_val = self.compile_expr(object)?;
         // Defensive: a `ref Vec` borrow (or any non-Vec shape that slipped
@@ -2120,10 +2194,18 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Free the temp Vec: buffer + (for non-Copy elements) each element's
         // nested heap. Safe because the returned element was deep-cloned.
-        let drop_fn = self.emit_drop_fn_for_type_expr(vec_te);
-        self.builder
-            .build_call(drop_fn, &[slot.into()], "")
-            .unwrap();
+        // Skipped for a BORROW temporary (`owns_temp == false`, the
+        // `<map>.get(k).unwrap()[i]` case, B-2026-07-15-27) — that
+        // `{ptr,len,cap=0}` view aliases the map's live bucket, so the map's
+        // scope-exit per-entry drop is the sole owner; dropping here would
+        // re-drain the elements (`emit_vec_drop_fn` walks 0..len before the
+        // cap-guarded buffer free) → double-free.
+        if owns_temp {
+            let drop_fn = self.emit_drop_fn_for_type_expr(vec_te);
+            self.builder
+                .build_call(drop_fn, &[slot.into()], "")
+                .unwrap();
+        }
 
         // Tidy the synth registrations (same set `register_var_from_type_expr`
         // could have touched for a Vec / VecDeque / String binding).
@@ -2170,19 +2252,24 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// True when `expr` is a plain element index (`make()[i]`, not a range)
-    /// into a *fresh-owned `Vec` temporary* (`inline_temp_vec_te` matches the
-    /// callee's return signature) whose element type is non-trivially-copyable.
-    /// `compile_inline_temp_vec_index` lowers that shape by **deep-cloning** the
-    /// indexed element into a fresh owned buffer (the temp Vec is dropped right
-    /// after the read, so the read must stand alone), then de-registers the
-    /// synth Vec local — so the clone has NO consuming binding and NO scope-exit
-    /// cleanup of its own. In a directly-consuming position (a `println`/`print`
-    /// argument, a by-value user-fn argument) the consumer must free it exactly
-    /// like a `Call`/`MethodCall` fresh temp (`expr_yields_fresh_owned_temp`),
-    /// or it leaks once per call — the reported `println(names()[0])`
-    /// (B-2026-06-14-32). A trivially-Copy element (`shape()[k] -> i64`) returns
-    /// a bare scalar — no clone, nothing to free — so it is excluded, matching
-    /// the clone gate in `compile_inline_temp_vec_index`.
+    /// into an *inline `Vec` temporary* — either a fresh-owned one
+    /// (`inline_temp_vec_te` matches the callee's return signature) or a
+    /// `<map>.get(k).unwrap()` Vec-value borrow (`map_get_unwrap_vec_value_te`,
+    /// B-2026-07-15-27) — whose element type is non-trivially-copyable.
+    /// `compile_inline_temp_vec_index_ex` lowers both shapes by **deep-cloning**
+    /// the indexed element into a fresh owned buffer (the fresh temp is dropped
+    /// right after the read, and the borrow temp is not dropped at all but the
+    /// clone still stands alone), then de-registers the synth Vec local — so the
+    /// clone has NO consuming binding and NO scope-exit cleanup of its own. In a
+    /// directly-consuming position (a `println`/`print` argument, a by-value
+    /// user-fn argument) the consumer must free it exactly like a
+    /// `Call`/`MethodCall` fresh temp (`expr_yields_fresh_owned_temp`), or it
+    /// leaks once per call — the reported `println(names()[0])`
+    /// (B-2026-06-14-32) and, for the borrow shape, `println(m.get(k).unwrap()[i])`
+    /// over `Map[_, Vec[String]]` (B-2026-07-15-27). A trivially-Copy element
+    /// (`shape()[k] -> i64`, `Map[_, Vec[i64]]`) returns a bare scalar — no
+    /// clone, nothing to free — so it is excluded, matching the clone gate in
+    /// `compile_inline_temp_vec_index_ex`.
     pub(super) fn expr_is_inline_temp_vec_heap_index(&self, expr: &Expr) -> bool {
         let ExprKind::Index { object, index } = &expr.kind else {
             return false;
@@ -2190,7 +2277,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(&index.kind, ExprKind::Range { .. }) {
             return false;
         }
-        let Some(vec_te) = self.inline_temp_vec_te(object) else {
+        let Some(vec_te) = self
+            .inline_temp_vec_te(object)
+            .or_else(|| self.map_get_unwrap_vec_value_te(object))
+        else {
             return false;
         };
         match vec_inner_type_expr(&vec_te) {
