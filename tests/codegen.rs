@@ -10296,6 +10296,31 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_product_terminal() {
+        // The `product()` numeric terminal — the multiplicative sibling of
+        // `sum()`. Desugars to `fold((1 as elem), |a, x| a * x)`, seeding the
+        // accumulator with a width-correct ONE. Covers: a bare `iter().product`,
+        // a `map().product`, a `filter().product`, an f64 product (the seed must
+        // be `1.0`), an empty source (products to 1), and a `range` product.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4];\n\
+                 println(f\"{v.iter().product()}\");\n\
+                 println(f\"{v.iter().map(|x| x + 1).product()}\");\n\
+                 println(f\"{v.iter().filter(|x| x % 2 == 0).product()}\");\n\
+                 let f: Vec[f64] = [1.5, 2.0, 4.0];\n\
+                 println(f\"{f.iter().product()}\");\n\
+                 let e: Vec[i64] = [];\n\
+                 println(f\"{e.iter().product()}\");\n\
+                 println(f\"{(1..5).product()}\");\n\
+             }",
+        ) {
+            // 24 (1*2*3*4), 120 (2*3*4*5), 8 (2*4), 12 (1.5*2*4), 1, 24 (1*2*3*4)
+            assert_eq!(out, "24\n120\n8\n12\n1\n24\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_iter_chain_count_terminal() {
         // B-2026-07-11-19 — the `count()` terminal on a fused iterator chain.
         // Before the fix it was caught by the materialized-collection `len`/

@@ -170,16 +170,18 @@ impl<'a> super::TypeChecker<'a> {
                     .insert(SpanKey::from_span(span), Self::type_to_type_expr(&acc_ty));
                 acc_ty
             }
-            "sum" => {
-                // `sum() -> T` — numeric terminal. Drains the iterator and adds
-                // the yielded elements from a zero of the element type. The
+            "sum" | "product" => {
+                // `sum() -> T` / `product() -> T` — numeric terminals. Drain the
+                // iterator and combine the yielded elements from a zero/one of
+                // the element type (`sum` adds, `product` multiplies). The
                 // yielded element `TypeExpr` is recorded span-keyed so codegen
                 // can seed its fused-loop accumulator with a correctly-typed
-                // zero (`acc = acc + x` must type-check at the element's width).
-                // B-2026-07-11-19.
+                // zero/one (`acc = acc + x` / `acc * x` must type-check at the
+                // element's width). B-2026-07-11-19 (sum); product is the
+                // multiplicative sibling.
                 if !args.is_empty() {
                     self.type_error(
-                        "Iterator.sum() takes no arguments".to_string(),
+                        format!("Iterator.{method}() takes no arguments"),
                         span.clone(),
                         TypeErrorKind::WrongNumberOfArgs,
                     );
@@ -190,7 +192,8 @@ impl<'a> super::TypeChecker<'a> {
                 if !is_numeric(item) && !self.type_param_has_numeric_bound(item) {
                     self.type_error(
                         format!(
-                            "Iterator.sum() requires a numeric element type, found '{}'",
+                            "Iterator.{}() requires a numeric element type, found '{}'",
+                            method,
                             type_display(item)
                         ),
                         span.clone(),
@@ -813,6 +816,7 @@ impl<'a> super::TypeChecker<'a> {
                     "next",
                     "peek",
                     "peekable",
+                    "product",
                     "reduce",
                     "scan",
                     "skip",

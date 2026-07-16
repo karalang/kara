@@ -5227,14 +5227,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // every numeric element type. Fails closed to the loud dispatch error
         // below when the element type wasn't recorded or the chain shape isn't
         // one the shared peel understands.
-        if method == "sum"
+        if (method == "sum" || method == "product")
             && args.is_empty()
             && matches!(
                 &object.kind,
                 ExprKind::MethodCall { .. } | ExprKind::Range { .. }
             )
         {
-            if let Some(v) = self.try_compile_iter_chain_sum(object, call_span)? {
+            if let Some(v) =
+                self.try_compile_iter_chain_sum_product(object, method == "product", call_span)?
+            {
                 return Ok(v);
             }
         }
@@ -9116,9 +9118,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`iter_terminal_elem_types`); without it — or when `fold`'s peel rejects
     /// the chain — this fails closed (`Ok(None)` → the loud dispatch error),
     /// never a silent wrong answer.
-    fn try_compile_iter_chain_sum(
+    fn try_compile_iter_chain_sum_product(
         &mut self,
         recv: &Expr,
+        is_product: bool,
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let Some(elem_te) = self
@@ -9137,13 +9140,14 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Identifier(name.to_string()),
             span: sp.clone(),
         };
-        // `(0 as <elem>)` — a width-correct zero for any numeric element type
-        // (i8..i64 / isize, u8..u64 / usize, f32 / f64) without spelling a
-        // per-type literal suffix (`IntSuffix` has no isize/usize spelling).
-        let zero = Expr {
+        // `(0 as <elem>)` / `(1 as <elem>)` — a width-correct additive/
+        // multiplicative identity for any numeric element type (i8..i64 /
+        // isize, u8..u64 / usize, f32 / f64) without spelling a per-type
+        // literal suffix (`IntSuffix` has no isize/usize spelling).
+        let seed = Expr {
             kind: ExprKind::Cast {
                 expr: Box::new(Expr {
-                    kind: ExprKind::Integer(0, None),
+                    kind: ExprKind::Integer(if is_product { 1 } else { 0 }, None),
                     span: sp.clone(),
                 }),
                 ty: elem_te,
@@ -9152,13 +9156,13 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let fold_body = Expr {
             kind: ExprKind::Binary {
-                op: BinOp::Add,
+                op: if is_product { BinOp::Mul } else { BinOp::Add },
                 left: Box::new(ident(&acc_p)),
                 right: Box::new(ident(&x_p)),
             },
             span: sp.clone(),
         };
-        self.try_compile_iter_chain_fold(recv, &zero, &acc_p, &x_p, &fold_body, call_span)
+        self.try_compile_iter_chain_fold(recv, &seed, &acc_p, &x_p, &fold_body, call_span)
     }
 
     /// `<iter-chain>.count() -> i64` — the element-count terminal on a fused
