@@ -72,7 +72,12 @@ default = []
 # is DE-GATE ONLY: `karac repl`/`test`/`run` still default to the tree-walk
 # interpreter (JIT is opt-in via `KARAC_REPL_JIT=1` / `KARAC_TEST_JIT=1`); the
 # JIT-by-default flip is Slice 5, deliberately kept separate.
-llvm = ["inkwell", "dep:llvm-sys", "dep:karac-runtime", "dep:libc"]
+# `karac-runtime/regex` so the in-process JIT runtime (`karac_jit_runner`,
+# `force_link_karac_runtime`) carries the `karac_regex_*` symbols the JIT must
+# resolve for `karac run` on regex programs — AOT gets them from the separate
+# `libkarac_runtime_regex.a`, but the JIT links the runtime dep at build time
+# with a fixed feature set, so regex has to be on here for run==build parity.
+llvm = ["inkwell", "dep:llvm-sys", "dep:karac-runtime", "dep:libc", "karac-runtime/regex"]
 # Throwaway prototype gate for phase-7 L558 sub-step (a): inkwell-MCJIT
 # round-trip of representative Kāra modules. Off by default; not shipped
 # in the normal karac binary. Removed when the orc2 wrap (L560) lands.

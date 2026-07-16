@@ -394,6 +394,20 @@ jobs:
       - name: Codegen E2E (arm64)
         run: cargo test --features llvm --test codegen
 
+      # arm64 run==build parity via LLJIT. The x86 leg above (job "Codegen E2E
+      # (LLVM 18)") is the ONLY via-LLJIT run, but macOS `ld64 -dead_strip` is
+      # more aggressive than the x86 linker, so runtime `#[no_mangle]` symbols
+      # missing from `__preserve_no_mangle_symbols` get stripped from
+      # `karac_jit_runner` on arm64 while surviving on x86 — an arm64-only JIT
+      # keep-list gap the x86 leg CANNOT catch (16 alloc/string/regex/task
+      # symbols were silently red here; B-2026-07-16-N). Reruns the same
+      # compiled binary (env is read at test-runtime), so this adds run time,
+      # not build time.
+      - name: Codegen E2E via LLJIT (arm64 run==build parity)
+        run: cargo test --features llvm --test codegen
+        env:
+          KARAC_TEST_JIT: "1"
+
       # The producer-mode library + `#[repr(C)]` enum + struct-by-value
       # round-trips — the direct AArch64 confirmation for the artifact + ABI
       # work. Multiple filters are OR'd by libtest. `test_build_crate_type`

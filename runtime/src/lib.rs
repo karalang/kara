@@ -125,6 +125,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         alloc::karac_alloc_fallible,
         alloc::karac_alloc_or_panic,
         alloc::karac_realloc_or_panic,
+        alloc::karac_alloc_zeroed_or_panic,
     );
     // Embedded critical-section RAII guard (`critical_section.acquire()`,
     // b6ea37a1). Codegen's synthesized drop calls
@@ -136,6 +137,52 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_critical_section_acquire,
         karac_critical_section_release,
     );
+    // Regex FFI (`runtime/src/regex.rs`, opt-in `regex` feature). Codegen emits
+    // calls to the whole `karac_regex_*` surface for `Regex.compile`/`is_match`/
+    // `find`/`find_all`/`replace_all`; the JIT resolves them from the running
+    // `karac_jit_runner` process via the `dlsym` generator, so all five must be
+    // preserved — without them `karac run` (JIT) on ANY regex program fails at
+    // lookup with "Symbols not found: [_karac_regex_validate, _karac_regex_is_match, …]"
+    // while `karac build` (AOT, `libkarac_runtime_regex.a`) is fine. Same
+    // keep-list class as the realloc (B-2026-07-12-22) and critical-section
+    // pairs above. cfg-gated because the `regex` module only exists under the
+    // feature; the `llvm` feature now pulls `karac-runtime/regex` so the JIT
+    // runtime actually carries these.
+    #[cfg(feature = "regex")]
+    keep!(
+        regex::karac_regex_validate,
+        regex::karac_regex_is_match,
+        regex::karac_regex_find,
+        regex::karac_regex_find_all,
+        regex::karac_regex_replace_all,
+    );
+    // String runtime — `clone.rs` methods (trim/case/strip/replace/sorted) and
+    // the split/lines FFI (`string_split_ffi` module + crate-root
+    // `karac_runtime_string_to_cstring`). Codegen emits these for `String`/`str`
+    // ops; the JIT resolves them from the process, so all must be preserved.
+    // Same keep-list class as alloc/regex — these were the arm64-ONLY via-JIT
+    // gap (macOS `-dead_strip` removed them; x86 CI's linker kept them, and the
+    // via-JIT CI leg is x86-only, so this went unseen).
+    keep!(
+        clone::karac_string_trim,
+        clone::karac_string_trim_start,
+        clone::karac_string_trim_end,
+        clone::karac_string_to_lowercase,
+        clone::karac_string_to_uppercase,
+        clone::karac_string_strip_prefix,
+        clone::karac_string_strip_suffix,
+        clone::karac_string_replace,
+        clone::karac_string_sorted,
+        string_split_ffi::karac_runtime_string_lines,
+        string_split_ffi::karac_runtime_string_split,
+        string_split_ffi::karac_runtime_string_split_whitespace,
+        karac_runtime_string_to_cstring,
+    );
+    // Task detach (`scheduler.rs`, native `net` scheduler) — codegen emits it for
+    // a discarded `spawn(...)` whose `TaskHandle` is never joined (B-2026-06-17-2).
+    // Native-only; the wasm schedulers export their own copy.
+    #[cfg(feature = "net")]
+    keep!(scheduler::karac_runtime_task_detach);
     // Tracing spans (`runtime/src/tracing.rs`). Codegen emits calls to the
     // whole surface (span enter/exit bracketing + exporter/min-level
     // plumbing), so all of it must be JIT-resolvable — `karac run` failed
