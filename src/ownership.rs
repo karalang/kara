@@ -2182,6 +2182,15 @@ pub(crate) fn collect_method_param_modes(program: &Program) -> HashMap<String, V
     ] {
         map.insert(key.to_string(), vec![OwnershipMode::Ref]);
     }
+    // `get_or(key: ref K, default: V) -> V` — the key BORROWS (lookup) but the
+    // default is CONSUMED (it becomes the return value when the key is absent),
+    // so the mode vector is `[Ref, Own]`, not the single-arg `[Ref]` above.
+    for key in ["Map.get_or", "SortedMap.get_or"] {
+        map.insert(
+            key.to_string(),
+            vec![OwnershipMode::Ref, OwnershipMode::Own],
+        );
+    }
     // Baked-stdlib instance methods next — the `MethodCall` twin of the
     // stdlib walk in `collect_callee_param_modes` (B-2026-07-01-10); user
     // entries override below.

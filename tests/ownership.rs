@@ -8807,3 +8807,21 @@ fn test_map_insert_still_consumes_key_after_lookup() {
         "using a String key after it was consumed by insert must still be a move error"
     );
 }
+
+#[test]
+fn test_map_get_or_borrows_key_consumes_default() {
+    // B-2026-07-16-12 follow-up: `get_or(key: ref K, default: V) -> V` borrows
+    // the key (a lookup) but consumes the default (it becomes the return value
+    // when the key is absent). A String key used with `get_or` then again must
+    // not be flagged as moved.
+    ownership_ok(
+        "fn main() {\n\
+        \x20   let mut m: Map[String, i64] = Map.new();\n\
+        \x20   let k: String = \"x\";\n\
+        \x20   let v: i64 = m.get_or(k, 0);\n\
+        \x20   let present: bool = m.contains_key(k);\n\
+        \x20   println(v);\n\
+        \x20   println(present);\n\
+        }",
+    );
+}
