@@ -2223,6 +2223,67 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// True when codegen statically knows `expr` yields a `String` /
+    /// `StringSlice` value (a `{ptr,len,cap}` struct). Used to fire the
+    /// `.to_string()` owning-copy special-case even when the shared-span
+    /// `dispatch_key` is unavailable — in a chain like
+    /// `s.to_string().to_uppercase()` the inner and outer `MethodCall`s collide
+    /// on ONE `method_callee_types` span key (the parser sets
+    /// `MethodCall.span == receiver.span`), so the inner call's
+    /// `"String.to_string"` key is shadowed by the outer call's and the
+    /// dispatch-key-gated special-case never fires — the inner `to_string` then
+    /// falls through to the Vec/String dispatcher, which has no `to_string` arm
+    /// and loud-fails the build (B-2026-07-16-20). This receiver-shape check is
+    /// side-effect-free (reads only static tables) and only recognises genuine
+    /// String/StringSlice receivers, so it can never hijack a `to_string` on
+    /// another type.
+    pub(super) fn expr_is_string_like(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::InterpolatedStringLit(_) => true,
+            ExprKind::Identifier(n) => {
+                self.string_vars.contains(n.as_str())
+                    || matches!(
+                        self.var_type_names.get(n.as_str()).map(String::as_str),
+                        Some("String") | Some("StringSlice")
+                    )
+            }
+            ExprKind::SelfValue => matches!(
+                self.var_type_names.get("self").map(String::as_str),
+                Some("String") | Some("StringSlice")
+            ),
+            // A builtin String→String method chained as a receiver
+            // (`c.trim().to_string()`, `c.to_uppercase().to_string()`) yields a
+            // String, but `trim`/`to_uppercase`/… are not registered in
+            // `fn_return_type_names`, so the generic `type_name_of_expr` fallback
+            // below can't resolve them. These names are String-only (a Vec has
+            // no `trim`/`to_uppercase`), and `to_string` always yields a String,
+            // so recognising them here is unambiguous. `sorted`/`replace`/
+            // `repeat` are deliberately EXCLUDED — they also name Vec methods
+            // (`Vec.sorted` returns a Vec), so flagging them string-like would
+            // misroute a Vec receiver's `.to_string()` through the String-copy
+            // path.
+            ExprKind::MethodCall { method, .. }
+                if matches!(
+                    method.as_str(),
+                    "trim"
+                        | "trim_start"
+                        | "trim_end"
+                        | "to_lowercase"
+                        | "to_uppercase"
+                        | "to_string"
+                ) =>
+            {
+                true
+            }
+            _ => matches!(
+                self.type_name_of_expr(expr).as_deref(),
+                Some("String") | Some("StringSlice")
+            ),
+        }
+    }
+
     /// Return the Kāra type name for a compiled expression, if known.
     pub(super) fn type_name_of(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {

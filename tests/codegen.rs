@@ -68706,6 +68706,43 @@ fn main() {
             }
         }
     }
+
+    #[test]
+    fn test_e2e_chained_to_string_then_string_method() {
+        // B-2026-07-16-20: a `.to_string()` chained as the RECEIVER of another
+        // method (`s.to_string().to_uppercase()`, `s.trim().to_string()...`)
+        // built-fail'd with "Vec/String method 'to_string' is not yet supported
+        // in codegen" while the interpreter ran fine — a check-passes /
+        // codegen-rejects consistency hole. Cause: the parser sets
+        // `MethodCall.span == receiver.span`, so the inner `to_string` and the
+        // outer method collide on one `method_callee_types` span key; the outer
+        // call's key shadows the inner's, so the `String.to_string()`
+        // owning-copy special-case (dispatch-key-gated on a "String" receiver
+        // segment) never fired for the inner call. Fixed by additionally firing
+        // that special-case on a statically String/StringSlice receiver
+        // (`expr_is_string_like`), independent of the shared-span dispatch key.
+        // Exercises the identifier, string-literal, and mid-chain
+        // (`trim().to_string().to_uppercase()`) receiver shapes.
+        for (src, want) in [
+            (
+                "fn main() { let s = \"hi\".to_string(); println(s.to_string().to_uppercase()); }",
+                "HI",
+            ),
+            (
+                "fn main() { println(\"hi\".to_string().to_uppercase()); }",
+                "HI",
+            ),
+            (
+                "fn main() { let s = \"  Hi  \".to_string(); \
+                 println(s.trim().to_string().to_uppercase()); }",
+                "HI",
+            ),
+        ] {
+            if let Some(out) = run_program(src) {
+                assert_eq!(out.trim(), want, "chained to_string mismatch for: {src}");
+            }
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]

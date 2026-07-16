@@ -2061,13 +2061,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // § StringSlice: "To store a slice beyond the borrow, call .to_string()")
         // — the same copy: a `StringSlice` is `{ptr,len,cap=0}`, so copying its
         // `len` bytes yields an independent owned `String`.
+        // The dispatch-key gate handles the terminal call; `expr_is_string_like`
+        // additionally covers a `to_string` whose span-keyed dispatch_key is
+        // shadowed by an outer chained call (`s.to_string().to_uppercase()`,
+        // B-2026-07-16-20) by recognising a statically String/StringSlice
+        // receiver directly.
         if method == "to_string"
             && args.is_empty()
-            && dispatch_key
+            && (dispatch_key
                 .as_deref()
                 .and_then(|k| k.rsplit_once('.'))
                 .map(|(t, _)| t == "String" || t == "StringSlice")
                 .unwrap_or(false)
+                || self.expr_is_string_like(object))
         {
             let v = self.compile_expr(object)?.into_struct_value();
             let data = self
@@ -2080,7 +2086,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(v, 1, "ts.s.len")
                 .unwrap()
                 .into_int_value();
-            return Ok(self.build_owned_string_from_parts(data, len));
+            let copied = self.build_owned_string_from_parts(data, len);
+            // Free the intermediate receiver temp when it is a fresh owned
+            // String (a chained `x.trim().to_string()` /
+            // `x.to_uppercase().to_string()` receiver): the copy above is an
+            // independent buffer, and nothing else owns the receiver's — so
+            // without this it leaks once per call (unbounded in a loop). A
+            // place-expr / identifier / literal receiver is NOT a fresh temp
+            // (`expr_yields_fresh_owned_temp` matches Call/MethodCall only), and
+            // the `cap > 0` guard in `free_str_vec_buffer_if_heap` additionally
+            // no-ops on a borrowed (cap == 0) view. B-2026-07-16-21.
+            if self.expr_yields_fresh_owned_temp(object)
+                || self.expr_is_fresh_owned_string_slice(object)
+            {
+                self.free_str_vec_buffer_if_heap(v.into());
+            }
+            return Ok(copied);
         }
 
         // `myStruct.to_string()` for a `#[derive(Display)]` / `impl Display`
@@ -10765,6 +10786,53 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_type_names.remove(&synth);
         self.vec_elem_types.remove(&synth);
         self.string_vars.remove(&synth);
+
+        // Free the intermediate receiver temp's buffer. When `object` is a
+        // fresh owned String — a chained `s.to_uppercase().to_lowercase()`
+        // receiver, an `f"…".trim()`, a `make_str().to_uppercase()` — nothing
+        // else owns its `{ptr,len,cap}` buffer: the statement-level owned-temp
+        // machinery tracks only the OUTERMOST temp, so the intermediate leaks
+        // once per call (unbounded in a loop). Free it here, but ONLY when the
+        // method's result cannot alias the receiver buffer — a scalar / bool /
+        // Option-of-scalar result never does, and the freshly-ALLOCATING
+        // String→String family returns an independent copy. A heap-struct
+        // result from a BORROWING method (`split`, slicing) may view into the
+        // receiver, so those stay conservatively un-freed (a safe leak, never a
+        // dangle). `free_str_vec_buffer_if_heap`'s `cap > 0` guard no-ops on a
+        // borrowed (cap == 0) view. B-2026-07-16-21.
+        if let Ok(rv) = &result {
+            if self.expr_yields_fresh_owned_temp(object)
+                || self.expr_is_fresh_owned_string_slice(object)
+            {
+                let result_is_heap_struct = self.llvm_ty_is_vec_struct(rv.get_type());
+                // A heap-struct result is receiver-independent only for methods
+                // that ALLOCATE a fresh copy: the String→String xform family
+                // and the split family, whose runtime helpers
+                // (`karac_runtime_string_split{,_whitespace}` / `_lines`)
+                // `copy_nonoverlapping` each piece into its OWN `cap>0` buffer —
+                // no element views into the receiver. Any other heap-struct
+                // result is treated as possibly-aliasing and left un-freed.
+                let result_independent_of_receiver = !result_is_heap_struct
+                    || matches!(
+                        method,
+                        "trim"
+                            | "trim_start"
+                            | "trim_end"
+                            | "to_lowercase"
+                            | "to_uppercase"
+                            | "sorted"
+                            | "replace"
+                            | "to_string"
+                            | "repeat"
+                            | "split"
+                            | "split_whitespace"
+                            | "lines"
+                    );
+                if result_independent_of_receiver {
+                    self.free_str_vec_buffer_if_heap(val);
+                }
+            }
+        }
 
         result.map(Some)
     }

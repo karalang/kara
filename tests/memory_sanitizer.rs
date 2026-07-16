@@ -28253,4 +28253,51 @@ fn main() {
             "struct_var_reassign_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_chained_string_method_intermediate_temp_no_leak() {
+        // B-2026-07-16-21: a heap-String-returning method used as the RECEIVER
+        // of another method (`s.to_uppercase().to_lowercase()`,
+        // `c.trim().to_string().to_uppercase()`, `e.to_uppercase().split(",")`)
+        // produces a fresh owned intermediate String whose buffer nothing else
+        // owned — the statement-level owned-temp machinery tracks only the
+        // OUTERMOST temp, so the intermediate leaked once per call (unbounded in
+        // a loop). Fixed by freeing the materialized receiver temp in the
+        // expression-receiver string-method path (and the `to_string` copy
+        // path), gated on `expr_yields_fresh_owned_temp` so a place-expr /
+        // borrowed receiver (`p.name.to_uppercase()`, `v[0]...`) is never
+        // freed, and on the method's result being receiver-INDEPENDENT (the
+        // freshly-allocating xform family + the copy-into-owned split family) so
+        // a borrowing result can't dangle. Loops 200× so any per-iteration
+        // strand shows as a large LSan leak; the field-receiver leg also guards
+        // against wrongly freeing a struct field's buffer (a double-free / UAF
+        // that ASAN would trip even without LSan).
+        assert_clean_asan_run(
+            r#"
+struct Rec { name: String }
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let a = "Hello-World".to_string();
+        let b = a.to_uppercase().to_lowercase();
+        total = total + (b.len() as i64);
+        let c = "  Trim Me  ".to_string();
+        let d = c.trim().to_string().to_uppercase();
+        total = total + (d.len() as i64);
+        let e = "x,y,z".to_string();
+        let parts = e.to_uppercase().split(",");
+        for p in parts { total = total + (p.len() as i64); }
+        let r = Rec { name: "field-string-value".to_string() };
+        let u = r.name.to_uppercase();
+        total = total + (u.len() as i64) + (r.name.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["11400"],
+            "chained_string_method_intermediate_temp_no_leak",
+        );
+    }
 }
