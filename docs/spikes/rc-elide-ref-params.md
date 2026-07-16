@@ -259,7 +259,7 @@ default-ON posture, not just headroom. Pinned by
 `asan_rc_elide_recursive_tree_sum_pool_no_leak` (Index-projection call site +
 combine-both walk; clean under default and `=0`).
 
-## Condition 5 (OPEN) — mutation-through-alias, found during the Part B review
+## Condition 5 (CLOSED, 2639536) — mutation-through-alias, found during the Part B review
 
 Conditions 1–4 do not constrain WHERE a payload **projection** may flow: an
 elided fn's arm may pass `n.parent` (any projection) to an arbitrary callee.
