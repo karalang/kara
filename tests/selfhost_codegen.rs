@@ -42,6 +42,17 @@ const CORPUS: &[&str] = &[
     "fn main() { let mut x = 1; x = x + 41; println(x.to_string()) }",
     "fn main() { let x = 1; let x = x + 1; println(x.to_string()) }",
     "fn main() { let mut a = 10; a = a - 3; a = a * 2; println(a.to_string()) }",
+    // Slice 4: bools, comparisons, logical ops, if/else (incl. else-if), div/mod.
+    "fn main() { let x = 5; if x > 3 { println(\"big\") } else { println(\"small\") } }",
+    "fn main() { let x = 2; if x > 3 { println(\"big\") } else { println(\"small\") } }",
+    "fn main() { println((3 < 4).to_string()); println((4 < 3).to_string()) }",
+    "fn main() { println(true.to_string()); println(false.to_string()) }",
+    "fn main() { let a = 1; let b = 2; println((a < b and b < 3).to_string()) }",
+    "fn main() { println((not (1 == 2)).to_string()) }",
+    "fn main() { let n = 17; if n % 2 == 0 { println(\"even\") } else { println(\"odd\") } }",
+    "fn main() { let n = 9; if n < 5 { println(\"lo\") } else { if n < 20 { println(\"mid\") } else { println(\"hi\") } } }",
+    "fn main() { println((84 / 2).to_string()); println((17 % 5).to_string()) }",
+    "fn main() { let mut x = 1; if true { x = x + 1; } println(x.to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

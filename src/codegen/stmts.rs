@@ -5480,12 +5480,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // scope exit both `a` (now holding b's value) and `b` freed them
                     // (double-free; JIT aborts immediately, native masks it at -O but
                     // trips under `karac_par_run`). Suppress the source below.
-                    let lhs_is_tracked_struct = self.var_type_names.get(name.as_str()).is_some_and(
-                        |tn| {
+                    let lhs_is_tracked_struct =
+                        self.var_type_names.get(name.as_str()).is_some_and(|tn| {
                             self.struct_types.contains_key(tn.as_str())
                                 && !self.shared_types.contains_key(tn.as_str())
-                        },
-                    );
+                        });
                     if let Some(slot) = self.variables.get(name).copied() {
                         // Coerce a scalar RHS to the slot's width before
                         // storing — narrow-int arithmetic computes at i64

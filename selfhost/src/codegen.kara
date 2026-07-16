@@ -37,12 +37,24 @@ import ast.{
     IdentExpr,
     StrLit,
     IntLit,
+    BoolLit,
     BinaryExpr,
     BinOp,
+    UnaryExpr,
+    UnaryOp,
     MethodCallExpr,
+    IfExpr,
     Pattern,
     BindingPattern,
 };
+
+// An emitted VALUE: the LLVM operand text plus whether it is an `i1` (bool)
+// rather than an `i64` (Slice 4). Comparisons / logical ops / bool literals
+// produce i1; everything else i64.
+struct Val {
+    op: String,
+    is_bool: bool,
+}
 
 // Accumulates the module's string-literal GLOBALS and the `main` BODY
 // separately (globals must precede the function definition), plus monotonic
@@ -58,6 +70,8 @@ struct Emitter {
     // linear scan (newest-first, so shadowing rebinds); no scoping yet — Slice 3
     // main bodies are a single flat block.
     locals: Vec[String],
+    // Monotonic basic-block label id (Slice 4: `if`/`else` control flow).
+    nlbl: i64,
 }
 
 // Emit a whole program as LLVM IR text. Walks the items, emits `main`'s body
@@ -71,6 +85,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         nstr: 0,
         ntmp: 0,
         locals: Vec.new(),
+        nlbl: 0,
     };
     for it in items {
         match it {
@@ -94,7 +109,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, body, nstr, ntmp, locals } = e;
+    let Emitter { globals, body, nstr, ntmp, locals, nlbl } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -104,6 +119,8 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
     out = out + "declare i64 @fwrite(ptr, i64, i64, ptr)\n";
     out = out + "declare i32 @snprintf(ptr, i64, ptr, ...)\n";
     out = out + "@.fmt_i = internal constant [5 x i8] c\"%lld\\00\"\n";
+    out = out + "@.true = internal constant [5 x i8] c\"true\\00\"\n";
+    out = out + "@.false = internal constant [6 x i8] c\"false\\00\"\n";
     out = out + globals;
     out = out + "define i32 @main() {\nentry:\n";
     out = out + body;
@@ -142,7 +159,8 @@ impl Emitter {
                 match pattern {
                     BindingPat(bp) => {
                         let BindingPattern { name, span: bsp } = bp;
-                        let v = self.emit_int_value(value);
+                        let v0 = self.emit_value(value);
+                        let Val { op: v, is_bool: vb } = v0;
                         let idx = self.locals.len();
                         self.locals.push(name);
                         let slot = "%v" + idx.to_string();
@@ -161,7 +179,8 @@ impl Emitter {
                         let IdentExpr { name, span: isp } = ie;
                         let idx = self.local_slot(name);
                         if idx >= 0 {
-                            let v = self.emit_int_value(value);
+                            let v0 = self.emit_value(value);
+                            let Val { op: v, is_bool: vb } = v0;
                             self.body = self.body
                                 + "  store i64 "
                                 + v
@@ -214,18 +233,61 @@ impl Emitter {
                                 self.emit_println_str(sv);
                             }
                             MethodCall(mc) => {
-                                // `println(<int-expr>.to_string())` (Slice 2):
-                                // emit the integer value, then format+print it.
+                                // `println(<expr>.to_string())` (Slices 2+4):
+                                // emit the value, then format+print it — i64 via
+                                // snprintf, i1 as "true"/"false" via select.
                                 let MethodCallExpr { object, method, args: margs, span: msp } = mc;
                                 if method == "to_string" {
-                                    let val = self.emit_int_value(object);
-                                    self.emit_println_int(val);
+                                    let val = self.emit_value(object);
+                                    let Val { op, is_bool } = val;
+                                    if is_bool {
+                                        self.emit_println_bool(op);
+                                    } else {
+                                        self.emit_println_int(op);
+                                    }
                                 }
                             }
                             _ => {}
                         }
                     }
                 }
+            }
+            If(n) => {
+                // `if cond { … } else { … }` in statement position (Slice 4):
+                // evaluate the condition (i1), branch to fresh labels, emit each
+                // arm, and re-join. The else branch is an `Expr` (a block, or a
+                // nested `if` for `else if`), handled by recursion.
+                let IfExpr { cond, then_block, else_branch, span } = n;
+                let c = self.emit_value(cond);
+                let Val { op: cop, is_bool: cb } = c;
+                let lid = self.nlbl;
+                self.nlbl = self.nlbl + 1;
+                let lthen = "then" + lid.to_string();
+                let lelse = "else" + lid.to_string();
+                let lend = "endif" + lid.to_string();
+                self.body = self.body
+                    + "  br i1 "
+                    + cop
+                    + ", label %"
+                    + lthen.clone()
+                    + ", label %"
+                    + lelse.clone()
+                    + "\n";
+                self.body = self.body + lthen + ":\n";
+                self.emit_block(then_block);
+                self.body = self.body + "  br label %" + lend.clone() + "\n";
+                self.body = self.body + lelse + ":\n";
+                match else_branch {
+                    Some(eb) => {
+                        self.emit_expr(eb);
+                    }
+                    None => {}
+                }
+                self.body = self.body + "  br label %" + lend.clone() + "\n";
+                self.body = self.body + lend + ":\n";
+            }
+            Blk(b) => {
+                self.emit_block(b);
             }
             _ => {}
         }
@@ -284,22 +346,31 @@ impl Emitter {
         "%t" + t.to_string()
     }
 
-    // Emit an INTEGER expression and return the LLVM operand holding its value —
-    // either a literal (constants are valid operands) or a `%tN` register (Slice
-    // 2). Handles integer literals and `+ - *`; sub-expressions are emitted
+    // Emit a VALUE expression and return its operand + type (Slice 2 ints,
+    // Slice 4 bools). Integer literals / local reads / `+ - *` are i64;
+    // comparisons (`== != < <= > >=` — icmp on i64 operands), logical `and`/`or`
+    // (on i1), bool literals, and `not` are i1. Sub-expressions are emitted
     // before the combining instruction, so operands are always in scope.
-    fn emit_int_value(mut ref self, e: Expr) -> String {
+    fn emit_value(mut ref self, e: Expr) -> Val {
         match e {
             Int(n) => {
                 let IntLit { value, suffix, span } = n;
-                value.to_string()
+                Val { op: value.to_string(), is_bool: false }
+            }
+            Bool(n) => {
+                let BoolLit { value, span } = n;
+                if value {
+                    Val { op: "true".to_string(), is_bool: true }
+                } else {
+                    Val { op: "false".to_string(), is_bool: true }
+                }
             }
             Ident(ie) => {
                 // A local variable read (Slice 3): load from its i64 slot.
                 let IdentExpr { name, span } = ie;
                 let idx = self.local_slot(name);
                 if idx < 0 {
-                    return "0".to_string();
+                    return Val { op: "0".to_string(), is_bool: false };
                 }
                 let r = self.fresh();
                 self.body = self.body
@@ -308,19 +379,99 @@ impl Emitter {
                     + " = load i64, ptr %v"
                     + idx.to_string()
                     + ", align 8\n";
-                r
+                Val { op: r, is_bool: false }
+            }
+            Unary(u) => {
+                // `not b` (Slice 4): xor the i1 with true.
+                let UnaryExpr { op, operand, span } = u;
+                let inner = self.emit_value(operand);
+                let Val { op: iop, is_bool: ib } = inner;
+                let is_not = match op {
+                    Not => true,
+                    _ => false,
+                };
+                if is_not {
+                    let r = self.fresh();
+                    self.body =
+                        self.body + "  " + r.clone() + " = xor i1 " + iop + ", true\n";
+                    return Val { op: r, is_bool: true };
+                }
+                Val { op: iop, is_bool: ib }
             }
             Binary(b) => {
                 let BinaryExpr { op, left, right, span } = b;
-                let lv = self.emit_int_value(left);
-                let rv = self.emit_int_value(right);
-                let oc = bin_opcode(op);
+                let lv = self.emit_value(left);
+                let rv = self.emit_value(right);
+                let Val { op: lop, is_bool: lb } = lv;
+                let Val { op: rop, is_bool: rb } = rv;
+                // ONE match on `op` (BinOp is not Copy) yields both the class
+                // and the instruction text: comparison → `icmp <cc>` on i64 → i1;
+                // logical → `and`/`or` on i1 (non-short-circuit — output-
+                // equivalent for the side-effect-free corpus); else arithmetic
+                // on i64.
+                let bi = bin_ir(op);
+                let BinIr { kind, text } = bi;
                 let r = self.fresh();
-                self.body = self.body + "  " + r.clone() + " = " + oc + " i64 " + lv + ", " + rv + "\n";
-                r
+                if kind == 1 {
+                    self.body = self.body
+                        + "  "
+                        + r.clone()
+                        + " = icmp "
+                        + text
+                        + " i64 "
+                        + lop
+                        + ", "
+                        + rop
+                        + "\n";
+                    return Val { op: r, is_bool: true };
+                }
+                if kind == 2 {
+                    self.body = self.body
+                        + "  "
+                        + r.clone()
+                        + " = "
+                        + text
+                        + " i1 "
+                        + lop
+                        + ", "
+                        + rop
+                        + "\n";
+                    return Val { op: r, is_bool: true };
+                }
+                self.body =
+                    self.body + "  " + r.clone() + " = " + text + " i64 " + lop + ", " + rop + "\n";
+                Val { op: r, is_bool: false }
             }
-            _ => "0".to_string(),
+            _ => Val { op: "0".to_string(), is_bool: false },
         }
+    }
+
+    // Print an i1 as `true`/`false` + newline: select the global + its length.
+    fn emit_println_bool(mut ref self, val: String) {
+        let p = self.fresh();
+        self.body = self.body
+            + "  "
+            + p.clone()
+            + " = select i1 "
+            + val.clone()
+            + ", ptr @.true, ptr @.false\n";
+        let l = self.fresh();
+        self.body =
+            self.body + "  " + l.clone() + " = select i1 " + val + ", i64 4, i64 5\n";
+        let st = self.fresh();
+        self.body = self.body + "  " + st.clone() + " = load ptr, ptr @stdout, align 8\n";
+        let r = self.fresh();
+        self.body = self.body
+            + "  "
+            + r
+            + " = call i64 @fwrite(ptr "
+            + p
+            + ", i64 1, i64 "
+            + l
+            + ", ptr "
+            + st
+            + ")\n";
+        self.emit_write("@.nl".to_string(), 1);
     }
 
     // Format an i64 operand with `snprintf` into a stack buffer and print it (the
@@ -358,13 +509,30 @@ impl Emitter {
     }
 }
 
-// The LLVM integer opcode for a binary operator (Slice 2: `+ - *`).
-fn bin_opcode(op: BinOp) -> String {
+// A binary operator's lowering, computed in ONE match (BinOp is not Copy):
+// `kind` 0 = arithmetic (text = the i64 opcode), 1 = comparison (text = the
+// signed icmp condition code), 2 = logical (text = the i1 opcode).
+struct BinIr {
+    kind: i64,
+    text: String,
+}
+
+fn bin_ir(op: BinOp) -> BinIr {
     match op {
-        Add => "add".to_string(),
-        Sub => "sub".to_string(),
-        Mul => "mul".to_string(),
-        _ => "add".to_string(),
+        Add => BinIr { kind: 0, text: "add".to_string() },
+        Sub => BinIr { kind: 0, text: "sub".to_string() },
+        Mul => BinIr { kind: 0, text: "mul".to_string() },
+        Div => BinIr { kind: 0, text: "sdiv".to_string() },
+        Mod => BinIr { kind: 0, text: "srem".to_string() },
+        Eq => BinIr { kind: 1, text: "eq".to_string() },
+        NotEq => BinIr { kind: 1, text: "ne".to_string() },
+        Lt => BinIr { kind: 1, text: "slt".to_string() },
+        LtEq => BinIr { kind: 1, text: "sle".to_string() },
+        Gt => BinIr { kind: 1, text: "sgt".to_string() },
+        GtEq => BinIr { kind: 1, text: "sge".to_string() },
+        And => BinIr { kind: 2, text: "and".to_string() },
+        Or => BinIr { kind: 2, text: "or".to_string() },
+        _ => BinIr { kind: 0, text: "add".to_string() },
     }
 }
 
