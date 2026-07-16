@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **495 surfaced · 1 open · 490 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **496 surfaced · 1 open · 491 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -97,9 +97,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **495 surfaced 
 |---|---|---|---|---|---|
 | B-2026-07-16-11 | 2026-07-16 | codegen (Vec construction: a Vec built by a counted push-loop reallocs ~log(n) times instead of pre-sizing) | low | A `Vec` built by `Vec.new()` + a counted `push`-loop reallocs ~log(n) times (growth-doubling) where the trip count is statically derivable — auto-pre-sizing (the imperative sibling of the collect-tabulate recognizer) would emit one alloc per Vec. On #115's nested Vec[Vec[i64]] DP this is ~1.7x of the gap to Rust; `Vec.with_capacity` recovers it (kara reaches nested-`Vec<Vec>` parity). The residual vs a flat Vec[i64] is the inherent per-row malloc of a row-of-rows | none |
 
-### Fixed (490)
+### Fixed (491)
 
-<details><summary>490 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>491 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -593,6 +593,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **495 surfaced 
 | B-2026-07-16-8 | codegen | med | LLJIT (`karac run` / KARAC_TEST_JIT) produces EMPTY OUTPUT for programs using regex, alloc_zeroed, string methods (trim/case/strip/replace/sorted/spl… | 902a163f |
 | B-2026-07-16-9 | codegen (let-binding RC registration: shared_option_info detection in the `let` statement path) | high | An `Option[shared]` bound from an `if`/`if let`/`match`/block EXPRESSION, then passed by value MORE THAN ONCE, is a use-after-free: the `let`-path `s… | 3137755 |
 | B-2026-07-16-10 | codegen (auto-par whole-function lowering / concurrency.rs analyze_function — par_run-wrapped body emits function-scope defer/errdefer in-place instead of on the fn-scope-exit cleanup drain) | medium | FIXED — User `defer` blocks execute FIFO-inline (at declaration point, in declaration order) instead of LIFO-at-scope-exit when the enclosing functio… | 07f4e09 |
+| B-2026-07-16-12 | ownership (collect_method_param_modes — builtin collection lookup methods have no syntactic signature so their key/value arg fell to the consume default) | medium | FIXED — Builtin collection LOOKUP methods (Map.get/remove/contains_key, Set.contains/remove, Vec.contains, String.contains) consumed their key/value… | 8f32f01 |
 
 </details>
 
