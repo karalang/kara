@@ -585,7 +585,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **488 surfaced 
 | B-2026-07-15-27 | codegen (index operator on a non-identifier temporary — `<expr>[i]` where <expr> is a method-call chain like `m.get(k).unwrap()`) | low | Inline-indexing a temporary Vec (`m.get(k).unwrap()[i]`, and likely any `<method-chain>[i]`) loud-bails 'Index operator applied to non-array type'; b… | 354b4df |
 | B-2026-07-16-1 | codegen (`<struct-field-map>.get(k).unwrap()` of a heap value — the get/unwrap borrow-elision detectors recognised only a bare-IDENTIFIER map receiver, so a field-access receiver `h.ms`/`self.ms` kept its real `cap` and double-freed the borrowed bucket buffer against the struct's scope-exit map drop) | high | `<struct-field-map>.get(k).unwrap()` of a heap value (a `Map[_, String]`/`Map[_, Vec]` FIELD) double-frees the value buffer, both bound (`let v = h.m… | 3a44455 |
 | B-2026-07-16-2 | runtime | high | Three recent runtime-symbol surfaces missing from the JIT keep-list — critical_section acquire/release (b6ea37a1), the tracing span/exporter octet, a… | e1972851 |
-| B-2026-07-16-3 | codegen | high | #[par_unordered] collect combine helper used get_store_size for its byte-offset GEPs and its size-keyed symbol, but Vec push/index GEPs stride by ele… | 1021e0da |
+| B-2026-07-16-3 | codegen | high | #[par_unordered] collect combine helper used get_store_size for its byte-offset GEPs and its size-keyed symbol, but Vec push/index GEPs stride by ele… | 70fd850a |
 
 </details>
 
