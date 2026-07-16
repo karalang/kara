@@ -89,13 +89,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **490 surfaced · 1 open · 485 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **491 surfaced · 2 open · 485 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-16-4 | 2026-07-16 | cli | med | lljit_prototype::lljit_gdb_registration_listener_registers_dwarf_module fails on macOS (M5 Pro, Darwin 25.5): after installing + materializing a DWARF-carrying module, the process-global __jit_debug_descriptor carries no registered entry ('the listener did not fire'). CI never catches it: the llvm-feature CI jobs run a targeted suite list that excludes lljit_prototype, and the plain `cargo test --all` job compiles without --features llvm. | none |
+| B-2026-07-16-7 | 2026-07-16 | rc-elide analysis (src/rc_elide.rs, env KARAC_RC_ELIDE_REF_PARAMS — default OFF) | high | rc-elide conditions 1-4 do not constrain where a payload PROJECTION flows: an elided fn passing `n.parent` (any projection) to a mutating callee can release the only count keeping the borrowed node alive (the elided frame holds no +1 of its own) — UAF mid-arm on up/back-pointer shared graphs; condition 5 is a priority fast-follow now that the default-ON flip (a8d47f2) has landed | none |
 
 ### Fixed (485)
 
