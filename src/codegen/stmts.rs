@@ -1835,6 +1835,79 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// Classify a `let`-RHS control-flow / block expression for the
+    /// `Option[shared]` registration case (g) at B-2026-07-16-8. Returns:
+    ///   - `None`          → NOT a recognized owns-+1 `Option[shared]` producer;
+    ///     the binding must **not** register (a scope-exit dec against an
+    ///     un-owned alias would double-free — the fail-closed default).
+    ///   - `Some(None)`    → every tail is a `None` literal (owns a null Option,
+    ///     no inner shared type to track — nothing to register).
+    ///   - `Some(Some(i))` → owns its `+1` with inner shared info `i`: every tail
+    ///     is a `Some(<shared>)` literal, a call returning `Option[shared]`, or a
+    ///     `None` literal (recursing through nested `if`/`if let`/`match`/block).
+    ///
+    /// Only owns-+1 tails are accepted, so — exactly like case (b) (Call
+    /// move-out) and case (e) (`Some(..)` literal) — registration emits the
+    /// caller-retains inc/dec pair with **no** extra inner inc. A tail that
+    /// merely *aliases* an existing binding (a bare identifier / field read)
+    /// bails, leaving the binding unregistered rather than risk an unbalanced
+    /// dec.
+    fn control_flow_owned_option_shared(
+        &self,
+        e: &Expr,
+    ) -> Option<Option<crate::codegen::state::SharedTypeInfo<'ctx>>> {
+        match &e.kind {
+            // `None` literal — owns a null Option; no inner type.
+            ExprKind::Identifier(n) if n == "None" => Some(None),
+            // `Some(<shared>)` literal, or a free-fn call returning `Option[shared]`.
+            ExprKind::Call { callee, args } => {
+                if let ExprKind::Identifier(c) = &callee.kind {
+                    if c == "Some" && args.len() == 1 {
+                        let inner = self.type_name_of_expr(&args[0].value)?;
+                        let info = self.shared_types.get(inner.as_str())?.clone();
+                        return Some(Some(info));
+                    }
+                    if let Some(inner) = self.fn_return_option_inner_shared.get(c.as_str()) {
+                        if let Some(info) = self.shared_types.get(inner.as_str()).cloned() {
+                            return Some(Some(info));
+                        }
+                    }
+                }
+                None
+            }
+            ExprKind::Block(b) => match &b.final_expr {
+                Some(t) => self.control_flow_owned_option_shared(t),
+                None => None,
+            },
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                let then_c = match &then_block.final_expr {
+                    Some(t) => self.control_flow_owned_option_shared(t)?,
+                    None => return None,
+                };
+                let else_c = self.control_flow_owned_option_shared(else_branch.as_ref()?)?;
+                Some(then_c.or(else_c))
+            }
+            ExprKind::Match { arms, .. } => {
+                let mut info = None;
+                for arm in arms {
+                    let c = self.control_flow_owned_option_shared(&arm.body)?;
+                    info = info.or(c);
+                }
+                Some(info)
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         // Slice c-repl.B.5.1: REPL value-snapshot replay short-circuit.
         // When this stmt is a top-level `let <name> = <expr>` whose
@@ -3279,6 +3352,47 @@ impl<'ctx> super::Codegen<'ctx> {
                                         }
                                     }
                                 }
+                            }
+                        }
+                        // (g) Untyped let with an `if` / `if let` / `match` /
+                        //     block-EXPRESSION RHS whose every branch tail is an
+                        //     owns-+1 `Option[shared]` producer (a `Some(<shared>)`
+                        //     literal, a call returning `Option[shared]`, or
+                        //     `None`) — `let root = if c { mk() } else { mk() }`,
+                        //     `let x = { mk() }`. Cases (a)-(f) all pattern-match a
+                        //     single RHS shape and never look inside a control-flow
+                        //     expression, so such a binding was left UNREGISTERED:
+                        //     no `var_option_shared_heap` entry, so the call-site
+                        //     `share_option_shared_ref_for_arg` retain no-op'd on
+                        //     every by-value pass and no scope-exit `RcDecOption`
+                        //     was queued. A single pass "moved" the chain (the
+                        //     callee's exit dec balanced the branch's rc==1) and
+                        //     worked by luck; passing the binding by value MORE
+                        //     THAN ONCE saw the first callee free the chain, and
+                        //     the second use read freed memory — a use-after-free
+                        //     (B-2026-07-16-8; surfaced by #114's
+                        //     `let root = if .. { build(..) } else { build(..) };
+                        //     flatten(root); spine_hash(root)`). This is the same
+                        //     class already fixed for the `Some(..)` RHS (case e,
+                        //     B-2026-07-11-21) and the `v[i]` RHS (case f,
+                        //     B-2026-07-11-29), extended to control-flow-expression
+                        //     RHSs. Every accepted tail owns its +1 (a Call
+                        //     move-out / `Some` literal), so — like cases (b)/(e) —
+                        //     NO extra inner inc is flagged; the classifier bails
+                        //     (leaving the binding unregistered) if any tail merely
+                        //     aliases, so a scope-exit dec is never queued against
+                        //     an un-owned handle.
+                        if shared_option_info.is_none()
+                            && matches!(
+                                &value.kind,
+                                ExprKind::If { .. }
+                                    | ExprKind::IfLet { .. }
+                                    | ExprKind::Match { .. }
+                                    | ExprKind::Block(_)
+                            )
+                        {
+                            if let Some(Some(info)) = self.control_flow_owned_option_shared(value) {
+                                shared_option_info = Some((var_name.clone(), info));
                             }
                         }
                         // Aliasing acquire: when the RHS is an Identifier naming

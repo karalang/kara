@@ -25718,6 +25718,40 @@ fn main() {
     }
 
     #[test]
+    fn asan_if_expr_option_shared_reused_no_use_after_free() {
+        // B-2026-07-16-8: an `Option[shared]` bound from an `if`/`match`/block
+        // EXPRESSION (`let root = if c { mk() } else { mk() }`) passed BY VALUE
+        // more than once. The `shared_option_info` detection block only matched a
+        // single RHS shape (Call / Some / Index / FieldAccess / Identifier) and
+        // never looked inside a control-flow expression, so the binding was left
+        // UNREGISTERED: no call-site retain, no scope-exit dec. The first `readv`
+        // call's param drop freed the node, the second read freed memory — a
+        // use-after-free (interpreter correct; JIT+AOT garbage / heap corruption).
+        // Same class as B-2026-07-11-21 (`Some(..)` RHS) / -29 (`v[i]` RHS),
+        // extended to control-flow-expression RHSs (case g). 50*(7+7) + 50*(9+9)
+        // = 1600.
+        assert_clean_asan_run(
+            r#"
+shared struct N { val: i64, mut left: Option[N], mut right: Option[N] }
+fn mk(v: i64) -> Option[N] { Some(N { val: v, left: None, right: None }) }
+fn readv(r: Option[N]) -> i64 { match r { None => 0i64, Some(n) => n.val } }
+fn main() {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < 100i64 {
+        let root = if (i % 2i64) == 0i64 { mk(7i64) } else { mk(9i64) };
+        acc = acc + readv(root) + readv(root);
+        i = i + 1i64;
+    }
+    println(acc)
+}
+"#,
+            &["1600"],
+            "if_expr_option_shared_reused_no_use_after_free",
+        );
+    }
+
+    #[test]
     fn asan_vecvec_heap_element_consumed_by_value_no_double_free() {
         // B-2026-07-11-24 (borrow-elision leg): a `let r = grid[i]` inner
         // `Vec[String]` read out of a `Vec[Vec[String]]`, whose element `r[j]` is
