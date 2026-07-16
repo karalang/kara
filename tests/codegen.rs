@@ -9989,6 +9989,60 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_reduction_over_shared_pool_declined_and_correct() {
+        // B-2026-07-16-2: the auto-par reduction recognizer lowered
+        // `total = total + sum(pool[k % 8])` into a multi-threaded
+        // `karac_par_reduce` worker even though the captured pool holds
+        // plain `shared` trees — every worker then raced the NON-atomic
+        // rc-inc (worker body, element retain) / rc-dec (callee-drop
+        // inside `sum`) pairs on the same 8 root nodes, driving refcounts
+        // to zero while the trees were still live: use-after-free reads
+        // (garbage `n.val` → spurious "integer overflow" panics) and
+        // glibc heap-corruption aborts within ~500 iterations. The fix
+        // gates reduction recognition on the same cross-task-safe
+        // predicate as explicit `spawn` captures, so this loop lowers
+        // sequentially and must produce the exact sum deterministically.
+        if let Some(out) = run_program(
+            "shared struct TreeNode {\n\
+                 val: i64,\n\
+                 left: Option[TreeNode],\n\
+                 right: Option[TreeNode],\n\
+             }\n\
+             fn build(depth: i64, counter: i64) -> Option[TreeNode] {\n\
+                 if depth == 0 {\n\
+                     return None;\n\
+                 }\n\
+                 let left = build(depth - 1, counter * 2);\n\
+                 let right = build(depth - 1, counter * 2 + 1);\n\
+                 return Some(TreeNode { val: counter, left: left, right: right });\n\
+             }\n\
+             fn sum(node: Option[TreeNode]) -> i64 {\n\
+                 match node {\n\
+                     None => 0,\n\
+                     Some(n) => n.val + sum(n.left) + sum(n.right),\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut pool: Vec[Option[TreeNode]] = Vec.new();\n\
+                 let mut i = 0;\n\
+                 while i < 8 {\n\
+                     pool.push(build(5, 1));\n\
+                     i = i + 1;\n\
+                 }\n\
+                 let mut total = 0;\n\
+                 let mut rep = 0;\n\
+                 while rep < 1000 {\n\
+                     total = total + sum(pool[rep % 8]);\n\
+                     rep = rep + 1;\n\
+                 }\n\
+                 println(total);\n\
+             }",
+        ) {
+            assert_eq!(out, "496000\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_take_get_or_insert() {
         // B-2026-07-14-6 (mutating combinators): `take()` yields the receiver's
         // current value and leaves `None` in its slot (a second take yields

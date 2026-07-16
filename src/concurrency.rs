@@ -1777,6 +1777,20 @@ impl<'a> ConcurrencyChecker<'a> {
             };
             self.recognize_reductions_in_block(body, out);
             if let Some((accumulator, op)) = self.classify_loop_body(body, attributes) {
+                // B-2026-07-16-2 soundness gate: the reduction lowering runs
+                // this body on MULTIPLE worker threads, so any value the body
+                // touches that is reachable from outside one iteration is
+                // visible to all workers. A plain `shared` (non-`par`) handle
+                // carries a NON-ATOMIC refcount header — one racing
+                // rc-inc/rc-dec pair across workers is a lost update that
+                // under-counts the header and frees a still-referenced object
+                // (use-after-free / double-free / heap corruption). The body
+                // must therefore satisfy the same cross-task-safe predicate an
+                // explicit `spawn` capture does; decline the reduction (the
+                // loop lowers sequentially) when it doesn't.
+                if !self.loop_body_types_cross_task_safe(body) {
+                    continue;
+                }
                 // A reduction whose per-iteration delta recurses into the
                 // enclosing function (e.g. a backtracking counter
                 // `if legal { total = total + count(...deeper...) }`) is
@@ -1798,6 +1812,44 @@ impl<'a> ConcurrencyChecker<'a> {
                 });
             }
         }
+    }
+
+    /// B-2026-07-16-2: true when every typed expression inside `body`
+    /// satisfies [`crate::cross_task_safe::is_cross_task_safe`] — the
+    /// same predicate enforced on explicit `spawn` / `par {}` captures.
+    ///
+    /// Implementation is a span sweep over `expr_types` (every entry
+    /// whose span lies inside the body block), NOT an AST walk: a walk
+    /// has to enumerate every `ExprKind` and a missed variant silently
+    /// reopens the soundness hole, while the sweep is shape-blind and
+    /// stays exhaustive as the language grows. Deliberately conservative
+    /// in two ways: a body-local FRESH `shared` object (thread-local for
+    /// its whole life, so technically race-free) still declines, and a
+    /// body expression with no `expr_types` entry contributes nothing
+    /// (the racing values — reads of outer bindings and their
+    /// projections — are bread-and-butter typed expressions). The cost
+    /// of a false decline is a sequential loop, never a miscompile.
+    ///
+    /// Without type info (`self.types` is `None` — the untyped
+    /// `concurrency_analyze` convenience entry used by analysis-only
+    /// tests), recognition is left unchanged: every path that LOWERS a
+    /// reduction (cli.rs `concurrencycheck`) runs the typed form.
+    fn loop_body_types_cross_task_safe(&self, body: &Block) -> bool {
+        let Some(tc) = self.types else {
+            return true;
+        };
+        let lo = body.span.offset;
+        let hi = body.span.offset + body.span.length;
+        for (key, ty) in &tc.expr_types {
+            let SpanKey(offset, length) = *key;
+            if offset >= lo
+                && offset + length <= hi
+                && crate::cross_task_safe::is_cross_task_safe(ty, tc).is_err()
+            {
+                return false;
+            }
+        }
+        true
     }
 
     /// Classify a loop body as a reduction over a single outer-scope

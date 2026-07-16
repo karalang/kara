@@ -2469,6 +2469,85 @@ fn test_reduction_recognized_for_add_while_loop() {
 }
 
 #[test]
+fn test_reduction_declined_for_shared_capture_body() {
+    // B-2026-07-16-2: the reduction worker runs the loop body on multiple
+    // threads, and a plain `shared` handle's refcount ops are NON-atomic —
+    // racing them across workers is a lost update that frees a
+    // still-referenced object (reproduced as heap corruption / UAF with a
+    // captured Vec[Option[SharedTree]] pool traversed by every worker).
+    // A body whose typed expressions reach a plain shared type must NOT be
+    // recognized as a parallel reduction under typed analysis.
+    let analysis = analyze_typed(
+        r#"
+        shared struct Node {
+            val: i64,
+            next: Option[Node],
+        }
+
+        fn len(node: Option[Node]) -> i64 {
+            match node {
+                None => 0,
+                Some(n) => 1 + len(n.next),
+            }
+        }
+
+        fn main() {
+            let mut pool: Vec[Option[Node]] = Vec.new();
+            pool.push(Some(Node { val: 1, next: None }));
+            let mut total = 0;
+            let mut k = 0;
+            while k < 100000 {
+                total = total + len(pool[k % 1]);
+                k = k + 1;
+            }
+            println(total);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "shared-capturing loop body must decline reduction recognition, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_kept_for_int_body_under_typed_analysis() {
+    // Companion to test_reduction_declined_for_shared_capture_body: the
+    // cross-task-safe gate must not over-decline — an int/Vec[i64]-only
+    // body stays recognized when the TYPED analysis runs (the untyped
+    // sibling tests above never exercise the gate).
+    let analysis = analyze_typed(
+        r#"
+        fn main() {
+            let mut data: Vec[i64] = Vec.new();
+            let mut i = 0;
+            while i < 8 {
+                data.push(i);
+                i = i + 1;
+            }
+            let mut total = 0;
+            let mut k = 0;
+            while k < 100000 {
+                total = total + data[k % 8];
+                k = k + 1;
+            }
+            println(total);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "int-only loop body must stay recognized under typed analysis, got {:?}",
+        main_fc.loop_reductions
+    );
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "total");
+}
+
+#[test]
 fn test_reduction_recognized_for_compound_add() {
     // `total += x` shape parses to CompoundAssign — must also be recognized.
     let analysis = analyze(

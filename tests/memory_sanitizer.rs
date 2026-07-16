@@ -27860,6 +27860,60 @@ fn main() {
     }
 
     #[test]
+    fn asan_reduction_over_shared_pool_no_race_uaf() {
+        // B-2026-07-16-2: the auto-par reduction lowering ran this loop's
+        // body on multiple worker threads while it carried NON-atomic
+        // rc-inc/rc-dec traffic on the same 8 pooled shared trees (element
+        // retain in the worker, callee-drop release inside `sum`). Racing
+        // workers lost refcount updates, freeing live nodes: ASAN reports
+        // heap-use-after-free / attempting-double-free within a few hundred
+        // iterations pre-fix. Post-fix the reduction recognizer declines the
+        // shared-capturing body (cross-task-safe gate) so the loop runs
+        // sequentially: clean ASAN, exact deterministic sum, zero leaks at
+        // exit (pool + trees drop through the normal sequential path).
+        assert_clean_asan_run(
+            r#"
+shared struct TreeNode {
+    val: i64,
+    left: Option[TreeNode],
+    right: Option[TreeNode],
+}
+fn build(depth: i64, counter: i64) -> Option[TreeNode] {
+    if depth == 0 {
+        return None;
+    }
+    let left = build(depth - 1, counter * 2);
+    let right = build(depth - 1, counter * 2 + 1);
+    return Some(TreeNode { val: counter, left: left, right: right });
+}
+fn sum(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => n.val + sum(n.left) + sum(n.right),
+    }
+}
+fn main() {
+    let mut pool: Vec[Option[TreeNode]] = Vec.new();
+    let mut i = 0;
+    while i < 8 {
+        pool.push(build(5, 1));
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut rep = 0;
+    while rep < 1000 {
+        total = total + sum(pool[rep % 8]);
+        rep = rep + 1;
+    }
+    println(total);
+}
+"#,
+            &["496000"],
+            "reduction_over_shared_pool_no_race_uaf",
+        );
+    }
+
+    #[test]
     fn asan_inline_index_map_get_unwrap_vec_value_no_leak() {
         // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
         // (`m.get(k).unwrap()[i]`) is lowered by materializing the `{ptr,len,

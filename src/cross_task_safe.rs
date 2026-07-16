@@ -65,7 +65,7 @@
 use crate::typechecker::env::{EnumInfo, StructInfo};
 use crate::typechecker::types::{type_display, Type};
 use crate::typechecker::TypeCheckResult;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Diagnostic-shaped path through the type tree from a root binding's
 /// type to the cross-task-unsafe leaf that's transitively reachable.
@@ -146,7 +146,8 @@ pub fn is_cross_task_safe_with(
 ) -> Result<(), CrossTaskUnsafePath> {
     let root = type_display(ty);
     let mut path: Vec<String> = Vec::new();
-    walk(ty, struct_info, enum_info, &mut path, &root)
+    let mut seen: HashSet<String> = HashSet::new();
+    walk(ty, struct_info, enum_info, &mut path, &root, &mut seen)
 }
 
 fn walk(
@@ -155,6 +156,14 @@ fn walk(
     enum_info: &HashMap<String, EnumInfo>,
     path: &mut Vec<String>,
     root: &str,
+    // Struct / enum names whose field / variant expansion has already run
+    // on this walk. A recursive OWNED aggregate (`struct A { xs: Vec[A] }`
+    // is representable — the Vec is the indirection) would otherwise
+    // re-expand forever. Re-expansion can't surface a leaf the first
+    // expansion didn't, so skipping repeats is sound. Leaf checks
+    // (`is_shared` / `is_par` / Rc / pointer) stay unguarded — they're
+    // name-keyed and non-recursive.
+    seen: &mut HashSet<String>,
 ) -> Result<(), CrossTaskUnsafePath> {
     // Immediate-hit checks — these are the v1 unsafe set's leaf shapes.
     match ty {
@@ -214,48 +223,48 @@ fn walk(
         Type::Tuple(elems) => {
             for (i, elem) in elems.iter().enumerate() {
                 path.push(format!("tuple element {}", i));
-                walk(elem, struct_info, enum_info, path, root)?;
+                walk(elem, struct_info, enum_info, path, root, seen)?;
                 path.pop();
             }
         }
         Type::Array { element, .. } => {
             path.push("array element".to_string());
-            walk(element, struct_info, enum_info, path, root)?;
+            walk(element, struct_info, enum_info, path, root, seen)?;
             path.pop();
         }
         Type::Vector { element, .. } => {
             // SIMD lanes are always primitive numerics today, but walk the
             // element anyway to stay correct if the constraint ever widens.
             path.push("vector lane".to_string());
-            walk(element, struct_info, enum_info, path, root)?;
+            walk(element, struct_info, enum_info, path, root, seen)?;
             path.pop();
         }
         Type::Slice { element, .. } => {
             path.push("slice element".to_string());
-            walk(element, struct_info, enum_info, path, root)?;
+            walk(element, struct_info, enum_info, path, root, seen)?;
             path.pop();
         }
         Type::Arc(inner) => {
             // Arc itself is safe but its inner might transitively reach
             // an unsafe leaf — `Arc[Rc[T]]` is still bad.
             path.push("Arc inner".to_string());
-            walk(inner, struct_info, enum_info, path, root)?;
+            walk(inner, struct_info, enum_info, path, root, seen)?;
             path.pop();
         }
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => {
-            walk(inner, struct_info, enum_info, path, root)?;
+            walk(inner, struct_info, enum_info, path, root, seen)?;
         }
         // A refinement is structurally its base — walk through to catch an
         // unsafe leaf reachable via the refined type's base (e.g. a
         // refinement over `Rc[T]`).
         Type::Refinement { base, .. } => {
-            walk(base, struct_info, enum_info, path, root)?;
+            walk(base, struct_info, enum_info, path, root, seen)?;
         }
         Type::Named { name, args } => {
             // Walk type args first — `Vec[Rc[T]]` catches Rc here.
             for (i, arg) in args.iter().enumerate() {
                 path.push(format!("`{}` arg {}", name, i));
-                walk(arg, struct_info, enum_info, path, root)?;
+                walk(arg, struct_info, enum_info, path, root, seen)?;
                 path.pop();
             }
             // Then transitively walk user struct fields / enum variants.
@@ -275,10 +284,12 @@ fn walk(
                         fix_it: CrossTaskUnsafeFixIt::SharedToPar,
                     });
                 }
-                for (field_name, field_ty, _is_pub) in &info.fields {
-                    path.push(format!("field '{}'", field_name));
-                    walk(field_ty, struct_info, enum_info, path, root)?;
-                    path.pop();
+                if seen.insert(name.clone()) {
+                    for (field_name, field_ty, _is_pub) in &info.fields {
+                        path.push(format!("field '{}'", field_name));
+                        walk(field_ty, struct_info, enum_info, path, root, seen)?;
+                        path.pop();
+                    }
                 }
             } else if let Some(info) = enum_info.get(name) {
                 if info.is_par {
@@ -292,25 +303,27 @@ fn walk(
                         fix_it: CrossTaskUnsafeFixIt::SharedToPar,
                     });
                 }
-                for (variant_name, variant_info) in &info.variants {
-                    use crate::typechecker::types::VariantTypeInfo;
-                    match variant_info {
-                        VariantTypeInfo::Unit => {}
-                        VariantTypeInfo::Tuple(fields) => {
-                            for (i, field_ty) in fields.iter().enumerate() {
-                                path.push(format!("variant '{}' payload {}", variant_name, i));
-                                walk(field_ty, struct_info, enum_info, path, root)?;
-                                path.pop();
+                if seen.insert(name.clone()) {
+                    for (variant_name, variant_info) in &info.variants {
+                        use crate::typechecker::types::VariantTypeInfo;
+                        match variant_info {
+                            VariantTypeInfo::Unit => {}
+                            VariantTypeInfo::Tuple(fields) => {
+                                for (i, field_ty) in fields.iter().enumerate() {
+                                    path.push(format!("variant '{}' payload {}", variant_name, i));
+                                    walk(field_ty, struct_info, enum_info, path, root, seen)?;
+                                    path.pop();
+                                }
                             }
-                        }
-                        VariantTypeInfo::Struct(fields) => {
-                            for (field_name, field_ty) in fields {
-                                path.push(format!(
-                                    "variant '{}' field '{}'",
-                                    variant_name, field_name
-                                ));
-                                walk(field_ty, struct_info, enum_info, path, root)?;
-                                path.pop();
+                            VariantTypeInfo::Struct(fields) => {
+                                for (field_name, field_ty) in fields {
+                                    path.push(format!(
+                                        "variant '{}' field '{}'",
+                                        variant_name, field_name
+                                    ));
+                                    walk(field_ty, struct_info, enum_info, path, root, seen)?;
+                                    path.pop();
+                                }
                             }
                         }
                     }
