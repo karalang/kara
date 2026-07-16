@@ -89,14 +89,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **497 surfaced · 2 open · 491 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **498 surfaced · 3 open · 491 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-16-11 | 2026-07-16 | codegen (Vec construction: a Vec built by a counted push-loop reallocs ~log(n) times instead of pre-sizing) | low | A `Vec` built by `Vec.new()` + a counted `push`-loop reallocs ~log(n) times (growth-doubling) where the trip count is statically derivable — auto-pre-sizing (the imperative sibling of the collect-tabulate recognizer) would emit one alloc per Vec. On #115's nested Vec[Vec[i64]] DP this is ~1.7x of the gap to Rust; `Vec.with_capacity` recovers it (kara reaches nested-`Vec<Vec>` parity). The residual vs a flat Vec[i64] is the inherent per-row malloc of a row-of-rows | none |
 | B-2026-07-16-13 | 2026-07-16 | typechecker (exprs.rs index-expression handling — no Map/SortedMap arm; falls through to the generic integer-or-range gate). Also unimplemented in interp/codegen. | low | `m[key]` (Map/SortedMap index operator) only accepts integer keys — a non-integer key (`m["x"]` on `Map[String,i64]`) is rejected 'index must be an integer or range, found String', despite design.md speccing `[]` → `index(ref self, key: ref K) -> ref V` (panics if key missing). `m[1]` on `Map[i64,V]` works only because i64 IS an integer. Workaround `m.get(k).unwrap()` works (and `get`'s key-borrow was fixed in B-2026-07-16-12). | none |
+| B-2026-07-16-14 | 2026-07-16 | typechecker (iterator-trait method resolution accepts reduction/collection methods DIRECTLY on a Vec receiver) vs interpreter + codegen (only the `.iter()` adaptor path implements them) | medium | `karac check` accepts iterator-reduction / string-collection methods DIRECTLY on a Vec (`v.sum()`, `v.max()`, `v.min()`, `v.product()`, `v.join(sep)`, `v.concat()`) but no backend implements them — interp reports 'method not found (no dispatch arm)' and codegen reports 'not yet supported' / build-fails. The idiomatic `.iter()` form works (`v.iter().sum()` = 120). This is a check/execution consistency hole: `karac check` (the AI-first wedge — a program that checks clean should run) passes code that traps at runtime on all three surfaces. | none |
 
 ### Fixed (491)
 
