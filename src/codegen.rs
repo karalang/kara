@@ -6940,12 +6940,18 @@ impl<'ctx> Codegen<'ctx> {
     pub(crate) fn loop_reduction_for_stmt(
         &self,
         stmt_index: usize,
+        loop_line: usize,
     ) -> Option<&crate::concurrency::LoopReduction> {
+        // Matched on (stmt_index, loop_line), not index alone: since the
+        // analyzer recurses into nested blocks (2026-07-15), `stmt_index`
+        // is an index within the loop's OWN block, and equal indices
+        // recur across sibling/nested blocks — the source line is what
+        // makes the pair unique per loop.
         let decision = self.concurrency_decisions.get(&self.current_fn_name)?;
         decision
             .loop_reductions
             .iter()
-            .find(|r| r.stmt_index == stmt_index)
+            .find(|r| r.stmt_index == stmt_index && r.loop_line == loop_line)
     }
 
     // ── Program / function compilation ───────────────────────────

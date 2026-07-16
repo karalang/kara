@@ -1724,10 +1724,45 @@ impl<'a> ConcurrencyChecker<'a> {
     /// shape against type information before emitting the fan-out.
     fn recognize_reductions(&self, func: &Function) -> Vec<LoopReduction> {
         let mut out = Vec::new();
-        for (idx, stmt) in func.body.stmts.iter().enumerate() {
+        self.recognize_reductions_in_block(&func.body, &mut out);
+        out
+    }
+
+    /// Walk one block's statements for reduction-shaped loops, recursing
+    /// into nested loop bodies and if-arms. Recursion (2026-07-15) is what
+    /// lets a `#[par_unordered]` collect loop nested inside an outer
+    /// sequential loop fan out — the LBM-substep shape (`while s < steps {
+    /// … #[par_unordered] while c < n { out.push(f(grid[c])) } … }`),
+    /// which the previous top-level-only walk silently left sequential.
+    /// A `LoopReduction`'s `stmt_index` is the loop's index within ITS OWN
+    /// block; codegen's lookup disambiguates by (stmt_index, loop_line),
+    /// so equal indices across sibling blocks can't cross-match. Recursing
+    /// into a body that is itself reduction-classified is deliberate: the
+    /// runtime's fork-depth cap (`KARAC_PAR_MAX_FORK_DEPTH`) already makes
+    /// inner regions run sequentially inline (see the recursion note
+    /// below), so nested tags are safe.
+    fn recognize_reductions_in_block(&self, block: &Block, out: &mut Vec<LoopReduction>) {
+        for (idx, stmt) in block.stmts.iter().enumerate() {
             let StmtKind::Expr(expr) = &stmt.kind else {
                 continue;
             };
+            match &expr.kind {
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    self.recognize_reductions_in_block(then_block, out);
+                    if let Some(else_expr) = else_branch {
+                        if let ExprKind::Block(else_block) = &else_expr.kind {
+                            self.recognize_reductions_in_block(else_block, out);
+                        }
+                    }
+                    continue;
+                }
+                ExprKind::For { .. } | ExprKind::While { .. } | ExprKind::Loop { .. } => {}
+                _ => continue,
+            }
             let (body, attributes) = match &expr.kind {
                 ExprKind::For {
                     body, attributes, ..
@@ -1738,8 +1773,9 @@ impl<'a> ConcurrencyChecker<'a> {
                 | ExprKind::Loop {
                     body, attributes, ..
                 } => (body, attributes.as_slice()),
-                _ => continue,
+                _ => unreachable!("filtered above"),
             };
+            self.recognize_reductions_in_block(body, out);
             if let Some((accumulator, op)) = self.classify_loop_body(body, attributes) {
                 // A reduction whose per-iteration delta recurses into the
                 // enclosing function (e.g. a backtracking counter
@@ -1762,7 +1798,6 @@ impl<'a> ConcurrencyChecker<'a> {
                 });
             }
         }
-        out
     }
 
     /// Classify a loop body as a reduction over a single outer-scope

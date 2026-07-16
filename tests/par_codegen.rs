@@ -5522,8 +5522,8 @@ fn main() {
     fn test_ir_collect_emits_par_reduce_call_and_collect_helpers() {
         // IR pin: the `#[par_unordered]` collect lowering must emit a
         // call to karac_par_reduce plus the per-elem-type init/combine
-        // helpers (`__karac_reduce_init_collect_i64`,
-        // `__karac_reduce_combine_collect_i64`) and a Collect-specific
+        // helpers (`__karac_reduce_init_collect`,
+        // `__karac_reduce_combine_collect_b8` — combine is cached by elem BYTE SIZE) and a Collect-specific
         // worker symbol (`__karac_reduce_worker_collect_<N>`). Without
         // this pin, a silent fallthrough to sequential codegen would
         // make the sink tests above still pass (sequential push gives
@@ -5558,12 +5558,12 @@ fn main() {
             "expected karac_par_reduce call for #[par_unordered] collect loop; got:\n{ir}"
         );
         assert!(
-            ir.contains("__karac_reduce_init_collect_i64"),
-            "expected init_collect_i64 helper; got:\n{ir}"
+            ir.contains("__karac_reduce_init_collect"),
+            "expected init_collect helper; got:\n{ir}"
         );
         assert!(
-            ir.contains("__karac_reduce_combine_collect_i64"),
-            "expected combine_collect_i64 helper; got:\n{ir}"
+            ir.contains("__karac_reduce_combine_collect_b8"),
+            "expected combine_collect_b8 helper (i64 elems = 8 bytes); got:\n{ir}"
         );
         assert!(
             ir.contains("__karac_reduce_worker_collect_"),
@@ -5604,12 +5604,276 @@ fn main() {
         )
         .expect("codegen failed");
         assert!(
-            !ir.contains("__karac_reduce_init_collect_"),
+            !ir.contains("__karac_reduce_init_collect"),
             "no `#[par_unordered]` ⇒ no init_collect helper; got:\n{ir}"
         );
         assert!(
             !ir.contains("__karac_reduce_worker_collect_"),
             "no `#[par_unordered]` ⇒ no worker_collect fn; got:\n{ir}"
+        );
+    }
+
+    // ── Collect over non-integer elements (2026-07-15) ──────────────────
+    //
+    // The Collect lowering originally gated on integer element types
+    // (i8/16/32/64); a `Vec[Cell]`-accumulator loop — the LBM-substep
+    // workload shape, `#[par_unordered] while … { out.push(collide(g[c])) }`
+    // over a 9×f32 struct — fell through to sequential SILENTLY. The gate
+    // is now POD-shaped (int/float/struct-of-scalars; pointer-free), with
+    // the combine helper cached by element byte size. These tests pin the
+    // generalization end-to-end.
+
+    #[test]
+    fn test_e2e_collect_struct_elems_ordered_tabulate() {
+        // Struct elements + an ORDER pin. The runtime hands each worker a
+        // contiguous chunk of the iteration space and the join combines
+        // slots in worker order, so a pure tabulate body (`push(f(k))`)
+        // reconstructs exact source order — every slot must match its own
+        // index formula, not just the multiset. (The `#[par_unordered]`
+        // attribute grants reorder license; this pins the CURRENT
+        // chunk+in-order-combine implementation so a future reordering
+        // change fails loudly here rather than silently corrupting
+        // tabulate-shaped users like the LBM substep.)
+        let src = r#"
+struct P { a: f64, b: i64 }
+fn main() {
+    let mut out: Vec[P] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..1000i64 {
+        out.push(P { a: (k as f64) * 0.5, b: k * 2i64 });
+    }
+    let mut order_ok: i64 = 1i64;
+    let mut i: i64 = 0i64;
+    while i < out.len() {
+        if out[i].b != i * 2i64 {
+            order_ok = 0i64;
+        }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(order_ok);
+    println((out[501].a * 2.0) as i64);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 3, "expected three lines, got:\n{}", out);
+        assert_eq!(lines[0], "1000", "length mismatch");
+        assert_eq!(lines[1], "1", "struct elements out of source order");
+        assert_eq!(lines[2], "501", "out[501].a should be 250.5 (×2 = 501)");
+    }
+
+    #[test]
+    fn test_e2e_collect_f64_elems() {
+        // Float elements (the other previously-rejected scalar). 0.5
+        // increments are exact in f64, so the sum is exact: sum(0..100)/2
+        // = 4950/2 = 2475.
+        let src = r#"
+fn main() {
+    let mut out: Vec[f64] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..100i64 {
+        out.push((k as f64) * 0.5);
+    }
+    let mut s: f64 = 0.0;
+    let mut i: i64 = 0i64;
+    while i < out.len() {
+        s = s + out[i];
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(s as i64);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "100", "length mismatch");
+        assert_eq!(lines[1], "2475", "f64 sum mismatch");
+    }
+
+    #[test]
+    fn test_ir_collect_struct_elems_emits_size_keyed_helpers() {
+        // IR pin for the struct generalization: a 16-byte {f64, i64}
+        // element must fan out through the size-keyed combine helper
+        // (`__karac_reduce_combine_collect_b16`) — proving the lowering
+        // fired rather than falling through to sequential (which the
+        // E2E sink above couldn't distinguish).
+        let src = r#"
+struct P { a: f64, b: i64 }
+fn main() {
+    let mut out: Vec[P] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..1000i64 {
+        out.push(P { a: k as f64, b: k });
+    }
+    println(out.len());
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "struct-elem collect loop must lower to par_reduce; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("__karac_reduce_combine_collect_b16"),
+            "expected size-keyed combine helper b16 for a {{f64, i64}} elem; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_collect_nested_in_outer_loop() {
+        // THE LBM-substep shape: a `#[par_unordered]` collect loop NESTED
+        // inside an outer sequential loop, rebuilding a struct grid from
+        // the previous iteration's each round. Both halves of the
+        // 2026-07-15 extension must hold together here — (a) the analyzer
+        // recurses into nested blocks (previously only fn-top-level
+        // statements were scanned, so this shape silently never fanned
+        // out), and (b) worker-order combine keeps source order, which
+        // the chained iterations make LOAD-BEARING: each round reads
+        // `prev[k-1]`, so any reordering corrupts every later round.
+        // prefix-sum-ish oracle: g[k] ← g[k] + g[k-1] each round; after 3
+        // rounds g[4] = C(3,0)·4 + C(3,1)·3 + C(3,2)·2 + C(3,3)·1 = 20,
+        // g[9] = 9+3·8+3·7+6 = 60.
+        let src = r#"
+struct C2 { v: i64, w: f64 }
+fn main() {
+    let mut g: Vec[C2] = Vec.new();
+    let mut i: i64 = 0i64;
+    while i < 4000i64 {
+        g.push(C2 { v: i, w: 0.0 });
+        i = i + 1i64;
+    }
+    let mut round: i64 = 0i64;
+    while round < 3i64 {
+        let mut next: Vec[C2] = Vec.new();
+        let mut k: i64 = 0i64;
+        #[par_unordered]
+        while k < 4000i64 {
+            let prev: i64 = if k == 0i64 { 0i64 } else { g[k - 1i64].v };
+            next.push(C2 { v: g[k].v + prev, w: g[k].w });
+            k = k + 1i64;
+        }
+        g = next;
+        round = round + 1i64;
+    }
+    println(g.len());
+    println(g[4].v);
+    println(g[9].v);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 3, "expected three lines, got:\n{}", out);
+        assert_eq!(lines[0], "4000", "length mismatch");
+        assert_eq!(lines[1], "20", "g[4] after 3 chained rounds");
+        assert_eq!(lines[2], "60", "g[9] after 3 chained rounds");
+    }
+
+    #[test]
+    fn test_ir_collect_nested_loop_lowers_to_par_reduce() {
+        // IR pin for the nested case: the sink test above cannot tell a
+        // successful fan-out from a silent sequential fallthrough (both
+        // print the same numbers). The worker symbol + par_reduce call
+        // must exist even though the annotated loop is NOT a fn-top-level
+        // statement.
+        let src = r#"
+struct C2 { v: i64, w: f64 }
+fn main() {
+    let mut g: Vec[C2] = Vec.new();
+    let mut i: i64 = 0i64;
+    while i < 100i64 {
+        g.push(C2 { v: i, w: 0.0 });
+        i = i + 1i64;
+    }
+    let mut round: i64 = 0i64;
+    while round < 3i64 {
+        let mut next: Vec[C2] = Vec.new();
+        let mut k: i64 = 0i64;
+        #[par_unordered]
+        while k < 100i64 {
+            next.push(C2 { v: g[k].v + 1i64, w: g[k].w });
+            k = k + 1i64;
+        }
+        g = next;
+        round = round + 1i64;
+    }
+    println(g.len());
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "nested #[par_unordered] collect loop must lower to par_reduce; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("__karac_reduce_worker_collect_"),
+            "expected worker_collect fn for the nested loop; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_collect_heap_owning_elems_stay_sequential() {
+        // A String element carries an owned heap pointer; the combine
+        // helper's raw byte-move + free-source-buffer would need
+        // per-element ownership transfer bookkeeping it doesn't do. The
+        // POD gate must reject it → sequential push, no par_reduce.
+        let src = r#"
+fn main() {
+    let mut out: Vec[String] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..1000i64 {
+        out.push("x");
+    }
+    println(out.len());
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            !ir.contains("__karac_reduce_worker_collect_"),
+            "String elems must NOT fan out (heap-owning interior); got:\n{ir}"
         );
     }
 

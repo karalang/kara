@@ -79,7 +79,15 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<Option<()>, String> {
         let stmt = &parent_body.stmts[stmt_index];
 
-        let reduction = self.loop_reduction_for_stmt(stmt_index).cloned();
+        // The (index, line) pair keys the analyzer's tag for THIS loop —
+        // index alone recurs across nested blocks now that the analyzer
+        // walks them.
+        let StmtKind::Expr(stmt_expr) = &stmt.kind else {
+            return Ok(None);
+        };
+        let reduction = self
+            .loop_reduction_for_stmt(stmt_index, stmt_expr.span.line)
+            .cloned();
         let Some(reduction) = reduction else {
             return Ok(None);
         };
@@ -1515,9 +1523,19 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         // Accumulator must be a Vec[T] — the `{ptr, len, cap}` struct
-        // shape — with an integer element type for Phase 3. The
-        // recognizer (`collect_push_shape`) checks the source-level shape
+        // shape — with a plain-old-data element type (int/float/struct-of-
+        // scalars; no heap-owning interior). The recognizer
+        // (`collect_push_shape`) checks the source-level shape
         // `acc.push(EXPR)`; here we verify the LLVM-side type matches.
+        // POD-only because the combine helper moves elements between
+        // buffers with raw memcpy and frees the source *buffer* only —
+        // sound exactly when elements carry no owned pointers (a struct
+        // with a Vec/String field would need per-element ownership
+        // transfer bookkeeping this lowering doesn't do). Struct/float
+        // elements were added for the LBM-substep workload shape
+        // (`#[par_unordered] while … { out.push(collide(grid[c])) }` over
+        // `Vec[Cell]`, 9×f32), which previously fell through to
+        // sequential silently.
         let Some(acc_slot) = self.variables.get(&reduction.accumulator).copied() else {
             return Ok(None);
         };
@@ -1525,10 +1543,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
         let elem_ty = self.vec_elem_type_for_var(&reduction.accumulator);
-        let BasicTypeEnum::IntType(elem_int_ty) = elem_ty else {
+        if !llvm_ty_is_pod(elem_ty) {
             return Ok(None);
-        };
-        if !matches!(elem_int_ty.get_bit_width(), 8 | 16 | 32 | 64) {
+        }
+        let elem_size = self.ensure_target_data()?.get_store_size(&elem_ty);
+        if elem_size == 0 {
             return Ok(None);
         }
 
@@ -1566,11 +1585,12 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
 
-        // Synthesize the per-elem-type helpers. Cached by element-type
-        // bit width so multiple reduction sites in the same module share
-        // one definition.
-        let init_fn = self.emit_reduce_collect_init_fn(elem_int_ty);
-        let combine_fn = self.emit_reduce_collect_combine_fn(elem_int_ty);
+        // Synthesize the helpers. init is element-agnostic (writes the
+        // empty-Vec literal); combine is cached by element BYTE SIZE —
+        // it only moves bytes, so two 8-byte element types share one
+        // definition.
+        let init_fn = self.emit_reduce_collect_init_fn();
+        let combine_fn = self.emit_reduce_collect_combine_fn(elem_size);
 
         // Capture set + partition (same machinery as scalar — Collect's
         // body can read any outer-scope binding the body refs).
@@ -1582,7 +1602,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let worker_fn = self.emit_reduce_collect_worker_fn(
             reduction,
             loop_var_int_ty,
-            elem_int_ty,
+            elem_ty,
             &shape.loop_var,
             &shape.body,
             &runtime_captures,
@@ -1606,14 +1626,12 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(()))
     }
 
-    /// Synthesize `void init_slot_collect_i<N>(*mut u8 slot)` — writes the
-    /// 24-byte `{null, 0, 0}` empty-Vec literal into the slot. Mirrors
-    /// `emit_reduce_init_fn`'s caching pattern but per-element-type.
-    fn emit_reduce_collect_init_fn(&mut self, elem_int_ty: IntType<'ctx>) -> FunctionValue<'ctx> {
-        let name = format!(
-            "__karac_reduce_init_collect_i{}",
-            elem_int_ty.get_bit_width()
-        );
+    /// Synthesize `void init_slot_collect(*mut u8 slot)` — writes the
+    /// 24-byte `{null, 0, 0}` empty-Vec literal into the slot. Element-
+    /// agnostic (the empty header looks the same for every element type),
+    /// so one definition is shared module-wide.
+    fn emit_reduce_collect_init_fn(&mut self) -> FunctionValue<'ctx> {
+        let name = "__karac_reduce_init_collect".to_string();
         if let Some(existing) = self.module.get_function(&name) {
             return existing;
         }
@@ -1657,7 +1675,7 @@ impl<'ctx> super::Codegen<'ctx> {
         f
     }
 
-    /// Synthesize `void combine_collect_i<N>(*mut u8 dst, *const u8 src)`
+    /// Synthesize `void combine_collect_b<N>(*mut u8 dst, *const u8 src)`
     /// — extends `src` into `dst`, transferring src's elements to dst's
     /// final buffer and zeroing src so its slot's subsequent cleanup is a
     /// no-op. Four-path strategy (Phase 3.1, 2026-05-21): the runtime calls
@@ -1681,14 +1699,11 @@ impl<'ctx> super::Codegen<'ctx> {
     ///    (amortized-doubling growth, like Vec.push's growth strategy);
     ///    malloc one new buffer, memcpy both sides into it, free old
     ///    dst.data and src.data.
-    fn emit_reduce_collect_combine_fn(
-        &mut self,
-        elem_int_ty: IntType<'ctx>,
-    ) -> FunctionValue<'ctx> {
-        let name = format!(
-            "__karac_reduce_combine_collect_i{}",
-            elem_int_ty.get_bit_width()
-        );
+    fn emit_reduce_collect_combine_fn(&mut self, elem_size_bytes: u64) -> FunctionValue<'ctx> {
+        // Cached by element BYTE SIZE, not type: the body only moves bytes
+        // (memcpy + byte-offset GEPs), so any two element types of equal
+        // store size share one definition.
+        let name = format!("__karac_reduce_combine_collect_b{elem_size_bytes}");
         if let Some(existing) = self.module.get_function(&name) {
             return existing;
         }
@@ -1716,7 +1731,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_ty = self.vec_struct_type();
         let dst_ptr = f.get_nth_param(0).unwrap().into_pointer_value();
         let src_ptr = f.get_nth_param(1).unwrap().into_pointer_value();
-        let elem_size = elem_int_ty.size_of();
+        let elem_size = i64_t.const_int(elem_size_bytes, false);
+        let i8_t = self.context.i8_type();
 
         // Load all six fields up front. LLVM's mem2reg + DSE collapse any
         // load that ends up unused on a given path.
@@ -1825,9 +1841,15 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // ── append_bb: memcpy src into dst's tail. ──
         self.builder.position_at_end(append_bb);
+        // Byte-offset GEP (i8 stride × dst_len·elem_size): element-type-
+        // agnostic, so struct/float elements share this size-keyed helper.
+        let dst_byte_off = self
+            .builder
+            .build_int_mul(dst_len, elem_size, "dst.byte.off")
+            .unwrap();
         let dst_tail = unsafe {
             self.builder
-                .build_gep(elem_int_ty, dst_data, &[dst_len], "dst.tail")
+                .build_gep(i8_t, dst_data, &[dst_byte_off], "dst.tail")
                 .unwrap()
         };
         let src_bytes_append = self
@@ -1883,9 +1905,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_memcpy(new_data, 8, dst_data, 8, dst_bytes)
             .unwrap();
+        // Byte-offset GEP: dst_bytes = dst_len·elem_size is exactly the
+        // tail's byte offset.
         let new_tail = unsafe {
             self.builder
-                .build_gep(elem_int_ty, new_data, &[dst_len], "new.tail")
+                .build_gep(i8_t, new_data, &[dst_bytes], "new.tail")
                 .unwrap()
         };
         let src_bytes_grow = self
@@ -1935,7 +1959,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         reduction: &LoopReduction,
         loop_var_int_ty: IntType<'ctx>,
-        elem_int_ty: IntType<'ctx>,
+        elem_ty: BasicTypeEnum<'ctx>,
         loop_var_name: &str,
         body: &Block,
         captures: &[String],
@@ -2110,7 +2134,7 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         );
         self.vec_elem_types
-            .insert(reduction.accumulator.clone(), elem_int_ty.into());
+            .insert(reduction.accumulator.clone(), elem_ty);
 
         // Loop var (mirror of scalar). Truncate runtime's i64 start/end
         // to the loop-var int width when narrower; shift by lo if set.
@@ -2421,6 +2445,27 @@ impl<'ctx> super::Codegen<'ctx> {
 /// op-method suffix used in `concurrency.rs::reduction_binary_shape`
 /// (`add` / `mul` / `bitor` / `bitand` / `bitxor`) so the IR symbol
 /// matches the analyzer's vocabulary.
+/// Is this LLVM type plain-old-data — safe for the Collect combine's raw
+/// byte-move between worker buffers? True for scalars and (recursively)
+/// pointer-free aggregates. A pointer ANYWHERE in the type tree means the
+/// element owns heap (Vec/String/shared header) and moving it by memcpy
+/// while freeing only the source *buffer* would need per-element ownership
+/// bookkeeping the collect lowering doesn't do — those stay sequential.
+/// i1 (bool) is excluded conservatively: its in-Vec store layout is the
+/// int path's concern and the pre-existing 8|16|32|64 gate never allowed it.
+fn llvm_ty_is_pod(ty: BasicTypeEnum<'_>) -> bool {
+    match ty {
+        BasicTypeEnum::IntType(t) => matches!(t.get_bit_width(), 8 | 16 | 32 | 64),
+        BasicTypeEnum::FloatType(_) => true,
+        BasicTypeEnum::StructType(s) => {
+            !s.is_opaque() && s.get_field_types().into_iter().all(llvm_ty_is_pod)
+        }
+        BasicTypeEnum::ArrayType(a) => llvm_ty_is_pod(a.get_element_type()),
+        BasicTypeEnum::VectorType(_) => true,
+        _ => false,
+    }
+}
+
 fn reduce_op_short_name(op: ReductionOp) -> &'static str {
     match op {
         ReductionOp::Add => "add",

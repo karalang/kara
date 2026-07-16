@@ -32,8 +32,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // with it cleared (a non-tail `if let` in stmt position must not pick up
         // tail-return compensation); restore it for the final expr below.
         let tail_inner = self.tail_ret_inner.take();
-        for stmt in &block.stmts {
-            self.compile_stmt(stmt)?;
+        for (i, stmt) in block.stmts.iter().enumerate() {
+            // Auto-par reduction lowering for NESTED blocks (2026-07-15).
+            // `compile_function_body` attempts this for the fn's top-level
+            // statements; nested blocks previously compiled every loop
+            // sequentially, so a `#[par_unordered]` collect loop inside an
+            // outer loop (the LBM-substep shape) silently never fanned
+            // out. The lookup keys on (stmt_index, line) so an index
+            // collision with a sibling block can't cross-match; a miss is
+            // one cheap Vec scan.
+            let lowered = self.try_emit_reduction_lowering(block, i)?;
+            if lowered.is_none() {
+                self.compile_stmt(stmt)?;
+            }
             if self
                 .builder
                 .get_insert_block()
