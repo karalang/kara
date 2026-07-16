@@ -6186,6 +6186,85 @@ fn main() {
         assert_eq!(lines[2], "42");
     }
 
+    // ── Par-tabulate worker vectorization (2026-07-16) ───────────────────
+    //
+    // The tabulate worker writes elements via raw stores at buf+idx·elem
+    // (no local view Vec, no per-push cap-check/grow) and declares
+    // per-worker-invocation noalias scopes — the same two levers as the
+    // sequential tabulate, applied inside the worker so LLVM vectorizes
+    // the parallel body per-core.
+
+    #[test]
+    fn test_ir_par_tabulate_worker_has_scopes_and_no_grow_path() {
+        let ir = ir_for_par(
+            r#"
+struct P { a: f64, b: i64 }
+fn main() {
+    let mut out: Vec[P] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..1000i64 {
+        out.push(P { a: (k as f64) * 0.5, b: k * 2i64 });
+    }
+    println(out.len());
+}
+"#,
+        );
+        // Slice the worker fn's definition out of the module text.
+        let start = ir
+            .find("define void @__karac_reduce_worker_collect_tab_")
+            .expect("tabulate worker must be emitted");
+        let after = &ir[start..];
+        let end = after[10..]
+            .find("\ndefine ")
+            .map(|i| i + 10)
+            .unwrap_or(after.len());
+        let worker = &after[..end];
+        assert!(
+            worker.contains("llvm.experimental.noalias.scope.decl"),
+            "tabulate worker must declare per-invocation alias scopes; got:\n{worker}"
+        );
+        assert!(
+            !worker.contains("karac_realloc_or_panic"),
+            "tabulate worker must have NO grow path (raw stores, not push); got:\n{worker}"
+        );
+        assert!(
+            worker.contains("!alias.scope"),
+            "tabulate worker stores must carry alias.scope metadata; got:\n{worker}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_par_tabulate_heap_local_let_in_body() {
+        // A String body-local beside the push: the rewritten worker keeps
+        // a per-iteration cleanup frame, so the let's heap value is freed
+        // every iteration (Linux-CI LSan is the leak authority; this pins
+        // behavior + values).
+        let src = r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..200i64 {
+        let s = f"x{k}";
+        out.push((s.len() as i64) + k * 10i64);
+    }
+    let mut ok: i64 = 1i64;
+    let mut i: i64 = 0i64;
+    while i < 200i64 {
+        let digits: i64 = if i < 10i64 { 1i64 } else { if i < 100i64 { 2i64 } else { 3i64 } };
+        if out[i] != digits + 1i64 + i * 10i64 { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "200");
+        assert_eq!(lines[1], "1", "heap-let par tabulate values corrupted");
+    }
+
     // ── Sequential collect tabulate (2026-07-16) ─────────────────────────
     //
     // The unannotated sibling of par tabulate: a counted single-push loop
@@ -6369,6 +6448,89 @@ fn main() {
         assert_eq!(lines[0], "102");
         assert_eq!(lines[1], "50");
         assert_eq!(lines[2], "1", "pre-seed/with_capacity element mismatch");
+    }
+
+    #[test]
+    fn test_e2e_seq_tabulate_declines_loop_control_writes() {
+        // B-2026-07-16-10: a body write to the while-counter (beyond the
+        // terminal increment) or to the bound makes the SOURCE trip
+        // count body-dependent — tabulate's precomputed count would
+        // over-iterate (the original miscompile pushed 10 elements where
+        // the source loop pushes 8). Both shapes must decline and run as
+        // plain push loops with exact source semantics.
+        let src = r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    let n: i64 = 10i64;
+    let mut c: i64 = 0i64;
+    while c < n {
+        out.push(c);
+        if c == 3i64 { c = c + 2i64; }
+        c = c + 1i64;
+    }
+    let mut out2: Vec[i64] = Vec.new();
+    let mut m: i64 = 10i64;
+    let mut d: i64 = 0i64;
+    while d < m {
+        out2.push(d);
+        if d == 4i64 { m = 7i64; }
+        d = d + 1i64;
+    }
+    println(out.len());
+    println(out[4i64]);
+    println(out2.len());
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "8", "counter-write loop must keep source trip count");
+        assert_eq!(lines[1], "6", "post-skip element must be the skipped-to counter");
+        assert_eq!(lines[2], "7", "bound-write loop must keep source trip count");
+    }
+
+    #[test]
+    fn test_ir_seq_tabulate_declines_control_writes_but_keeps_clean_loops() {
+        let dirty = ir_for_par(
+            r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    let n: i64 = 100i64;
+    let mut c: i64 = 0i64;
+    while c < n {
+        out.push(c);
+        if c == 3i64 { c = c + 2i64; }
+        c = c + 1i64;
+    }
+    println(out.len());
+}
+"#,
+        );
+        assert!(
+            !dirty.contains("stab.run"),
+            "counter-writing body must NOT tabulate; got:\n{dirty}"
+        );
+        let clean = ir_for_par(
+            r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    let n: i64 = 100i64;
+    let mut acc: i64 = 0i64;
+    let mut c: i64 = 0i64;
+    while c < n {
+        acc = acc + c;
+        out.push(c);
+        c = c + 1i64;
+    }
+    println(out.len());
+    println(acc);
+}
+"#,
+        );
+        assert!(
+            clean.contains("stab.run"),
+            "non-control writes (scalar accum) must still tabulate; got:\n{clean}"
+        );
     }
 
     #[test]

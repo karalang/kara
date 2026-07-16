@@ -1948,7 +1948,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 // rewritten into an in-place store. The tabulate shape
                 // check guarantees the accumulator appears exactly once,
                 // as the receiver of one unconditional top-level push.
-                if let Some(acc) = self.classify_seq_collect_tabulate(body) {
+                if let Some(acc) = self.classify_seq_collect_tabulate(body, expr) {
                     out.push(LoopReduction {
                         accumulator: acc,
                         op: ReductionOp::Collect,
@@ -1969,7 +1969,21 @@ impl<'a> ConcurrencyChecker<'a> {
     /// does the exactness check). Candidate discovery scans top-level
     /// bare pushes; two pushes to DIFFERENT accumulators is declined
     /// (each would fail the other's mention check anyway).
-    fn classify_seq_collect_tabulate(&self, body: &Block) -> Option<String> {
+    ///
+    /// LOOP-CONTROL immutability (B-2026-07-16-7): the tabulate lowering
+    /// precomputes the trip count, so the body must not be able to
+    /// change how many iterations the SOURCE loop would run. For a
+    /// while-loop, any body write to a variable the condition reads
+    /// (the counter itself, the bound, a `.len()` receiver) — other
+    /// than the terminal step-one increment the codegen strips — makes
+    /// the source trip count body-dependent: DECLINE. (The self-hosted
+    /// lexer's `if escaped { i = i + 1 }` skip-advance inside a push
+    /// loop is the live shape that miscompiled.) For a for-range loop
+    /// the range is evaluated once up front in source semantics too, so
+    /// bound writes are harmless — but a body write to the LOOP VAR
+    /// still diverges (source rebinds it fresh each iteration; the
+    /// lowering persists one alloca): DECLINE that as well.
+    fn classify_seq_collect_tabulate(&self, body: &Block, loop_expr: &Expr) -> Option<String> {
         let mut candidate: Option<String> = None;
         let consider = |name: Option<String>, candidate: &mut Option<String>| -> bool {
             let Some(n) = name else { return true };
@@ -1994,11 +2008,92 @@ impl<'a> ConcurrencyChecker<'a> {
             }
         }
         let acc = candidate?;
-        if self.collect_is_tabulate_shape(body, &acc) {
-            Some(acc)
-        } else {
-            None
+        if !self.collect_is_tabulate_shape(body, &acc) {
+            return None;
         }
+
+        // ── Loop-control immutability gate. ──
+        // Names the trip count depends on:
+        let mut control_reads: HashSet<String> = HashSet::new();
+        match &loop_expr.kind {
+            ExprKind::While { condition, .. } => {
+                self.collect_expr_reads(condition, &mut control_reads);
+            }
+            ExprKind::For {
+                pattern, iterable, ..
+            } => {
+                // Range bounds are pre-evaluated in source semantics; only
+                // the loop variable itself is control state.
+                let _ = iterable;
+                if let PatternKind::Binding(name) = &pattern.kind {
+                    control_reads.insert(name.clone());
+                }
+            }
+            _ => return None,
+        }
+        if control_reads.is_empty() {
+            return Some(acc);
+        }
+
+        // Names the body writes — Assign/CompoundAssign targets plus
+        // nested writes (if-arms, inner loops, mutating method
+        // receivers) via the same walker the auto-par dependency check
+        // trusts. Body-local rebindings are not loop-carried; the
+        // while-form's TERMINAL step-one increment is the one exempted
+        // write (extract_loop_shape strips it before codegen).
+        let mut let_introduced: HashSet<String> = HashSet::new();
+        for stmt in &body.stmts {
+            match &stmt.kind {
+                StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                    self.collect_pattern_bindings(pattern, &mut let_introduced);
+                }
+                StmtKind::LetUninit { name, .. } => {
+                    let_introduced.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+        let is_while = matches!(loop_expr.kind, ExprKind::While { .. });
+        let last_idx = body.stmts.len().saturating_sub(1);
+        let mut written: HashSet<String> = HashSet::new();
+        for (i, stmt) in body.stmts.iter().enumerate() {
+            match &stmt.kind {
+                StmtKind::Assign { target, value } => {
+                    if is_while && i == last_idx && body.final_expr.is_none() {
+                        if let Some(name) = identifier_name(target) {
+                            if induction_step_via_assign(value, &name) {
+                                // The terminal counter step — stripped by
+                                // extract_loop_shape, exempt here.
+                                continue;
+                            }
+                        }
+                    }
+                    self.collect_assign_target_defines(target, &mut written);
+                    self.collect_expr_inner_writes(value, &mut written);
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
+                    self.collect_assign_target_defines(target, &mut written);
+                    self.collect_expr_inner_writes(value, &mut written);
+                }
+                StmtKind::Let { value, .. } => {
+                    self.collect_expr_inner_writes(value, &mut written);
+                }
+                StmtKind::Expr(e) => {
+                    self.collect_expr_inner_writes(e, &mut written);
+                }
+                _ => {}
+            }
+        }
+        if let Some(e) = &body.final_expr {
+            self.collect_expr_inner_writes(e, &mut written);
+        }
+        if written
+            .iter()
+            .any(|w| !let_introduced.contains(w) && control_reads.contains(w))
+        {
+            return None;
+        }
+        Some(acc)
     }
 
     /// B-2026-07-16-6: true when every typed expression inside `body`

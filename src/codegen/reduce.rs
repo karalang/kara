@@ -1618,6 +1618,26 @@ impl<'ctx> super::Codegen<'ctx> {
         // init (buffer view) and the caller's install differ.
         let tabulate_elem_size = reduction.collect_tabulate.then_some(elem_size);
 
+        // Alias-scope candidates for the tabulate worker, filtered HERE
+        // (the caller's context) where ref-param aliasing is knowable:
+        // distinct owned Vec locals only — the ownership guarantee that
+        // two such locals never share storage is what licenses the
+        // worker's noalias metadata. (Mirrors the seq lowering's filter.)
+        let alias_read_vecs: Vec<String> = if tabulate_elem_size.is_some() {
+            runtime_captures
+                .iter()
+                .filter(|n| !self.ref_params.contains_key(n.as_str()))
+                .filter(|n| {
+                    self.variables
+                        .get(n.as_str())
+                        .is_some_and(|s| self.llvm_ty_is_vec_struct(s.ty))
+                })
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let worker_fn = self.emit_reduce_collect_worker_fn(
             reduction,
             loop_var_int_ty,
@@ -1628,6 +1648,7 @@ impl<'ctx> super::Codegen<'ctx> {
             &const_int_captures,
             lo_val.is_some(),
             tabulate_elem_size,
+            &alias_read_vecs,
         )?;
 
         self.emit_reduce_collect_call(
@@ -1976,16 +1997,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// freeing it. Body-local lets register their own cleanup as usual.
     /// `tabulate_elem_size`: when `Some(elem_size)`, emit the TABULATE
     /// variant — the env struct's first field is the shared presized
-    /// output buffer's base pointer, and the worker's local accumulator
-    /// is initialized as a *view* into it (`{base + start·elem_size,
-    /// len 0, cap end-start}`) instead of an empty Vec. The body's
-    /// `acc.push` codegen is reused untouched: with exactly one push per
-    /// iteration (the recognizer's tabulate gate) the pushes fill the
-    /// view to exactly its capacity, so the grow path never fires and
-    /// every element lands directly in its final position. The worker
-    /// does NOT publish to its slot — the slot keeps init's `{null,0,0}`
-    /// so the runtime's combine chain is a no-op; the caller installs
-    /// the shared buffer into the accumulator after the call.
+    /// output buffer's base pointer, and the worker writes each element
+    /// IN PLACE at `buf + idx·elem` (idx = the global relative iteration
+    /// index over the worker's chunk), with the single recognized push
+    /// rewritten into a raw store — no local accumulator, no per-push
+    /// cap-check/grow path. Element loads of distinct owned Vec captures
+    /// and the store carry per-worker-invocation noalias scopes
+    /// (`alias_read_vecs`, filtered in the CALLER's context where
+    /// ref-param aliasing is knowable), which is what lets LLVM
+    /// loop-vectorize the worker body without runtime memchecks — the
+    /// same pair of levers as the sequential tabulate lowering. The
+    /// worker does NOT publish to its slot — the slot keeps init's
+    /// `{null,0,0}` so the runtime's combine chain is a no-op; the
+    /// caller installs the shared buffer into the accumulator after the
+    /// call.
     #[allow(clippy::result_large_err)]
     #[allow(clippy::too_many_arguments)]
     fn emit_reduce_collect_worker_fn(
@@ -1999,6 +2024,7 @@ impl<'ctx> super::Codegen<'ctx> {
         const_int_captures: &[(String, i64, Option<IntSuffix>)],
         has_lo: bool,
         tabulate_elem_size: Option<u64>,
+        alias_read_vecs: &[String],
     ) -> Result<FunctionValue<'ctx>, String> {
         let worker_id = self.par_counter;
         self.par_counter += 1;
@@ -2035,6 +2061,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
         let saved_elem_types = std::mem::take(&mut self.vec_elem_types);
+        // The enclosing function may itself be inside a tabulate loop —
+        // its alias scopes are declared in THAT function and must not
+        // leak into this worker's body.
+        let saved_tab_md = self.tabulate_alias_scopes.take();
         self.scope_cleanup_actions.push(Vec::new());
 
         self.current_fn = Some(worker_fn);
@@ -2170,60 +2200,64 @@ impl<'ctx> super::Codegen<'ctx> {
         // view to exactly its capacity and the grow path (which would
         // `free` this interior pointer) is statically unreachable.
         let vec_ty = self.vec_struct_type();
-        let acc_alloca = self.create_entry_alloca(worker_fn, &reduction.accumulator, vec_ty.into());
         let null_ptr = ptr_ty.const_null();
         let zero = i64_t.const_zero();
-        let (acc_data, acc_cap): (PointerValue<'ctx>, IntValue<'ctx>) = match tab_buf {
-            Some(buf) => {
+        // Partials path: allocate + register the local accumulator Vec
+        // (empty `{null,0,0}`) so the body's `acc.push` dispatches into
+        // compile_vec_method. Tabulate path: NO accumulator at all — the
+        // single push is rewritten below into a raw store at
+        // `buf + idx·elem`, where idx starts at this worker's chunk
+        // start; the recognizer guarantees the body never mentions the
+        // accumulator otherwise.
+        let mut acc_alloca_partials: Option<PointerValue<'ctx>> = None;
+        let mut tab_idx_alloca: Option<PointerValue<'ctx>> = None;
+        match tab_buf {
+            Some(_) => {
                 let raw_start_i64 = worker_fn.get_nth_param(1).unwrap().into_int_value();
-                let raw_end_i64 = worker_fn.get_nth_param(2).unwrap().into_int_value();
-                let elem_size = i64_t.const_int(
-                    tabulate_elem_size.expect("tab_buf implies tabulate_elem_size"),
-                    false,
-                );
-                let byte_off = self
-                    .builder
-                    .build_int_mul(raw_start_i64, elem_size, "tab.byte.off")
-                    .unwrap();
-                let view = unsafe {
-                    self.builder
-                        .build_gep(self.context.i8_type(), buf, &[byte_off], "tab.view")
-                        .unwrap()
-                };
-                let chunk_len = self
-                    .builder
-                    .build_int_sub(raw_end_i64, raw_start_i64, "tab.chunk.len")
-                    .unwrap();
-                (view, chunk_len)
+                let idx = self.create_entry_alloca(worker_fn, "tab.idx", i64_t.into());
+                self.builder.build_store(idx, raw_start_i64).unwrap();
+                tab_idx_alloca = Some(idx);
             }
-            None => (null_ptr, zero),
+            None => {
+                let acc_alloca =
+                    self.create_entry_alloca(worker_fn, &reduction.accumulator, vec_ty.into());
+                let mut acc_init = vec_ty.get_undef();
+                acc_init = self
+                    .builder
+                    .build_insert_value(acc_init, null_ptr, 0, "acc.data")
+                    .unwrap()
+                    .into_struct_value();
+                acc_init = self
+                    .builder
+                    .build_insert_value(acc_init, zero, 1, "acc.len")
+                    .unwrap()
+                    .into_struct_value();
+                acc_init = self
+                    .builder
+                    .build_insert_value(acc_init, zero, 2, "acc.cap")
+                    .unwrap()
+                    .into_struct_value();
+                self.builder.build_store(acc_alloca, acc_init).unwrap();
+                self.variables.insert(
+                    reduction.accumulator.clone(),
+                    VarSlot {
+                        ptr: acc_alloca,
+                        ty: vec_ty.into(),
+                    },
+                );
+                self.vec_elem_types
+                    .insert(reduction.accumulator.clone(), elem_ty);
+                acc_alloca_partials = Some(acc_alloca);
+            }
+        }
+        // Per-worker-invocation alias scopes (tabulate only): declared at
+        // worker entry, so buf-vs-captures disjointness holds for exactly
+        // this invocation's buffers.
+        let store_alias_md = if tabulate {
+            self.setup_tabulate_alias_scopes(alias_read_vecs)
+        } else {
+            None
         };
-        let mut acc_init = vec_ty.get_undef();
-        acc_init = self
-            .builder
-            .build_insert_value(acc_init, acc_data, 0, "acc.data")
-            .unwrap()
-            .into_struct_value();
-        acc_init = self
-            .builder
-            .build_insert_value(acc_init, zero, 1, "acc.len")
-            .unwrap()
-            .into_struct_value();
-        acc_init = self
-            .builder
-            .build_insert_value(acc_init, acc_cap, 2, "acc.cap")
-            .unwrap()
-            .into_struct_value();
-        self.builder.build_store(acc_alloca, acc_init).unwrap();
-        self.variables.insert(
-            reduction.accumulator.clone(),
-            VarSlot {
-                ptr: acc_alloca,
-                ty: vec_ty.into(),
-            },
-        );
-        self.vec_elem_types
-            .insert(reduction.accumulator.clone(), elem_ty);
 
         // Loop var (mirror of scalar). Truncate runtime's i64 start/end
         // to the loop-var int width when narrower; shift by lo if set.
@@ -2288,22 +2322,105 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(body_bb);
-        let body_result = self.compile_block(body);
-        body_result?;
+        if let (Some(buf), Some(idx_alloca)) = (tab_buf, tab_idx_alloca) {
+            // Tabulate: mini block compiler — the recognized push becomes
+            // a raw tagged store; everything else compiles inline (nested
+            // tagged loops still get their own lowering); body-local lets
+            // get a per-iteration cleanup frame.
+            let acc_name = reduction.accumulator.clone();
+            let push_arg_of = |e: &Expr| -> Option<Expr> {
+                if crate::concurrency::collect_push_shape(e).as_deref() == Some(acc_name.as_str()) {
+                    if let ExprKind::MethodCall { args, .. } = &e.kind {
+                        return Some(args[0].value.clone());
+                    }
+                }
+                None
+            };
+            self.scope_cleanup_actions.push(Vec::new());
+            let mut terminated = false;
+            for (j, body_stmt) in body.stmts.iter().enumerate() {
+                if let StmtKind::Expr(e) = &body_stmt.kind {
+                    if let Some(arg) = push_arg_of(e) {
+                        let v = self.compile_expr(&arg)?;
+                        self.emit_tabulate_store(v, elem_ty, buf, idx_alloca, &store_alias_md);
+                        continue;
+                    }
+                }
+                let lowered = self.try_emit_reduction_lowering(body, j)?;
+                if lowered.is_none() {
+                    self.compile_stmt(body_stmt)?;
+                }
+                if self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_terminator()
+                    .is_some()
+                {
+                    terminated = true;
+                    break;
+                }
+            }
+            if !terminated {
+                if let Some(e) = &body.final_expr {
+                    if let Some(arg) = push_arg_of(e) {
+                        let v = self.compile_expr(&arg)?;
+                        self.emit_tabulate_store(v, elem_ty, buf, idx_alloca, &store_alias_md);
+                    } else {
+                        self.compile_expr(e)?;
+                    }
+                    terminated = self
+                        .builder
+                        .get_insert_block()
+                        .unwrap()
+                        .get_terminator()
+                        .is_some();
+                }
+            }
+            if !terminated {
+                self.drain_top_frame_with_emit();
+                let k_cur = self
+                    .builder
+                    .build_load(loop_var_int_ty, k_alloca, "k.cur")
+                    .unwrap()
+                    .into_int_value();
+                let k_next = self
+                    .builder
+                    .build_int_add(k_cur, loop_var_int_ty.const_int(1, false), "k.next")
+                    .unwrap();
+                self.builder.build_store(k_alloca, k_next).unwrap();
+                let i_cur = self
+                    .builder
+                    .build_load(i64_t, idx_alloca, "tab.i")
+                    .unwrap()
+                    .into_int_value();
+                let i_next = self
+                    .builder
+                    .build_int_add(i_cur, i64_t.const_int(1, false), "tab.i.next")
+                    .unwrap();
+                self.builder.build_store(idx_alloca, i_next).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+            } else {
+                self.scope_cleanup_actions.pop();
+            }
+        } else {
+            let body_result = self.compile_block(body);
+            body_result?;
 
-        let current_bb = self.builder.get_insert_block().unwrap();
-        if current_bb.get_terminator().is_none() {
-            let k_cur = self
-                .builder
-                .build_load(loop_var_int_ty, k_alloca, "k.cur")
-                .unwrap()
-                .into_int_value();
-            let k_next = self
-                .builder
-                .build_int_add(k_cur, loop_var_int_ty.const_int(1, false), "k.next")
-                .unwrap();
-            self.builder.build_store(k_alloca, k_next).unwrap();
-            self.builder.build_unconditional_branch(cond_bb).unwrap();
+            let current_bb = self.builder.get_insert_block().unwrap();
+            if current_bb.get_terminator().is_none() {
+                let k_cur = self
+                    .builder
+                    .build_load(loop_var_int_ty, k_alloca, "k.cur")
+                    .unwrap()
+                    .into_int_value();
+                let k_next = self
+                    .builder
+                    .build_int_add(k_cur, loop_var_int_ty.const_int(1, false), "k.next")
+                    .unwrap();
+                self.builder.build_store(k_alloca, k_next).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+            }
         }
 
         self.builder.position_at_end(exit_bb);
@@ -2314,7 +2431,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // pointers to adopt/free), and the caller installs the shared
         // buffer directly. Body-local lets get their cleanup via
         // emit_scope_cleanup (acc was never registered).
-        if !tabulate {
+        if let Some(acc_alloca) = acc_alloca_partials {
             let final_vec = self
                 .builder
                 .build_load(vec_ty, acc_alloca, "acc.final")
@@ -2326,6 +2443,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_return(None).unwrap();
 
         // Restore outer state.
+        self.tabulate_alias_scopes = saved_tab_md;
         self.vec_elem_types = saved_elem_types;
         self.branch_cancel_ptr = saved_cancel_ptr;
         self.scope_cleanup_actions = saved_cleanup;
@@ -2665,6 +2783,74 @@ impl<'ctx> super::Codegen<'ctx> {
     // via `llvm.experimental.noalias.scope.decl`, so an outer loop
     // swapping which buffer a binding holds (LBM's grid↔next) cannot
     // create cross-execution contradictions.
+    /// Build and DECLARE a fresh alias-scope domain at the current insert
+    /// point: one scope for the tabulate output region, one per read Vec
+    /// variable. Sets `self.tabulate_alias_scopes` (fn_key = current fn)
+    /// so `compile_vec_index` tags element loads, and returns the
+    /// `(alias.scope, noalias)` metadata pair for the tabulate store.
+    /// Returns `None` (and sets no context) when the
+    /// `noalias.scope.decl` intrinsic is unavailable — unbounded scopes
+    /// would be unsound under outer-loop buffer swaps, so no decl means
+    /// no metadata at all. Callers save/restore the previous context.
+    fn setup_tabulate_alias_scopes(
+        &mut self,
+        read_vecs: &[String],
+    ) -> Option<(
+        inkwell::values::MetadataValue<'ctx>,
+        inkwell::values::MetadataValue<'ctx>,
+    )> {
+        let decl_fn = inkwell::intrinsics::Intrinsic::find("llvm.experimental.noalias.scope.decl")
+            .and_then(|i| i.get_declaration(&self.module, &[]))?;
+        let fn_val = self
+            .current_fn
+            .expect("alias-scope setup must run inside a function");
+        let site_id = self.par_counter;
+        self.par_counter += 1;
+        let domain = self.context.metadata_node(&[self
+            .context
+            .metadata_string(&format!("karac.tab.domain.{site_id}"))
+            .into()]);
+        let mk_scope = |name: &str| {
+            self.context.metadata_node(&[
+                self.context
+                    .metadata_string(&format!("karac.tab.{site_id}.{name}"))
+                    .into(),
+                domain.into(),
+            ])
+        };
+        let out_scope = mk_scope("out");
+        let out_list = self.context.metadata_node(&[out_scope.into()]);
+        let var_scopes: Vec<(String, inkwell::values::MetadataValue<'ctx>)> =
+            read_vecs.iter().map(|n| (n.clone(), mk_scope(n))).collect();
+        // Declare every scope for THIS dynamic entry (loop entry for the
+        // seq lowering; worker invocation for the par lowering).
+        self.builder
+            .build_call(decl_fn, &[out_list.into()], "")
+            .unwrap();
+        let mut alias_scope_map = HashMap::new();
+        let mut noalias_map = HashMap::new();
+        for (n, s) in &var_scopes {
+            let own_list = self.context.metadata_node(&[(*s).into()]);
+            self.builder
+                .build_call(decl_fn, &[own_list.into()], "")
+                .unwrap();
+            alias_scope_map.insert(n.clone(), own_list);
+            noalias_map.insert(n.clone(), out_list);
+        }
+        let all_var_scope_list = self.context.metadata_node(
+            &var_scopes
+                .iter()
+                .map(|(_, s)| (*s).into())
+                .collect::<Vec<_>>(),
+        );
+        self.tabulate_alias_scopes = Some(crate::codegen::TabulateAliasScopes {
+            fn_key: fn_val,
+            alias_scope: alias_scope_map,
+            noalias: noalias_map,
+        });
+        Some((out_list, all_var_scope_list))
+    }
+
     /// Emit one in-place tabulate element store: `base[idx] = v`, tagged
     /// with the output alias scope when metadata is active. Shared by the
     /// stmt-position and final-expr-position push rewrites.
@@ -2892,60 +3078,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .is_some_and(|s| self.llvm_ty_is_vec_struct(s.ty))
             })
             .collect();
-        let decl_intrinsic =
-            inkwell::intrinsics::Intrinsic::find("llvm.experimental.noalias.scope.decl")
-                .and_then(|i| i.get_declaration(&self.module, &[]));
-        let mut store_alias_md: Option<(
-            inkwell::values::MetadataValue<'ctx>,
-            inkwell::values::MetadataValue<'ctx>,
-        )> = None;
         let saved_tab_scopes = self.tabulate_alias_scopes.take();
-        if let Some(decl_fn) = decl_intrinsic {
-            let site_id = self.par_counter;
-            self.par_counter += 1;
-            let domain = self.context.metadata_node(&[self
-                .context
-                .metadata_string(&format!("karac.tab.domain.{site_id}"))
-                .into()]);
-            let mk_scope = |name: &str| {
-                self.context.metadata_node(&[
-                    self.context
-                        .metadata_string(&format!("karac.tab.{site_id}.{name}"))
-                        .into(),
-                    domain.into(),
-                ])
-            };
-            let out_scope = mk_scope("out");
-            let out_list = self.context.metadata_node(&[out_scope.into()]);
-            let var_scopes: Vec<(String, inkwell::values::MetadataValue<'ctx>)> =
-                read_vecs.iter().map(|n| (n.clone(), mk_scope(n))).collect();
-            // Declare every scope for THIS dynamic loop entry.
-            self.builder
-                .build_call(decl_fn, &[out_list.into()], "")
-                .unwrap();
-            let mut alias_scope_map = HashMap::new();
-            let mut noalias_map = HashMap::new();
-            for (n, s) in &var_scopes {
-                let own_list = self.context.metadata_node(&[(*s).into()]);
-                self.builder
-                    .build_call(decl_fn, &[own_list.into()], "")
-                    .unwrap();
-                alias_scope_map.insert(n.clone(), own_list);
-                noalias_map.insert(n.clone(), out_list);
-            }
-            let all_var_scope_list = self.context.metadata_node(
-                &var_scopes
-                    .iter()
-                    .map(|(_, s)| (*s).into())
-                    .collect::<Vec<_>>(),
-            );
-            store_alias_md = Some((out_list, all_var_scope_list));
-            self.tabulate_alias_scopes = Some(crate::codegen::TabulateAliasScopes {
-                fn_key: fn_val,
-                alias_scope: alias_scope_map,
-                noalias: noalias_map,
-            });
-        }
+        let store_alias_md = self.setup_tabulate_alias_scopes(&read_vecs);
 
         // ── Loop scaffolding. While-form: the loop var is the OUTER
         // binding (extract_loop_shape stripped the terminal increment);
