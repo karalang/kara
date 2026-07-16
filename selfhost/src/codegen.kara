@@ -28,6 +28,8 @@ import ast.{
     FnDefNode,
     Block,
     Stmt,
+    LetStmt,
+    AssignStmt,
     ExprStmt,
     Expr,
     CallExpr,
@@ -38,6 +40,8 @@ import ast.{
     BinaryExpr,
     BinOp,
     MethodCallExpr,
+    Pattern,
+    BindingPattern,
 };
 
 // Accumulates the module's string-literal GLOBALS and the `main` BODY
@@ -49,18 +53,24 @@ struct Emitter {
     body: String,
     nstr: i64,
     ntmp: i64,
+    // Local INTEGER variables (Slice 3): `locals[i]` is the name of the i-th
+    // `let` binding; its stack slot is `%v<i>` (an i64 alloca). Flat Vec +
+    // linear scan (newest-first, so shadowing rebinds); no scoping yet — Slice 3
+    // main bodies are a single flat block.
+    locals: Vec[String],
 }
 
 // Emit a whole program as LLVM IR text. Walks the items, emits `main`'s body
 // (Slice 1: `println` of string literals), and assembles the module —
 // datalayout / triple / the `@stdout` extern / a shared `@.nl` newline / the
 // `@fwrite` declare / the collected string globals / `define i32 @main`.
-pub fn emit_program(items: Vec[Item]) -> String {
+pub fn emit_program(items: Vec[Item]) -> String with panics {
     let mut e = Emitter {
         globals: "".to_string(),
         body: "".to_string(),
         nstr: 0,
         ntmp: 0,
+        locals: Vec.new(),
     };
     for it in items {
         match it {
@@ -84,7 +94,7 @@ pub fn emit_program(items: Vec[Item]) -> String {
             _ => {}
         }
     }
-    let Emitter { globals, body, nstr, ntmp } = e;
+    let Emitter { globals, body, nstr, ntmp, locals } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -116,14 +126,68 @@ impl Emitter {
         }
     }
 
-    // Slice 1 handles only expression statements (a call).
+    // Expression statements (Slice 1), `let` bindings and assignments (Slice 3).
     fn emit_stmt(mut ref self, st: Stmt) {
         match st {
             Exp(es) => {
                 let ExprStmt { expr, span } = es;
                 self.emit_expr(expr);
             }
-            _ => {}
+            Let(ls) => {
+                // `let [mut] name = <int-expr>`: register the binding, alloca an
+                // i64 slot `%v<idx>`, evaluate the initializer, store. Only a
+                // plain binding pattern is handled; the annotation is ignored
+                // (everything is i64 in the Slice-3 surface).
+                let LetStmt { is_mut, pattern, ty, value, span } = ls;
+                match pattern {
+                    BindingPat(bp) => {
+                        let BindingPattern { name, span: bsp } = bp;
+                        let v = self.emit_int_value(value);
+                        let idx = self.locals.len();
+                        self.locals.push(name);
+                        let slot = "%v" + idx.to_string();
+                        self.body = self.body + "  " + slot.clone() + " = alloca i64, align 8\n";
+                        self.body =
+                            self.body + "  store i64 " + v + ", ptr " + slot + ", align 8\n";
+                    }
+                    _ => {}
+                }
+            }
+            Assign(asn) => {
+                // `name = <int-expr>`: evaluate, store into the existing slot.
+                let AssignStmt { target, value, span } = asn;
+                match target {
+                    Ident(ie) => {
+                        let IdentExpr { name, span: isp } = ie;
+                        let idx = self.local_slot(name);
+                        if idx >= 0 {
+                            let v = self.emit_int_value(value);
+                            self.body = self.body
+                                + "  store i64 "
+                                + v
+                                + ", ptr %v"
+                                + idx.to_string()
+                                + ", align 8\n";
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // The slot index of local `name` (NEWEST-first scan, so a shadowing `let`
+    // wins), or -1 if unbound.
+    fn local_slot(ref self, name: ref String) -> i64 {
+        let mut i = self.locals.len() - 1;
+        loop {
+            if i < 0 {
+                return -1;
+            }
+            if self.locals[i] == name {
+                return i;
+            }
+            i = i - 1;
         }
     }
 
@@ -229,6 +293,22 @@ impl Emitter {
             Int(n) => {
                 let IntLit { value, suffix, span } = n;
                 value.to_string()
+            }
+            Ident(ie) => {
+                // A local variable read (Slice 3): load from its i64 slot.
+                let IdentExpr { name, span } = ie;
+                let idx = self.local_slot(name);
+                if idx < 0 {
+                    return "0".to_string();
+                }
+                let r = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + r.clone()
+                    + " = load i64, ptr %v"
+                    + idx.to_string()
+                    + ", align 8\n";
+                r
             }
             Binary(b) => {
                 let BinaryExpr { op, left, right, span } = b;

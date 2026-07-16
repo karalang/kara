@@ -35,6 +35,13 @@ const CORPUS: &[&str] = &[
     "fn main() { println((2 + 3 * 4).to_string()) }",
     "fn main() { println((0 - 5).to_string()) }",
     "fn main() { println(\"n = \"); println((1 + 1).to_string()) }",
+    // Slice 3: let bindings, local reads, assignment, shadowing.
+    "fn main() { let x = 5; println(x.to_string()) }",
+    "fn main() { let x = 2; let y = 3; println((x + y).to_string()) }",
+    "fn main() { let x = 2; let y = x * 10; println((y + x).to_string()) }",
+    "fn main() { let mut x = 1; x = x + 41; println(x.to_string()) }",
+    "fn main() { let x = 1; let x = x + 1; println(x.to_string()) }",
+    "fn main() { let mut a = 10; a = a - 3; a = a * 2; println(a.to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
