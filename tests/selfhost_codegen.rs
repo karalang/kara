@@ -53,6 +53,13 @@ const CORPUS: &[&str] = &[
     "fn main() { let n = 9; if n < 5 { println(\"lo\") } else { if n < 20 { println(\"mid\") } else { println(\"hi\") } } }",
     "fn main() { println((84 / 2).to_string()); println((17 % 5).to_string()) }",
     "fn main() { let mut x = 1; if true { x = x + 1; } println(x.to_string()) }",
+    // Slice 5: while loops.
+    "fn main() { let mut i = 0; while i < 5 { println(i.to_string()); i = i + 1; } }",
+    "fn main() { let mut s = 0; let mut i = 1; while i <= 10 { s = s + i; i = i + 1; } println(s.to_string()) }",
+    "fn main() { let mut n = 1; while n < 100 { n = n * 2; } println(n.to_string()) }",
+    "fn main() { let mut i = 0; while i < 0 { println(\"never\"); i = i + 1; } println(\"done\") }",
+    // Nested: FizzBuzz-lite (loop + if/else-if inside).
+    "fn main() { let mut i = 1; while i <= 15 { if i % 15 == 0 { println(\"fizzbuzz\") } else { if i % 3 == 0 { println(\"fizz\") } else { if i % 5 == 0 { println(\"buzz\") } else { println(i.to_string()) } } } i = i + 1; } }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

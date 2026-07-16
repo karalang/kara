@@ -44,6 +44,7 @@ import ast.{
     UnaryOp,
     MethodCallExpr,
     IfExpr,
+    WhileExpr,
     Pattern,
     BindingPattern,
 };
@@ -284,6 +285,33 @@ impl Emitter {
                     None => {}
                 }
                 self.body = self.body + "  br label %" + lend.clone() + "\n";
+                self.body = self.body + lend + ":\n";
+            }
+            While(w) => {
+                // `while cond { body }` (Slice 5): a loop header re-evaluates the
+                // condition each iteration — br to header, header computes cond
+                // and branches to body or end, body jumps back to header.
+                let WhileExpr { label, cond, body, span } = w;
+                let lid = self.nlbl;
+                self.nlbl = self.nlbl + 1;
+                let lhead = "loop" + lid.to_string();
+                let lbody = "body" + lid.to_string();
+                let lend = "endloop" + lid.to_string();
+                self.body = self.body + "  br label %" + lhead.clone() + "\n";
+                self.body = self.body + lhead.clone() + ":\n";
+                let c = self.emit_value(cond);
+                let Val { op: cop, is_bool: cb } = c;
+                self.body = self.body
+                    + "  br i1 "
+                    + cop
+                    + ", label %"
+                    + lbody.clone()
+                    + ", label %"
+                    + lend.clone()
+                    + "\n";
+                self.body = self.body + lbody + ":\n";
+                self.emit_block(body);
+                self.body = self.body + "  br label %" + lhead + "\n";
                 self.body = self.body + lend + ":\n";
             }
             Blk(b) => {
