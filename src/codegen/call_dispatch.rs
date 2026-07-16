@@ -1374,7 +1374,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         object
                     };
-                    if let Ok(Some((field_ptr, field_ty, _))) =
+                    if let Ok(Some((field_ptr, field_ty, field_te))) =
                         self.lower_field_access_ptr(obj_ref, field, "ref-arg field borrow")
                     {
                         // Restrict the in-place borrow to the confirmed
@@ -1389,6 +1389,32 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the fix scoped to exactly the reported shape.
                         if field_ty == self.vec_struct_type().into() {
                             compiled_args.push(field_ptr.into());
+                            continue;
+                        }
+                        // B-2026-07-16-5: a DECLARED `ref` / `mut ref` field
+                        // (design.md Feature 4 Part 3 — the slot lowers to
+                        // `ptr` and stores the BORROW pointer, not the value).
+                        // Forward the stored borrow directly: it is already
+                        // the exact `ptr` ABI the callee's `ref T` param
+                        // expects. The rvalue fall-through instead DEREF'd the
+                        // borrow into a `{ptr,len,cap}` temp and queued a
+                        // cap-guarded free of it — but that cap is the
+                        // LENDER's real cap, so the temp cleanup freed the
+                        // lender's buffer and the lender's own scope-exit
+                        // free doubled it (`shout(p.source)` with
+                        // `source: ref String` aborted `free(): double free`
+                        // under AOT; interp was correct — a silent run/build
+                        // divergence caught by safety_design's
+                        // runtime-confirmation harness).
+                        if field_ty.is_pointer_type()
+                            && matches!(field_te.kind, TypeKind::Ref(_) | TypeKind::MutRef(_))
+                        {
+                            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                            let fwd = self
+                                .builder
+                                .build_load(ptr_ty, field_ptr, "ref_field_fwd")
+                                .unwrap();
+                            compiled_args.push(fwd.into());
                             continue;
                         }
                     }
@@ -2615,6 +2641,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // retains the free (kata-22 family, 2026-06-06).
                 self.suppress_fstr_acc_if_moved_out(&arg.value);
                 let val = self.maybe_defensive_copy_param_arg(&arg.value, val);
+                // B-2026-07-16-5: borrow-sourced payload — zero the cap word
+                // so the stored triple is a view (see the non-shared arm).
+                let val = self.zero_cap_if_ref_heap_borrow(&arg.value, val);
                 // #226 (B-2026-06-15): a `Variant(nodes[i])` payload reading a
                 // bare-`shared` Vec element is aliased, not moved — inc so the
                 // new enum owns its own ref (else freed when the Vec drops).
@@ -2695,6 +2724,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // caller retains the free). Kata-22 family, 2026-06-06.
             self.suppress_fstr_acc_if_moved_out(&arg.value);
             let val = self.maybe_defensive_copy_param_arg(&arg.value, val);
+            // B-2026-07-16-5: a payload sourced from a BORROW — `Some(s)`
+            // with `s: ref String` (the `Option[ref String]` adversarial-
+            // accept shape) — packs the LENDER's `{ptr,len,cap}` triple
+            // into the payload words, so the match-arm binding's
+            // cap-guarded cleanup freed the lender's buffer and the
+            // lender's own scope-exit free doubled it. Zero the cap word:
+            // the payload is a read-only view; the lender stays sole owner.
+            let val = self.zero_cap_if_ref_heap_borrow(&arg.value, val);
             // #226 (B-2026-06-15): `Some(nodes[i])` — a bare-`shared` Vec
             // element read is aliased, not moved; inc so the Option owns its
             // own ref (else freed when the source Vec drops).
@@ -4699,6 +4736,90 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         self.emit_option_inner_rc_inc_for_loaded(val, inner_info.heap_type);
+    }
+
+    /// B-2026-07-16-5: true when `e` denotes a BORROWED String/Vec value —
+    /// an Identifier naming a `ref` / `mut ref` param whose pointee is the
+    /// `{ptr,len,cap}` triple layout, or a field access whose DECLARED
+    /// field type is `ref`/`mut ref` to a String/str/Vec/VecDeque. Such an
+    /// expression's compiled value carries the LENDER's live `cap`, so any
+    /// consumer that stores it into an owned-looking slot must first zero
+    /// the cap (see `zero_cap_if_ref_heap_borrow`) or every downstream
+    /// cap-guarded free releases a buffer the lender still owns.
+    pub(super) fn expr_is_ref_heap_borrow(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Identifier(n) => self
+                .ref_params
+                .get(n)
+                .is_some_and(|inner| *inner == self.vec_struct_type().into()),
+            ExprKind::FieldAccess { object, field } => {
+                let obj_name = match &object.kind {
+                    ExprKind::Identifier(n) => n.clone(),
+                    ExprKind::SelfValue => "self".to_string(),
+                    _ => return false,
+                };
+                let Some(type_name) = self.var_type_names.get(&obj_name).cloned() else {
+                    return false;
+                };
+                let Some(idx) = self
+                    .struct_field_names
+                    .get(&type_name)
+                    .and_then(|names| names.iter().position(|n| n == field))
+                else {
+                    return false;
+                };
+                let Some(field_te) = self
+                    .struct_field_type_exprs
+                    .get(&type_name)
+                    .and_then(|v| v.get(idx))
+                else {
+                    return false;
+                };
+                let inner = match &field_te.kind {
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner,
+                    _ => return false,
+                };
+                match &inner.kind {
+                    TypeKind::Path(p) => matches!(
+                        p.segments.last().map(|s| s.as_str()),
+                        Some("String") | Some("str") | Some("Vec") | Some("VecDeque")
+                    ),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// B-2026-07-16-5 companion: when `arg` is a ref-heap borrow (see
+    /// `expr_is_ref_heap_borrow`) and `val` is its materialized
+    /// `{ptr,len,cap}` triple, zero the cap word so the stored value is a
+    /// read-only VIEW — the same borrow-view discipline as the map
+    /// `get(k).unwrap()` family (B-2026-07-14-15 / B-2026-07-15-26): every
+    /// cap-guarded free downstream (a match-arm binding cleanup, an enum
+    /// payload drop, a struct field drop) skips, and the lender remains the
+    /// buffer's sole owner. Reads (`len`, `println`, clone) never consult
+    /// `cap`. Pass-through for non-borrow args and non-triple values.
+    pub(super) fn zero_cap_if_ref_heap_borrow(
+        &self,
+        arg: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        if !self.expr_is_ref_heap_borrow(arg) {
+            return val;
+        }
+        let BasicValueEnum::StructValue(sv) = val else {
+            return val;
+        };
+        if sv.get_type() != self.vec_struct_type() {
+            return val;
+        }
+        let zero = self.context.i64_type().const_zero();
+        self.builder
+            .build_insert_value(sv, zero, 2, "plref.cap0")
+            .unwrap()
+            .into_struct_value()
+            .into()
     }
 
     pub(super) fn share_option_shared_ref_for_arg(&self, arg_expr: &Expr) {

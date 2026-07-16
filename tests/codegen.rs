@@ -10043,6 +10043,46 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ref_borrow_stored_positions_no_double_free() {
+        // B-2026-07-16-5: two borrow-materialization legs that freed the
+        // LENDER's buffer (glibc double-free under AOT; interp correct).
+        // Leg 1 — `Option[ref String]`: `Some(s)` with `s: ref String`
+        // packed the lender's {ptr,len,cap} into the payload, so the
+        // match-arm binding cleanup freed the borrowed buffer; fixed by
+        // zeroing the payload's cap word at pack time (borrow-view
+        // discipline). Leg 2 — a declared `ref String` STRUCT field passed
+        // to a `ref` param (`shout(p.source)`): the ref-arg rvalue path
+        // deref'd the borrow-pointer slot into a temp and queued a
+        // cap-guarded free of the lender's buffer; fixed by forwarding the
+        // stored borrow pointer directly (the slot already holds the exact
+        // `ptr` ABI the callee expects).
+        if let Some(out) = run_program(
+            "struct Parser { source: ref String, position: i64 }\n\
+             fn make_parser(s: ref String) -> ref Parser {\n\
+                 Parser { source: s, position: 0 }\n\
+             }\n\
+             fn shout(x: ref String) { println(x); }\n\
+             fn wrap(s: ref String) -> Option[ref String] {\n\
+                 Option.Some(s)\n\
+             }\n\
+             fn main() {\n\
+                 let mut s: String = \"\";\n\
+                 s.push_str(\"a longer payload string\");\n\
+                 match wrap(s) {\n\
+                     Some(n) => println(n.len()),\n\
+                     None => println(0),\n\
+                 }\n\
+                 println(s);\n\
+                 let s2 = String.from(\"input data\");\n\
+                 let p = make_parser(s2);\n\
+                 shout(p.source);\n\
+             }",
+        ) {
+            assert_eq!(out, "23\na longer payload string\ninput data\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_take_get_or_insert() {
         // B-2026-07-14-6 (mutating combinators): `take()` yields the receiver's
         // current value and leaves `None` in its slot (a second take yields
