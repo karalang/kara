@@ -9932,6 +9932,63 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_mono_bare_t_heap_field_before_map_no_crash() {
+        // B-2026-07-15-24: a generic struct with a bare generic-param field bound
+        // to a WIDER heap type (`Vec`/`String` = 3 words) placed BEFORE a Map/Vec
+        // field. The base `struct_types` layout erases the bare-T field to one i64
+        // word, so every following field's drop/move-suppression GEP was offset by
+        // the mono widening — a SIGSEGV/double-free at scope-exit drop (the reads
+        // already used the mono layout, so only the drop crashed). Fixed by GEPing
+        // the drop-synthesis + move-suppression fields with the per-monomorph
+        // layout (`mono_struct_type_from_subst`) and generalizing the bare-T
+        // heap-field classifier from single-field to any position. Covers: a
+        // String bare-T before Map (no move); a `Vec[String]` bare-T before Map
+        // (drains inner elements); two bare-T `Vec` fields before Map with a
+        // whole-struct move; and a nested field move-out (`let bound = o.inner`).
+        // Output guard; the crash itself is the ASAN sibling
+        // `asan_mono_bare_t_heap_field_before_map_no_double_free`.
+        if let Some(out) = run_program(
+            "struct SBefore[T] { a: T, m: Map[i64, i64] }\n\
+             struct TwoHeap[T] { a: T, b: T, m: Map[i64, i64] }\n\
+             struct GInner[T] { a: T, m: Map[i64, i64] }\n\
+             struct GOuter[T] { inner: GInner[T] }\n\
+             fn main() {\n\
+                 let mut m1: Map[i64, i64] = Map.new();\n\
+                 m1.insert(1, 11);\n\
+                 let s: String = \"hello\".to_string();\n\
+                 let x1 = SBefore { a: s, m: m1 };\n\
+                 println(x1.a.len());\n\
+                 println(x1.m.get(1).unwrap());\n\
+                 let mut m1b: Map[i64, i64] = Map.new();\n\
+                 m1b.insert(1, 111);\n\
+                 let vsa: Vec[String] = [\"aa\", \"bb\", \"cc\"];\n\
+                 let x1b = SBefore { a: vsa, m: m1b };\n\
+                 println(x1b.a[1]);\n\
+                 println(x1b.m.get(1).unwrap());\n\
+                 let mut m2: Map[i64, i64] = Map.new();\n\
+                 m2.insert(2, 22);\n\
+                 let v1: Vec[i64] = [1, 2, 3];\n\
+                 let v2: Vec[i64] = [4, 5, 6, 7];\n\
+                 let th = TwoHeap { a: v1, b: v2, m: m2 };\n\
+                 let th2 = th;\n\
+                 println(th2.a[2]);\n\
+                 println(th2.b[3]);\n\
+                 println(th2.m.get(2).unwrap());\n\
+                 let mut mp: Map[i64, i64] = Map.new();\n\
+                 mp.insert(9, 99);\n\
+                 let vv: Vec[i64] = [7, 8, 9];\n\
+                 let gi = GInner { a: vv, m: mp };\n\
+                 let o = GOuter { inner: gi };\n\
+                 let bound = o.inner;\n\
+                 println(bound.a[0]);\n\
+                 println(bound.m.get(9).unwrap());\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n11\nbb\n111\n3\n7\n22\n7\n99\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_take_get_or_insert() {
         // B-2026-07-14-6 (mutating combinators): `take()` yields the receiver's
         // current value and leaves `None` in its slot (a second take yields

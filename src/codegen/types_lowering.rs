@@ -123,6 +123,35 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(self.context.struct_type(&field_types, false))
     }
 
+    /// The per-monomorph LLVM struct type for `struct_name` under an explicit
+    /// `param -> concrete TypeExpr` subst (the `mono_struct_type` sibling for
+    /// callers that already hold a subst map rather than `GenericArg`s — e.g.
+    /// the struct-drop synthesizer). Each field's declared `TypeExpr` is
+    /// resolved through `subst` before lowering, so a bare generic-param field
+    /// mono'd to a wider heap type (`Vec`/`String` = a `{ptr,len,cap}` word
+    /// triple, not one erased i64 word) widens the layout — making every
+    /// FOLLOWING field's GEP offset correct. `None` for a non-generic struct,
+    /// an empty subst, or an unknown name (the caller falls back to the base
+    /// `struct_types` layout). B-2026-07-15-24.
+    pub(super) fn mono_struct_type_from_subst(
+        &self,
+        struct_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<inkwell::types::StructType<'ctx>> {
+        if subst.is_empty() {
+            return None;
+        }
+        let field_tes = self.struct_field_type_exprs.get(struct_name)?;
+        let field_types: Vec<BasicTypeEnum<'ctx>> = field_tes
+            .iter()
+            .map(|te| {
+                let concrete = super::helpers::subst_type_params_in_type_expr(te, subst);
+                self.llvm_type_for_type_expr(&concrete)
+            })
+            .collect();
+        Some(self.context.struct_type(&field_types, false))
+    }
+
     /// The per-instantiation mono struct type for a struct-literal (or any
     /// struct-typed) expression, recovered from the lowering pass's span-keyed
     /// instantiation record (`enum_inst_type_exprs`, which captures every

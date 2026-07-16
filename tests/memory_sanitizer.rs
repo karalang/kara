@@ -27536,6 +27536,68 @@ fn main() {
     }
 
     #[test]
+    fn asan_mono_bare_t_heap_field_before_map_no_double_free() {
+        // B-2026-07-15-24: a generic struct with a bare generic-param field bound
+        // to a WIDER heap type (`Vec`/`String` = a 3-word `{ptr,len,cap}` triple)
+        // placed BEFORE a Map/Vec field. The base `struct_types` layout erases the
+        // bare-T field to one i64 word, so the mono widening shifted every
+        // following field's offset — the drop-synthesis + move-suppression GEPs
+        // targeted the base offset, leaving the Map handle / following Vec live and
+        // double-freeing at scope exit (SIGSEGV / `free(): double free`; the reads
+        // already used the mono layout, so only the drop crashed). Fixed by GEPing
+        // those fields with the per-monomorph layout (`mono_struct_type_from_subst`
+        // threaded into `emit_struct_drop_synthesis` + `zero_struct_move_caps_mono`)
+        // and generalizing the bare-T heap-field classifier from single-field to
+        // any position, plus deriving the moved-out binding's mono instantiation
+        // (`field_move_out_struct_inst`) for `let bound = o.inner`. Loops so a
+        // per-iteration double-free trips ASAN and any strand accumulates as a
+        // leak. Covers a `Vec[String]` bare-T before Map (drains inner elements, no
+        // move), two bare-T `Vec` fields before Map with a whole-struct move, and a
+        // nested field move-out. Only the crash surfaces at scope exit AFTER the
+        // reads, invisible to an output-only harness.
+        assert_clean_asan_run(
+            r#"
+struct SBefore[T] { a: T, m: Map[i64, i64] }
+struct TwoHeap[T] { a: T, b: T, m: Map[i64, i64] }
+struct GInner[T] { a: T, m: Map[i64, i64] }
+struct GOuter[T] { inner: GInner[T] }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let mut m1: Map[i64, i64] = Map.new();
+        m1.insert(i, i + 11);
+        let vsa: Vec[String] = ["padded aaaaaaaaaaaaaaaaaaaaaaa", "padded bbbbbbbbbbbbbbbbbbbbbbb"];
+        let x1 = SBefore { a: vsa, m: m1 };
+        total = total + x1.a[1].len();
+        total = total + x1.m.get(i).unwrap();
+        let mut m2: Map[i64, i64] = Map.new();
+        m2.insert(i, 22);
+        let v1: Vec[i64] = [1, 2, 3];
+        let v2: Vec[i64] = [4, 5, 6, 7];
+        let th = TwoHeap { a: v1, b: v2, m: m2 };
+        let th2 = th;
+        total = total + th2.a[2] + th2.b[3];
+        total = total + th2.m.get(i).unwrap();
+        let mut mp: Map[i64, i64] = Map.new();
+        mp.insert(i, 99);
+        let vv: Vec[i64] = [7, 8, 9];
+        let gi = GInner { a: vv, m: mp };
+        let o = GOuter { inner: gi };
+        let bound = o.inner;
+        total = total + bound.a[0];
+        total = total + bound.m.get(i).unwrap();
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["22850"],
+            "mono_bare_t_heap_field_before_map_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_generic_struct_field_receiver_param_indexed_no_leak() {
         // B-2026-07-15-20: the field-receiver method dispatch fix (record a
         // concrete generic-struct param's instantiation + an indexed-container

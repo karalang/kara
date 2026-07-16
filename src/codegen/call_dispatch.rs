@@ -3986,65 +3986,24 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         subst: Option<&std::collections::HashMap<String, TypeExpr>>,
     ) {
-        let Some(&st) = self.struct_types.get(struct_name) else {
+        let Some(&base_st) = self.struct_types.get(struct_name) else {
             return;
         };
+        // B-2026-07-15-24 — GEP fields with the PER-MONOMORPH layout under a
+        // real subst (the move-suppression twin of the drop-synthesis `st`
+        // override): a bare generic-param field bound to a wider heap type
+        // widens the layout, so a following Vec/Map/enum field's cap/handle
+        // null-store must land at the mono offset, not the base erased one, or
+        // the source stays live and double-frees the moved-out destination.
+        let st = subst
+            .and_then(|s| self.mono_struct_type_from_subst(struct_name, s))
+            .unwrap_or(base_st);
         let Some(field_names) = self.struct_field_type_names.get(struct_name).cloned() else {
             return;
         };
         let field_tes = self.struct_field_type_exprs.get(struct_name).cloned();
         let vec_ty = self.vec_struct_type();
         let zero = self.context.i64_type().const_int(0, false);
-        // B-2026-07-15-11 — single-field generic wrapper `W[T] { f: T }` moved
-        // whole: the mono drop frees field 0 when T binds to a direct Vec/String,
-        // so zero its `len`+`cap` (mirroring the Vec/String field arm below) to
-        // keep the source drop a no-op. Same single-field offset gate as the
-        // drop classifier (layout erasure). A no-op unless a real subst binds the
-        // sole field's bare param to a direct heap type.
-        if let Some(subst) = subst {
-            if field_names.len() == 1 {
-                if let Some(fte) = self
-                    .struct_field_type_exprs
-                    .get(struct_name)
-                    .and_then(|v| v.first())
-                {
-                    let is_bare_param = matches!(
-                        &fte.kind,
-                        TypeKind::Path(p)
-                            if p.segments.len() == 1
-                                && p.generic_args.is_none()
-                                && subst.contains_key(&p.segments[0])
-                    );
-                    if is_bare_param {
-                        let cte =
-                            crate::codegen::helpers::subst_type_params_in_type_expr(fte, subst);
-                        let is_vec_head = matches!(
-                            &cte.kind,
-                            TypeKind::Path(p)
-                                if matches!(
-                                    p.segments.last().map(|s| s.as_str()),
-                                    Some("Vec") | Some("VecDeque")
-                                )
-                        );
-                        if self.is_string_type_expr(&cte) || is_vec_head {
-                            if let Ok(field_ptr) =
-                                self.builder.build_struct_gep(st, base_ptr, 0, "smv.bt.p")
-                            {
-                                for word in [1u32, 2u32] {
-                                    if let Ok(wp) = self
-                                        .builder
-                                        .build_struct_gep(vec_ty, field_ptr, word, "smv.bt.w")
-                                    {
-                                        let _ = self.builder.build_store(wp, zero);
-                                    }
-                                }
-                            }
-                            return;
-                        }
-                    }
-                }
-            }
-        }
         for (i, opt_name) in field_names.iter().enumerate() {
             let fname = opt_name.as_deref().unwrap_or("");
             let Ok(field_ptr) =
@@ -4053,6 +4012,53 @@ impl<'ctx> super::Codegen<'ctx> {
             else {
                 continue;
             };
+            // B-2026-07-15-24 (generalizes B-2026-07-15-11) — a bare generic-
+            // param field this monomorph binds to a direct Vec/String: the mono
+            // drop now frees it (drop classifier VecOrString), so zero its
+            // `len`+`cap` — mirroring the concrete Vec/String field arm — to keep
+            // the moved-out source drop a no-op. Applies to ANY field position
+            // now that `st` is the per-monomorph layout (the original B-11 gate
+            // was single-field-only because the base layout mis-offset a mid
+            // bare-T field). A no-op unless a real subst binds this field's bare
+            // param to a direct heap type.
+            let bare_t_heap = subst
+                .and_then(|s| {
+                    let fte = field_tes.as_ref()?.get(i)?;
+                    let is_bare_param = matches!(
+                        &fte.kind,
+                        TypeKind::Path(p)
+                            if p.segments.len() == 1
+                                && p.generic_args.is_none()
+                                && s.contains_key(&p.segments[0])
+                    );
+                    if !is_bare_param {
+                        return None;
+                    }
+                    let cte = crate::codegen::helpers::subst_type_params_in_type_expr(fte, s);
+                    let is_vec_head = matches!(
+                        &cte.kind,
+                        TypeKind::Path(p)
+                            if matches!(
+                                p.segments.last().map(|s| s.as_str()),
+                                Some("Vec") | Some("VecDeque")
+                            )
+                    );
+                    (self.is_string_type_expr(&cte) || is_vec_head).then_some(())
+                })
+                .is_some();
+            if bare_t_heap {
+                for word in [1u32, 2u32] {
+                    if let Ok(wp) = self.builder.build_struct_gep(
+                        vec_ty,
+                        field_ptr,
+                        word,
+                        &format!("smv.bt{i}.w"),
+                    ) {
+                        let _ = self.builder.build_store(wp, zero);
+                    }
+                }
+                continue;
+            }
             if matches!(fname, "Vec" | "VecDeque" | "String") {
                 if let Ok(cap_ptr) =
                     self.builder

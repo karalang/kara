@@ -1081,7 +1081,22 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.shared_types.contains_key(struct_name) {
             return None;
         }
-        let st = *self.struct_types.get(struct_name)?;
+        // B-2026-07-15-24: under a real mono subst, GEP fields with the
+        // PER-MONOMORPH layout, not the base erased `struct_types` layout. The
+        // base type lowers a bare generic-param field to ONE i64 word; a
+        // monomorph that binds that param to a wider heap type (Vec/String = a
+        // 3-word `{ptr,len,cap}` triple) widens the field, shifting every
+        // following field's offset. So a Map/Set/Vec/String/enum field placed
+        // AFTER a bare-T heap field was GEP'd at the wrong (base) offset —
+        // double-free / SIGSEGV at scope-exit drop (the read paths already use
+        // the mono layout, so reads were correct and only the drop crashed).
+        // Rebuilding `st` from each field's subst-resolved TypeExpr makes every
+        // downstream field GEP and `get_field_type_at_index` here mono-correct
+        // in one place. Falls back to the base type for a non-generic struct or
+        // when the mono type can't be built.
+        let st = subst
+            .and_then(|s| self.mono_struct_type_from_subst(struct_name, s))
+            .or_else(|| self.struct_types.get(struct_name).copied())?;
         let field_kinds = self.struct_field_type_names.get(struct_name)?.clone();
 
         // Classify each field: Vec/String (vec-struct layout), Map/Set
@@ -1203,14 +1218,34 @@ impl<'ctx> super::Codegen<'ctx> {
         // (borrowed-receiver field-return deep-clone in runtime.rs, move-cap
         // zeroing) are mono-aware for this shape so the added scope-exit drop
         // does not double-free a moved-out / accessor-returned field.
+        // A bare generic-param field this monomorph binds to a direct heap type
+        // (`String` / `Vec[..]` / `VecDeque[..]`): the name-based classifier read
+        // the erased declared name `T` (matched no arm) and left it `None`, so
+        // the field's heap buffer leaked at scope exit (the concrete-field twin
+        // `W { f: String }` is clean). Resolve each such field's declared
+        // TypeExpr through the active mono `subst`; a direct Vec/String monomorph
+        // classifies `VecOrString` (the VecOrString emit arm substitutes the
+        // field TypeExpr too, so a `Vec[String]` monomorph also drains its
+        // elements).
+        //
+        // Applies to EVERY field, not just a sole one (B-2026-07-15-24 lifted the
+        // original B-2026-07-15-11 `kinds.len() == 1` gate). That gate existed
+        // only because the base `struct_types` layout GEP'd a bare-T field at one
+        // erased i64 word, mis-offsetting every following field of a multi-field
+        // wrapper; now that `st` above is the per-monomorph layout, a mid bare-T
+        // heap field GEPs at its true widened offset, so classifying it (and the
+        // Map/Vec/String/enum field after it) is offset-correct. A concrete
+        // (non-generic) struct passes `subst == None` and is untouched. The
+        // PAIRED move sites (move-cap zeroing, borrowed-receiver deep-clone) are
+        // mono-aware for this shape so the added scope-exit drop does not
+        // double-free a moved-out / accessor-returned field.
         if let Some(subst) = subst {
-            if kinds.len() == 1 && kinds[0] == FieldDrop::None {
-                if let Some(fte) = self
-                    .struct_field_type_exprs
-                    .get(struct_name)
-                    .and_then(|v| v.first())
-                    .cloned()
-                {
+            let field_tes = self.struct_field_type_exprs.get(struct_name).cloned();
+            if let Some(field_tes) = field_tes {
+                for (idx, fte) in field_tes.iter().enumerate() {
+                    if kinds.get(idx) != Some(&FieldDrop::None) {
+                        continue;
+                    }
                     let is_bare_param = matches!(
                         &fte.kind,
                         TypeKind::Path(p)
@@ -1218,24 +1253,24 @@ impl<'ctx> super::Codegen<'ctx> {
                                 && p.generic_args.is_none()
                                 && subst.contains_key(&p.segments[0])
                     );
-                    if is_bare_param {
-                        let cte =
-                            crate::codegen::helpers::subst_type_params_in_type_expr(&fte, subst);
-                        // A direct heap buffer: `String`/`str` (the typechecker's
-                        // two spellings — `is_string_type_expr` unifies them) or a
-                        // `Vec`/`VecDeque` head. Both lower to the `{ptr,len,cap}`
-                        // Vec-struct layout the `VecOrString` arm frees.
-                        let is_vec_head = matches!(
-                            &cte.kind,
-                            TypeKind::Path(p)
-                                if matches!(
-                                    p.segments.last().map(|s| s.as_str()),
-                                    Some("Vec") | Some("VecDeque")
-                                )
-                        );
-                        if self.is_string_type_expr(&cte) || is_vec_head {
-                            kinds[0] = FieldDrop::VecOrString;
-                        }
+                    if !is_bare_param {
+                        continue;
+                    }
+                    let cte = crate::codegen::helpers::subst_type_params_in_type_expr(fte, subst);
+                    // A direct heap buffer: `String`/`str` (the typechecker's two
+                    // spellings — `is_string_type_expr` unifies them) or a
+                    // `Vec`/`VecDeque` head. Both lower to the `{ptr,len,cap}`
+                    // Vec-struct layout the `VecOrString` arm frees.
+                    let is_vec_head = matches!(
+                        &cte.kind,
+                        TypeKind::Path(p)
+                            if matches!(
+                                p.segments.last().map(|s| s.as_str()),
+                                Some("Vec") | Some("VecDeque")
+                            )
+                    );
+                    if self.is_string_type_expr(&cte) || is_vec_head {
+                        kinds[idx] = FieldDrop::VecOrString;
                     }
                 }
             }

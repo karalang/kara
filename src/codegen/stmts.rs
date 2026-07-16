@@ -2142,7 +2142,16 @@ impl<'ctx> super::Codegen<'ctx> {
                                 || self.is_generic_named_struct_type_expr(te)
                         })
                         .cloned()
-                        .or_else(|| self.enum_inst_type_from_span(value));
+                        .or_else(|| self.enum_inst_type_from_span(value))
+                        // B-2026-07-15-24 — a generic struct FIELD moved out
+                        // (`let bound = o.inner`, `inner: GInner[T]`) is a
+                        // FieldAccess, which the lowering pass records no
+                        // span-keyed instantiation for; derive `bound`'s concrete
+                        // instantiation (`GInner[Vec[i64]]`) from `o`'s recorded
+                        // inst + the field's declared type, so `bound`'s scope-exit
+                        // drop is the per-monomorph drop (correct field offsets),
+                        // not the base-layout drop that SIGSEGVs.
+                        .or_else(|| self.field_move_out_struct_inst(value));
                     if let Some(inst) = inst {
                         self.enum_inst_var_types.insert(var_name.clone(), inst);
                     }

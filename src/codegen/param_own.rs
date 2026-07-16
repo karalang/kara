@@ -1525,6 +1525,59 @@ impl<'ctx> super::Codegen<'ctx> {
     /// once `self` is a callee-owned by-value aggregate param — the source field
     /// AND the returned literal both free the same buffer (std.tracing's
     /// `with_field`).
+    /// B-2026-07-15-24 — the concrete generic instantiation of a struct field
+    /// moved out via `let bound = o.field`, derived from `o`'s recorded
+    /// instantiation and the field's declared type. `o: GOuter[Vec[i64]]`,
+    /// `field inner: GInner[T]` → `GInner[Vec[i64]]`. Feeds (a) the moved-out
+    /// binding's own mono drop (so it GEPs the per-monomorph layout, not the
+    /// base erased one) and (b) the source-field mono cap-zeroing in
+    /// `suppress_struct_field_move_into_literal`. `None` unless `o` has a
+    /// recorded generic instantiation and the field resolves to a generic named
+    /// struct — a non-generic field (or an unrecorded object) keeps the
+    /// name-shared base-layout behavior, unchanged.
+    pub(super) fn field_move_out_struct_inst(&self, value: &Expr) -> Option<TypeExpr> {
+        let ExprKind::FieldAccess { object, field } = &value.kind else {
+            return None;
+        };
+        let obj_name = match &object.kind {
+            ExprKind::Identifier(o) => o.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return None,
+        };
+        let obj_inst = self.enum_inst_var_types.get(obj_name)?;
+        let TypeKind::Path(op) = &obj_inst.kind else {
+            return None;
+        };
+        let obj_struct = op.segments.last()?.clone();
+        let obj_args = op.generic_args.as_ref()?;
+        let params = self.struct_generic_params.get(&obj_struct)?;
+        if params.len() != obj_args.len() {
+            return None;
+        }
+        let mut subst: std::collections::HashMap<String, TypeExpr> =
+            std::collections::HashMap::new();
+        for (p, a) in params.iter().zip(obj_args.iter()) {
+            if let crate::ast::GenericArg::Type(te) = a {
+                subst.insert(p.clone(), te.clone());
+            }
+        }
+        if subst.is_empty() {
+            return None;
+        }
+        let field_idx = self
+            .struct_field_names
+            .get(&obj_struct)?
+            .iter()
+            .position(|n| n == field)?;
+        let fte = self
+            .struct_field_type_exprs
+            .get(&obj_struct)?
+            .get(field_idx)?;
+        let resolved = crate::codegen::helpers::subst_type_params_in_type_expr(fte, &subst);
+        self.is_generic_named_struct_type_expr(&resolved)
+            .then_some(resolved)
+    }
+
     pub(super) fn suppress_struct_field_move_into_literal(&self, value: &Expr) {
         let ExprKind::FieldAccess { object, field } = &value.kind else {
             return;
@@ -1612,7 +1665,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(name) = field_type_name.as_deref() {
                     if self.struct_types.contains_key(name) && !self.shared_types.contains_key(name)
                     {
-                        self.zero_struct_move_caps(field_ptr, name);
+                        // B-2026-07-15-24 — derive the moved-out field's concrete
+                        // mono instantiation (`GInner[Vec[i64]]`) so the source
+                        // cap-zeroing GEPs the PER-MONOMORPH layout. Without it a
+                        // bare-`T` heap field placed before a Map/Vec field in the
+                        // nested struct mis-offsets the handle null-store (base
+                        // erased layout), leaving the source live → double-free /
+                        // SIGSEGV on the nested move-out. A non-generic field
+                        // yields `None` → the name-shared base-layout suppression,
+                        // unchanged.
+                        let nsub = self
+                            .field_move_out_struct_inst(value)
+                            .map(|inst| self.generic_struct_subst_from_inst(name, &inst))
+                            .filter(|s| !s.is_empty());
+                        self.zero_struct_move_caps_mono(field_ptr, name, nsub.as_ref());
                     } else if let Some(layout) = self.enum_layouts.get(name) {
                         // Enum field (#19) — cap-zero its `VecOrString` payload
                         // words so the owning struct's drop skips the buffer the
