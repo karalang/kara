@@ -2538,13 +2538,18 @@ fn test_reduction_kept_for_int_body_under_typed_analysis() {
         "#,
     );
     let main_fc = get_function(&analysis, "main");
+    // The scalar `total` reduction must survive the typed cross-task
+    // gate; the `data.push(i)` FILL loop additionally carries a
+    // seq-tabulate tag since 2026-07-16 (sequential, not dispatch —
+    // filter it out rather than pin the total count).
+    let scalar: Vec<_> = main_fc.loop_reductions.iter().filter(|r| !r.seq).collect();
     assert_eq!(
-        main_fc.loop_reductions.len(),
+        scalar.len(),
         1,
         "int-only loop body must stay recognized under typed analysis, got {:?}",
         main_fc.loop_reductions
     );
-    assert_eq!(main_fc.loop_reductions[0].accumulator, "total");
+    assert_eq!(scalar[0].accumulator, "total");
 }
 
 #[test]
@@ -3490,10 +3495,22 @@ fn test_reduction_rejects_bare_push_without_par_unordered() {
         "#,
     );
     let main_fc = get_function(&analysis, "main");
-    assert!(
-        main_fc.loop_reductions.is_empty(),
-        "bare push without par_unordered must not be recognized, got {:?}",
+    // Since the sequential-tabulate lowering (2026-07-16) the loop IS
+    // recognized — but ONLY as `seq: true` (reserve + in-place stores,
+    // no parallel dispatch). The safety property this test guards is
+    // unchanged: collect-style AUTO-PAR still requires the explicit
+    // attribute — no non-seq Collect reduction may exist here.
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "bare push without par_unordered should be recognized as seq tabulate only, got {:?}",
         main_fc.loop_reductions
+    );
+    let r = &main_fc.loop_reductions[0];
+    assert!(
+        r.seq && r.collect_tabulate,
+        "recognition without the attribute must be the SEQUENTIAL tabulate, got {:?}",
+        r
     );
 }
 

@@ -1030,6 +1030,25 @@ fn jit_bind_libc_symbols(
 
 // ── Codegen ────────────────────────────────────────────────────
 
+/// Alias-scope context for a sequential-tabulate loop (reduce.rs).
+/// Built once per lowering site; `compile_vec_index` consults it to tag
+/// element loads. Both maps hold READY-TO-ATTACH metadata lists:
+/// `alias_scope[var]` = the single-scope list naming var's own scope,
+/// `noalias[var]` = the list of scopes var's loads are asserted disjoint
+/// from (the tabulate output scope). Scope validity is bounded by
+/// `llvm.experimental.noalias.scope.decl` calls in the loop preheader —
+/// required for soundness because an OUTER loop may swap which buffer a
+/// binding holds between inner-loop executions (the LBM grid↔next swap);
+/// per-execution scopes make cross-execution accesses unrelated.
+pub(crate) struct TabulateAliasScopes<'ctx> {
+    /// The function whose preheader declared these scopes. Tags apply
+    /// only while compiling inside it (nested function emission — par
+    /// workers, closures — must not inherit another function's scopes).
+    pub(crate) fn_key: inkwell::values::FunctionValue<'ctx>,
+    pub(crate) alias_scope: std::collections::HashMap<String, inkwell::values::MetadataValue<'ctx>>,
+    pub(crate) noalias: std::collections::HashMap<String, inkwell::values::MetadataValue<'ctx>>,
+}
+
 pub(super) struct Codegen<'ctx> {
     pub(crate) context: &'ctx Context,
     pub(crate) module: Module<'ctx>,
@@ -3109,6 +3128,20 @@ pub(super) struct Codegen<'ctx> {
     /// `karac_par_run` (sequential in the wasm runtime archive) so
     /// their cancellation/result-slot semantics are preserved.
     pub(crate) auto_par_disabled: bool,
+    /// Active sequential-tabulate alias-scope context (reduce.rs §
+    /// seq tabulate). While `Some` AND `current_fn` matches the stored
+    /// function, `compile_vec_index` tags element loads of the listed
+    /// Vec variables with `!alias.scope`/`!noalias` metadata asserting
+    /// disjointness from the tabulate output buffer — the
+    /// ownership-derived guarantee (two distinct owned Vec locals never
+    /// share storage) that lets LLVM's loop vectorizer skip its runtime
+    /// memchecks (which false-conflict on exactly-adjacent buffers; see
+    /// the phase-10 CPU-codegen forensics entry). The function key
+    /// prevents scope leakage into nested function emission (par
+    /// workers, closures): scopes are declared via
+    /// `llvm.experimental.noalias.scope.decl` in THIS function's loop
+    /// preheader and are only sound within it.
+    pub(crate) tabulate_alias_scopes: Option<TabulateAliasScopes<'ctx>>,
     // ── Theme 6: `with_provider[R]` trait-method dispatch ──────────
     /// Resource name → stable u32 ID assigned at codegen init from the
     /// declaration order of `Item::EffectResource` items. The same
@@ -6353,6 +6386,7 @@ impl<'ctx> Codegen<'ctx> {
             // (auto-par fan-out is pure overhead on a single-threaded
             // target; phase-10 sequential default).
             auto_par_disabled: !read_auto_par_env() || crate::target::active_target_is_wasm(),
+            tabulate_alias_scopes: None,
             provider_resource_ids: HashMap::new(),
             provider_resource_traits: HashMap::new(),
             provider_trait_methods: HashMap::new(),

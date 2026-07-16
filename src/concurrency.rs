@@ -714,6 +714,16 @@ pub struct LoopReduction {
     /// worker's chunk view and the push grow-path would free an interior
     /// pointer. See `collect_is_tabulate_shape`.
     pub collect_tabulate: bool,
+    /// SEQUENTIAL tabulate (no `#[par_unordered]`): the same
+    /// tabulate-shape guarantee, lowered inline — reserve the exact
+    /// capacity once, store each element in place, bump `len` after the
+    /// loop. No parallel dispatch, no reordering license needed; the
+    /// win is removing the per-iteration push grow-branch + realloc
+    /// call, which is what blocks LLVM's loop vectorizer on the
+    /// canonical `out.push(f(v[i]))` map loop (see the phase-10
+    /// CPU-codegen-gap entry, 2026-07-16 forensics). Only ever true
+    /// with `op == Collect && collect_tabulate`.
+    pub seq: bool,
 }
 
 /// A set of statements that can safely run in parallel.
@@ -1822,8 +1832,68 @@ impl<'a> ConcurrencyChecker<'a> {
                     stmt_index: idx,
                     loop_line: expr.span.line,
                     collect_tabulate,
+                    seq: false,
                 });
+            } else if !attributes.iter().any(|a| a.is_bare("par_unordered")) {
+                // No reduction classified and no par opt-in: try the
+                // SEQUENTIAL collect-tabulate shape. Unlike the par
+                // classifier, other loop-carried writes (a scalar
+                // accumulation alongside the push, extra counters) are
+                // fine — the lowering compiles every non-push statement
+                // inline in source order; only the push itself is
+                // rewritten into an in-place store. The tabulate shape
+                // check guarantees the accumulator appears exactly once,
+                // as the receiver of one unconditional top-level push.
+                if let Some(acc) = self.classify_seq_collect_tabulate(body) {
+                    out.push(LoopReduction {
+                        accumulator: acc,
+                        op: ReductionOp::Collect,
+                        stmt_index: idx,
+                        loop_line: expr.span.line,
+                        collect_tabulate: true,
+                        seq: true,
+                    });
+                }
             }
+        }
+    }
+
+    /// Find the single outer-scope Vec accumulator of a sequential
+    /// tabulate loop, if the body has that shape: exactly one top-level
+    /// unconditional `acc.push(EXPR)` where `acc` is an outer binding
+    /// mentioned nowhere else in the body (`collect_is_tabulate_shape`
+    /// does the exactness check). Candidate discovery scans top-level
+    /// bare pushes; two pushes to DIFFERENT accumulators is declined
+    /// (each would fail the other's mention check anyway).
+    fn classify_seq_collect_tabulate(&self, body: &Block) -> Option<String> {
+        let mut candidate: Option<String> = None;
+        let mut consider = |name: Option<String>, candidate: &mut Option<String>| -> bool {
+            let Some(n) = name else { return true };
+            match candidate {
+                None => {
+                    *candidate = Some(n);
+                    true
+                }
+                Some(existing) => *existing == n,
+            }
+        };
+        for stmt in &body.stmts {
+            if let StmtKind::Expr(e) = &stmt.kind {
+                if !consider(collect_push_shape(e), &mut candidate) {
+                    return None;
+                }
+            }
+        }
+        if let Some(e) = &body.final_expr {
+            if !consider(collect_push_shape(e), &mut candidate) {
+                return None;
+            }
+        }
+        let acc = candidate?;
+        if self.collect_is_tabulate_shape(body, &acc) {
+            Some(acc)
+        } else {
+            None
         }
     }
 
@@ -4669,7 +4739,7 @@ fn single_stmt_block_as_acc_update(block: &Block) -> Option<(String, ReductionOp
 /// The single-arg requirement is the canonical `Vec::push(x)` shape; if
 /// future workloads need `push_many(values)` or other multi-arg
 /// collectors, the matcher can be extended.
-fn collect_push_shape(expr: &Expr) -> Option<String> {
+pub(crate) fn collect_push_shape(expr: &Expr) -> Option<String> {
     let ExprKind::MethodCall {
         object,
         method,

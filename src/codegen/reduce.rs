@@ -99,6 +99,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // helpers below assume an integer accumulator with a single-instr
         // combine, so Collect dispatches before those gates run.
         if reduction.op == ReductionOp::Collect {
+            // Sequential tabulate takes its own lowering: no dispatch, no
+            // workers — reserve exact capacity once and store elements in
+            // place. See `try_emit_seq_tabulate_lowering`.
+            if reduction.seq {
+                return self.try_emit_seq_tabulate_lowering(parent_body, stmt_index, &reduction);
+            }
             return self.try_emit_collect_reduction_lowering(parent_body, stmt_index, &reduction);
         }
 
@@ -2583,7 +2589,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Post-call fold.
         //
         // Partials path: extend out_slot's Vec into the parent's existing
-        // accumulator. `combine_fn` takes (dst, src) and transfers src's
+        // accumulator. [seq tabulate has its own lowering below — see
+        // try_emit_seq_tabulate_lowering] `combine_fn` takes (dst, src) and transfers src's
         // elements into dst, freeing both old buffers and zeroing src.
         // The parent's pre-existing items (e.g. a `let mut results =
         // Vec.new(); results.push(-1);` before the loop) appear first in
@@ -2599,7 +2606,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // pre-existing items, `buf` freed).
         match tab_state {
             Some((cont_bb, buf, total64)) => {
-                let temp_slot = self.create_entry_alloca(parent_fn, "__tab_result", vec_ty.into());
+                let temp_slot = self.create_entry_alloca(parent_fn, "__tab_res", vec_ty.into());
                 let mut result = vec_ty.get_undef();
                 result = self
                     .builder
@@ -2631,6 +2638,470 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         Ok(())
+    }
+
+    // ── Sequential collect tabulate (2026-07-16) ────────────────────────
+    //
+    // The unannotated sibling of the par tabulate above, targeting the
+    // canonical map loop `while c < n { out.push(f(v[c])); c = c + 1 }`.
+    // The per-iteration push carries a grow-branch + potential realloc
+    // call, which is exactly what blocks LLVM's loop vectorizer on this
+    // shape (phase-10 CPU-codegen forensics). Lowering: evaluate the trip
+    // count once, RESERVE exact capacity once (realloc(NULL,·) == malloc,
+    // so the empty-Vec case needs no special path), compile the body
+    // inline with the single push rewritten into a raw in-place store at
+    // `base + idx·elem`, and bump `len` after the loop completes. All
+    // non-push statements (scalar accumulations, counters) compile
+    // unchanged in source order — semantics are identical, including a
+    // mid-loop panic (len is only bumped on completion; elements written
+    // beyond len are plain cap-space bytes).
+    //
+    // Alias metadata: the store is tagged with a fresh alias scope and
+    // element loads of distinct owned Vec locals read in the body are
+    // tagged disjoint from it (`compile_vec_index` consults
+    // `tabulate_alias_scopes`) — the ownership-derived guarantee that
+    // spares LLVM its runtime memchecks, which false-conflict on
+    // exactly-adjacent buffers. Scope validity is bounded per loop entry
+    // via `llvm.experimental.noalias.scope.decl`, so an outer loop
+    // swapping which buffer a binding holds (LBM's grid↔next) cannot
+    // create cross-execution contradictions.
+    /// Emit one in-place tabulate element store: `base[idx] = v`, tagged
+    /// with the output alias scope when metadata is active. Shared by the
+    /// stmt-position and final-expr-position push rewrites.
+    fn emit_tabulate_store(
+        &mut self,
+        v: BasicValueEnum<'ctx>,
+        elem_ty: BasicTypeEnum<'ctx>,
+        base: PointerValue<'ctx>,
+        idx_alloca: PointerValue<'ctx>,
+        store_alias_md: &Option<(
+            inkwell::values::MetadataValue<'ctx>,
+            inkwell::values::MetadataValue<'ctx>,
+        )>,
+    ) {
+        let i64_t = self.context.i64_type();
+        let idx_cur = self
+            .builder
+            .build_load(i64_t, idx_alloca, "stab.i.cur")
+            .unwrap()
+            .into_int_value();
+        let slot = unsafe {
+            self.builder
+                .build_gep(elem_ty, base, &[idx_cur], "stab.slot")
+                .unwrap()
+        };
+        let st = self.builder.build_store(slot, v).unwrap();
+        if let Some((out_list, noalias_list)) = store_alias_md {
+            let _ = st.set_metadata(*out_list, self.context.get_kind_id("alias.scope"));
+            let _ = st.set_metadata(*noalias_list, self.context.get_kind_id("noalias"));
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn try_emit_seq_tabulate_lowering(
+        &mut self,
+        parent_body: &Block,
+        stmt_index: usize,
+        reduction: &LoopReduction,
+    ) -> Result<Option<()>, String> {
+        let stmt = &parent_body.stmts[stmt_index];
+        let StmtKind::Expr(expr) = &stmt.kind else {
+            return Ok(None);
+        };
+        let is_for_form = matches!(expr.kind, ExprKind::For { .. });
+        let Some(shape) = self.extract_loop_shape(parent_body, stmt_index, expr) else {
+            return Ok(None);
+        };
+        let acc = reduction.accumulator.clone();
+        let Some(acc_slot) = self.variables.get(&acc).copied() else {
+            return Ok(None);
+        };
+        if !self.llvm_ty_is_vec_struct(acc_slot.ty) {
+            return Ok(None);
+        }
+        // The accumulator must be a direct owned local — a `ref`/`mut ref`
+        // param's slot holds a POINTER to the caller's Vec, and the header
+        // GEPs below would silently address the pointer cell instead.
+        if self.ref_params.contains_key(&acc) {
+            return Ok(None);
+        }
+        let elem_ty = self.vec_elem_type_for_var(&acc);
+        if !llvm_ty_is_pod(elem_ty) {
+            return Ok(None);
+        }
+        let elem_size = self.ensure_target_data()?.get_abi_size(&elem_ty);
+        if elem_size == 0 {
+            return Ok(None);
+        }
+        if block_has_early_exit(&shape.body) {
+            return Ok(None);
+        }
+        // While-form counters must already be bindings — verified BEFORE
+        // any IR is emitted (a later bail would leave a half-built CFG).
+        if !is_for_form && !self.variables.contains_key(&shape.loop_var) {
+            return Ok(None);
+        }
+
+        let fn_val = self
+            .current_fn
+            .expect("seq tabulate lowering must run inside a function");
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+
+        // Bounds, evaluated once (end then lo — mirrors the par paths).
+        let end_val = self.compile_expr(&shape.end_expr)?.into_int_value();
+        let loop_var_int_ty = end_val.get_type();
+        let (iter_total, lo_val) = match &shape.lo_expr {
+            None => (end_val, None),
+            Some(lo_expr) => {
+                let lo = self.compile_expr(lo_expr)?.into_int_value();
+                if lo.get_type() != loop_var_int_ty {
+                    return Ok(None);
+                }
+                let total = self
+                    .builder
+                    .build_int_sub(end_val, lo, "stab.total")
+                    .unwrap();
+                (total, Some(lo))
+            }
+        };
+
+        // Guard the whole lowering on iter_total > 0 (signed): zero or
+        // reversed ranges do nothing, leaving the accumulator untouched —
+        // exactly the sequential loop's behavior.
+        let zero_w = loop_var_int_ty.const_zero();
+        let is_pos = self
+            .builder
+            .build_int_compare(IntPredicate::SGT, iter_total, zero_w, "stab.pos")
+            .unwrap();
+        let run_bb = self.context.append_basic_block(fn_val, "stab.run");
+        let cont_bb = self.context.append_basic_block(fn_val, "stab.cont");
+        self.builder
+            .build_conditional_branch(is_pos, run_bb, cont_bb)
+            .unwrap();
+        self.builder.position_at_end(run_bb);
+
+        // Positive on this path, so zext == sext.
+        let total64 = if loop_var_int_ty.get_bit_width() < 64 {
+            self.builder
+                .build_int_z_extend(iter_total, i64_t, "stab.total64")
+                .unwrap()
+        } else {
+            iter_total
+        };
+
+        // Reserve: cap >= len + total, or realloc to exactly that.
+        // realloc(NULL, n) == malloc per C semantics (and
+        // karac_realloc_or_panic passes through), so the empty Vec needs
+        // no special case.
+        let data_p = self
+            .builder
+            .build_struct_gep(vec_ty, acc_slot.ptr, 0, "stab.data.p")
+            .unwrap();
+        let len_p = self
+            .builder
+            .build_struct_gep(vec_ty, acc_slot.ptr, 1, "stab.len.p")
+            .unwrap();
+        let cap_p = self
+            .builder
+            .build_struct_gep(vec_ty, acc_slot.ptr, 2, "stab.cap.p")
+            .unwrap();
+        let data0 = self
+            .builder
+            .build_load(ptr_ty, data_p, "stab.data")
+            .unwrap()
+            .into_pointer_value();
+        let len0 = self
+            .builder
+            .build_load(i64_t, len_p, "stab.len")
+            .unwrap()
+            .into_int_value();
+        let cap0 = self
+            .builder
+            .build_load(i64_t, cap_p, "stab.cap")
+            .unwrap()
+            .into_int_value();
+        let need = self
+            .builder
+            .build_int_add(len0, total64, "stab.need")
+            .unwrap();
+        let has_room = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, cap0, need, "stab.has.room")
+            .unwrap();
+        let grow_bb = self.context.append_basic_block(fn_val, "stab.grow");
+        let ready_bb = self.context.append_basic_block(fn_val, "stab.ready");
+        let room_from_bb = self.builder.get_insert_block().unwrap();
+        self.builder
+            .build_conditional_branch(has_room, ready_bb, grow_bb)
+            .unwrap();
+
+        self.builder.position_at_end(grow_bb);
+        let new_bytes = self
+            .builder
+            .build_int_mul(need, i64_t.const_int(elem_size, false), "stab.bytes")
+            .unwrap();
+        let realloc_fn = self.realloc_or_panic_fn_decl();
+        let new_data = self
+            .builder
+            .build_call(
+                realloc_fn,
+                &[data0.into(), new_bytes.into()],
+                "stab.new.data",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_store(data_p, new_data).unwrap();
+        self.builder.build_store(cap_p, need).unwrap();
+        self.builder.build_unconditional_branch(ready_bb).unwrap();
+
+        self.builder.position_at_end(ready_bb);
+        let data_phi = self.builder.build_phi(ptr_ty, "stab.data.cur").unwrap();
+        data_phi.add_incoming(&[(&data0, room_from_bb), (&new_data, grow_bb)]);
+        let data_cur = data_phi.as_basic_value().into_pointer_value();
+        let base_off = self
+            .builder
+            .build_int_mul(len0, i64_t.const_int(elem_size, false), "stab.base.off")
+            .unwrap();
+        let base = unsafe {
+            self.builder
+                .build_gep(i8_t, data_cur, &[base_off], "stab.base")
+                .unwrap()
+        };
+
+        // ── Alias scopes (ownership-derived): declare a fresh domain for
+        // this loop entry, one scope for the output region and one per
+        // distinct owned Vec local the body reads. Loads via those
+        // variables get alias.scope=self / noalias=[out]; the store gets
+        // alias.scope=[out] / noalias=[all read scopes]. Bounded to this
+        // loop entry by noalias.scope.decl — without the decl the
+        // metadata would be function-wide and an outer-loop buffer swap
+        // could contradict it, so if the intrinsic is unavailable we skip
+        // ALL metadata rather than emit unbounded scopes.
+        let captures = self.collect_reduction_captures(&shape.body, &acc, &shape.loop_var);
+        let read_vecs: Vec<String> = captures
+            .into_iter()
+            .filter(|n| !self.ref_params.contains_key(n.as_str()))
+            .filter(|n| {
+                self.variables
+                    .get(n.as_str())
+                    .is_some_and(|s| self.llvm_ty_is_vec_struct(s.ty))
+            })
+            .collect();
+        let decl_intrinsic =
+            inkwell::intrinsics::Intrinsic::find("llvm.experimental.noalias.scope.decl")
+                .and_then(|i| i.get_declaration(&self.module, &[]));
+        let mut store_alias_md: Option<(
+            inkwell::values::MetadataValue<'ctx>,
+            inkwell::values::MetadataValue<'ctx>,
+        )> = None;
+        let saved_tab_scopes = self.tabulate_alias_scopes.take();
+        if let Some(decl_fn) = decl_intrinsic {
+            let site_id = self.par_counter;
+            self.par_counter += 1;
+            let domain = self.context.metadata_node(&[self
+                .context
+                .metadata_string(&format!("karac.tab.domain.{site_id}"))
+                .into()]);
+            let mk_scope = |name: &str| {
+                self.context.metadata_node(&[
+                    self.context
+                        .metadata_string(&format!("karac.tab.{site_id}.{name}"))
+                        .into(),
+                    domain.into(),
+                ])
+            };
+            let out_scope = mk_scope("out");
+            let out_list = self.context.metadata_node(&[out_scope.into()]);
+            let var_scopes: Vec<(String, inkwell::values::MetadataValue<'ctx>)> =
+                read_vecs.iter().map(|n| (n.clone(), mk_scope(n))).collect();
+            // Declare every scope for THIS dynamic loop entry.
+            self.builder
+                .build_call(decl_fn, &[out_list.into()], "")
+                .unwrap();
+            let mut alias_scope_map = HashMap::new();
+            let mut noalias_map = HashMap::new();
+            for (n, s) in &var_scopes {
+                let own_list = self.context.metadata_node(&[(*s).into()]);
+                self.builder
+                    .build_call(decl_fn, &[own_list.into()], "")
+                    .unwrap();
+                alias_scope_map.insert(n.clone(), own_list);
+                noalias_map.insert(n.clone(), out_list);
+            }
+            let all_var_scope_list = self.context.metadata_node(
+                &var_scopes
+                    .iter()
+                    .map(|(_, s)| (*s).into())
+                    .collect::<Vec<_>>(),
+            );
+            store_alias_md = Some((out_list, all_var_scope_list));
+            self.tabulate_alias_scopes = Some(crate::codegen::TabulateAliasScopes {
+                fn_key: fn_val,
+                alias_scope: alias_scope_map,
+                noalias: noalias_map,
+            });
+        }
+
+        // ── Loop scaffolding. While-form: the loop var is the OUTER
+        // binding (extract_loop_shape stripped the terminal increment);
+        // reusing and incrementing its alloca leaves it == end after the
+        // loop, exactly as the source loop would. For-form: fresh
+        // shadowing binding, restored after.
+        let (k_alloca, saved_k_binding) = if is_for_form {
+            let a = self.create_entry_alloca(fn_val, &shape.loop_var, loop_var_int_ty.into());
+            let init = lo_val.unwrap_or_else(|| loop_var_int_ty.const_zero());
+            self.builder.build_store(a, init).unwrap();
+            let saved = self.variables.insert(
+                shape.loop_var.clone(),
+                VarSlot {
+                    ptr: a,
+                    ty: loop_var_int_ty.into(),
+                },
+            );
+            (a, Some(saved))
+        } else {
+            let slot = self
+                .variables
+                .get(&shape.loop_var)
+                .copied()
+                .expect("gated above: while-form counter is a binding");
+            (slot.ptr, None)
+        };
+        let idx_alloca = self.create_entry_alloca(fn_val, "stab.idx", i64_t.into());
+        self.builder
+            .build_store(idx_alloca, i64_t.const_zero())
+            .unwrap();
+
+        let cond_bb = self.context.append_basic_block(fn_val, "stab.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "stab.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "stab.exit");
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let idx_now = self
+            .builder
+            .build_load(i64_t, idx_alloca, "stab.i")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, idx_now, total64, "stab.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        // Per-iteration scope frame for body-local lets (mirrors
+        // compile_for_range_with_step).
+        self.scope_cleanup_actions.push(Vec::new());
+        let mut terminated = false;
+        let push_arg_of = |e: &Expr| -> Option<Expr> {
+            if crate::concurrency::collect_push_shape(e).as_deref() == Some(acc.as_str()) {
+                if let ExprKind::MethodCall { args, .. } = &e.kind {
+                    return Some(args[0].value.clone());
+                }
+            }
+            None
+        };
+        for (j, body_stmt) in shape.body.stmts.iter().enumerate() {
+            if let StmtKind::Expr(e) = &body_stmt.kind {
+                if let Some(arg) = push_arg_of(e) {
+                    let v = self.compile_expr(&arg)?;
+                    self.emit_tabulate_store(v, elem_ty, base, idx_alloca, &store_alias_md);
+                    continue;
+                }
+            }
+            // Mirror compile_block: nested tagged loops still get their
+            // own lowering (the analyzer recurses into bodies, so a
+            // reduction inside this body is keyed to THIS block's
+            // (index, line) pair — shape.body is a clone with spans
+            // preserved).
+            let lowered = self.try_emit_reduction_lowering(&shape.body, j)?;
+            if lowered.is_none() {
+                self.compile_stmt(body_stmt)?;
+            }
+            if self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_terminator()
+                .is_some()
+            {
+                terminated = true;
+                break;
+            }
+        }
+        if !terminated {
+            if let Some(e) = &shape.body.final_expr {
+                if let Some(arg) = push_arg_of(e) {
+                    let v = self.compile_expr(&arg)?;
+                    self.emit_tabulate_store(v, elem_ty, base, idx_alloca, &store_alias_md);
+                } else {
+                    self.compile_expr(e)?;
+                }
+                terminated = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_terminator()
+                    .is_some();
+            }
+        }
+        if !terminated {
+            self.drain_top_frame_with_emit();
+            // Advance k (the source-visible counter) and idx together.
+            let k_cur = self
+                .builder
+                .build_load(loop_var_int_ty, k_alloca, "stab.k")
+                .unwrap()
+                .into_int_value();
+            let k_next = self
+                .builder
+                .build_int_add(k_cur, loop_var_int_ty.const_int(1, false), "stab.k.next")
+                .unwrap();
+            self.builder.build_store(k_alloca, k_next).unwrap();
+            let i_cur = self
+                .builder
+                .build_load(i64_t, idx_alloca, "stab.i2")
+                .unwrap()
+                .into_int_value();
+            let i_next = self
+                .builder
+                .build_int_add(i_cur, i64_t.const_int(1, false), "stab.i.next")
+                .unwrap();
+            self.builder.build_store(idx_alloca, i_next).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+        } else {
+            self.scope_cleanup_actions.pop();
+        }
+
+        self.builder.position_at_end(exit_bb);
+        // Publish the new length — only on full completion (a mid-loop
+        // panic/abort never reaches here, leaving len at its old value).
+        self.builder.build_store(len_p, need).unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // Restore shadowed state.
+        self.tabulate_alias_scopes = saved_tab_scopes;
+        if let Some(saved) = saved_k_binding {
+            match saved {
+                Some(prev) => {
+                    self.variables.insert(shape.loop_var.clone(), prev);
+                }
+                None => {
+                    self.variables.remove(&shape.loop_var);
+                }
+            }
+        }
+
+        self.builder.position_at_end(cont_bb);
+        Ok(Some(()))
     }
 }
 

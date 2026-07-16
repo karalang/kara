@@ -6186,6 +6186,352 @@ fn main() {
         assert_eq!(lines[2], "42");
     }
 
+    // ── Sequential collect tabulate (2026-07-16) ─────────────────────────
+    //
+    // The unannotated sibling of par tabulate: a counted single-push loop
+    // (`while c < n { out.push(f(...)); c = c + 1 }` / `for k in a..b`)
+    // reserves exact capacity once and stores elements in place — no
+    // per-iteration grow-branch/realloc, which is what unblocks LLVM's
+    // loop vectorizer on the canonical map loop (phase-10 CPU-codegen
+    // forensics: LBM substep 9.79B→5.19B instrs, kara-seq now FASTER
+    // than rust-seq). Element loads and the tabulate store carry
+    // ownership-derived scoped-noalias metadata so the vectorizer needs
+    // no runtime memchecks (which false-conflict on adjacent buffers).
+
+    #[test]
+    fn test_ir_seq_tabulate_fires_on_plain_counted_push_loop() {
+        let ir = ir_for_par(
+            r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    let n: i64 = 1000i64;
+    let mut c: i64 = 0i64;
+    while c < n {
+        out.push(c * 2i64);
+        c = c + 1i64;
+    }
+    println(out.len());
+}
+"#,
+        );
+        assert!(
+            ir.contains("stab.run"),
+            "plain counted push loop must take the seq-tabulate lowering; got:\n{ir}"
+        );
+        assert!(
+            !ir.contains("call void @karac_par_reduce"),
+            "seq tabulate must NOT dispatch through the parallel runtime; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("llvm.experimental.noalias.scope.decl"),
+            "seq tabulate loop must declare its alias scopes; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_seq_tabulate_declines_conditional_and_acc_reading_bodies() {
+        let cond = ir_for_par(
+            r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0i64..100i64 {
+        if (k % 2i64) == 0i64 {
+            out.push(k);
+        }
+    }
+    println(out.len());
+}
+"#,
+        );
+        assert!(
+            !cond.contains("stab.run"),
+            "conditional push must keep the plain push loop; got:\n{cond}"
+        );
+        let acc_read = ir_for_par(
+            r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0i64..100i64 {
+        let l = out.len();
+        out.push(k + l);
+    }
+    println(out.len());
+}
+"#,
+        );
+        assert!(
+            !acc_read.contains("stab.run"),
+            "acc mention outside the push must decline seq tabulate; got:\n{acc_read}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_seq_tabulate_for_form_ordered_and_shadow_restored() {
+        // Per-slot value pin + the for-var shadowing contract: the loop
+        // variable shadows an outer binding inside the loop and the outer
+        // binding is visible again after.
+        let src = r#"
+fn main() {
+    let k: i64 = 99i64;
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0i64..1000i64 {
+        out.push(k * 3i64);
+    }
+    let mut ok: i64 = 1i64;
+    let mut i: i64 = 0i64;
+    while i < out.len() {
+        if out[i] != i * 3i64 { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+    println(k);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 3, "expected three lines, got:\n{}", out);
+        assert_eq!(lines[0], "1000");
+        assert_eq!(lines[1], "1", "slot i must hold i*3");
+        assert_eq!(
+            lines[2], "99",
+            "outer binding must be restored after the loop"
+        );
+    }
+
+    #[test]
+    fn test_e2e_seq_tabulate_while_form_counter_visible_after_loop() {
+        // While-form: the counter is an outer binding; after the loop it
+        // must equal the bound (the lowering advances the SAME alloca).
+        let src = r#"
+fn main() {
+    let n: i64 = 500i64;
+    let mut out: Vec[i64] = Vec.new();
+    let mut c: i64 = 0i64;
+    while c < n {
+        out.push(c + 7i64);
+        c = c + 1i64;
+    }
+    println(out.len());
+    println(c);
+    println(out[499i64]);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "500");
+        assert_eq!(
+            lines[1], "500",
+            "counter must equal the bound after the loop"
+        );
+        assert_eq!(lines[2], "506");
+    }
+
+    #[test]
+    fn test_e2e_seq_tabulate_preseeded_and_with_capacity() {
+        // Pre-seeded accumulator: tabulate appends after the existing
+        // items (reserve + base offset = len). with_capacity: the reserve
+        // is a no-op and elements land in the existing buffer.
+        let src = r#"
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(0i64 - 1i64);
+    a.push(0i64 - 2i64);
+    for k in 0i64..100i64 {
+        a.push(k);
+    }
+    let mut b: Vec[i64] = Vec.with_capacity(64i64);
+    for k in 0i64..50i64 {
+        b.push(k * 2i64);
+    }
+    let mut ok: i64 = 1i64;
+    if a[0i64] != 0i64 - 1i64 { ok = 0i64; }
+    if a[1i64] != 0i64 - 2i64 { ok = 0i64; }
+    let mut i: i64 = 0i64;
+    while i < 100i64 {
+        if a[i + 2i64] != i { ok = 0i64; }
+        i = i + 1i64;
+    }
+    i = 0i64;
+    while i < 50i64 {
+        if b[i] != i * 2i64 { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(a.len());
+    println(b.len());
+    println(ok);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "102");
+        assert_eq!(lines[1], "50");
+        assert_eq!(lines[2], "1", "pre-seed/with_capacity element mismatch");
+    }
+
+    #[test]
+    fn test_e2e_seq_tabulate_zero_and_reversed_ranges() {
+        let src = r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    out.push(41i64);
+    for k in 0i64..0i64 {
+        out.push(k);
+    }
+    for k in 5i64..3i64 {
+        out.push(k);
+    }
+    println(out.len());
+    println(out[0i64]);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0], "1",
+            "empty/reversed ranges must leave acc untouched"
+        );
+        assert_eq!(lines[1], "41");
+    }
+
+    #[test]
+    fn test_e2e_seq_tabulate_mixed_body_scalar_accum_alongside_push() {
+        // A scalar accumulation NEXT TO the push — a shape the par
+        // classifier rejects but seq tabulate compiles inline. Both the
+        // collected elements and the scalar sum must be exact.
+        let src = r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    let mut sum: i64 = 0i64;
+    let n: i64 = 100i64;
+    let mut c: i64 = 0i64;
+    while c < n {
+        sum = sum + c;
+        out.push(c * c);
+        c = c + 1i64;
+    }
+    let mut ok: i64 = 1i64;
+    let mut i: i64 = 0i64;
+    while i < n {
+        if out[i] != i * i { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(sum);
+    println(ok);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "100");
+        assert_eq!(lines[1], "4950", "inline scalar accumulation lost");
+        assert_eq!(lines[2], "1");
+    }
+
+    #[test]
+    fn test_e2e_seq_tabulate_swap_chain_alias_soundness() {
+        // The LBM shape and the alias-metadata soundness canary: an outer
+        // loop swaps which buffer each binding holds while the inner
+        // tabulate reads one and writes the other. Values chain across
+        // outer iterations (each round shifts-and-adds), so any unsound
+        // cross-iteration reordering licensed by bad noalias scoping
+        // corrupts the result. Scopes are declared per inner-loop entry
+        // (noalias.scope.decl), which is what makes the swap legal.
+        let src = r#"
+fn main() {
+    let n: i64 = 64i64;
+    let mut grid: Vec[i64] = Vec.new();
+    let mut i: i64 = 0i64;
+    while i < n {
+        grid.push(i);
+        i = i + 1i64;
+    }
+    let mut s: i64 = 0i64;
+    while s < 10i64 {
+        let mut next: Vec[i64] = Vec.new();
+        let mut c: i64 = 0i64;
+        while c < n {
+            let left = if c == 0i64 { 0i64 } else { grid[c - 1i64] };
+            next.push(grid[c] + left);
+            c = c + 1i64;
+        }
+        grid = next;
+        s = s + 1i64;
+    }
+    println(grid[10i64]);
+    println(grid[63i64]);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        // 10 rounds of prefix-pair sums over 0..64: row of binomial
+        // partial sums — grid[k] after r rounds = sum_{j} C(r, j) * (k-j)
+        // for j in 0..=min(r,k). r=10, k=10: sum C(10,j)*(10-j) = 10*2^10
+        // - sum C(10,j)*j = 10240 - 10*2^9 = 5120. k=63: sum C(10,j)*(63-j)
+        // = 63*1024 - 5120 = 59392.
+        assert_eq!(lines[0], "5120", "swap-chain value corrupted at k=10");
+        assert_eq!(lines[1], "59392", "swap-chain value corrupted at k=63");
+    }
+
+    #[test]
+    fn test_e2e_seq_tabulate_padded_struct_elems() {
+        // Padded struct ({i64,i32}: alloc 16, store 12) — the raw stores
+        // stride by ALLOC size via the typed GEP; a store-size regression
+        // would interleave garbage.
+        let src = r#"
+struct Q { a: i64, b: i32 }
+fn main() {
+    let mut out: Vec[Q] = Vec.new();
+    for k in 0i64..500i64 {
+        out.push(Q { a: k * 5i64, b: (k % 7i64) as i32 });
+    }
+    let mut ok: i64 = 1i64;
+    let mut i: i64 = 0i64;
+    while i < 500i64 {
+        if out[i].a != i * 5i64 { ok = 0i64; }
+        if out[i].b != ((i % 7i64) as i32) { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "500");
+        assert_eq!(lines[1], "1", "padded struct elements corrupted");
+    }
+
+    #[test]
+    fn test_e2e_seq_tabulate_heap_elems_decline_but_work() {
+        // Vec[String] elements are heap-owning → the POD gate declines
+        // tabulate and the plain push loop runs; behavior must be
+        // identical either way.
+        let src = r#"
+fn main() {
+    let mut out: Vec[String] = Vec.new();
+    let mut c: i64 = 0i64;
+    while c < 50i64 {
+        out.push(f"s{c}");
+        c = c + 1i64;
+    }
+    println(out.len());
+    println(out[49i64]);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "50");
+        assert_eq!(lines[1], "s49");
+    }
+
     // --- Par codegen slice 4: defer / errdefer on the cancel path ---
     //
     // Slice 4 of the Phase 7 § *Par codegen: cancellation and error

@@ -2865,6 +2865,23 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem_ty, elem_ptr, "v.elem")
             .unwrap();
+        // Sequential-tabulate alias scopes (reduce.rs): inside an active
+        // tabulate loop, an element load through a distinct owned Vec
+        // local is asserted disjoint from the tabulate output store —
+        // the ownership-derived noalias fact that lets LLVM's loop
+        // vectorizer skip runtime memchecks. Function-keyed so nested
+        // function emission never inherits another function's scopes.
+        if let Some(tags) = &self.tabulate_alias_scopes {
+            if Some(tags.fn_key) == self.current_fn {
+                if let (Some(own), Some(na)) = (tags.alias_scope.get(name), tags.noalias.get(name))
+                {
+                    if let Some(inst) = val.as_instruction_value() {
+                        let _ = inst.set_metadata(*own, self.context.get_kind_id("alias.scope"));
+                        let _ = inst.set_metadata(*na, self.context.get_kind_id("noalias"));
+                    }
+                }
+            }
+        }
         Ok(val)
     }
 
