@@ -6484,9 +6484,18 @@ fn main() {
         let Some(out) = run_program(src) else { return };
         let lines: Vec<&str> = out.trim().split('\n').collect();
         assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0], "8", "counter-write loop must keep source trip count");
-        assert_eq!(lines[1], "6", "post-skip element must be the skipped-to counter");
-        assert_eq!(lines[2], "7", "bound-write loop must keep source trip count");
+        assert_eq!(
+            lines[0], "8",
+            "counter-write loop must keep source trip count"
+        );
+        assert_eq!(
+            lines[1], "6",
+            "post-skip element must be the skipped-to counter"
+        );
+        assert_eq!(
+            lines[2], "7",
+            "bound-write loop must keep source trip count"
+        );
     }
 
     #[test]
