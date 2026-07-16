@@ -26580,6 +26580,62 @@ fn main() {
     // removes the reliance on codegen's payload re-share, not a live leak.)
 
     #[test]
+    fn asan_rc_elide_mutation_through_alias_projection_guarded() {
+        // B-2026-07-16-7 regression pin — the condition-5 miscompile shape.
+        // `walk` satisfies conditions 1-4 (scrutinee-only param, projection
+        // args at its call site, scalar return, projection-only payload), yet
+        // its arm passes the payload's BACK-pointer (`n.back`) to `detach`,
+        // which field-assigns through the alias (`m.left = None`) — releasing
+        // the only count keeping the borrowed `n` alive. Pre-condition-5 this
+        // ELIDED `walk`, and the default build read freed memory: a SILENT
+        // WRONG ANSWER (garbage instead of 8) plus a valgrind invalid-read.
+        // Condition 5 (5c: a lineage projection may flow only to an elided
+        // position — detach is dropped by 5a's store ban) reverts `walk` to
+        // the owned protocol: n holds its own +1 across the arm, the read is
+        // valid, and the mutation's release balances at arm exit. The `make`
+        // helper keeps the child's only extra count out of main's frame so
+        // the field really is the last count. Must print 8 and be
+        // LSan/ASAN-clean under the default AND `=0` paths.
+        assert_clean_asan_run(
+            r#"
+shared struct Node {
+    val: i64,
+    mut left: Option[Node],
+    mut back: Option[Node],
+}
+fn detach(q: Option[Node]) -> i64 {
+    match q {
+        None => 0,
+        Some(m) => {
+            m.left = None;
+            1
+        },
+    }
+}
+fn walk(p: Option[Node]) -> i64 {
+    match p {
+        None => 0,
+        Some(n) => detach(n.back) + n.val,
+    }
+}
+fn make() -> Node {
+    let parent = Node { val: 10, left: None, back: None };
+    let child = Node { val: 7, left: None, back: Some(parent) };
+    parent.left = Some(child);
+    parent
+}
+fn main() {
+    let parent = make();
+    let total = walk(parent.left);
+    println(total);
+}
+"#,
+            &["8"],
+            "rc_elide_mutation_through_alias_projection_guarded",
+        );
+    }
+
+    #[test]
     fn asan_rc_elide_recursive_tree_sum_pool_no_leak() {
         // B-2026-07-15-21 second-shape pin: an 8-tree POOL summed via
         // `sum(pool[rep % 8])` — the call site is an Index PROJECTION into a

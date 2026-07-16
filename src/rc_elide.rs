@@ -905,10 +905,617 @@ pub fn safe_elidable_ref_params(
         }
     }
 
+    // Condition 5 (B-2026-07-16-7) — the elided call web must be hermetically
+    // READ-ONLY over shared state. Conditions 1–4 never constrained WHERE a
+    // payload projection may flow: an elided fn's arm could pass `n.back` (any
+    // projection) to an arbitrary callee, and on an up/back-pointer graph that
+    // callee — following the ordinary owned protocol, so its own counts
+    // balance — could field-assign through the alias (`m.left = None`) and
+    // release the ONLY count keeping the borrowed node alive (an elided frame
+    // holds no +1 of its own). Reproduced as a silent wrong answer + valgrind
+    // invalid-read on the make/walk/detach probe (ledger entry). The fix is a
+    // fixed-point refinement over the condition-1–4 set: drop any fn that
+    // (5a) contains a projection-target store or a lineage-rooted method
+    // call, (5b) has a shared-carrying param that is not itself elided, or
+    // (5c) lets a lineage projection (or a let-alias of one — those join the
+    // lineage) flow anywhere except an elided position of a surviving fn or
+    // a nested destructure. Removal cascades: a dropped callee turns its
+    // callers' projection-args into non-sanctioned flows on the next pass.
+    let carriers = collect_shared_carrying_types(program);
+    let field_class = classify_struct_fields(program, &carriers);
+    loop {
+        let names: Vec<String> = out.keys().cloned().collect();
+        let mut removed = false;
+        for fname in names {
+            let func = free_fns[fname.as_str()];
+            let recs = &out[&fname];
+            if !condition5_ok(func, recs, &out, &carriers, &field_class) {
+                if std::env::var_os("KARAC_RC_ELIDE_DEBUG").is_some() {
+                    eprintln!("[rc-elide] condition 5 drops: {fname}");
+                }
+                out.remove(&fname);
+                removed = true;
+            }
+        }
+        if !removed {
+            break;
+        }
+    }
+
     if std::env::var_os("KARAC_RC_ELIDE_DEBUG").is_some() {
         eprintln!("[rc-elide] elidable set: {out:?}");
     }
     out
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Condition 5 — read-only elided web (B-2026-07-16-7)
+// ────────────────────────────────────────────────────────────────────────
+
+/// Every type name that can (transitively) hold a `shared`/`par` handle: the
+/// shared/par struct+enum names themselves, plus any struct/enum with a field
+/// or variant whose declared type mentions a member of the set (fixpoint).
+/// Drives 5b (an owned param of such a type is a potential alias of the
+/// borrowed graph) and the field classification below.
+fn collect_shared_carrying_types(program: &Program) -> HashSet<String> {
+    let mut set: HashSet<String> = HashSet::new();
+    for item in &program.items {
+        match item {
+            Item::StructDef(s) if s.is_shared || s.is_par => {
+                set.insert(s.name.clone());
+            }
+            Item::EnumDef(e) if e.is_shared || e.is_par => {
+                set.insert(e.name.clone());
+            }
+            _ => {}
+        }
+    }
+    loop {
+        let mut grew = false;
+        for item in &program.items {
+            match item {
+                Item::StructDef(s) if !set.contains(&s.name) => {
+                    if s.fields
+                        .iter()
+                        .any(|f| type_shared_payload(&f.ty, &set).is_some())
+                    {
+                        set.insert(s.name.clone());
+                        grew = true;
+                    }
+                }
+                Item::EnumDef(e) if !set.contains(&e.name) => {
+                    let mentions = e.variants.iter().any(|v| match &v.kind {
+                        crate::ast::VariantKind::Unit => false,
+                        crate::ast::VariantKind::Tuple(tes) => {
+                            tes.iter().any(|te| type_shared_payload(te, &set).is_some())
+                        }
+                        crate::ast::VariantKind::Struct(fields) => fields
+                            .iter()
+                            .any(|f| type_shared_payload(&f.ty, &set).is_some()),
+                    });
+                    if mentions {
+                        set.insert(e.name.clone());
+                        grew = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    set
+}
+
+/// First shared-carrying type name mentioned anywhere in `te` (path segments
+/// and generic args, recursively), or `None` when the type provably holds no
+/// handle. Exhaustive over `TypeKind` — a new type form fails the build here
+/// rather than silently classifying as handle-free.
+fn type_shared_payload(te: &TypeExpr, carriers: &HashSet<String>) -> Option<String> {
+    fn path(p: &crate::ast::PathExpr, carriers: &HashSet<String>) -> Option<String> {
+        for seg in &p.segments {
+            if carriers.contains(seg.as_str()) {
+                return Some(seg.clone());
+            }
+        }
+        if let Some(args) = &p.generic_args {
+            for a in args {
+                if let crate::ast::GenericArg::Type(t) = a {
+                    if let Some(n) = type_shared_payload(t, carriers) {
+                        return Some(n);
+                    }
+                }
+            }
+        }
+        None
+    }
+    match &te.kind {
+        TypeKind::Path(p) => path(p, carriers),
+        TypeKind::Tuple(ts) => ts.iter().find_map(|t| type_shared_payload(t, carriers)),
+        TypeKind::Array { element, .. } => type_shared_payload(element, carriers),
+        TypeKind::Pointer { inner, .. }
+        | TypeKind::Ref(inner)
+        | TypeKind::MutRef(inner)
+        | TypeKind::MutSlice(inner)
+        | TypeKind::Weak(inner) => type_shared_payload(inner, carriers),
+        TypeKind::FnType {
+            params,
+            return_type,
+            ..
+        } => params
+            .iter()
+            .find_map(|t| type_shared_payload(t, carriers))
+            .or_else(|| {
+                return_type
+                    .as_ref()
+                    .and_then(|t| type_shared_payload(t, carriers))
+            }),
+        // A trait object / opaque type could box a shared handle behind an
+        // interface — treat as shared-carrying (fail closed, drives 5b).
+        TypeKind::Dyn { .. } | TypeKind::ImplTrait { .. } => Some("dyn".to_string()),
+        TypeKind::Unit | TypeKind::Error => None,
+    }
+}
+
+/// `(struct, field)` → `Some(carrier)` when the field's declared type can hold
+/// a shared handle (a RESTRICTED projection under 5c), `None` for a provably
+/// handle-free field (a FREE scalar-ish read). Covers every struct — lineage
+/// can pass through a plain struct that carries shared handles.
+fn classify_struct_fields(
+    program: &Program,
+    carriers: &HashSet<String>,
+) -> HashMap<(String, String), Option<String>> {
+    let mut out = HashMap::new();
+    for item in &program.items {
+        if let Item::StructDef(s) = item {
+            for f in &s.fields {
+                out.insert(
+                    (s.name.clone(), f.name.clone()),
+                    type_shared_payload(&f.ty, carriers),
+                );
+            }
+        }
+    }
+    out
+}
+
+/// How a place-expression relates to the borrowed lineage.
+enum PlaceClass<'e> {
+    /// Not rooted at a lineage binding (or not a place at all) — walk normally.
+    NotLineage,
+    /// Rooted at lineage but every handle-bearing hop bottoms out in a
+    /// provably handle-free field — the VALUE is a scalar-ish copy, free to
+    /// use anywhere. Carries the index/argument sub-expressions that still
+    /// need an ordinary walk.
+    Free(Vec<&'e Expr>),
+    /// A live handle into the borrowed graph (payload struct name): legal
+    /// ONLY as an elided-position arg, a nested scrutinee, or a plain-`let`
+    /// RHS (the alias joins the lineage).
+    Restricted(String, Vec<&'e Expr>),
+    /// Lineage-rooted but unresolvable (unknown field, tuple hop, enum
+    /// struct) — fail closed.
+    Poison,
+}
+
+/// Condition-5 body walk for one elidable fn. `bad` latches on the first
+/// violation; the surrounding fixed point then removes the fn (and re-checks
+/// its callers on the next iteration).
+struct Cond5<'a> {
+    elided: &'a HashMap<String, Vec<(String, usize)>>,
+    fields: &'a HashMap<(String, String), Option<String>>,
+    /// binding → payload struct name it can reach.
+    lineage: HashMap<String, String>,
+    bad: bool,
+    in_closure: bool,
+}
+
+impl<'e> Cond5<'_> {
+    fn resolve(&mut self, e: &'e Expr) -> PlaceClass<'e> {
+        match &e.kind {
+            ExprKind::Identifier(n) => match self.lineage.get(n.as_str()) {
+                Some(t) => {
+                    if self.in_closure {
+                        self.bad = true;
+                    }
+                    PlaceClass::Restricted(t.clone(), Vec::new())
+                }
+                None => PlaceClass::NotLineage,
+            },
+            ExprKind::FieldAccess { object, field } => match self.resolve(object) {
+                PlaceClass::NotLineage => PlaceClass::NotLineage,
+                PlaceClass::Free(subs) => PlaceClass::Free(subs),
+                PlaceClass::Restricted(t, subs) => {
+                    match self.fields.get(&(t, field.clone())) {
+                        Some(None) => PlaceClass::Free(subs),
+                        Some(Some(u)) => PlaceClass::Restricted(u.clone(), subs),
+                        // Unknown (struct without a def entry — an enum
+                        // payload, a builtin) — fail closed.
+                        None => PlaceClass::Poison,
+                    }
+                }
+                PlaceClass::Poison => PlaceClass::Poison,
+            },
+            ExprKind::Index { object, index } => match self.resolve(object) {
+                PlaceClass::NotLineage => PlaceClass::NotLineage,
+                PlaceClass::Free(mut subs) => {
+                    subs.push(index);
+                    PlaceClass::Free(subs)
+                }
+                PlaceClass::Restricted(t, mut subs) => {
+                    // Indexing a handle-bearing container (`n.kids[i]`)
+                    // yields another handle of the same carrier family.
+                    subs.push(index);
+                    PlaceClass::Restricted(t, subs)
+                }
+                PlaceClass::Poison => PlaceClass::Poison,
+            },
+            ExprKind::TupleIndex { object, .. } => match self.resolve(object) {
+                PlaceClass::NotLineage => PlaceClass::NotLineage,
+                PlaceClass::Free(subs) => PlaceClass::Free(subs),
+                // No per-position tuple typing here — fail closed.
+                PlaceClass::Restricted(..) => PlaceClass::Poison,
+                PlaceClass::Poison => PlaceClass::Poison,
+            },
+            _ => PlaceClass::NotLineage,
+        }
+    }
+
+    /// A restricted place reached a non-sanctioned position?
+    fn ctx_expr(&mut self, e: &'e Expr) {
+        if self.bad {
+            return;
+        }
+        match &e.kind {
+            ExprKind::Call { callee, args } => {
+                let callee_name = match &callee.kind {
+                    ExprKind::Identifier(n) => Some(n.as_str()),
+                    _ => None,
+                };
+                for (j, arg) in args.iter().enumerate() {
+                    match self.resolve(&arg.value) {
+                        PlaceClass::Restricted(_, subs) => {
+                            let sanctioned = callee_name.is_some_and(|g| {
+                                self.elided
+                                    .get(g)
+                                    .is_some_and(|recs| recs.iter().any(|(_, pos)| *pos == j))
+                            });
+                            if !sanctioned {
+                                self.bad = true;
+                                return;
+                            }
+                            for s in subs {
+                                self.ctx_expr(s);
+                            }
+                        }
+                        PlaceClass::Poison => {
+                            self.bad = true;
+                            return;
+                        }
+                        PlaceClass::Free(subs) => {
+                            for s in subs {
+                                self.ctx_expr(s);
+                            }
+                        }
+                        PlaceClass::NotLineage => self.ctx_expr(&arg.value),
+                    }
+                }
+                if callee_name.is_none() {
+                    self.ctx_expr(callee);
+                }
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                // 5a method leg: a lineage-rooted receiver could mutate the
+                // borrowed graph (or hand out an alias) — ban it outright.
+                match self.resolve(object) {
+                    PlaceClass::Restricted(..) | PlaceClass::Poison => {
+                        self.bad = true;
+                        return;
+                    }
+                    PlaceClass::Free(subs) => {
+                        for s in subs {
+                            self.ctx_expr(s);
+                        }
+                    }
+                    PlaceClass::NotLineage => self.ctx_expr(object),
+                }
+                for arg in args {
+                    match self.resolve(&arg.value) {
+                        PlaceClass::Restricted(..) | PlaceClass::Poison => {
+                            self.bad = true;
+                            return;
+                        }
+                        PlaceClass::Free(subs) => {
+                            for s in subs {
+                                self.ctx_expr(s);
+                            }
+                        }
+                        PlaceClass::NotLineage => self.ctx_expr(&arg.value),
+                    }
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                match self.resolve(scrutinee) {
+                    PlaceClass::Restricted(u, subs) => {
+                        for s in subs {
+                            self.ctx_expr(s);
+                        }
+                        for arm in arms {
+                            let mut names = HashSet::new();
+                            collect_pattern_bindings(&arm.pattern, &mut names);
+                            for n in names {
+                                self.lineage.insert(n, u.clone());
+                            }
+                        }
+                    }
+                    PlaceClass::Poison => {
+                        self.bad = true;
+                        return;
+                    }
+                    PlaceClass::Free(subs) => {
+                        for s in subs {
+                            self.ctx_expr(s);
+                        }
+                    }
+                    PlaceClass::NotLineage => self.ctx_expr(scrutinee),
+                }
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        self.ctx_expr(g);
+                    }
+                    self.ctx_expr(&arm.body);
+                }
+            }
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                else_branch,
+            } => {
+                self.destructure(pattern, value);
+                self.block(then_block);
+                if let Some(el) = else_branch {
+                    self.ctx_expr(el);
+                }
+            }
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } => {
+                self.destructure(pattern, value);
+                self.block(body);
+            }
+            ExprKind::Closure { body, .. } => {
+                let prev = self.in_closure;
+                self.in_closure = true;
+                self.ctx_expr(body);
+                self.in_closure = prev;
+            }
+            ExprKind::Block(b)
+            | ExprKind::Comptime(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => self.block(b),
+            ExprKind::LabeledBlock { body, .. } | ExprKind::Loop { body, .. } => self.block(body),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.ctx_expr(condition);
+                self.block(then_block);
+                if let Some(el) = else_branch {
+                    self.ctx_expr(el);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.ctx_expr(condition);
+                self.block(body);
+            }
+            ExprKind::For { iterable, body, .. } => {
+                // Iterating the borrowed graph hands the loop variable a
+                // handle without a lineage entry — fail closed on a
+                // lineage-rooted iterable.
+                match self.resolve(iterable) {
+                    PlaceClass::Restricted(..) | PlaceClass::Poison => {
+                        self.bad = true;
+                        return;
+                    }
+                    PlaceClass::Free(subs) => {
+                        for s in subs {
+                            self.ctx_expr(s);
+                        }
+                    }
+                    PlaceClass::NotLineage => self.ctx_expr(iterable),
+                }
+                self.block(body);
+            }
+            ExprKind::Lock { mutex, body, .. } => {
+                self.ctx_expr(mutex);
+                self.block(body);
+            }
+            ExprKind::Providers { bindings, body } => {
+                for b in bindings {
+                    self.ctx_expr(&b.value);
+                }
+                self.block(body);
+            }
+            _ => match self.resolve(e) {
+                PlaceClass::Restricted(..) | PlaceClass::Poison => {
+                    self.bad = true;
+                }
+                PlaceClass::Free(subs) => {
+                    for s in subs {
+                        self.ctx_expr(s);
+                    }
+                }
+                PlaceClass::NotLineage => {
+                    walk_children(&e.kind, &mut |c| self.ctx_expr(c));
+                }
+            },
+        }
+    }
+
+    /// Pattern-binding against a possibly-restricted scrutinee (if-let /
+    /// while-let / let-else): bindings under a restricted scrutinee join the
+    /// lineage; otherwise the value is walked normally.
+    fn destructure(&mut self, pattern: &Pattern, value: &'e Expr) {
+        match self.resolve(value) {
+            PlaceClass::Restricted(u, subs) => {
+                for s in subs {
+                    self.ctx_expr(s);
+                }
+                let mut names = HashSet::new();
+                collect_pattern_bindings(pattern, &mut names);
+                for n in names {
+                    self.lineage.insert(n, u.clone());
+                }
+            }
+            PlaceClass::Poison => self.bad = true,
+            PlaceClass::Free(subs) => {
+                for s in subs {
+                    self.ctx_expr(s);
+                }
+            }
+            PlaceClass::NotLineage => self.ctx_expr(value),
+        }
+    }
+
+    fn block(&mut self, b: &'e Block) {
+        for s in &b.stmts {
+            self.stmt(s);
+        }
+        if let Some(e) = &b.final_expr {
+            self.ctx_expr(e);
+        }
+    }
+
+    fn stmt(&mut self, s: &'e Stmt) {
+        if self.bad {
+            return;
+        }
+        match &s.kind {
+            StmtKind::Let { pattern, value, .. } => match &pattern.kind {
+                // 5c let-alias: a restricted RHS joins the lineage under the
+                // bound name (PayloadScan never tracked these — the alias
+                // could otherwise be handed bare to a mutating callee).
+                PatternKind::Binding(name) => match self.resolve(value) {
+                    PlaceClass::Restricted(u, subs) => {
+                        for sub in subs {
+                            self.ctx_expr(sub);
+                        }
+                        self.lineage.insert(name.clone(), u);
+                    }
+                    PlaceClass::Poison => self.bad = true,
+                    PlaceClass::Free(subs) => {
+                        for sub in subs {
+                            self.ctx_expr(sub);
+                        }
+                    }
+                    PlaceClass::NotLineage => self.ctx_expr(value),
+                },
+                _ => self.destructure(pattern, value),
+            },
+            StmtKind::LetElse {
+                pattern,
+                value,
+                else_block,
+                ..
+            } => {
+                self.destructure(pattern, value);
+                self.block(else_block);
+            }
+            StmtKind::Expr(e) => self.ctx_expr(e),
+            StmtKind::LetUninit { .. } => {}
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => self.block(body),
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                // 5a: ANY projection-target store disqualifies — a field/index
+                // store through any alias can release a count some elided
+                // frame is relying on. Scalar-local assigns stay legal.
+                if matches!(
+                    &target.kind,
+                    ExprKind::FieldAccess { .. }
+                        | ExprKind::Index { .. }
+                        | ExprKind::TupleIndex { .. }
+                ) {
+                    self.bad = true;
+                    return;
+                }
+                self.ctx_expr(target);
+                self.ctx_expr(value);
+            }
+            StmtKind::MultiAssign { targets, values } => {
+                for t in targets {
+                    if matches!(
+                        &t.kind,
+                        ExprKind::FieldAccess { .. }
+                            | ExprKind::Index { .. }
+                            | ExprKind::TupleIndex { .. }
+                    ) {
+                        self.bad = true;
+                        return;
+                    }
+                    self.ctx_expr(t);
+                }
+                for v in values {
+                    self.ctx_expr(v);
+                }
+            }
+        }
+    }
+}
+
+/// Fn-level condition-5 check against the CURRENT candidate set.
+fn condition5_ok(
+    func: &Function,
+    recs: &[(String, usize)],
+    elided: &HashMap<String, Vec<(String, usize)>>,
+    carriers: &HashSet<String>,
+    fields: &HashMap<(String, String), Option<String>>,
+) -> bool {
+    // 5b — every shared-carrying param must itself be elided: an owned (or
+    // otherwise non-elided) sibling handle could alias the borrowed graph and
+    // its perfectly-balanced mutations would still release borrowed nodes.
+    let elided_names: HashSet<&str> = recs.iter().map(|(n, _)| n.as_str()).collect();
+    let mut lineage = HashMap::new();
+    for p in &func.params {
+        let Some(name) = binding_name(&p.pattern) else {
+            // Exotic param pattern — cannot track its lineage; fail closed.
+            return false;
+        };
+        match type_shared_payload(&p.ty, carriers) {
+            Some(u) => {
+                if !elided_names.contains(name) {
+                    return false;
+                }
+                lineage.insert(name.to_string(), u);
+            }
+            None => {
+                // Handle-free param (scalar, Vec[i64], …) — no lineage.
+            }
+        }
+    }
+    let mut scan = Cond5 {
+        elided,
+        fields,
+        lineage,
+        bad: false,
+        in_closure: false,
+    };
+    scan.block(&func.body);
+    !scan.bad
+}
+
+fn binding_name(pat: &Pattern) -> Option<&str> {
+    match &pat.kind {
+        PatternKind::Binding(n) => Some(n.as_str()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1090,6 +1697,142 @@ fn caller(pool: Vec[Option[Node]]) -> i64 {{ probe4(pool[0i64]) }}
         assert!(
             !out.contains_key("probe4"),
             "@-binding aliases the referent — must NOT elide, got {out:?}"
+        );
+    }
+
+    // ── Condition 5 (B-2026-07-16-7): read-only elided web ─────────────
+
+    const BACKNODE: &str =
+        "shared struct Node { val: i64, mut left: Option[Node], mut back: Option[Node] }\n";
+
+    /// The reproduced miscompile: an elidable walk passes a lineage
+    /// projection (`n.back`) to a callee that field-assigns through it,
+    /// releasing the only count keeping the borrowed node alive. 5c must
+    /// drop `walk` (the callee `detach` is dropped by 5a's store ban, so
+    /// the projection flows to a non-elided position).
+    #[test]
+    fn cond5_rejects_projection_to_mutating_callee() {
+        let src = format!(
+            "{BACKNODE}\
+fn detach(q: Option[Node]) -> i64 {{ match q {{ None => 0, Some(m) => {{ m.left = None; 1 }} }} }}
+fn walk(p: Option[Node]) -> i64 {{ match p {{ None => 0, Some(n) => detach(n.back) + n.val }} }}
+fn caller(root: Node) -> i64 {{ walk(root.left) }}
+"
+        );
+        let out = elidable(
+            &src,
+            &[
+                ("detach", &[("q", OwnershipMode::Ref)]),
+                ("walk", &[("p", OwnershipMode::Ref)]),
+            ],
+        );
+        assert!(
+            !out.contains_key("walk") && !out.contains_key("detach"),
+            "mutating-callee web must NOT elide, got {out:?}"
+        );
+    }
+
+    /// 5a: a projection-target store inside an otherwise-elidable fn.
+    #[test]
+    fn cond5_rejects_field_store_in_elidable_fn() {
+        let src = format!(
+            "{BACKNODE}\
+fn zap(p: Option[Node]) -> i64 {{ match p {{ None => 0, Some(n) => {{ n.left = None; n.val }} }} }}
+fn caller(root: Node) -> i64 {{ zap(root.left) }}
+"
+        );
+        let out = elidable(&src, &[("zap", &[("p", OwnershipMode::Ref)])]);
+        assert!(
+            !out.contains_key("zap"),
+            "field-storing fn must NOT elide, got {out:?}"
+        );
+    }
+
+    /// 5b: an owned shared sibling param could alias the borrowed graph.
+    #[test]
+    fn cond5_rejects_owned_shared_sibling_param() {
+        let src = format!(
+            "{BACKNODE}\
+fn mixed(p: Option[Node], q: Node) -> i64 {{ match p {{ None => q.val, Some(n) => n.val }} }}
+fn caller(root: Node, other: Node) -> i64 {{ mixed(root.left, other) }}
+"
+        );
+        let out = elidable(
+            &src,
+            &[(
+                "mixed",
+                &[("p", OwnershipMode::Ref), ("q", OwnershipMode::Own)],
+            )],
+        );
+        assert!(
+            !out.contains_key("mixed"),
+            "non-elided shared sibling param must drop the fn, got {out:?}"
+        );
+    }
+
+    /// 5c let-alias: `let x = n.back` joins the lineage, so handing `x` to an
+    /// owned-consuming callee is a bare lineage move — dropped.
+    #[test]
+    fn cond5_rejects_let_alias_flow_to_owned_callee() {
+        let src = format!(
+            "{BACKNODE}\
+fn sink(x: Option[Node]) -> i64 {{ match x {{ None => 0, Some(m) => m.val }} }}
+fn leaky(p: Option[Node]) -> i64 {{ match p {{ None => 0, Some(n) => {{ let x = n.back; sink(x) }} }} }}
+fn caller(root: Node) -> i64 {{ leaky(root.left) }}
+"
+        );
+        let out = elidable(
+            &src,
+            &[
+                ("sink", &[("x", OwnershipMode::Ref)]),
+                ("leaky", &[("p", OwnershipMode::Ref)]),
+            ],
+        );
+        assert!(
+            !out.contains_key("leaky"),
+            "let-alias of a lineage projection handed to a callee bare must NOT elide the caller, got {out:?}"
+        );
+    }
+
+    /// Fixed-point cascade: G is dropped (5a store), so F's projection-arg
+    /// into G becomes non-sanctioned and F drops on the next iteration.
+    #[test]
+    fn cond5_cascade_removes_caller_of_dropped_callee() {
+        let src = format!(
+            "{BACKNODE}\
+fn g(q: Option[Node]) -> i64 {{ match q {{ None => 0, Some(m) => {{ m.left = None; m.val }} }} }}
+fn f(p: Option[Node]) -> i64 {{ match p {{ None => 0, Some(n) => g(n.left) + n.val }} }}
+fn caller(root: Node) -> i64 {{ f(root.left) }}
+"
+        );
+        let out = elidable(
+            &src,
+            &[
+                ("g", &[("q", OwnershipMode::Ref)]),
+                ("f", &[("p", OwnershipMode::Ref)]),
+            ],
+        );
+        assert!(
+            !out.contains_key("g") && !out.contains_key("f"),
+            "cascade must remove both, got {out:?}"
+        );
+    }
+
+    /// The known winners survive condition 5: recursion into the elided web
+    /// itself, scalar field reads anywhere, nested destructures.
+    #[test]
+    fn cond5_keeps_recursive_readonly_walks() {
+        let src = format!(
+            "{NODE}\
+fn sum(node: Option[Node]) -> i64 {{ match node {{ None => 0, Some(n) => n.val + sum(n.left) + sum(n.right) }} }}
+fn caller(root: Node) -> i64 {{ sum(root.left) }}
+"
+        );
+        let out = elidable(&src, &[("sum", &[("node", OwnershipMode::Ref)])]);
+        assert!(
+            out.get("sum")
+                .is_some_and(|r| r.iter().any(|(n, p)| n == "node" && *p == 0)),
+            "pure combine-both walk must stay elidable, got {out:?}"
         );
     }
 }
