@@ -13963,6 +13963,192 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_float_mul(p, pow2n, "e.res").unwrap()
     }
 
+    /// Vectorized `ln(x)` — the `log` sibling of [`compile_vector_exp`]
+    /// (`std.simd.math`, phase-11). For an **f32** vector this is the Cephes
+    /// `logf` algorithm: a branchless `frexp` (split `x = m·2^e`, `m ∈ [0.5,1)`)
+    /// done directly on the IEEE bit pattern — `e` from the exponent field,
+    /// `m` by forcing that field to the `0.5` biased value — then a
+    /// `√½`-pivot normalization (`m < √½ → e−1, x = 2m−1`, else `x = m−1`), a
+    /// degree-9 minimax polynomial for `ln(1+x)`, and the `e·ln2`
+    /// reconstruction (with `ln2` split hi+lo for precision). Domain: `x < 0 →
+    /// NaN`, `x == 0 → −∞` (per-lane `select`, matching `@llvm.log`).
+    /// Genuinely vectorized, ~1 ULP; the f64 case falls back to `llvm.log`
+    /// (the f64 polynomial is a follow-up). Used by `v.ln()`.
+    fn compile_vector_ln(
+        &self,
+        recv: inkwell::values::VectorValue<'ctx>,
+    ) -> inkwell::values::VectorValue<'ctx> {
+        let vt = recv.get_type();
+        let ft = vt.get_element_type().into_float_type();
+        let n = vt.get_size();
+        let i32_t = self.context.i32_type();
+        let iv_t = i32_t.vec_type(n);
+
+        let fsplat = |c: f64| -> inkwell::values::VectorValue<'ctx> {
+            let scalar = ft.const_float(c);
+            let mut sv = vt.get_undef();
+            for i in 0..n {
+                sv = self
+                    .builder
+                    .build_insert_element(sv, scalar, i32_t.const_int(i as u64, false), "l.fsplat")
+                    .unwrap();
+            }
+            sv
+        };
+        let isplat = |c: u64| -> inkwell::values::VectorValue<'ctx> {
+            let scalar = i32_t.const_int(c, false);
+            let mut sv = iv_t.get_undef();
+            for i in 0..n {
+                sv = self
+                    .builder
+                    .build_insert_element(sv, scalar, i32_t.const_int(i as u64, false), "l.isplat")
+                    .unwrap();
+            }
+            sv
+        };
+
+        // f64 (or any non-f32 float): fall back to the intrinsic.
+        if ft != self.context.f32_type() {
+            let intr =
+                inkwell::intrinsics::Intrinsic::find("llvm.log").expect("llvm.log must exist");
+            let decl = intr
+                .get_declaration(&self.module, &[vt.into()])
+                .expect("llvm.log declaration");
+            return self
+                .builder
+                .build_call(decl, &[recv.into()], "l.intr")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_vector_value();
+        }
+
+        // Branchless frexp on the bit pattern: bits = reinterpret(x).
+        let bits = self
+            .builder
+            .build_bit_cast(recv, iv_t, "l.bits")
+            .unwrap()
+            .into_vector_value();
+        // e = ((bits >> 23) & 0xFF) - 126  (unbiased exponent, frexp convention).
+        let ef = self
+            .builder
+            .build_right_shift(bits, isplat(23), false, "l.ef")
+            .unwrap();
+        let ef = self.builder.build_and(ef, isplat(0xFF), "l.ef2").unwrap();
+        let e_int = self
+            .builder
+            .build_int_sub(ef, isplat(126), "l.eint")
+            .unwrap();
+        // m = reinterpret((bits & 0x807FFFFF) | 0x3F000000) ∈ [0.5, 1).
+        let mant = self
+            .builder
+            .build_and(bits, isplat(0x807F_FFFF), "l.mant")
+            .unwrap();
+        let mant = self
+            .builder
+            .build_or(mant, isplat(0x3F00_0000), "l.mant2")
+            .unwrap();
+        let m = self
+            .builder
+            .build_bit_cast(mant, vt, "l.m")
+            .unwrap()
+            .into_vector_value();
+        // √½ pivot: if m < √½ then (e-=1; x = 2m-1) else x = m-1.
+        let cond = self
+            .builder
+            .build_float_compare(
+                inkwell::FloatPredicate::OLT,
+                m,
+                fsplat(std::f64::consts::FRAC_1_SQRT_2),
+                "l.piv",
+            )
+            .unwrap();
+        let m2 = self.builder.build_float_add(m, m, "l.m2").unwrap();
+        let x_lo = self
+            .builder
+            .build_float_sub(m2, fsplat(1.0), "l.xlo")
+            .unwrap();
+        let x_hi = self
+            .builder
+            .build_float_sub(m, fsplat(1.0), "l.xhi")
+            .unwrap();
+        let x = self
+            .builder
+            .build_select(cond, x_lo, x_hi, "l.x")
+            .unwrap()
+            .into_vector_value();
+        let e_dec = self
+            .builder
+            .build_int_sub(e_int, isplat(1), "l.edec")
+            .unwrap();
+        let e_sel = self
+            .builder
+            .build_select(cond, e_dec, e_int, "l.esel")
+            .unwrap()
+            .into_vector_value();
+        let fe = self
+            .builder
+            .build_signed_int_to_float(e_sel, vt, "l.fe")
+            .unwrap();
+        // Degree-9 Horner minimax polynomial for ln(1+x), then × x × x².
+        let z = self.builder.build_float_mul(x, x, "l.z").unwrap();
+        let coeffs = [
+            7.037_683_629_2e-2_f64,
+            -1.151_461_031_0e-1,
+            1.167_699_874_0e-1,
+            -1.242_014_084_6e-1,
+            1.424_932_278_7e-1,
+            -1.666_805_766_5e-1,
+            2.000_071_476_5e-1,
+            -2.499_999_399_3e-1,
+            3.333_333_117_4e-1,
+        ];
+        let mut y = fsplat(coeffs[0]);
+        for &c in &coeffs[1..] {
+            y = self.builder.build_float_mul(y, x, "l.pm").unwrap();
+            y = self.builder.build_float_add(y, fsplat(c), "l.pa").unwrap();
+        }
+        y = self.builder.build_float_mul(y, x, "l.yx").unwrap();
+        y = self.builder.build_float_mul(y, z, "l.yz").unwrap();
+        // y += ln2_lo·e ; y -= 0.5·z
+        let ylo = self
+            .builder
+            .build_float_mul(fsplat(-2.121_944_40e-4), fe, "l.ylo")
+            .unwrap();
+        y = self.builder.build_float_add(y, ylo, "l.yadd").unwrap();
+        let hz = self
+            .builder
+            .build_float_mul(fsplat(0.5), z, "l.hz")
+            .unwrap();
+        y = self.builder.build_float_sub(y, hz, "l.ysub").unwrap();
+        // result = x + y + ln2_hi·e
+        let zr = self.builder.build_float_add(x, y, "l.zr").unwrap();
+        let hi = self
+            .builder
+            .build_float_mul(fsplat(0.693_359_375), fe, "l.hi")
+            .unwrap();
+        let zr = self.builder.build_float_add(zr, hi, "l.zr2").unwrap();
+        // Domain: x < 0 → NaN, x == 0 → -inf (matches @llvm.log).
+        let zero = fsplat(0.0);
+        let is_zero = self
+            .builder
+            .build_float_compare(inkwell::FloatPredicate::OEQ, recv, zero, "l.isz")
+            .unwrap();
+        let is_neg = self
+            .builder
+            .build_float_compare(inkwell::FloatPredicate::OLT, recv, zero, "l.isn")
+            .unwrap();
+        let r = self
+            .builder
+            .build_select(is_zero, fsplat(f64::NEG_INFINITY), zr, "l.rz")
+            .unwrap()
+            .into_vector_value();
+        self.builder
+            .build_select(is_neg, fsplat(f64::NAN), r, "l.rn")
+            .unwrap()
+            .into_vector_value()
+    }
+
     /// typechecker guarantees `N >= 1`, an integer element for the bitwise
     /// folds, and a same-typed vector argument for `dot`.
     fn compile_vector_method(
@@ -14029,7 +14215,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `exp` is the hand-written guaranteed-SIMD polynomial (f32;
                     // f64 falls back to the intrinsic) — see compile_vector_exp.
                     "exp" => self.compile_vector_exp(recv),
-                    "ln" => apply(self, "llvm.log", recv),
+                    // `ln` is the hand-written guaranteed-SIMD polynomial (f32;
+                    // f64 falls back to the intrinsic) — see compile_vector_ln.
+                    "ln" => self.compile_vector_ln(recv),
                     "floor" => apply(self, "llvm.floor", recv),
                     "ceil" => apply(self, "llvm.ceil", recv),
                     "round" => apply(self, "llvm.round", recv),

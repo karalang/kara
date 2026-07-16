@@ -61656,6 +61656,70 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vector_ln_uses_polynomial_not_intrinsic() {
+        // `v.ln()` on an f32 vector is the hand-written Cephes logf polynomial
+        // (guaranteed SIMD — see compile_vector_ln), NOT `@llvm.log`. The IR
+        // proves it: the branchless frexp emits the exponent extraction
+        // (`sitofp` of the integer exponent) and there is NO `@llvm.log` call.
+        let ir = ir_for(
+            r#"
+fn f(a: f32) -> f32 {
+    let v: Vector[f32, 4] = Vector[f32, 4](a, a, a, a);
+    let l = v.ln();
+    l[0]
+}
+fn main() { println(f(2.0f32)); }
+"#,
+        );
+        assert!(
+            ir.contains("sitofp") && !ir.contains("@llvm.log"),
+            "f32 v.ln() should be the polynomial (sitofp, no @llvm.log); got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_vector_ln_polynomial_accuracy() {
+        // `v.ln()` is the hand-written Cephes logf polynomial (f32, ~1 ULP).
+        // Verify against libm across the range to a tight relative tolerance,
+        // and the domain: ln(0) = -inf, ln(-1) = NaN (matching @llvm.log). As
+        // for exp, this deviates from the interpreter (f64 libm) beyond f32
+        // rounding — assert against the true math values, not interp parity.
+        let Some(out) = run_program(
+            r#"
+fn main() {
+    let x = Vector[f32, 4].from_array([1.0f32, 2.0f32, 10.0f32, 0.5f32]);
+    let l = x.ln();
+    println(l[0]); println(l[1]); println(l[2]); println(l[3]);
+    let d = Vector[f32, 4].from_array([0.0f32, -1.0f32, 1.0f32, 1.0f32]);
+    let ld = d.ln();
+    println(ld[0]); println(ld[1]);
+}
+"#,
+        ) else {
+            return;
+        };
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 6, "output line count; got:\n{out}");
+        let want = [1.0_f64.ln(), 2.0_f64.ln(), 10.0_f64.ln(), 0.5_f64.ln()];
+        for (l, w) in lines[..4].iter().zip(want.iter()) {
+            let g: f64 = l.parse().unwrap();
+            let tol = w.abs() * 1e-4 + 1e-6;
+            assert!(
+                (g - w).abs() <= tol,
+                "vector ln off: got {g}, want {w} (tol {tol})\nfull:\n{out}"
+            );
+        }
+        let z0: f64 = lines[4].parse().unwrap();
+        assert!(
+            z0.is_infinite() && z0 < 0.0,
+            "ln(0) should be -inf, got {}",
+            lines[4]
+        );
+        let zn: f64 = lines[5].parse().unwrap();
+        assert!(zn.is_nan(), "ln(-1) should be NaN, got {}", lines[5]);
+    }
+
+    #[test]
     fn test_ir_vector_floor_uses_vector_intrinsic() {
         // `std.simd.math` rounding (phase-11): `v.floor()` on a `Vector[f32, 4]`
         // lowers to the overloaded LLVM VECTOR intrinsic `@llvm.floor.v4f32`

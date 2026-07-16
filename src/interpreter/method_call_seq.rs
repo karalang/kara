@@ -1462,13 +1462,14 @@ impl<'a> super::Interpreter<'a> {
             // element width, so an `f32` vector's low-order bits can differ, as
             // for the other float ops. `round` is half-away-from-zero (Rust
             // `f64::round` ≡ `llvm.round`, matching the scalar `x.round()`).
-            // NOTE on `exp` / `sigmoid` / `tanh`: `karac build` lowers an f32
-            // `exp` to a hand-written Cephes minimax polynomial (guaranteed
-            // SIMD, ~1 ULP — `codegen::…::compile_vector_exp`), and
-            // `sigmoid`/`tanh` are derived from it; this interpreter uses exact
-            // f64 libm, so the two agree only to ~f32 accuracy on non-trivial
-            // inputs, a wider (documented) gap than the low-order-bit rounding
-            // of the intrinsic-lowered ops.
+            // NOTE on `exp` / `ln` / `sigmoid` / `tanh`: `karac build` lowers an
+            // f32 `exp` and `ln` to hand-written Cephes minimax polynomials
+            // (guaranteed SIMD, ~1 ULP — `codegen::…::compile_vector_exp` /
+            // `compile_vector_ln`), and `sigmoid`/`tanh` are derived from `exp`;
+            // this interpreter uses exact f64 libm, so the two agree only to
+            // ~f32 accuracy on non-trivial inputs, a wider (documented) gap than
+            // the low-order-bit rounding of the intrinsic-lowered ops (`sqrt` /
+            // the rounding family).
             "sqrt" | "exp" | "ln" | "tanh" | "sigmoid" | "floor" | "ceil" | "round" | "trunc" => {
                 let out: Vec<Value> = lanes
                     .into_iter()
