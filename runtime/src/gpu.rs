@@ -1247,4 +1247,76 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         unsafe { free(aos as *mut core::ffi::c_void) };
     }
+
+    // GPU-SLIP-4f regression guard: a STENCIL shader (reads a NEIGHBOUR, not just
+    // its own element) dispatched over a RESIDENT buffer. The resident path was
+    // built for element-wise collide; this locks in that `dispatch_resident` binds
+    // the WHOLE grid read-only (`as_entire_binding`), so a shader reading `in[i-1]`
+    // sees the neighbour — the property the resident LBM `stream` pass depends on.
+    // Shifts each element from its left neighbour (clamped at 0): out[i] = in[i-1].
+    const STENCIL_SHIFT_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       a_in:  array<f32>;
+@group(0) @binding(1) var<storage, read_write> a_out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= arrayLength(&a_in)) { return; }
+    if (i == 0u) { a_out[0] = a_in[0]; } else { a_out[i] = a_in[i - 1u]; }
+}
+"#;
+
+    #[test]
+    fn resident_stencil_reads_neighbour() {
+        if gpu_context().is_none() {
+            eprintln!("gpu: no GPU adapter available — skipping");
+            return;
+        }
+        extern "C" {
+            fn free(ptr: *mut core::ffi::c_void);
+        }
+        const N: usize = 64;
+        let src: Vec<f32> = (0..N).map(|i| i as f32).collect();
+        let bytes = f32s_to_le(&src);
+        let in_ptrs = [bytes.as_ptr()];
+        let strides = [4usize];
+        let handle =
+            unsafe { karac_runtime_gpu_upload_soa(1, in_ptrs.as_ptr(), strides.as_ptr(), N) };
+        assert_ne!(handle, 0, "upload returned a null handle");
+        let out = unsafe {
+            karac_runtime_gpu_dispatch_resident(
+                STENCIL_SHIFT_WGSL.as_ptr(),
+                STENCIL_SHIFT_WGSL.len(),
+                handle,
+                0,
+                std::ptr::null(),
+                0,
+            )
+        };
+        unsafe { karac_runtime_gpu_free_soa(handle) };
+        assert_ne!(out, 0, "resident stencil dispatch returned a null handle");
+
+        let field_group = [0usize];
+        let field_src = [0usize];
+        let field_dst = [0usize];
+        let aos = unsafe {
+            karac_runtime_gpu_download_soa(
+                out,
+                1,
+                field_group.as_ptr(),
+                field_src.as_ptr(),
+                field_dst.as_ptr(),
+                4,
+                4,
+                N,
+            )
+        };
+        assert!(!aos.is_null());
+        let got = unsafe { le_to_f32s(std::slice::from_raw_parts(aos, N * 4)) };
+        // out[0] = in[0] = 0; out[i] = in[i-1] = i-1 for i >= 1.
+        assert_eq!(got[0], 0.0, "clamped left edge");
+        for (i, &v) in got.iter().enumerate().skip(1) {
+            assert_eq!(v, (i - 1) as f32, "neighbour shift at {i}");
+        }
+        unsafe { free(aos as *mut core::ffi::c_void) };
+    }
 }
