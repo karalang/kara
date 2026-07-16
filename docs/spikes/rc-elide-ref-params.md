@@ -213,3 +213,54 @@ par_codegen 173/0, lib 1025/0, clippy clean, #112 byte-identical across
 interp/JIT/AOT/auto-par/`=0` and valgrind-clean. Pinned by
 `asan_rc_elide_some_binding_or_recursion_walk_no_leak` (the `has_path_sum` shape,
 now load-bearing on every build).
+
+## Second-shape corroboration (tree-sum pool, combine-both recursion)
+
+Independently measured in a parallel session on the B-2026-07-15-21 ledger
+probe — 8 pooled 31-node trees, `total += sum(pool[rep % 8])` at 3M reps, a
+COMBINE-BOTH walk (`n.val + sum(n.left) + sum(n.right)`, no TCO), Linux x86-64
+container, best-of-9, vs `rustc -O -C overflow-checks=on` at 0.342 s:
+
+| | wall | vs rust-ovf |
+|---|---|---|
+| `=0` (owned protocol) | 0.440 s | 1.29× |
+| Part A only (binding pair kept) | 0.474 s | **1.39× — a 7% regression on this shape** |
+| **Part A + Part B (default)** | **0.362 s** | **1.06×** |
+
+Two takeaways: the combine-both family lands at equal-safety-Rust parity from
+rc-silence alone (no TCO needed), and Part A **without** Part B can regress a
+shape even while it wins on others (the #100/#104/#111/#112 corpus wins were
+1.18–1.32× with the pair still in place) — so Part B is load-bearing for the
+default-ON posture, not just headroom. Pinned by
+`asan_rc_elide_recursive_tree_sum_pool_no_leak` (Index-projection call site +
+combine-both walk; clean under default and `=0`).
+
+## Condition 5 (OPEN) — mutation-through-alias, found during the Part B review
+
+Conditions 1–4 do not constrain WHERE a payload **projection** may flow: an
+elided fn's arm may pass `n.parent` (any projection) to an arbitrary callee.
+For a `shared` graph with **up/back-pointers**, that callee — following the
+ordinary owned protocol, so its own counts balance — can field-assign through
+the alias (`parent.left = None`) and release the ONLY count keeping the
+borrowed node alive (under elision the current frame holds no +1 of its own),
+freeing `n` mid-arm: a use-after-free the un-elided protocol shields. The same
+holds through a let-alias of a projection (`let x = n.parent; mutate(x)`),
+which `PayloadScan` does not add to the lineage. Unreachable in the current
+corpus (no elided shape passes projections to a mutating callee;
+`is_mirror`/`sum`/`has_path_sum` recurse only into themselves) — but with
+default-ON landed the env gate no longer shields it, so closing this is a
+priority fast-follow, tracked as **B-2026-07-16-7**. Sketched condition 5 (all
+cheap syntactic fail-closed checks):
+
+- **5a** — an elidable fn's body contains no field/index store
+  (`Assign`/`CompoundAssign` with a projection target) and no method call on a
+  lineage-rooted receiver;
+- **5b** — every `shared`/`Option[shared]` param of an elidable fn is itself
+  elided (no owned-shared sibling param that could alias the borrowed tree);
+- **5c** — lineage projections (and let-aliases of them, which must join the
+  lineage) may be passed ONLY at elided positions of fns satisfying 5a–5c —
+  making the whole elided call web hermetically read-only over shared state,
+  so no release can occur while any borrow in the web is live.
+
+`is_mirror`/`is_symmetric`/`sum`/`has_path_sum` all satisfy 5a–5c, so every
+known win survives the tightening.

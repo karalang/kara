@@ -26580,6 +26580,63 @@ fn main() {
     // removes the reliance on codegen's payload re-share, not a live leak.)
 
     #[test]
+    fn asan_rc_elide_recursive_tree_sum_pool_no_leak() {
+        // B-2026-07-15-21 second-shape pin: an 8-tree POOL summed via
+        // `sum(pool[rep % 8])` — the call site is an Index PROJECTION into a
+        // caller-held Vec (condition 1's `v[i]` leg, where the sibling pin
+        // `asan_rc_elide_some_binding_or_recursion_walk_no_leak` exercises a
+        // 2-node pool + or-short-circuit walk). `sum` is a COMBINE-BOTH
+        // recursion (`n.val + sum(n.left) + sum(n.right)` — no TCO), so this
+        // pins the pure Part A + Part B rc-elision with both child calls
+        // live: zero header RMWs per node on the default path, pool stays
+        // sole owner, every node drops exactly once at scope exit. Must be
+        // clean under the default (elided) AND `=0` (owned-protocol) paths —
+        // LSan catches an over-elide as a leak, an under-balance as a
+        // UAF/double-free. 31-node trees x 200 reps amplify any per-visit
+        // imbalance.
+        assert_clean_asan_run(
+            r#"
+shared struct TreeNode {
+    val: i64,
+    left: Option[TreeNode],
+    right: Option[TreeNode],
+}
+fn build(depth: i64, counter: i64) -> Option[TreeNode] {
+    if depth == 0 {
+        return None;
+    }
+    let left = build(depth - 1, counter * 2);
+    let right = build(depth - 1, counter * 2 + 1);
+    return Some(TreeNode { val: counter, left: left, right: right });
+}
+fn sum(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => n.val + sum(n.left) + sum(n.right),
+    }
+}
+fn main() {
+    let mut pool: Vec[Option[TreeNode]] = Vec.new();
+    let mut i = 0;
+    while i < 8 {
+        pool.push(build(5, 1));
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut rep = 0;
+    while rep < 200 {
+        total = total + sum(pool[rep % 8]);
+        rep = rep + 1;
+    }
+    println(total);
+}
+"#,
+            &["99200"],
+            "rc_elide_recursive_tree_sum_pool_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_rc_elide_consumed_payload_projection_caller_no_double_free() {
         // Residual shape, direct consume: `match p { Some(n) => sink(n) }` moves
         // payload `n` by value into owned `sink`. Condition 4 declines to elide
