@@ -89,11 +89,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **494 surfaced · 0 open · 490 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **495 surfaced · 1 open · 490 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-16-11 | 2026-07-16 | codegen (Vec construction: a Vec built by a counted push-loop reallocs ~log(n) times instead of pre-sizing) | low | A `Vec` built by `Vec.new()` + a counted `push`-loop reallocs ~log(n) times (growth-doubling) where the trip count is statically derivable — auto-pre-sizing (the imperative sibling of the collect-tabulate recognizer) would emit one alloc per Vec. On #115's nested Vec[Vec[i64]] DP this is ~1.7x of the gap to Rust; `Vec.with_capacity` recovers it (kara reaches nested-`Vec<Vec>` parity). The residual vs a flat Vec[i64] is the inherent per-row malloc of a row-of-rows | none |
 
 ### Fixed (490)
 
