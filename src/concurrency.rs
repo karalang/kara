@@ -1867,7 +1867,7 @@ impl<'a> ConcurrencyChecker<'a> {
     /// (each would fail the other's mention check anyway).
     fn classify_seq_collect_tabulate(&self, body: &Block) -> Option<String> {
         let mut candidate: Option<String> = None;
-        let mut consider = |name: Option<String>, candidate: &mut Option<String>| -> bool {
+        let consider = |name: Option<String>, candidate: &mut Option<String>| -> bool {
             let Some(n) = name else { return true };
             match candidate {
                 None => {
