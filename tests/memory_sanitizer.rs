@@ -27861,7 +27861,7 @@ fn main() {
 
     #[test]
     fn asan_reduction_over_shared_pool_no_race_uaf() {
-        // B-2026-07-16-2: the auto-par reduction lowering ran this loop's
+        // B-2026-07-16-6: the auto-par reduction lowering ran this loop's
         // body on multiple worker threads while it carried NON-atomic
         // rc-inc/rc-dec traffic on the same 8 pooled shared trees (element
         // retain in the worker, callee-drop release inside `sum`). Racing

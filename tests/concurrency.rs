@@ -2470,7 +2470,7 @@ fn test_reduction_recognized_for_add_while_loop() {
 
 #[test]
 fn test_reduction_declined_for_shared_capture_body() {
-    // B-2026-07-16-2: the reduction worker runs the loop body on multiple
+    // B-2026-07-16-6: the reduction worker runs the loop body on multiple
     // threads, and a plain `shared` handle's refcount ops are NON-atomic —
     // racing them across workers is a lost update that frees a
     // still-referenced object (reproduced as heap corruption / UAF with a

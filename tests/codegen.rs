@@ -9990,7 +9990,7 @@ fn main() {
 
     #[test]
     fn test_e2e_reduction_over_shared_pool_declined_and_correct() {
-        // B-2026-07-16-2: the auto-par reduction recognizer lowered
+        // B-2026-07-16-6: the auto-par reduction recognizer lowered
         // `total = total + sum(pool[k % 8])` into a multi-threaded
         // `karac_par_reduce` worker even though the captured pool holds
         // plain `shared` trees — every worker then raced the NON-atomic

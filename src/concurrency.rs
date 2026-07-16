@@ -1787,7 +1787,7 @@ impl<'a> ConcurrencyChecker<'a> {
             };
             self.recognize_reductions_in_block(body, out);
             if let Some((accumulator, op)) = self.classify_loop_body(body, attributes) {
-                // B-2026-07-16-2 soundness gate: the reduction lowering runs
+                // B-2026-07-16-6 soundness gate: the reduction lowering runs
                 // this body on MULTIPLE worker threads, so any value the body
                 // touches that is reachable from outside one iteration is
                 // visible to all workers. A plain `shared` (non-`par`) handle
@@ -1827,7 +1827,7 @@ impl<'a> ConcurrencyChecker<'a> {
         }
     }
 
-    /// B-2026-07-16-2: true when every typed expression inside `body`
+    /// B-2026-07-16-6: true when every typed expression inside `body`
     /// satisfies [`crate::cross_task_safe::is_cross_task_safe`] — the
     /// same predicate enforced on explicit `spawn` / `par {}` captures.
     ///
