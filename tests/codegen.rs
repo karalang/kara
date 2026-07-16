@@ -53067,6 +53067,33 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_inline_map_get_unwrap_heap_value() {
+        // B-2026-07-15-26: an inline `map.get(k).unwrap()` of a heap value
+        // (String/Vec) used to double-free (SIGABRT) when consumed directly — the
+        // borrowed bucket buffer was freed both as the inline temporary and by the
+        // map's scope-exit drop. Now the unwrap zeroes the borrow view's `cap`, so
+        // the inline consumer's free-guard skips it. This output test guards the
+        // observable result across a println arg, a method receiver (`.len()`), a
+        // fn-call arg, and a bound read; the sibling LSan test guards the memory
+        // safety.
+        let output = run_program(
+            "fn takes(s: String) -> i64 { s.len() }\n\
+             fn main() {\n\
+                 let mut m: Map[i64, String] = Map.new();\n\
+                 m.insert(1, \"hello\");\n\
+                 m.insert(2, \"worldish\");\n\
+                 println(m.get(1).unwrap());\n\
+                 println(m.get(2).unwrap().len());\n\
+                 println(takes(m.get(1).unwrap()));\n\
+                 let v = m.get(2).unwrap();\n\
+                 println(v);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "hello\n8\n5\nworldish\n");
+    }
+
+    #[test]
     fn test_e2e_vec_prefix_literal_basic() {
         // `Vec[a, b, c]` at expression position now lowers via
         // `compile_vec_prefix_literal` — malloc + per-slot store +

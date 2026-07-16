@@ -27702,4 +27702,47 @@ fn main() {
             "reassign_heap_field_and_map_set_var_no_leak_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_inline_map_get_unwrap_heap_value_no_double_free() {
+        // B-2026-07-15-26: an INLINE `map.get(k).unwrap()` whose value is a heap
+        // type (`Map[K, String]` / `Map[K, Vec[..]]`) packs a BORROW of the
+        // bucket's `{ptr,len,cap}`. Consumed inline (a println arg, a method
+        // receiver, a call arg) the temporary's own `cap > 0` free-guard freed
+        // that buffer — which the map's scope-exit per-entry drop ALSO freed →
+        // double-free (SIGABRT), while binding to a `let` first was clean. Fixed
+        // by zeroing the borrow view's `cap` at the unwrap so every consumer's
+        // free-guard skips it (the map stays the sole owner; reads use ptr+len).
+        // Exercise all three inline consumption modes over String and Vec values
+        // in a loop (a per-iteration double-free trips ASAN; a per-iteration
+        // strand — if the map ever STOPPED owning the value — accumulates a leak).
+        assert_clean_asan_run(
+            r#"
+fn takes(s: String) -> i64 {
+    s.len()
+}
+fn main() {
+    let mut ms: Map[i64, String] = Map.new();
+    ms.insert(1, "alpha".to_string());
+    ms.insert(2, "bb".to_string());
+    let mut mv: Map[i64, Vec[i64]] = Map.new();
+    mv.insert(1, [1, 2, 3, 4]);
+    mv.insert(2, [9]);
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 60 {
+        acc = acc + ms.get(1).unwrap().len();
+        acc = acc + takes(ms.get(2).unwrap());
+        acc = acc + mv.get(1).unwrap().len();
+        acc = acc + mv.get(2).unwrap().len();
+        i = i + 1;
+    }
+    println(acc);
+    println(ms.get(1).unwrap());
+}
+"#,
+            &["720", "alpha"],
+            "inline_map_get_unwrap_heap_value_no_double_free",
+        );
+    }
 }

@@ -2376,6 +2376,30 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?
         };
+        // B-2026-07-15-26: `map.get(k).unwrap()` on a NON-shared heap value
+        // (`Map[K, String]` / `Map[K, Vec[..]]`) packs a BORROW of the bucket's
+        // `{ptr,len,cap}` — the buffer belongs to the map. Consumed INLINE (a
+        // println arg, a method receiver, a call arg) the temporary's own
+        // `cap > 0` free-guard frees that buffer, which the map's scope-exit
+        // per-entry drop ALSO frees → double-free. Zero the borrow view's `cap`
+        // so every consumer's free-guard skips it (the map stays the sole owner);
+        // reads use ptr+len and are unaffected. Harmless for the let-bound case
+        // (borrow-elided, reads only) and closes that binding's latent move-out
+        // double-free too. Only fires for the `<map>.get(k)` receiver shape, so a
+        // genuinely-owned unwrap payload keeps its real `cap`.
+        let value = match value {
+            BasicValueEnum::StructValue(sv)
+                if sv.get_type() == self.vec_struct_type()
+                    && self.unwrap_receiver_is_nonshared_heap_value_map_get(object) =>
+            {
+                self.builder
+                    .build_insert_value(sv, i64_t.const_zero(), 2, "map.get.borrow.cap0")
+                    .unwrap()
+                    .into_struct_value()
+                    .into()
+            }
+            _ => value,
+        };
         // B-2026-07-10-2 — the extracted payload is a SHALLOW alias of the
         // receiver's inline/boxed heap buffer. `unwrap`/`expect`/`unwrap_err`/
         // `expect_err` CONSUME the receiver, so a LET-BOUND receiver's scope-exit

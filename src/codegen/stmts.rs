@@ -7465,6 +7465,43 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Bare-identifier map receiver only (`m.get(k)`) — the shape the reader
     /// bindings take; a field/index-rooted map get keeps the conservative
     /// receive-inc (never the over-retain, at worst a status-quo alias).
+    /// True when `object` is `<map>.get(k)` (bare-identifier map receiver) on a
+    /// Map/SortedMap whose VALUE is a NON-shared heap type (`Vec`/`String`) —
+    /// the receiver form of [`Self::is_nonshared_heap_value_map_get_unwrap`].
+    /// `map.get(k)` packs a BORROW of the bucket's `{ptr,len,cap}`, so the
+    /// unwrapped value ALIASES the map's stored buffer; used inline (a println
+    /// arg, a method receiver) the temporary's own `cap > 0` free-guard would
+    /// free that buffer, which the map's scope-exit per-entry drop ALSO frees →
+    /// double-free (B-2026-07-15-26). The unwrap lowering zeroes the borrow
+    /// view's `cap` so every consumer's free-guard skips it, leaving the map the
+    /// sole owner (reads use ptr+len, unaffected).
+    pub(super) fn unwrap_receiver_is_nonshared_heap_value_map_get(&self, object: &Expr) -> bool {
+        let ExprKind::MethodCall {
+            method,
+            object: map_recv,
+            ..
+        } = &object.kind
+        else {
+            return false;
+        };
+        if method != "get" {
+            return false;
+        }
+        let ExprKind::Identifier(map_var) = &map_recv.kind else {
+            return false;
+        };
+        let Some(te) = self.var_elem_type_exprs.get(map_var) else {
+            return false;
+        };
+        let is_shared = matches!(&te.kind,
+            TypeKind::Path(p)
+                if p.segments.last().is_some_and(|s| self.shared_types.contains_key(s.as_str())));
+        if is_shared {
+            return false;
+        }
+        self.is_string_type_expr(te) || self.extract_vec_elem_type(te).is_some()
+    }
+
     fn unwrap_receiver_is_shared_value_map_get(&self, object: &Expr) -> bool {
         let ExprKind::MethodCall {
             method,
