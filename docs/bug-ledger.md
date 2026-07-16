@@ -95,7 +95,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **490 surfaced 
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-15-21 | 2026-07-15 | codegen (per-node Option[shared] traversal lowering: niche-match + field GEP + recursion) | low | Read-only `Option[shared]` tree traversal runs ~1.45x behind equal-safety Rust (rustc -O -C overflow-checks=on) on a pure per-node walk — the residual is Option[shared] match/field/recursion lowering, NOT refcount traffic (retain/release is already elided; by-value == ref-borrow to the millisecond) | none |
+| B-2026-07-15-21 | 2026-07-15 | codegen (per-node Option[shared] traversal lowering: niche-match + field GEP + recursion) | low | Read-only `Option[shared]` tree traversal ~1.8x behind equal-safety Rust on a pure per-node walk — the residual is per-node REFCOUNT TRAFFIC (the balanced retain/release pair, NOT elided by default) plus Option[shared] match/field lowering. The rc-elision convention (`rc_elide.rs`, `KARAC_RC_ELIDE_REF_PARAMS`) is now DEFAULT-ON and closes ~2/3 of it (17–32% across #100/#104/#111/#112, byte-identical); the Some(n)-binding retain + the tail-call→loop it blocks are the remainder (Part B) | none |
 | B-2026-07-16-4 | 2026-07-16 | cli | med | lljit_prototype::lljit_gdb_registration_listener_registers_dwarf_module fails on macOS (M5 Pro, Darwin 25.5): after installing + materializing a DWARF-carrying module, the process-global __jit_debug_descriptor carries no registered entry ('the listener did not fire'). CI never catches it: the llvm-feature CI jobs run a targeted suite list that excludes lljit_prototype, and the plain `cargo test --all` job compiles without --features llvm. | none |
 
 ### Fixed (484)

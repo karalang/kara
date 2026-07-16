@@ -1207,12 +1207,25 @@ impl<'a> OwnershipChecker<'a> {
             }
         }
 
-        // RC-elision safety set (opt-in). Only walk the program when the flag
-        // is set — otherwise the field stays empty and codegen elides nothing.
-        let elidable_ref_params = if std::env::var_os("KARAC_RC_ELIDE_REF_PARAMS").is_some() {
-            crate::rc_elide::safe_elidable_ref_params(self.program, &self.param_modes)
-        } else {
+        // RC-elision safety set. **Default ON** (B-2026-07-15-21): eliding the
+        // balanced retain/release pair on a provably read-only, non-escaping
+        // `ref`-classified `shared`/`Option[shared]` param is a 17–32% win on
+        // read-only tree walks (#100/#104/#111/#112) with byte-identical output,
+        // sound by construction (`rc_elide.rs`'s four conditions + the condition-4
+        // payload-escape guard). Validated flag-on == flag-off on the full
+        // `memory_sanitizer` LSan gate and the codegen E2E suite. Opt OUT with
+        // `KARAC_RC_ELIDE_REF_PARAMS=0` (also `off`/`false`) — the escape hatch if
+        // the whole-program analysis ever misfires.
+        let elide_off = std::env::var("KARAC_RC_ELIDE_REF_PARAMS")
+            .map(|v| {
+                let v = v.trim();
+                v == "0" || v.eq_ignore_ascii_case("off") || v.eq_ignore_ascii_case("false")
+            })
+            .unwrap_or(false);
+        let elidable_ref_params = if elide_off {
             HashMap::new()
+        } else {
+            crate::rc_elide::safe_elidable_ref_params(self.program, &self.param_modes)
         };
 
         OwnershipCheckResult {

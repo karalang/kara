@@ -1,4 +1,4 @@
-//! RC-elision safety analysis (env `KARAC_RC_ELIDE_REF_PARAMS`).
+//! RC-elision safety analysis (default ON; opt out `KARAC_RC_ELIDE_REF_PARAMS=0`).
 //!
 //! The ownership pass classifies a parameter that is only read as
 //! [`OwnershipMode::Ref`] — a borrow. For a `shared` / `Option[shared]` such

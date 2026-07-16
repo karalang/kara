@@ -2922,7 +2922,7 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_function`) and the call-site arg-inc skip (by position,
     /// in the direct-call arg loop) — both gated on `headerless_types`.
     pub(crate) borrowed_param_skips: HashMap<String, Vec<(String, usize, String)>>,
-    /// RC-elide-ref (env `KARAC_RC_ELIDE_REF_PARAMS`, default OFF): per-fn
+    /// RC-elide-ref (env `KARAC_RC_ELIDE_REF_PARAMS`, default ON; opt out `=0`): per-fn
     /// `(param name, position)` of every `ref`-mode `shared`/`Option[shared]`
     /// parameter proven **sound to RC-elide** by
     /// [`crate::rc_elide::safe_elidable_ref_params`] — a private, directly-called

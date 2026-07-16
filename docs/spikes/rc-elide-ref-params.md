@@ -1,10 +1,12 @@
 # RC-elision for read-only borrow parameters (`KARAC_RC_ELIDE_REF_PARAMS`)
 
-**Status:** landed **gated OFF** (env opt-in). Full macOS suite + full Linux
-LSan verified: **flag-on is byte-for-byte the same pass/fail as flag-off** on the
-whole `memory_sanitizer` corpus (no new leak / UAF / double-free). The default-ON
-flip is the owner's call — same pattern as the headerless reshaper
-(`KARAC_HEADERLESS_RESHAPER`). See "Flip criteria" and "Known residual".
+**Status:** landed **default ON** (B-2026-07-15-21; opt OUT with
+`KARAC_RC_ELIDE_REF_PARAMS=0`). Full macOS suite + full Linux LSan verified:
+**elide-on is byte-for-byte the same pass/fail as elide-off** on the whole
+`memory_sanitizer` corpus (no new leak / UAF / double-free), re-confirmed at
+current HEAD (`memory_sanitizer` 736/0/1 + codegen E2E 2400/0 on the default
+path). All four flip criteria met — see "Flip criteria". The escape hatch
+(`=0`) mirrors the headerless reshaper's `KARAC_HEADERLESS_RESHAPER`.
 
 ## The gap
 
@@ -140,14 +142,26 @@ one hole conditions 1–3 left open. Investigating it produced two findings:
    soundness no longer couples to codegen behavior. `src/rc_elide.rs` unit tests
    assert both directions.
 
-## Flip criteria (default-ON)
+## Flip criteria (default-ON) — **all met, flipped B-2026-07-15-21**
 
 1. ~~Close the known residual (callee-consume-aware check).~~ **Done** —
    condition 4 (`payloads_never_move_out`), unit-tested + LSan-verified.
-2. A corpus-wide re-bench confirming the win generalizes with no compile-time
-   regression from the whole-program analysis.
-3. CI `memory-sanitizer` green with the flag forced on (would make the
-   `asan_rc_elide_*` pins load-bearing on every change).
-4. Affirm the design shift: codegen consuming a `param_modes`-derived hint widens
-   the current "modes are a checking aid, not a codegen input" scoping
-   (CLAUDE.md, Architecture). Sound and contained here, but a direction to own.
+2. ~~A corpus-wide re-bench confirming the win generalizes with no compile-time
+   regression from the whole-program analysis.~~ **Done** — read-only tree walks
+   #100 / #104 / #111 / #112 each land **1.20–1.32×** faster (17–32%) with
+   byte-identical output; #110 (`is_balanced`, a height-returning helper) is
+   correctly excluded — no win, no regression. Whole-program analysis adds no
+   measurable compile time (−6 ms on #112, within noise).
+3. ~~CI `memory-sanitizer` green with the flag forced on.~~ **Done by the flip** —
+   with default-ON the suite runs the elision path with **no** env var, so the
+   `asan_rc_elide_*` pins (and every read-only-walk program) are load-bearing on
+   every change. Re-confirmed at HEAD: `memory_sanitizer` 736/0/1, codegen E2E
+   2400/0, par_codegen 173/0, lib 1025/0 — all on the default path.
+4. **Design shift affirmed.** Codegen now consumes one `param_modes`-derived
+   plain-data hint (`elidable_ref_params`), a deliberate, contained widening of
+   the "modes are a checking aid, not a codegen input" scoping (CLAUDE.md,
+   Architecture). The hint is computed in `ownership.rs` (outside codegen) and
+   reaches codegen as data through the existing `borrowed_arg_skip` /
+   `borrowed_param_dec_skip` channel — no `inkwell`/LLVM type crosses the
+   boundary, so the codegen-containment invariant holds. CLAUDE.md's Ownership
+   bullet is updated to name this one hint.
