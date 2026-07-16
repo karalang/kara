@@ -18,13 +18,21 @@
 //!    Every call must pass the param a *projection of a named binding* —
 //!    `n.left`, `v[i]`, `t.0`, `self.head` — which READS a sub-value out of a
 //!    container the caller still holds (a genuine borrow; the container keeps it
-//!    alive and drops it at the caller's own scope exit). A **bare** identifier
-//!    (`eat(d)`) is rejected: passing a whole binding by value is a *move* that
-//!    transfers its `+1` to the callee, whose exit dec is then load-bearing. A
-//!    *fresh rvalue* (`Some(x)`, a call return) is rejected for the same reason.
-//!    The function must also be **directly called** at least once (arg shapes
-//!    fully observed), never used as a **value** (indirect calls invisible), and
-//!    not **`pub`** (external callers invisible).
+//!    alive and drops it at the caller's own scope exit) — **or** a *bare
+//!    identifier naming a `Ref`-mode parameter of the enclosing function* (a
+//!    **borrow-forward**: `is_balanced(root)` calling `check(root)` where `root`
+//!    is `Ref`). A `Ref` param's referent is, by definition, kept alive by the
+//!    enclosing frame for the whole call, so forwarding it is a genuine borrow
+//!    regardless of whether the enclosing function itself elides — the same
+//!    outlives-the-call guarantee a projection gives. A **bare** identifier
+//!    naming an *owned local* (`let d = take(); eat(d)`) is still rejected: that
+//!    is a *move* transferring `d`'s `+1` to the callee, whose exit dec is then
+//!    load-bearing. A *fresh rvalue* (`Some(x)`, a call return) is rejected for
+//!    the same reason. The borrow-forward relaxation is disabled inside closures
+//!    (a captured borrow could outlive the call — fail-closed). The function must
+//!    also be **directly called** at least once (arg shapes fully observed),
+//!    never used as a **value** (indirect calls invisible), and not **`pub`**
+//!    (external callers invisible).
 //!
 //! 2. **Callee side — the callee only borrows the param (never moves its
 //!    resource out).** `OwnershipMode::Ref` is NOT enough: the ownership pass
@@ -151,6 +159,16 @@ struct Scan<'a> {
     /// Function names used as a *value* (not a direct callee) — call sites not
     /// all visible, so no param may elide.
     escaped: HashSet<String>,
+    /// The `Ref`-mode (read-only borrow) parameters of the function whose body
+    /// is currently being walked. A bare-identifier argument naming one of these
+    /// is a **borrow-forward**, not a move: a `Ref` param's referent is kept
+    /// alive by the enclosing frame for the whole call (that is what borrow
+    /// means), so handing it to a callee that borrows it can never observe
+    /// refcount 0 mid-call — sound to treat as an un-retained borrow, exactly
+    /// like a projection. Set per-body by the driver; cleared inside closures
+    /// (a captured borrow could outlive the call), so the relaxation is
+    /// fail-closed there.
+    cur_ref_params: HashSet<String>,
 }
 
 impl Scan<'_> {
@@ -196,7 +214,9 @@ impl Scan<'_> {
                     ExprKind::Identifier(name) if self.fn_names.contains(name.as_str()) => {
                         self.called.insert(name.clone());
                         for (i, arg) in args.iter().enumerate() {
-                            if !is_borrow_projection(&arg.value) {
+                            if !is_borrow_projection(&arg.value)
+                                && !self.is_ref_param_forward(&arg.value)
+                            {
                                 self.unsafe_pos.entry(name.clone()).or_default().insert(i);
                             }
                         }
@@ -216,11 +236,26 @@ impl Scan<'_> {
                     self.escaped.insert(name.clone());
                 }
             }
+            ExprKind::Closure { body, .. } => {
+                // A captured `Ref` param could be forwarded from a closure that
+                // outlives the borrow, so the borrow-forward relaxation is unsafe
+                // here: clear the ref-param set while walking the closure body
+                // (fail-closed — a bare-identifier arg inside reverts to a move).
+                let saved = std::mem::take(&mut self.cur_ref_params);
+                self.walk_expr(body);
+                self.cur_ref_params = saved;
+            }
             other => {
                 let mut recur = |e: &Expr| self.walk_expr(e);
                 walk_children(other, &mut recur);
             }
         }
+    }
+
+    /// `true` if `expr` is a bare identifier naming a `Ref`-mode parameter of the
+    /// function currently being walked — a borrow-forward (see `cur_ref_params`).
+    fn is_ref_param_forward(&self, expr: &Expr) -> bool {
+        matches!(&expr.kind, ExprKind::Identifier(n) if self.cur_ref_params.contains(n.as_str()))
     }
 }
 
@@ -773,12 +808,30 @@ pub fn safe_elidable_ref_params(
 ) -> HashMap<String, Vec<(String, usize)>> {
     let fn_names: HashSet<&str> = param_modes.keys().map(|s| s.as_str()).collect();
 
-    // Condition 1 — caller-side scan over EVERY function/method body.
+    // Per-function `Ref`-mode (read-only borrow) parameter names — the set a
+    // bare-identifier argument may forward as a borrow (condition-1 relaxation).
+    let ref_params_of = |fname: &str| -> HashSet<String> {
+        param_modes
+            .get(fname)
+            .map(|ms| {
+                ms.iter()
+                    .filter(|(_, m)| matches!(m, OwnershipMode::Ref))
+                    .map(|(n, _)| n.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    // Condition 1 — caller-side scan over EVERY function/method body. Before each
+    // body, `cur_ref_params` is set to that function's `Ref` params so a
+    // borrow-forward (`helper(root)` where `root` is a `Ref` param) is not
+    // mis-scored as a move.
     let mut scan = Scan {
         fn_names: &fn_names,
         called: HashSet::new(),
         unsafe_pos: HashMap::new(),
         escaped: HashSet::new(),
+        cur_ref_params: HashSet::new(),
     };
     // Free functions the ownership pass knows about, by name (only these are
     // directly-called elision candidates; methods are excluded via `called`).
@@ -786,12 +839,17 @@ pub fn safe_elidable_ref_params(
     for item in &program.items {
         match item {
             Item::Function(f) => {
+                scan.cur_ref_params = ref_params_of(&f.name);
                 scan.walk_block(&f.body);
                 free_fns.insert(f.name.as_str(), f);
             }
             Item::ImplBlock(b) => {
                 for inner in &b.items {
                     if let ImplItem::Method(m) = inner {
+                        // Methods aren't keyed in `param_modes` by a bare name, so
+                        // fall back to the empty set (conservative — no forward
+                        // relaxation from a method body).
+                        scan.cur_ref_params = ref_params_of(&m.name);
                         scan.walk_block(&m.body);
                     }
                 }
@@ -800,6 +858,7 @@ pub fn safe_elidable_ref_params(
                 for inner in &t.items {
                     if let TraitItem::Method(m) = inner {
                         if let Some(body) = &m.body {
+                            scan.cur_ref_params = ref_params_of(&m.name);
                             scan.walk_block(body);
                         }
                     }
@@ -913,6 +972,53 @@ fn caller(pool: Vec[Option[Node]]) -> bool {{ is_symmetric(pool[0i64]) }}
             out.get("is_symmetric"),
             Some(&vec![("root".to_string(), 0)]),
             "is_symmetric's projection-only param must stay elidable"
+        );
+    }
+
+    /// Borrow-forward relaxation (#110): a thin wrapper `is_balanced(root)` that
+    /// forwards its **`Ref`** param `root` by bare identifier to the recursive
+    /// helper `check` is a *borrow*, not a move (a `Ref` param's referent is kept
+    /// alive by the caller for the whole call), so `check`'s `node` stays
+    /// elidable despite the bare-identifier call site.
+    #[test]
+    fn borrow_forward_of_ref_param_keeps_helper_elidable() {
+        let src = format!(
+            "{NODE}\
+fn check(node: Option[Node]) -> i64 {{ match node {{ None => 0i64, Some(n) => {{ let l = check(n.left); let r = check(n.right); if l > r {{ 1i64 + l }} else {{ 1i64 + r }} }} }} }}
+fn is_balanced(root: Option[Node]) -> bool {{ check(root) != -1i64 }}
+fn caller(pool: Vec[Option[Node]]) -> bool {{ is_balanced(pool[0i64]) }}
+"
+        );
+        let out = elidable(
+            &src,
+            &[
+                ("check", &[("node", OwnershipMode::Ref)]),
+                ("is_balanced", &[("root", OwnershipMode::Ref)]),
+            ],
+        );
+        assert_eq!(
+            out.get("check"),
+            Some(&vec![("node".to_string(), 0)]),
+            "check's node must stay elidable — is_balanced forwards a Ref param (a borrow), not a move"
+        );
+    }
+
+    /// Negative control: a bare **local** (owned) binding passed by identifier is
+    /// a genuine MOVE, not a borrow-forward — the helper must NOT elide (its exit
+    /// dec is load-bearing). Only `Ref` *params* qualify for the relaxation.
+    #[test]
+    fn bare_local_forward_still_excludes_helper() {
+        let src = format!(
+            "{NODE}\
+fn walk(node: Option[Node]) -> i64 {{ match node {{ None => 0i64, Some(n) => walk(n.left) + walk(n.right) }} }}
+fn driver() -> i64 {{ let local = Some(Node {{ val: 1i64, left: None, right: None }}); walk(local) }}
+"
+        );
+        let out = elidable(&src, &[("walk", &[("node", OwnershipMode::Ref)])]);
+        assert_eq!(
+            out.get("walk"),
+            None,
+            "walk must NOT elide — walk(local) forwards an owned local, a move, not a borrow"
         );
     }
 

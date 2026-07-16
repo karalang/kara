@@ -26799,6 +26799,52 @@ fn main() {
     }
 
     #[test]
+    fn asan_rc_elide_borrow_forward_ref_param_no_leak() {
+        // B-2026-07-15-21 Part C — the condition-1 borrow-forward relaxation: a
+        // thin wrapper `is_balanced(root)` forwards its `Ref` param `root` by
+        // bare identifier to the recursive helper `check`. That forward is a
+        // borrow (a `Ref` param's referent is kept alive by the enclosing frame
+        // for the whole call), so `check`'s `node` elides its per-node RC. Must
+        // be leak- AND UAF-clean: eliding `check`'s retain/release while the
+        // wrapper's `root` (and up-chain `pool`) keep the tree alive. Balanced
+        // tree → true, right-chain → unbalanced → false; 200 reps → 100.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn check(node: Option[Node]) -> i64 {
+    match node {
+        None => 0i64,
+        Some(n) => {
+            let lh = check(n.left);
+            if lh == -1i64 { return -1i64; }
+            let rh = check(n.right);
+            if rh == -1i64 { return -1i64; }
+            let d = lh - rh;
+            let ad = if d < 0i64 { -d } else { d };
+            if ad > 1i64 { return -1i64; }
+            if lh > rh { 1i64 + lh } else { 1i64 + rh }
+        }
+    }
+}
+fn is_balanced(root: Option[Node]) -> bool { check(root) != -1i64 }
+fn main() {
+    let bal = Some(Node { val: 4i64, left: Some(Node { val: 2i64, left: Some(Node{val:1i64,left:None,right:None}), right: Some(Node{val:3i64,left:None,right:None}) }), right: Some(Node { val: 6i64, left: Some(Node{val:5i64,left:None,right:None}), right: Some(Node{val:7i64,left:None,right:None}) }) });
+    let unb = Some(Node { val: 1i64, left: None, right: Some(Node { val: 2i64, left: None, right: Some(Node{val:3i64,left:None,right:None}) }) });
+    let mut pool: Vec[Option[Node]] = Vec.new();
+    pool.push(bal);
+    pool.push(unb);
+    let mut t = 0i64;
+    let mut rep = 0i64;
+    while rep < 200i64 { let idx = rep % 2i64; if is_balanced(pool[idx]) { t = t + 1i64; } rep = rep + 1i64; }
+    println(f"{t}")
+}
+"#,
+            &["100"],
+            "rc_elide_borrow_forward_ref_param_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_map_get_unwrap_heap_value_no_double_free() {
         // B-2026-07-14-15: `let r = m.get(k).unwrap()` on a Map whose VALUE is a
         // NON-shared heap type (`Vec`/`String`) double-freed — `map.get` returns

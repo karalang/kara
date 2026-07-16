@@ -201,10 +201,34 @@ the last recursion is in tail position get TCO and ~double — #100 `is_same`
 (`and`) **2.20×**, #112 `has_path_sum` (`or`) **1.90×**. The **combine-both**
 shapes (`1 + max(l,r)` / `min`) can't tail-call but still shed the Some-binding
 RC — #111 `min_depth` **1.37×**, #104 `max_depth` **1.31×**. #110 `is_balanced`
-(height-returning helper) stays correctly excluded (1.00×). The lone residual vs
-C is the per-node overflow-check `jo` kāra emits by default and C omits — the
-deliberate equal-safety tax, leaving kāra at parity with `rustc -O -C
-overflow-checks=on`.
+was excluded at Part B (folded in by Part C below). The lone residual vs C is the
+per-node overflow-check `jo` kāra emits by default and C omits — the deliberate
+equal-safety tax, leaving kāra at parity with `rustc -O -C overflow-checks=on`.
+
+## Part C — borrow-forward relaxation of condition 1
+
+Part B left one traversal shape excluded: a thin wrapper that delegates to a
+recursive helper — `fn is_balanced(root) -> bool { check(root) != -1 }` (#110).
+`check` passes conditions 2–4, but condition 1 rejected it: the wrapper calls
+`check(root)` with a **bare identifier**, which the original rule scored as a
+move. It isn't — `root` is a `Ref`-mode param, so its referent is kept alive by
+the enclosing frame (or an ancestor) for the whole call. Condition 1 now accepts
+a **borrow-forward**: a bare identifier naming a `Ref`-mode parameter of the
+function being walked, alongside the existing projection form. The soundness is
+the same outlives-the-call guarantee a projection gives, and does *not* require
+the enclosing function to elide anything — a non-elided `is_balanced` still holds
+`root`'s `+1` across its whole body, covering the `check(root)` call. The
+relaxation is disabled inside closures (a captured borrow could outlive the call
+— fail-closed), and a bare **owned local** (`let d = …; eat(d)`) is still a move,
+still rejected (unit-tested both directions in `rc_elide.rs`).
+
+Result: `check` now elides (`{"check": [("node", 0)]}`), and #110 goes from the
+sweep's holdout to **1.67× faster** (elide-off 0.597 s → 0.357 s; `check` carries
+zero rc ops per node — no TCO, since `1 + max(l,r)` combines both child results).
+Validated on the default path: `memory_sanitizer` 738/0/1, codegen E2E 2400/0,
+par_codegen 173/0, rc_elide unit tests 7/0; #110 byte-identical across
+interp/JIT/AOT/auto-par/`=0` + valgrind-clean. Pinned by
+`asan_rc_elide_borrow_forward_ref_param_no_leak`.
 
 Soundness rests on the identical condition-4 proof as Part A (the payload is a
 non-escaping alias of the caller-kept-alive param), re-validated on the default
