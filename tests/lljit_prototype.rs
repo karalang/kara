@@ -589,6 +589,44 @@ extern "C" {
     static __jit_debug_descriptor: JitDescriptor;
 }
 
+/// Resolve the GDB JIT descriptor from the SAME image that hosts LLVM — the
+/// copy `GDBJITRegistrationListener` actually writes into.
+///
+/// B-2026-07-16-4: the link-time `extern` binding above went green-then-red
+/// on macOS with no repo change — after a toolchain update the process ended
+/// up with more than one copy of the GDB JIT interface globals, the extern
+/// bound to a copy the listener never touches, and the assertion below read
+/// `first_entry == null` while the registration had in fact fired (into the
+/// dylib-hosted LLVM's own descriptor — the copy an attached gdb reads too).
+/// So: locate an exported LLVM entry point at runtime, ask `dladdr` which
+/// image hosts it, and read `__jit_debug_descriptor` from THAT image. When
+/// LLVM is statically linked (Linux CI, the default dev setup) the
+/// `RTLD_DEFAULT` probe finds nothing — Rust test binaries don't export LLVM
+/// symbols — and we fall back to the link-time extern, which in that
+/// configuration IS the single unified copy (identical behavior to before).
+unsafe fn llvm_hosted_descriptor() -> *const JitDescriptor {
+    #[cfg(unix)]
+    {
+        let probe = libc::dlsym(libc::RTLD_DEFAULT, c"LLVMContextCreate".as_ptr());
+        if !probe.is_null() {
+            let mut info: libc::Dl_info = std::mem::zeroed();
+            if libc::dladdr(probe, &mut info) != 0 && !info.dli_fname.is_null() {
+                let handle = libc::dlopen(info.dli_fname, libc::RTLD_LAZY | libc::RTLD_NOLOAD);
+                if !handle.is_null() {
+                    let sym = libc::dlsym(handle, c"__jit_debug_descriptor".as_ptr());
+                    // Release the NOLOAD refcount — the image stays loaded
+                    // (it hosts live LLVM state for the running engines).
+                    libc::dlclose(handle);
+                    if !sym.is_null() {
+                        return sym.cast();
+                    }
+                }
+            }
+        }
+    }
+    std::ptr::addr_of!(__jit_debug_descriptor)
+}
+
 /// Slice 3 bonus — the GDB JIT-registration listener is wired and fires.
 ///
 /// Installing + materializing a DWARF-carrying module must leave the process
@@ -611,10 +649,8 @@ fn lljit_gdb_registration_listener_registers_dwarf_module() {
     assert_eq!(unsafe { main_fn() }, 0);
 
     let (version, first_entry) = unsafe {
-        (
-            __jit_debug_descriptor.version,
-            __jit_debug_descriptor.first_entry,
-        )
+        let desc = llvm_hosted_descriptor();
+        ((*desc).version, (*desc).first_entry)
     };
     assert_eq!(
         version, 1,

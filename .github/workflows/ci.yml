@@ -285,7 +285,13 @@ jobs:
           cargo rustc -p karac-runtime --release --crate-type staticlib
 
       - name: Codegen E2E + interpreter + typechecker + self-host oracle
-        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer
+        # lljit_prototype added B-2026-07-16-4: no CI job ran it (this list
+        # excluded it; the plain `cargo test --all` job builds without
+        # --features llvm), so the GDB JIT-registration smoke test only ever
+        # ran on dev machines — where a Darwin toolchain drift silently broke
+        # it. Linux static-LLVM is the authoritative leg for the descriptor
+        # observation; keep it enforced here.
+        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype
 
       # AArch64 `#[repr(C)]` struct-by-value ABI signature match (B-2026-07-09-2).
       # Forces the arm64 target-ABI classifier via KARAC_FORCE_TARGET_ARCH and
