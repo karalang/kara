@@ -26692,6 +26692,56 @@ fn main() {
     }
 
     #[test]
+    fn asan_rc_elide_some_binding_or_recursion_walk_no_leak() {
+        // B-2026-07-15-21 Part B — the Some(n)-binding acquire/RcDec is ALSO
+        // elided (not just the param + child-arg retains) when the scrutinee is
+        // an elidable param, so a read-only OR-recursion walk carries ZERO rc
+        // ops per node and the tail recursion loop-ifies. `has_path_sum` is the
+        // canonical shape: bool-returning, `node` used only as a `match`
+        // scrutinee, payload read only via projections (`n.val`, `n.left`,
+        // `n.right`) into `ref`/borrowed positions. Must be leak- AND
+        // UAF-clean: a 5-node tree, has_path_sum 200x (100 achievable target 7
+        // → true, 100 unachievable target 6 → false) → prints 100. If the
+        // Some-binding elision were unsound the shared nodes would double-free
+        // (release without acquire) or leak (acquire without release) here.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut left: Option[Node], mut right: Option[Node] }
+fn has_path_sum(node: Option[Node], target: i64) -> bool {
+    match node {
+        None => false,
+        Some(n) => {
+            let rem = target - n.val;
+            let ln = match n.left { None => true, Some(_) => false };
+            let rn = match n.right { None => true, Some(_) => false };
+            if ln and rn { rem == 0i64 }
+            else { has_path_sum(n.left, rem) or has_path_sum(n.right, rem) }
+        }
+    }
+}
+fn main() {
+    let l = Some(Node { val: 2i64, left: Some(Node { val: 4i64, left: None, right: None }), right: Some(Node { val: 5i64, left: None, right: None }) });
+    let r = Some(Node { val: 3i64, left: None, right: None });
+    let root = Some(Node { val: 1i64, left: l, right: r });
+    let mut pool: Vec[Option[Node]] = Vec.new();
+    pool.push(root);
+    let mut t = 0i64;
+    let mut rep = 0i64;
+    while rep < 200i64 {
+        let tgt = if (rep % 2i64) == 0i64 { 7i64 } else { 6i64 };
+        let hit = has_path_sum(pool[0i64], tgt);
+        t = t + (if hit { 1i64 } else { 0i64 });
+        rep = rep + 1i64;
+    }
+    println(f"{t}")
+}
+"#,
+            &["100"],
+            "rc_elide_some_binding_or_recursion_walk_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_map_get_unwrap_heap_value_no_double_free() {
         // B-2026-07-14-15: `let r = m.get(k).unwrap()` on a Map whose VALUE is a
         // NON-shared heap type (`Vec`/`String`) double-freed — `map.get` returns

@@ -195,7 +195,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         // headerless, so the role check alone covers most
                         // of it; the explicit layout check keeps the two
                         // gates independent.
-                        if !self.b2_skips_counts(name) && !self.headerless_here(&type_name) {
+                        // Third gate (B-2026-07-15-21 Part B): the scrutinee is
+                        // an RC-elidable borrowed param — its payload is a
+                        // proven-non-escaping alias kept alive by the caller for
+                        // the whole call, so this acquire + its scope-exit RcDec
+                        // are a balanced no-op. Skipping the pair also clears the
+                        // post-call release epilogue, unblocking tailcallelim.
+                        if !self.b2_skips_counts(name)
+                            && !self.headerless_here(&type_name)
+                            && !self.pattern_binding_scrutinee_is_elidable_param
+                        {
                             let ptr_v = ptr_val.into_pointer_value();
                             self.emit_refcount_inc(name, info.heap_type, ptr_v);
                             self.track_rc_var(name, alloca, info.heap_type);

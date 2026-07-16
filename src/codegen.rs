@@ -2251,6 +2251,16 @@ pub(super) struct Codegen<'ctx> {
     /// aliases the container's storage and the container's own cleanup
     /// already covers the buffer.
     pub(crate) pattern_binding_is_borrow: bool,
+    /// Set by `compile_match` (B-2026-07-15-21 Part B) when the scrutinee is a
+    /// bare identifier naming a param already in `rc_elide_ref_params` — i.e. a
+    /// read-only, non-escaping borrowed `shared`/`Option[shared]` param whose
+    /// payload `rc_elide.rs`'s condition 4 has proven projection-only. Read by
+    /// `bind_pattern_values` to skip the Some-binding acquire + its scope-exit
+    /// `RcDec` (the payload aliases the param, kept alive by the caller for the
+    /// whole call, so the retain/release is a balanced no-op). Eliding it also
+    /// removes the post-call release epilogue, letting LLVM's tailcallelim turn
+    /// the tail recursion into a loop (the C/Rust structure).
+    pub(crate) pattern_binding_scrutinee_is_elidable_param: bool,
     /// B-2026-07-10-4 — when set, the deep-copy field walker
     /// (`deep_copy_one_aggregate_field` / `deep_copy_vec_aggregate_elements_in_place`)
     /// additionally rc-INCs a bare `shared` handle it would otherwise leave shallow:
@@ -6238,6 +6248,7 @@ impl<'ctx> Codegen<'ctx> {
             compiling_ref_return_let_rhs: false,
             suppress_shadow_metadata_purge: false,
             pattern_binding_is_borrow: false,
+            pattern_binding_scrutinee_is_elidable_param: false,
             deep_copy_rc_inc_bare_shared: false,
             pattern_binding_scrutinee_is_option_result: false,
             pattern_binding_scrutinee_optres_area: 0,

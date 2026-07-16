@@ -188,6 +188,14 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.scrutinee_is_borrowed_binding(scrutinee)
             || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms)
             || self.scrutinee_is_readonly_owned_agg_loop_var(scrutinee, arms);
+        // B-2026-07-15-21 Part B — scrutinee is an RC-elidable borrowed param:
+        // skip the Some-binding acquire + its scope-exit RcDec (payload is a
+        // proven-non-escaping alias of the caller-kept-alive param), which also
+        // clears the post-call release epilogue so tailcallelim can loop-ify the
+        // tail recursion.
+        let saved_elidable_param_flag = self.pattern_binding_scrutinee_is_elidable_param;
+        self.pattern_binding_scrutinee_is_elidable_param =
+            self.scrutinee_is_elidable_param(scrutinee);
         // B-2026-06-13-13 residual A: when the scrutinee is the type-erased
         // `Option`/`Result`, its payload is owned by the dedicated inline/boxed
         // cleanup, not a per-field `EnumDrop` — so the pattern-binding struct
@@ -609,6 +617,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         self.pattern_binding_is_borrow = saved_borrow_flag;
+        self.pattern_binding_scrutinee_is_elidable_param = saved_elidable_param_flag;
         self.pattern_binding_scrutinee_is_option_result = saved_opt_res_flag;
         self.pattern_binding_scrutinee_optres_area = saved_optres_area;
         self.pattern_binding_scrutinee_is_shared_enum = saved_shared_enum_flag;
@@ -965,6 +974,23 @@ impl<'ctx> super::Codegen<'ctx> {
         self.ref_params.contains_key(name)
             || self.for_loop_borrow_vars.contains(name)
             || self.borrow_accessor_let_payload.contains_key(name)
+    }
+
+    /// True when the scrutinee is a **bare identifier naming a param already in
+    /// `rc_elide_ref_params`** for the current function — a read-only,
+    /// non-escaping borrowed `shared`/`Option[shared]` param (B-2026-07-15-21
+    /// Part B). `rc_elide.rs`'s four conditions (incl. condition 4,
+    /// `payloads_never_move_out`) have proven the param's payload is
+    /// projection-only, so the `Some(n)` binding never escapes and its retain +
+    /// scope-exit `RcDec` are a balanced no-op safe to skip. Bare identifier
+    /// only (a projection like `n.left` is a different, non-param place).
+    pub(super) fn scrutinee_is_elidable_param(&self, scrutinee: &Expr) -> bool {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return false;
+        };
+        self.rc_elide_ref_params
+            .get(&self.current_fn_name)
+            .is_some_and(|recs| recs.iter().any(|(n, _)| n == name))
     }
 
     /// True when the scrutinee is a **field/element read through a borrow**

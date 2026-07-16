@@ -165,3 +165,51 @@ one hole conditions 1–3 left open. Investigating it produced two findings:
    `borrowed_param_dec_skip` channel — no `inkwell`/LLVM type crosses the
    boundary, so the codegen-containment invariant holds. CLAUDE.md's Ownership
    bullet is updated to name this one hint.
+
+## Part B — Some-binding elision unblocks tail-call elimination
+
+Part A (the flip) elides the **param-level and child-argument** retains via the
+`borrowed_arg_skip` / `borrowed_param_dec_skip` channel. One RC pair survives:
+the **`Some(n)`-binding acquire + its scope-exit `RcDec`** (emitted at
+`pattern_binding.rs:198`). It is the same balanced no-op — for an elidable param,
+condition 4 (`payloads_never_move_out`) has already proven the payload `n` is
+projection-only, so it never escapes and is kept alive by the caller-held param
+for the whole call. Part B skips that pair too, gated on a new
+`pattern_binding_scrutinee_is_elidable_param` flag (set in `compile_match` from
+`scrutinee_is_elidable_param`, a bare-identifier-names-an-elidable-param
+classifier modeled on `scrutinee_is_borrowed_binding`).
+
+The payoff is second-order and larger than the RC arithmetic itself: the
+surviving `RcDec` was a **post-call release epilogue**, which kept the tail
+recursion out of tail position. Removing it lets LLVM's `tailcallelim` convert
+the self-recursion into a **loop** — the exact structure C/Rust get (one real
+call for the non-tail child, a loop on the tail child's spine). Verified on the
+#112 `has_path_sum` object code: after Part B the hot function carries **zero rc
+ops** and the right recursion is a `jne` back-edge, not a `call`.
+
+Measured (container, best-of-7 median, `has_path_sum` bench K=6M):
+
+| | wall | vs baseline | vs C |
+|---|---|---|---|
+| baseline (`=0`) | 0.559 s | 1.00× | 2.16× |
+| Part A | 0.453 s | 1.23× | 1.76× |
+| **Part B** | **0.291 s** | **1.92×** | **1.13×** |
+| C clang -O3 | 0.258 s | — | 1.00× |
+
+Corpus generalization (elide-off → Part B): the **short-circuit** shapes where
+the last recursion is in tail position get TCO and ~double — #100 `is_same`
+(`and`) **2.20×**, #112 `has_path_sum` (`or`) **1.90×**. The **combine-both**
+shapes (`1 + max(l,r)` / `min`) can't tail-call but still shed the Some-binding
+RC — #111 `min_depth` **1.37×**, #104 `max_depth` **1.31×**. #110 `is_balanced`
+(height-returning helper) stays correctly excluded (1.00×). The lone residual vs
+C is the per-node overflow-check `jo` kāra emits by default and C omits — the
+deliberate equal-safety tax, leaving kāra at parity with `rustc -O -C
+overflow-checks=on`.
+
+Soundness rests on the identical condition-4 proof as Part A (the payload is a
+non-escaping alias of the caller-kept-alive param), re-validated on the default
+path: full `memory_sanitizer` 736/0/1 (== elide-off), codegen E2E 2400/0,
+par_codegen 173/0, lib 1025/0, clippy clean, #112 byte-identical across
+interp/JIT/AOT/auto-par/`=0` and valgrind-clean. Pinned by
+`asan_rc_elide_some_binding_or_recursion_walk_no_leak` (the `has_path_sum` shape,
+now load-bearing on every build).
