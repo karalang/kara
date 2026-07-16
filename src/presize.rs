@@ -327,18 +327,102 @@ fn body_fills_once(body: &Block, v: &str) -> bool {
     if block_has_early_exit(body) {
         return false;
     }
-    // Fail closed on any body we cannot fully analyze (nested control flow, or
-    // `v` in an un-walked position) — guarantees the body is straight-line, so
-    // every push to `v` is a top-level statement counted below.
-    if count_ident_in_block(body, v).is_none() {
-        return false;
+    // Straight-line case: every mention of `v` is in an analyzable (top-level)
+    // position — `count_ident_in_block` returns `None` on nested control flow —
+    // so the single top-level push is the *only* push (unconditional).
+    if count_ident_in_block(body, v).is_some() {
+        return top_level_push_count(body, v) == 1;
     }
-    // Exactly one (necessarily top-level, hence unconditional) push to `v`.
+    // Balanced-if/else case (B-2026-07-16-17): `v`'s only mention is a single
+    // top-level `if COND { v.push(a) } else { v.push(b) }` whose BOTH arms push
+    // `v` exactly once and whose condition doesn't touch `v`. The net push count
+    // is still one per iteration — the trip-count reservation stays exact — even
+    // though the push is not lexically top-level. This is the DP-base-case shape
+    // (`if j == 0 { row.push(1) } else { row.push(0) }`, #115) the straight-line
+    // check bails on. Strictly narrower than the declined `if c { v.push(x) }`
+    // (no `else`): there the push count is ≤ trip-count, not exact.
+    balanced_if_fills_once(body, v)
+}
+
+/// Count the top-level (unconditional) pushes to `v` in `body` — statements and
+/// the final expression. Callers gate on `count_ident_in_block(..).is_some()`
+/// first, so any push nested in control flow has already forced a bail.
+fn top_level_push_count(body: &Block, v: &str) -> usize {
     body.stmts
         .iter()
         .filter(|s| matches!(&s.kind, StmtKind::Expr(e) if is_push_to(e, v)))
         .count()
-        == 1
+        + body
+            .final_expr
+            .as_ref()
+            .map_or(0, |e| usize::from(is_push_to(e, v)))
+}
+
+/// `v` is mentioned in exactly one top-level statement/final, and that mention
+/// is a balanced `if { v.push(_) } else { v.push(_) }` (see `body_fills_once`).
+fn balanced_if_fills_once(body: &Block, v: &str) -> bool {
+    let mut found = false;
+    let mut mentions = 0usize;
+    for s in &body.stmts {
+        if !stmt_mentions_ident(s, v) {
+            continue;
+        }
+        mentions += 1;
+        match &s.kind {
+            StmtKind::Expr(e) if is_balanced_if_push(e, v) => found = true,
+            _ => return false,
+        }
+    }
+    if let Some(fe) = &body.final_expr {
+        if mentions_ident(fe, v) {
+            mentions += 1;
+            if !is_balanced_if_push(fe, v) {
+                return false;
+            }
+            found = true;
+        }
+    }
+    found && mentions == 1
+}
+
+/// A balanced `if COND { v.push(_) } else { v.push(_) }`: the condition does not
+/// mention `v`, and each arm pushes `v` exactly once (a plain `else { .. }`
+/// block — `else if` chains fail closed).
+fn is_balanced_if_push(e: &Expr, v: &str) -> bool {
+    let ExprKind::If {
+        condition,
+        then_block,
+        else_branch,
+    } = &e.kind
+    else {
+        return false;
+    };
+    if mentions_ident(condition, v) {
+        return false;
+    }
+    if !arm_pushes_v_once(then_block, v) {
+        return false;
+    }
+    match else_branch.as_deref() {
+        Some(Expr {
+            kind: ExprKind::Block(b),
+            ..
+        }) => arm_pushes_v_once(b, v),
+        _ => false,
+    }
+}
+
+/// One arm of a balanced-if: no early exit, `v` only in analyzable positions,
+/// and exactly one push to `v` (reads of `v` — `v[j - 1]` in a cumulative fill —
+/// are fine; a read never changes the length).
+fn arm_pushes_v_once(block: &Block, v: &str) -> bool {
+    if block_has_early_exit(block) {
+        return false;
+    }
+    if count_ident_in_block(block, v).is_none() {
+        return false;
+    }
+    top_level_push_count(block, v) == 1
 }
 
 fn is_push_to(e: &Expr, v: &str) -> bool {
@@ -538,7 +622,24 @@ fn expr_mutates_ident(e: &Expr, name: &str) -> bool {
             start.as_ref().is_some_and(|s| expr_mutates_ident(s, name))
                 || end.as_ref().is_some_and(|e| expr_mutates_ident(e, name))
         }
-        // Unknown nesting (closures, if/match in expr position, …): fail open.
+        // `if`/block in expr position: recurse precisely (the balanced-if fill
+        // body — B-2026-07-16-17 — lives here). A bare `else { .. }` is a
+        // `Block` expr; an `else if` chain is a nested `If`. Recursing keeps the
+        // bound-invariance check exact for these shapes rather than failing open
+        // and needlessly declining the pre-size.
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            expr_mutates_ident(condition, name)
+                || ident_mutated_in_block(then_block, name)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|e| expr_mutates_ident(e, name))
+        }
+        ExprKind::Block(b) => ident_mutated_in_block(b, name),
+        // Unknown nesting (closures, match, loops in expr position, …): fail open.
         _ => true,
     }
 }
@@ -705,8 +806,31 @@ mod tests {
 
     #[test]
     fn no_fire_on_conditional_push() {
-        // Push nested in an `if` — not unconditional, count bails.
+        // Push nested in an `if` with NO else — count ≤ trip-count, not exact.
         let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  let mut i = 0i64;\n  while i < n {\n    if i > 0i64 { v.push(i); }\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "v"));
+    }
+
+    #[test]
+    fn fires_on_balanced_if_else_push() {
+        // B-2026-07-16-17 — the #115 DP-base-case shape: BOTH arms push `v`
+        // exactly once, so the net push count is still the trip count. Must fire.
+        let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  let mut j = 0i64;\n  while j <= n {\n    if j == 0i64 { v.push(1i64); } else { v.push(0i64); }\n    j = j + 1i64;\n  }\n}\n";
+        assert!(fires_for(src, "v"));
+    }
+
+    #[test]
+    fn no_fire_on_unbalanced_if_else() {
+        // One arm pushes twice, the other once — net count is not the trip
+        // count, so the balanced-if path must decline.
+        let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  let mut j = 0i64;\n  while j <= n {\n    if j == 0i64 { v.push(1i64); v.push(2i64); } else { v.push(0i64); }\n    j = j + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "v"));
+    }
+
+    #[test]
+    fn no_fire_on_if_else_one_arm_no_push() {
+        // The else arm doesn't push `v` — count < trip count, decline.
+        let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  let mut j = 0i64;\n  while j <= n {\n    if j == 0i64 { v.push(1i64); } else { }\n    j = j + 1i64;\n  }\n}\n";
         assert!(!fires_for(src, "v"));
     }
 
