@@ -5472,6 +5472,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     if lhs_is_tracked_map && !rhs_is_self_alias {
                         self.eager_free_old_map_var_handle(name);
                     }
+                    // B-2026-07-16-18: struct VARIABLE reassignment (`a = b` where
+                    // `a`, `b` are heap-owning non-shared structs). The Assign arm
+                    // handled Vec/String and Map/Set vars but had NO struct-var case,
+                    // so `a = b` never suppressed the moved source `b`'s StructDrop —
+                    // after the store both slots hold the same field buffers, and at
+                    // scope exit both `a` (now holding b's value) and `b` freed them
+                    // (double-free; JIT aborts immediately, native masks it at -O but
+                    // trips under `karac_par_run`). Suppress the source below.
+                    let lhs_is_tracked_struct = self.var_type_names.get(name.as_str()).is_some_and(
+                        |tn| {
+                            self.struct_types.contains_key(tn.as_str())
+                                && !self.shared_types.contains_key(tn.as_str())
+                        },
+                    );
                     if let Some(slot) = self.variables.get(name).copied() {
                         // Coerce a scalar RHS to the slot's width before
                         // storing — narrow-int arithmetic computes at i64
@@ -5525,6 +5539,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let ExprKind::Identifier(rhs_name) = &value.kind {
                             self.suppress_map_cleanup_for_tail_identifier(rhs_name);
                         }
+                    }
+                    // B-2026-07-16-18: suppress the moved source's StructDrop for a
+                    // struct-var reassignment (`a = b`). `suppress_source_vec_cleanup_for_arg`
+                    // routes a struct Identifier RHS through `zero_struct_move_caps`,
+                    // zeroing `b`'s field caps so its scope-exit StructDrop no-ops;
+                    // the LHS `a`'s own StructDrop stays the unique owner of the
+                    // buffers now in its slot. No-op for a fresh RHS (literal / call)
+                    // or a self-alias.
+                    if lhs_is_tracked_struct && !rhs_is_self_alias {
+                        self.suppress_source_vec_cleanup_for_arg(value);
                     }
                 } else if let ExprKind::FieldAccess { object, field } = &target.kind {
                     // Heap-env closure FIELD reassignment (`r.f = make(j)` /

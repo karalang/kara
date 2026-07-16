@@ -28205,4 +28205,52 @@ fn main() {
             "inline_index_map_get_unwrap_vec_value_no_leak",
         );
     }
+
+    #[test]
+    fn asan_struct_var_reassign_no_double_free() {
+        // B-2026-07-16-18: reassigning a heap-owning STRUCT variable (`a = b`) never
+        // suppressed the moved source `b`'s StructDrop, so both `a` (now holding b's
+        // value) and `b` freed the same field buffers at scope exit — a double-free
+        // (JIT aborts immediately; native masks it at -O but trips under
+        // `karac_par_run`). The Assign arm handled Vec/String and Map/Set vars but had
+        // no struct-var case. Fixed by suppressing the source's StructDrop
+        // (`suppress_source_vec_cleanup_for_arg` → `zero_struct_move_caps`) for a
+        // tracked-struct LHS. Exercises: a loop reassign (each iteration overwrites the
+        // struct — a leak or double-free accumulates), a move-out-then-reassign 3-way
+        // swap (`let tmp = a; a = b; b = tmp`), and a String-field struct. Loops so a
+        // per-iteration strand shows as a large LSan leak.
+        assert_clean_asan_run(
+            r#"
+struct Box { items: Vec[i64] }
+struct Rec { name: String, id: i64 }
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 100 {
+        // loop reassign — the old value must be reclaimed each iteration
+        let mut cur: Box = Box { items: [i] };
+        let next: Box = Box { items: [i, i + 1, i + 2] };
+        cur = next;
+        total = total + cur.items.len();
+        // move-out then reassign 3-way swap
+        let mut a: Box = Box { items: [1, 2, 3] };
+        let mut b: Box = Box { items: [4, 5] };
+        let tmp: Box = a;
+        a = b;
+        b = tmp;
+        total = total + a.items.len() + b.items.len();
+        // String-field struct reassign
+        let mut r: Rec = Rec { name: "first-long-enough-to-heap-alloc", id: 1 };
+        let r2: Rec = Rec { name: "second-replacement-heap-string", id: 2 };
+        r = r2;
+        total = total + r.name.len();
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["3800"],
+            "struct_var_reassign_no_double_free",
+        );
+    }
 }
