@@ -2678,7 +2678,19 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_insert_value(desc_agg, env_ctx_ptr, 6, "d.ctx")
             .unwrap()
             .into_struct_value();
-        let per_iter_const = i64_t.const_int(per_iter_cost_units, false);
+        // Tabulate dispatches are ORDER-FREE — every worker invocation
+        // writes results at global iteration indices and slots stay at
+        // identity — so the runtime may over-decompose the range and let
+        // workers pull chunks dynamically (heterogeneity-aware balancing
+        // on P/E-core hosts). Signaled via bit 63 of the cost field
+        // (KARAC_PAR_ORDER_FREE_FLAG in runtime/src/lib.rs — kept in
+        // lock-step) so the descriptor layout is unchanged.
+        let cost_with_flags = if tabulate_elem_size.is_some() {
+            per_iter_cost_units | (1u64 << 63)
+        } else {
+            per_iter_cost_units
+        };
+        let per_iter_const = i64_t.const_int(cost_with_flags, false);
         desc_agg = self
             .builder
             .build_insert_value(desc_agg, per_iter_const, 7, "d.per_iter_cost")

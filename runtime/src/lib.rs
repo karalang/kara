@@ -1927,6 +1927,17 @@ pub struct KaracReduceDescriptor {
     /// descriptors always set a real estimate (the source-level body's
     /// cost-units walk bottoms at 1, never 0). `u64` per the field-width
     /// note on `iter_total`.
+    /// HIGH BIT (`KARAC_PAR_ORDER_FREE_FLAG`): the dispatch is
+    /// ORDER-FREE — every worker invocation writes results keyed by the
+    /// global iteration index (the tabulate lowering's in-place stores)
+    /// and the slots stay at identity, so the runtime may decompose the
+    /// range into MORE chunks than workers and let workers pull chunks
+    /// dynamically (heterogeneity-aware balancing on P/E-core hosts).
+    /// Encoded in the cost field rather than a new descriptor field so
+    /// the struct layout — and therefore old-archive/new-codegen skew
+    /// behavior — is unchanged; cost readers must mask with
+    /// `!KARAC_PAR_ORDER_FREE_FLAG`. Real cost estimates never reach
+    /// bit 63 (they are small per-iteration unit counts).
     pub per_iter_cost_units: u64,
 }
 
@@ -1945,6 +1956,12 @@ unsafe impl Sync for KaracReduceDescriptor {}
 /// the worker once in the caller's thread.
 #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 const DISPATCH_OVERHEAD_PER_CALL_UNITS_RT: u64 = 10_000;
+
+/// Bit 63 of [`KaracReduceDescriptor::per_iter_cost_units`]: the dispatch
+/// is ORDER-FREE (see the field doc). Kept in lock-step with the codegen
+/// constant of the same name in `src/codegen/reduce.rs` — the descriptor
+/// layout test below pins the field offset; this pins the bit.
+pub const KARAC_PAR_ORDER_FREE_FLAG: u64 = 1 << 63;
 
 // ── Reduction fork-depth cap ───────────────────────────────────────────────
 //
@@ -2124,6 +2141,11 @@ unsafe fn karac_par_reduce_pooled(
     let pool_workers = resolve_pool_workers();
     let n_workers = (pool_workers as u64).min(desc.iter_total).max(1) as usize;
 
+    // Decode the order-free flag out of the cost field (see the field
+    // doc — bit 63, no descriptor-layout change).
+    let order_free = desc.per_iter_cost_units & KARAC_PAR_ORDER_FREE_FLAG != 0;
+    let per_iter_cost = desc.per_iter_cost_units & !KARAC_PAR_ORDER_FREE_FLAG;
+
     // Slice 3b.8 (2026-05-20): runtime-side cost gate. Even when the
     // codegen-time gate let the call through (e.g. variable-K loops
     // bypass `const_eval_iter_count`), the actual K may be too small to
@@ -2132,9 +2154,9 @@ unsafe fn karac_par_reduce_pooled(
     // below `pool_workers * DISPATCH_OVERHEAD_PER_CALL_UNITS_RT`. The
     // `per_iter_cost_units == 0` sentinel (caller didn't estimate)
     // bypasses the gate so behaviour stays at "always dispatch."
-    let total_cost = desc.iter_total.saturating_mul(desc.per_iter_cost_units);
+    let total_cost = desc.iter_total.saturating_mul(per_iter_cost);
     let cost_threshold = (pool_workers as u64).saturating_mul(DISPATCH_OVERHEAD_PER_CALL_UNITS_RT);
-    let gate_skip = desc.per_iter_cost_units != 0 && total_cost < cost_threshold;
+    let gate_skip = per_iter_cost != 0 && total_cost < cost_threshold;
 
     // Single-worker fast path: bypass the slot buffer + spawn machinery
     // and run the worker directly into `out_slot`. The serial combine
@@ -2191,7 +2213,6 @@ unsafe fn karac_par_reduce_pooled(
     // Range math stays in `u64` end-to-end — the per-worker `start`/`end`
     // feed `worker_fn`'s i64-width index parameters directly, no
     // narrowing on wasm32.
-    let chunk = desc.iter_total.div_ceil(n_workers as u64);
     let ctx_addr = desc.ctx as usize;
     let slot_base = slots as usize;
     let worker_fn = desc.worker_fn;
@@ -2207,33 +2228,90 @@ unsafe fn karac_par_reduce_pooled(
         track_frames: false,
     });
 
-    let tasks: Vec<Task> = (0..n_workers)
-        .map(|w| {
-            let start = (w as u64) * chunk;
-            let end = ((w as u64) + 1).saturating_mul(chunk).min(iter_total);
-            let slot_addr = slot_base + w * stride_local;
-            Task {
-                call: Arc::clone(&call),
-                branch_idx: w as u32,
-                run: Box::new(move |cancel: &AtomicBool| unsafe {
-                    // Raise the reduction depth for the duration of this
-                    // worker's body: any nested `karac_par_reduce` reached from
-                    // `worker_fn` (a recursive delta) sees the higher depth and,
-                    // once the cap is hit, runs inline instead of fanning out
-                    // again. Runs on whichever thread executes the task — a pool
-                    // worker, or the caller when it work-helps.
-                    let _depth = ParReduceDepthGuard::enter();
-                    worker_fn(
-                        slot_addr as *mut u8,
-                        start,
-                        end,
-                        ctx_addr as *mut c_void,
-                        cancel as *const AtomicBool,
-                    );
-                }),
-            }
-        })
-        .collect();
+    let tasks: Vec<Task> = if order_free {
+        // ── Heterogeneity-aware dynamic chunking (order-free dispatches
+        // only — today the tabulate lowering, whose output is
+        // index-addressed so chunk completion order is irrelevant and
+        // the per-task slot stays at identity). Equal static chunks on
+        // an asymmetric-core host (6P+12E Apple Silicon) make the join
+        // wait for the slowest E-core chunk; over-decomposing into
+        // `n_workers × KARAC_PAR_CHUNK_FACTOR` (default 8) chunks that
+        // workers PULL from an atomic counter lets fast cores absorb
+        // the surplus — the cheap version of work-stealing, with no
+        // deques and no per-chunk task churn (n_workers tasks total).
+        // A floor of MIN_DYNAMIC_CHUNK iterations per chunk keeps the
+        // pull-loop overhead invisible on small ranges; factor 1 (env)
+        // degenerates to the static split.
+        let factor = std::env::var("KARAC_PAR_CHUNK_FACTOR")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|&f| f >= 1)
+            .unwrap_or(8);
+        const MIN_DYNAMIC_CHUNK: u64 = 1024;
+        let target_chunks = (n_workers as u64).saturating_mul(factor);
+        let chunk = iter_total
+            .div_ceil(target_chunks)
+            .max(MIN_DYNAMIC_CHUNK.min(iter_total));
+        let n_chunks = iter_total.div_ceil(chunk);
+        let next_chunk = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        (0..n_workers)
+            .map(|w| {
+                let slot_addr = slot_base + w * stride_local;
+                let next_chunk = Arc::clone(&next_chunk);
+                Task {
+                    call: Arc::clone(&call),
+                    branch_idx: w as u32,
+                    run: Box::new(move |cancel: &AtomicBool| unsafe {
+                        let _depth = ParReduceDepthGuard::enter();
+                        loop {
+                            let idx = next_chunk.fetch_add(1, Ordering::Relaxed);
+                            if idx >= n_chunks {
+                                break;
+                            }
+                            let start = idx * chunk;
+                            let end = (start + chunk).min(iter_total);
+                            worker_fn(
+                                slot_addr as *mut u8,
+                                start,
+                                end,
+                                ctx_addr as *mut c_void,
+                                cancel as *const AtomicBool,
+                            );
+                        }
+                    }),
+                }
+            })
+            .collect()
+    } else {
+        let chunk = desc.iter_total.div_ceil(n_workers as u64);
+        (0..n_workers)
+            .map(|w| {
+                let start = (w as u64) * chunk;
+                let end = ((w as u64) + 1).saturating_mul(chunk).min(iter_total);
+                let slot_addr = slot_base + w * stride_local;
+                Task {
+                    call: Arc::clone(&call),
+                    branch_idx: w as u32,
+                    run: Box::new(move |cancel: &AtomicBool| unsafe {
+                        // Raise the reduction depth for the duration of this
+                        // worker's body: any nested `karac_par_reduce` reached from
+                        // `worker_fn` (a recursive delta) sees the higher depth and,
+                        // once the cap is hit, runs inline instead of fanning out
+                        // again. Runs on whichever thread executes the task — a pool
+                        // worker, or the caller when it work-helps.
+                        let _depth = ParReduceDepthGuard::enter();
+                        worker_fn(
+                            slot_addr as *mut u8,
+                            start,
+                            end,
+                            ctx_addr as *mut c_void,
+                            cancel as *const AtomicBool,
+                        );
+                    }),
+                }
+            })
+            .collect()
+    };
 
     dispatch_and_wait(&call, tasks);
 
@@ -8952,6 +9030,100 @@ mod tests {
         assert_eq!(offset_of!(KaracReduceDescriptor, combine_fn), 40);
         assert_eq!(offset_of!(KaracReduceDescriptor, ctx), 48);
         assert_eq!(offset_of!(KaracReduceDescriptor, per_iter_cost_units), 56);
+    }
+
+    /// Order-free tabulate-style worker: bumps an atomic per-index
+    /// counter through ctx (chunks are disjoint by contract, but atomics
+    /// keep a chunking BUG from turning into UB instead of a clean
+    /// assertion) and never touches its slot — mirroring the tabulate
+    /// lowering's in-place stores.
+    unsafe extern "C" fn worker_tabulate_count_ctx(
+        _slot: *mut u8,
+        start: u64,
+        end: u64,
+        ctx: *mut c_void,
+        _cancel: *const AtomicBool,
+    ) {
+        let base = ctx as *const std::sync::atomic::AtomicI64;
+        for k in start..end {
+            (*base.add(k as usize)).fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// KARAC_PAR_ORDER_FREE_FLAG (bit 63 of per_iter_cost_units) routes
+    /// the dispatch through the dynamic-chunk pull loop. Every index must
+    /// be covered EXACTLY once (a fencepost in the chunk math would show
+    /// as 0 or 2), and out_slot must stay at the identity (order-free
+    /// workers never publish to slots; the combine chain folds
+    /// identities). The range is large enough to exceed the
+    /// MIN_DYNAMIC_CHUNK floor × workers so multiple chunks per worker
+    /// actually occur; the second case pins the tiny-range degenerate
+    /// (floor collapses it to one chunk).
+    #[test]
+    fn test_par_reduce_order_free_covers_range_exactly_once() {
+        for n in [200_000usize, 10usize] {
+            let buf: Vec<std::sync::atomic::AtomicI64> = (0..n)
+                .map(|_| std::sync::atomic::AtomicI64::new(0))
+                .collect();
+            let desc = KaracReduceDescriptor {
+                iter_total: n as u64,
+                slot_size: std::mem::size_of::<i64>() as u64,
+                slot_align: std::mem::align_of::<i64>() as u64,
+                init_slot: init_i64_zero,
+                worker_fn: worker_tabulate_count_ctx,
+                combine_fn: combine_i64_add,
+                ctx: buf.as_ptr() as *mut c_void,
+                per_iter_cost_units: KARAC_PAR_ORDER_FREE_FLAG,
+            };
+            let mut out: i64 = 0xBEEF;
+            unsafe {
+                karac_par_reduce(&desc, &mut out as *mut i64 as *mut u8, 0);
+            }
+            assert_eq!(out, 0, "slots must stay at identity (n={n})");
+            for (k, v) in buf.iter().enumerate() {
+                assert_eq!(
+                    v.load(Ordering::Relaxed),
+                    1,
+                    "index {k} not covered exactly once (n={n})"
+                );
+            }
+        }
+    }
+
+    /// The flag must not confuse the cost gate: masked cost of 0 is the
+    /// "no estimate" sentinel (always dispatch), and a real cost in the
+    /// low bits still gates. Pin the decode by running a flagged
+    /// dispatch with a huge nominal bit-63 value — if the gate read the
+    /// raw field, total_cost would saturate and gate_skip stay false on
+    /// even a tiny range... which is also the correct outcome; the real
+    /// regression this catches is the DYNAMIC path mis-running when the
+    /// flag is absent: a plain 0-cost dispatch must take the static
+    /// split (observable only via coverage, asserted above, so here we
+    /// simply pin identical results between flagged and unflagged runs).
+    #[test]
+    fn test_par_reduce_order_free_matches_static_result() {
+        let n = 50_000usize;
+        let run = |flags: u64| -> Vec<i64> {
+            let buf: Vec<std::sync::atomic::AtomicI64> = (0..n)
+                .map(|_| std::sync::atomic::AtomicI64::new(0))
+                .collect();
+            let desc = KaracReduceDescriptor {
+                iter_total: n as u64,
+                slot_size: 8,
+                slot_align: 8,
+                init_slot: init_i64_zero,
+                worker_fn: worker_tabulate_count_ctx,
+                combine_fn: combine_i64_add,
+                ctx: buf.as_ptr() as *mut c_void,
+                per_iter_cost_units: flags,
+            };
+            let mut out: i64 = 0;
+            unsafe {
+                karac_par_reduce(&desc, &mut out as *mut i64 as *mut u8, 0);
+            }
+            buf.iter().map(|a| a.load(Ordering::Relaxed)).collect()
+        };
+        assert_eq!(run(KARAC_PAR_ORDER_FREE_FLAG), run(0));
     }
 
     /// 0-iter reduction returns the identity element (init_slot output).
