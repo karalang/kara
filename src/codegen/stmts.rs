@@ -1889,10 +1889,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 else_branch,
                 ..
             } => {
-                let then_c = match &then_block.final_expr {
-                    Some(t) => self.control_flow_owned_option_shared(t)?,
-                    None => return None,
-                };
+                let then_c =
+                    self.control_flow_owned_option_shared(then_block.final_expr.as_ref()?)?;
                 let else_c = self.control_flow_owned_option_shared(else_branch.as_ref()?)?;
                 Some(then_c.or(else_c))
             }
