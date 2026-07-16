@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **500 surfaced · 3 open · 493 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **501 surfaced · 3 open · 494 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -99,9 +99,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **500 surfaced 
 | B-2026-07-16-14 | 2026-07-16 | typechecker (iterator-trait method resolution accepts reduction/collection methods DIRECTLY on a Vec receiver) vs interpreter + codegen (only the `.iter()` adaptor path implements them) | medium | `karac check` accepts iterator-reduction / string-collection methods DIRECTLY on a Vec (`v.sum()`, `v.max()`, `v.min()`, `v.product()`, `v.join(sep)`, `v.concat()`) but no backend implements them — interp reports 'method not found (no dispatch arm)' and codegen reports 'not yet supported' / build-fails. The idiomatic `.iter()` form works (`v.iter().sum()` = 120). This is a check/execution consistency hole: `karac check` (the AI-first wedge — a program that checks clean should run) passes code that traps at runtime on all three surfaces. | none |
 | B-2026-07-16-16 | 2026-07-16 | codegen | high | tests/selfhost_codegen.rs (selfhost_codegen_matches_seed_run) is RED on main: the self-hosted emitter compiles and runs, but executing its emitted IR prints "" where the seed run prints the expected stdout (all corpus entries, starting at fn main(){println(\"hi\")}). The emitted IR text LOOKS structurally plausible (datalayout, @main present) — the divergence is somewhere in the emitted body or the driver's dump path. | none |
 
-### Fixed (493)
+### Fixed (494)
 
-<details><summary>493 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>494 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -598,6 +598,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **500 surfaced 
 | B-2026-07-16-11 | codegen | low | A `Vec` built by `Vec.new()` + a counted `push`-loop reallocs ~log(n) times (growth-doubling) where the trip count is statically derivable — auto-pre… | dae4e309 |
 | B-2026-07-16-12 | ownership (collect_method_param_modes — builtin collection lookup methods have no syntactic signature so their key/value arg fell to the consume default) | medium | FIXED — Builtin collection LOOKUP methods (Map.get/remove/contains_key, Set.contains/remove, Vec.contains, String.contains) consumed their key/value… | 8f32f01 |
 | B-2026-07-16-15 | codegen | high | Seq-tabulate (dae4e309) miscompiled counted push loops whose body ALSO writes the while-loop's control state: `while c < n { out.push(c); if c == 3 {… | b4f86484 |
+| B-2026-07-16-17 | lowering (presize.rs collection pre-sizing): a counted push-loop whose fill is a balanced if/else (both arms push once) was not recognized, so the Vec kept growth-doubling reallocs | low | The loop-bound pre-sizing pass fired only on a STRAIGHT-LINE single push per iteration; a body whose sole fill is a balanced `if COND { v.push(a) } e… | 53f5c09 |
 
 </details>
 
