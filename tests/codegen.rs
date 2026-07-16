@@ -61591,6 +61591,71 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vector_exp_uses_polynomial_not_intrinsic() {
+        // `v.exp()` on an f32 vector is the hand-written Cephes polynomial
+        // (guaranteed SIMD — see compile_vector_exp), NOT `@llvm.exp` (which
+        // scalarizes where libmvec is absent). The IR proves it: the range
+        // reduction emits `@llvm.floor.v4f32` and the `2^n` assembly emits a
+        // `shl <4 x i32>` + bitcast, and there is NO `@llvm.exp` call.
+        let ir = ir_for(
+            r#"
+fn f(a: f32) -> f32 {
+    let v: Vector[f32, 4] = Vector[f32, 4](a, a, a, a);
+    let e = v.exp();
+    e[0]
+}
+fn main() { println(f(1.0f32)); }
+"#,
+        );
+        assert!(
+            ir.contains("@llvm.floor.v4f32")
+                && ir.contains("shl <4 x i32>")
+                && !ir.contains("@llvm.exp"),
+            "f32 v.exp() should be the polynomial (floor + shl, no @llvm.exp); got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_vector_exp_polynomial_accuracy() {
+        // `v.exp()` is the hand-written Cephes expf polynomial (f32, ~1 ULP).
+        // Verify the codegen output against libm across the range to a tight
+        // relative tolerance, and that sigmoid / tanh route through it. NOTE:
+        // this DEVIATES from the interpreter (f64 libm) by more than f32
+        // rounding — the documented approximation — so we assert against the
+        // TRUE math values, not interp parity.
+        let Some(out) = run_program(
+            r#"
+fn main() {
+    let x = Vector[f32, 4].from_array([1.0f32, 2.0f32, -3.0f32, 5.0f32]);
+    let e = x.exp();
+    println(e[0]); println(e[1]); println(e[2]); println(e[3]);
+    let s = x.sigmoid(); println(s[0]);
+    let t = x.tanh(); println(t[0]);
+}
+"#,
+        ) else {
+            return;
+        };
+        let got: Vec<f64> = out.lines().map(|l| l.parse::<f64>().unwrap()).collect();
+        let want = [
+            1.0_f64.exp(),
+            2.0_f64.exp(),
+            (-3.0_f64).exp(),
+            5.0_f64.exp(),
+            1.0 / (1.0 + (-1.0_f64).exp()), // sigmoid(1)
+            1.0_f64.tanh(),
+        ];
+        assert_eq!(got.len(), want.len(), "output line count; got:\n{out}");
+        for (g, w) in got.iter().zip(want.iter()) {
+            let tol = w.abs() * 1e-4 + 1e-6;
+            assert!(
+                (g - w).abs() <= tol,
+                "vector exp/sigmoid/tanh off: got {g}, want {w} (tol {tol})\nfull:\n{out}"
+            );
+        }
+    }
+
+    #[test]
     fn test_ir_vector_floor_uses_vector_intrinsic() {
         // `std.simd.math` rounding (phase-11): `v.floor()` on a `Vector[f32, 4]`
         // lowers to the overloaded LLVM VECTOR intrinsic `@llvm.floor.v4f32`

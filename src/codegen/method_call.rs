@@ -13817,6 +13817,152 @@ impl<'ctx> super::Codegen<'ctx> {
     /// product of the two vectors with `+`. Lanes are read via `extractelement`
     /// and combined with the scalar `compile_binop` (which selects int vs float
     /// automatically); LLVM re-vectorizes the fold where profitable. The
+    /// Vectorized `exp(x)` — the core of `std.simd.math`'s guaranteed-SIMD
+    /// transcendentals (phase-11). For an **f32** vector this is the Cephes
+    /// `expf` algorithm: Cody-Waite range reduction `x = n·ln2 + r` (with the
+    /// `ln2` split into a high + low part so the subtraction keeps full
+    /// precision), a degree-6 minimax polynomial for `exp(r)` on
+    /// `r ∈ [-ln2/2, ln2/2]`, then scale by `2^n` assembled directly into the
+    /// IEEE-754 exponent field (`bitcast((n + 127) << 23)`). Genuinely
+    /// vectorized on every target (no dependence on a target vector-math lib —
+    /// the reason plain `@llvm.exp` scalarizes where libmvec is absent),
+    /// accurate to ~1 ULP. `x` is clamped to `[-88.376, 88.376]` first so the
+    /// exponent assembly can't overflow (larger magnitudes saturate to
+    /// `~f32::MAX` / `0`, the Cephes posture). For an **f64** vector it falls
+    /// back to the overloaded `llvm.exp` intrinsic (the f64 polynomial is a
+    /// follow-up). Used by `v.exp()` and, transitively, `v.sigmoid()` /
+    /// `v.tanh()` (both derived from `exp`).
+    fn compile_vector_exp(
+        &self,
+        recv: inkwell::values::VectorValue<'ctx>,
+    ) -> inkwell::values::VectorValue<'ctx> {
+        let vt = recv.get_type();
+        let ft = vt.get_element_type().into_float_type();
+        let n = vt.get_size();
+        let i32_t = self.context.i32_type();
+        let iv_t = i32_t.vec_type(n);
+
+        let fsplat = |c: f64| -> inkwell::values::VectorValue<'ctx> {
+            let scalar = ft.const_float(c);
+            let mut sv = vt.get_undef();
+            for i in 0..n {
+                sv = self
+                    .builder
+                    .build_insert_element(sv, scalar, i32_t.const_int(i as u64, false), "e.fsplat")
+                    .unwrap();
+            }
+            sv
+        };
+        let isplat = |c: u64| -> inkwell::values::VectorValue<'ctx> {
+            let scalar = i32_t.const_int(c, false);
+            let mut sv = iv_t.get_undef();
+            for i in 0..n {
+                sv = self
+                    .builder
+                    .build_insert_element(sv, scalar, i32_t.const_int(i as u64, false), "e.isplat")
+                    .unwrap();
+            }
+            sv
+        };
+        let unary_intr = |name: &str,
+                          v: inkwell::values::VectorValue<'ctx>|
+         -> inkwell::values::VectorValue<'ctx> {
+            let intr = inkwell::intrinsics::Intrinsic::find(name).expect("intrinsic must exist");
+            let decl = intr
+                .get_declaration(&self.module, &[v.get_type().into()])
+                .expect("intrinsic declaration");
+            self.builder
+                .build_call(decl, &[v.into()], "e.intr")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_vector_value()
+        };
+        let binary_intr = |name: &str,
+                           a: inkwell::values::VectorValue<'ctx>,
+                           b: inkwell::values::VectorValue<'ctx>|
+         -> inkwell::values::VectorValue<'ctx> {
+            let intr = inkwell::intrinsics::Intrinsic::find(name).expect("intrinsic must exist");
+            let decl = intr
+                .get_declaration(&self.module, &[a.get_type().into()])
+                .expect("intrinsic declaration");
+            self.builder
+                .build_call(decl, &[a.into(), b.into()], "e.intr2")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_vector_value()
+        };
+
+        // f64 (or any non-f32 float): fall back to the intrinsic.
+        if ft != self.context.f32_type() {
+            return unary_intr("llvm.exp", recv);
+        }
+
+        // Clamp so the `2^n` exponent assembly stays in range.
+        let x = binary_intr("llvm.maxnum", recv, fsplat(-88.376_262_664_795_0));
+        let x = binary_intr("llvm.minnum", x, fsplat(88.376_262_664_795_0));
+        // z = floor(x * log2(e) + 0.5)  — the nearest integer exponent.
+        let zin = self
+            .builder
+            .build_float_mul(x, fsplat(std::f64::consts::LOG2_E), "e.z0")
+            .unwrap();
+        let zin = self
+            .builder
+            .build_float_add(zin, fsplat(0.5), "e.z1")
+            .unwrap();
+        let z = unary_intr("llvm.floor", zin);
+        // r = x - z*C1 - z*C2   (ln2 = C1 + C2, split for precision).
+        let zc1 = self
+            .builder
+            .build_float_mul(z, fsplat(0.693_359_375), "e.zc1")
+            .unwrap();
+        let x = self.builder.build_float_sub(x, zc1, "e.xr1").unwrap();
+        let zc2 = self
+            .builder
+            .build_float_mul(z, fsplat(-2.121_944_40e-4), "e.zc2")
+            .unwrap();
+        let x = self.builder.build_float_sub(x, zc2, "e.xr2").unwrap();
+        // Horner evaluation of the degree-6 minimax polynomial for exp(r).
+        let coeffs = [
+            1.987_569_150_0e-4_f64,
+            1.398_199_950_7e-3,
+            8.333_451_907_3e-3,
+            4.166_579_589_4e-2,
+            1.666_666_545_9e-1,
+            5.000_000_120_1e-1,
+        ];
+        let mut p = fsplat(coeffs[0]);
+        for &c in &coeffs[1..] {
+            p = self.builder.build_float_mul(p, x, "e.pm").unwrap();
+            p = self.builder.build_float_add(p, fsplat(c), "e.pa").unwrap();
+        }
+        // p = p*r² + r + 1
+        let x2 = self.builder.build_float_mul(x, x, "e.x2").unwrap();
+        let p = self.builder.build_float_mul(p, x2, "e.px2").unwrap();
+        let p = self.builder.build_float_add(p, x, "e.ppx").unwrap();
+        let p = self
+            .builder
+            .build_float_add(p, fsplat(1.0), "e.pp1")
+            .unwrap();
+        // 2^n = bitcast((int(z) + 127) << 23) — assemble the exponent field.
+        let ni = self
+            .builder
+            .build_float_to_signed_int(z, iv_t, "e.ni")
+            .unwrap();
+        let ni = self.builder.build_int_add(ni, isplat(127), "e.nb").unwrap();
+        let ei = self
+            .builder
+            .build_left_shift(ni, isplat(23), "e.shl")
+            .unwrap();
+        let pow2n = self
+            .builder
+            .build_bit_cast(ei, vt, "e.pow")
+            .unwrap()
+            .into_vector_value();
+        self.builder.build_float_mul(p, pow2n, "e.res").unwrap()
+    }
+
     /// typechecker guarantees `N >= 1`, an integer element for the bitwise
     /// folds, and a same-typed vector argument for `dot`.
     fn compile_vector_method(
@@ -13880,7 +14026,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let out = match method {
                     "sqrt" => apply(self, "llvm.sqrt", recv),
-                    "exp" => apply(self, "llvm.exp", recv),
+                    // `exp` is the hand-written guaranteed-SIMD polynomial (f32;
+                    // f64 falls back to the intrinsic) — see compile_vector_exp.
+                    "exp" => self.compile_vector_exp(recv),
                     "ln" => apply(self, "llvm.log", recv),
                     "floor" => apply(self, "llvm.floor", recv),
                     "ceil" => apply(self, "llvm.ceil", recv),
@@ -13888,7 +14036,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     "trunc" => apply(self, "llvm.trunc", recv),
                     "sigmoid" => {
                         let neg = self.builder.build_float_neg(recv, "sig.neg").unwrap();
-                        let e = apply(self, "llvm.exp", neg);
+                        let e = self.compile_vector_exp(neg);
                         let one = splat(self, 1.0);
                         let denom = self.builder.build_float_add(one, e, "sig.denom").unwrap();
                         self.builder.build_float_div(one, denom, "sigmoid").unwrap()
@@ -13897,7 +14045,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // tanh(x) = (e^{2x} - 1) / (e^{2x} + 1)
                         let two = splat(self, 2.0);
                         let x2 = self.builder.build_float_mul(recv, two, "tanh.x2").unwrap();
-                        let e = apply(self, "llvm.exp", x2);
+                        let e = self.compile_vector_exp(x2);
                         let one = splat(self, 1.0);
                         let num = self.builder.build_float_sub(e, one, "tanh.num").unwrap();
                         let den = self.builder.build_float_add(e, one, "tanh.den").unwrap();
