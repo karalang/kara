@@ -126,6 +126,32 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         alloc::karac_alloc_or_panic,
         alloc::karac_realloc_or_panic,
     );
+    // Embedded critical-section RAII guard (`critical_section.acquire()`,
+    // b6ea37a1). Codegen's synthesized drop calls
+    // `karac_critical_section_release` on scope exit, so BOTH entries must
+    // be JIT-resolvable — without them `karac run` failed at lookup on any
+    // program whose module declares the release fn (B-2026-07-16-N, the
+    // B-2026-07-12-22 keep-list class; 54 cli/jit tests red).
+    keep!(
+        karac_critical_section_acquire,
+        karac_critical_section_release,
+    );
+    // Tracing spans (`runtime/src/tracing.rs`). Codegen emits calls to the
+    // whole surface (span enter/exit bracketing + exporter/min-level
+    // plumbing), so all of it must be JIT-resolvable — `karac run` failed
+    // at lookup on Message-derive/tracing programs with "Symbols not
+    // found: [ _karac_tracing_set_active_span, … ]" (same keep-list class
+    // as the critical-section pair above).
+    keep!(
+        tracing::karac_tracing_get_active_span,
+        tracing::karac_tracing_set_active_span,
+        tracing::karac_tracing_get_min_level,
+        tracing::karac_tracing_set_min_level,
+        tracing::karac_tracing_set_exporter,
+        tracing::karac_tracing_get_exporter_data,
+        tracing::karac_tracing_get_exporter_fn,
+        tracing::karac_tracing_reset,
+    );
     // Producer-mode runtime lifecycle (additive-interop Slice 2) —
     // `karac_runtime_init` / `karac_runtime_shutdown`, the two entry
     // points the emitted C header surfaces for library-artifact hosts.
@@ -309,6 +335,14 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_http_response_set_body,
         karac_runtime_http_response_set_header,
         karac_runtime_http_response_set_status,
+        // Response-header READ surface (headers_count / key_at / val_at /
+        // headers_free) — added after the set_* trio without keep entries,
+        // so `karac run` failed at JIT lookup on any std.web program
+        // (same keep-list class as the critical-section/tracing entries).
+        karac_runtime_http_response_headers_count,
+        karac_runtime_http_response_header_key_at,
+        karac_runtime_http_response_header_val_at,
+        karac_runtime_http_response_headers_free,
         karac_runtime_http_request_path,
         karac_runtime_http_request_method,
         karac_runtime_http_request_body_ptr,
