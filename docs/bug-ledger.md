@@ -89,18 +89,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **490 surfaced · 2 open · 484 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **490 surfaced · 1 open · 485 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-15-21 | 2026-07-15 | codegen (per-node Option[shared] traversal lowering: niche-match + field GEP + recursion) | low | Read-only `Option[shared]` tree traversal ~1.8x behind equal-safety Rust on a pure per-node walk — the residual is per-node REFCOUNT TRAFFIC (the balanced retain/release pair, NOT elided by default) plus Option[shared] match/field lowering. The rc-elision convention (`rc_elide.rs`, `KARAC_RC_ELIDE_REF_PARAMS`) is now DEFAULT-ON and closes ~2/3 of it (17–32% across #100/#104/#111/#112, byte-identical); the Some(n)-binding retain + the tail-call→loop it blocks are the remainder (Part B) | none |
 | B-2026-07-16-4 | 2026-07-16 | cli | med | lljit_prototype::lljit_gdb_registration_listener_registers_dwarf_module fails on macOS (M5 Pro, Darwin 25.5): after installing + materializing a DWARF-carrying module, the process-global __jit_debug_descriptor carries no registered entry ('the listener did not fire'). CI never catches it: the llvm-feature CI jobs run a targeted suite list that excludes lljit_prototype, and the plain `cargo test --all` job compiles without --features llvm. | none |
 
-### Fixed (484)
+### Fixed (485)
 
-<details><summary>484 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>485 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -577,6 +576,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **490 surfaced 
 | B-2026-07-15-18 | codegen (field-receiver method dispatch — calls.rs lower_field_access_ptr plain-struct GEP) | high | A `<generic-struct>.field.method()` receiver reads the WRONG field for a multi-heap-field generic struct: `Pair[Vec,Vec].second.len()` returns the fi… | bf4b002 |
 | B-2026-07-15-19 | codegen (Vec/VecDeque.retain in-place predicate filter — no LLVM lowering) | low | `Vec[T]/VecDeque[T].retain(\|x\| pred)` has no AOT codegen lowering — typechecks and runs correctly in the interpreter (B-2026-07-15-16 added both), bu… | 93c8c0d |
 | B-2026-07-15-20 | codegen (field-receiver method dispatch over a GENERIC struct — calls.rs lower_field_access_ptr / resolve_generic_field_te instantiation resolution for ref-param and indexed receivers) | medium | A generic-struct field-receiver method loud-bails for a ref-param receiver (`p: ref Pair[Vec,Vec]` → `p.second.len()`) or an indexed receiver (`v[i].… | 355d5da |
+| B-2026-07-15-21 | codegen (per-node Option[shared] traversal lowering: niche-match + field GEP + recursion) | low | Read-only `Option[shared]` tree traversal ran ~1.8x behind equal-safety Rust — the residual was per-node REFCOUNT TRAFFIC (the balanced retain/releas… | a8d47f2 (Part A: RC-elision default-ON) + 36748bb (Part B: Some-binding elision + TCO) |
 | B-2026-07-15-22 | codegen (stmts.rs Let-arm struct-var move-suppression — the FieldAccess RHS case was missing) | high | `let bound = o.inner` moving a struct-typed heap-bearing field out of an owned struct double-frees the inner Vec buffer at scope exit — both `bound`'… | 8a02f75 |
 | B-2026-07-15-23 | codegen (call_dispatch.rs `zero_struct_move_caps` had no Map/Set arm; param_own.rs `suppress_struct_field_move_into_literal` relied on LLVM-type-driven `zero_aggregate_field_caps` blind to Map/Set ptr handles and enum all-i64 leaves) | high | Moving a struct with a Map/Set handle field or an enum-with-heap-payload field double-frees the handle/enum buffer at scope exit (SIGSEGV for Map/Set… | 50b2945 |
 | B-2026-07-15-24 | codegen (call_dispatch.rs `zero_struct_move_caps` GEPs the Map handle field using the BASE erased struct layout, not the per-monomorph layout — the mono-blindness class, cf. B-2026-07-15-11) | low | `zero_struct_move_caps` GEPs a Map/Set handle field at the BASE struct-layout offset; when a PRECEDING field is a bare generic param mono'd to a wide… | 7a2bfce |
