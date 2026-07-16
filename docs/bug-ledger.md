@@ -89,19 +89,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **498 surfaced · 3 open · 491 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **500 surfaced · 3 open · 493 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-16-11 | 2026-07-16 | codegen (Vec construction: a Vec built by a counted push-loop reallocs ~log(n) times instead of pre-sizing) | low | A `Vec` built by `Vec.new()` + a counted `push`-loop reallocs ~log(n) times (growth-doubling) where the trip count is statically derivable — auto-pre-sizing (the imperative sibling of the collect-tabulate recognizer) would emit one alloc per Vec. On #115's nested Vec[Vec[i64]] DP this is ~1.7x of the gap to Rust; `Vec.with_capacity` recovers it (kara reaches nested-`Vec<Vec>` parity). The residual vs a flat Vec[i64] is the inherent per-row malloc of a row-of-rows | none |
 | B-2026-07-16-13 | 2026-07-16 | typechecker (exprs.rs index-expression handling — no Map/SortedMap arm; falls through to the generic integer-or-range gate). Also unimplemented in interp/codegen. | low | `m[key]` (Map/SortedMap index operator) only accepts integer keys — a non-integer key (`m["x"]` on `Map[String,i64]`) is rejected 'index must be an integer or range, found String', despite design.md speccing `[]` → `index(ref self, key: ref K) -> ref V` (panics if key missing). `m[1]` on `Map[i64,V]` works only because i64 IS an integer. Workaround `m.get(k).unwrap()` works (and `get`'s key-borrow was fixed in B-2026-07-16-12). | none |
 | B-2026-07-16-14 | 2026-07-16 | typechecker (iterator-trait method resolution accepts reduction/collection methods DIRECTLY on a Vec receiver) vs interpreter + codegen (only the `.iter()` adaptor path implements them) | medium | `karac check` accepts iterator-reduction / string-collection methods DIRECTLY on a Vec (`v.sum()`, `v.max()`, `v.min()`, `v.product()`, `v.join(sep)`, `v.concat()`) but no backend implements them — interp reports 'method not found (no dispatch arm)' and codegen reports 'not yet supported' / build-fails. The idiomatic `.iter()` form works (`v.iter().sum()` = 120). This is a check/execution consistency hole: `karac check` (the AI-first wedge — a program that checks clean should run) passes code that traps at runtime on all three surfaces. | none |
+| B-2026-07-16-16 | 2026-07-16 | codegen | high | tests/selfhost_codegen.rs (selfhost_codegen_matches_seed_run) is RED on main: the self-hosted emitter compiles and runs, but executing its emitted IR prints "" where the seed run prints the expected stdout (all corpus entries, starting at fn main(){println(\"hi\")}). The emitted IR text LOOKS structurally plausible (datalayout, @main present) — the divergence is somewhere in the emitted body or the driver's dump path. | none |
 
-### Fixed (491)
+### Fixed (493)
 
-<details><summary>491 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>493 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -595,7 +595,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **498 surfaced 
 | B-2026-07-16-8 | codegen | med | LLJIT (`karac run` / KARAC_TEST_JIT) produces EMPTY OUTPUT for programs using regex, alloc_zeroed, string methods (trim/case/strip/replace/sorted/spl… | 902a163f |
 | B-2026-07-16-9 | codegen (let-binding RC registration: shared_option_info detection in the `let` statement path) | high | An `Option[shared]` bound from an `if`/`if let`/`match`/block EXPRESSION, then passed by value MORE THAN ONCE, is a use-after-free: the `let`-path `s… | 3137755 |
 | B-2026-07-16-10 | codegen (auto-par whole-function lowering / concurrency.rs analyze_function — par_run-wrapped body emits function-scope defer/errdefer in-place instead of on the fn-scope-exit cleanup drain) | medium | FIXED — User `defer` blocks execute FIFO-inline (at declaration point, in declaration order) instead of LIFO-at-scope-exit when the enclosing functio… | 07f4e09 |
+| B-2026-07-16-11 | codegen | low | A `Vec` built by `Vec.new()` + a counted `push`-loop reallocs ~log(n) times (growth-doubling) where the trip count is statically derivable — auto-pre… | dae4e309 |
 | B-2026-07-16-12 | ownership (collect_method_param_modes — builtin collection lookup methods have no syntactic signature so their key/value arg fell to the consume default) | medium | FIXED — Builtin collection LOOKUP methods (Map.get/remove/contains_key, Set.contains/remove, Vec.contains, String.contains) consumed their key/value… | 8f32f01 |
+| B-2026-07-16-15 | codegen | high | Seq-tabulate (dae4e309) miscompiled counted push loops whose body ALSO writes the while-loop's control state: `while c < n { out.push(c); if c == 3 {… | b4f86484 |
 
 </details>
 
