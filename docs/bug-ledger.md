@@ -89,15 +89,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **492 surfaced · 0 open · 488 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **493 surfaced · 0 open · 489 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (488)
+### Fixed (489)
 
-<details><summary>488 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>489 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -589,6 +589,7 @@ _None — the ledger is fully drained._
 | B-2026-07-16-5 | codegen (borrow materialization: enum payload pack of `Option[ref String]`, ref-arg forwarding of a declared `ref` struct field) | high | Storing a `ref String`/`ref Vec` borrow into a value position — `Some(s)` with `s: ref String`, or passing a declared `ref String` struct field to a… | 46924c3 |
 | B-2026-07-16-7 | rc-elide analysis (src/rc_elide.rs, env KARAC_RC_ELIDE_REF_PARAMS — default OFF) | high | rc-elide conditions 1-4 do not constrain where a payload PROJECTION flows: an elided fn passing `n.parent` (any projection) to a mutating callee can… | 2639536 |
 | B-2026-07-16-8 | codegen | med | LLJIT (`karac run` / KARAC_TEST_JIT) produces EMPTY OUTPUT for programs using regex, alloc_zeroed, string methods (trim/case/strip/replace/sorted/spl… | 902a163f |
+| B-2026-07-16-9 | codegen (let-binding RC registration: shared_option_info detection in the `let` statement path) | high | An `Option[shared]` bound from an `if`/`if let`/`match`/block EXPRESSION, then passed by value MORE THAN ONCE, is a use-after-free: the `let`-path `s… | 3137755 |
 
 </details>
 
