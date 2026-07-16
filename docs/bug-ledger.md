@@ -89,18 +89,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **484 surfaced · 2 open · 478 fixed** (2026-05-20 → 2026-07-15). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **485 surfaced · 2 open · 479 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-15-21 | 2026-07-15 | codegen (per-node Option[shared] traversal lowering: niche-match + field GEP + recursion) | low | Read-only `Option[shared]` tree traversal runs ~1.45x behind equal-safety Rust (rustc -O -C overflow-checks=on) on a pure per-node walk — the residual is Option[shared] match/field/recursion lowering, NOT refcount traffic (retain/release is already elided; by-value == ref-borrow to the millisecond) | none |
-| B-2026-07-15-24 | 2026-07-15 | codegen (call_dispatch.rs `zero_struct_move_caps` GEPs the Map handle field using the BASE erased struct layout, not the per-monomorph layout — the mono-blindness class, cf. B-2026-07-15-11) | low | `zero_struct_move_caps` GEPs a Map/Set handle field at the BASE struct-layout offset; when a PRECEDING field is a bare generic param mono'd to a wider heap type (e.g. `Inner[T]{a: T, m: Map[i64,i64]}`, T=Vec[i64]), the base layout erases `a` to i64 (1 word) but the mono widens it (Vec = 3 words), so the Map handle's null-store (B-23) lands at the wrong offset and the real handle stays live → double-free / SIGSEGV on move-out. | none |
+| B-2026-07-16-1 | 2026-07-16 | codegen (scope-exit drop of a struct carrying a `Map[K, heap-value]` / `Set[heap]` FIELD — the struct's `FieldDrop::MapOrSet` frees the map handle but the per-value heap drop double-frees the value buffers) | high | A struct FIELD of type `Map[K, heap-value]` (e.g. `Map[i64, String]`) double-frees the map's VALUE buffers at scope-exit drop (`free(): double free`), non-generic AND generic. A bare `Map[K, String]` LOCAL is clean; only a struct field crashes. The struct's `FieldDrop::MapOrSet` frees the field via `karac_map_free_with_drop_vec`, which drops each heap value — but the value buffers are freed twice. Interp correct; codegen-only. | none |
 
-### Fixed (478)
+### Fixed (479)
 
-<details><summary>478 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>479 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -579,6 +579,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **484 surfaced 
 | B-2026-07-15-20 | codegen (field-receiver method dispatch over a GENERIC struct — calls.rs lower_field_access_ptr / resolve_generic_field_te instantiation resolution for ref-param and indexed receivers) | medium | A generic-struct field-receiver method loud-bails for a ref-param receiver (`p: ref Pair[Vec,Vec]` → `p.second.len()`) or an indexed receiver (`v[i].… | 355d5da |
 | B-2026-07-15-22 | codegen (stmts.rs Let-arm struct-var move-suppression — the FieldAccess RHS case was missing) | high | `let bound = o.inner` moving a struct-typed heap-bearing field out of an owned struct double-frees the inner Vec buffer at scope exit — both `bound`'… | 8a02f75 |
 | B-2026-07-15-23 | codegen (call_dispatch.rs `zero_struct_move_caps` had no Map/Set arm; param_own.rs `suppress_struct_field_move_into_literal` relied on LLVM-type-driven `zero_aggregate_field_caps` blind to Map/Set ptr handles and enum all-i64 leaves) | high | Moving a struct with a Map/Set handle field or an enum-with-heap-payload field double-frees the handle/enum buffer at scope exit (SIGSEGV for Map/Set… | 50b2945 |
+| B-2026-07-15-24 | codegen (call_dispatch.rs `zero_struct_move_caps` GEPs the Map handle field using the BASE erased struct layout, not the per-monomorph layout — the mono-blindness class, cf. B-2026-07-15-11) | low | `zero_struct_move_caps` GEPs a Map/Set handle field at the BASE struct-layout offset; when a PRECEDING field is a bare generic param mono'd to a wide… | 7a2bfce |
 | B-2026-07-15-25 | codegen (expr_ops.rs `compile_field_store` never drops the old field value for a plain-struct heap field; stmts.rs Assign arm eager-free + `suppress_source_vec_cleanup_for_arg` are gated to `lhs_is_tracked_vec` only, so Map/Set var reassignment is uncovered) | high | Reassigning a struct's heap-owning field (`o.f = x`) never drops the OLD field value: leaks it for a fresh RHS (`h.v = [9,8,7]` strands the old Vec b… | c588e30 |
 | B-2026-07-15-26 | codegen (Map `get(k).unwrap()` inline-temporary path for a heap value — the unwrapped value aliases the map's live bucket buffer instead of cloning, so the inline temp's drop AND the map's scope-exit per-entry free hit the same buffer) | high | An INLINE `map.get(k).unwrap()` whose value is heap-owning (`Map[i64, String]` / `Map[i64, Vec[..]]`) double-frees: `println(m.get(2).unwrap())` and… | e465acb |
 | B-2026-07-15-27 | codegen (index operator on a non-identifier temporary — `<expr>[i]` where <expr> is a method-call chain like `m.get(k).unwrap()`) | low | Inline-indexing a temporary Vec (`m.get(k).unwrap()[i]`, and likely any `<method-chain>[i]`) loud-bails 'Index operator applied to non-array type'; b… | 354b4df |
