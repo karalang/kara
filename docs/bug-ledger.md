@@ -89,17 +89,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **491 surfaced · 1 open · 486 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **491 surfaced · 0 open · 487 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-16-4 | 2026-07-16 | cli | med | lljit_prototype::lljit_gdb_registration_listener_registers_dwarf_module fails on macOS (M5 Pro, Darwin 25.5): after installing + materializing a DWARF-carrying module, the process-global __jit_debug_descriptor carries no registered entry ('the listener did not fire'). CI never catches it: the llvm-feature CI jobs run a targeted suite list that excludes lljit_prototype, and the plain `cargo test --all` job compiles without --features llvm. | none |
+_None — the ledger is fully drained._
 
-### Fixed (486)
+### Fixed (487)
 
-<details><summary>486 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>487 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -586,6 +584,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **491 surfaced 
 | B-2026-07-16-1 | codegen (`<struct-field-map>.get(k).unwrap()` of a heap value — the get/unwrap borrow-elision detectors recognised only a bare-IDENTIFIER map receiver, so a field-access receiver `h.ms`/`self.ms` kept its real `cap` and double-freed the borrowed bucket buffer against the struct's scope-exit map drop) | high | `<struct-field-map>.get(k).unwrap()` of a heap value (a `Map[_, String]`/`Map[_, Vec]` FIELD) double-frees the value buffer, both bound (`let v = h.m… | 3a44455 |
 | B-2026-07-16-2 | runtime | high | Three recent runtime-symbol surfaces missing from the JIT keep-list — critical_section acquire/release (b6ea37a1), the tracing span/exporter octet, a… | e1972851 |
 | B-2026-07-16-3 | codegen | high | #[par_unordered] collect combine helper used get_store_size for its byte-offset GEPs and its size-keyed symbol, but Vec push/index GEPs stride by ele… | 70fd850a |
+| B-2026-07-16-4 | cli | med | lljit_prototype::lljit_gdb_registration_listener_registers_dwarf_module fails on macOS (M5 Pro, Darwin 25.5): after installing + materializing a DWAR… | 8579cdac |
 | B-2026-07-16-6 | concurrency analysis (auto-par loop-reduction recognition) + codegen reduce lowering | high | Auto-par reduction lowers a loop whose body carries plain `shared` RC traffic into a multi-threaded worker — racing non-atomic rc-inc/rc-dec across w… | b057501 |
 | B-2026-07-16-5 | codegen (borrow materialization: enum payload pack of `Option[ref String]`, ref-arg forwarding of a declared `ref` struct field) | high | Storing a `ref String`/`ref Vec` borrow into a value position — `Some(s)` with `s: ref String`, or passing a declared `ref String` struct field to a… | 46924c3 |
 | B-2026-07-16-7 | rc-elide analysis (src/rc_elide.rs, env KARAC_RC_ELIDE_REF_PARAMS — default OFF) | high | rc-elide conditions 1-4 do not constrain where a payload PROJECTION flows: an elided fn passing `n.parent` (any projection) to a mutating callee can… | 2639536 |
