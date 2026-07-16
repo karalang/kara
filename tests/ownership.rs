@@ -8743,3 +8743,67 @@ fn generic_ord_min_body_passes_ownership() {
          fn main() { let r = umin(Name { s: \"aaa\" }, Name { s: \"bbb\" }); println(r.s); }",
     );
 }
+
+// ── B-2026-07-16-12: builtin collection lookup methods borrow their key ──
+
+#[test]
+fn test_map_get_then_insert_string_key_borrows() {
+    // design.md's collection tables spec `get`/`remove`/`contains_key` as
+    // taking `key: ref K` — a lookup BORROWS the key. Before the fix, the
+    // builtin Map methods had no syntactic signature (empty `struct Map[=K,=V]{}`)
+    // so their key argument fell to the consume default, moving a heap key
+    // (`String`) and rejecting the fundamental get-then-insert idiom (the word
+    // counter). This must check clean: multiple lookups of the same String key
+    // before the consuming `insert`.
+    ownership_ok(
+        "fn main() {\n\
+        \x20   let mut m: Map[String, i64] = Map.new();\n\
+        \x20   let k: String = \"apple\";\n\
+        \x20   let present: bool = m.contains_key(k);\n\
+        \x20   let cur: i64 = m.get(k).unwrap_or(0);\n\
+        \x20   m.insert(k, cur + 1);\n\
+        \x20   println(present);\n\
+        }",
+    );
+}
+
+#[test]
+fn test_set_and_vec_contains_borrow_heap_element() {
+    // `Set.contains(val: ref T)` / `Vec.contains(val: ref T)` borrow the probe
+    // value — a heap `String` used for `contains` then again afterward must not
+    // be flagged as moved.
+    ownership_ok(
+        "fn main() {\n\
+        \x20   let mut s: Set[String] = Set.new();\n\
+        \x20   let w: String = \"hello\";\n\
+        \x20   let has: bool = s.contains(w);\n\
+        \x20   s.insert(w);\n\
+        \x20   println(has);\n\
+        \x20   let v: Vec[String] = [\"a\", \"b\"];\n\
+        \x20   let t: String = \"a\";\n\
+        \x20   let found: bool = v.contains(t);\n\
+        \x20   println(found);\n\
+        \x20   println(t.len());\n\
+        }",
+    );
+}
+
+#[test]
+fn test_map_insert_still_consumes_key_after_lookup() {
+    // The fix is surgical: `insert(key: K, val: V)` still CONSUMES the key
+    // (it is stored). A `get(k)` AFTER `insert(k, _)` is a genuine
+    // use-after-move and must still be rejected.
+    let errors = ownership_errors(
+        "fn main() {\n\
+        \x20   let mut m: Map[String, i64] = Map.new();\n\
+        \x20   let k: String = \"apple\";\n\
+        \x20   m.insert(k, 5);\n\
+        \x20   let v: i64 = m.get(k).unwrap_or(0);\n\
+        \x20   println(v);\n\
+        }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "using a String key after it was consumed by insert must still be a move error"
+    );
+}

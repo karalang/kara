@@ -2150,7 +2150,39 @@ fn collect_callee_param_modes_into(
 /// consume, spuriously RC-promoting a borrowed struct arg (B-2026-06-12-8).
 pub(crate) fn collect_method_param_modes(program: &Program) -> HashMap<String, Vec<OwnershipMode>> {
     let mut map = HashMap::new();
-    // Baked-stdlib instance methods first — the `MethodCall` twin of the
+    // B-2026-07-16-12: builtin collection LOOKUP methods have no syntactic
+    // signature — their type is an empty builtin `struct Map[=K, =V] {}` etc.
+    // registered via `register_builtin_types`, so the stdlib/user walk below
+    // finds no method to read param modes from and the key/value argument fell
+    // to the consume default. That broke the fundamental get-then-insert idiom
+    // with a heap key: `let c = m.get(k); m.insert(k, c + 1)` was rejected as a
+    // use-after-move of `k` (only for a heap key like `String` — a Copy key like
+    // `i64` never observes the spurious move). design.md's collection tables
+    // spec these lookups as borrowing their key/value: `get`/`remove`/
+    // `contains_key` take `key: ref K`, `contains`/`remove` (Set) take
+    // `val: ref T`, `Vec.contains` / `String.contains` take `ref T` / `ref String`.
+    // Each has exactly ONE non-self param, so the mode vector is `[Ref]`.
+    // Inserted before the stdlib/user walk so any real signature still wins.
+    // NOT included: `insert` / `entry` (key & value are `K`/`V` — consumed,
+    // stored into the container) and `get_or` (arity unverified here).
+    for key in [
+        "Map.get",
+        "Map.remove",
+        "Map.contains_key",
+        "SortedMap.get",
+        "SortedMap.remove",
+        "SortedMap.contains_key",
+        "Set.contains",
+        "Set.remove",
+        "SortedSet.contains",
+        "SortedSet.remove",
+        "Vec.contains",
+        "VecDeque.contains",
+        "String.contains",
+    ] {
+        map.insert(key.to_string(), vec![OwnershipMode::Ref]);
+    }
+    // Baked-stdlib instance methods next — the `MethodCall` twin of the
     // stdlib walk in `collect_callee_param_modes` (B-2026-07-01-10); user
     // entries override below.
     for (_, sp) in crate::prelude::STDLIB_PROGRAMS.iter() {
