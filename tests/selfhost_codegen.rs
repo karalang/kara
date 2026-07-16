@@ -60,6 +60,16 @@ const CORPUS: &[&str] = &[
     "fn main() { let mut i = 0; while i < 0 { println(\"never\"); i = i + 1; } println(\"done\") }",
     // Nested: FizzBuzz-lite (loop + if/else-if inside).
     "fn main() { let mut i = 1; while i <= 15 { if i % 15 == 0 { println(\"fizzbuzz\") } else { if i % 3 == 0 { println(\"fizz\") } else { if i % 5 == 0 { println(\"buzz\") } else { println(i.to_string()) } } } i = i + 1; } }",
+    // Slice 6: user-defined functions — params, calls, tails, return, recursion.
+    "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { println(add(2, 3).to_string()) }",
+    "fn dbl(n: i64) -> i64 { n * 2 }\nfn main() { println(dbl(dbl(10) + 1).to_string()) }",
+    "fn greet() { println(\"hello\") }\nfn main() { greet(); greet() }",
+    "fn max(a: i64, b: i64) -> i64 { if a > b { a } else { b } }\nfn main() { println(max(3, 9).to_string()); println(max(9, 3).to_string()) }",
+    "fn fib(n: i64) -> i64 { if n < 2 { return n; } fib(n - 1) + fib(n - 2) }\nfn main() { println(fib(10).to_string()) }",
+    "fn fact(n: i64) -> i64 { if n <= 1 { 1 } else { n * fact(n - 1) } }\nfn main() { println(fact(6).to_string()) }",
+    "fn sign(n: i64) -> i64 { if n > 0 { return 1; } if n < 0 { return 0 - 1; } 0 }\nfn main() { println(sign(42).to_string()); println(sign(0 - 7).to_string()); println(sign(0).to_string()) }",
+    // A helper called for effect inside a loop.
+    "fn shout(n: i64) { println(n.to_string()); println(\"!\") }\nfn main() { let mut i = 0; while i < 3 { shout(i); i = i + 1; } }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

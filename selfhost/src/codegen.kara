@@ -26,6 +26,7 @@ import span.Span;
 import ast.{
     Item,
     FnDefNode,
+    FnParamNode,
     Block,
     Stmt,
     LetStmt,
@@ -45,6 +46,7 @@ import ast.{
     MethodCallExpr,
     IfExpr,
     WhileExpr,
+    ReturnExpr,
     Pattern,
     BindingPattern,
 };
@@ -63,6 +65,9 @@ struct Val {
 // (`%tN`).
 struct Emitter {
     globals: String,
+    // Finished function DEFINITIONS (Slice 6): each `emit_fn` appends its
+    // assembled `define …` here; `body` is per-function scratch.
+    funcs: String,
     body: String,
     nstr: i64,
     ntmp: i64,
@@ -73,6 +78,9 @@ struct Emitter {
     locals: Vec[String],
     // Monotonic basic-block label id (Slice 4: `if`/`else` control flow).
     nlbl: i64,
+    // True while emitting `main` (Slice 6): a `return` there is `ret i32 0`,
+    // in a user fn `ret i64 <v>`.
+    in_main: bool,
 }
 
 // Emit a whole program as LLVM IR text. Walks the items, emits `main`'s body
@@ -82,11 +90,13 @@ struct Emitter {
 pub fn emit_program(items: Vec[Item]) -> String with panics {
     let mut e = Emitter {
         globals: "".to_string(),
+        funcs: "".to_string(),
         body: "".to_string(),
         nstr: 0,
         ntmp: 0,
         locals: Vec.new(),
         nlbl: 0,
+        in_main: false,
     };
     for it in items {
         match it {
@@ -103,14 +113,16 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
                     doc,
                     span,
                 } = f;
-                if name == "main" {
-                    e.emit_block(body);
-                }
+                let has_ret = match ret {
+                    Some(t) => true,
+                    None => false,
+                };
+                e.emit_fn(name, params, has_ret, body);
             }
             _ => {}
         }
     }
-    let Emitter { globals, body, nstr, ntmp, locals, nlbl } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, nlbl, in_main } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -123,13 +135,103 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
     out = out + "@.true = internal constant [5 x i8] c\"true\\00\"\n";
     out = out + "@.false = internal constant [6 x i8] c\"false\\00\"\n";
     out = out + globals;
-    out = out + "define i32 @main() {\nentry:\n";
-    out = out + body;
-    out = out + "  ret i32 0\n}\n";
+    out = out + funcs;
     out
 }
 
 impl Emitter {
+    // Emit ONE function definition (Slice 6). Per-fn state (`body`, `locals`)
+    // resets; `ntmp`/`nlbl` keep counting (registers/labels are function-scoped
+    // in LLVM, so uniqueness across fns is merely convenient). Each parameter
+    // gets a stack slot (`alloca` + store of the incoming `%aN`), so params
+    // behave exactly like `let` locals. `main` becomes `define i32 @main`
+    // (always `ret i32 0`); a user fn becomes `define i64 @u_<name>` (the
+    // `u_` prefix keeps user names clear of libc/runtime symbols) whose tail
+    // expression is its return value (default 0). Everything is i64.
+    fn emit_fn(mut ref self, name: String, params: Vec[FnParamNode], has_ret: bool, b: Block) {
+        self.body = "".to_string();
+        self.locals = Vec.new();
+        let is_main = name == "main";
+        self.in_main = is_main;
+        let mut sig = "".to_string();
+        let mut pre = "".to_string();
+        let mut pi = 0;
+        for p in params {
+            let FnParamNode { name: pn, ty, span } = p;
+            let idx = self.locals.len();
+            self.locals.push(pn);
+            if pi > 0 {
+                sig = sig + ", ";
+            }
+            sig = sig + "i64 %a" + pi.to_string();
+            pre = pre + "  %v" + idx.to_string() + " = alloca i64, align 8\n";
+            pre = pre
+                + "  store i64 %a"
+                + pi.to_string()
+                + ", ptr %v"
+                + idx.to_string()
+                + ", align 8\n";
+            pi = pi + 1;
+        }
+        let Block { stmts, tail, span: bsp } = b;
+        for st in stmts {
+            self.emit_stmt(st);
+        }
+        // A VALUE-returning fn's tail is its return value; a UNIT fn's tail
+        // (main, or any fn without `-> T`) is a side-effect expression (e.g. a
+        // trailing `println`) — walked as a statement.
+        let use_val = has_ret and not is_main;
+        let mut tv = "0".to_string();
+        match tail {
+            Some(e) => {
+                if use_val {
+                    let v = self.emit_value(e);
+                    let Val { op, is_bool } = v;
+                    tv = op;
+                } else {
+                    self.emit_expr(e);
+                }
+            }
+            None => {}
+        }
+        if is_main {
+            self.funcs = self.funcs
+                + "define i32 @main() {\nentry:\n"
+                + pre
+                + self.body.clone()
+                + "  ret i32 0\n}\n";
+        } else {
+            self.funcs = self.funcs
+                + "define i64 @u_"
+                + name
+                + "("
+                + sig
+                + ") {\nentry:\n"
+                + pre
+                + self.body.clone()
+                + "  ret i64 "
+                + tv
+                + "\n}\n";
+        }
+    }
+
+    // Walk a block and return its TAIL value (0 if none) — the value-position
+    // sibling of `emit_block` (Slice 6: if-as-value branches).
+    fn emit_block_value(mut ref self, b: Block) -> Val {
+        let Block { stmts, tail, span } = b;
+        for st in stmts {
+            self.emit_stmt(st);
+        }
+        let mut v = Val { op: "0".to_string(), is_bool: false };
+        match tail {
+            Some(e) => {
+                v = self.emit_value(e);
+            }
+            None => {}
+        }
+        v
+    }
+
     // Walk a block: every statement, then the tail expression if present.
     fn emit_block(mut ref self, b: Block) {
         let Block { stmts, tail, span } = b;
@@ -218,14 +320,15 @@ impl Emitter {
         match e {
             Call(n) => {
                 let CallExpr { callee, args, span } = n;
-                let is_println = match callee {
+                let mut cname = "".to_string();
+                match callee {
                     Ident(ie) => {
                         let IdentExpr { name, span: isp } = ie;
-                        name == "println"
+                        cname = name;
                     }
-                    _ => false,
-                };
-                if is_println {
+                    _ => {}
+                }
+                if cname == "println" {
                     for a in args {
                         let CallArg { label, mut_marker, value, span: asp } = a;
                         match value {
@@ -251,7 +354,58 @@ impl Emitter {
                             _ => {}
                         }
                     }
+                } else {
+                    // A user-function call in STATEMENT position (Slice 6):
+                    // emit it and discard the result.
+                    let mut alist = "".to_string();
+                    let mut ai = 0;
+                    for a in args {
+                        let CallArg { label, mut_marker, value, span: asp } = a;
+                        let v = self.emit_value(value);
+                        let Val { op, is_bool } = v;
+                        if ai > 0 {
+                            alist = alist + ", ";
+                        }
+                        alist = alist + "i64 " + op;
+                        ai = ai + 1;
+                    }
+                    if cname != "" {
+                        let r = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + r
+                            + " = call i64 @u_"
+                            + cname
+                            + "("
+                            + alist
+                            + ")\n";
+                    }
                 }
+            }
+            Return(re) => {
+                // `return [expr]` (Slice 6): emit the value, `ret`, then OPEN A
+                // FRESH DEAD BLOCK — an LLVM block has exactly one terminator, so
+                // anything the walk emits after the return (the enclosing if's
+                // rejoin `br`, later stmts) must land in a new (unreachable)
+                // block to keep the module well-formed.
+                let ReturnExpr { value, span } = re;
+                let mut rv = "0".to_string();
+                match value {
+                    Some(v) => {
+                        let val = self.emit_value(v);
+                        let Val { op, is_bool } = val;
+                        rv = op;
+                    }
+                    None => {}
+                }
+                if self.in_main {
+                    self.body = self.body + "  ret i32 0\n";
+                } else {
+                    self.body = self.body + "  ret i64 " + rv + "\n";
+                }
+                let lid = self.nlbl;
+                self.nlbl = self.nlbl + 1;
+                self.body = self.body + "dead" + lid.to_string() + ":\n";
             }
             If(n) => {
                 // `if cond { … } else { … }` in statement position (Slice 4):
@@ -470,6 +624,96 @@ impl Emitter {
                     self.body + "  " + r.clone() + " = " + text + " i64 " + lop + ", " + rop + "\n";
                 Val { op: r, is_bool: false }
             }
+            Call(cn) => {
+                // A user-function call in VALUE position (Slice 6).
+                let CallExpr { callee, args, span } = cn;
+                let mut cname = "".to_string();
+                match callee {
+                    Ident(ie) => {
+                        let IdentExpr { name, span: isp } = ie;
+                        cname = name;
+                    }
+                    _ => {}
+                }
+                let mut alist = "".to_string();
+                let mut ai = 0;
+                for a in args {
+                    let CallArg { label, mut_marker, value, span: asp } = a;
+                    let v = self.emit_value(value);
+                    let Val { op, is_bool } = v;
+                    if ai > 0 {
+                        alist = alist + ", ";
+                    }
+                    alist = alist + "i64 " + op;
+                    ai = ai + 1;
+                }
+                if cname == "" {
+                    return Val { op: "0".to_string(), is_bool: false };
+                }
+                let r = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + r.clone()
+                    + " = call i64 @u_"
+                    + cname
+                    + "("
+                    + alist
+                    + ")\n";
+                Val { op: r, is_bool: false }
+            }
+            If(n) => {
+                // `if` in VALUE position (Slice 6): route each branch's tail
+                // value through a result slot, then load it at the join — the
+                // slot stands in for a phi without block-predecessor tracking.
+                let IfExpr { cond, then_block, else_branch, span } = n;
+                let slot = self.fresh();
+                self.body = self.body + "  " + slot.clone() + " = alloca i64, align 8\n";
+                let c = self.emit_value(cond);
+                let Val { op: cop, is_bool: cb } = c;
+                let lid = self.nlbl;
+                self.nlbl = self.nlbl + 1;
+                let lthen = "vthen" + lid.to_string();
+                let lelse = "velse" + lid.to_string();
+                let lend = "vend" + lid.to_string();
+                self.body = self.body
+                    + "  br i1 "
+                    + cop
+                    + ", label %"
+                    + lthen.clone()
+                    + ", label %"
+                    + lelse.clone()
+                    + "\n";
+                self.body = self.body + lthen + ":\n";
+                let tv = self.emit_block_value(then_block);
+                let Val { op: top, is_bool: tb } = tv;
+                self.body =
+                    self.body + "  store i64 " + top + ", ptr " + slot.clone() + ", align 8\n";
+                self.body = self.body + "  br label %" + lend.clone() + "\n";
+                self.body = self.body + lelse + ":\n";
+                match else_branch {
+                    Some(eb) => {
+                        let ev = self.emit_value(eb);
+                        let Val { op: eop, is_bool: ebb } = ev;
+                        self.body = self.body
+                            + "  store i64 "
+                            + eop
+                            + ", ptr "
+                            + slot.clone()
+                            + ", align 8\n";
+                    }
+                    None => {
+                        self.body =
+                            self.body + "  store i64 0, ptr " + slot.clone() + ", align 8\n";
+                    }
+                }
+                self.body = self.body + "  br label %" + lend.clone() + "\n";
+                self.body = self.body + lend + ":\n";
+                let r = self.fresh();
+                self.body =
+                    self.body + "  " + r.clone() + " = load i64, ptr " + slot + ", align 8\n";
+                Val { op: r, is_bool: false }
+            }
+            Blk(b) => self.emit_block_value(b),
             _ => Val { op: "0".to_string(), is_bool: false },
         }
     }
