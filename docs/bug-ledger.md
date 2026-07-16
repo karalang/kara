@@ -89,13 +89,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **496 surfaced · 1 open · 491 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **497 surfaced · 2 open · 491 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-16-11 | 2026-07-16 | codegen (Vec construction: a Vec built by a counted push-loop reallocs ~log(n) times instead of pre-sizing) | low | A `Vec` built by `Vec.new()` + a counted `push`-loop reallocs ~log(n) times (growth-doubling) where the trip count is statically derivable — auto-pre-sizing (the imperative sibling of the collect-tabulate recognizer) would emit one alloc per Vec. On #115's nested Vec[Vec[i64]] DP this is ~1.7x of the gap to Rust; `Vec.with_capacity` recovers it (kara reaches nested-`Vec<Vec>` parity). The residual vs a flat Vec[i64] is the inherent per-row malloc of a row-of-rows | none |
+| B-2026-07-16-13 | 2026-07-16 | typechecker (exprs.rs index-expression handling — no Map/SortedMap arm; falls through to the generic integer-or-range gate). Also unimplemented in interp/codegen. | low | `m[key]` (Map/SortedMap index operator) only accepts integer keys — a non-integer key (`m["x"]` on `Map[String,i64]`) is rejected 'index must be an integer or range, found String', despite design.md speccing `[]` → `index(ref self, key: ref K) -> ref V` (panics if key missing). `m[1]` on `Map[i64,V]` works only because i64 IS an integer. Workaround `m.get(k).unwrap()` works (and `get`'s key-borrow was fixed in B-2026-07-16-12). | none |
 
 ### Fixed (491)
 
