@@ -588,7 +588,7 @@ _None — the ledger is fully drained._
 | B-2026-07-16-6 | concurrency analysis (auto-par loop-reduction recognition) + codegen reduce lowering | high | Auto-par reduction lowers a loop whose body carries plain `shared` RC traffic into a multi-threaded worker — racing non-atomic rc-inc/rc-dec across w… | b057501 |
 | B-2026-07-16-5 | codegen (borrow materialization: enum payload pack of `Option[ref String]`, ref-arg forwarding of a declared `ref` struct field) | high | Storing a `ref String`/`ref Vec` borrow into a value position — `Some(s)` with `s: ref String`, or passing a declared `ref String` struct field to a… | 46924c3 |
 | B-2026-07-16-7 | rc-elide analysis (src/rc_elide.rs, env KARAC_RC_ELIDE_REF_PARAMS — default OFF) | high | rc-elide conditions 1-4 do not constrain where a payload PROJECTION flows: an elided fn passing `n.parent` (any projection) to a mutating callee can… | 2639536 |
-| B-2026-07-16-8 | codegen | med | LLJIT (`karac run` / KARAC_TEST_JIT) produces EMPTY OUTPUT for programs using regex, alloc_zeroed, string methods (trim/case/strip/replace/sorted/spl… | 8ba497c2 |
+| B-2026-07-16-8 | codegen | med | LLJIT (`karac run` / KARAC_TEST_JIT) produces EMPTY OUTPUT for programs using regex, alloc_zeroed, string methods (trim/case/strip/replace/sorted/spl… | 902a163f |
 
 </details>
 
