@@ -89,7 +89,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **503 surfaced · 4 open · 495 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **505 surfaced · 4 open · 497 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -100,9 +100,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **503 surfaced 
 | B-2026-07-16-16 | 2026-07-16 | codegen | high | tests/selfhost_codegen.rs (selfhost_codegen_matches_seed_run) is RED on main: the self-hosted emitter compiles and runs, but executing its emitted IR prints "" where the seed run prints the expected stdout (all corpus entries, starting at fn main(){println(\"hi\")}). The emitted IR text LOOKS structurally plausible (datalayout, @main present) — the divergence is somewhere in the emitted body or the driver's dump path. | none |
 | B-2026-07-16-19 | 2026-07-16 | codegen (auto-par whole-function lowering — the Vec-element move-out suppression for `Some(words[0])` that is correct in sequential codegen is not preserved when the caller (main) is auto-parallelized) | high | A function returning `Option[String]` built from a MOVED Vec element (`let words = s.split(" "); if words.len()>0 { Some(words[0]) } else { None }`) double-frees the element buffer when called TWICE inside an auto-parallelized `main` (JIT: 'free(): double free'; native: valgrind Invalid free under karac_par_run). Single/sequential invocation is CLEAN (the element move-out of `words[0]` into `Some` is correctly suppressed there); the bug appears only when main's statement mix makes it auto-parallelize (par_run=1). KARAC_AUTO_PAR=0 fixes it — an auto-par correctness bug, not the element-move-out itself. | none |
 
-### Fixed (495)
+### Fixed (497)
 
-<details><summary>495 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>497 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -601,6 +601,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **503 surfaced 
 | B-2026-07-16-15 | codegen | high | Seq-tabulate (dae4e309) miscompiled counted push loops whose body ALSO writes the while-loop's control state: `while c < n { out.push(c); if c == 3 {… | b4f86484 |
 | B-2026-07-16-17 | lowering (presize.rs collection pre-sizing): a counted push-loop whose fill is a balanced if/else (both arms push once) was not recognized, so the Vec kept growth-doubling reallocs | low | The loop-bound pre-sizing pass fired only on a STRAIGHT-LINE single push per iteration; a body whose sole fill is a balanced `if COND { v.push(a) } e… | 53f5c09 |
 | B-2026-07-16-18 | codegen (stmts.rs Assign arm — the Identifier-target reassignment had cases for Vec/String and Map/Set vars but no struct-var case, so `a = b` never suppressed the moved source's StructDrop) | high | FIXED — Reassigning a heap-owning STRUCT variable (`a = b`) double-frees: the Assign arm never suppressed the moved source `b`'s StructDrop, so both… | b837786 |
+| B-2026-07-16-20 | codegen (`compile_method_call` `String.to_string()` owning-copy special-case) vs interpreter | medium | A `.to_string()` chained as the receiver of another method (`s.to_string().to_uppercase()`, `s.trim().to_string()…`) build-failed with 'Vec/String me… | c043d03 |
+| B-2026-07-16-21 | codegen (`try_compile_nonident_collection_method` expression-receiver string-method materialization + the `to_string` copy path) | medium | A heap-String-returning method used as the RECEIVER of another method (`s.to_uppercase().to_lowercase()`, `e.to_uppercase().split(",")`, `c.trim().to… | c043d03 |
 
 </details>
 
