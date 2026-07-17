@@ -1677,6 +1677,17 @@ pub struct TypeChecker<'a> {
     /// path. Used to resolve bare `method(args)` calls at expected-type
     /// positions when the expected type is a generic param.
     pub(super) enclosing_bounds: HashMap<String, Vec<crate::ast::TraitBound>>,
+    /// Generic-parameter names that are DIM/const params (appear in a shape
+    /// position `[D]` in the current function's signature, or are declared
+    /// `const` / `...S`) — the subset whose body-annotation resolution needs
+    /// the generic scope. Set by `check_function` (save/restore). Type params
+    /// are deliberately EXCLUDED: in function bodies they use the bare
+    /// `Named{"T"}` spelling (bounds resolve via `enclosing_bounds`), so
+    /// scoping them would flip a `let x: T` annotation to `TypeParam` and break
+    /// operator/method resolution — the Named-vs-TypeParam trap. Scoping only
+    /// dim params lets `let p: Tensor[f32, [D]]` resolve `D` while `let x: T`
+    /// keeps `Named` (B-2026-07-13-5 leg B).
+    pub(super) current_body_dim_scope: Vec<String>,
     /// Name of the enclosing trait declaration when type-checking a default
     /// method body. Populated on entering `check_trait_def`, cleared on exit.
     /// Consumed by `dispatch_self_receiver_method` (slice 3.5 of the
@@ -1853,6 +1864,7 @@ impl<'a> TypeChecker<'a> {
             pattern_binding_borrow_modes: HashMap::new(),
             pattern_binding_inner_unresolved: HashMap::new(),
             enclosing_bounds: HashMap::new(),
+            current_body_dim_scope: Vec::new(),
             enclosing_trait: None,
             closure_once_reasons: HashMap::new(),
             closure_param_seeds: HashMap::new(),

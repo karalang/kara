@@ -27985,6 +27985,34 @@ fn test_variadic_shape_param_binds_whole_shape() {
 }
 
 #[test]
+fn test_generic_shape_param_in_body_annotation_resolves() {
+    // B-2026-07-13-5 leg B: a body-level `let` annotation whose shape
+    // references the enclosing fn's generic DIM param — `let p: Tensor[f32,
+    // [D]]`, `let z: Tensor[f32, [M, N]]` — used to lower with an EMPTY
+    // generic scope and error "const expression: 'D' is not a known const",
+    // even though the SIGNATURE accepts the identical annotation. The fn's
+    // shape-position dim params now thread into body annotations. Type params
+    // (`let y: T`) are deliberately NOT scoped so they keep the `Named{"T"}`
+    // body spelling (bounds via `enclosing_bounds`) — the mixed case below
+    // exercises both in one function set.
+    typecheck_ok(
+        "fn scale[D](t: Tensor[f32, [D]]) -> Tensor[f32, [D]] {\n\
+             let p: Tensor[f32, [D]] = t.map(|x| x * 2.0f32);\n\
+             p\n\
+         }\n\
+         fn zeros_like[M, N](t: Tensor[f32, [M, N]]) -> f32 {\n\
+             let z: Tensor[f32, [M, N]] = t.map(|x| x * 0.0f32);\n\
+             z.sum()\n\
+         }\n\
+         fn id_ann[T](x: T) -> T {\n\
+             let y: T = x;\n\
+             y\n\
+         }\n\
+         fn main() {}\n",
+    );
+}
+
+#[test]
 fn test_splice_transpose_result_shape() {
     let errors = typecheck_errors(
         "struct Mat[T, ...S] { }\n\

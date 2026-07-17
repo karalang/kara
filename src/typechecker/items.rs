@@ -1399,6 +1399,62 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Collect the names in `generics` that appear in a SHAPE position
+    /// (`[D]` / `[...S]`) anywhere inside `ty` — the dim params a body-level
+    /// annotation must resolve (B-2026-07-13-5 leg B). Recursive walk over the
+    /// annotation-nesting `TypeKind`s; `GenericArg::Shape` dims are the only
+    /// shape carriers. A type param is never collected (it sits in a
+    /// `GenericArg::Type` position, not a shape one), so its `Named` body
+    /// spelling is preserved and the Named-vs-TypeParam trap is avoided.
+    fn collect_shape_dim_generic_names(ty: &TypeExpr, generics: &[String], out: &mut Vec<String>) {
+        fn note(name: &str, generics: &[String], out: &mut Vec<String>) {
+            if generics.iter().any(|g| g == name) && !out.iter().any(|o| o == name) {
+                out.push(name.to_string());
+            }
+        }
+        if let TypeKind::Path(p) = &ty.kind {
+            if let Some(args) = &p.generic_args {
+                for arg in args {
+                    match arg {
+                        GenericArg::Type(t) => {
+                            Self::collect_shape_dim_generic_names(t, generics, out)
+                        }
+                        GenericArg::Shape(shape) => {
+                            for dim in &shape.dims {
+                                match dim {
+                                    ShapeDim::Const(e) => {
+                                        if let ExprKind::Identifier(n) = &e.kind {
+                                            note(n, generics, out);
+                                        }
+                                    }
+                                    ShapeDim::Splice { name, .. } => note(name, generics, out),
+                                    ShapeDim::Dynamic { .. } => {}
+                                }
+                            }
+                        }
+                        GenericArg::Const(_) => {}
+                    }
+                }
+            }
+        }
+        match &ty.kind {
+            TypeKind::Tuple(ts) => {
+                for t in ts {
+                    Self::collect_shape_dim_generic_names(t, generics, out);
+                }
+            }
+            TypeKind::Array { element, .. }
+            | TypeKind::Pointer { inner: element, .. }
+            | TypeKind::Ref(element)
+            | TypeKind::MutRef(element)
+            | TypeKind::MutSlice(element)
+            | TypeKind::Weak(element) => {
+                Self::collect_shape_dim_generic_names(element, generics, out)
+            }
+            _ => {}
+        }
+    }
+
     fn check_function(
         &mut self,
         f: &Function,
@@ -1423,6 +1479,28 @@ impl<'a> super::TypeChecker<'a> {
         for (name, bounds) in Self::collect_param_bounds(&f.generic_params, &f.where_clause) {
             self.enclosing_bounds.insert(name, bounds);
         }
+
+        // Collect the DIM params used in shape positions in the signature (and
+        // any `const` / `...S` params) so body-level annotations can resolve
+        // them — `let p: Tensor[f32, [D]]` (B-2026-07-13-5 leg B). Type params
+        // are excluded (they keep the `Named` body spelling). Saved/restored
+        // around the body like `enclosing_bounds`.
+        let mut body_dim_scope: Vec<String> = Vec::new();
+        if let Some(gps) = &f.generic_params {
+            for p in &gps.params {
+                if (p.is_const || p.is_variadic_shape) && gp.iter().any(|g| g == &p.name) {
+                    body_dim_scope.push(p.name.clone());
+                }
+            }
+        }
+        for param in &f.params {
+            Self::collect_shape_dim_generic_names(&param.ty, &gp, &mut body_dim_scope);
+        }
+        if let Some(ret) = &f.return_type {
+            Self::collect_shape_dim_generic_names(ret, &gp, &mut body_dim_scope);
+        }
+        let saved_body_dim_scope =
+            std::mem::replace(&mut self.current_body_dim_scope, body_dim_scope);
 
         // Validate default parameter values
         self.validate_default_params(&f.params, &gp);
@@ -1597,6 +1675,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_return_type = None;
         self.current_self_type = None;
         self.enclosing_bounds = saved_bounds;
+        self.current_body_dim_scope = saved_body_dim_scope;
         self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
         self.lint_override_stack.pop();
     }
@@ -3238,7 +3317,11 @@ impl<'a> super::TypeChecker<'a> {
                 value,
             } => {
                 let expected_ty = if let Some(ty_expr) = ty {
-                    let declared = self.lower_type_expr(ty_expr, &[]);
+                    // Lower with the enclosing fn's DIM params in scope so a
+                    // shape param `let p: Tensor[f32, [D]]` resolves `D`; type
+                    // params stay `Named` (B-2026-07-13-5 leg B).
+                    let scope = self.current_body_dim_scope.clone();
+                    let declared = self.lower_type_expr(ty_expr, &scope);
                     self.check_expr(value, &declared);
                     declared
                 } else {
@@ -3300,7 +3383,11 @@ impl<'a> super::TypeChecker<'a> {
                 else_block,
             } => {
                 let expected_ty = if let Some(ty_expr) = ty {
-                    let declared = self.lower_type_expr(ty_expr, &[]);
+                    // Lower with the enclosing fn's DIM params in scope so a
+                    // shape param `let p: Tensor[f32, [D]]` resolves `D`; type
+                    // params stay `Named` (B-2026-07-13-5 leg B).
+                    let scope = self.current_body_dim_scope.clone();
+                    let declared = self.lower_type_expr(ty_expr, &scope);
                     self.check_expr(value, &declared);
                     declared
                 } else {
