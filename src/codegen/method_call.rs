@@ -13962,7 +13962,116 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_vector_value()
         };
 
-        // f64 (or any non-f32 float): fall back to the intrinsic.
+        // f64: the Cephes double-precision `exp` — a rational P(r)/Q(r) instead
+        // of the f32 single polynomial (higher precision), same range reduction
+        // and `2^k` exponent assembly (into the 11-bit f64 exponent field).
+        if ft == self.context.f64_type() {
+            let i64_t = self.context.i64_type();
+            let iv64 = i64_t.vec_type(n);
+            let isplat64 = |c: u64| -> inkwell::values::VectorValue<'ctx> {
+                let scalar = i64_t.const_int(c, false);
+                let mut sv = iv64.get_undef();
+                for i in 0..n {
+                    sv = self
+                        .builder
+                        .build_insert_element(
+                            sv,
+                            scalar,
+                            i32_t.const_int(i as u64, false),
+                            "e64.isplat",
+                        )
+                        .unwrap();
+                }
+                sv
+            };
+            // Clamp to [MINLOG, MAXLOG] so the 2^k assembly can't overflow.
+            let x = binary_intr("llvm.maxnum", recv, fsplat(-708.396_418_532_264_1));
+            let x = binary_intr("llvm.minnum", x, fsplat(709.782_712_893_384));
+            // n = floor(log2(e)·x + 0.5)
+            let zin = self
+                .builder
+                .build_float_mul(x, fsplat(std::f64::consts::LOG2_E), "e64.z0")
+                .unwrap();
+            let zin = self
+                .builder
+                .build_float_add(zin, fsplat(0.5), "e64.z1")
+                .unwrap();
+            let z = unary_intr("llvm.floor", zin);
+            // r = x - z*C1 - z*C2  (ln2 split hi+lo).
+            let zc1 = self
+                .builder
+                .build_float_mul(z, fsplat(6.931_457_519_531_25E-1), "e64.zc1")
+                .unwrap();
+            let x = self.builder.build_float_sub(x, zc1, "e64.xr1").unwrap();
+            let zc2 = self
+                .builder
+                .build_float_mul(z, fsplat(1.428_606_820_309_417_2E-6), "e64.zc2")
+                .unwrap();
+            let x = self.builder.build_float_sub(x, zc2, "e64.xr2").unwrap();
+            let xx = self.builder.build_float_mul(x, x, "e64.xx").unwrap();
+            // px = x · P(xx),  P degree 2.
+            let pco = [
+                1.261_771_930_748_105_9E-4_f64,
+                3.029_944_077_074_419_6E-2,
+                1.0,
+            ];
+            let mut p = fsplat(pco[0]);
+            for &c in &pco[1..] {
+                p = self.builder.build_float_mul(p, xx, "e64.pm").unwrap();
+                p = self
+                    .builder
+                    .build_float_add(p, fsplat(c), "e64.pa")
+                    .unwrap();
+            }
+            let px = self.builder.build_float_mul(x, p, "e64.px").unwrap();
+            // Q(xx),  degree 3.
+            let qco = [
+                3.001_985_051_386_644_6E-6_f64,
+                2.524_483_403_496_841E-3,
+                2.272_655_482_081_550_3E-1,
+                2.0,
+            ];
+            let mut q = fsplat(qco[0]);
+            for &c in &qco[1..] {
+                q = self.builder.build_float_mul(q, xx, "e64.qm").unwrap();
+                q = self
+                    .builder
+                    .build_float_add(q, fsplat(c), "e64.qa")
+                    .unwrap();
+            }
+            // r = px / (Q - px);  result mantissa = 1 + 2r.
+            let denom = self.builder.build_float_sub(q, px, "e64.den").unwrap();
+            let xr = self.builder.build_float_div(px, denom, "e64.div").unwrap();
+            let two_xr = self
+                .builder
+                .build_float_mul(fsplat(2.0), xr, "e64.2xr")
+                .unwrap();
+            let res = self
+                .builder
+                .build_float_add(fsplat(1.0), two_xr, "e64.res")
+                .unwrap();
+            // 2^k = bitcast((int64(z) + 1023) << 52).
+            let ki = self
+                .builder
+                .build_float_to_signed_int(z, iv64, "e64.ki")
+                .unwrap();
+            let ki = self
+                .builder
+                .build_int_add(ki, isplat64(1023), "e64.kb")
+                .unwrap();
+            let ei = self
+                .builder
+                .build_left_shift(ki, isplat64(52), "e64.shl")
+                .unwrap();
+            let pow2k = self
+                .builder
+                .build_bit_cast(ei, vt, "e64.pow")
+                .unwrap()
+                .into_vector_value();
+            return self.builder.build_float_mul(res, pow2k, "e64.out").unwrap();
+        }
+
+        // Any other float width (f16 / bf16): fall back to the intrinsic.
         if ft != self.context.f32_type() {
             return unary_intr("llvm.exp", recv);
         }
@@ -14075,7 +14184,178 @@ impl<'ctx> super::Codegen<'ctx> {
             sv
         };
 
-        // f64 (or any non-f32 float): fall back to the intrinsic.
+        // f64: the Cephes double-precision `log` — same branchless frexp +
+        // √½ pivot as f32, but a rational `x³·P(x)/Q(x)` (degree-5 each) instead
+        // of the f32 single polynomial. Exponent field is 11 bits (bias 1023).
+        if ft == self.context.f64_type() {
+            let i64_t = self.context.i64_type();
+            let iv64 = i64_t.vec_type(n);
+            let isplat64 = |c: u64| -> inkwell::values::VectorValue<'ctx> {
+                let scalar = i64_t.const_int(c, false);
+                let mut sv = iv64.get_undef();
+                for i in 0..n {
+                    sv = self
+                        .builder
+                        .build_insert_element(
+                            sv,
+                            scalar,
+                            i32_t.const_int(i as u64, false),
+                            "l64.isplat",
+                        )
+                        .unwrap();
+                }
+                sv
+            };
+            // frexp: e = ((bits >> 52) & 0x7FF) - 1022; m ∈ [0.5, 1).
+            let bits = self
+                .builder
+                .build_bit_cast(recv, iv64, "l64.bits")
+                .unwrap()
+                .into_vector_value();
+            let ef = self
+                .builder
+                .build_right_shift(bits, isplat64(52), false, "l64.ef")
+                .unwrap();
+            let ef = self
+                .builder
+                .build_and(ef, isplat64(0x7FF), "l64.ef2")
+                .unwrap();
+            let e_int = self
+                .builder
+                .build_int_sub(ef, isplat64(1022), "l64.eint")
+                .unwrap();
+            let mant = self
+                .builder
+                .build_and(bits, isplat64(0x800F_FFFF_FFFF_FFFF), "l64.mant")
+                .unwrap();
+            let mant = self
+                .builder
+                .build_or(mant, isplat64(0x3FE0_0000_0000_0000), "l64.mant2")
+                .unwrap();
+            let m = self
+                .builder
+                .build_bit_cast(mant, vt, "l64.m")
+                .unwrap()
+                .into_vector_value();
+            // √½ pivot.
+            let cond = self
+                .builder
+                .build_float_compare(
+                    inkwell::FloatPredicate::OLT,
+                    m,
+                    fsplat(std::f64::consts::FRAC_1_SQRT_2),
+                    "l64.piv",
+                )
+                .unwrap();
+            let m2 = self.builder.build_float_add(m, m, "l64.m2").unwrap();
+            let x_lo = self
+                .builder
+                .build_float_sub(m2, fsplat(1.0), "l64.xlo")
+                .unwrap();
+            let x_hi = self
+                .builder
+                .build_float_sub(m, fsplat(1.0), "l64.xhi")
+                .unwrap();
+            let x = self
+                .builder
+                .build_select(cond, x_lo, x_hi, "l64.x")
+                .unwrap()
+                .into_vector_value();
+            let e_dec = self
+                .builder
+                .build_int_sub(e_int, isplat64(1), "l64.edec")
+                .unwrap();
+            let e_sel = self
+                .builder
+                .build_select(cond, e_dec, e_int, "l64.esel")
+                .unwrap()
+                .into_vector_value();
+            let fe = self
+                .builder
+                .build_signed_int_to_float(e_sel, vt, "l64.fe")
+                .unwrap();
+            let z = self.builder.build_float_mul(x, x, "l64.z").unwrap();
+            // P(x), degree 5 (6 coeffs).
+            let pco = [
+                1.018_756_638_045_809_3E-4_f64,
+                4.974_949_949_767_47E-1,
+                4.705_791_198_788_817,
+                1.449_892_253_416_109_3E1,
+                1.793_686_785_078_198_2E1,
+                7.708_387_337_558_854E0,
+            ];
+            let mut pnum = fsplat(pco[0]);
+            for &c in &pco[1..] {
+                pnum = self.builder.build_float_mul(pnum, x, "l64.pm").unwrap();
+                pnum = self
+                    .builder
+                    .build_float_add(pnum, fsplat(c), "l64.pa")
+                    .unwrap();
+            }
+            // Q(x), monic degree 5 (implicit leading 1 + 5 coeffs).
+            let qco = [
+                1.128_735_871_891_674_5E1_f64,
+                4.522_791_458_375_322E1,
+                8.298_752_669_127_766E1,
+                7.115_447_506_185_639E1,
+                2.312_516_201_267_653_4E1,
+            ];
+            let mut qden = fsplat(1.0);
+            for &c in &qco {
+                qden = self.builder.build_float_mul(qden, x, "l64.qm").unwrap();
+                qden = self
+                    .builder
+                    .build_float_add(qden, fsplat(c), "l64.qa")
+                    .unwrap();
+            }
+            // y = x · (z · P/Q)
+            let ratio = self
+                .builder
+                .build_float_div(pnum, qden, "l64.ratio")
+                .unwrap();
+            let mut y = self.builder.build_float_mul(z, ratio, "l64.zr").unwrap();
+            y = self.builder.build_float_mul(x, y, "l64.xy").unwrap();
+            // y -= fe · ln2_lo ; y -= 0.5·z
+            let ylo = self
+                .builder
+                .build_float_mul(fe, fsplat(2.121_944_400_546_905_8E-4), "l64.ylo")
+                .unwrap();
+            y = self.builder.build_float_sub(y, ylo, "l64.ysub1").unwrap();
+            let hz = self
+                .builder
+                .build_float_mul(fsplat(0.5), z, "l64.hz")
+                .unwrap();
+            y = self.builder.build_float_sub(y, hz, "l64.ysub2").unwrap();
+            // result = x + y + fe · ln2_hi
+            let zr = self.builder.build_float_add(x, y, "l64.zr2").unwrap();
+            let hi = self
+                .builder
+                .build_float_mul(fe, fsplat(0.693_359_375), "l64.hi")
+                .unwrap();
+            let zr = self.builder.build_float_add(zr, hi, "l64.zr3").unwrap();
+            // Domain: x < 0 → NaN, x == 0 → -inf.
+            let zero = fsplat(0.0);
+            let is_zero = self
+                .builder
+                .build_float_compare(inkwell::FloatPredicate::OEQ, recv, zero, "l64.isz")
+                .unwrap();
+            let is_neg = self
+                .builder
+                .build_float_compare(inkwell::FloatPredicate::OLT, recv, zero, "l64.isn")
+                .unwrap();
+            let r = self
+                .builder
+                .build_select(is_zero, fsplat(f64::NEG_INFINITY), zr, "l64.rz")
+                .unwrap()
+                .into_vector_value();
+            return self
+                .builder
+                .build_select(is_neg, fsplat(f64::NAN), r, "l64.rn")
+                .unwrap()
+                .into_vector_value();
+        }
+
+        // Any other float width (f16 / bf16): fall back to the intrinsic.
         if ft != self.context.f32_type() {
             let intr =
                 inkwell::intrinsics::Intrinsic::find("llvm.log").expect("llvm.log must exist");

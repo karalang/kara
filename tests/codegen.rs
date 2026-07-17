@@ -61720,6 +61720,94 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vector_exp_ln_f64_use_rationals_not_intrinsics() {
+        // The f64 `v.exp()` / `v.ln()` are the Cephes double-precision RATIONAL
+        // forms (a float `fdiv` of two polynomials), NOT `@llvm.exp` /
+        // `@llvm.log`. IR proof: a `fdiv <2 x double>` is present and neither
+        // intrinsic is called.
+        let ir_e = ir_for(
+            r#"
+fn f(a: f64) -> f64 {
+    let v: Vector[f64, 2] = Vector[f64, 2](a, a);
+    let e = v.exp();
+    e[0]
+}
+fn main() { println(f(1.0)); }
+"#,
+        );
+        assert!(
+            ir_e.contains("fdiv <2 x double>") && !ir_e.contains("@llvm.exp"),
+            "f64 v.exp() should be the rational (fdiv, no @llvm.exp); got:\n{ir_e}"
+        );
+        let ir_l = ir_for(
+            r#"
+fn f(a: f64) -> f64 {
+    let v: Vector[f64, 2] = Vector[f64, 2](a, a);
+    let l = v.ln();
+    l[0]
+}
+fn main() { println(f(2.0)); }
+"#,
+        );
+        assert!(
+            ir_l.contains("fdiv <2 x double>") && !ir_l.contains("@llvm.log"),
+            "f64 v.ln() should be the rational (fdiv, no @llvm.log); got:\n{ir_l}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_vector_exp_ln_f64_accuracy() {
+        // f64 `v.exp()` / `v.ln()` are the Cephes double-precision rationals —
+        // near machine precision, much tighter than the f32 single polynomials.
+        // Verify against libm to a tight relative tolerance + the ln domain.
+        let Some(out) = run_program(
+            r#"
+fn main() {
+    let x = Vector[f64, 4].from_array([1.0, 2.0, 5.0, -1.0]);
+    let e = x.exp();
+    println(e[0]); println(e[1]); println(e[2]); println(e[3]);
+    let y = Vector[f64, 4].from_array([2.0, 10.0, 0.001, 1000000.0]);
+    let l = y.ln();
+    println(l[0]); println(l[1]); println(l[2]); println(l[3]);
+    let d = Vector[f64, 2].from_array([0.0, -2.0]);
+    let ld = d.ln();
+    println(ld[0]); println(ld[1]);
+}
+"#,
+        ) else {
+            return;
+        };
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 10, "output line count; got:\n{out}");
+        let want = [
+            1.0_f64.exp(),
+            2.0_f64.exp(),
+            5.0_f64.exp(),
+            (-1.0_f64).exp(),
+            2.0_f64.ln(),
+            10.0_f64.ln(),
+            0.001_f64.ln(),
+            1_000_000.0_f64.ln(),
+        ];
+        for (l, w) in lines[..8].iter().zip(want.iter()) {
+            let g: f64 = l.parse().unwrap();
+            let tol = w.abs() * 1e-10 + 1e-12;
+            assert!(
+                (g - w).abs() <= tol,
+                "f64 exp/ln off: got {g}, want {w} (tol {tol})\nfull:\n{out}"
+            );
+        }
+        let z0: f64 = lines[8].parse().unwrap();
+        assert!(
+            z0.is_infinite() && z0 < 0.0,
+            "ln(0) should be -inf, got {}",
+            lines[8]
+        );
+        let zn: f64 = lines[9].parse().unwrap();
+        assert!(zn.is_nan(), "ln(-2) should be NaN, got {}", lines[9]);
+    }
+
+    #[test]
     fn test_ir_vector_floor_uses_vector_intrinsic() {
         // `std.simd.math` rounding (phase-11): `v.floor()` on a `Vector[f32, 4]`
         // lowers to the overloaded LLVM VECTOR intrinsic `@llvm.floor.v4f32`
