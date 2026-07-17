@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 35 | 1 |
 | crash | 23 | 0 |
 | run-vs-build | 23 | 0 |
-| perf | 20 | 1 |
+| perf | 20 | 0 |
 | soundness | 18 | 2 |
 | diagnostics | 11 | 1 |
 | use-after-free | 3 | 0 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 367 | 4 |
+| codegen | 367 | 3 |
 | typecheck | 61 | 3 |
 | interp | 48 | 1 |
 | ownership | 22 | 0 |
@@ -123,9 +123,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **520 surfaced · 8 open · 509 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **520 surfaced · 7 open · 510 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -133,14 +133,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **520 surfaced 
 | B-2026-07-16-13 | 2026-07-16 | other | low | `m[key]` (Map/SortedMap index operator) only accepts integer keys — a non-integer key (`m["x"]` on `Map[String,i64]`) is rejected 'index must be an integer or range, found String', despite design.md speccing `[]` → `index(ref self, key: ref K) -> ref V` (panics if key missing). `m[1]` on `Map[i64,V]` works only because i64 IS an integer. Workaround `m.get(k).unwrap()` works (and `get`'s key-borrow was fixed in B-2026-07-16-12). | none |
 | B-2026-07-16-23 | 2026-07-16 | codegen | medium | `unwrap_or(<non-Call heap default>)` mismanaged the eager default's ownership. LEG 1 (FIXED in c9593ed): an owned-binding default (moved Vec/String identifier) DOUBLE-FREED. REMAINING (open): a DIRECT array/collection-literal default (`unwrap_or([9,9,9])`) LEAKS, and a DIRECT f-string default (`unwrap_or(f"…")`) DOUBLE-FREES. Only the Call/MethodCall/String-slice (B-2026-07-16-22) and owned-binding (leg 1) default shapes are now correct. | none |
 | B-2026-07-17-5 | 2026-07-17 | cli | low | wasm link fails with cryptic `undefined symbol: __wasm_first_page_end` (from rustup's self-contained wasi libc.a dlmalloc.c.obj) when the PATH `wasm-ld` is older than the active rustup toolchain's wasi-libc — the linker resolution order (KARAC_WASM_LD > PATH wasm-ld > brew > rust-lld) picks the stale system linker over the version-matched rust-lld sitting in the same rustup toolchain that supplied the libc. | none |
-| B-2026-07-17-1 | 2026-07-17 | codegen | low | In-place single-row DP `while k >= 1 { row[k] = row[k] + row[k-1]; k = k-1 }` (Pascal #119, and the general rolling-DP shape) keeps a per-iteration bounds check codegen does not eliminate — kata #119 ran 416ms vs equal-safety Rust (rustc -O -C overflow-checks=on) 311ms = 1.34x, and vs C (no checks) 239ms = 1.74x. asm isolation: the update loop emits `cmp %rbx,%rdx; ja <panic>` before the `row[k]` / `row[k-1]` loads (one check covers both, since k-1 < k), while the SIBLING `row_hash` fold loop (`while j < row.len() { row[j] }`) in the SAME binary has NO bounds check (BCE fired there). So codegen's BCE handles the canonical forward `j < v.len()` and the binary-search `mid` (B-2026-06-16-1) but NOT this pattern: the index `k` is bounded by the OUTER loop var `i` (k <= i-1) and `i <= row_index` while `len = row_index + 1`, so `k < len` holds only transitively (k <= i-1 <= row_index-1 < len). The overflow check (`jo`) is present in both kara and equal-safety Rust and is NOT the gap (rust -O 274ms vs rust-ovf 311ms shows the overflow tax is ~13%; the residual 311->416 is the bounds check). Same BCE class as the fixed binary-search B-2026-06-16-1 (there get_unchecked pinned the check as ~85% of the gap), a distinct index-derivation pattern. | none |
 | B-2026-07-17-6 | 2026-07-17 | typecheck+interp | medium | `match <non-Option scalar/String> { Some(v) => …, None => … }` (Option-variant patterns on a scrutinee that is NOT an Option) PASSES `karac check` but PANICS the interpreter: 'internal error: entered unreachable code: non-exhaustive match … should be caught by exhaustiveness checker' (src/interpreter/pattern_match.rs:46). Also accepts a USER enum variant pattern on a non-matching scrutinee (`match i64 { Color.Red => … }`). Result patterns (`Ok/Err`) are CORRECTLY rejected — an asymmetry. A plausible real mistake (confusing Channel `recv()->T` with `try_recv()->Option[T]`) yields an internal-error crash, not a clear diagnostic. | none |
 | B-2026-07-17-12 | 2026-07-17 | typecheck | medium | Unknown methods on non-exhaustive prelude types (Vec/String/Map/Set/...) silently type as Type::Error, which unifies with ANYTHING: `v.some_typo()` passes karac check, and pre-B-2026-07-16-14 even `let x: bool = v.sum()` checked clean. EXHAUSTIVE_PRELUDE (expr_method_call.rs ~5400) covers only Option/Result, so every other built-in receiver gets the silent fall-through — the check/execution contract (the AI-first wedge: check-clean must run) is open on exactly the receivers LLM authors touch most. | none |
 | B-2026-07-17-13 | 2026-07-17 | codegen | low | A narrow-UNSIGNED value carried through an Option payload prints SIGNED: `Option[u8]` holding 200u8, unwrapped and printed, shows -56 (200 as i8) under karac build; interp correct. The unwrap/reconstruct produces the right bit pattern (i8 truncation is correct) but the print path reads it as signed because the reconstructed value's unsigned surface type is not threaded to expr_is_unsigned_int through the Option unwrap. Reproduces with a hand-written `match racc { Some(a) => .. }` over Option[u8] (NOT reduce-specific) — same class as B-2026-07-03-21's narrow-unsigned slot printing, extended to the Option-payload path. | none |
 
-### Fixed (509)
+### Fixed (510)
 
-<details><summary>509 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>510 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -648,6 +647,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **520 surfaced 
 | B-2026-07-17-2 | codegen | high | shared-ownership-matrix frontier REGRESSION: `forwarding_chain/ResultOk` + `forwarding_chain/ResultErr` went Clean → Leak with RC-elision ON (`KARAC_… | 3830213 — Result-carried payload exclusion at rc-elide classification (src/rc_elide.rs condition-1 filter): a param whose declared type wraps a shared handle in Result (at any nesting) is never admitted to the elidable set. Root cause confirmed as the e39db64 borrow-forward relaxation admitting the `eat2(r)` bare forward while `eat` itself stayed un-elided (forwarding escapes condition 2): `eat` compiled the forward as a MOVE (own release suppressed) and `eat2` skipped its elided release — nobody freed the Node. The pair-elision is edge-local (skip call-site retain + skip callee release = net zero) and is only balanced when the edge carries that pair: Option[shared]/bare-shared args follow the caller-retains convention (both halves exist), Result[shared] args follow the MOVE convention (no retain twin — the B-2026-07-12-24 scope-exit-dec residual), so Result edges have no pair to skip. Re-admitting Result is gated on B-2026-07-12-24 giving Result[shared] locals a real scope-exit release. Verified: matrix repro leak gone (valgrind 0 definitely lost, interp parity, elidable set empty for the chain), the Option twin of the SAME chain still elides and is valgrind-clean, treesum win intact at 26.8% elide-on vs off (0.364s vs 0.462s, within the 17-32% band), shared_ownership_matrix frontier restored (FLOWS.expected untouched per the filing's instruction). Unit pin: rc_elide::tests::result_carried_param_never_elides. |
 | B-2026-07-17-3 | codegen | high | An owned `self` receiver method returned/moved with a non-empty heap (Vec/String) field DOUBLE-FREES the field buffer | 13eda85 (direct-return leg, sibling session) + 2df786d (rebind leg) — both legs were the same missing-SelfValue gate at different call sites of the owned-struct move-out suppression. Direct return (`fn ident(self) -> T {{ self }}`): suppress_source_vec_cleanup_for_arg_ex's var_name match gained a SelfValue -> 'self' arm (gated to an inline-struct self slot so ref self never GEPs through a borrow pointer). Rebind (`let mut b = self; ...; b` — the builder/fluent shape): the Let-arm's move-source resolution in stmts.rs likewise resolves SelfValue to 'self', routing it into the same helper (and into suppress_user_drop_for_var for user-Drop structs) exactly like a plain owned-struct Identifier move. NOT a deeper deep-copy interaction after all — the deep-copy at entry was correct; only the suppression routing missed SelfValue. Verified: builder chain, String-field rebind, user-Drop rebind — interp/JIT/native parity, valgrind clean (drop count exactly matches the two deep-copied instances); memory_sanitizer + codegen suites green. Pins: asan_owned_self_direct_return_no_double_free (13eda85), asan_owned_self_rebind_builder_chain_no_double_free (this fix). |
 | B-2026-07-17-4 | codegen | high | `let a = r.unwrap_or("x").len();` on a let-bound `Option[String]` double-frees SEQUENTIALLY (no auto-par): unwrap_or's present branch reconstitutes t… | d9cd7a2 — calls.rs unwrap_or arm now calls suppress_inline_option_result_binding_move(object) at the merge point, the exact suppression unwrap/expect gained in B-2026-07-10-2 (same no-op cases: fresh-temp receiver, non-heap payload; the absent path zeroes a payload-less slot harmlessly). Pin: asan_sequential_unwrap_or_on_named_option_binding_no_double_free. |
+| B-2026-07-17-1 | codegen | low | In-place single-row DP `while k >= 1 { row[k] = row[k] + row[k-1]; k = k-1 }` (Pascal #119, and the general rolling-DP shape) keeps a per-iteration b… | 6474a73 |
 | B-2026-07-17-7 | codegen | high | `Vec[Tensor]` element ownership was never wired through codegen — a `Vec[Tensor]` (tensor-valued-autograd `Tape` grads/values columns) leaked every e… | 87443ed |
 | B-2026-07-17-8 | codegen | medium | Par-tabulate install of a pre-seeded accumulator takes the combine APPEND arm — a serial total×elem memcpy on the parent thread per dispatch while ev… | 7b7ba41a |
 | B-2026-07-17-9 | codegen | medium | Routing Vec/String frees through an unattributed karac_free_buf declaration turned every cleanup drain into a clobber-everything opaque call — LLVM k… | 7b7ba41a |
