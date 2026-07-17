@@ -15,22 +15,29 @@
 //     y.backward();
 //     x.grad();                          // dy/dx = 2x + 1 = 5
 //
-// **v1 scope — scalar core.** This slice differentiates scalar (`f64`)
-// expressions: the arithmetic ops (`add`/`sub`/`mul`/`div`/`neg`) and the
-// activations with hand-coded backwards (`relu`/`sigmoid`/`tanh`). It is the
-// foundation the tensor-valued surface builds on — the tape/backward mechanism
-// is identical for tensors, only the node payload widens from `f64` to
-// `Tensor[T, S]`. The design's shape-typed `Var[T, S]` wrapper over
-// `Tensor[T, S]` (with `Var.track` / `var.detach`), matmul/broadcast/reduction
-// ops, the softmax/gelu/silu activations, the losses, `grad`/`value_and_grad`,
-// and the `writes(GradTape)` effect integration are the follow-on slices.
+// **Scalar core (`Tape` / `Var`).** Differentiates scalar (`f64`) expressions:
+// the arithmetic ops (`add`/`sub`/`mul`/`div`/`neg`) and the activations with
+// hand-coded backwards (`relu`/`sigmoid`/`tanh`).
 //
-// **Design note — integer op-codes, not an enum.** The tape stores each node's
-// op as parallel `Vec[i64]` columns (`kind`/`pa`/`pb`) rather than an `enum Op`
-// payload. A gated `import` splices the named types (`Tape`, `Var`) and their
-// `impl` blocks, but not a separate helper enum — so encoding the op as an
-// integer keeps the module to the two importable types. The op-code legend:
-// 0 leaf · 1 add · 2 sub · 3 mul · 4 div · 5 neg · 6 relu · 7 sigmoid · 8 tanh.
+// **Tensor-valued surface (`TensorTape` / `TensorVar`).** The same tape/backward
+// mechanism with the node payload widened from `f64` to `Tensor[f32, [?]]` — a
+// dynamic-shape rank-1 f32 tensor. v1 covers the element-wise linear ops whose
+// vector-Jacobian products are themselves element-wise and shape-preserving:
+// `add` · `sub` · `mul` (Hadamard) · `neg`. Every node's operands and gradient
+// share one shape, so no broadcasting or reduction is needed; `backward` seeds
+// the output gradient to an all-ones tensor (`d out / d out = 1` element-wise).
+// The design's shape-typed generic `Var[T, S]` (with `Var.track` / `var.detach`),
+// matmul/broadcast/reduction ops (and the scalar-loss `sum`), the softmax/gelu/
+// silu activations, the losses, `grad`/`value_and_grad`, and the
+// `writes(GradTape)` effect integration are the follow-on slices.
+//
+// **Design note — integer op-codes, not an enum.** Each tape stores its nodes'
+// ops as parallel `Vec[i64]` columns (`kind`/`pa`/`pb`) rather than an `enum Op`
+// payload. A gated `import` splices the named types (`Tape`, `Var`, `TensorTape`,
+// `TensorVar`) and their `impl` blocks, but not a separate helper enum — so
+// encoding the op as an integer keeps the module to the importable types. The
+// op-code legend (shared by both tapes): 0 leaf · 1 add · 2 sub · 3 mul · 4 div ·
+// 5 neg · 6 relu · 7 sigmoid · 8 tanh.
 
 /// The append-only differentiation tape: parallel columns indexed by node id.
 /// `values` holds each node's forward value, `grads` its accumulated gradient
@@ -231,6 +238,204 @@ impl Var {
                 8 => {
                     let tv = tp.values[i];
                     tp.grads[a] = tp.grads[a] + g * (1.0 - tv * tv);
+                }
+                _ => {}
+            }
+            i = i - 1;
+        }
+    }
+}
+
+/// The tensor-valued differentiation tape — the `Tape` structure with each
+/// node's forward value and accumulated gradient widened from `f64` to a
+/// dynamic-shape rank-1 `Tensor[f32, [?]]`. `kind`/`pa`/`pb` are the same
+/// op-code + parent-id columns. Every node's value and gradient share one
+/// shape, so the reverse pass is pure element-wise tensor arithmetic.
+pub shared struct TensorTape {
+    mut values: Vec[Tensor[f32, [?]]],
+    mut grads: Vec[Tensor[f32, [?]]],
+    mut kind: Vec[i64],
+    mut pa: Vec[i64],
+    mut pb: Vec[i64],
+}
+
+/// A handle to one node on a `TensorTape` — the tensor value being
+/// differentiated. Carries a shared reference to the tape plus the node's
+/// index; operations append new nodes and return handles to them.
+pub struct TensorVar {
+    tape: TensorTape,
+    idx: i64,
+}
+
+impl TensorTape {
+    /// A fresh, empty tensor tape.
+    pub fn new() -> TensorTape {
+        TensorTape {
+            values: Vec.new(),
+            grads: Vec.new(),
+            kind: Vec.new(),
+            pa: Vec.new(),
+            pb: Vec.new(),
+        }
+    }
+
+    /// Append a node's bookkeeping columns (op-code + up to two parent ids) and
+    /// return its id. The `values`/`grads` tensor columns are pushed by the
+    /// caller *in its own scope* — a fresh owned local moves cleanly into the
+    /// Vec, whereas a tensor threaded through this method as an owned parameter
+    /// would alias the caller (tensors pass by a by-value-ref ABI, so a param
+    /// stored into a container double-frees). Every op pushes exactly one
+    /// value + one grad before calling this, so `kind.len()` (pre-push) is the
+    /// new node's id and keeps all five columns in lock-step.
+    #[must_use = "the recorded node id is needed to build the TensorVar handle"]
+    pub fn push_node(ref self, kind: i64, a: i64, b: i64) -> i64 {
+        let idx = self.kind.len();
+        self.kind.push(kind);
+        self.pa.push(a);
+        self.pb.push(b);
+        idx
+    }
+}
+
+impl TensorVar {
+    /// A leaf (input) variable from a tensor. The tape stores its OWN copy of
+    /// the value (`value + 0.0` materialises a fresh tensor), so the caller
+    /// keeps ownership of its input. `value` is borrowed (`ref`) rather than
+    /// consumed — a `shared struct` method may not store its own `self` into a
+    /// field, so the tape is a parameter rather than a receiver.
+    #[must_use = "a leaf TensorVar is only useful once operated on and read back"]
+    pub fn leaf(t: TensorTape, value: ref Tensor[f32, [?]]) -> TensorVar {
+        let v: Tensor[f32, [?]] = value + 0.0;
+        let zg: Tensor[f32, [?]] = value * 0.0;
+        t.values.push(v);
+        t.grads.push(zg);
+        let idx = t.push_node(0, -1, -1);
+        TensorVar { tape: t, idx: idx }
+    }
+
+    /// A fresh copy of this node's forward value. Adding `0.0` materialises a
+    /// new tensor so the caller owns the result and the tape keeps its own.
+    #[must_use]
+    pub fn value(ref self) -> Tensor[f32, [?]] {
+        let tp = self.tape;
+        let v = tp.values[self.idx];
+        v + 0.0
+    }
+
+    /// A fresh copy of this node's accumulated gradient (an all-zero tensor
+    /// until `backward` runs from an output reachable through this node).
+    #[must_use = "the gradient is the whole point of reverse-mode AD"]
+    pub fn grad(ref self) -> Tensor[f32, [?]] {
+        let tp = self.tape;
+        let g = tp.grads[self.idx];
+        g + 0.0
+    }
+
+    /// One scalar element of this node's accumulated gradient (`grad()[i]`
+    /// without materialising the whole tensor) — handy for assertions.
+    #[must_use = "the gradient is the whole point of reverse-mode AD"]
+    pub fn grad_at(ref self, i: i64) -> f32 {
+        let tp = self.tape;
+        let g = tp.grads[self.idx];
+        g[i]
+    }
+
+    /// Element-wise `self + other`. The fresh sum and its zero-grad are pushed
+    /// here (in this scope) so they move cleanly into the tape's Vec columns.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn add(ref self, other: ref TensorVar) -> TensorVar {
+        let tp = self.tape;
+        let av = tp.values[self.idx];
+        let bv = tp.values[other.idx];
+        let v: Tensor[f32, [?]] = av + bv;
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(1, self.idx, other.idx);
+        TensorVar { tape: tp, idx: idx }
+    }
+
+    /// Element-wise `self - other`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn sub(ref self, other: ref TensorVar) -> TensorVar {
+        let tp = self.tape;
+        let av = tp.values[self.idx];
+        let bv = tp.values[other.idx];
+        let v: Tensor[f32, [?]] = av - bv;
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(2, self.idx, other.idx);
+        TensorVar { tape: tp, idx: idx }
+    }
+
+    /// Element-wise (Hadamard) `self * other`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn mul(ref self, other: ref TensorVar) -> TensorVar {
+        let tp = self.tape;
+        let av = tp.values[self.idx];
+        let bv = tp.values[other.idx];
+        let v: Tensor[f32, [?]] = av * bv;
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(3, self.idx, other.idx);
+        TensorVar { tape: tp, idx: idx }
+    }
+
+    /// Element-wise `-self`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn neg(ref self) -> TensorVar {
+        let tp = self.tape;
+        let sv = tp.values[self.idx];
+        let v: Tensor[f32, [?]] = sv * -1.0;
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(5, self.idx, -1);
+        TensorVar { tape: tp, idx: idx }
+    }
+
+    /// Run the reverse pass from this node: seed its gradient to an all-ones
+    /// tensor, then walk every node newest→oldest applying each op's local
+    /// (element-wise) vector-Jacobian product to its parents. Nodes are
+    /// recorded in topological order, so one sweep fully accumulates every
+    /// node's gradient before it is read. Single-use per forward graph.
+    pub fn backward(ref self) {
+        let tp = self.tape;
+        let seed = tp.grads[self.idx];
+        tp.grads[self.idx] = seed + 1.0;
+        let n = tp.kind.len();
+        let mut i = n - 1;
+        while i >= 0 {
+            let g = tp.grads[i];
+            let k = tp.kind[i];
+            let a = tp.pa[i];
+            let b = tp.pb[i];
+            match k {
+                1 => {
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + g;
+                    let gb = tp.grads[b];
+                    tp.grads[b] = gb + g;
+                }
+                2 => {
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + g;
+                    let gb = tp.grads[b];
+                    tp.grads[b] = gb - g;
+                }
+                3 => {
+                    let vb = tp.values[b];
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + g * vb;
+                    let va = tp.values[a];
+                    let gb = tp.grads[b];
+                    tp.grads[b] = gb + g * va;
+                }
+                5 => {
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga - g;
                 }
                 _ => {}
             }

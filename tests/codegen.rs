@@ -67834,6 +67834,38 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_autograd_tensor_valued() {
+        // `std.autograd` tensor-valued surface (phase-11) — reverse-mode AD over
+        // element-wise `Tensor[f32, [?]]` nodes, with gradient accumulation
+        // across a fanned-out input.
+        //   z = x * y + x   (x used in both the product and the sum)
+        //   dz/dx = y + 1 = [5, 6];   dz/dy = x = [2, 3]
+        // at x=[2,3], y=[4,5]. Exercises the Vec[Tensor] element-ownership
+        // paths fixed in B-2026-07-17-7 (field drop, index-store overwrite in
+        // `backward`'s accumulation, moved named-tensor store in `record`).
+        if let Some(out) = run_program(
+            r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let x0: Tensor[f32, [?]] = Tensor.from([2.0, 3.0]);
+    let y0: Tensor[f32, [?]] = Tensor.from([4.0, 5.0]);
+    let x = TensorVar.leaf(t, x0);
+    let y = TensorVar.leaf(t, y0);
+    let z = x.mul(y).add(x);
+    z.backward();
+    println(x.grad_at(0));
+    println(x.grad_at(1));
+    println(y.grad_at(0));
+    println(y.grad_at(1));
+}
+"#,
+        ) {
+            assert_eq!(out, "5\n6\n2\n3\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_embeddings_cosine_similarity_matrix() {
         // `std.embeddings.cosine_similarity_matrix` (phase-11): the Q×N
         // bulk-scoring path — a `[Q, D]` query block vs a `[N, D]` corpus →

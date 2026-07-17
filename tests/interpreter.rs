@@ -18380,6 +18380,35 @@ fn main() {
 }
 
 #[test]
+fn test_autograd_reverse_mode_tensor_valued() {
+    // std.autograd (phase-11) tensor-valued surface — interpreter parity with
+    // tests/codegen.rs::test_e2e_autograd_tensor_valued. Element-wise
+    // Tensor[f32, [?]] nodes with gradient accumulation across a fanned-out
+    // input: z = x*y + x at x=[2,3], y=[4,5] → dz/dx = y+1 = [5,6],
+    // dz/dy = x = [2,3]. Exercises the shared-struct tensor tape, the
+    // fresh-local value/grad pushes, and the tensor backward sweep.
+    let out = run_no_errors(
+        r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let x0: Tensor[f32, [?]] = Tensor.from([2.0, 3.0]);
+    let y0: Tensor[f32, [?]] = Tensor.from([4.0, 5.0]);
+    let x = TensorVar.leaf(t, x0);
+    let y = TensorVar.leaf(t, y0);
+    let z = x.mul(y).add(x);
+    z.backward();
+    println(x.grad_at(0));
+    println(x.grad_at(1));
+    println(y.grad_at(0));
+    println(y.grad_at(1));
+}
+"#,
+    );
+    assert_eq!(out, "5\n6\n2\n3\n");
+}
+
+#[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors
     // (the last Sleef building block). `>>` is logical on unsigned lanes and

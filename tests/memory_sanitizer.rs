@@ -425,6 +425,34 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_autograd_tensor_valued_module() {
+        // The full `std.autograd` tensor-valued surface end-to-end: leaf copies,
+        // the fresh-local value/grad pushes, the `backward` accumulation, and the
+        // copy-return `value()`/`grad()` — all through the gated import. z = x*y+x
+        // with x fanned out, so grads accumulate. LSan-clean over the whole tape.
+        assert_clean_asan_run(
+            r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let x0: Tensor[f32, [?]] = Tensor.from([2.0, 3.0]);
+    let y0: Tensor[f32, [?]] = Tensor.from([4.0, 5.0]);
+    let x = TensorVar.leaf(t, x0);
+    let y = TensorVar.leaf(t, y0);
+    let z = x.mul(y).add(x);
+    z.backward();
+    let gx = x.grad();
+    println(gx[0]);
+    println(x.grad_at(1));
+    println(y.grad_at(0));
+}
+"#,
+            &["5", "6", "2"],
+            "asan_autograd_tensor_valued_module",
+        );
+    }
+
     // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ───────────
     // A returned capturing closure gets a reference-counted HEAP environment
     // (`emit_rc_alloc { i64 refcount, env }`); the owning `let f = make(..)`
