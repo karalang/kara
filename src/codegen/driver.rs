@@ -118,12 +118,33 @@ fn link_wasm_executable(
         .output()
         .map_err(|e| format!("Failed to invoke {}: {}", linker.display(), e))?;
     if !output.status.success() {
-        return Err(format!(
-            "wasm-ld failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        return Err(format_wasm_link_error("wasm-ld failed", &output.stderr));
     }
     Ok(())
+}
+
+/// Format a wasm-ld failure, appending an actionable hint when the stderr
+/// shows the linker↔wasi-libc version-drift symptom (B-2026-07-17-5): an
+/// undefined reference to a linker-synthesized symbol (`__wasm_first_page_end`
+/// / `__wasm_init_memory`) that only a newer LLD provides but the resolved
+/// linker does not, pulled in from the toolchain's own dlmalloc. karac now
+/// defaults to the version-matched rustup `rust-lld`, so this only fires when
+/// `KARAC_WASM_LD` points at a stale system `wasm-ld` (or on a non-rustup
+/// setup); the hint names the fix either way.
+fn format_wasm_link_error(context: &str, stderr: &[u8]) -> String {
+    let s = String::from_utf8_lossy(stderr);
+    let mut msg = format!("{context}: {s}");
+    if s.contains("__wasm_first_page_end") || s.contains("__wasm_init_memory") {
+        msg.push_str(
+            "\nhint: the resolved wasm linker is older than the active rustup \
+             toolchain's wasi-libc (the `__wasm_first_page_end` undefined symbol \
+             is the tell). karac defaults to the toolchain's version-matched \
+             `rust-lld`; if you set KARAC_WASM_LD to a system `wasm-ld`, unset it \
+             — or point it at the rustup gcc-ld wasm-ld under \
+             `$(rustc --print sysroot)/lib/rustlib/<host>/bin/gcc-ld/wasm-ld`.",
+        );
+    }
+    msg
 }
 
 /// Link a wasm32 object into a **shared-memory threaded** WASI command
@@ -230,9 +251,9 @@ pub fn link_wasm_executable_threaded(
         .output()
         .map_err(|e| format!("Failed to invoke {}: {}", linker.display(), e))?;
     if !output.status.success() {
-        return Err(format!(
-            "wasm-ld (threaded) failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+        return Err(format_wasm_link_error(
+            "wasm-ld (threaded) failed",
+            &output.stderr,
         ));
     }
     Ok(())
@@ -253,17 +274,41 @@ fn append_wasm_export_flags(cmd: &mut std::process::Command, wasm_exports: &[Str
 /// Locate a wasm-capable linker. Resolution order:
 ///   1. `KARAC_WASM_LD` env var — honored verbatim (mirror of
 ///      `KARAC_RUNTIME`'s contract).
-///   2. `wasm-ld` on `PATH`.
-///   3. Homebrew LLVM's `wasm-ld` (macOS: Apple's toolchain ships no
+///   2. The ACTIVE Rust toolchain's `rust-lld` with `-flavor wasm` — the
+///      version-matched sibling of the wasi-libc we link (both come from the
+///      same rustup toolchain), so it can't drift out of sync with the libc
+///      the way a system linker can (B-2026-07-17-5). Present in every rustup
+///      install, so the karac-runtime build prerequisite already guarantees
+///      it exists.
+///   3. `wasm-ld` on `PATH` (fallback for a non-rustup toolchain).
+///   4. Homebrew LLVM's `wasm-ld` (macOS: Apple's toolchain ships no
 ///      wasm backend driver, brew's llvm/llvm@18 do).
-///   4. The Rust toolchain's `rust-lld` with `-flavor wasm` — present in
-///      every rustup install, so the karac-runtime build prerequisite
-///      already guarantees a working fallback.
 ///
 /// Returns the command plus any prefix args the flavor needs.
 fn resolve_wasm_linker() -> Result<(std::path::PathBuf, Vec<String>), String> {
     if let Some(p) = std::env::var_os("KARAC_WASM_LD") {
         return Ok((std::path::PathBuf::from(p), vec![]));
+    }
+    // Prefer the ACTIVE rustup toolchain's own `rust-lld` over a PATH
+    // `wasm-ld`. The wasi-libc we link (`wasi_self_contained_sysroot`) comes
+    // from THIS toolchain's self-contained sysroot, so `rust-lld` is the
+    // version-matched linker; a stale system `wasm-ld` invites exactly the
+    // libc↔linker drift that breaks the link (B-2026-07-17-5: after
+    // `rustup update` a newer wasi-libc's dlmalloc references
+    // `__wasm_first_page_end`, a symbol only newer LLD synthesizes, while
+    // Ubuntu's PATH `wasm-ld` 18.1.3 fails with a cryptic undefined-symbol
+    // error). `rust-lld -flavor wasm` IS lld's wasm driver — identical
+    // behaviour to `wasm-ld`, just guaranteed to match the libc. Best-effort:
+    // if `rustc`/`rust-lld` isn't resolvable (a non-rustup toolchain), fall
+    // through to the PATH / homebrew probes below.
+    if let (Ok(sysroot), Ok(host)) = (rustc_print(&["--print", "sysroot"]), rustc_host_triple()) {
+        let rust_lld = std::path::Path::new(sysroot.trim())
+            .join("lib/rustlib")
+            .join(host.trim())
+            .join("bin/rust-lld");
+        if rust_lld.exists() {
+            return Ok((rust_lld, vec!["-flavor".to_string(), "wasm".to_string()]));
+        }
     }
     // PATH probe: `wasm-ld --version` exiting zero is the existence check.
     let on_path = std::process::Command::new("wasm-ld")
@@ -281,16 +326,6 @@ fn resolve_wasm_linker() -> Result<(std::path::PathBuf, Vec<String>), String> {
         if std::path::Path::new(brew).exists() {
             return Ok((std::path::PathBuf::from(brew), vec![]));
         }
-    }
-    // rust-lld lives under <sysroot>/lib/rustlib/<host>/bin/.
-    let sysroot = rustc_print(&["--print", "sysroot"])?;
-    let host = rustc_host_triple()?;
-    let rust_lld = std::path::Path::new(sysroot.trim())
-        .join("lib/rustlib")
-        .join(host.trim())
-        .join("bin/rust-lld");
-    if rust_lld.exists() {
-        return Ok((rust_lld, vec!["-flavor".to_string(), "wasm".to_string()]));
     }
     Err(
         "no wasm linker found: set KARAC_WASM_LD, or install one of wasm-ld (PATH / \
@@ -2008,10 +2043,33 @@ pub(super) fn read_strip_error_trace_env() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        default_cpu_and_features, parse_cpu_names_from_help_listing,
+        default_cpu_and_features, format_wasm_link_error, parse_cpu_names_from_help_listing,
         parse_feature_names_from_help_listing, symbol_listing_references_gpu,
         symbol_listing_references_tls,
     };
+
+    #[test]
+    fn wasm_link_error_appends_version_drift_hint() {
+        // B-2026-07-17-5: the `__wasm_first_page_end` undefined-symbol failure
+        // (a stale wasm-ld vs the toolchain's newer wasi-libc) gets an
+        // actionable hint pointing at the version-matched rustup linker.
+        let stderr = b"rust-lld: error: dlmalloc.c.obj: undefined symbol: __wasm_first_page_end\n";
+        let msg = format_wasm_link_error("wasm-ld failed", stderr);
+        assert!(msg.contains("__wasm_first_page_end"));
+        assert!(msg.contains("hint:"));
+        assert!(msg.contains("rust-lld"));
+        assert!(msg.contains("KARAC_WASM_LD"));
+    }
+
+    #[test]
+    fn wasm_link_error_no_hint_for_unrelated_failure() {
+        // An ordinary link failure (a missing runtime symbol) carries no hint —
+        // the drift hint would be a misleading red herring.
+        let stderr = b"rust-lld: error: undefined symbol: karac_free_buf\n";
+        let msg = format_wasm_link_error("wasm-ld failed", stderr);
+        assert!(msg.contains("karac_free_buf"));
+        assert!(!msg.contains("hint:"));
+    }
 
     #[test]
     fn gpu_symbol_reference_detected() {
