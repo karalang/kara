@@ -1,0 +1,240 @@
+// `std.autograd` — reverse-mode automatic differentiation (design.md §
+// std.autograd; deferred.md § std.autograd; phase-11 numerical/ML stdlib).
+//
+//     import std.autograd.{Tape, Var};
+//
+// Reverse-mode ("backpropagation"): a forward pass builds a computation graph
+// on a `Tape`, then `backward()` walks it in reverse, accumulating the
+// gradient of the output with respect to every node. Each operation records
+// how it was produced so the reverse pass can apply its local derivative (the
+// vector-Jacobian product).
+//
+//     let t = Tape.new();
+//     let x = Var.leaf(t, 2.0);          // a differentiable input
+//     let y = x.mul(x).add(x);           // y = x² + x   (= 6 at x = 2)
+//     y.backward();
+//     x.grad();                          // dy/dx = 2x + 1 = 5
+//
+// **v1 scope — scalar core.** This slice differentiates scalar (`f64`)
+// expressions: the arithmetic ops (`add`/`sub`/`mul`/`div`/`neg`) and the
+// activations with hand-coded backwards (`relu`/`sigmoid`/`tanh`). It is the
+// foundation the tensor-valued surface builds on — the tape/backward mechanism
+// is identical for tensors, only the node payload widens from `f64` to
+// `Tensor[T, S]`. The design's shape-typed `Var[T, S]` wrapper over
+// `Tensor[T, S]` (with `Var.track` / `var.detach`), matmul/broadcast/reduction
+// ops, the softmax/gelu/silu activations, the losses, `grad`/`value_and_grad`,
+// and the `writes(GradTape)` effect integration are the follow-on slices.
+//
+// **Design note — integer op-codes, not an enum.** The tape stores each node's
+// op as parallel `Vec[i64]` columns (`kind`/`pa`/`pb`) rather than an `enum Op`
+// payload. A gated `import` splices the named types (`Tape`, `Var`) and their
+// `impl` blocks, but not a separate helper enum — so encoding the op as an
+// integer keeps the module to the two importable types. The op-code legend:
+// 0 leaf · 1 add · 2 sub · 3 mul · 4 div · 5 neg · 6 relu · 7 sigmoid · 8 tanh.
+
+/// The append-only differentiation tape: parallel columns indexed by node id.
+/// `values` holds each node's forward value, `grads` its accumulated gradient
+/// (zeroed until `backward`), and `kind`/`pa`/`pb` record how the node was
+/// produced (op-code + up to two parent node ids, `-1` when absent). A
+/// `shared struct` so every `Var` handle can append to and read the same tape.
+pub shared struct Tape {
+    mut values: Vec[f64],
+    mut grads: Vec[f64],
+    mut kind: Vec[i64],
+    mut pa: Vec[i64],
+    mut pb: Vec[i64],
+}
+
+/// A handle to one node on a `Tape` — the value being differentiated. Carries
+/// a shared reference to the tape plus the node's index; operations on `Var`s
+/// append new nodes and return handles to them.
+pub struct Var {
+    tape: Tape,
+    idx: i64,
+}
+
+impl Tape {
+    /// A fresh, empty tape.
+    pub fn new() -> Tape {
+        Tape {
+            values: Vec.new(),
+            grads: Vec.new(),
+            kind: Vec.new(),
+            pa: Vec.new(),
+            pb: Vec.new(),
+        }
+    }
+
+    /// Append a node and return its id. Internal — `Var`'s operations call it.
+    #[must_use = "the recorded node id is needed to build the Var handle"]
+    pub fn record(ref self, value: f64, kind: i64, a: i64, b: i64) -> i64 {
+        let idx = self.values.len();
+        self.values.push(value);
+        self.grads.push(0.0);
+        self.kind.push(kind);
+        self.pa.push(a);
+        self.pb.push(b);
+        idx
+    }
+}
+
+impl Var {
+    /// A leaf (input) variable — a differentiable value with no parents. The
+    /// tape is a parameter (a shared handle) rather than a receiver because a
+    /// `shared struct` method may not store its own `self` into a field.
+    #[must_use = "a leaf Var is only useful once operated on and read back"]
+    pub fn leaf(t: Tape, value: f64) -> Var {
+        let idx = t.record(value, 0, -1, -1);
+        Var { tape: t, idx: idx }
+    }
+
+    /// This node's forward value.
+    #[must_use]
+    pub fn value(ref self) -> f64 {
+        let tp = self.tape;
+        tp.values[self.idx]
+    }
+
+    /// This node's accumulated gradient (0 until `backward` runs from an output
+    /// reachable through this node).
+    #[must_use = "the gradient is the whole point of reverse-mode AD"]
+    pub fn grad(ref self) -> f64 {
+        let tp = self.tape;
+        tp.grads[self.idx]
+    }
+
+    /// `self + other`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn add(ref self, other: ref Var) -> Var {
+        let tp = self.tape;
+        let v = self.value() + other.value();
+        let idx = tp.record(v, 1, self.idx, other.idx);
+        Var { tape: tp, idx: idx }
+    }
+
+    /// `self - other`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn sub(ref self, other: ref Var) -> Var {
+        let tp = self.tape;
+        let v = self.value() - other.value();
+        let idx = tp.record(v, 2, self.idx, other.idx);
+        Var { tape: tp, idx: idx }
+    }
+
+    /// `self * other`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn mul(ref self, other: ref Var) -> Var {
+        let tp = self.tape;
+        let v = self.value() * other.value();
+        let idx = tp.record(v, 3, self.idx, other.idx);
+        Var { tape: tp, idx: idx }
+    }
+
+    /// `self / other`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn div(ref self, other: ref Var) -> Var with panics {
+        let tp = self.tape;
+        let v = self.value() / other.value();
+        let idx = tp.record(v, 4, self.idx, other.idx);
+        Var { tape: tp, idx: idx }
+    }
+
+    /// `-self`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn neg(ref self) -> Var {
+        let tp = self.tape;
+        let v = 0.0 - self.value();
+        let idx = tp.record(v, 5, self.idx, -1);
+        Var { tape: tp, idx: idx }
+    }
+
+    /// ReLU activation: `max(0, self)`. Backward passes the gradient straight
+    /// through where the input was positive and blocks it (0) otherwise.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn relu(ref self) -> Var {
+        let tp = self.tape;
+        let x = self.value();
+        let v = if x > 0.0 { x } else { 0.0 };
+        let idx = tp.record(v, 6, self.idx, -1);
+        Var { tape: tp, idx: idx }
+    }
+
+    /// Logistic sigmoid `1 / (1 + e^-self)`. Backward is `s·(1 − s)` on the
+    /// output `s`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn sigmoid(ref self) -> Var {
+        let tp = self.tape;
+        let v = 1.0 / (1.0 + (0.0 - self.value()).exp());
+        let idx = tp.record(v, 7, self.idx, -1);
+        Var { tape: tp, idx: idx }
+    }
+
+    /// Hyperbolic tangent. Backward is `1 − t²` on the output `t`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn tanh(ref self) -> Var {
+        let tp = self.tape;
+        let v = self.value().tanh();
+        let idx = tp.record(v, 8, self.idx, -1);
+        Var { tape: tp, idx: idx }
+    }
+
+    /// Run the reverse pass from this node: seed its gradient to 1, then walk
+    /// every node from newest to oldest applying each op's local derivative to
+    /// its parents. Because nodes are recorded in topological order, a single
+    /// reverse sweep fully accumulates each node's gradient before it is read.
+    /// Single-use: call once per forward graph (gradients accumulate into the
+    /// tape's `grads` column).
+    pub fn backward(ref self) {
+        let tp = self.tape;
+        tp.grads[self.idx] = 1.0;
+        let n = tp.kind.len();
+        let mut i = n - 1;
+        while i >= 0 {
+            let g = tp.grads[i];
+            let k = tp.kind[i];
+            let a = tp.pa[i];
+            let b = tp.pb[i];
+            match k {
+                1 => {
+                    tp.grads[a] = tp.grads[a] + g;
+                    tp.grads[b] = tp.grads[b] + g;
+                }
+                2 => {
+                    tp.grads[a] = tp.grads[a] + g;
+                    tp.grads[b] = tp.grads[b] - g;
+                }
+                3 => {
+                    let va = tp.values[a];
+                    let vb = tp.values[b];
+                    tp.grads[a] = tp.grads[a] + g * vb;
+                    tp.grads[b] = tp.grads[b] + g * va;
+                }
+                4 => {
+                    let va = tp.values[a];
+                    let vb = tp.values[b];
+                    tp.grads[a] = tp.grads[a] + g / vb;
+                    tp.grads[b] = tp.grads[b] - g * va / (vb * vb);
+                }
+                5 => {
+                    tp.grads[a] = tp.grads[a] - g;
+                }
+                6 => {
+                    let va = tp.values[a];
+                    if va > 0.0 {
+                        tp.grads[a] = tp.grads[a] + g;
+                    }
+                }
+                7 => {
+                    let s = tp.values[i];
+                    tp.grads[a] = tp.grads[a] + g * s * (1.0 - s);
+                }
+                8 => {
+                    let tv = tp.values[i];
+                    tp.grads[a] = tp.grads[a] + g * (1.0 - tv * tv);
+                }
+                _ => {}
+            }
+            i = i - 1;
+        }
+    }
+}

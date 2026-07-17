@@ -18342,6 +18342,44 @@ fn main() {
 }
 
 #[test]
+fn test_autograd_reverse_mode_scalar() {
+    // std.autograd (phase-11) reverse-mode scalar AD — interpreter parity with
+    // tests/codegen.rs::test_e2e_autograd_scalar_arithmetic /
+    // test_e2e_autograd_activations. Exercises the shared-struct tape,
+    // interior-mutability node recording, and the backward sweep on the
+    // tree-walk backend. f(x)=x²+3x at x=2 → 10, grad 7; sigmoid(0)=0.5,
+    // grad 0.25; relu(-2) grad 0; tanh(0)=0, grad 1.
+    let out = run_no_errors(
+        r#"
+import std.autograd.{Tape, Var};
+fn main() {
+    let t = Tape.new();
+    let x = Var.leaf(t, 2.0);
+    let three = Var.leaf(t, 3.0);
+    let f = x.mul(x).add(three.mul(x));
+    println(f.value()); f.backward(); println(x.grad());
+
+    let t2 = Tape.new();
+    let z = Var.leaf(t2, 0.0);
+    let s = z.sigmoid();
+    println(s.value()); s.backward(); println(z.grad());
+
+    let t3 = Tape.new();
+    let n = Var.leaf(t3, -2.0);
+    let rn = n.relu();
+    rn.backward(); println(n.grad());
+
+    let t4 = Tape.new();
+    let w = Var.leaf(t4, 0.0);
+    let y = w.tanh();
+    println(y.value()); y.backward(); println(w.grad());
+}
+"#,
+    );
+    assert_eq!(out, "10\n7\n0.5\n0.25\n0\n0\n1\n");
+}
+
+#[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors
     // (the last Sleef building block). `>>` is logical on unsigned lanes and

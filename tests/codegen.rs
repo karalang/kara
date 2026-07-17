@@ -67596,6 +67596,77 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_autograd_scalar_arithmetic() {
+        // `std.autograd` (phase-11) reverse-mode scalar AD — arithmetic ops +
+        // the chain rule + gradient accumulation across a shared input.
+        //   f(x) = x*x + 3*x  at x=2 → 10; df/dx = 2x+3 = 7 (x used twice, so
+        //     its gradient accumulates from both terms).
+        //   g(a,b) = (a-b)/b   at a=6,b=2 → 2; dg/da = 1/b = 0.5;
+        //     dg/db = -a/b² = -1.5 (b used in both the subtraction and divisor).
+        if let Some(out) = run_program(
+            r#"
+import std.autograd.{Tape, Var};
+fn main() {
+    let t = Tape.new();
+    let x = Var.leaf(t, 2.0);
+    let three = Var.leaf(t, 3.0);
+    let f = x.mul(x).add(three.mul(x));
+    println(f.value());
+    f.backward();
+    println(x.grad());
+
+    let t2 = Tape.new();
+    let a = Var.leaf(t2, 6.0);
+    let b = Var.leaf(t2, 2.0);
+    let g = a.sub(b).div(b);
+    println(g.value());
+    g.backward();
+    println(a.grad());
+    println(b.grad());
+}
+"#,
+        ) {
+            assert_eq!(out, "10\n7\n2\n0.5\n-1.5\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_autograd_activations() {
+        // `std.autograd` activations with hand-coded backwards. Exact fixed
+        // points: sigmoid(0)=0.5, backward s(1-s)=0.25; relu blocks the
+        // gradient on a negative input (0) and passes it (1) on a positive one;
+        // tanh(0)=0, backward 1-t²=1.
+        if let Some(out) = run_program(
+            r#"
+import std.autograd.{Tape, Var};
+fn main() {
+    let t = Tape.new();
+    let z = Var.leaf(t, 0.0);
+    let s = z.sigmoid();
+    println(s.value()); s.backward(); println(z.grad());
+
+    let t2 = Tape.new();
+    let n = Var.leaf(t2, -2.0);
+    let rn = n.relu();
+    println(rn.value()); rn.backward(); println(n.grad());
+
+    let t3 = Tape.new();
+    let p = Var.leaf(t3, 3.0);
+    let rp = p.relu();
+    println(rp.value()); rp.backward(); println(p.grad());
+
+    let t4 = Tape.new();
+    let w = Var.leaf(t4, 0.0);
+    let y = w.tanh();
+    println(y.value()); y.backward(); println(w.grad());
+}
+"#,
+        ) {
+            assert_eq!(out, "0.5\n0.25\n0\n0\n3\n1\n0\n1\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_embeddings_cosine_similarity_matrix() {
         // `std.embeddings.cosine_similarity_matrix` (phase-11): the Q×N
         // bulk-scoring path — a `[Q, D]` query block vs a `[N, D]` corpus →
