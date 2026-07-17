@@ -15,7 +15,7 @@ fn group_anagrams(strs: ref Vec[String]) -> Vec[Vec[String]] {
         groups.entry(key).or_insert(Vec.new()).push(s.clone());
     }
 
-    groups.values().collect()
+    groups.values()
 }
 
 fn main() {

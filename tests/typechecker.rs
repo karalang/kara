@@ -5869,6 +5869,47 @@ fn test_distinct_bogus_method_is_no_method_found() {
     );
 }
 
+// B-2026-07-17-12 (partial): `String.bytes()` returns a structural
+// `Type::Slice[u8]`; before the arm-3700 fix that source shape fell through
+// the `extend_from_slice` arm to the silent prelude Error-typing.
+#[test]
+fn test_vec_extend_from_slice_accepts_slice_source() {
+    // `String.bytes()` returns a structural `Type::Slice[u8]`; before the
+    // arm-3700 fix that source shape fell through the extend_from_slice arm to
+    // the silent prelude Error-typing. It must type the call as `()` cleanly.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut buf: Vec[u8] = Vec.new();\n\
+             let s: String = \"hi\";\n\
+             buf.extend_from_slice(s.bytes());\n\
+             println(buf.len())\n\
+         }",
+    );
+}
+
+#[test]
+fn test_vec_known_methods_still_resolve() {
+    // Guard against the exhaustive gate over-firing: the full common Vec
+    // surface (mutators, accessors, extend_from_slice with Vec/Slice/Array
+    // sources, direct iterator terminals) must still typecheck.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut v: Vec[i64] = [3, 1, 2];\n\
+             v.push(4); v.pop(); v.insert(0, 9); v.remove(1); v.swap_remove(0);\n\
+             v.sort(); v.reverse(); v.clear(); v.truncate(1); v.swap(0, 0);\n\
+             let _a = v.len(); let _b = v.is_empty(); let _c = v.first();\n\
+             let _e = v.get(0); let _f = v.contains(1); let _g = v.binary_search(1);\n\
+             let _k = v.sorted(); let _s = v.iter().sum();\n\
+             let src: Vec[i64] = [1, 2];\n\
+             v.extend_from_slice(src);\n\
+             let arr: Array[i64, 2] = [7, 8];\n\
+             v.extend_from_slice(arr);\n\
+             v.retain(|x| x > 0);\n\
+             println(\"ok\")\n\
+         }",
+    );
+}
+
 #[test]
 fn test_unknown_method_on_option_is_rejected() {
     // `Option` / `Result` have an exhaustively-modelled method surface, so a
@@ -9352,7 +9393,9 @@ fn test_method_resolution_prelude_silent_fallthrough_preserved_when_method_absen
     // (B-2026-07-14-5) — their surface is exhaustively modelled, so an unknown
     // method on one is a real NoMethodFound (see
     // `test_unknown_method_on_option_is_rejected`). This gate therefore uses
-    // `Vec`, which remains on the silent path.
+    // `Vec`, which remains on the silent path (graduating it is the open
+    // B-2026-07-17-12 — it requires modelling the full iterator-terminal-on-
+    // Vec surface that codegen handles via syntax-directed intercepts).
     typecheck_ok("fn main() { let mut v: Vec[i64] = Vec.new(); v.truly_nonexistent_method(); }");
 }
 

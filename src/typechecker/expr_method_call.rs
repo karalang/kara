@@ -3725,6 +3725,16 @@ impl<'a> super::TypeChecker<'a> {
                     {
                         Some(args[0].clone())
                     }
+                    // A structural `Type::Slice { element }` source — what
+                    // `String.bytes()` / `Vec.as_slice()` / a `v.slice(a, b)`
+                    // view produce (the byte-slice shape, distinct from the
+                    // `Type::Named { name: "Slice" }` spelling). Both backends
+                    // already accept a 2-field slice source
+                    // (`vec_method.rs`); without this arm the call fell through
+                    // to the silent prelude Error-typing (part of
+                    // B-2026-07-17-12) — e.g. `buf.extend_from_slice(s.bytes())`
+                    // typed as `Type::Error` instead of `()`.
+                    Type::Slice { element, .. } => Some((**element).clone()),
                     Type::Array { element, .. } => Some((**element).clone()),
                     _ => None,
                 };
