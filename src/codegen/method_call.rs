@@ -5293,13 +5293,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 ExprKind::MethodCall { .. } | ExprKind::Range { .. }
             )
         {
-            // Float elements are gated OUT to the loud interp-hint bail: the
-            // underlying `reduce` lowering mis-handles a float accumulator
-            // (`f.iter().reduce(|a, x| ..)` returns the None arm under
-            // `karac build` while the interpreter is correct) — a PRE-EXISTING
-            // reduce bug this desugar would otherwise inherit silently
-            // (ledger entry filed with this slice). Ints/uints take the fast
-            // path; floats work under `--interp`.
+            // Engage for scalar (int / uint / char / bool / float) elements —
+            // the reduce lowering now roundtrips float and narrow-int payloads
+            // correctly (B-2026-07-17-11 registered the synthesized acc
+            // binding's surface type). Non-scalar elements (Strings, which
+            // belong to the sorted-collection iter paths below this arm, and
+            // any unrecorded shape) FALL THROUGH to the existing dispatch — an
+            // early Err here would preempt those later arms
+            // (e2e_sorted_set_string_iter_min_max_codegen).
             let elem_head = self
                 .iter_terminal_elem_types
                 .get(&(call_span.offset, call_span.length))
@@ -5309,7 +5310,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     _ => None,
                 });
-            let elem_is_int = matches!(
+            let elem_is_scalar = matches!(
                 elem_head.as_deref(),
                 Some(
                     "i8" | "i16"
@@ -5325,18 +5326,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         | "isize"
                         | "char"
                         | "bool"
+                        | "f32"
+                        | "f64"
                 )
             );
-            if !elem_is_int {
-                // FALL THROUGH, never Err: floats hit the pre-existing reduce
-                // float-accumulator bug (filed with this slice — an early bail
-                // here would be a silent wrong answer if desugared, and a loud
-                // preemption of later arms if Err'd); Strings belong to the
-                // sorted-collection iter paths BELOW this arm (an early Err
-                // regressed e2e_sorted_set_string_iter_min_max_codegen on the
-                // first battery run). Whatever this arm skips lands on the
-                // existing dispatch — the sorted-set lowering or the generic
-                // loud error.
+            if !elem_is_scalar {
+                // FALL THROUGH, never Err: a non-scalar element (String —
+                // owned by the sorted-collection iter paths below this arm; an
+                // early Err regressed e2e_sorted_set_string_iter_min_max_codegen)
+                // or an unrecorded element type lands on the existing dispatch,
+                // which handles it or emits the generic loud error.
             } else {
                 let sp = call_span.clone();
                 let ident = |n: &str| Expr {
@@ -9403,6 +9402,34 @@ impl<'ctx> super::Codegen<'ctx> {
         let uid = self.indexed_elem_counter;
         let sp = call_span.clone();
         let raccname = format!("__racc_{}", uid);
+        // B-2026-07-17-11: the synthesized `Some(<acc>)` match-arm binding is
+        // compiled WITHOUT a typecheck pass, so codegen's payload
+        // reconstruction (`reconstruct_payload_value`) has no
+        // `pattern_binding_types` entry for it and falls to the raw-i64
+        // default — correct for an i64 element, but a FLOAT element then reads
+        // the payload word (the float's bit pattern) via `sitofp` (garbage),
+        // and a NARROW-INT element (`u8`/`i32`/…) never truncates (`200u8`
+        // read back as `-56`). Give the binding a unique synthetic span (well
+        // outside any real source offset, distinct per reduce via `uid`) and
+        // register the element's surface name there, so the float-bitcast /
+        // int-truncation arms fire exactly as they do for a typechecked
+        // `match`. Elements are already gated to trivially-copyable scalars,
+        // so the last path segment is the surface name (`f64`, `u8`, …);
+        // registering `i64`/`u64` is a harmless no-op (word passes through).
+        let acc_bind_span = crate::token::Span {
+            line: sp.line,
+            column: sp.column,
+            offset: usize::MAX - uid as usize,
+            length: 1,
+        };
+        let acc_surface_name = match &elem_te.kind {
+            TypeKind::Path(p) if p.generic_args.is_none() => p.segments.last().cloned(),
+            _ => None,
+        };
+        if let Some(name) = acc_surface_name {
+            self.pattern_binding_types
+                .insert((acc_bind_span.offset, acc_bind_span.length), name);
+        }
         let elem_name = steps
             .iter()
             .find(|(_, p, _)| !p.is_empty())
@@ -9477,7 +9504,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                     path: vec!["Some".to_string()],
                                     patterns: vec![Pattern {
                                         kind: PatternKind::Binding(acc_p.to_string()),
-                                        span: sp.clone(),
+                                        // Unique span registered in
+                                        // `pattern_binding_types` above so the
+                                        // payload reconstruction knows the
+                                        // element's real scalar type
+                                        // (B-2026-07-17-11).
+                                        span: acc_bind_span.clone(),
                                     }],
                                 },
                                 span: sp.clone(),

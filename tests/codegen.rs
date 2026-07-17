@@ -10756,6 +10756,31 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_reduce_float_and_narrow_int_payload() {
+        // B-2026-07-17-11 — the synthesized `Some(<acc>)` match binding is
+        // compiled without a typecheck pass, so its payload had no
+        // `pattern_binding_types` entry and reconstructed via the raw-i64
+        // default: a FLOAT accumulator read the payload word via `sitofp`
+        // (garbage → the reduce returned the None arm, printing the
+        // `unwrap_or` default), and a NARROW-INT accumulator never truncated.
+        // The synthesis now registers the acc binding's surface type against a
+        // unique span so the float-bitcast / int-truncate arms fire. Float max
+        // reduce → 2.5; f64 sum-reduce → 4.5; direct `.max()`/`.min()` desugar
+        // (which reuses this lowering) → 2.5 / 0.5.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let f: Vec[f64] = [1.5, 2.5, 0.5];\n\
+                 match f.iter().reduce(|a, x| if x > a { x } else { a }) { Some(s) => println(s), None => println(-1.0) }\n\
+                 match f.iter().reduce(|a, x| a + x) { Some(s) => println(s), None => println(-1.0) }\n\
+                 println(f.max().unwrap_or(0.0))\n\
+                 println(f.min().unwrap_or(0.0))\n\
+             }",
+        ) {
+            assert_eq!(out, "2.5\n4.5\n2.5\n0.5\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_materialized_iterator_binding() {
         // B-2026-07-11-19 — a `let it = v.iter()` iterator binding used at a
         // terminal / adaptor / for-loop. Codegen has no runtime iterator value,

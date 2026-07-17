@@ -28844,10 +28844,13 @@ fn main() {
     println(tricky.join("|"));
     let none: Vec[String] = [];
     println(none.join(",").len());
+    let fs: Vec[f64] = [1.5, 2.5, 0.5];
+    println(fs.max().unwrap_or(0.0));
+    println(fs.min().unwrap_or(0.0));
 }
 "#,
             &[
-                "100", "240000", "40", "10", "0", "-1", "42", "40", "|x", "0",
+                "100", "240000", "40", "10", "0", "-1", "42", "40", "|x", "0", "2.5", "0.5",
             ],
             "direct_vec_iterator_terminals_and_string_join_no_leak",
         );
