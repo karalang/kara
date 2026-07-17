@@ -514,7 +514,17 @@ impl<'a> super::TypeChecker<'a> {
                         );
                         dims.push(DimArg::Dynamic);
                     }
-                    ExprKind::Identifier(name) if generic_scope.contains(name) => {
+                    // A shape dim naming a generic param — in the passed scope
+                    // (the signature path's `gp`) OR an enclosing generic (a
+                    // BODY annotation `let p: Tensor[f32, [D]]` inside
+                    // `fn f[D](...)`, whose `generic_scope` is empty; the fn's
+                    // `D` is recovered from `enclosing_bounds`). Lowered to a
+                    // symbolic `ConstParam` dim rather than const-evaluated —
+                    // without the enclosing-generic arm a body-annotation `D`
+                    // errored "'D' is not a known const" (B-2026-07-13-5 leg B).
+                    ExprKind::Identifier(name)
+                        if generic_scope.contains(name) || self.is_enclosing_generic(name) =>
+                    {
                         dims.push(DimArg::Const(ConstArg::ConstParam(name.clone())));
                     }
                     _ if mentions_scope_param(expr, generic_scope) => {
@@ -915,6 +925,18 @@ impl<'a> super::TypeChecker<'a> {
             }),
             _ => None,
         }
+    }
+
+    /// True when `name` is a generic param of the function/impl body currently
+    /// being checked. `enclosing_bounds` is pre-populated with every generic
+    /// param name (bounded or not — see `collect_param_bounds`), so its keys
+    /// are the "names in scope" set. Used to recognize a shape-dim identifier
+    /// (`Tensor[f32, [D]]`) as a bound shape param in a BODY annotation, where
+    /// the passed `generic_scope` is empty (the signature path threads the full
+    /// `gp` list instead). Kept to SHAPE-dim resolution only — body type-param
+    /// spelling stays the bare `Named{"T"}` form downstream code relies on.
+    pub(super) fn is_enclosing_generic(&self, name: &str) -> bool {
+        self.enclosing_bounds.contains_key(name)
     }
 
     pub(super) fn generic_param_names(generics: &Option<GenericParams>) -> Vec<String> {

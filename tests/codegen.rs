@@ -58449,6 +58449,27 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_body_annotation_generic_shape_param() {
+        // B-2026-07-13-5 leg B: a BODY type annotation naming the enclosing fn's
+        // generic shape param (`let p: Tensor[f32, [D]]` inside `fn scale[D]`)
+        // now checks and runs on both backends — the shape-dim `D` resolves as a
+        // symbolic dim via `enclosing_bounds` instead of erroring in the const-
+        // evaluator. scale([1,2,3], 2.0) = sum([2,4,6]) = 12.
+        let src = r#"
+fn scale[D](a: ref Tensor[f32, [D]], k: f32) -> f32 {
+    let p: Tensor[f32, [D]] = a * k;
+    p.sum()
+}
+fn main() {
+    let x: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]);
+    println(f"{scale(x, 2.0f32)}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "12\n");
+    }
+
+    #[test]
     fn test_e2e_zip_with_rejects_noninline() {
         // Same inline-literal boundary as `map` / the folds, on both containers.
         let col = r#"

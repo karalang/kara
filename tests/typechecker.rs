@@ -28158,6 +28158,47 @@ fn test_shape_param_arithmetic_deferred() {
     );
 }
 
+#[test]
+fn test_tensor_body_annotation_generic_shape_param_ok() {
+    // B-2026-07-13-5 leg B: a BODY type annotation may mention the enclosing
+    // fn's generic shape param (`let p: Tensor[f32, [D]]` inside `fn f[D]`).
+    // Before the fix the body-annotation shape-dim `D` fell through to the
+    // const-evaluator ("'D' is not a known const"); the signature path always
+    // resolved it. `lower_shape_literal` now recognizes an enclosing generic
+    // shape param via `enclosing_bounds` (SHAPE dims only — body type-param
+    // spelling is unchanged).
+    typecheck_ok(
+        "fn scale[D](a: ref Tensor[f32, [D]], k: f32) -> f32 {\n\
+             let p: Tensor[f32, [D]] = a * k;\n\
+             p.sum()\n\
+         }\n\
+         fn main() {\n\
+             let x: Tensor[f32, [3]] = Tensor.from([1.0, 2.0, 3.0]);\n\
+             let s: f32 = scale(x, 2.0);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_tensor_body_annotation_unknown_dim_still_rejected() {
+    // The enclosing-generic-shape-param arm must NOT accept an identifier that
+    // is neither a literal nor a bound generic — `Q` (not a param of `f[D]`)
+    // still routes to the const-evaluator and errors, preserving the check.
+    let errors = typecheck_errors(
+        "fn scale[D](a: ref Tensor[f32, [D]]) -> f32 {\n\
+             let p: Tensor[f32, [Q]] = a * 2.0;\n\
+             p.sum()\n\
+         }\n\
+         fn main() {}\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("'Q' is not a known const")),
+        "{errors:?}",
+    );
+}
+
 // ── Tensor[T, Shape] static surface (Phase 11 MVP) ──────────────────
 
 #[test]
