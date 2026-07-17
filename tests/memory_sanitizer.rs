@@ -500,6 +500,29 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_autograd_tensor_mean_loss() {
+        // The `mean` reduction path — the shape-changing [N]→[1] terminal plus
+        // its 1/N-broadcasting backward, which allocates the count temp
+        // (`(xa*0+1).sum()`) on top of the broadcast. LSan-clean over the tape.
+        assert_clean_asan_run(
+            r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let x0: Tensor[f32, [?]] = Tensor.from([2.0, 4.0]);
+    let x = TensorVar.leaf(t, x0);
+    let sq = x.mul(x);
+    let loss = sq.mean();
+    loss.backward();
+    println(x.grad_at(1));
+}
+"#,
+            &["4"],
+            "asan_autograd_tensor_mean_loss",
+        );
+    }
+
     // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ───────────
     // A returned capturing closure gets a reference-counted HEAP environment
     // (`emit_rc_alloc { i64 refcount, env }`); the owning `let f = make(..)`

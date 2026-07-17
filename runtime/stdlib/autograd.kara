@@ -26,9 +26,12 @@
 // the arithmetic `add` · `sub` · `mul` (Hadamard) · `neg` and the activations
 // `relu` · `sigmoid` · `tanh` (forward via `Tensor.map`, backward the element-
 // wise derivative — ReLU gates on the input sign, sigmoid/tanh read the stored
-// output). Every node's operands and gradient share one shape, so no
-// broadcasting or reduction is needed; `backward` seeds the output gradient to
-// an all-ones tensor (`d out / d out = 1` element-wise).
+// output), plus the scalar reductions `sum` and `mean` (`[N]` → `[1]`, the
+// terminals that turn a tensor computation into a scalar loss you can
+// `backward()`). Every element-wise node's operands and gradient share one
+// shape; the reductions are the only shape-changing ops (their backward
+// broadcasts the scalar upstream gradient back to the input shape). `backward`
+// seeds the output gradient to an all-ones tensor (`d out / d out = 1`).
 // The design's shape-typed generic `Var[T, S]` (with `Var.track` / `var.detach`),
 // matmul/broadcast/reduction ops (and the scalar-loss `sum`), the softmax/gelu/
 // silu activations, the losses, `grad`/`value_and_grad`, and the
@@ -40,7 +43,7 @@
 // `TensorVar`) and their `impl` blocks, but not a separate helper enum — so
 // encoding the op as an integer keeps the module to the importable types. The
 // op-code legend (shared by both tapes): 0 leaf · 1 add · 2 sub · 3 mul · 4 div ·
-// 5 neg · 6 relu · 7 sigmoid · 8 tanh · 9 sum (tensor tape only).
+// 5 neg · 6 relu · 7 sigmoid · 8 tanh · 9 sum · 10 mean (9/10 tensor tape only).
 
 /// The append-only differentiation tape: parallel columns indexed by node id.
 /// `values` holds each node's forward value, `grads` its accumulated gradient
@@ -458,6 +461,28 @@ impl TensorVar {
         TensorVar { tape: tp, idx: idx }
     }
 
+    /// Reduce every element to their scalar mean, stored as a `[1]` tensor — the
+    /// averaged sibling of `sum` (e.g. the MSE loss is a `mean` over squared
+    /// errors). Since `d(mean(x))/dx_i = 1/N`, its backward broadcasts the
+    /// upstream scalar gradient divided by the element count back to the input
+    /// shape. The count is `(x*0 + 1).sum()` — shape-agnostic, no extra
+    /// primitive.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn mean(ref self) -> TensorVar {
+        let tp = self.tape;
+        let sv = tp.values[self.idx];
+        let total = sv.sum();
+        let ones: Tensor[f32, [?]] = sv * 0.0 + 1.0;
+        let n = ones.sum();
+        let m = total / n;
+        let v: Tensor[f32, [?]] = Tensor.full([1], m);
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(10, self.idx, -1);
+        TensorVar { tape: tp, idx: idx }
+    }
+
     /// Run the reverse pass from this node: seed its gradient to an all-ones
     /// tensor, then walk every node newest→oldest applying each op's local
     /// (element-wise) vector-Jacobian product to its parents. Nodes are
@@ -524,6 +549,16 @@ impl TensorVar {
                     // parent's shape via `xa * 0.0 + gs`.
                     let gs = g[0];
                     let xa = tp.values[a];
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + (xa * 0.0 + gs);
+                }
+                10 => {
+                    // Mean: d(mean(x))/dx_i = 1/N — broadcast g_scalar/N back to
+                    // the parent's shape. N = (xa*0 + 1).sum(), shape-agnostic.
+                    let xa = tp.values[a];
+                    let ones: Tensor[f32, [?]] = xa * 0.0 + 1.0;
+                    let n = ones.sum();
+                    let gs = g[0] / n;
                     let ga = tp.grads[a];
                     tp.grads[a] = ga + (xa * 0.0 + gs);
                 }

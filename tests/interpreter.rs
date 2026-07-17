@@ -18568,6 +18568,31 @@ fn main() {
 }
 
 #[test]
+fn test_autograd_reverse_mode_tensor_mean_loss() {
+    // std.autograd tensor-valued `mean` reduction — interpreter parity with
+    // tests/codegen.rs::test_e2e_autograd_tensor_mean_loss. L = mean(x²) at
+    // x=[2,4] (N=2) → 10; dL/dx = 2x/N = x = [2,4].
+    let out = run_no_errors(
+        r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let x0: Tensor[f32, [?]] = Tensor.from([2.0, 4.0]);
+    let x = TensorVar.leaf(t, x0);
+    let sq = x.mul(x);
+    let loss = sq.mean();
+    let lv = loss.value();
+    println(f"{lv[0]}");
+    loss.backward();
+    println(x.grad_at(0));
+    println(x.grad_at(1));
+}
+"#,
+    );
+    assert_eq!(out, "10\n2\n4\n");
+}
+
+#[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors
     // (the last Sleef building block). `>>` is logical on unsigned lanes and
