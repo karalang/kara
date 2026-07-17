@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 59 | 1 |
 | missing-feature | 46 | 1 |
 | false-positive | 35 | 0 |
-| crash | 23 | 0 |
+| crash | 24 | 0 |
 | run-vs-build | 23 | 0 |
 | perf | 21 | 1 |
 | soundness | 18 | 1 |
@@ -109,12 +109,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 368 | 4 |
+| codegen | 369 | 4 |
 | typecheck | 61 | 2 |
 | interp | 48 | 0 |
 | ownership | 22 | 0 |
 | other | 18 | 0 |
-| autopar | 14 | 0 |
+| autopar | 15 | 0 |
 | runtime | 12 | 0 |
 | cli | 12 | 1 |
 | resolver | 9 | 0 |
@@ -123,7 +123,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **521 surfaced · 6 open · 512 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **522 surfaced · 6 open · 513 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -136,9 +136,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **521 surfaced 
 | B-2026-07-17-13 | 2026-07-17 | codegen | low | A narrow-UNSIGNED value carried through an Option payload prints SIGNED: `Option[u8]` holding 200u8, unwrapped and printed, shows -56 (200 as i8) under karac build; interp correct. The unwrap/reconstruct produces the right bit pattern (i8 truncation is correct) but the print path reads it as signed because the reconstructed value's unsigned surface type is not threaded to expr_is_unsigned_int through the Option unwrap. Reproduces with a hand-written `match racc { Some(a) => .. }` over Option[u8] (NOT reduce-specific) — same class as B-2026-07-03-21's narrow-unsigned slot printing, extended to the Option-payload path. | none |
 | B-2026-07-17-14 | 2026-07-17 | codegen | low | Descending counted loop `while k >= 1 { ..; k = k - 1 }` keeps an explicit `cmp $1` after the decrement instead of folding the guard into the `dec`'s flags. Surfaced as the RESIDUAL gap on Pascal #119 after the descending bounds-check skip (B-2026-07-17-1) removed the per-iteration bounds check: the in-place update loop then runs 8 instructions (`mov;mov;add;jo;mov;dec;cmp $1;ja`) where equal-safety `rustc -O -C overflow-checks=on` runs 7 (`mov;mov;add;jo;mov;dec;jne`) — rust lowers its `(1..=i).rev()` countdown to `dec; jne` (compare-against-0 via the decrement's ZF), kara emits a separate `cmp $0x1,%rdx` dependent on the `dec`. That one extra dependent instruction per iteration is a ~1.14-1.19x residual on the tight O(k^2) update loop (kara 341ms vs rust-ovf 289ms = 1.18x; the bounds-check fix had already moved it from 1.29x). Distinct mechanism from B-2026-07-17-1 (bounds-check elision): this is loop-guard strength reduction / countdown canonicalization. | none |
 
-### Fixed (512)
+### Fixed (513)
 
-<details><summary>512 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>513 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -654,6 +654,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **521 surfaced 
 | B-2026-07-17-9 | codegen | medium | Routing Vec/String frees through an unattributed karac_free_buf declaration turned every cleanup drain into a clobber-everything opaque call — LLVM k… | 7b7ba41a |
 | B-2026-07-17-10 | runtime | medium | The buffer-cache's first cut used OnceLock/Mutex/env::var_os/eprint_fmt inside the force-kept karac_alloc_or_panic/karac_free_buf closure — ONE reach… | 7b7ba41a |
 | B-2026-07-17-11 | codegen | medium | Iterator.reduce over FLOAT elements returns the None arm under karac build (interp correct): `[1.5, 2.5, 0.5].iter().reduce(\|a, x\| if x > a { x } els… | 75e248d — the reduce lowering (try_compile_iter_chain_reduce) synthesizes an Option[<elem>] accumulator folded via a match and compiles that AST WITHOUT a re-typecheck pass, so the synthesized Some(<acc>) payload binding had no pattern_binding_types entry and codegen's payload reconstruction fell to the raw-i64 default: a float acc read the payload word via `sitofp i64 -> double` (the f64 bit pattern reinterpreted as an integer VALUE = garbage, so the fold never landed Some and reduce returned the None arm), and a narrow u8/i32 acc skipped truncation. Root cause was WIDER than filed — it hit narrow ints too, not just floats. Fix: give the synthesized Some(acc) binding a unique synthetic span (usize::MAX - uid, distinct per reduce) and register the element's surface name in pattern_binding_types there, so the existing float-bitcast / int-truncate reconstruction arms fire exactly as for a typechecked match. Also un-gated the direct v.max()/v.min() float fast path (B-2026-07-16-14 had bailed floats to --interp pending this) — elem_is_int became elem_is_scalar (adds f32/f64). Verified float/narrow-int reduce + direct float max/min interp/JIT/native parity, valgrind clean. Tests: test_e2e_iter_chain_reduce_float_and_narrow_int_payload (codegen) + a float leg on the B-16-14 asan pin. RESIDUAL (out of scope, filed B-2026-07-17-13): narrow-UNSIGNED reduce now yields the correct bit pattern but still PRINTS signed ([200u8].max() -> -56) — the pre-existing Option-through-unsigned-print gap (B-2026-07-03-21 class), reproduces with a hand-written match over Option[u8], untouched here. |
+| B-2026-07-17-15 | codegen+autopar | high | Two annotated opaque-handle-new bindings (`let t: Interner = Interner.new()` / `let a: Arena[T] = Arena.new()`) in the same fn are auto-parallelized… | e01b609 |
 
 </details>
 
