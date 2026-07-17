@@ -104,6 +104,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 16 | 0 |
 | diagnostics | 10 | 0 |
 | use-after-free | 3 | 0 |
+| memory leak (fresh-owned String argument discarded unfreed) | 1 | 0 |
 
 ### By surface
 
@@ -121,9 +122,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 | parser | 3 | 0 |
 | effect | 1 | 0 |
+| codegen (`String.replace` in src/codegen/vec_method.rs — missing arg cleanup) | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **507 surfaced · 6 open · 498 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **508 surfaced · 6 open · 499 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -136,9 +138,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **507 surfaced 
 | B-2026-07-16-23 | 2026-07-16 | codegen | high | `unwrap_or(<non-Call heap default>)` mismanages the eager default's ownership: an owned-binding default (moved identifier) and an f-string default DOUBLE-FREE (native abort / JIT crash, interp fine — a real silent-in-interp memory-unsafety divergence); an array/collection-literal default LEAKS. Only the Call/MethodCall/String-slice default shapes are correctly handled (B-2026-07-16-22). | none |
 | B-2026-07-17-2 | 2026-07-17 | codegen | high | shared-ownership-matrix frontier REGRESSION: `forwarding_chain/ResultOk` + `forwarding_chain/ResultErr` went Clean → Leak with RC-elision ON (`KARAC_RC_ELIDE_REF_PARAMS` default) — `fn eat(r: Result[Node, i64]) -> i64 { eat2(r) }` (owned param forwarded whole to a consuming callee) leaks the shared `Node` on both the Ok-side (`Result[Node, i64]`) and Err-side (`Result[i64, Node]`) containers; the `Option[Node]` cell of the SAME flow stays Clean, and the whole matrix passes with `KARAC_RC_ELIDE_REF_PARAMS=0`. Prime suspect: `e39db64` (borrow-forward relaxation of RC-elision condition 1, B-2026-07-15-21 Part C — the forwarding-chain shape is exactly its target); suspect window includes `2639536` (condition-5 fix, same day). | none |
 
-### Fixed (498)
+### Fixed (499)
 
-<details><summary>498 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>499 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -640,6 +642,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **507 surfaced 
 | B-2026-07-16-20 | other+interp | medium | A `.to_string()` chained as the receiver of another method (`s.to_string().to_uppercase()`, `s.trim().to_string()…`) build-failed with 'Vec/String me… | c043d03 |
 | B-2026-07-16-21 | codegen | medium | A heap-String-returning method used as the RECEIVER of another method (`s.to_uppercase().to_lowercase()`, `e.to_uppercase().split(",")`, `c.trim().to… | c043d03 |
 | B-2026-07-16-22 | codegen | medium | `Option[String].unwrap_or(default)` / `Result[String,E].unwrap_or(default)` leaks a fresh heap-String default once per call when the receiver is data… | 598765b |
+| B-2026-07-16-24 | codegen (`String.replace` in src/codegen/vec_method.rs — missing arg cleanup) | medium | `String.replace(from, to)` never freed its fresh-owned String ARGUMENTS — a fresh-temp arg (`s.replace(a.to_string(), b.to_string())`) leaks once per… | 7be908c |
 
 </details>
 
