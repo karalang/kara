@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 142 | 1 |
+| miscompile | 143 | 1 |
 | leak | 80 | 0 |
 | codegen-gap | 59 | 0 |
 | double-free | 59 | 1 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 366 | 4 |
+| codegen | 367 | 4 |
 | typecheck | 61 | 3 |
 | interp | 48 | 1 |
 | ownership | 22 | 0 |
@@ -123,7 +123,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **519 surfaced · 8 open · 508 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **520 surfaced · 8 open · 509 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
@@ -135,12 +135,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **519 surfaced 
 | B-2026-07-17-5 | 2026-07-17 | cli | low | wasm link fails with cryptic `undefined symbol: __wasm_first_page_end` (from rustup's self-contained wasi libc.a dlmalloc.c.obj) when the PATH `wasm-ld` is older than the active rustup toolchain's wasi-libc — the linker resolution order (KARAC_WASM_LD > PATH wasm-ld > brew > rust-lld) picks the stale system linker over the version-matched rust-lld sitting in the same rustup toolchain that supplied the libc. | none |
 | B-2026-07-17-1 | 2026-07-17 | codegen | low | In-place single-row DP `while k >= 1 { row[k] = row[k] + row[k-1]; k = k-1 }` (Pascal #119, and the general rolling-DP shape) keeps a per-iteration bounds check codegen does not eliminate — kata #119 ran 416ms vs equal-safety Rust (rustc -O -C overflow-checks=on) 311ms = 1.34x, and vs C (no checks) 239ms = 1.74x. asm isolation: the update loop emits `cmp %rbx,%rdx; ja <panic>` before the `row[k]` / `row[k-1]` loads (one check covers both, since k-1 < k), while the SIBLING `row_hash` fold loop (`while j < row.len() { row[j] }`) in the SAME binary has NO bounds check (BCE fired there). So codegen's BCE handles the canonical forward `j < v.len()` and the binary-search `mid` (B-2026-06-16-1) but NOT this pattern: the index `k` is bounded by the OUTER loop var `i` (k <= i-1) and `i <= row_index` while `len = row_index + 1`, so `k < len` holds only transitively (k <= i-1 <= row_index-1 < len). The overflow check (`jo`) is present in both kara and equal-safety Rust and is NOT the gap (rust -O 274ms vs rust-ovf 311ms shows the overflow tax is ~13%; the residual 311->416 is the bounds check). Same BCE class as the fixed binary-search B-2026-06-16-1 (there get_unchecked pinned the check as ~85% of the gap), a distinct index-derivation pattern. | none |
 | B-2026-07-17-6 | 2026-07-17 | typecheck+interp | medium | `match <non-Option scalar/String> { Some(v) => …, None => … }` (Option-variant patterns on a scrutinee that is NOT an Option) PASSES `karac check` but PANICS the interpreter: 'internal error: entered unreachable code: non-exhaustive match … should be caught by exhaustiveness checker' (src/interpreter/pattern_match.rs:46). Also accepts a USER enum variant pattern on a non-matching scrutinee (`match i64 { Color.Red => … }`). Result patterns (`Ok/Err`) are CORRECTLY rejected — an asymmetry. A plausible real mistake (confusing Channel `recv()->T` with `try_recv()->Option[T]`) yields an internal-error crash, not a clear diagnostic. | none |
-| B-2026-07-17-11 | 2026-07-17 | codegen | medium | Iterator.reduce over FLOAT elements returns the None arm under karac build (interp correct): `[1.5, 2.5, 0.5].iter().reduce(|a, x| if x > a { x } else { a }).unwrap_or(0.0)` prints 0 under JIT/AOT, 2.5 under --interp. The Option[A]-accumulator reduce lowering mis-handles a float accumulator (seeded-None fold never lands Some, or the payload words reconstruct wrong). Found probing B-2026-07-16-14's max/min desugar, which now GATES float elements to a loud interp-hint bail so it does not inherit this as a silent wrong answer — un-gate max/min when fixing. | none |
 | B-2026-07-17-12 | 2026-07-17 | typecheck | medium | Unknown methods on non-exhaustive prelude types (Vec/String/Map/Set/...) silently type as Type::Error, which unifies with ANYTHING: `v.some_typo()` passes karac check, and pre-B-2026-07-16-14 even `let x: bool = v.sum()` checked clean. EXHAUSTIVE_PRELUDE (expr_method_call.rs ~5400) covers only Option/Result, so every other built-in receiver gets the silent fall-through — the check/execution contract (the AI-first wedge: check-clean must run) is open on exactly the receivers LLM authors touch most. | none |
+| B-2026-07-17-13 | 2026-07-17 | codegen | low | A narrow-UNSIGNED value carried through an Option payload prints SIGNED: `Option[u8]` holding 200u8, unwrapped and printed, shows -56 (200 as i8) under karac build; interp correct. The unwrap/reconstruct produces the right bit pattern (i8 truncation is correct) but the print path reads it as signed because the reconstructed value's unsigned surface type is not threaded to expr_is_unsigned_int through the Option unwrap. Reproduces with a hand-written `match racc { Some(a) => .. }` over Option[u8] (NOT reduce-specific) — same class as B-2026-07-03-21's narrow-unsigned slot printing, extended to the Option-payload path. | none |
 
-### Fixed (508)
+### Fixed (509)
 
-<details><summary>508 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>509 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -652,6 +652,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **519 surfaced 
 | B-2026-07-17-8 | codegen | medium | Par-tabulate install of a pre-seeded accumulator takes the combine APPEND arm — a serial total×elem memcpy on the parent thread per dispatch while ev… | 7b7ba41a |
 | B-2026-07-17-9 | codegen | medium | Routing Vec/String frees through an unattributed karac_free_buf declaration turned every cleanup drain into a clobber-everything opaque call — LLVM k… | 7b7ba41a |
 | B-2026-07-17-10 | runtime | medium | The buffer-cache's first cut used OnceLock/Mutex/env::var_os/eprint_fmt inside the force-kept karac_alloc_or_panic/karac_free_buf closure — ONE reach… | 7b7ba41a |
+| B-2026-07-17-11 | codegen | medium | Iterator.reduce over FLOAT elements returns the None arm under karac build (interp correct): `[1.5, 2.5, 0.5].iter().reduce(\|a, x\| if x > a { x } els… | 75e248d — the reduce lowering (try_compile_iter_chain_reduce) synthesizes an Option[<elem>] accumulator folded via a match and compiles that AST WITHOUT a re-typecheck pass, so the synthesized Some(<acc>) payload binding had no pattern_binding_types entry and codegen's payload reconstruction fell to the raw-i64 default: a float acc read the payload word via `sitofp i64 -> double` (the f64 bit pattern reinterpreted as an integer VALUE = garbage, so the fold never landed Some and reduce returned the None arm), and a narrow u8/i32 acc skipped truncation. Root cause was WIDER than filed — it hit narrow ints too, not just floats. Fix: give the synthesized Some(acc) binding a unique synthetic span (usize::MAX - uid, distinct per reduce) and register the element's surface name in pattern_binding_types there, so the existing float-bitcast / int-truncate reconstruction arms fire exactly as for a typechecked match. Also un-gated the direct v.max()/v.min() float fast path (B-2026-07-16-14 had bailed floats to --interp pending this) — elem_is_int became elem_is_scalar (adds f32/f64). Verified float/narrow-int reduce + direct float max/min interp/JIT/native parity, valgrind clean. Tests: test_e2e_iter_chain_reduce_float_and_narrow_int_payload (codegen) + a float leg on the B-16-14 asan pin. RESIDUAL (out of scope, filed B-2026-07-17-13): narrow-UNSIGNED reduce now yields the correct bit pattern but still PRINTS signed ([200u8].max() -> -56) — the pre-existing Option-through-unsigned-print gap (B-2026-07-03-21 class), reproduces with a hand-written match over Option[u8], untouched here. |
 
 </details>
 
