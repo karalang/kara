@@ -78,6 +78,13 @@ const CORPUS: &[&str] = &[
     "fn main() { let s = \"one\"; let s = \"two\"; println(s) }",
     "fn main() { let b = true; println(b.to_string()) }",
     "fn main() { let name = \"kara\"; let n = 5; println(name); println(n.to_string()) }",
+    // Slice 8: string concatenation (malloc+memcpy; frees deferred to the
+    // drop slice — concat results leak until exit, oracle checks stdout+exit).
+    "fn main() { let s = \"foo\" + \"bar\"; println(s) }",
+    "fn main() { let a = \"x\"; let b = \"y\"; let c = a + b; println(c) }",
+    "fn main() { println(\"a\" + \"b\" + \"c\") }",
+    "fn main() { let name = \"kara\"; println(\"hi \" + name) }",
+    "fn main() { let mut s = \"\"; let mut i = 0; while i < 3 { s = s + \"ab\"; i = i + 1; } println(s) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
