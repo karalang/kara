@@ -331,6 +331,100 @@ mod memory_sanitizer_tests {
         );
     }
 
+    // ── Vec[Tensor] element ownership (B-2026-07-17-1) ───────────
+    // A `Vec[Tensor]` (the tensor-valued-autograd `Tape` grads/values columns)
+    // exercises three tensor-element ownership paths that were each leaking or
+    // double-freeing:
+    //   (a) a shared-struct `Vec[Tensor]` FIELD drop drains each element block
+    //       (`emit_tensor_drop_fn`, wired into the shared-struct VecOrString
+    //       drain) — previously the buffer was freed but the per-element
+    //       `[rank][dims][data]` blocks leaked;
+    //   (b) an index-store overwrite (`grads[i] = old + g`) frees the displaced
+    //       old block before taking over the fresh one — previously it leaked;
+    //   (c) a MOVED named-tensor store (`grads[i] = seed`) suppresses the source
+    //       binding's `FreeTensor` — previously both the Vec's element-drop and
+    //       `seed`'s cleanup freed the block (double-free).
+
+    #[test]
+    fn asan_shared_struct_vec_tensor_field_drop() {
+        // (a) push-only — the shared-struct `Vec[Tensor]` field drop must free
+        // each element block. No overwrite involved.
+        assert_clean_asan_run(
+            r#"
+shared struct S { mut grads: Vec[Tensor[f32, [?]]] }
+fn main() {
+    let s = S { grads: Vec.new() };
+    let z: Tensor[f32, [?]] = Tensor.zeros([2]);
+    s.grads.push(z);
+    let r = s.grads[0];
+    println(r[0]);
+}
+"#,
+            &["0"],
+            "asan_shared_struct_vec_tensor_field_drop",
+        );
+    }
+
+    #[test]
+    fn asan_vec_tensor_element_overwrite() {
+        // (b) overwrite — `s.grads[0] = old + g` frees the displaced old element
+        // block (read into the fresh sum first) and takes over the new one.
+        assert_clean_asan_run(
+            r#"
+shared struct S { mut grads: Vec[Tensor[f32, [?]]] }
+fn go(s: S) {
+    let z: Tensor[f32, [?]] = Tensor.zeros([2]);
+    s.grads.push(z);
+    let g: Tensor[f32, [?]] = Tensor.ones([2]);
+    let old = s.grads[0];
+    s.grads[0] = old + g;
+}
+fn main() {
+    let s = S { grads: Vec.new() };
+    go(s);
+    let r = s.grads[0];
+    println(r[0]);
+}
+"#,
+            &["1"],
+            "asan_vec_tensor_element_overwrite",
+        );
+    }
+
+    #[test]
+    fn asan_vec_tensor_accumulate_loop() {
+        // (b)+(c) the backward-pass shape: a moved named-tensor store (`seed`)
+        // plus repeated accumulation into ONE slot across a loop
+        // (`grads[0] = grads[0] + g`), overwriting the same slot each step.
+        assert_clean_asan_run(
+            r#"
+shared struct T { mut grads: Vec[Tensor[f32, [?]]] }
+fn main() {
+    let t = T { grads: Vec.new() };
+    let seed: Tensor[f32, [?]] = Tensor.ones([3]);
+    t.grads.push(seed);
+    let mut k = 1;
+    while k < 4 {
+        let o: Tensor[f32, [?]] = Tensor.ones([3]);
+        t.grads.push(o);
+        k = k + 1;
+    }
+    let mut i = 1;
+    while i < 4 {
+        let g = t.grads[i];
+        let acc = t.grads[0];
+        t.grads[0] = acc + g;
+        i = i + 1;
+    }
+    let r = t.grads[0];
+    println(r[0]);
+}
+"#,
+            &["4"],
+            "asan_vec_tensor_accumulate_loop",
+        );
+    }
+
     // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ───────────
     // A returned capturing closure gets a reference-counted HEAP environment
     // (`emit_rc_alloc { i64 refcount, env }`); the owning `let f = make(..)`

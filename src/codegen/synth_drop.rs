@@ -2814,8 +2814,27 @@ impl<'ctx> super::Codegen<'ctx> {
                         .cloned()
                         .and_then(|fte| crate::codegen::helpers::vec_inner_type_expr(&fte))
                         .and_then(|elem_te| {
+                            // A `Vec[Tensor]` FIELD (`shared struct Tape { grads:
+                            // Vec[Tensor[f32, [?]]] }`, tensor-valued autograd)
+                            // previously drained only the `{ptr,len,cap}` buffer —
+                            // each element `ptr` to a `[rank][dims][data]` block
+                            // leaked. Route it to `emit_tensor_drop_fn` (via the
+                            // Tensor arm of `emit_drop_fn_for_type_expr`) per
+                            // element. Scoped to this SHARED-struct drain, NOT the
+                            // shared `elem_te_needs_direct_recursive_drain`
+                            // predicate: that predicate also gates the owned-param
+                            // deep-COPY (`param_own.rs`), and there is no tensor-
+                            // element clone, so widening it would unbalance
+                            // copy-depth vs drop-depth (double-free) for a VALUE
+                            // struct field. A shared struct is RC-shared, never
+                            // deep-copied, so draining here has no copy peer to
+                            // unbalance.
+                            let elem_is_tensor =
+                                self.tensor_var_info_from_type_expr(&elem_te).is_some();
                             let f = self.vec_elem_agg_drop_for_type_expr(&elem_te).or_else(|| {
-                                if Self::elem_te_needs_direct_recursive_drain(&elem_te) {
+                                if Self::elem_te_needs_direct_recursive_drain(&elem_te)
+                                    || elem_is_tensor
+                                {
                                     Some(self.emit_drop_fn_for_type_expr(&elem_te))
                                 } else {
                                     None

@@ -3947,9 +3947,37 @@ impl<'ctx> super::Codegen<'ctx> {
         let plain_shared_heap = elem_te
             .as_ref()
             .and_then(|te| self.shared_heap_type_for_type_expr(te));
+        // A `Vec[Tensor]` element slot holds a single `ptr` to a
+        // `[rank][dims][data]` control block — none of the vec-struct /
+        // shared-refcount shapes below. Overwriting the slot orphans the old
+        // block unless we free it first (a LEAK, e.g. `s.grads[i] = old + g`
+        // in tensor-valued autograd: `old` aliases the block being overwritten,
+        // read into the fresh RHS before the free). `val` is an owned/fresh
+        // tensor (a fresh op result carries no alias; the assign path deep-
+        // clones an aliasing index-read RHS via `clone_owned_vec_index_element`),
+        // so the slot takes over ownership and the container's element-drop
+        // (`emit_tensor_drop_fn`) frees it later — no scope-exit temp cleanup to
+        // suppress, since an assignment-RHS tensor temp gets no `FreeTensor`.
+        let elem_is_tensor = elem_te
+            .as_ref()
+            .is_some_and(|te| self.tensor_var_info_from_type_expr(te).is_some());
 
         if self.llvm_ty_is_vec_struct(elem_ty) {
             self.emit_free_vec_buffer_if_owned(elem_ptr);
+        } else if elem_is_tensor {
+            // Free the displaced old block, then take over the new one.
+            // `free(null)` is a no-op, so the move-suppression sentinel needs no
+            // guard (same convention as `FreeVecBuffer`'s tensor drain).
+            let old_block = self
+                .builder
+                .build_load(ptr_ty, elem_ptr, "vidx.t.old")
+                .unwrap()
+                .into_pointer_value();
+            self.builder
+                .build_call(self.free_fn, &[old_block.into()], "")
+                .unwrap();
+            self.builder.build_store(elem_ptr, val).unwrap();
+            return Ok(());
         } else if is_opt_shared || plain_shared_heap.is_some() {
             let elem_te = elem_te.expect("shared/opt-shared element implies a recorded TypeExpr");
             let fn_val = self.current_fn.unwrap();

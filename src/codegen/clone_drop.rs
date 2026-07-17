@@ -1693,6 +1693,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 if head == Some("String") || head == Some("str") {
                     return self.emit_string_drop_fn();
                 }
+                // A `Tensor` element owns a single `[rank][dims][data]` heap
+                // block reached through a `ptr` slot — free it directly. Without
+                // this arm the fallback routes it to the primitive no-op and
+                // every `Vec[Tensor]` element leaks (shared-struct `grads` field
+                // drop; nested tensor Vecs).
+                if head == Some("Tensor") {
+                    return self.emit_tensor_drop_fn(te);
+                }
                 // User struct / enum / shared / Option element (owned-temp slices
                 // 3o + 3p). The recursive drop family otherwise bottoms out in the
                 // primitive no-op for a named user type — wrong for a struct/enum
@@ -1813,6 +1821,55 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(exit_bb).unwrap();
 
         self.builder.position_at_end(exit_bb);
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        drop_fn
+    }
+
+    /// Emit `karac_drop_Tensor_<…>` — the per-element drop for a `Tensor`
+    /// nested inside a `Vec[Tensor]` (or any recursive-drop container). The
+    /// element slot holds a single `ptr` to the tensor's `[rank][dims][data]`
+    /// control block (a single allocation — tensors carry no inner recursion),
+    /// so the drop loads that pointer and frees it. `free(null)` is a no-op, so
+    /// the move-suppression sentinel (a nulled slot) needs no explicit guard —
+    /// the same convention `FreeVecBuffer`'s `elem_is_tensor` drain uses. Without
+    /// this arm `emit_drop_fn_for_type_expr` routes a `Tensor` element to the
+    /// primitive no-op and every element block leaks (the `Vec[Tensor]`-field
+    /// drop of a shared struct, and any nested `Vec[Tensor]`).
+    pub(super) fn emit_tensor_drop_fn(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
+        let type_name = Self::display_mangle_te(te);
+        if let Some(&f) = self.drop_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_drop_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.drop_fn_cache.insert(type_name, f);
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
+        self.drop_fn_cache.insert(type_name, drop_fn);
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let slot = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        // The element slot holds the tensor control-block pointer; load it and
+        // free the single block. `free(null)` is a no-op → no null guard.
+        let block = self
+            .builder
+            .build_load(ptr_ty, slot, "t.block")
+            .unwrap()
+            .into_pointer_value();
+        self.builder
+            .build_call(self.free_fn, &[block.into()], "")
+            .unwrap();
         self.builder.build_return(None).unwrap();
 
         if let Some(bb) = saved_bb {

@@ -5768,21 +5768,38 @@ impl<'ctx> super::Codegen<'ctx> {
                     // no-op for a non-Identifier / non-tracked RHS.
                     let target_owns_heap_vec_elem = match &object.kind {
                         ExprKind::Identifier(container) => {
-                            self.vec_elem_types
+                            let is_vecstruct_elem = self
+                                .vec_elem_types
                                 .get(container.as_str())
-                                .is_some_and(|&et| self.llvm_ty_is_vec_struct(et))
+                                .is_some_and(|&et| self.llvm_ty_is_vec_struct(et));
+                            // A local `Vec[Tensor]` element is a single `ptr`, not
+                            // a {ptr,len,cap} — check the element TypeExpr for a
+                            // Tensor. `grads[i] = seed` moves the owned tensor
+                            // binding `seed` into the Vec, which now owns the block
+                            // (freed by `emit_tensor_drop_fn` on the Vec's drop);
+                            // without suppression `seed`'s `FreeTensor` also fires
+                            // → double-free.
+                            let is_tensor_elem = self
+                                .var_elem_type_exprs
+                                .get(container.as_str())
+                                .is_some_and(|te| {
+                                    self.tensor_var_info_from_type_expr(te).is_some()
+                                });
+                            (is_vecstruct_elem || is_tensor_elem)
                                 && !self.slice_elem_types.contains_key(container.as_str())
                                 && !self.map_key_types.contains_key(container.as_str())
                         }
                         // `h.xs[j] = t` / `self.xs[j] = t`: the field is an owning
-                        // heap Vec whose element is a {ptr,len,cap} (String / Vec).
-                        // Resolve the element type via the same helper the clone
-                        // path uses (with monomorph type-param substitution) and
-                        // suppress the moved-in source binding.
+                        // heap Vec whose element is a {ptr,len,cap} (String / Vec)
+                        // or a Tensor (`self.grads[i] = seed`, tensor-valued
+                        // autograd). Resolve the element type via the same helper
+                        // the clone path uses (with monomorph type-param
+                        // substitution) and suppress the moved-in source binding.
                         ExprKind::FieldAccess { .. } => {
                             self.vec_index_elem_type_expr(object).is_some_and(|te| {
                                 self.is_string_type_expr(&te)
                                     || self.extract_vec_elem_type(&te).is_some()
+                                    || self.tensor_var_info_from_type_expr(&te).is_some()
                             })
                         }
                         _ => false,
