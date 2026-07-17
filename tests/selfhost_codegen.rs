@@ -96,6 +96,15 @@ const CORPUS: &[&str] = &[
     "fn wrap(s: String) -> String { \"[\" + s + \"]\" }\nfn main() { println(wrap(wrap(\"x\"))) }",
     "fn shout(s: String) { println(s + \"!\") }\nfn main() { shout(\"hey\"); shout(\"ho\") }",
     "fn pad(a: String, b: String) -> String { a + \" \" + b }\nfn main() { println(pad(\"left\", \"right\")) }",
+    // Slice 11: to_string() in VALUE position — i64 formats into a fresh heap
+    // buffer (snprintf), bool borrows the true/false globals, string passes
+    // through; composes with concat, bindings, params, and loops.
+    "fn label(n: i64, tag: String) -> String { tag + n.to_string() }\nfn main() { println(label(7, \"v\")) }",
+    "fn main() { let s = 42.to_string(); println(s) }",
+    "fn main() { let n = 3; println(\"n=\" + n.to_string()) }",
+    "fn main() { println(true.to_string() + \"!\") }",
+    "fn main() { let mut i = 0; let mut acc = \"\"; while i < 3 { acc = acc + i.to_string(); i = i + 1; } println(acc) }",
+    "fn main() { println((0 - 99).to_string() + \"/\" + (7 * 6).to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

@@ -1213,6 +1213,86 @@ impl Emitter {
                 Val { op: r, kind: 0, heap: false }
             }
             Blk(b) => self.emit_block_value(b),
+            MethodCall(mc) => {
+                // `<expr>.to_string()` as a VALUE (Slice 11). An i64 formats
+                // into a fresh heap buffer via snprintf (`%lld` fits in 24
+                // bytes incl. sign+NUL) — an OWNED string temp. A bool selects
+                // between the `@.true`/`@.false` globals — a BORROW (consumers
+                // materialize on binding, exactly like a literal). A string
+                // passes through. Other methods stay unsupported (0).
+                let MethodCallExpr { object, method, args: margs, span: msp } = mc;
+                if method != "to_string" {
+                    return Val { op: "0".to_string(), kind: 0, heap: false };
+                }
+                let v = self.emit_value(object);
+                let Val { op, kind, heap } = v;
+                if kind == 2 {
+                    return Val { op: op, kind: 2, heap: heap };
+                }
+                if kind == 1 {
+                    let pr = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + pr.clone()
+                        + " = select i1 "
+                        + op.clone()
+                        + ", ptr @.true, ptr @.false\n";
+                    let ln = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + ln.clone()
+                        + " = select i1 "
+                        + op
+                        + ", i64 4, i64 5\n";
+                    let a0 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + a0.clone()
+                        + " = insertvalue { ptr, i64 } undef, ptr "
+                        + pr
+                        + ", 0\n";
+                    let a1 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + a1.clone()
+                        + " = insertvalue { ptr, i64 } "
+                        + a0
+                        + ", i64 "
+                        + ln
+                        + ", 1\n";
+                    return Val { op: a1, kind: 2, heap: false };
+                }
+                let buf = self.fresh();
+                self.body = self.body + "  " + buf.clone() + " = call ptr @malloc(i64 24)\n";
+                let w = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + w.clone()
+                    + " = call i32 (ptr, i64, ptr, ...) @snprintf(ptr "
+                    + buf.clone()
+                    + ", i64 24, ptr @.fmt_i, i64 "
+                    + op
+                    + ")\n";
+                let ln = self.fresh();
+                self.body = self.body + "  " + ln.clone() + " = zext i32 " + w + " to i64\n";
+                let a0 = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + a0.clone()
+                    + " = insertvalue { ptr, i64 } undef, ptr "
+                    + buf
+                    + ", 0\n";
+                let a1 = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + a1.clone()
+                    + " = insertvalue { ptr, i64 } "
+                    + a0
+                    + ", i64 "
+                    + ln
+                    + ", 1\n";
+                Val { op: a1, kind: 2, heap: true }
+            }
             _ => Val { op: "0".to_string(), kind: 0, heap: false },
         }
     }
