@@ -68205,6 +68205,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_autograd_matmul() {
+        // `std.autograd` rank-2 matrix surface (MatTape / MatVar) — matmul with
+        // its transpose-product backward. Y = A·B with A=[[1,2],[3,4]], B=I;
+        // seeding grad_Y=ones, grad_A = ones·Bᵀ = [[1,1],[1,1]] and
+        // grad_B = Aᵀ·ones = [[4,4],[6,6]].
+        if let Some(out) = run_program(
+            r#"
+import std.autograd.{MatTape, MatVar};
+fn main() {
+    let t = MatTape.new();
+    let a0: Tensor[f32, [?, ?]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    let b0: Tensor[f32, [?, ?]] = Tensor.from([[1.0, 0.0], [0.0, 1.0]]);
+    let a = MatVar.leaf(t, a0);
+    let b = MatVar.leaf(t, b0);
+    let y = a.matmul(b);
+    y.backward();
+    println(a.grad_at(0, 0));
+    println(a.grad_at(1, 1));
+    println(b.grad_at(0, 0));
+    println(b.grad_at(1, 0));
+}
+"#,
+        ) {
+            assert_eq!(out, "1\n1\n4\n6\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_embeddings_cosine_similarity_matrix() {
         // `std.embeddings.cosine_similarity_matrix` (phase-11): the Q×N
         // bulk-scoring path — a `[Q, D]` query block vs a `[N, D]` corpus →

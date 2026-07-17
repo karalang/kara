@@ -523,6 +523,34 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_autograd_matmul() {
+        // The rank-2 MatTape/MatVar matmul path — a matmul→add chain whose
+        // backward allocates transpose + matmul-product temps per node, all
+        // stored into the shared-struct Vec[Tensor[f32,[?,?]]] columns.
+        // LSan-clean over the whole rank-2 tape. Y = (A·B) + C, B=I → grad flows
+        // grad_A = ones·Bᵀ = ones, so a.grad_at(0,0) = 1.
+        assert_clean_asan_run(
+            r#"
+import std.autograd.{MatTape, MatVar};
+fn main() {
+    let t = MatTape.new();
+    let a0: Tensor[f32, [?, ?]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    let b0: Tensor[f32, [?, ?]] = Tensor.from([[1.0, 0.0], [0.0, 1.0]]);
+    let c0: Tensor[f32, [?, ?]] = Tensor.from([[5.0, 6.0], [7.0, 8.0]]);
+    let a = MatVar.leaf(t, a0);
+    let b = MatVar.leaf(t, b0);
+    let c = MatVar.leaf(t, c0);
+    let y = a.matmul(b).add(c);
+    y.backward();
+    println(a.grad_at(0, 0));
+}
+"#,
+            &["1"],
+            "asan_autograd_matmul",
+        );
+    }
+
     // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ───────────
     // A returned capturing closure gets a reference-counted HEAP environment
     // (`emit_rc_alloc { i64 refcount, env }`); the owning `let f = make(..)`

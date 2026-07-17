@@ -18593,6 +18593,32 @@ fn main() {
 }
 
 #[test]
+fn test_autograd_reverse_mode_matmul() {
+    // std.autograd rank-2 matrix surface (MatTape / MatVar) — interpreter parity
+    // with tests/codegen.rs::test_e2e_autograd_matmul. Y = A·B, A=[[1,2],[3,4]],
+    // B=I; grad_A = [[1,1],[1,1]], grad_B = [[4,4],[6,6]].
+    let out = run_no_errors(
+        r#"
+import std.autograd.{MatTape, MatVar};
+fn main() {
+    let t = MatTape.new();
+    let a0: Tensor[f32, [?, ?]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+    let b0: Tensor[f32, [?, ?]] = Tensor.from([[1.0, 0.0], [0.0, 1.0]]);
+    let a = MatVar.leaf(t, a0);
+    let b = MatVar.leaf(t, b0);
+    let y = a.matmul(b);
+    y.backward();
+    println(a.grad_at(0, 0));
+    println(a.grad_at(1, 1));
+    println(b.grad_at(0, 0));
+    println(b.grad_at(1, 0));
+}
+"#,
+    );
+    assert_eq!(out, "1\n1\n4\n6\n");
+}
+
+#[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors
     // (the last Sleef building block). `>>` is logical on unsigned lanes and
