@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **506 surfaced · 5 open · 497 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **508 surfaced · 6 open · 498 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -99,11 +99,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **506 surfaced 
 | B-2026-07-16-14 | 2026-07-16 | typechecker (iterator-trait method resolution accepts reduction/collection methods DIRECTLY on a Vec receiver) vs interpreter + codegen (only the `.iter()` adaptor path implements them) | medium | `karac check` accepts iterator-reduction / string-collection methods DIRECTLY on a Vec (`v.sum()`, `v.max()`, `v.min()`, `v.product()`, `v.join(sep)`, `v.concat()`) but no backend implements them — interp reports 'method not found (no dispatch arm)' and codegen reports 'not yet supported' / build-fails. The idiomatic `.iter()` form works (`v.iter().sum()` = 120). This is a check/execution consistency hole: `karac check` (the AI-first wedge — a program that checks clean should run) passes code that traps at runtime on all three surfaces. | none |
 | B-2026-07-16-16 | 2026-07-16 | codegen | high | tests/selfhost_codegen.rs (selfhost_codegen_matches_seed_run) is RED on main: the self-hosted emitter compiles and runs, but executing its emitted IR prints "" where the seed run prints the expected stdout (all corpus entries, starting at fn main(){println(\"hi\")}). The emitted IR text LOOKS structurally plausible (datalayout, @main present) — the divergence is somewhere in the emitted body or the driver's dump path. | none |
 | B-2026-07-16-19 | 2026-07-16 | codegen (auto-par whole-function lowering — the Vec-element move-out suppression for `Some(words[0])` that is correct in sequential codegen is not preserved when the caller (main) is auto-parallelized) | high | A function returning `Option[String]` built from a MOVED Vec element (`let words = s.split(" "); if words.len()>0 { Some(words[0]) } else { None }`) double-frees the element buffer when called TWICE inside an auto-parallelized `main` (JIT: 'free(): double free'; native: valgrind Invalid free under karac_par_run). Single/sequential invocation is CLEAN (the element move-out of `words[0]` into `Some` is correctly suppressed there); the bug appears only when main's statement mix makes it auto-parallelize (par_run=1). KARAC_AUTO_PAR=0 fixes it — an auto-par correctness bug, not the element-move-out itself. | none |
+| B-2026-07-16-23 | 2026-07-16 | codegen (`Option/Result.unwrap_or` eager-default ownership for non-Call default shapes) | high | `unwrap_or(<non-Call heap default>)` mismanages the eager default's ownership: an owned-binding default (moved identifier) and an f-string default DOUBLE-FREE (native abort / JIT crash, interp fine — a real silent-in-interp memory-unsafety divergence); an array/collection-literal default LEAKS. Only the Call/MethodCall/String-slice default shapes are correctly handled (B-2026-07-16-22). | none |
 | B-2026-07-17-1 | 2026-07-17 | codegen (bounds-check elimination): the in-place update loop `while k >= 1 { row[k] = row[k] + row[k-1]; k = k - 1 }` keeps a per-iteration bounds check that LLVM elides for the equivalent Rust | low | In-place single-row DP `while k >= 1 { row[k] = row[k] + row[k-1]; k = k-1 }` (Pascal #119, and the general rolling-DP shape) keeps a per-iteration bounds check codegen does not eliminate — kata #119 ran 416ms vs equal-safety Rust (rustc -O -C overflow-checks=on) 311ms = 1.34x, and vs C (no checks) 239ms = 1.74x. asm isolation: the update loop emits `cmp %rbx,%rdx; ja <panic>` before the `row[k]` / `row[k-1]` loads (one check covers both, since k-1 < k), while the SIBLING `row_hash` fold loop (`while j < row.len() { row[j] }`) in the SAME binary has NO bounds check (BCE fired there). So codegen's BCE handles the canonical forward `j < v.len()` and the binary-search `mid` (B-2026-06-16-1) but NOT this pattern: the index `k` is bounded by the OUTER loop var `i` (k <= i-1) and `i <= row_index` while `len = row_index + 1`, so `k < len` holds only transitively (k <= i-1 <= row_index-1 < len). The overflow check (`jo`) is present in both kara and equal-safety Rust and is NOT the gap (rust -O 274ms vs rust-ovf 311ms shows the overflow tax is ~13%; the residual 311->416 is the bounds check). Same BCE class as the fixed binary-search B-2026-06-16-1 (there get_unchecked pinned the check as ~85% of the gap), a distinct index-derivation pattern. | none |
 
-### Fixed (497)
+### Fixed (498)
 
-<details><summary>497 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>498 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -604,6 +605,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **506 surfaced 
 | B-2026-07-16-18 | codegen (stmts.rs Assign arm — the Identifier-target reassignment had cases for Vec/String and Map/Set vars but no struct-var case, so `a = b` never suppressed the moved source's StructDrop) | high | FIXED — Reassigning a heap-owning STRUCT variable (`a = b`) double-frees: the Assign arm never suppressed the moved source `b`'s StructDrop, so both… | b837786 |
 | B-2026-07-16-20 | codegen (`compile_method_call` `String.to_string()` owning-copy special-case) vs interpreter | medium | A `.to_string()` chained as the receiver of another method (`s.to_string().to_uppercase()`, `s.trim().to_string()…`) build-failed with 'Vec/String me… | c043d03 |
 | B-2026-07-16-21 | codegen (`try_compile_nonident_collection_method` expression-receiver string-method materialization + the `to_string` copy path) | medium | A heap-String-returning method used as the RECEIVER of another method (`s.to_uppercase().to_lowercase()`, `e.to_uppercase().split(",")`, `c.trim().to… | c043d03 |
+| B-2026-07-16-22 | codegen (`Option/Result.unwrap_or` in src/codegen/calls.rs — the eager default's present-path discard) | medium | `Option[String].unwrap_or(default)` / `Result[String,E].unwrap_or(default)` leaks a fresh heap-String default once per call when the receiver is data… | 598765b |
 
 </details>
 
