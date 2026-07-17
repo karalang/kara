@@ -28484,6 +28484,7 @@ fn main() {
             "unwrap_or_moved_binding_default_no_double_free",
         );
     }
+
     #[test]
     fn asan_auto_par_consuming_match_on_option_string_no_double_free() {
         // B-2026-07-16-19: a fn returning `Option[String]` built from a MOVED
@@ -28595,6 +28596,48 @@ fn main() {
 "#,
             &["5"],
             "sequential_unwrap_or_on_named_option_binding_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_owned_self_direct_return_no_double_free() {
+        // B-2026-07-17-3 (direct-return leg): an owned `self` receiver method
+        // whose tail expression IS `self` (`fn ident(self) -> Bag { self }`)
+        // double-freed the self struct's heap (Vec/String) field buffer when
+        // non-empty — the tail-return move-out suppression resolved a plain
+        // struct `Identifier` but returned early for `ExprKind::SelfValue`, so
+        // self's callee-owned StructDrop and the returned value's owner both
+        // freed the same buffer (native UAF via realloc / JIT abort; interp
+        // correct). Fixed by resolving `SelfValue` to the `self` binding in
+        // `suppress_source_vec_cleanup_for_arg_ex` (inline-owned-guarded, so a
+        // `ref self` pointer is never touched). Loops 200× building a fresh
+        // 2-element Vec each time and round-tripping it through the identity
+        // method, so a per-call double-free aborts and any leak accumulates.
+        // (The `let b = self; … b` REBIND form is a separate, deeper deep-copy-
+        // interaction leg still tracked open under the same ledger id.)
+        assert_clean_asan_run(
+            r#"
+struct Bag { items: Vec[i64] }
+impl Bag {
+    fn ident(self) -> Bag { self }
+    fn count(ref self) -> i64 { self.items.len() }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let mut b = Bag { items: Vec.new() };
+        b.items.push(i);
+        b.items.push(i + 1);
+        let b2 = b.ident();
+        total = total + b2.count();
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["400"],
+            "owned_self_direct_return_no_double_free",
         );
     }
 }

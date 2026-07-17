@@ -4363,6 +4363,25 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let var_name = match &arg_expr.kind {
             ExprKind::Identifier(n) => n.as_str(),
+            // An owned `self` receiver moved OUT of a method — `fn m(self) -> T
+            // { self }` (tail return) or `let b = self` (rebind) — needs the
+            // same move-out cap-zeroing as an owned struct Identifier, else
+            // self's callee-owned StructDrop and the moved-out value's owner
+            // (the caller's binding) both free the same heap-field buffer: a
+            // use-after-free / double-free (B-2026-07-17-3, the owned-`self`
+            // builder/fluent pattern). Gated to a self slot that holds the
+            // aggregate INLINE (owned): a `ref self` holds a POINTER into the
+            // caller's frame, and although a borrow can't be moved out (so this
+            // is never reached for `ref self`), the inline guard makes the
+            // struct arm's cap GEP provably safe — it never writes through a
+            // ref pointer into the caller's struct.
+            ExprKind::SelfValue
+                if self.variables.get("self").is_some_and(|s| {
+                    matches!(s.ty, inkwell::types::BasicTypeEnum::StructType(_))
+                }) =>
+            {
+                "self"
+            }
             _ => return,
         };
         let slot = match self.variables.get(var_name) {
