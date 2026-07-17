@@ -28640,4 +28640,54 @@ fn main() {
             "owned_self_direct_return_no_double_free",
         );
     }
+    #[test]
+    fn asan_owned_self_rebind_builder_chain_no_double_free() {
+        // B-2026-07-17-3 (rebind leg): the common builder/fluent shape —
+        // `fn add(self, p) -> Builder { let mut b = self; b.parts.push(p); b }`
+        // chained. `let mut b = self` is the same struct move as `let g = f;`
+        // (the deep-copied callee-owned aggregate is copied into `b`'s slot and
+        // `b`'s StructDrop becomes the owner), but the Let-arm move-suppression
+        // gated on `ExprKind::Identifier` and skipped `SelfValue` — self's
+        // StructDrop stayed live and the SECOND chained call's push realloc'd a
+        // freed buffer (native UAF, JIT "free(): double free"; interp correct).
+        // The direct-return leg (`fn ident(self) -> T { self }`) was fixed in
+        // 13eda85; this pins the rebind leg (call-site routing of SelfValue
+        // into the same suppression helper). String-field + i64-field variants
+        // both covered by the two structs.
+        assert_clean_asan_run(
+            r#"
+struct Builder { parts: Vec[i64] }
+
+impl Builder {
+    fn add(self, p: i64) -> Builder {
+        let mut b = self;
+        b.parts.push(p);
+        b
+    }
+}
+
+struct Sb { text: String, n: i64 }
+
+impl Sb {
+    fn append(self, s: String) -> Sb {
+        let mut b = self;
+        b.text = s;
+        b.n = b.n + 1;
+        b
+    }
+}
+
+fn main() {
+    let b0 = Builder { parts: Vec.new() };
+    let b3 = b0.add(1).add(2).add(3);
+    println(b3.parts.len());
+    let s0 = Sb { text: "start-with-a-heap-sized-string-payload", n: 0 };
+    let s2 = s0.append("-a").append("-b");
+    println(s2.n);
+}
+"#,
+            &["3", "2"],
+            "owned_self_rebind_builder_chain_no_double_free",
+        );
+    }
 }

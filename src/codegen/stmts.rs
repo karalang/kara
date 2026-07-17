@@ -4703,7 +4703,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         // FreeVecBuffer suppression is a broader
                         // concern tracked separately in
                         // phase-7-codegen.md.
-                        if let ExprKind::Identifier(source_name) = &value.kind {
+                        // B-2026-07-17-3 (rebind leg): `let mut b = self;` inside
+                        // an owned-`self` method is the same struct move as
+                        // `let g = f;` — the aggregate (deep-copied callee-owned
+                        // at entry) is copied into `b`'s slot and `b`'s
+                        // freshly-tracked StructDrop becomes the owner, so
+                        // `self`'s StructDrop must be cap-zeroed or both free the
+                        // same field buffer (the builder/fluent `fn add(self)`
+                        // shape: second chained call realloc'd a freed buffer —
+                        // native UAF / JIT abort). Resolve `SelfValue` to the
+                        // `self` binding exactly like the tail-return site
+                        // (13eda85); the helper's own inline-struct-slot gate
+                        // keeps `ref self` (a pointer slot) out.
+                        let move_source_name = match &value.kind {
+                            ExprKind::Identifier(n) => Some(n.as_str()),
+                            ExprKind::SelfValue => Some("self"),
+                            _ => None,
+                        };
+                        if let Some(source_name) = move_source_name {
                             if has_user_drop {
                                 self.suppress_user_drop_for_var(source_name);
                             } else {
