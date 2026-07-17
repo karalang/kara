@@ -93,41 +93,37 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 141 | 0 |
-| leak | 78 | 1 |
+| leak | 79 | 1 |
 | codegen-gap | 59 | 0 |
-| double-free | 57 | 2 |
+| double-free | 59 | 2 |
 | missing-feature | 46 | 1 |
 | false-positive | 35 | 1 |
 | crash | 23 | 0 |
 | run-vs-build | 23 | 0 |
 | soundness | 16 | 1 |
 | perf | 16 | 0 |
-| diagnostics | 10 | 0 |
+| diagnostics | 11 | 1 |
 | use-after-free | 3 | 0 |
-| memory leak (fresh-owned String argument discarded unfreed) | 1 | 0 |
-| memory unsafety (use-after-free / double-free) — owned `self` receiver returned/moved with a non-empty heap field | 1 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 357 | 3 |
+| codegen | 361 | 4 |
 | typecheck | 59 | 2 |
 | interp | 47 | 1 |
 | ownership | 22 | 0 |
-| other | 19 | 3 |
-| autopar | 13 | 0 |
+| other | 18 | 2 |
+| autopar | 14 | 0 |
+| cli | 12 | 1 |
 | runtime | 11 | 0 |
-| cli | 11 | 0 |
 | resolver | 9 | 0 |
 | lexer | 3 | 0 |
 | parser | 3 | 0 |
 | effect | 1 | 0 |
-| codegen (`String.replace` in src/codegen/vec_method.rs — missing arg cleanup) | 1 | 0 |
-| codegen (owned `self` receiver move-out suppression — `SelfValue` not handled where an owned struct `Identifier` is) | 1 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **509 surfaced · 7 open · 499 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **511 surfaced · 7 open · 501 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -136,14 +132,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **509 surfaced 
 | B-2026-07-13-5 | 2026-07-13 | codegen+typecheck | medium | Three composable Tensor limitations block idiomatic numerical-stdlib .kara over generic-dim tensors: (A) a tensor reduction/transform on a NON-IDENTIFIER receiver (method chain, e.g. `a.zip_with(b, f).sum()`) fails codegen with 'no handler for method sum on non-identifier receiver' — try_compile_tensor_reduce (tensor.rs:2794) only matches Identifier/SelfValue receivers, returning None for a MethodCall receiver so dispatch falls through; (B) a generic shape parameter `D` (declared `fn f[D](t: Tensor[f32,[D]])`) is usable in the SIGNATURE but NOT in a function-BODY type annotation — `let p: Tensor[f32,[D]] = ...` fails typecheck with "const expression: 'D' is not a known const"; (C) a `ref Tensor[f32,[D]]` PARAM passed to a tensor method taking `other: ref Tensor` (zip_with) fails typecheck with 'expected Tensor, found ref Tensor'. Each is loud (compile error / --interp hint), interp-correct where reachable. | — |
 | B-2026-07-16-13 | 2026-07-16 | other | low | `m[key]` (Map/SortedMap index operator) only accepts integer keys — a non-integer key (`m["x"]` on `Map[String,i64]`) is rejected 'index must be an integer or range, found String', despite design.md speccing `[]` → `index(ref self, key: ref K) -> ref V` (panics if key missing). `m[1]` on `Map[i64,V]` works only because i64 IS an integer. Workaround `m.get(k).unwrap()` works (and `get`'s key-borrow was fixed in B-2026-07-16-12). | none |
 | B-2026-07-16-14 | 2026-07-16 | typecheck+interp+other | medium | `karac check` accepts iterator-reduction / string-collection methods DIRECTLY on a Vec (`v.sum()`, `v.max()`, `v.min()`, `v.product()`, `v.join(sep)`, `v.concat()`) but no backend implements them — interp reports 'method not found (no dispatch arm)' and codegen reports 'not yet supported' / build-fails. The idiomatic `.iter()` form works (`v.iter().sum()` = 120). This is a check/execution consistency hole: `karac check` (the AI-first wedge — a program that checks clean should run) passes code that traps at runtime on all three surfaces. | none |
-| B-2026-07-16-19 | 2026-07-16 | other | high | A function returning `Option[String]` built from a MOVED Vec element (`let words = s.split(" "); if words.len()>0 { Some(words[0]) } else { None }`) double-frees the element buffer when called TWICE inside an auto-parallelized `main` (JIT: 'free(): double free'; native: valgrind Invalid free under karac_par_run). Single/sequential invocation is CLEAN (the element move-out of `words[0]` into `Some` is correctly suppressed there); the bug appears only when main's statement mix makes it auto-parallelize (par_run=1). KARAC_AUTO_PAR=0 fixes it — an auto-par correctness bug, not the element-move-out itself. | none |
 | B-2026-07-16-23 | 2026-07-16 | codegen | medium | `unwrap_or(<non-Call heap default>)` mismanaged the eager default's ownership. LEG 1 (FIXED in c9593ed): an owned-binding default (moved Vec/String identifier) DOUBLE-FREED. REMAINING (open): a DIRECT array/collection-literal default (`unwrap_or([9,9,9])`) LEAKS, and a DIRECT f-string default (`unwrap_or(f"…")`) DOUBLE-FREES. Only the Call/MethodCall/String-slice (B-2026-07-16-22) and owned-binding (leg 1) default shapes are now correct. | none |
 | B-2026-07-17-2 | 2026-07-17 | codegen | high | shared-ownership-matrix frontier REGRESSION: `forwarding_chain/ResultOk` + `forwarding_chain/ResultErr` went Clean → Leak with RC-elision ON (`KARAC_RC_ELIDE_REF_PARAMS` default) — `fn eat(r: Result[Node, i64]) -> i64 { eat2(r) }` (owned param forwarded whole to a consuming callee) leaks the shared `Node` on both the Ok-side (`Result[Node, i64]`) and Err-side (`Result[i64, Node]`) containers; the `Option[Node]` cell of the SAME flow stays Clean, and the whole matrix passes with `KARAC_RC_ELIDE_REF_PARAMS=0`. Prime suspect: `e39db64` (borrow-forward relaxation of RC-elision condition 1, B-2026-07-15-21 Part C — the forwarding-chain shape is exactly its target); suspect window includes `2639536` (condition-5 fix, same day). | none |
-| B-2026-07-17-3 | 2026-07-17 | codegen (owned `self` receiver move-out suppression — `SelfValue` not handled where an owned struct `Identifier` is) | high | An owned `self` receiver method that RETURNS `self` (or `let b = self; … b`) DOUBLE-FREES the self struct's heap (Vec/String) field buffer when that field is non-empty (cap>0). The builder/fluent pattern `X.new().add(a).add(b)` crashes: JIT aborts (empty output), native masks the empty-output at -O but valgrind shows the use-after-free (`karac_realloc_or_panic` on a freed block); the interpreter is correct. FREE-FUNCTION equivalent (`fn add(bld: Builder) -> Builder { … }`) is clean — the bug is specific to the `self` receiver. | none |
+| B-2026-07-17-3 | 2026-07-17 | codegen | high | An owned `self` receiver method that RETURNS `self` (or `let b = self; … b`) DOUBLE-FREES the self struct's heap (Vec/String) field buffer when that field is non-empty (cap>0). The builder/fluent pattern `X.new().add(a).add(b)` crashes: JIT aborts (empty output), native masks the empty-output at -O but valgrind shows the use-after-free (`karac_realloc_or_panic` on a freed block); the interpreter is correct. FREE-FUNCTION equivalent (`fn add(bld: Builder) -> Builder { … }`) is clean — the bug is specific to the `self` receiver. | none |
+| B-2026-07-17-5 | 2026-07-17 | cli | low | wasm link fails with cryptic `undefined symbol: __wasm_first_page_end` (from rustup's self-contained wasi libc.a dlmalloc.c.obj) when the PATH `wasm-ld` is older than the active rustup toolchain's wasi-libc — the linker resolution order (KARAC_WASM_LD > PATH wasm-ld > brew > rust-lld) picks the stale system linker over the version-matched rust-lld sitting in the same rustup toolchain that supplied the libc. | none |
 
-### Fixed (499)
+### Fixed (501)
 
-<details><summary>499 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>501 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -642,10 +638,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **509 surfaced 
 | B-2026-07-16-16 | codegen | high | tests/selfhost_codegen.rs (selfhost_codegen_matches_seed_run) is RED on main: the self-hosted emitter compiles and runs, but executing its emitted IR… | — |
 | B-2026-07-16-17 | other | low | The loop-bound pre-sizing pass fired only on a STRAIGHT-LINE single push per iteration; a body whose sole fill is a balanced `if COND { v.push(a) } e… | 53f5c09 |
 | B-2026-07-16-18 | codegen | high | FIXED — Reassigning a heap-owning STRUCT variable (`a = b`) double-frees: the Assign arm never suppressed the moved source `b`'s StructDrop, so both… | b837786 |
+| B-2026-07-16-19 | autopar+codegen | high | A function returning `Option[String]` built from a MOVED Vec element (`let words = s.split(" "); if words.len()>0 { Some(words[0]) } else { None }`)… | d9cd7a2 — three coordinated changes: (1) analyzer move-hazard gate (concurrency.rs) keeps statements that CONSUME an owned-heap capture (match/if-let payload move, owned call arg, Option/Result combinator receiver, bare-RHS alias/aggregate move) out of par groups — the hazard is stmt-vs-parent-scope-exit, invisible to the stmt-vs-stmt conflict graph; (2) the par-branch publish loop now tag-sentinel-suppresses FreeInlineOptionPayload / FreeInlineOptionMapPayload / FreeInlineResultPayload for published slots (pre-fix the worker freed the payload right after copying it into the returns struct); (3) the parent slot-rebind loop re-registers the payload free against its fresh alloca (RHS-span -> enum_inst_type_exprs, mirroring the sequential let path) so suppression (2) does not trade the double-free for a per-slot leak. |
 | B-2026-07-16-20 | other+interp | medium | A `.to_string()` chained as the receiver of another method (`s.to_string().to_uppercase()`, `s.trim().to_string()…`) build-failed with 'Vec/String me… | c043d03 |
 | B-2026-07-16-21 | codegen | medium | A heap-String-returning method used as the RECEIVER of another method (`s.to_uppercase().to_lowercase()`, `e.to_uppercase().split(",")`, `c.trim().to… | c043d03 |
 | B-2026-07-16-22 | codegen | medium | `Option[String].unwrap_or(default)` / `Result[String,E].unwrap_or(default)` leaks a fresh heap-String default once per call when the receiver is data… | 598765b |
-| B-2026-07-16-24 | codegen (`String.replace` in src/codegen/vec_method.rs — missing arg cleanup) | medium | `String.replace(from, to)` never freed its fresh-owned String ARGUMENTS — a fresh-temp arg (`s.replace(a.to_string(), b.to_string())`) leaks once per… | 7be908c |
+| B-2026-07-16-24 | codegen | medium | `String.replace(from, to)` never freed its fresh-owned String ARGUMENTS — a fresh-temp arg (`s.replace(a.to_string(), b.to_string())`) leaks once per… | 7be908c |
+| B-2026-07-17-4 | codegen | high | `let a = r.unwrap_or("x").len();` on a let-bound `Option[String]` double-frees SEQUENTIALLY (no auto-par): unwrap_or's present branch reconstitutes t… | d9cd7a2 — calls.rs unwrap_or arm now calls suppress_inline_option_result_binding_move(object) at the merge point, the exact suppression unwrap/expect gained in B-2026-07-10-2 (same no-op cases: fresh-temp receiver, non-heap payload; the absent path zeroes a payload-less slot harmlessly). Pin: asan_sequential_unwrap_or_on_named_option_binding_no_double_free. |
 
 </details>
 
