@@ -2807,6 +2807,80 @@ mod codegen_tests {
         assert!(ir.contains("fdiv"), "should use float div");
     }
 
+    /// IR pin (phase-10 line 284): the opaque allocator wrappers
+    /// (`karac_alloc_fallible` / `karac_alloc_or_panic` / `karac_realloc_or_panic`)
+    /// carry the SAFE malloc-family modeling attributes (memory-effects +
+    /// allockind + alloc-family) so LLVM stops treating them as
+    /// clobber-everything barriers — the alloc-side twin of the free-family set
+    /// on `karac_free_buf`. The `Zeroed` allockind bit must stay ABSENT
+    /// (malloc-backed memory is uninitialized). Crucially, `noalias`-return must
+    /// NOT be present: it is what LLVM needs to REMOVE a dead allocation, but it
+    /// is unsound under Kāra's recycling cache + move-aliasing (it miscompiled 15
+    /// E2E programs) — see the helper doc + the phase-10 entry.
+    #[test]
+    fn ir_alloc_wrappers_carry_malloc_family_attrs() {
+        // Vec.new + push exercises alloc_or_panic + realloc_or_panic; the
+        // fallible wrapper is declared unconditionally in Codegen::new.
+        let ir = ir_for(
+            "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             let mut i: i64 = 0i64;\n\
+             while i < 64i64 { v.push(i); i = i + 1i64; }\n\
+             println(v.len().to_string());\n\
+             }\n",
+        );
+        // Collect the wrapper declares + every attribute group so a shared
+        // group is visible regardless of which `#N` a declare points at.
+        let relevant: String = ir
+            .lines()
+            .filter(|l| {
+                l.contains("@karac_alloc")
+                    || l.contains("@karac_realloc")
+                    || l.starts_with("attributes #")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for f in [
+            "karac_alloc_fallible",
+            "karac_alloc_or_panic",
+            "karac_realloc_or_panic",
+        ] {
+            assert!(
+                relevant.contains(&format!("@{f}(")),
+                "missing decl {f}\n{relevant}"
+            );
+        }
+        assert!(
+            relevant.contains("\"alloc-family\"=\"malloc\""),
+            "alloc-family=malloc missing (pairs alloc with karac_free_buf)\n{relevant}"
+        );
+        assert!(
+            relevant.contains("allockind(\"alloc,uninitialized\")"),
+            "alloc allockind missing / Zeroed bit leaked\n{relevant}"
+        );
+        assert!(
+            relevant.contains("allockind(\"realloc,uninitialized\")"),
+            "realloc allockind missing\n{relevant}"
+        );
+        // The deliberate exclusion: no `noalias` on any wrapper's return (unsound
+        // under the recycling cache). Return attributes render inline on the
+        // `declare` line, so check those specifically.
+        for f in [
+            "karac_alloc_fallible",
+            "karac_alloc_or_panic",
+            "karac_realloc_or_panic",
+        ] {
+            let decl = ir
+                .lines()
+                .find(|l| l.contains("declare") && l.contains(&format!("@{f}(")))
+                .unwrap_or_else(|| panic!("no declare line for {f}"));
+            assert!(
+                !decl.contains("noalias"),
+                "{f} must NOT carry noalias-return (unsound under the recycling cache): {decl}"
+            );
+        }
+    }
+
     // ── Type-aware operator dispatch: signed vs unsigned ─────────
     //
     // Signedness-sensitive integer ops (Div/Mod/Lt/LtEq/Gt/GtEq/Shr)

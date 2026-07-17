@@ -3695,6 +3695,70 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) hot_swap_fns: Vec<(u32, FunctionValue<'ctx>)>,
 }
 
+/// Apply the malloc-family allocator attributes to an alloc/realloc wrapper
+/// *declaration* (`karac_alloc_fallible` / `karac_alloc_or_panic` /
+/// `karac_realloc_or_panic`), so LLVM stops treating each opaque extern as a
+/// clobber-everything barrier — the alloc-side twin of the free-family set on
+/// `karac_free_buf` (B-2026-07-17-9 / phase-10 line 284). Modeling the call's
+/// real memory effects (`memory(inaccessiblemem: readwrite)` — a plain alloc
+/// touches only allocator-internal state) lets DSE / store-forwarding / LICM
+/// run across the alloc, recovering ~2.4× on a dead-buffer churn loop on top of
+/// the free-side win (the "elide the stores into them" half of the entry).
+///
+/// **`noalias`-return and `allocsize` are DELIBERATELY NOT applied.** `noalias`
+/// on the return is what LLVM additionally requires to REMOVE a dead allocation
+/// (the malloc+free-PAIR elision), but it is UNSOUND under Kāra's codegen — the
+/// large-buffer recycling cache hands back recently-freed addresses and the
+/// move/aliasing lowering keeps multiple SSA pointers to one buffer, both of
+/// which violate the noalias-return precondition. Applying it miscompiled 15
+/// E2E programs (bounds-elision, Vec sort/retain/with-capacity-grow, enum
+/// moves) into wrong output / empty output. `allocsize` buys nothing without
+/// the removal it would enable and feeds LLVM's object-size / bounds reasoning,
+/// so it is left off too. See phase-10 line 284 for the bisect.
+///
+/// `allockind_bits`: `Alloc`(1) for the byte-size wrappers, `Realloc`(2) for the
+/// resizer — each OR'd with `Uninitialized`(8) because the buffers are
+/// malloc-backed, NOT zeroed (the `Zeroed` bit is DELIBERATELY absent so LLVM
+/// never folds a read-before-write to 0). `argmem_rw`: true only for realloc (it
+/// reads the old buffer); a plain alloc touches only allocator-internal
+/// (inaccessible) memory. `willreturn`: false for the `_or_panic` variants (they
+/// abort on OOM). `realloc_ptr_param`: marks the resized allocation —
+/// `allockind` `Realloc` is inert without it, exactly like free's `allocptr`.
+fn apply_alloc_family_attrs(
+    context: &Context,
+    fn_val: FunctionValue<'_>,
+    allockind_bits: u64,
+    willreturn: bool,
+    argmem_rw: bool,
+    realloc_ptr_param: Option<u32>,
+) {
+    use inkwell::attributes::{Attribute, AttributeLoc};
+    let enum_attr = |name: &str, val: u64| {
+        context.create_enum_attribute(Attribute::get_named_enum_kind_id(name), val)
+    };
+    // memory(inaccessiblemem: readwrite [, argmem: readwrite]) — 2 bits per
+    // location (argmem = bits[1:0], inaccessiblemem = bits[3:2], ModRef = 0b11);
+    // matches the free-side `0b1111` for argmem+inaccessible readwrite.
+    let memory = if argmem_rw { 0b1111 } else { 0b1100 };
+    fn_val.add_attribute(AttributeLoc::Function, enum_attr("memory", memory));
+    fn_val.add_attribute(
+        AttributeLoc::Function,
+        enum_attr("allockind", allockind_bits),
+    );
+    fn_val.add_attribute(AttributeLoc::Function, enum_attr("nounwind", 0));
+    fn_val.add_attribute(AttributeLoc::Function, enum_attr("mustprogress", 0));
+    if willreturn {
+        fn_val.add_attribute(AttributeLoc::Function, enum_attr("willreturn", 0));
+    }
+    fn_val.add_attribute(
+        AttributeLoc::Function,
+        context.create_string_attribute("alloc-family", "malloc"),
+    );
+    if let Some(p) = realloc_ptr_param {
+        fn_val.add_attribute(AttributeLoc::Param(p), enum_attr("allocptr", 0));
+    }
+}
+
 impl<'ctx> Codegen<'ctx> {
     fn new(context: &'ctx Context, module_name: &str) -> Self {
         let module = context.create_module(module_name);
@@ -3891,6 +3955,12 @@ impl<'ctx> Codegen<'ctx> {
                 );
             }
         }
+        // Alloc-side twin of the free-family attributes above (phase-10 line
+        // 284): `Alloc | Uninitialized` (0b1001), touches only allocator-internal
+        // memory. `_fallible` always returns (null on OOM → `willreturn`);
+        // `_or_panic` aborts on OOM (no `willreturn`).
+        apply_alloc_family_attrs(context, alloc_fallible_fn, 0b1001, true, false, None);
+        apply_alloc_family_attrs(context, alloc_or_panic_fn, 0b1001, false, false, None);
 
         let exit_type = context
             .void_type()

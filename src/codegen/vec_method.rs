@@ -35,7 +35,12 @@ impl<'ctx> super::Codegen<'ctx> {
             let ptr_ty = self.context.ptr_type(AddressSpace::default());
             let i64_t = self.context.i64_type();
             let ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_t.into()], false);
-            self.module.add_function(sym, ty, Some(Linkage::External))
+            let f = self.module.add_function(sym, ty, Some(Linkage::External));
+            // Realloc-family attrs (phase-10 line 284): `Realloc | Uninitialized`
+            // (0b1010), reads the old buffer (argmem), resizes param 0
+            // (`allocptr`), aborts on OOM (no `willreturn`).
+            crate::codegen::apply_alloc_family_attrs(self.context, f, 0b1010, false, true, Some(0));
+            f
         })
     }
 
