@@ -67964,6 +67964,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_autograd_tensor_scalar_loss() {
+        // `std.autograd` tensor-valued `sum` reduction — the terminal that turns
+        // a tensor computation into a scalar loss. L = sum(x²) at x=[1,2,3] → 14;
+        // dL/dx = 2x = [2,4,6] (the sum node broadcasts its scalar upstream
+        // gradient back to the input shape, then the mul VJP doubles it).
+        if let Some(out) = run_program(
+            r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let x0: Tensor[f32, [?]] = Tensor.from([1.0, 2.0, 3.0]);
+    let x = TensorVar.leaf(t, x0);
+    let sq = x.mul(x);
+    let loss = sq.sum();
+    let lv = loss.value();
+    println(f"{lv[0]}");
+    loss.backward();
+    println(x.grad_at(0));
+    println(x.grad_at(1));
+    println(x.grad_at(2));
+}
+"#,
+        ) {
+            assert_eq!(out, "14\n2\n4\n6\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_embeddings_cosine_similarity_matrix() {
         // `std.embeddings.cosine_similarity_matrix` (phase-11): the Q×N
         // bulk-scoring path — a `[Q, D]` query block vs a `[N, D]` corpus →

@@ -18542,6 +18542,32 @@ fn main() {
 }
 
 #[test]
+fn test_autograd_reverse_mode_tensor_scalar_loss() {
+    // std.autograd tensor-valued `sum` reduction — interpreter parity with
+    // tests/codegen.rs::test_e2e_autograd_tensor_scalar_loss. L = sum(x²) at
+    // x=[1,2,3] → 14; dL/dx = 2x = [2,4,6].
+    let out = run_no_errors(
+        r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let x0: Tensor[f32, [?]] = Tensor.from([1.0, 2.0, 3.0]);
+    let x = TensorVar.leaf(t, x0);
+    let sq = x.mul(x);
+    let loss = sq.sum();
+    let lv = loss.value();
+    println(f"{lv[0]}");
+    loss.backward();
+    println(x.grad_at(0));
+    println(x.grad_at(1));
+    println(x.grad_at(2));
+}
+"#,
+    );
+    assert_eq!(out, "14\n2\n4\n6\n");
+}
+
+#[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors
     // (the last Sleef building block). `>>` is logical on unsigned lanes and

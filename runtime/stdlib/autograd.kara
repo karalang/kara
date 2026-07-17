@@ -40,7 +40,7 @@
 // `TensorVar`) and their `impl` blocks, but not a separate helper enum — so
 // encoding the op as an integer keeps the module to the importable types. The
 // op-code legend (shared by both tapes): 0 leaf · 1 add · 2 sub · 3 mul · 4 div ·
-// 5 neg · 6 relu · 7 sigmoid · 8 tanh.
+// 5 neg · 6 relu · 7 sigmoid · 8 tanh · 9 sum (tensor tape only).
 
 /// The append-only differentiation tape: parallel columns indexed by node id.
 /// `values` holds each node's forward value, `grads` its accumulated gradient
@@ -440,6 +440,24 @@ impl TensorVar {
         TensorVar { tape: tp, idx: idx }
     }
 
+    /// Reduce every element to a scalar total, stored as a `[1]` tensor — the
+    /// terminal that turns a tensor computation into a scalar loss you can
+    /// `backward()`. The only shape-changing op (input `[N]` → output `[1]`):
+    /// since `d(sum(x))/dx_i = 1`, its backward broadcasts the upstream scalar
+    /// gradient back to the input shape.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn sum(ref self) -> TensorVar {
+        let tp = self.tape;
+        let sv = tp.values[self.idx];
+        let s = sv.sum();
+        let v: Tensor[f32, [?]] = Tensor.full([1], s);
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(9, self.idx, -1);
+        TensorVar { tape: tp, idx: idx }
+    }
+
     /// Run the reverse pass from this node: seed its gradient to an all-ones
     /// tensor, then walk every node newest→oldest applying each op's local
     /// (element-wise) vector-Jacobian product to its parents. Nodes are
@@ -499,6 +517,15 @@ impl TensorVar {
                     let tv = tp.values[i];
                     let ga = tp.grads[a];
                     tp.grads[a] = ga + g * (1.0 - tv * tv);
+                }
+                9 => {
+                    // Sum: d(sum(x))/dx_i = 1 — broadcast the upstream scalar
+                    // gradient (`g` is this node's `[1]` grad) back to the
+                    // parent's shape via `xa * 0.0 + gs`.
+                    let gs = g[0];
+                    let xa = tp.values[a];
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + (xa * 0.0 + gs);
                 }
                 _ => {}
             }
