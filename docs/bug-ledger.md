@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 143 | 1 |
+| miscompile | 143 | 0 |
 | leak | 80 | 0 |
 | codegen-gap | 59 | 0 |
 | double-free | 59 | 1 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 369 | 3 |
+| codegen | 369 | 2 |
 | typecheck | 61 | 2 |
 | interp | 48 | 0 |
 | ownership | 22 | 0 |
@@ -123,9 +123,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **522 surfaced · 5 open · 513 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **522 surfaced · 4 open · 514 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -133,11 +133,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **522 surfaced 
 | B-2026-07-16-23 | 2026-07-16 | codegen | medium | `unwrap_or(<non-Call heap default>)` mismanaged the eager default's ownership. LEG 1 (FIXED in c9593ed): an owned-binding default (moved Vec/String identifier) DOUBLE-FREED. REMAINING (open): a DIRECT array/collection-literal default (`unwrap_or([9,9,9])`) LEAKS, and a DIRECT f-string default (`unwrap_or(f"…")`) DOUBLE-FREES. Only the Call/MethodCall/String-slice (B-2026-07-16-22) and owned-binding (leg 1) default shapes are now correct. | none |
 | B-2026-07-17-5 | 2026-07-17 | cli | low | wasm link fails with cryptic `undefined symbol: __wasm_first_page_end` (from rustup's self-contained wasi libc.a dlmalloc.c.obj) when the PATH `wasm-ld` is older than the active rustup toolchain's wasi-libc — the linker resolution order (KARAC_WASM_LD > PATH wasm-ld > brew > rust-lld) picks the stale system linker over the version-matched rust-lld sitting in the same rustup toolchain that supplied the libc. | none |
 | B-2026-07-17-12 | 2026-07-17 | typecheck | medium | Unknown methods on non-exhaustive prelude types (Vec/String/Map/Set/...) silently type as Type::Error, which unifies with ANYTHING: `v.some_typo()` passes karac check, and pre-B-2026-07-16-14 even `let x: bool = v.sum()` checked clean. EXHAUSTIVE_PRELUDE (expr_method_call.rs ~5400) covers only Option/Result, so every other built-in receiver gets the silent fall-through — the check/execution contract (the AI-first wedge: check-clean must run) is open on exactly the receivers LLM authors touch most. | none |
-| B-2026-07-17-13 | 2026-07-17 | codegen | low | A narrow-UNSIGNED value carried through an Option payload prints SIGNED: `Option[u8]` holding 200u8, unwrapped and printed, shows -56 (200 as i8) under karac build; interp correct. The unwrap/reconstruct produces the right bit pattern (i8 truncation is correct) but the print path reads it as signed because the reconstructed value's unsigned surface type is not threaded to expr_is_unsigned_int through the Option unwrap. Reproduces with a hand-written `match racc { Some(a) => .. }` over Option[u8] (NOT reduce-specific) — same class as B-2026-07-03-21's narrow-unsigned slot printing, extended to the Option-payload path. | none |
 
-### Fixed (513)
+### Fixed (514)
 
-<details><summary>513 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>514 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -653,6 +652,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **522 surfaced 
 | B-2026-07-17-9 | codegen | medium | Routing Vec/String frees through an unattributed karac_free_buf declaration turned every cleanup drain into a clobber-everything opaque call — LLVM k… | 7b7ba41a |
 | B-2026-07-17-10 | runtime | medium | The buffer-cache's first cut used OnceLock/Mutex/env::var_os/eprint_fmt inside the force-kept karac_alloc_or_panic/karac_free_buf closure — ONE reach… | 7b7ba41a |
 | B-2026-07-17-11 | codegen | medium | Iterator.reduce over FLOAT elements returns the None arm under karac build (interp correct): `[1.5, 2.5, 0.5].iter().reduce(\|a, x\| if x > a { x } els… | 75e248d — the reduce lowering (try_compile_iter_chain_reduce) synthesizes an Option[<elem>] accumulator folded via a match and compiles that AST WITHOUT a re-typecheck pass, so the synthesized Some(<acc>) payload binding had no pattern_binding_types entry and codegen's payload reconstruction fell to the raw-i64 default: a float acc read the payload word via `sitofp i64 -> double` (the f64 bit pattern reinterpreted as an integer VALUE = garbage, so the fold never landed Some and reduce returned the None arm), and a narrow u8/i32 acc skipped truncation. Root cause was WIDER than filed — it hit narrow ints too, not just floats. Fix: give the synthesized Some(acc) binding a unique synthetic span (usize::MAX - uid, distinct per reduce) and register the element's surface name in pattern_binding_types there, so the existing float-bitcast / int-truncate reconstruction arms fire exactly as for a typechecked match. Also un-gated the direct v.max()/v.min() float fast path (B-2026-07-16-14 had bailed floats to --interp pending this) — elem_is_int became elem_is_scalar (adds f32/f64). Verified float/narrow-int reduce + direct float max/min interp/JIT/native parity, valgrind clean. Tests: test_e2e_iter_chain_reduce_float_and_narrow_int_payload (codegen) + a float leg on the B-16-14 asan pin. RESIDUAL (out of scope, filed B-2026-07-17-13): narrow-UNSIGNED reduce now yields the correct bit pattern but still PRINTS signed ([200u8].max() -> -56) — the pre-existing Option-through-unsigned-print gap (B-2026-07-03-21 class), reproduces with a hand-written match over Option[u8], untouched here. |
+| B-2026-07-17-13 | codegen | low | A narrow-UNSIGNED value carried through an Option payload prints SIGNED: `Option[u8]` holding 200u8, unwrapped and printed, shows -56 (200 as i8) und… | 8d21349 |
 | B-2026-07-17-15 | codegen+autopar | high | Two annotated opaque-handle-new bindings (`let t: Interner = Interner.new()` / `let a: Arena[T] = Arena.new()`) in the same fn are auto-parallelized… | e01b609 |
 
 </details>
