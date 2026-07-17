@@ -28741,6 +28741,56 @@ fn main() {
     }
 
     #[test]
+    fn asan_unwrap_or_literal_and_fstring_default_clean() {
+        // B-2026-07-16-23 legs 2 + 3: `Option[T].unwrap_or(<default>)` where the
+        // default is a DIRECT literal, not a binding.
+        //   • leg 2 — a collection literal (`["a","b","c"]` / `Vec[9,9,9]`)
+        //     LEAKED on the present (Some) path: the materialized Vec buffer was
+        //     discarded without a free (24B × present-iters lost).
+        //   • leg 3 — an f-string (`f"def-{i}"`) DOUBLE-FREED on the absent
+        //     (None) path: the f-string's `acc` alloca was `track_vec_var`'d for
+        //     scope-exit free AND the same buffer became the unwrap_or result
+        //     (freed again by the result binding) — `free(): double free`.
+        // Fix: free the literal default on the present path (it materializes to a
+        // Vec struct and registers no scope cleanup, so a present-path free is
+        // sufficient and never double-frees); for the f-string, additionally
+        // suppress the acc's scope cleanup before the branch so the buffer is
+        // freed exactly once per path. Loops 200× mixing present/absent over a
+        // heap-element array literal, a `Vec[..]` prefix literal, and an f-string
+        // default, so a double-free aborts immediately and a per-iteration leak
+        // accumulates for LSan.
+        assert_clean_asan_run(
+            r#"
+fn opt_v(i: i64) -> Option[Vec[String]] {
+    if i % 2 == 0 { Some(["x", "y"]) } else { None }
+}
+fn opt_i(i: i64) -> Option[Vec[i64]] {
+    if i % 2 == 0 { Some([i, i]) } else { None }
+}
+fn opt_s(i: i64) -> Option[String] {
+    if i % 2 == 0 { Some("hi") } else { None }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let v: Vec[String] = opt_v(i).unwrap_or(["a", "b", "c"]);
+        total = total + (v.len() as i64);
+        let w: Vec[i64] = opt_i(i).unwrap_or(Vec[9, 9, 9]);
+        total = total + (w.len() as i64);
+        let s: String = opt_s(i).unwrap_or(f"def-{i}");
+        total = total + (s.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["1845"],
+            "unwrap_or_literal_and_fstring_default_clean",
+        );
+    }
+
+    #[test]
     fn asan_auto_par_consuming_match_on_option_string_no_double_free() {
         // B-2026-07-16-19: a fn returning `Option[String]` built from a MOVED
         // Vec element (`Some(words[0])` after `split`), called twice in a main

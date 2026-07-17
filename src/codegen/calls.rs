@@ -2192,6 +2192,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 "codegen: Option/Result.unwrap_or expects 1 argument, found 0".to_string()
             })?;
             let inner_ll = self.llvm_type_for_type_expr(&inner_te);
+            // Snapshot the innermost cleanup frame BEFORE compiling the
+            // default, so an f-string default's `acc` cleanup (armed by
+            // `track_vec_var` during compile) can be located and suppressed
+            // below (B-2026-07-16-23 leg 3).
+            let cleanup_snap = self
+                .scope_cleanup_actions
+                .last()
+                .map(|f| f.len())
+                .unwrap_or(0);
             let mut default_val = self.compile_expr(&default_arg.value)?;
             if let (BasicValueEnum::IntValue(dv), BasicTypeEnum::IntType(it)) =
                 (default_val, inner_ll)
@@ -2240,6 +2249,34 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             if default_is_moved_heap_ident {
                 self.suppress_source_vec_cleanup_for_arg(&default_arg.value);
+            }
+
+            // f-string default (`unwrap_or(f"…")`): the InterpolatedStringLit
+            // materializes into an `acc` alloca that `track_vec_var` armed for
+            // scope-exit free (exprs.rs). On the ABSENT path that same buffer
+            // becomes the unwrap_or result, so the result binding frees it AND
+            // the acc cleanup frees it → double-free (B-2026-07-16-23 leg 3;
+            // `free(): double free detected`). Remove the acc's FreeVecBuffer
+            // (added during the default's compile, so it sits in the frame tail
+            // past `cleanup_snap`) and free `default_val` on the present path
+            // instead — the temp analogue of leg 1's moved-binding cap-zeroing.
+            // Result: freed exactly once per branch — present → the present-path
+            // free below; absent → the result binding at scope.
+            let default_is_fstring =
+                matches!(&default_arg.value.kind, ExprKind::InterpolatedStringLit(_));
+            if default_is_fstring {
+                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                    let mut i = frame.len();
+                    while i > cleanup_snap {
+                        i -= 1;
+                        if matches!(
+                            frame[i],
+                            crate::codegen::state::CleanupAction::FreeVecBuffer { .. }
+                        ) {
+                            frame.remove(i);
+                        }
+                    }
+                }
             }
 
             let fn_val = self.current_fn.unwrap();
@@ -2307,6 +2344,13 @@ impl<'ctx> super::Codegen<'ctx> {
             if self.expr_yields_fresh_owned_temp(&default_arg.value)
                 || self.expr_is_fresh_owned_string_slice(&default_arg.value)
                 || default_is_moved_heap_ident
+                || default_is_fstring
+                || matches!(
+                    &default_arg.value.kind,
+                    ExprKind::ArrayLiteral(_)
+                        | ExprKind::PrefixCollectionLiteral { .. }
+                        | ExprKind::RepeatLiteral { .. }
+                )
             {
                 self.free_str_vec_buffer_if_heap(default_val);
             }
