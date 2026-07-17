@@ -868,6 +868,7 @@ pub fn safe_elidable_ref_params(
         }
     }
 
+    let carriers = collect_shared_carrying_types(program);
     let mut out: HashMap<String, Vec<(String, usize)>> = HashMap::new();
     for (fname, modes) in param_modes {
         // Condition-1 function-level filters.
@@ -897,6 +898,33 @@ pub fn safe_elidable_ref_params(
                     // Condition 4 — the param's match-payloads never move out as a
                     // bare-identifier value (sound by construction; see section).
                     && payloads_never_move_out(func, name)
+                    // Result-carried payload exclusion (B-2026-07-17-2): the
+                    // pair-elision is EDGE-LOCAL — skip the call-site retain,
+                    // skip the callee's release, net zero — which is only
+                    // balanced when the call edge actually carries that
+                    // retain/release pair. `Option[shared]` / bare-`shared`
+                    // args follow the caller-retains convention (inc at the
+                    // call site, dec in the callee / at the caller's scope
+                    // exit), so both halves exist and eliding both is sound.
+                    // A `Result[shared]`-typed arg follows the MOVE convention
+                    // — no call-site retain is emitted, and the ONLY release
+                    // is the callee's consume (the `Result[shared]` scope-
+                    // exit-dec residual, B-2026-07-12-24) — so "eliding the
+                    // pair" removes a release that had no retain twin: the
+                    // shared payload leaks (shared-ownership-matrix
+                    // forwarding_chain/ResultOk+Err went Clean → Leak when the
+                    // Part-C borrow-forward admitted `eat(r)`-shaped chains).
+                    // Excluded here at classification so no downstream
+                    // condition needs Result awareness; re-admitting Result
+                    // edges is gated on B-2026-07-12-24 giving Result[shared]
+                    // locals a real scope-exit release first.
+                    && !func
+                        .params
+                        .iter()
+                        .find(|p| {
+                            matches!(&p.pattern.kind, PatternKind::Binding(n) if n == name)
+                        })
+                        .is_some_and(|p| result_wraps_shared(&p.ty, &carriers))
             })
             .map(|(i, (n, _))| (n.clone(), i))
             .collect();
@@ -921,7 +949,6 @@ pub fn safe_elidable_ref_params(
     // lineage) flow anywhere except an elided position of a surviving fn or
     // a nested destructure. Removal cascades: a dropped callee turns its
     // callers' projection-args into non-sanctioned flows on the next pass.
-    let carriers = collect_shared_carrying_types(program);
     let field_class = classify_struct_fields(program, &carriers);
     loop {
         let names: Vec<String> = out.keys().cloned().collect();
@@ -1012,6 +1039,53 @@ fn collect_shared_carrying_types(program: &Program) -> HashSet<String> {
 /// and generic args, recursively), or `None` when the type provably holds no
 /// handle. Exhaustive over `TypeKind` — a new type form fails the build here
 /// rather than silently classifying as handle-free.
+/// `true` when `te` contains a `Result[..]` whose type arguments carry a
+/// shared handle — the shape excluded from the elidable set because the
+/// `Result[shared]` call edge follows the MOVE convention (no call-site
+/// retain to pair with the elided callee release; see the condition-1
+/// filter comment, B-2026-07-17-2). Walks nested positions so
+/// `Option[Result[Node, i64]]` and `(i64, Result[Node, i64])` are caught
+/// too; a `Result` with only non-shared payloads (`Result[i64, String]`)
+/// stays eligible.
+fn result_wraps_shared(te: &TypeExpr, carriers: &HashSet<String>) -> bool {
+    fn args_of(p: &crate::ast::PathExpr) -> impl Iterator<Item = &TypeExpr> {
+        p.generic_args.iter().flatten().filter_map(|a| match a {
+            crate::ast::GenericArg::Type(t) => Some(t),
+            _ => None,
+        })
+    }
+    match &te.kind {
+        TypeKind::Path(p) => {
+            let is_result = p.segments.last().map(String::as_str) == Some("Result");
+            if is_result && args_of(p).any(|t| type_shared_payload(t, carriers).is_some()) {
+                return true;
+            }
+            args_of(p).any(|t| result_wraps_shared(t, carriers))
+        }
+        TypeKind::Tuple(ts) => ts.iter().any(|t| result_wraps_shared(t, carriers)),
+        TypeKind::Array { element, .. } => result_wraps_shared(element, carriers),
+        TypeKind::Pointer { inner, .. }
+        | TypeKind::Ref(inner)
+        | TypeKind::MutRef(inner)
+        | TypeKind::MutSlice(inner)
+        | TypeKind::Weak(inner) => result_wraps_shared(inner, carriers),
+        TypeKind::FnType {
+            params,
+            return_type,
+            ..
+        } => {
+            params.iter().any(|t| result_wraps_shared(t, carriers))
+                || return_type
+                    .as_ref()
+                    .is_some_and(|t| result_wraps_shared(t, carriers))
+        }
+        // Dyn/ImplTrait already fail closed via `type_shared_payload` in 5b;
+        // for the Result guard they carry no visible Result wrapper.
+        TypeKind::Dyn { .. } | TypeKind::ImplTrait { .. } => false,
+        TypeKind::Unit | TypeKind::Error => false,
+    }
+}
+
 fn type_shared_payload(te: &TypeExpr, carriers: &HashSet<String>) -> Option<String> {
     fn path(p: &crate::ast::PathExpr, carriers: &HashSet<String>) -> Option<String> {
         for seg in &p.segments {
@@ -1627,6 +1701,43 @@ fn driver() -> i64 {{ let local = Some(Node {{ val: 1i64, left: None, right: Non
             None,
             "walk must NOT elide — walk(local) forwards an owned local, a move, not a borrow"
         );
+    }
+
+    /// Result-carried payload exclusion (B-2026-07-17-2): the shared-ownership-
+    /// matrix forwarding-chain regression. `eat(d)` moves an owned
+    /// `Result[Node, i64]` into `eat`, whose Ref-classified param bare-forwards
+    /// to the scrutinee-only `eat2` — pre-fix `eat2.r` stayed elidable (the
+    /// Part-C relaxation admitted the forward) while `eat` itself did not
+    /// (forwarding escapes condition 2), so `eat` compiled the forward as a
+    /// MOVE (own release suppressed) and `eat2` skipped its elided release:
+    /// nobody freed the Node (LSan leak, `KARAC_RC_ELIDE_REF_PARAMS=0` clean).
+    /// A `Result[shared]` call edge has no call-site retain to pair with the
+    /// skipped release (move convention — the B-2026-07-12-24 residual), so
+    /// Result-carried params are excluded from the set entirely; the Option
+    /// twin of the same chain (previous test) keeps its elision.
+    #[test]
+    fn result_carried_param_never_elides() {
+        let src = format!(
+            "{NODE}\
+fn eat2(r: Result[Node, i64]) -> i64 {{ match r {{ Ok(n) => n.val, Err(_e) => 0i64 }} }}
+fn eat(r: Result[Node, i64]) -> i64 {{ eat2(r) }}
+fn caller(pool: Vec[Result[Node, i64]]) -> i64 {{ eat(pool[0i64]) }}
+"
+        );
+        let out = elidable(
+            &src,
+            &[
+                ("eat2", &[("r", OwnershipMode::Ref)]),
+                ("eat", &[("r", OwnershipMode::Ref)]),
+            ],
+        );
+        assert_eq!(
+            out.get("eat2"),
+            None,
+            "eat2's Result[shared] param must NOT elide — its call edge is a move \
+             (no retain to pair with the skipped release); got {out:?}"
+        );
+        assert_eq!(out.get("eat"), None, "eat likewise; got {out:?}");
     }
 
     /// Condition 4 rejects a payload moved by value into a consuming callee —

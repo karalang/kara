@@ -288,3 +288,34 @@ cheap syntactic fail-closed checks):
 
 `is_mirror`/`is_symmetric`/`sum`/`has_path_sum` all satisfy 5a–5c, so every
 known win survives the tightening.
+
+## Result-carried payload exclusion (CLOSED with B-2026-07-17-2) — the Part C edge-convention regression
+
+The shared-ownership matrix caught Part C admitting a chain the pair-elision
+premise does not cover: `forwarding_chain/ResultOk+ResultErr` went Clean →
+Leak with the default ON. Shape: `fn eat(r: Result[Node, i64]) -> i64 {
+eat2(r) }` with `eat2` scrutinee-only. The borrow-forward relaxation admitted
+the bare `eat2(r)` forward (r is Ref-classified), so `eat2.r` stayed elidable
+— while `eat` itself did NOT elide (forwarding escapes condition 2). The chain
+broke in the middle: `eat` compiled the forward as a MOVE (its own release
+suppressed by the consume classifier) and `eat2` skipped its elided release —
+nobody freed the Node.
+
+The underlying rule the regression exposed: **the pair-elision is edge-local**
+— skip the call-site retain, skip the callee release, net zero — and that is
+only balanced when the call edge actually carries a retain/release pair.
+`Option[shared]` / bare-`shared` arguments follow the caller-retains
+convention (inc at the call site, dec in the callee), so both halves exist
+and eliding both is sound. `Result[shared]` arguments follow the MOVE
+convention — no call-site retain is ever emitted (the `Result[shared]`
+scope-exit-dec residual, B-2026-07-12-24) — so there is no pair to skip:
+eliding removes a release with no retain twin.
+
+Fix (B-2026-07-17-2): params whose declared type wraps a shared handle in
+`Result` (at any nesting) are excluded from the elidable set at
+classification (`result_wraps_shared`, condition-1 filter), so no downstream
+condition needs Result awareness. Re-admitting Result edges is gated on
+B-2026-07-12-24 giving `Result[shared]` locals a real scope-exit release
+first. The Option twin of the same chain still elides and is valgrind-clean;
+treesum's win re-measured at 26.8% elide-on vs off (0.364s vs 0.462s, Linux
+container) — the winners are all Option/bare-shared and lose nothing.
