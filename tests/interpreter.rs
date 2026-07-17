@@ -9160,6 +9160,52 @@ fn test_map_insert_and_get() {
 }
 
 #[test]
+fn test_map_index_read_and_write_string_and_int_keys() {
+    // B-2026-07-16-13: the `m[k]` index operator now works in the interpreter
+    // for any key type (read panics if missing; write inserts / overwrites),
+    // matching codegen's native path. Pre-fix a non-integer key was rejected
+    // at typecheck, and even an integer-keyed `m[1]` `unreachable!`'d the
+    // interpreter (no Map-index arm). Covers String keys, int keys, a SortedMap
+    // receiver, and overwrite-on-existing.
+    let output = run("fn main() {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             m[\"alice\"] = 1_i64;\n\
+             m[\"bob\"] = 2_i64;\n\
+             m[\"alice\"] = 100_i64;\n\
+             println(m[\"alice\"]);\n\
+             println(m[\"bob\"]);\n\
+             let mut mi: Map[i64, i64] = Map.new();\n\
+             mi[5_i64] = 50_i64;\n\
+             println(mi[5_i64]);\n\
+             let mut sm: SortedMap[String, i64] = SortedMap.new();\n\
+             sm[\"k\"] = 7_i64;\n\
+             sm[\"k\"] = 8_i64;\n\
+             println(sm[\"k\"]);\n\
+         }");
+    assert_eq!(output, "100\n2\n50\n8\n");
+}
+
+#[test]
+fn test_map_index_read_missing_key_panics() {
+    // `m[k]` on a missing key is a runtime panic (design.md § Subscript Trait),
+    // distinct from `m.get(k)` which returns `None` (B-2026-07-16-13).
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             m[\"x\"] = 1_i64;\n\
+             println(m[\"nope\"]);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("key not found in map")),
+        "missing map key must raise a clear runtime error, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_map_get_missing_returns_none() {
     let output = run("fn main() {\n\
              let m: Map[String, i64] = Map.new();\n\

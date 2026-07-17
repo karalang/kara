@@ -15,7 +15,7 @@ use crate::ast::*;
 use crate::resolver::SpanKey;
 
 use super::exec::{add_pattern_bindings, collect_free_idents_expr, ControlFlow};
-use super::value::{primitive_const_to_value, EnumData, IteratorSource, Value};
+use super::value::{primitive_const_to_value, EnumData, IteratorSource, OrdValue, Value};
 
 impl<'a> super::Interpreter<'a> {
     pub(crate) fn eval_expr_inner(&mut self, expr: &Expr) -> Value {
@@ -608,6 +608,31 @@ impl<'a> super::Interpreter<'a> {
                             variant: "None".to_string(),
                             data: EnumData::Unit,
                         }
+                    };
+                }
+                // Map / SortedMap key index — `m[k] -> V`, panics if the key is
+                // missing (design.md § Subscript Trait; B-2026-07-16-13). Both
+                // backends have native support — codegen's `compile_map_index`
+                // hashes any `K`; this is its interpreter twin (before the
+                // Vec/Array arm, keyed on the receiver being a Map, not the
+                // index being an integer). `m.get(k).unwrap()` remains the
+                // Option-returning workaround; this is the direct-index sugar.
+                if let Value::Map(entries) = &obj {
+                    return match entries.iter().find(|(k, _)| *k == idx) {
+                        Some((_, v)) => v.clone(),
+                        None => self.record_runtime_error(
+                            format!("key not found in map: {}", idx),
+                            &expr.span,
+                        ),
+                    };
+                }
+                if let Value::SortedMap(m) = &obj {
+                    return match m.get(&OrdValue(idx.clone())) {
+                        Some(v) => v.clone(),
+                        None => self.record_runtime_error(
+                            format!("key not found in map: {}", idx),
+                            &expr.span,
+                        ),
                     };
                 }
                 match (&obj, &idx) {

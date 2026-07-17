@@ -2759,6 +2759,59 @@ impl<'a> super::TypeChecker<'a> {
                         };
                     }
                 }
+                // Map / SortedMap key index — `m[k] -> V` (design.md § Subscript
+                // Trait: `[]` → `index(ref self, key: ref K) -> ref V`, panics if
+                // the key is missing). B-2026-07-16-13: type it so `karac check`
+                // accepts a non-integer key (`m["x"]` on `Map[String, i64]`) and
+                // returns `V`, not the `Type::Error` the generic integer gate
+                // would leave behind. Placed BEFORE the integer/range gate so a
+                // String / struct key doesn't error there. Both backends have
+                // NATIVE Map-index support (codegen's `compile_map_index` hashes
+                // any K; the interpreter's `(Value::Map, key)` arm), so no
+                // desugar is needed — this arm only unblocks the typecheck gate.
+                // `m[1]` on `Map[i64, V]` also routes here now (it used to slip
+                // through the integer gate and return `Type::Error` —
+                // check-passing but interp-`unreachable!`).
+                {
+                    let map_kv = match &obj_ty {
+                        Type::Named { name, args }
+                            if matches!(name.as_str(), "Map" | "SortedMap") && args.len() == 2 =>
+                        {
+                            Some((args[0].clone(), args[1].clone()))
+                        }
+                        Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                            Type::Named { name, args }
+                                if matches!(name.as_str(), "Map" | "SortedMap")
+                                    && args.len() == 2 =>
+                            {
+                                Some((args[0].clone(), args[1].clone()))
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some((k_ty, v_ty)) = map_kv {
+                        // The key must be assignable to `K`. A `ref`/`mut ref`
+                        // key expression (`m[borrowed_key]`) is accepted against
+                        // an owned `K` — indexing borrows the key (`ref K`), the
+                        // same relaxation `Map.get`/`contains_key` got in
+                        // B-2026-07-16-12.
+                        let key_ty = match &idx_ty {
+                            Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                            other => other.clone(),
+                        };
+                        if key_ty != Type::Error {
+                            self.check_assignable(&k_ty, &key_ty, index.span.clone());
+                        }
+                        // `V` for BOTH a read (`x = m[k]`, panics if missing)
+                        // and an assignment target (`m[k] = v`, inserts /
+                        // overwrites — the assign checks the RHS against `V`).
+                        // Codegen already implements both (`compile_map_index` /
+                        // `compile_index_store`); the interpreter's read + store
+                        // arms mirror them (B-2026-07-16-13).
+                        return v_ty;
+                    }
+                }
                 // B-2026-07-15-3: an integer `ref` / `mut ref` indexes
                 // through the borrow (`preorder[cur]` with `cur: mut ref
                 // i64`) — same auto-deref arithmetic performs.

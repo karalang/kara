@@ -48,7 +48,7 @@ mod value;
 
 use exec::{deep_clone_value, option_value_from, ControlFlow, Env};
 use value::{
-    try_write_or_panic, upgrade_weak_to_option, EnumData, FieldCell, SharedStructInner,
+    try_write_or_panic, upgrade_weak_to_option, EnumData, FieldCell, OrdValue, SharedStructInner,
     ERROR_TRACE_MAX_DEPTH,
 };
 pub use value::{ErrorTraceFrame, RuntimeError, TestOutcome, Value};
@@ -2351,6 +2351,35 @@ impl<'a> Interpreter<'a> {
                 }
             }
             return;
+        }
+        // Map / SortedMap key store — `m[k] = v` inserts on a missing key and
+        // overwrites on an existing one (design.md § Subscript Trait;
+        // B-2026-07-16-13). Handled before the `Int`-index gate below (a Map
+        // key need not be an integer) and keyed on the receiver being a Map,
+        // via a write-back through the receiver place so the mutation lands
+        // regardless of how the receiver was reached. Codegen's twin is
+        // `compile_index_store`'s map arm.
+        {
+            let recv = match &object.kind {
+                ExprKind::Identifier(name) => self.env.get(name),
+                _ => Some(self.eval_expr_inner(object)),
+            };
+            match recv {
+                Some(Value::Map(mut entries)) => {
+                    match entries.iter_mut().find(|(k, _)| *k == idx_val) {
+                        Some(slot) => slot.1 = val,
+                        None => entries.push((idx_val, val)),
+                    }
+                    self.write_back_receiver(object, Value::Map(entries));
+                    return;
+                }
+                Some(Value::SortedMap(mut m)) => {
+                    m.insert(OrdValue(idx_val), val);
+                    self.write_back_receiver(object, Value::SortedMap(m));
+                    return;
+                }
+                _ => {}
+            }
         }
         let Value::Int(i) = idx_val else {
             return;
