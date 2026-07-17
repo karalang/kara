@@ -552,7 +552,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **527 surfaced 
 | B-2026-07-13-2 | codegen | high | A bare generic param `x: T` bound to a builtin COLLECTION (String/Vec/VecDeque) misses its owned-param return DEEP-COPY in the monomorph body under t… | d20a515 |
 | B-2026-07-13-3 | codegen | medium | A GENERIC function whose body is a `match` expression evaluating to a HEAP type `T` (String/Vec), monomorphized, lowers the match VALUE to the i64 co… | 0e7face,0d680d7 |
 | B-2026-07-13-4 | interp+codegen | low | Calling a method directly on an enum UNIT-VARIANT LITERAL receiver — `Dir.North.code()` — fails on BOTH surfaces (the typechecker ACCEPTS it, but nei… | 7bd38e2 |
-| B-2026-07-13-5 | codegen+typecheck | medium | Three composable Tensor limitations block idiomatic numerical-stdlib .kara over generic-dim tensors: (A) a tensor reduction/transform on a NON-IDENTI… | c006423 |
+| B-2026-07-13-5 | codegen+typecheck | medium | Three composable Tensor limitations block idiomatic numerical-stdlib .kara over generic-dim tensors: (A) a tensor reduction/transform on a NON-IDENTI… | 45c07cb |
 | B-2026-07-13-6 | codegen | high | A `let` that SHADOWS an outer variable inside ANY nested scope (plain block, `if`/`else` block, `while` body, `for` body, `match` arm, nested block)… | 07fe865 |
 | B-2026-07-13-7 | codegen | high | Reading the row sub-tensors returned by `Tensor.iter_axis(n)` double-frees under JIT/native (`free(): double free detected in tcache 2`); the interpr… | 0de5fc8 |
 | B-2026-07-13-8 | codegen | high | `String.from(<String>)` returned the source's `{ptr,len,cap}` aggregate UNCHANGED (an ALIAS of its heap buffer) instead of an owned copy | 257059b |
