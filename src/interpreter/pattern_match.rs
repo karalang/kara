@@ -43,9 +43,19 @@ impl<'a> super::Interpreter<'a> {
                 return result;
             }
         }
-        unreachable!(
-            "non-exhaustive match at {}:{}; should be caught by exhaustiveness checker",
-            span.line, span.column
+        // Defense in depth: the typechecker's exhaustiveness check plus the
+        // pattern-scrutinee-mismatch gate (B-2026-07-17-6) should make this
+        // path unreachable, but a future front-end gap must degrade to a
+        // clean runtime diagnostic rather than panic the whole process (the
+        // old `unreachable!` turned an accepted-but-wrong program into a Rust
+        // backtrace instead of a Kāra error).
+        self.record_runtime_error(
+            format!(
+                "internal error: non-exhaustive match at {}:{} — no arm matched \
+                 the scrutinee value (the typechecker should have rejected this)",
+                span.line, span.column
+            ),
+            span,
         )
     }
 

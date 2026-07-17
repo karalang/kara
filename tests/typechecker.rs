@@ -1117,6 +1117,160 @@ fn test_non_exhaustive_match() {
     assert!(exhaust_err.message.contains("Blue") || exhaust_err.message.contains("Green"));
 }
 
+// B-2026-07-17-6: an enum-variant pattern matched against a scrutinee whose
+// type cannot own the variant used to pass `karac check` (the constructor
+// sub-patterns were silently bound to `Type::Error`, and a bare unit-variant
+// name like `None` was even mis-classified as a catch-all binding) and then
+// ICE the interpreter's structural matcher. Each of these must now be a clean
+// `PatternScrutineeMismatch` type error.
+#[test]
+fn variant_tuple_pattern_on_primitive_scrutinee_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let x: i64 = 5;\n\
+             match x {\n\
+                 Some(v) => println(v),\n\
+                 None => println(\"none\"),\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::PatternScrutineeMismatch),
+        "Some(v)/None against i64 must be a PatternScrutineeMismatch, got: {errors:?}"
+    );
+    // The poisoned match must NOT also surface a redundant non-exhaustive tail.
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
+        "the scrutinee-mismatch match should suppress non-exhaustive, got: {errors:?}"
+    );
+}
+
+#[test]
+fn result_variant_pattern_on_primitive_scrutinee_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let x: i64 = 5;\n\
+             match x {\n\
+                 Ok(v) => println(v),\n\
+                 Err(e) => println(e),\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::PatternScrutineeMismatch),
+        "Ok/Err against i64 must be a PatternScrutineeMismatch, got: {errors:?}"
+    );
+}
+
+#[test]
+fn bare_unit_variant_name_on_primitive_scrutinee_rejected() {
+    // The lone-`None` shape: a bare unit-variant name is a catch-all binding
+    // to the typechecker's naive reading, so this used to typecheck and then
+    // ICE (no arm structurally matches the `i64`).
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let x: i64 = 5;\n\
+             match x {\n\
+                 None => println(\"n\"),\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::PatternScrutineeMismatch),
+        "lone None against i64 must be a PatternScrutineeMismatch, got: {errors:?}"
+    );
+}
+
+#[test]
+fn dotted_variant_pattern_on_primitive_scrutinee_rejected() {
+    // A dotted unit-variant pattern (`Color.Red`) parses as a dotted binding,
+    // not a `TupleVariant`; it must still be rejected against a primitive.
+    let errors = typecheck_errors(
+        "enum Color { Red, Green, Blue }\n\
+         fn main() {\n\
+             let x: i64 = 5;\n\
+             match x {\n\
+                 Color.Red => println(\"r\"),\n\
+                 _ => println(\"other\"),\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::PatternScrutineeMismatch),
+        "Color.Red against i64 must be a PatternScrutineeMismatch, got: {errors:?}"
+    );
+}
+
+#[test]
+fn variant_pattern_on_struct_scrutinee_rejected() {
+    let errors = typecheck_errors(
+        "struct Point { x: i64, y: i64 }\n\
+         fn main() {\n\
+             let p = Point { x: 1, y: 2 };\n\
+             match p {\n\
+                 Some(v) => println(v),\n\
+                 None => println(\"n\"),\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::PatternScrutineeMismatch),
+        "Some/None against a struct must be a PatternScrutineeMismatch, got: {errors:?}"
+    );
+}
+
+#[test]
+fn legitimate_variant_patterns_still_pass() {
+    // Guard against false positives: Option / Result / user-enum (bare and
+    // dotted) / tuple-variant / generic-T matches must all still typecheck.
+    typecheck_ok(
+        "enum Color { Red, Green, Blue }\n\
+         enum Shape { Circle(i64), Square(i64) }\n\
+         fn opt(o: Option[i64]) -> i64 {\n\
+             match o { Some(v) => v, None => -1 }\n\
+         }\n\
+         fn res(r: Result[i64, String]) -> i64 {\n\
+             match r { Ok(v) => v, Err(_) => 0 }\n\
+         }\n\
+         fn col(c: Color) -> i64 {\n\
+             match c { Red => 1, Color.Green => 2, _ => 3 }\n\
+         }\n\
+         fn shp(s: Shape) -> i64 {\n\
+             match s { Shape.Circle(r) => r, Square(w) => w }\n\
+         }\n\
+         fn pick[T](o: Option[T], d: T) -> T {\n\
+             match o { Some(v) => v, None => d }\n\
+         }",
+    );
+}
+
+#[test]
+fn pascalcase_binding_that_is_not_a_variant_still_binds() {
+    // A PascalCase name that is NOT any enum's unit variant must remain a
+    // genuine binding (the guard keys on `is_known_unit_variant`, not on
+    // capitalization alone), so this catch-all match is exhaustive and clean.
+    typecheck_ok(
+        "fn main() {\n\
+             let x: i64 = 5;\n\
+             match x {\n\
+                 Whatever => println(Whatever),\n\
+             }\n\
+         }",
+    );
+}
+
 #[test]
 fn non_exhaustive_enum_match_carries_missing_arm_fix_it() {
     // E0205 on an enum scrutinee synthesizes the missing arm as a

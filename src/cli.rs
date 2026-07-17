@@ -3176,6 +3176,10 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::AtomicInvalidInnerType => "E0272",
                 // FE-2 — a `#[gpu]` function uses a non-GPU-safe type.
                 crate::typechecker::TypeErrorKind::GpuNotSafe => "E0801",
+                // B-2026-07-17-6 — an enum-variant pattern (`Some(v)`, `Ok(e)`,
+                // `Color.Red`, or a bare unit-variant name like `None`) matched
+                // against a scrutinee whose type cannot own that variant.
+                crate::typechecker::TypeErrorKind::PatternScrutineeMismatch => "E0273",
             };
             // Also surface a typecheck fix-it as the top-level
             // `"replacement":{offset,length,text}` shape every other phase
@@ -8696,6 +8700,7 @@ fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'static str {
         K::SharedFieldNotMut => "E0269",
         K::AtomicMissingOrdering => "E0270",
         K::AtomicInvalidInnerType => "E0272",
+        K::PatternScrutineeMismatch => "E0273",
         _ => "E0200",
     }
 }

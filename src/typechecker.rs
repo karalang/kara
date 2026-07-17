@@ -607,6 +607,18 @@ pub enum TypeErrorKind {
     /// only irrefutable patterns are allowed — function parameters, closure
     /// parameters, `let` bindings. Use `if let` or `match` for refutable cases.
     RefutablePattern,
+    /// An enum-variant pattern (`Some(v)`, `Ok(e)`, `Color.Red`, or a bare
+    /// unit-variant name like `None`) is matched against a scrutinee whose
+    /// type provably cannot own that variant — a primitive, a struct, a
+    /// structural aggregate, or an enum that does not declare the variant.
+    /// Before this the typechecker silently bound the sub-patterns to
+    /// `Type::Error` (and a bare unit-variant name was even mis-classified as
+    /// a catch-all binding), so `karac check` accepted the program while the
+    /// interpreter's structural matcher found no arm matched and hit an
+    /// `unreachable!` (B-2026-07-17-6). Classified as a type mismatch; also
+    /// used to suppress the redundant non-exhaustive diagnostic on the same
+    /// poisoned match.
+    PatternScrutineeMismatch,
     /// `impl Foo for T` is missing a required `impl Bar for T` where `Bar` is
     /// a supertrait of `Foo`. See design.md § Trait Constraints (Supertraits).
     MissingSupertrait,
@@ -922,6 +934,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::StringNotIndexable
         | TypeErrorKind::LabelMismatch
         | TypeErrorKind::NonContiguousLabels
+        | TypeErrorKind::PatternScrutineeMismatch
         | TypeErrorKind::OnceFnIntoFnSlot => Some(DC::TypeMismatch),
 
         TypeErrorKind::WrongNumberOfArgs | TypeErrorKind::AtomicMissingOrdering => {

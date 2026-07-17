@@ -201,9 +201,14 @@ impl<'a> super::TypeChecker<'a> {
         let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
         let dispatch_ty = dispatch_ty.clone();
         let mut arm_types: Vec<Type> = Vec::new();
+        let mut scrutinee_mismatch = false;
         for arm in arms {
             self.local_scope.push();
+            let errs_before = self.errors.len();
             self.check_pattern_against(&arm.pattern, &dispatch_ty, mode);
+            scrutinee_mismatch |= self.errors[errs_before..]
+                .iter()
+                .any(|e| e.kind == TypeErrorKind::PatternScrutineeMismatch);
             if let Some(guard) = &arm.guard {
                 let guard_ty = self.infer_expr(guard);
                 if guard_ty != Type::Bool && guard_ty != Type::Error {
@@ -221,7 +226,13 @@ impl<'a> super::TypeChecker<'a> {
             arm_types.push(arm_ty);
             self.local_scope.pop();
         }
-        self.check_exhaustiveness(&scrut_ty, arms, span.clone());
+        // A variant-pattern/scrutinee mismatch already poisons the match; the
+        // scrutinee isn't the enum the arms destructure, so a follow-on
+        // "non-exhaustive match" would be redundant and misleading
+        // (B-2026-07-17-6).
+        if !scrutinee_mismatch {
+            self.check_exhaustiveness(&scrut_ty, arms, span.clone());
+        }
         let result_ty = arm_types
             .iter()
             .find(|t| **t != Type::Never)
@@ -236,10 +247,15 @@ impl<'a> super::TypeChecker<'a> {
         let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
         let dispatch_ty = dispatch_ty.clone();
         let mut arm_types: Vec<Type> = Vec::new();
+        let mut scrutinee_mismatch = false;
 
         for arm in arms {
             self.local_scope.push();
+            let errs_before = self.errors.len();
             self.check_pattern_against(&arm.pattern, &dispatch_ty, mode);
+            scrutinee_mismatch |= self.errors[errs_before..]
+                .iter()
+                .any(|e| e.kind == TypeErrorKind::PatternScrutineeMismatch);
             if let Some(guard) = &arm.guard {
                 let guard_ty = self.infer_expr(guard);
                 if guard_ty != Type::Bool && guard_ty != Type::Error {
@@ -258,8 +274,13 @@ impl<'a> super::TypeChecker<'a> {
             self.local_scope.pop();
         }
 
-        // Check exhaustiveness for enum types
-        self.check_exhaustiveness(&scrut_ty, arms, span.clone());
+        // Check exhaustiveness for enum types — but not when a variant
+        // pattern already mismatched the scrutinee type, which poisons the
+        // match and would make a "non-exhaustive" tail redundant
+        // (B-2026-07-17-6).
+        if !scrutinee_mismatch {
+            self.check_exhaustiveness(&scrut_ty, arms, span.clone());
+        }
 
         // Fold the (non-Never, non-Error) arm types into their least-upper-
         // bound. Refinement arms widen to their shared base (design.md
@@ -551,6 +572,42 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
+                // A dotted name (`Color.Red`) or a bare PascalCase name that
+                // is a known unit variant of some enum (`None`, a user
+                // `enum Color { Red }`'s `Red`) is a unit-variant *pattern*,
+                // not a fresh binding — the interpreter's structural matcher
+                // (pattern_match.rs) classifies it exactly this way and would
+                // ICE if no arm matched. Kāra's case-class invariant makes
+                // value bindings snake_case and variant names PascalCase, so
+                // this never steals a genuine binding. When the scrutinee
+                // provably cannot own the variant, emit the same scrutinee-
+                // type mismatch as the constructor form and stop — do NOT fall
+                // through to treat it as a catch-all binding, which is exactly
+                // what made `match x:i64 { None => .. }` pass check and then
+                // ICE (B-2026-07-17-6). The bare unit-variant *match* against
+                // the correct enum was already handled by the early return
+                // above; here `variant_pattern_scrutinee_mismatch` returns
+                // false for a scrutinee that does own the variant, so a
+                // dotted `Color.Red` against a `Color` scrutinee falls through
+                // untouched.
+                let variant_name = name.rsplit('.').next().unwrap_or(name);
+                let is_variant_pattern = name.contains('.')
+                    || (variant_name
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_uppercase())
+                        && self.is_known_unit_variant(variant_name));
+                if is_variant_pattern
+                    && self.variant_pattern_scrutinee_mismatch(expected, variant_name)
+                {
+                    self.emit_pattern_scrutinee_mismatch(
+                        name,
+                        variant_name,
+                        expected,
+                        &pattern.span,
+                    );
+                    return;
+                }
                 // Cannot-double-consume rule: a by-move non-Copy leaf
                 // binding inside a consuming `@` outer claims heap content
                 // the outer already owns (design.md § @ Bindings).
@@ -598,7 +655,32 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
-                // Fallback: bind sub-patterns to Error
+                // Fallback: the scrutinee is not an enum that declares this
+                // variant. When we can *prove* the scrutinee type cannot own
+                // the variant (a primitive, a struct, an aggregate, or an
+                // enum lacking it), this is a genuine type error — emit it
+                // instead of silently binding, which used to let `karac
+                // check` accept a program the interpreter then ICE'd on
+                // (B-2026-07-17-6). The guard stays silent for `Type::Error`,
+                // unresolved inference vars, generic params, and opaque types
+                // so error-cascade suppression and generic code are never
+                // falsely accused.
+                if self.variant_pattern_scrutinee_mismatch(expected, &variant_name) {
+                    let ctor = path.join(".");
+                    let ctor_disp = if patterns.is_empty() {
+                        ctor
+                    } else {
+                        format!("{ctor}(..)")
+                    };
+                    self.emit_pattern_scrutinee_mismatch(
+                        &ctor_disp,
+                        &variant_name,
+                        expected,
+                        &pattern.span,
+                    );
+                }
+                // Bind sub-patterns to Error for recovery so the arm body
+                // does not cascade "undefined variable" diagnostics.
                 for pat in patterns {
                     self.check_pattern_against(pat, &Type::Error, mode);
                 }
@@ -818,6 +900,94 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+    }
+
+    /// True iff `name` is a **unit** variant of some known enum. Used by the
+    /// `Binding` arm of `check_pattern_against` to decide whether a bare
+    /// PascalCase name is a unit-variant *pattern* (which the interpreter's
+    /// structural matcher treats it as) rather than a fresh binding.
+    /// (B-2026-07-17-6.)
+    fn is_known_unit_variant(&self, name: &str) -> bool {
+        self.env.enums.values().any(|e| {
+            e.variants
+                .iter()
+                .any(|(vn, info)| vn == name && matches!(info, VariantTypeInfo::Unit))
+        })
+    }
+
+    /// True when `expected` is a fully-resolved type that provably cannot be
+    /// destructured by an enum-variant pattern named `variant_name` — i.e.
+    /// the pattern/scrutinee pairing is a genuine type error, not an
+    /// error-cascade artifact. Conservative by design: returns `false` for
+    /// `Type::Error`, unresolved inference variables, generic type
+    /// parameters, and any exotic/opaque type (`Shared`, `Rc`, `Arc`,
+    /// pointers, existentials, associated-type projections, …), so
+    /// error-cascade suppression and generic code are never falsely accused.
+    /// (B-2026-07-17-6.)
+    fn variant_pattern_scrutinee_mismatch(&self, expected: &Type, variant_name: &str) -> bool {
+        // Peel borrow layers: `ScrutineeMode::classify` strips one, and
+        // generic instantiation can nest `ref ref T`.
+        let mut ty = expected;
+        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            ty = inner;
+        }
+        match ty {
+            // Primitives / structural aggregates / callables: an enum-variant
+            // pattern can never match any of these.
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Str
+            | Type::Unit
+            | Type::Tuple(_)
+            | Type::Array { .. }
+            | Type::Vector { .. }
+            | Type::Slice { .. }
+            | Type::Function { .. }
+            | Type::OnceFunction { .. } => true,
+            Type::Named { name, .. } => {
+                if let Some(info) = self.env.enums.get(name) {
+                    // An enum: a mismatch iff it does not declare the variant.
+                    !info.variants.iter().any(|(vn, _)| vn == variant_name)
+                } else if self.env.structs.contains_key(name) {
+                    // A known struct: a variant pattern cannot destructure it.
+                    true
+                } else {
+                    // Unknown / unresolved `Named` (a type alias, a builtin
+                    // collection, or a not-yet-registered name): stay silent.
+                    false
+                }
+            }
+            // `Type::Error`, `TypeVar`, `TypeParam`, `Shared`, `Rc`, `Arc`,
+            // `Weak`, `Pointer`, `AssocProjection`, `Existential`, `Shape`,
+            // `Never`, … — conservative silence.
+            _ => false,
+        }
+    }
+
+    /// Emit the `PatternScrutineeMismatch` type error for an enum-variant
+    /// pattern (`ctor_disp` — e.g. `Some(..)`, `Color.Red`, `None`) matched
+    /// against a scrutinee whose type cannot own the `variant_name` variant.
+    /// (B-2026-07-17-6.)
+    fn emit_pattern_scrutinee_mismatch(
+        &mut self,
+        ctor_disp: &str,
+        variant_name: &str,
+        expected: &Type,
+        span: &Span,
+    ) {
+        self.type_error(
+            format!(
+                "pattern `{ctor_disp}` is an enum-variant pattern, but the \
+                 scrutinee has type `{ty}` — `{ty}` is not an enum with a \
+                 `{variant_name}` variant",
+                ty = type_display(expected),
+            ),
+            span.clone(),
+            TypeErrorKind::PatternScrutineeMismatch,
+        );
     }
 
     /// Resolve + validate a range pattern's bounds (design.md § Range

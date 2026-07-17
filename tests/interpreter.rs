@@ -995,6 +995,56 @@ fn test_faulting_match_scrutinee_propagates_not_ice() {
 }
 
 #[test]
+fn test_no_arm_match_degrades_to_runtime_error_not_panic() {
+    // B-2026-07-17-6 defense-in-depth: if a match ever reaches
+    // `eval_match` with no arm matching (a front-end gap), the interpreter
+    // must degrade to a clean runtime diagnostic rather than a Rust
+    // `unreachable!` panic. `Some(v)`/`None` against an `i64` is exactly such
+    // a program — the typechecker now rejects it, but `run_program_full` runs
+    // the interpreter regardless of type errors, so this exercises the
+    // degraded path directly. Before the fix this panicked the interp thread.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let x: i64 = 5;\n\
+             match x {\n\
+                 Some(v) => println(v),\n\
+                 None => println(\"none\"),\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("non-exhaustive match")),
+        "no-arm match must record a runtime error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_legitimate_variant_matches_run() {
+    // Parity guard for B-2026-07-17-6: the scrutinee-mismatch gate must not
+    // disturb legitimate Option / Result / user-enum (bare + dotted) /
+    // tuple-variant matches, which must still run and produce correct output.
+    let out = run_no_errors(
+        "enum Color { Red, Green, Blue }\n\
+         enum Shape { Circle(i64), Square(i64) }\n\
+         fn col(c: Color) -> i64 { match c { Red => 1, Color.Green => 2, _ => 3 } }\n\
+         fn shp(s: Shape) -> i64 { match s { Shape.Circle(r) => r, Square(w) => w } }\n\
+         fn opt(o: Option[i64]) -> i64 { match o { Some(v) => v, None => -1 } }\n\
+         fn main() {\n\
+             println(col(Color.Red));\n\
+             println(col(Color.Green));\n\
+             println(col(Color.Blue));\n\
+             println(shp(Shape.Circle(7)));\n\
+             println(shp(Shape.Square(4)));\n\
+             println(opt(Some(9)));\n\
+             println(opt(None));\n\
+         }",
+    );
+    assert_eq!(out, "1\n2\n3\n7\n4\n9\n-1\n");
+}
+
+#[test]
 fn test_narrow_int_in_range_does_not_trap() {
     // A narrow-int sum that fits the width is the value, no trap: `u8 97 + u8
     // 98 = 195` (≤ 255).
