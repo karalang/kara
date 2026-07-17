@@ -26576,7 +26576,7 @@ fn main() {
 
     #[test]
     fn asan_shared_scrutinee_shadowed_by_local() {
-        // B-2026-07-12-6: a `match e { … }` arm over a by-value shared-enum
+        // B-2026-07-12-31: a `match e { … }` arm over a by-value shared-enum
         // param `e` that declares a same-named local (`let mut e = 0`) shadows
         // the scrutinee's pointer slot. The param's scope-exit RC-dec reloaded
         // its pointer BY NAME from `variables["e"]`, which the shadow had

@@ -76,7 +76,26 @@ def report(rows) -> str:
             out.append(f"| {k or '—'} | {n} | {co.get(k, 0)} | {bar(n)} |")
         out.append("")
 
-    breakdown("surface", "surface")
+    # Surfaces split on '+' so a "typecheck+codegen" bug counts under each
+    # (the compound value itself no longer fragments the table).
+    surf = Counter()
+    surfo = Counter()
+    for r in rows:
+        for seg in r["surface"].split("+"):
+            surf[seg] += 1
+            if r["status"] == "open":
+                surfo[seg] += 1
+    out.append("## By surface\n")
+    out.append("| surface | total | open | |")
+    out.append("|---|---|---|---|")
+    for k, n in surf.most_common():
+        out.append(f"| {k or '—'} | {n} | {surfo.get(k, 0)} | {bar(n)} |")
+    out.append("")
+    # Failure-mode class — a CONTROLLED vocabulary (canonicalized 2026-07-17):
+    # miscompile, double-free, use-after-free, leak, crash, codegen-gap,
+    # missing-feature, false-positive, soundness, run-vs-build, diagnostics,
+    # perf, other. New entries must use one of these (nuance goes in `detail`).
+    breakdown("class", "class")
     breakdown("severity", "severity")
     # source grouped by family (kata: / selfhost: / dogfood: / internal)
     fam = Counter(r["source"].split(":")[0] for r in rows)
@@ -167,6 +186,27 @@ def ledger_view(rows) -> str:
     fixed = [r for r in rows if r["status"] == "fixed"]
     out = []
     out.append(GEN_BEGIN)
+    # Compact retro tables: failure-mode class and surface (compound surfaces
+    # count under each '+' segment).
+    from collections import Counter as _C
+    cls = _C(r["class"] for r in rows)
+    clso = _C(r["class"] for r in rows if r["status"] == "open")
+    surf, surfo = _C(), _C()
+    for r in rows:
+        for seg in r["surface"].split("+"):
+            surf[seg] += 1
+            if r["status"] == "open":
+                surfo[seg] += 1
+    out.append("\n### By class\n")
+    out.append("| class | total | open |")
+    out.append("|---|---|---|")
+    for k, n in cls.most_common():
+        out.append(f"| {k or '—'} | {n} | {clso.get(k, 0)} |")
+    out.append("\n### By surface\n")
+    out.append("| surface | total | open |")
+    out.append("|---|---|---|")
+    for k, n in surf.most_common():
+        out.append(f"| {k} | {n} | {surfo.get(k, 0)} |")
     out.append("## Current state")
     out.append("")
     out.append(

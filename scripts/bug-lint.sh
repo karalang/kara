@@ -21,6 +21,11 @@ errs, warns = [], []
 REQ = ["id","date","source","surface","class","severity","status","fix","title","tracker"]
 IDRE = re.compile(r"^B-\d{4}-\d{2}-\d{2}-\d+$")
 SURF = {"codegen","typecheck","interp","ownership","effect","lexer","parser","runtime","resolver","cli","autopar","other"}
+# Failure-mode class — CONTROLLED vocabulary (canonicalized 2026-07-17). One
+# primary class per bug; nuance goes in `detail`, never into new class strings.
+CLASS = {"miscompile","double-free","use-after-free","leak","crash","codegen-gap",
+         "missing-feature","false-positive","soundness","run-vs-build",
+         "diagnostics","perf","other"}
 seen = {}
 rows = []
 for i, line in enumerate(pathlib.Path(ledger).read_text().splitlines(), 1):
@@ -42,10 +47,14 @@ for i, line in enumerate(pathlib.Path(ledger).read_text().splitlines(), 1):
     seen[bid] = i
     if r.get("status") not in {"open","fixed","invalid","not-reproduced"}:
         errs.append(f"{bid}: bad status '{r.get('status')}'")
-    if r.get("severity") not in {"high","med","low"}:
+    if r.get("severity") not in {"high","medium","low"}:
         errs.append(f"{bid}: bad severity '{r.get('severity')}'")
-    if r.get("surface") not in SURF:
+    # surface: one base value, or a '+'-joined compound of base values
+    # (a multi-phase bug counts under each segment in the rollup).
+    if not all(seg in SURF for seg in r.get("surface","").split("+")):
         errs.append(f"{bid}: bad surface '{r.get('surface')}'")
+    if r.get("class") not in CLASS:
+        errs.append(f"{bid}: bad class '{r.get('class')}' (allowed: {sorted(CLASS)})")
     if r.get("status")=="fixed" and not r.get("fix"):
         warns.append(f"{bid}: fixed but no fix SHA")
 

@@ -4105,7 +4105,7 @@ fn main() {
 
     #[test]
     fn test_e2e_shared_scrutinee_shadowed_by_local_no_corruption() {
-        // B-2026-07-12-6 correctness pin (the ASAN/leak gate lives in
+        // B-2026-07-12-31 correctness pin (the ASAN/leak gate lives in
         // tests/memory_sanitizer.rs::asan_shared_scrutinee_shadowed_by_local).
         // A `match e { … }` arm over a by-value shared-enum param `e` that
         // declares a local `let mut e = 0` shadows the scrutinee's slot. The
@@ -5439,7 +5439,7 @@ fn main() {
         }
     }
 
-    /// B-2026-07-11-1: a TURBOFISH-inferred raw-pointer binding
+    /// B-2026-07-11-40: a TURBOFISH-inferred raw-pointer binding
     /// (`let p = ptr.null[u8]()`) — no annotation — must lower to a real `ptr`
     /// and register the pointee so a later pointer method compiles. Before the
     /// fix the turbofish `ptr.null[u8]()` parsed as an `Index`-callee call that

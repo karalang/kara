@@ -95,7 +95,7 @@ precisely the shape that produced every codegen footgun this port already hit:
   self` method double-frees; must match `Option` inline.
 - **B-2026-07-12-1** — passing a `self.<Vec field>` by ref to a free fn
   double-frees; must scan via a `ref self` method.
-- **B-2026-07-12-6** — ~4+ heap-typed (`Vec`) locals in one arm of a large
+- **B-2026-07-12-31** — ~4+ heap-typed (`Vec`) locals in one arm of a large
   match corrupt the frame; must extract to a dedicated method.
 - The established idiom that a match-bound `ref` to a nested node reads its
   `Vec` fields as **empty** under codegen, forcing by-value destructuring.

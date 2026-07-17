@@ -4108,7 +4108,7 @@ fn raw_pointer_annotated_binding_resolves_pointee() {
 fn raw_pointer_turbofish_constructor_resolves_pointee() {
     // `ptr.null[u8]()` pins T at the constructor — typechecks with no
     // unresolved-pointee error (the design's second fix-it). (Codegen threading
-    // of the turbofish pointee is tracked separately as B-2026-07-11-1.)
+    // of the turbofish pointee is tracked separately as B-2026-07-11-40.)
     typecheck_ok("fn main() { let p = ptr.null[u8](); unsafe { let _ = p.read(); } }");
 }
 
