@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 141 | 0 |
-| leak | 77 | 0 |
+| leak | 78 | 1 |
 | codegen-gap | 59 | 0 |
 | double-free | 57 | 2 |
 | missing-feature | 46 | 1 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 356 | 2 |
+| codegen | 357 | 3 |
 | typecheck | 59 | 2 |
 | interp | 47 | 1 |
 | ownership | 22 | 0 |
@@ -123,9 +123,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **506 surfaced · 5 open · 498 fixed** (2026-05-20 → 2026-07-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **507 surfaced · 6 open · 498 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **506 surfaced 
 | B-2026-07-16-14 | 2026-07-16 | typecheck+interp+other | medium | `karac check` accepts iterator-reduction / string-collection methods DIRECTLY on a Vec (`v.sum()`, `v.max()`, `v.min()`, `v.product()`, `v.join(sep)`, `v.concat()`) but no backend implements them — interp reports 'method not found (no dispatch arm)' and codegen reports 'not yet supported' / build-fails. The idiomatic `.iter()` form works (`v.iter().sum()` = 120). This is a check/execution consistency hole: `karac check` (the AI-first wedge — a program that checks clean should run) passes code that traps at runtime on all three surfaces. | none |
 | B-2026-07-16-19 | 2026-07-16 | other | high | A function returning `Option[String]` built from a MOVED Vec element (`let words = s.split(" "); if words.len()>0 { Some(words[0]) } else { None }`) double-frees the element buffer when called TWICE inside an auto-parallelized `main` (JIT: 'free(): double free'; native: valgrind Invalid free under karac_par_run). Single/sequential invocation is CLEAN (the element move-out of `words[0]` into `Some` is correctly suppressed there); the bug appears only when main's statement mix makes it auto-parallelize (par_run=1). KARAC_AUTO_PAR=0 fixes it — an auto-par correctness bug, not the element-move-out itself. | none |
 | B-2026-07-16-23 | 2026-07-16 | codegen | high | `unwrap_or(<non-Call heap default>)` mismanages the eager default's ownership: an owned-binding default (moved identifier) and an f-string default DOUBLE-FREE (native abort / JIT crash, interp fine — a real silent-in-interp memory-unsafety divergence); an array/collection-literal default LEAKS. Only the Call/MethodCall/String-slice default shapes are correctly handled (B-2026-07-16-22). | none |
+| B-2026-07-17-2 | 2026-07-17 | codegen | high | shared-ownership-matrix frontier REGRESSION: `forwarding_chain/ResultOk` + `forwarding_chain/ResultErr` went Clean → Leak with RC-elision ON (`KARAC_RC_ELIDE_REF_PARAMS` default) — `fn eat(r: Result[Node, i64]) -> i64 { eat2(r) }` (owned param forwarded whole to a consuming callee) leaks the shared `Node` on both the Ok-side (`Result[Node, i64]`) and Err-side (`Result[i64, Node]`) containers; the `Option[Node]` cell of the SAME flow stays Clean, and the whole matrix passes with `KARAC_RC_ELIDE_REF_PARAMS=0`. Prime suspect: `e39db64` (borrow-forward relaxation of RC-elision condition 1, B-2026-07-15-21 Part C — the forwarding-chain shape is exactly its target); suspect window includes `2639536` (condition-5 fix, same day). | none |
 
 ### Fixed (498)
 
