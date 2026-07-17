@@ -2000,9 +2000,14 @@ impl<'ctx> super::Codegen<'ctx> {
             crate::codegen::bce_length_pin::compute_vec_length_pins(&func.body);
         // Descending-loop bounds-check skips (B-2026-07-17-1): the rolling-1D-DP
         // in-place-update shape. Whole-body analysis, consumed in `compile_while`
-        // keyed on the inner descending loop's condition span.
-        self.descending_skips =
-            crate::codegen::bce_length_pin::compute_descending_skips(&func.body);
+        // keyed on the inner descending loop's condition span. Opt out with
+        // `KARAC_BCE_DESC_SKIP=0` (soundness-critical BCE escape hatch + A/B lever;
+        // mirrors `KARAC_RC_ELIDE_REF_PARAMS`).
+        self.descending_skips = if std::env::var("KARAC_BCE_DESC_SKIP").as_deref() == Ok("0") {
+            std::collections::HashMap::new()
+        } else {
+            crate::codegen::bce_length_pin::compute_descending_skips(&func.body)
+        };
 
         // Slice-parameter scoped-alias metadata (alias-metadata slice 4). Runs
         // after the param-registration loop above, so its map entries survive
