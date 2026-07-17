@@ -100,8 +100,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 35 | 1 |
 | crash | 23 | 0 |
 | run-vs-build | 23 | 0 |
+| perf | 17 | 1 |
 | soundness | 16 | 1 |
-| perf | 16 | 0 |
 | diagnostics | 11 | 1 |
 | use-after-free | 3 | 0 |
 
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 361 | 4 |
+| codegen | 362 | 5 |
 | typecheck | 59 | 2 |
 | interp | 47 | 1 |
 | ownership | 22 | 0 |
@@ -123,9 +123,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **511 surfaced · 7 open · 501 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **512 surfaced · 8 open · 501 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **511 surfaced 
 | B-2026-07-17-2 | 2026-07-17 | codegen | high | shared-ownership-matrix frontier REGRESSION: `forwarding_chain/ResultOk` + `forwarding_chain/ResultErr` went Clean → Leak with RC-elision ON (`KARAC_RC_ELIDE_REF_PARAMS` default) — `fn eat(r: Result[Node, i64]) -> i64 { eat2(r) }` (owned param forwarded whole to a consuming callee) leaks the shared `Node` on both the Ok-side (`Result[Node, i64]`) and Err-side (`Result[i64, Node]`) containers; the `Option[Node]` cell of the SAME flow stays Clean, and the whole matrix passes with `KARAC_RC_ELIDE_REF_PARAMS=0`. Prime suspect: `e39db64` (borrow-forward relaxation of RC-elision condition 1, B-2026-07-15-21 Part C — the forwarding-chain shape is exactly its target); suspect window includes `2639536` (condition-5 fix, same day). | none |
 | B-2026-07-17-3 | 2026-07-17 | codegen | high | An owned `self` receiver method that RETURNS `self` (or `let b = self; … b`) DOUBLE-FREES the self struct's heap (Vec/String) field buffer when that field is non-empty (cap>0). The builder/fluent pattern `X.new().add(a).add(b)` crashes: JIT aborts (empty output), native masks the empty-output at -O but valgrind shows the use-after-free (`karac_realloc_or_panic` on a freed block); the interpreter is correct. FREE-FUNCTION equivalent (`fn add(bld: Builder) -> Builder { … }`) is clean — the bug is specific to the `self` receiver. | none |
 | B-2026-07-17-5 | 2026-07-17 | cli | low | wasm link fails with cryptic `undefined symbol: __wasm_first_page_end` (from rustup's self-contained wasi libc.a dlmalloc.c.obj) when the PATH `wasm-ld` is older than the active rustup toolchain's wasi-libc — the linker resolution order (KARAC_WASM_LD > PATH wasm-ld > brew > rust-lld) picks the stale system linker over the version-matched rust-lld sitting in the same rustup toolchain that supplied the libc. | none |
+| B-2026-07-17-1 | 2026-07-17 | codegen | low | In-place single-row DP `while k >= 1 { row[k] = row[k] + row[k-1]; k = k-1 }` (Pascal #119, and the general rolling-DP shape) keeps a per-iteration bounds check codegen does not eliminate — kata #119 ran 416ms vs equal-safety Rust (rustc -O -C overflow-checks=on) 311ms = 1.34x, and vs C (no checks) 239ms = 1.74x. asm isolation: the update loop emits `cmp %rbx,%rdx; ja <panic>` before the `row[k]` / `row[k-1]` loads (one check covers both, since k-1 < k), while the SIBLING `row_hash` fold loop (`while j < row.len() { row[j] }`) in the SAME binary has NO bounds check (BCE fired there). So codegen's BCE handles the canonical forward `j < v.len()` and the binary-search `mid` (B-2026-06-16-1) but NOT this pattern: the index `k` is bounded by the OUTER loop var `i` (k <= i-1) and `i <= row_index` while `len = row_index + 1`, so `k < len` holds only transitively (k <= i-1 <= row_index-1 < len). The overflow check (`jo`) is present in both kara and equal-safety Rust and is NOT the gap (rust -O 274ms vs rust-ovf 311ms shows the overflow tax is ~13%; the residual 311->416 is the bounds check). Same BCE class as the fixed binary-search B-2026-06-16-1 (there get_unchecked pinned the check as ~85% of the gap), a distinct index-derivation pattern. | none |
 
 ### Fixed (501)
 
