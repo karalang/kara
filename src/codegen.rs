@@ -6189,6 +6189,12 @@ impl<'ctx> Codegen<'ctx> {
         // out_matched: *mut i32) -> ptr. Fetched by name at the use site
         // (vec_method.rs) — no cached field. `out_matched` distinguishes a
         // matched empty remainder (Some("")) from a no-match (None).
+        // karac_string_join(parts: *const {ptr,len,cap}, count, sep, sep_len,
+        // out_len) -> ptr — Vec[String].join/concat (B-2026-07-16-14). Walks
+        // the vector's element triples read-only; fetched by name at the use
+        // site (vec_method.rs) — no cached field.
+        let string_join_ty = ptr_type.fn_type(&[ptr_md, i64_ty, ptr_md, i64_ty, ptr_md], false);
+        module.add_function("karac_string_join", string_join_ty, Some(Linkage::External));
         let string_strip_ty =
             ptr_type.fn_type(&[ptr_md, i64_ty, ptr_md, i64_ty, ptr_md, ptr_md], false);
         module.add_function(

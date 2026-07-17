@@ -923,6 +923,37 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
             }
+            "join" | "concat" => {
+                // `Vec[String].join(sep)` / `.concat()` — string-collection
+                // terminals (B-2026-07-16-14). Positional join: `sep` between
+                // every adjacent pair regardless of element emptiness (Rust
+                // `[String]::join` semantics); `concat` is join with the empty
+                // separator. The typechecker restricts these to String
+                // elements, so a non-String element here is a dispatch
+                // fall-through (another `join` overload — e.g. TaskHandle —
+                // handled elsewhere), not an error.
+                if let Value::Array(ref rc) = obj {
+                    let v = rc.read().unwrap();
+                    if v.iter().all(|e| matches!(e, Value::String(_))) {
+                        let sep = if method == "join" {
+                            match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                                Some(Value::String(s)) => s.to_string(),
+                                _ => String::new(),
+                            }
+                        } else {
+                            String::new()
+                        };
+                        let parts: Vec<&str> = v
+                            .iter()
+                            .map(|e| match e {
+                                Value::String(s) => s.as_str(),
+                                _ => unreachable!("all-String checked above"),
+                            })
+                            .collect();
+                        return Some(Value::String(parts.join(&sep)));
+                    }
+                }
+            }
             "contains" => {
                 if let Value::Array(ref rc) = obj {
                     let v = rc.read().unwrap();

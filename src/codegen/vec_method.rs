@@ -1545,6 +1545,65 @@ impl<'ctx> super::Codegen<'ctx> {
                     "str.sorted",
                 ))
             }
+            // `Vec[String].join(sep) -> String` / `.concat() -> String` via
+            // `karac_string_join` (B-2026-07-16-14). The receiver's
+            // `{ptr, len, cap}` triple reads as (elements-buffer, count); the
+            // runtime walks the element triples READ-ONLY (ownership stays
+            // with the vector — no element consumption to suppress) and
+            // returns a fresh owned buffer wrapped by the shared xform-result
+            // path. Gated off String receivers (`string_vars`) so only the
+            // Vec[String] form lands here; the typechecker's element gate
+            // keeps non-String element vectors out.
+            "join" | "concat" if !self.string_vars.contains(var_name) => {
+                let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "jn");
+                let sep_data = if method == "join" {
+                    if args.len() != 1 {
+                        return Err("Vec.join requires a separator argument".to_string());
+                    }
+                    let sep_val = self.compile_expr(&args[0].value)?.into_struct_value();
+                    let d = self
+                        .builder
+                        .build_extract_value(sep_val, 0, "jn.sep.ptr")
+                        .unwrap()
+                        .into_pointer_value();
+                    let l = self
+                        .builder
+                        .build_extract_value(sep_val, 1, "jn.sep.len")
+                        .unwrap()
+                        .into_int_value();
+                    // A fresh-owned separator temp (`v.join("-".to_string())`)
+                    // has no other owner once the runtime copies its bytes —
+                    // free it after the call like `replace` frees its args.
+                    // Deferred until after build_string_xform_result via the
+                    // captured value below.
+                    Some((sep_val, d, l))
+                } else {
+                    None
+                };
+                let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                let i64_t = self.context.i64_type();
+                let (sd, sl, sep_free) = match &sep_data {
+                    Some((sv, d, l)) => (
+                        inkwell::values::BasicValueEnum::from(*d),
+                        inkwell::values::BasicValueEnum::from(*l),
+                        Some(*sv),
+                    ),
+                    None => (ptr_ty.const_null().into(), i64_t.const_zero().into(), None),
+                };
+                let join_fn = self
+                    .module
+                    .get_function("karac_string_join")
+                    .ok_or_else(|| "karac_string_join not declared".to_string())?;
+                let result = self.build_string_xform_result(
+                    join_fn,
+                    vec![recv_data.into(), recv_len.into(), sd.into(), sl.into()],
+                    "str.join",
+                );
+                if let Some(sv) = sep_free {
+                    self.free_fresh_owned_str_arg(&args[0].value, sv.into());
+                }
+                Ok(result)
+            }
             // `String.replace(from, to) -> String` via `karac_string_replace`
             // (Rust `str::replace`). Receiver + both args are passed as
             // `(ptr, len)` pairs.

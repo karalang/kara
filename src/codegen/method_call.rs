@@ -5275,6 +5275,111 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<iter-chain>.max()` / `.min()` — comparison terminals
+        // (B-2026-07-16-14). Desugars to the existing `reduce` lowering with a
+        // synthesized comparison closure — `reduce(|__mma, __mmx| if __mmx >
+        // __mma { __mmx } else { __mma })` (Lt for `min`) — so the
+        // Option[T]-returning accumulator machinery (seeded None, synthetic
+        // Some/None match per element) is reused verbatim. The typechecker
+        // recorded the element type against THIS call's span in
+        // `iter_terminal_elem_types`, the same key `reduce`'s lowering reads
+        // (`MethodCall.span == receiver.span`, and the desugared receiver
+        // keeps its span). Scalar elements only — a String element falls to
+        // the loud interp-hint bail, mirroring `reduce`'s heap deferral.
+        if (method == "max" || method == "min")
+            && args.is_empty()
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            // Float elements are gated OUT to the loud interp-hint bail: the
+            // underlying `reduce` lowering mis-handles a float accumulator
+            // (`f.iter().reduce(|a, x| ..)` returns the None arm under
+            // `karac build` while the interpreter is correct) — a PRE-EXISTING
+            // reduce bug this desugar would otherwise inherit silently
+            // (ledger entry filed with this slice). Ints/uints take the fast
+            // path; floats work under `--interp`.
+            let elem_head = self
+                .iter_terminal_elem_types
+                .get(&(call_span.offset, call_span.length))
+                .and_then(|te| match &te.kind {
+                    crate::ast::TypeKind::Path(p) => {
+                        p.segments.last().map(|s| s.as_str().to_string())
+                    }
+                    _ => None,
+                });
+            let elem_is_int = matches!(
+                elem_head.as_deref(),
+                Some(
+                    "i8" | "i16"
+                        | "i32"
+                        | "i64"
+                        | "i128"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "u128"
+                        | "usize"
+                        | "isize"
+                        | "char"
+                        | "bool"
+                )
+            );
+            if !elem_is_int {
+                // FALL THROUGH, never Err: floats hit the pre-existing reduce
+                // float-accumulator bug (filed with this slice — an early bail
+                // here would be a silent wrong answer if desugared, and a loud
+                // preemption of later arms if Err'd); Strings belong to the
+                // sorted-collection iter paths BELOW this arm (an early Err
+                // regressed e2e_sorted_set_string_iter_min_max_codegen on the
+                // first battery run). Whatever this arm skips lands on the
+                // existing dispatch — the sorted-set lowering or the generic
+                // loud error.
+            } else {
+                let sp = call_span.clone();
+                let ident = |n: &str| Expr {
+                    kind: ExprKind::Identifier(n.to_string()),
+                    span: sp.clone(),
+                };
+                let blk = |e: Expr| Block {
+                    stmts: Vec::new(),
+                    final_expr: Some(Box::new(e)),
+                    span: sp.clone(),
+                };
+                let cmp = Expr {
+                    kind: ExprKind::Binary {
+                        op: if method == "max" {
+                            BinOp::Gt
+                        } else {
+                            BinOp::Lt
+                        },
+                        left: Box::new(ident("__mmx")),
+                        right: Box::new(ident("__mma")),
+                    },
+                    span: sp.clone(),
+                };
+                let body = Expr {
+                    kind: ExprKind::If {
+                        condition: Box::new(cmp),
+                        then_block: blk(ident("__mmx")),
+                        else_branch: Some(Box::new(Expr {
+                            kind: ExprKind::Block(blk(ident("__mma"))),
+                            span: sp.clone(),
+                        })),
+                    },
+                    span: sp.clone(),
+                };
+                if let Some(v) =
+                    self.try_compile_iter_chain_reduce(object, "__mma", "__mmx", &body, call_span)?
+                {
+                    return Ok(v);
+                }
+                // Unpeelable chain: fall through to the existing dispatch.
+            }
+        }
+
         // `<iter-chain>.for_each(|x| body)` — the side-effecting terminal on a
         // fused iterator chain (B-2026-07-11-19). Same iterator-chain gate as
         // `fold`. Desugars to a `for` loop over the peeled base with the closure

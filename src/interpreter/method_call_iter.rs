@@ -626,6 +626,63 @@ impl<'a> super::Interpreter<'a> {
                     return Some(acc.unwrap_or(Value::Int(empty_default)));
                 }
             }
+            "max" | "min" => {
+                // Comparison terminals (B-2026-07-16-14) — drain the iterator
+                // keeping the extreme element; `Some(best)`, or `None` for an
+                // empty source (Rust semantics — no sentinel seeding). Ordering
+                // via the same `eval_binary` Gt/Lt the language's comparison
+                // operators use (ints, floats, Strings). Ties keep the FIRST
+                // seen (strict compare), matching Rust's `max_by`/`min_by`
+                // first-wins-on-equal behavior for max? Rust `Iterator::max`
+                // returns the LAST maximum; kept strict-first here and pinned
+                // by tests — the difference is observable only for duplicate
+                // extremes of non-scalar elements.
+                if matches!(obj, Value::Iterator { .. }) {
+                    if !args.is_empty() {
+                        return Some(self.record_runtime_error(
+                            format!(
+                                "Iterator.{}() takes no arguments, got {}",
+                                method,
+                                args.len()
+                            ),
+                            span,
+                        ));
+                    }
+                    let op = if method == "max" {
+                        BinOp::Gt
+                    } else {
+                        BinOp::Lt
+                    };
+                    let mut iter_val = obj;
+                    let mut best: Option<Value> = None;
+                    while let Some(item) = self.iterator_step(&mut iter_val) {
+                        best = Some(match best {
+                            None => item,
+                            Some(b) => {
+                                let wins =
+                                    self.eval_binary(&op, item.clone(), b.clone(), span, false);
+                                if matches!(wins, Value::Bool(true)) {
+                                    item
+                                } else {
+                                    b
+                                }
+                            }
+                        });
+                    }
+                    return Some(match best {
+                        Some(v) => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![v]),
+                        },
+                        None => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "None".to_string(),
+                            data: EnumData::Unit,
+                        },
+                    });
+                }
+            }
             "reduce" => {
                 // Terminal — `reduce(f)`. Folds elements with the first as the
                 // seed; returns `Some(acc)`, or `None` for an empty source.

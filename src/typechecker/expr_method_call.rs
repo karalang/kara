@@ -3293,6 +3293,108 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Direct iterator TERMINALS on an iterable collection receiver —
+        // `v.sum()` / `v.product()` / `v.max()` / `v.min()` without the
+        // `.iter()` hop (B-2026-07-16-14). Pre-fix these fell through to the
+        // silent unknown-method leniency (`Type::Error`, which unifies with
+        // anything), so `karac check` passed programs every backend then
+        // trapped on — a check/execution hole on the exact shapes LLM authors
+        // write constantly. Route them through `infer_iterator_method` as if
+        // `.iter()` were present: the terminal's span-keyed metadata
+        // (`iter_terminal_elem_types` etc.) records against THIS call's span,
+        // and the lowering desugar (`src/lowering.rs`) rewrites the AST to the
+        // canonical `.iter().<terminal>()` chain the backends implement.
+        // Scoped to the no-closure numeric/ordering terminals; `join`/`concat`
+        // are Vec[String]-receiver METHODS handled in their own arm (they
+        // never had an Iterator form).
+        // Narrowed to Vec/VecDeque receivers: SortedMap/SortedSet (and Map)
+        // have their OWN min/max surfaces (Option[(K, V)] pairs, sorted-order
+        // first/last) with dedicated typing + lowering — routing them here
+        // regressed test_sorted_map_min_max_return_option_pair on the first
+        // battery run.
+        if matches!(method, "sum" | "product" | "max" | "min") {
+            let vec_like_item = match &obj_ty {
+                Type::Named { name, args: targs }
+                    if matches!(name.as_str(), "Vec" | "VecDeque") && targs.len() == 1 =>
+                {
+                    Some(targs[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args: targs }
+                        if matches!(name.as_str(), "Vec" | "VecDeque") && targs.len() == 1 =>
+                    {
+                        Some(targs[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(item_ty) = vec_like_item {
+                return self.infer_iterator_method(&item_ty, method, args, span, false);
+            }
+        }
+
+        // `Vec[String].join(sep) -> String` / `.concat() -> String` — the
+        // string-collection terminals (B-2026-07-16-14's other half). These
+        // are collection METHODS (no Iterator form): join places `sep`
+        // between every adjacent pair (positionally — an empty first element
+        // still gets a separator after it), concat is join with the empty
+        // separator. Non-String elements are rejected here so the
+        // check/execution contract holds (pre-fix these fell into the same
+        // silent Type::Error leniency as the terminals above). VecDeque is
+        // included — same layout, same runtime walk.
+        if matches!(method, "join" | "concat") {
+            let elem_is_str = match &obj_ty {
+                Type::Named { name, args: targs }
+                    if matches!(name.as_str(), "Vec" | "VecDeque") && targs.len() == 1 =>
+                {
+                    Some(matches!(targs[0], Type::Str))
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args: targs }
+                        if matches!(name.as_str(), "Vec" | "VecDeque") && targs.len() == 1 =>
+                    {
+                        Some(matches!(targs[0], Type::Str))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(is_str) = elem_is_str {
+                if !is_str {
+                    self.type_error(
+                        format!("Vec.{method}() requires String elements"),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                let expected_args = usize::from(method == "join");
+                if args.len() != expected_args {
+                    self.type_error(
+                        format!(
+                            "Vec.{method}() expects {expected_args} argument(s), found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Str;
+                }
+                if method == "join" {
+                    let sep_ty = self.infer_expr(&args[0].value);
+                    self.check_assignable(&Type::Str, &sep_ty, args[0].value.span.clone());
+                }
+                return Type::Str;
+            }
+        }
+
         // `StdinLines` (`stdin.lines()`) and `LinesIter` (`BufReader.lines()`)
         // are opaque line-iterator markers with NO surface methods — iteration
         // is via `for line in <iter>` only (the drain/codegen loop pulls one

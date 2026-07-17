@@ -690,6 +690,10 @@ impl<'a> Lowerer<'a> {
     /// Lower an expression: recurse into children first (bottom-up), then
     /// rewrite the current node if it's a lowerable operator.
     fn lower_expr(&mut self, expr: &mut Expr) {
+        // The direct-terminal desugar below keys `method_callee_types` by the
+        // method-call span (== the receiver's span in this AST) — capture it
+        // before the kind borrow.
+        let expr_span = expr.span.clone();
         // Recurse into sub-expressions first.
         match &mut expr.kind {
             ExprKind::Binary { left, right, .. } => {
@@ -746,10 +750,67 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-            ExprKind::MethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                args,
+                method,
+                ..
+            } => {
                 self.lower_expr(object);
                 for a in args {
                     self.lower_expr(&mut a.value);
+                }
+                // B-2026-07-16-14: canonicalize DIRECT iterator terminals on an
+                // iterable collection receiver — `v.sum()` / `.product()` /
+                // `.max()` / `.min()` — into the `.iter().<terminal>()` chain
+                // the backends implement (the interpreter's iterator pipeline
+                // and codegen's fused-chain peel both key on the `iter()` hop).
+                // The typechecker already typed THIS call via
+                // `infer_iterator_method` (its span-keyed terminal metadata is
+                // against the outer MethodCall span, which this rewrite keeps —
+                // only the receiver gains a synthetic `iter()` node). Gated on
+                // the receiver's RECORDED type being an iterable collection:
+                // an Iterator/Peekable/Range receiver is already canonical, and
+                // an unrecorded span is left alone (codegen's loud dispatch
+                // error stays the fail-closed path).
+                if matches!(method.as_str(), "sum" | "product" | "max" | "min") {
+                    // `expr_types` can't answer "what is the receiver" here —
+                    // a MethodCall shares its receiver's span, so that map
+                    // holds whichever type was recorded last (usually the
+                    // call's result). `method_callee_types` exists precisely
+                    // for this: receiver type NAME keyed by the method-call
+                    // span.
+                    let recv_is_iterable_collection = self
+                        .tc
+                        .method_callee_types
+                        .get(&SpanKey::from_span(&expr_span))
+                        .is_some_and(|n| {
+                            // Entries are "Type.method" — match the receiver head.
+                            // Vec/VecDeque only — sorted collections keep
+                            // their own min/max surfaces (see the typecheck
+                            // routing arm's narrowing note).
+                            matches!(n.split('.').next().unwrap_or(""), "Vec" | "VecDeque")
+                        });
+                    if recv_is_iterable_collection {
+                        let recv_span = object.span.clone();
+                        let inner = std::mem::replace(
+                            &mut **object,
+                            Expr {
+                                kind: ExprKind::Tuple(Vec::new()),
+                                span: recv_span.clone(),
+                            },
+                        );
+                        **object = Expr {
+                            kind: ExprKind::MethodCall {
+                                object: Box::new(inner),
+                                method: "iter".to_string(),
+                                turbofish: None,
+                                args: Vec::new(),
+                                args_close_span: recv_span.clone(),
+                            },
+                            span: recv_span,
+                        };
+                    }
                 }
             }
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {

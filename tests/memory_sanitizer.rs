@@ -28784,4 +28784,44 @@ fn main() {
             "owned_self_rebind_builder_chain_no_double_free",
         );
     }
+    #[test]
+    fn asan_direct_vec_iterator_terminals_and_string_join_no_leak() {
+        // B-2026-07-16-14: the direct-on-Vec iterator terminals — `v.sum()` /
+        // `.product()` / `.max()` / `.min()` (lowering-desugared to the
+        // `.iter()` chain; max/min via the synthetic-reduce codegen) — and the
+        // Vec[String] `join(sep)` / `concat()` methods (karac_string_join
+        // walks the element triples READ-ONLY; the vector keeps ownership,
+        // the result is a fresh owned buffer freed once at scope exit).
+        // Pre-fix all six passed `karac check` via the silent unknown-method
+        // leniency and trapped on every backend. Edge coverage: empty vec
+        // (sum 0 / max None / join "") and the positional join of an empty
+        // first element ("|x" — the separator is structural, not
+        // emptiness-gated). LSan guards the join/concat result + separator
+        // temp ownership.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let v: Vec[i64] = [10, 20, 30, 40];
+    println(v.sum());
+    println(v.product());
+    println(v.max().unwrap_or(0));
+    println(v.min().unwrap_or(0));
+    let e: Vec[i64] = [];
+    println(e.sum());
+    println(e.max().unwrap_or(-1));
+    let s: Vec[String] = ["alpha-heap-sized-string-payload", "beta", "gamma"];
+    println(s.join("-").len());
+    println(s.concat().len());
+    let tricky: Vec[String] = ["", "x"];
+    println(tricky.join("|"));
+    let none: Vec[String] = [];
+    println(none.join(",").len());
+}
+"#,
+            &[
+                "100", "240000", "40", "10", "0", "-1", "42", "40", "|x", "0",
+            ],
+            "direct_vec_iterator_terminals_and_string_join_no_leak",
+        );
+    }
 }

@@ -177,6 +177,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         clone::karac_string_strip_prefix,
         clone::karac_string_strip_suffix,
         clone::karac_string_replace,
+        clone::karac_string_join,
         clone::karac_string_sorted,
         string_split_ffi::karac_runtime_string_lines,
         string_split_ffi::karac_runtime_string_split,

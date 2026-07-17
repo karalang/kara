@@ -356,6 +356,50 @@ pub unsafe extern "C" fn karac_string_replace(
     alloc_string_result(replaced.as_bytes(), out_len)
 }
 
+/// `Vec[String].join(sep)` / `.concat()` — concatenate the vector's string
+/// elements with `sep` between every adjacent pair (`concat` passes an empty
+/// `sep`). `parts` is the Vec's data buffer: `count` contiguous
+/// `{ptr, len, cap}` element triples (the Kāra String layout); only
+/// `ptr`/`len` are read — ownership of the elements stays with the vector
+/// (B-2026-07-16-14). Returns a fresh owned buffer via
+/// [`alloc_string_result`]; an empty vector yields the empty string
+/// (null/0, the canonical empty Kāra String).
+///
+/// # Safety
+/// `parts` must point at `count` valid element triples whose `ptr`/`len`
+/// describe live UTF-8 string bodies (null/0 for the empty string);
+/// `sep`/`sep_len` is a Kāra String body; `out_len` must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_join(
+    parts: *const KaracStrTriple,
+    count: i64,
+    sep: *const u8,
+    sep_len: i64,
+    out_len: *mut i64,
+) -> *mut u8 {
+    let sep_s = str_from_raw(sep, sep_len);
+    let mut out = String::new();
+    for i in 0..count {
+        let t = &*parts.offset(i as isize);
+        if i > 0 {
+            out.push_str(sep_s);
+        }
+        out.push_str(str_from_raw(t.ptr, t.len));
+    }
+    alloc_string_result(out.as_bytes(), out_len)
+}
+
+/// One `{ptr, len, cap}` Kāra String element as laid out inside a
+/// `Vec[String]` data buffer — the read-only view [`karac_string_join`]
+/// walks. `cap` is present for layout fidelity only; join never reads it.
+#[repr(C)]
+pub struct KaracStrTriple {
+    ptr: *const u8,
+    len: i64,
+    #[allow(dead_code)]
+    cap: i64,
+}
+
 /// `String.strip_prefix(prefix)` — if the string starts with `prefix`, return a
 /// fresh OWNED copy of the remainder and set `*out_matched = 1`; otherwise set
 /// `*out_matched = 0` and return null (Rust `str::strip_prefix`, but allocating

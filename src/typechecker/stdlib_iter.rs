@@ -238,6 +238,48 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![item.clone()],
                 }
             }
+            "max" | "min" => {
+                // `max() -> Option[T]` / `min() -> Option[T]` — comparison
+                // terminals (B-2026-07-16-14). Drain the iterator keeping the
+                // extreme element; `None` for an empty source (Rust semantics —
+                // no sentinel seeding, so the full element range is legal).
+                // Ordered elements only: numeric or String (the comparison the
+                // backends implement); anything else is rejected here so the
+                // check/execution contract holds. Element TypeExpr recorded
+                // span-keyed for codegen's synthetic-reduce desugar (same table
+                // as `reduce`).
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("Iterator.{method}() takes no arguments"),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                if !is_numeric(item)
+                    && !matches!(item, Type::Str)
+                    && !self.type_param_has_numeric_bound(item)
+                {
+                    self.type_error(
+                        format!(
+                            "Iterator.{}() requires a numeric or String element type, found '{}'",
+                            method,
+                            type_display(item)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                self.iter_terminal_elem_types
+                    .insert(SpanKey::from_span(span), Self::type_to_type_expr(item));
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
             "for_each" => {
                 // `for_each(f: Fn(T) -> ()) -> ()` — terminal. Runs `f` for its
                 // side effects on each element and yields unit. The body may
@@ -813,6 +855,8 @@ impl<'a> super::TypeChecker<'a> {
                     "for_each",
                     "inspect",
                     "map",
+                    "max",
+                    "min",
                     "next",
                     "peek",
                     "peekable",
