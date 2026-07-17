@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 59 | 0 |
 | double-free | 59 | 1 |
 | missing-feature | 46 | 1 |
-| false-positive | 35 | 1 |
+| false-positive | 35 | 0 |
 | crash | 23 | 0 |
 | run-vs-build | 23 | 0 |
 | perf | 21 | 1 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 61 | 3 |
 | interp | 48 | 1 |
 | ownership | 22 | 0 |
-| other | 18 | 1 |
+| other | 18 | 0 |
 | autopar | 14 | 0 |
 | runtime | 12 | 0 |
 | cli | 12 | 1 |
@@ -123,14 +123,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **521 surfaced · 8 open · 510 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **521 surfaced · 7 open · 511 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-13-5 | 2026-07-13 | codegen+typecheck | medium | Three composable Tensor limitations block idiomatic numerical-stdlib .kara over generic-dim tensors: (A) a tensor reduction/transform on a NON-IDENTIFIER receiver (method chain, e.g. `a.zip_with(b, f).sum()`) fails codegen with 'no handler for method sum on non-identifier receiver' — try_compile_tensor_reduce (tensor.rs:2794) only matches Identifier/SelfValue receivers, returning None for a MethodCall receiver so dispatch falls through; (B) a generic shape parameter `D` (declared `fn f[D](t: Tensor[f32,[D]])`) is usable in the SIGNATURE but NOT in a function-BODY type annotation — `let p: Tensor[f32,[D]] = ...` fails typecheck with "const expression: 'D' is not a known const"; (C) a `ref Tensor[f32,[D]]` PARAM passed to a tensor method taking `other: ref Tensor` (zip_with) fails typecheck with 'expected Tensor, found ref Tensor'. Each is loud (compile error / --interp hint), interp-correct where reachable. | — |
-| B-2026-07-16-13 | 2026-07-16 | other | low | `m[key]` (Map/SortedMap index operator) only accepts integer keys — a non-integer key (`m["x"]` on `Map[String,i64]`) is rejected 'index must be an integer or range, found String', despite design.md speccing `[]` → `index(ref self, key: ref K) -> ref V` (panics if key missing). `m[1]` on `Map[i64,V]` works only because i64 IS an integer. Workaround `m.get(k).unwrap()` works (and `get`'s key-borrow was fixed in B-2026-07-16-12). | none |
 | B-2026-07-16-23 | 2026-07-16 | codegen | medium | `unwrap_or(<non-Call heap default>)` mismanaged the eager default's ownership. LEG 1 (FIXED in c9593ed): an owned-binding default (moved Vec/String identifier) DOUBLE-FREED. REMAINING (open): a DIRECT array/collection-literal default (`unwrap_or([9,9,9])`) LEAKS, and a DIRECT f-string default (`unwrap_or(f"…")`) DOUBLE-FREES. Only the Call/MethodCall/String-slice (B-2026-07-16-22) and owned-binding (leg 1) default shapes are now correct. | none |
 | B-2026-07-17-5 | 2026-07-17 | cli | low | wasm link fails with cryptic `undefined symbol: __wasm_first_page_end` (from rustup's self-contained wasi libc.a dlmalloc.c.obj) when the PATH `wasm-ld` is older than the active rustup toolchain's wasi-libc — the linker resolution order (KARAC_WASM_LD > PATH wasm-ld > brew > rust-lld) picks the stale system linker over the version-matched rust-lld sitting in the same rustup toolchain that supplied the libc. | none |
 | B-2026-07-17-6 | 2026-07-17 | typecheck+interp | medium | `match <non-Option scalar/String> { Some(v) => …, None => … }` (Option-variant patterns on a scrutinee that is NOT an Option) PASSES `karac check` but PANICS the interpreter: 'internal error: entered unreachable code: non-exhaustive match … should be caught by exhaustiveness checker' (src/interpreter/pattern_match.rs:46). Also accepts a USER enum variant pattern on a non-matching scrutinee (`match i64 { Color.Red => … }`). Result patterns (`Ok/Err`) are CORRECTLY rejected — an asymmetry. A plausible real mistake (confusing Channel `recv()->T` with `try_recv()->Option[T]`) yields an internal-error crash, not a clear diagnostic. | none |
@@ -138,9 +137,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **521 surfaced 
 | B-2026-07-17-13 | 2026-07-17 | codegen | low | A narrow-UNSIGNED value carried through an Option payload prints SIGNED: `Option[u8]` holding 200u8, unwrapped and printed, shows -56 (200 as i8) under karac build; interp correct. The unwrap/reconstruct produces the right bit pattern (i8 truncation is correct) but the print path reads it as signed because the reconstructed value's unsigned surface type is not threaded to expr_is_unsigned_int through the Option unwrap. Reproduces with a hand-written `match racc { Some(a) => .. }` over Option[u8] (NOT reduce-specific) — same class as B-2026-07-03-21's narrow-unsigned slot printing, extended to the Option-payload path. | none |
 | B-2026-07-17-14 | 2026-07-17 | codegen | low | Descending counted loop `while k >= 1 { ..; k = k - 1 }` keeps an explicit `cmp $1` after the decrement instead of folding the guard into the `dec`'s flags. Surfaced as the RESIDUAL gap on Pascal #119 after the descending bounds-check skip (B-2026-07-17-1) removed the per-iteration bounds check: the in-place update loop then runs 8 instructions (`mov;mov;add;jo;mov;dec;cmp $1;ja`) where equal-safety `rustc -O -C overflow-checks=on` runs 7 (`mov;mov;add;jo;mov;dec;jne`) — rust lowers its `(1..=i).rev()` countdown to `dec; jne` (compare-against-0 via the decrement's ZF), kara emits a separate `cmp $0x1,%rdx` dependent on the `dec`. That one extra dependent instruction per iteration is a ~1.14-1.19x residual on the tight O(k^2) update loop (kara 341ms vs rust-ovf 289ms = 1.18x; the bounds-check fix had already moved it from 1.29x). Distinct mechanism from B-2026-07-17-1 (bounds-check elision): this is loop-guard strength reduction / countdown canonicalization. | none |
 
-### Fixed (510)
+### Fixed (511)
 
-<details><summary>510 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>511 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -635,6 +634,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **521 surfaced 
 | B-2026-07-16-10 | codegen | medium | FIXED — User `defer` blocks execute FIFO-inline (at declaration point, in declaration order) instead of LIFO-at-scope-exit when the enclosing functio… | 07f4e09 |
 | B-2026-07-16-11 | codegen | low | A `Vec` built by `Vec.new()` + a counted `push`-loop reallocs ~log(n) times (growth-doubling) where the trip count is statically derivable — auto-pre… | dae4e309 |
 | B-2026-07-16-12 | ownership | medium | FIXED — Builtin collection LOOKUP methods (Map.get/remove/contains_key, Set.contains/remove, Vec.contains, String.contains) consumed their key/value… | 8f32f01 |
+| B-2026-07-16-13 | other | low | `m[key]` (Map/SortedMap index operator) only accepts integer keys — a non-integer key (`m["x"]` on `Map[String,i64]`) is rejected 'index must be an i… | c585377 — the index-expression typecheck had no Map/SortedMap arm, so a non-integer key fell to the generic integer-or-range gate; an integer key slipped through but returned Type::Error (no Map arm in the element match), check-passing while the interpreter unreachable!'d and only codegen worked. BOTH backends already had native Map-index support the typecheck gate was blocking — codegen's compile_map_index (read, hashes any K) + compile_index_store (write, insert/overwrite); the interpreter had neither. Fix = a typecheck arm (types m[k] -> V for read AND assignment target, checks the key against K with the B-2026-07-16-12 ref-key relaxation) + the interpreter's two missing arms (eval_expr Index read: (Value::Map|SortedMap, key) scan/OrdValue lookup, missing key = clear runtime error since m[k] panics where m.get(k) returns None; set_index store: insert-or-overwrite before the Int-index gate). No desugar, no codegen change. Verified read+write, String/int/SortedMap keys, interp/JIT/native parity, valgrind clean, missing-key panics both backends. Tests: test_map_index_read_and_write_string_and_int_keys, test_map_index_read_missing_key_panics; the existing codegen test_e2e_map_index_* tests are now backed by a real check gate. |
 | B-2026-07-16-14 | typecheck+interp+other | medium | `karac check` accepts iterator-reduction / string-collection methods DIRECTLY on a Vec (`v.sum()`, `v.max()`, `v.min()`, `v.product()`, `v.join(sep)`… | 5090b76 — all six shapes now RUN with real types across interp/JIT/AOT. max/min join the iterator terminal surface (Option[T], numeric-or-String, reduce-shaped typing + span-keyed elem recording); direct terminals on iterable receivers route through infer_iterator_method and lowering canonicalizes them to the .iter() chain (receiver identified via method_callee_types — expr_types cannot answer receiver questions, MethodCall.span == receiver.span); join/concat are Vec[String]/VecDeque methods lowered through a new karac_string_join runtime entry (read-only element walk, vector keeps ownership) with interp seq arms (positional separator: ["", "x"].join("|") == "|x"). Codegen max/min reuse the reduce lowering via a synthesized comparison closure; FLOAT elements bail loud to --interp pending B-2026-07-17-11 (pre-existing reduce float-accumulator bug this desugar would inherit as a silent wrong answer). Pin: asan_direct_vec_iterator_terminals_and_string_join_no_leak. NOTE the root cause was WIDER than filed — see B-2026-07-17-12 (unknown methods on non-exhaustive prelude types silently type as Type::Error and unify with anything; v.some_typo() and let x: bool = v.sum() both passed check pre-fix). |
 | B-2026-07-16-15 | codegen | high | Seq-tabulate (dae4e309) miscompiled counted push loops whose body ALSO writes the while-loop's control state: `while c < n { out.push(c); if c == 3 {… | b4f86484 |
 | B-2026-07-16-16 | codegen | high | tests/selfhost_codegen.rs (selfhost_codegen_matches_seed_run) is RED on main: the self-hosted emitter compiles and runs, but executing its emitted IR… | — |
