@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 24 | 0 |
 | run-vs-build | 23 | 0 |
 | perf | 21 | 0 |
-| soundness | 18 | 0 |
+| soundness | 20 | 1 |
 | diagnostics | 11 | 0 |
 | use-after-free | 3 | 0 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 370 | 0 |
-| typecheck | 61 | 0 |
+| typecheck | 63 | 1 |
 | interp | 48 | 0 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
@@ -123,15 +123,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **524 surfaced · 0 open · 520 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **526 surfaced · 1 open · 521 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-17-19 | 2026-07-17 | typecheck | low | Unknown methods on a fixed-size `Array[T, N]` silently type as Type::Error and pass `karac check`, then run on no backend — the same check/execution hole B-2026-07-17-12/-18 closed for the Named prelude types, but `Array[T, N]` is a STRUCTURAL `Type::Array{element,size}`, not `Type::Named{"Array"}`, so it bypasses the Named-keyed EXHAUSTIVE_PRELUDE None arm entirely; adding "Array" to that list is dead code. | — |
 
-### Fixed (520)
+### Fixed (521)
 
-<details><summary>520 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>521 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -655,6 +657,7 @@ _None — the ledger is fully drained._
 | B-2026-07-17-15 | codegen+autopar | high | Two annotated opaque-handle-new bindings (`let t: Interner = Interner.new()` / `let a: Arena[T] = Arena.new()`) in the same fn are auto-parallelized… | e01b609 |
 | B-2026-07-17-16 | ownership | low | Spurious RC fallback on the natural 'build a nested Vec row-by-row' shape: `while … { let mut row = Vec.new(); while … { row.push(x) } outer.push(row… | 4938f2c |
 | B-2026-07-17-17 | codegen | medium | A tensor VARIABLE reassignment (`w = w - g` / `w = w + d`, where `w: mut Tensor`) never freed the displaced old block — one `[rank][dims][data]` leak… | fbb824f |
+| B-2026-07-17-18 | typecheck | low | Unknown methods on the Type::Named numerical prelude types `Tensor` and `DataFrame` silently typed as Type::Error (same check/execution hole B-2026-0… | aee4a66 |
 
 </details>
 
