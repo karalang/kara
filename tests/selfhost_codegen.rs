@@ -70,6 +70,14 @@ const CORPUS: &[&str] = &[
     "fn sign(n: i64) -> i64 { if n > 0 { return 1; } if n < 0 { return 0 - 1; } 0 }\nfn main() { println(sign(42).to_string()); println(sign(0 - 7).to_string()); println(sign(0).to_string()) }",
     // A helper called for effect inside a loop.
     "fn shout(n: i64) { println(n.to_string()); println(\"!\") }\nfn main() { let mut i = 0; while i < 3 { shout(i); i = i + 1; } }",
+    // Slice 7: string locals ({ptr,i64} aggregates over interned globals),
+    // typed slots (also fixes bool locals), moves, reassignment, shadowing.
+    "fn main() { let s = \"hello\"; println(s) }",
+    "fn main() { let mut t = \"a\"; t = \"b\"; println(t) }",
+    "fn main() { let s = \"x\"; let t = s; println(t) }",
+    "fn main() { let s = \"one\"; let s = \"two\"; println(s) }",
+    "fn main() { let b = true; println(b.to_string()) }",
+    "fn main() { let name = \"kara\"; let n = 5; println(name); println(n.to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

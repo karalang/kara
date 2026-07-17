@@ -51,12 +51,12 @@ import ast.{
     BindingPattern,
 };
 
-// An emitted VALUE: the LLVM operand text plus whether it is an `i1` (bool)
-// rather than an `i64` (Slice 4). Comparisons / logical ops / bool literals
-// produce i1; everything else i64.
+// An emitted VALUE: the LLVM operand text plus its type KIND — 0 = `i64`,
+// 1 = `i1` (bool), 2 = string, a first-class `{ ptr, i64 }` aggregate
+// (pointer + byte length; literal-backed, so no heap yet — Slice 7).
 struct Val {
     op: String,
-    is_bool: bool,
+    kind: i64,
 }
 
 // Accumulates the module's string-literal GLOBALS and the `main` BODY
@@ -76,6 +76,9 @@ struct Emitter {
     // linear scan (newest-first, so shadowing rebinds); no scoping yet — Slice 3
     // main bodies are a single flat block.
     locals: Vec[String],
+    // Parallel to `locals`: the slot's value kind (0 i64, 1 i1, 2 string —
+    // Slice 7 typed slots; earlier slices stored everything as i64).
+    locals_kind: Vec[i64],
     // Monotonic basic-block label id (Slice 4: `if`/`else` control flow).
     nlbl: i64,
     // True while emitting `main` (Slice 6): a `return` there is `ret i32 0`,
@@ -95,6 +98,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         nstr: 0,
         ntmp: 0,
         locals: Vec.new(),
+        locals_kind: Vec.new(),
         nlbl: 0,
         in_main: false,
     };
@@ -122,7 +126,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, nlbl, in_main } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, nlbl, in_main } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -151,6 +155,7 @@ impl Emitter {
     fn emit_fn(mut ref self, name: String, params: Vec[FnParamNode], has_ret: bool, b: Block) {
         self.body = "".to_string();
         self.locals = Vec.new();
+        self.locals_kind = Vec.new();
         let is_main = name == "main";
         self.in_main = is_main;
         let mut sig = "".to_string();
@@ -160,6 +165,7 @@ impl Emitter {
             let FnParamNode { name: pn, ty, span } = p;
             let idx = self.locals.len();
             self.locals.push(pn);
+            self.locals_kind.push(0);
             if pi > 0 {
                 sig = sig + ", ";
             }
@@ -186,7 +192,7 @@ impl Emitter {
             Some(e) => {
                 if use_val {
                     let v = self.emit_value(e);
-                    let Val { op, is_bool } = v;
+                    let Val { op, kind } = v;
                     tv = op;
                 } else {
                     self.emit_expr(e);
@@ -222,7 +228,7 @@ impl Emitter {
         for st in stmts {
             self.emit_stmt(st);
         }
-        let mut v = Val { op: "0".to_string(), is_bool: false };
+        let mut v = Val { op: "0".to_string(), kind: 0 };
         match tail {
             Some(e) => {
                 v = self.emit_value(e);
@@ -263,13 +269,26 @@ impl Emitter {
                     BindingPat(bp) => {
                         let BindingPattern { name, span: bsp } = bp;
                         let v0 = self.emit_value(value);
-                        let Val { op: v, is_bool: vb } = v0;
+                        let Val { op: v, kind: vk } = v0;
                         let idx = self.locals.len();
                         self.locals.push(name);
+                        self.locals_kind.push(vk);
+                        let ty = kind_ty(vk);
                         let slot = "%v" + idx.to_string();
-                        self.body = self.body + "  " + slot.clone() + " = alloca i64, align 8\n";
-                        self.body =
-                            self.body + "  store i64 " + v + ", ptr " + slot + ", align 8\n";
+                        self.body = self.body
+                            + "  "
+                            + slot.clone()
+                            + " = alloca "
+                            + ty.clone()
+                            + ", align 8\n";
+                        self.body = self.body
+                            + "  store "
+                            + ty
+                            + " "
+                            + v
+                            + ", ptr "
+                            + slot
+                            + ", align 8\n";
                     }
                     _ => {}
                 }
@@ -283,9 +302,12 @@ impl Emitter {
                         let idx = self.local_slot(name);
                         if idx >= 0 {
                             let v0 = self.emit_value(value);
-                            let Val { op: v, is_bool: vb } = v0;
+                            let Val { op: v, kind: vk } = v0;
+                            let ty = kind_ty(vk);
                             self.body = self.body
-                                + "  store i64 "
+                                + "  store "
+                                + ty
+                                + " "
                                 + v
                                 + ", ptr %v"
                                 + idx.to_string()
@@ -329,6 +351,13 @@ impl Emitter {
                     _ => {}
                 }
                 if cname == "println" {
+                    // Every arg shape routes through `emit_value` and a
+                    // kind-dispatch print (Slice 7): a literal keeps its fast
+                    // path; `<expr>.to_string()` prints the OBJECT's value
+                    // (formatting happens at print time — the identity holds
+                    // because to_string only feeds println in this surface);
+                    // any other expr (a string local, a computed value) prints
+                    // by its emitted kind.
                     for a in args {
                         let CallArg { label, mut_marker, value, span: asp } = a;
                         match value {
@@ -337,21 +366,18 @@ impl Emitter {
                                 self.emit_println_str(sv);
                             }
                             MethodCall(mc) => {
-                                // `println(<expr>.to_string())` (Slices 2+4):
-                                // emit the value, then format+print it — i64 via
-                                // snprintf, i1 as "true"/"false" via select.
                                 let MethodCallExpr { object, method, args: margs, span: msp } = mc;
                                 if method == "to_string" {
                                     let val = self.emit_value(object);
-                                    let Val { op, is_bool } = val;
-                                    if is_bool {
-                                        self.emit_println_bool(op);
-                                    } else {
-                                        self.emit_println_int(op);
-                                    }
+                                    let Val { op, kind } = val;
+                                    self.emit_println_val(op, kind);
                                 }
                             }
-                            _ => {}
+                            other => {
+                                let val = self.emit_value(other);
+                                let Val { op, kind } = val;
+                                self.emit_println_val(op, kind);
+                            }
                         }
                     }
                 } else {
@@ -362,7 +388,7 @@ impl Emitter {
                     for a in args {
                         let CallArg { label, mut_marker, value, span: asp } = a;
                         let v = self.emit_value(value);
-                        let Val { op, is_bool } = v;
+                        let Val { op, kind } = v;
                         if ai > 0 {
                             alist = alist + ", ";
                         }
@@ -393,7 +419,7 @@ impl Emitter {
                 match value {
                     Some(v) => {
                         let val = self.emit_value(v);
-                        let Val { op, is_bool } = val;
+                        let Val { op, kind } = val;
                         rv = op;
                     }
                     None => {}
@@ -414,7 +440,7 @@ impl Emitter {
                 // nested `if` for `else if`), handled by recursion.
                 let IfExpr { cond, then_block, else_branch, span } = n;
                 let c = self.emit_value(cond);
-                let Val { op: cop, is_bool: cb } = c;
+                let Val { op: cop, kind: ck } = c;
                 let lid = self.nlbl;
                 self.nlbl = self.nlbl + 1;
                 let lthen = "then" + lid.to_string();
@@ -454,7 +480,7 @@ impl Emitter {
                 self.body = self.body + "  br label %" + lhead.clone() + "\n";
                 self.body = self.body + lhead.clone() + ":\n";
                 let c = self.emit_value(cond);
-                let Val { op: cop, is_bool: cb } = c;
+                let Val { op: cop, kind: ck } = c;
                 self.body = self.body
                     + "  br i1 "
                     + cop
@@ -475,10 +501,9 @@ impl Emitter {
         }
     }
 
-    // Emit one `println(sv)`: a string global `@.strN` (byte-hex-escaped, with a
-    // trailing NUL) plus two `fwrite`s — the string (its byte length) then the
-    // shared `@.nl` newline. Matches the seed's lowering (fwrite over @stdout).
-    fn emit_println_str(mut ref self, sv: String) {
+    // Intern a string literal as a global `@.strN` (byte-hex-escaped, trailing
+    // NUL) and return its name + byte length.
+    fn intern_str(mut ref self, sv: String) -> StrG {
         let sid = self.nstr;
         self.nstr = self.nstr + 1;
         let mut hex = "".to_string();
@@ -495,7 +520,61 @@ impl Emitter {
             + " x i8] c\""
             + hex
             + "\\00\"\n";
-        self.emit_write("@.str" + sid.to_string(), len);
+        StrG { name: "@.str" + sid.to_string(), len: len }
+    }
+
+    // Emit one `println(<literal>)`: intern + two `fwrite`s (string, newline).
+    // Matches the seed's lowering (fwrite over @stdout).
+    fn emit_println_str(mut ref self, sv: String) {
+        let g = self.intern_str(sv);
+        let StrG { name, len } = g;
+        self.emit_write(name, len);
+        self.emit_write("@.nl".to_string(), 1);
+    }
+
+    // Kind-dispatched print of an emitted value + newline (Slice 7).
+    fn emit_println_val(mut ref self, op: String, kind: i64) {
+        if kind == 1 {
+            self.emit_println_bool(op);
+        } else {
+            if kind == 2 {
+                self.emit_println_strval(op);
+            } else {
+                self.emit_println_int(op);
+            }
+        }
+    }
+
+    // Print a STRING VALUE (`{ ptr, i64 }` aggregate operand): extract the
+    // pointer and length, fwrite, newline (Slice 7).
+    fn emit_println_strval(mut ref self, val: String) {
+        let pr = self.fresh();
+        self.body = self.body
+            + "  "
+            + pr.clone()
+            + " = extractvalue { ptr, i64 } "
+            + val.clone()
+            + ", 0\n";
+        let ln = self.fresh();
+        self.body = self.body
+            + "  "
+            + ln.clone()
+            + " = extractvalue { ptr, i64 } "
+            + val
+            + ", 1\n";
+        let st = self.fresh();
+        self.body = self.body + "  " + st.clone() + " = load ptr, ptr @stdout, align 8\n";
+        let r = self.fresh();
+        self.body = self.body
+            + "  "
+            + r
+            + " = call i64 @fwrite(ptr "
+            + pr
+            + ", i64 1, i64 "
+            + ln
+            + ", ptr "
+            + st
+            + ")\n";
         self.emit_write("@.nl".to_string(), 1);
     }
 
@@ -537,37 +616,66 @@ impl Emitter {
         match e {
             Int(n) => {
                 let IntLit { value, suffix, span } = n;
-                Val { op: value.to_string(), is_bool: false }
+                Val { op: value.to_string(), kind: 0 }
+            }
+            Str(sl) => {
+                // A string literal as a VALUE (Slice 7): intern the global and
+                // build the `{ ptr, i64 }` aggregate via insertvalue.
+                let StrLit { value: sv, span } = sl;
+                let g = self.intern_str(sv);
+                let StrG { name, len } = g;
+                let t0 = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + t0.clone()
+                    + " = insertvalue { ptr, i64 } undef, ptr "
+                    + name
+                    + ", 0\n";
+                let t1 = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + t1.clone()
+                    + " = insertvalue { ptr, i64 } "
+                    + t0
+                    + ", i64 "
+                    + len.to_string()
+                    + ", 1\n";
+                Val { op: t1, kind: 2 }
             }
             Bool(n) => {
                 let BoolLit { value, span } = n;
                 if value {
-                    Val { op: "true".to_string(), is_bool: true }
+                    Val { op: "true".to_string(), kind: 1 }
                 } else {
-                    Val { op: "false".to_string(), is_bool: true }
+                    Val { op: "false".to_string(), kind: 1 }
                 }
             }
             Ident(ie) => {
-                // A local variable read (Slice 3): load from its i64 slot.
+                // A local variable read (Slice 3; typed slots Slice 7): load
+                // from the slot with the slot's own type and kind.
                 let IdentExpr { name, span } = ie;
                 let idx = self.local_slot(name);
                 if idx < 0 {
-                    return Val { op: "0".to_string(), is_bool: false };
+                    return Val { op: "0".to_string(), kind: 0 };
                 }
+                let k = self.locals_kind[idx];
+                let ty = kind_ty(k);
                 let r = self.fresh();
                 self.body = self.body
                     + "  "
                     + r.clone()
-                    + " = load i64, ptr %v"
+                    + " = load "
+                    + ty
+                    + ", ptr %v"
                     + idx.to_string()
                     + ", align 8\n";
-                Val { op: r, is_bool: false }
+                Val { op: r, kind: k }
             }
             Unary(u) => {
                 // `not b` (Slice 4): xor the i1 with true.
                 let UnaryExpr { op, operand, span } = u;
                 let inner = self.emit_value(operand);
-                let Val { op: iop, is_bool: ib } = inner;
+                let Val { op: iop, kind: ik } = inner;
                 let is_not = match op {
                     Not => true,
                     _ => false,
@@ -576,16 +684,16 @@ impl Emitter {
                     let r = self.fresh();
                     self.body =
                         self.body + "  " + r.clone() + " = xor i1 " + iop + ", true\n";
-                    return Val { op: r, is_bool: true };
+                    return Val { op: r, kind: 1 };
                 }
-                Val { op: iop, is_bool: ib }
+                Val { op: iop, kind: ik }
             }
             Binary(b) => {
                 let BinaryExpr { op, left, right, span } = b;
                 let lv = self.emit_value(left);
                 let rv = self.emit_value(right);
-                let Val { op: lop, is_bool: lb } = lv;
-                let Val { op: rop, is_bool: rb } = rv;
+                let Val { op: lop, kind: lk } = lv;
+                let Val { op: rop, kind: rk } = rv;
                 // ONE match on `op` (BinOp is not Copy) yields both the class
                 // and the instruction text: comparison → `icmp <cc>` on i64 → i1;
                 // logical → `and`/`or` on i1 (non-short-circuit — output-
@@ -605,7 +713,7 @@ impl Emitter {
                         + ", "
                         + rop
                         + "\n";
-                    return Val { op: r, is_bool: true };
+                    return Val { op: r, kind: 1 };
                 }
                 if kind == 2 {
                     self.body = self.body
@@ -618,11 +726,11 @@ impl Emitter {
                         + ", "
                         + rop
                         + "\n";
-                    return Val { op: r, is_bool: true };
+                    return Val { op: r, kind: 1 };
                 }
                 self.body =
                     self.body + "  " + r.clone() + " = " + text + " i64 " + lop + ", " + rop + "\n";
-                Val { op: r, is_bool: false }
+                Val { op: r, kind: 0 }
             }
             Call(cn) => {
                 // A user-function call in VALUE position (Slice 6).
@@ -640,7 +748,7 @@ impl Emitter {
                 for a in args {
                     let CallArg { label, mut_marker, value, span: asp } = a;
                     let v = self.emit_value(value);
-                    let Val { op, is_bool } = v;
+                    let Val { op, kind } = v;
                     if ai > 0 {
                         alist = alist + ", ";
                     }
@@ -648,7 +756,7 @@ impl Emitter {
                     ai = ai + 1;
                 }
                 if cname == "" {
-                    return Val { op: "0".to_string(), is_bool: false };
+                    return Val { op: "0".to_string(), kind: 0 };
                 }
                 let r = self.fresh();
                 self.body = self.body
@@ -659,7 +767,7 @@ impl Emitter {
                     + "("
                     + alist
                     + ")\n";
-                Val { op: r, is_bool: false }
+                Val { op: r, kind: 0 }
             }
             If(n) => {
                 // `if` in VALUE position (Slice 6): route each branch's tail
@@ -669,7 +777,7 @@ impl Emitter {
                 let slot = self.fresh();
                 self.body = self.body + "  " + slot.clone() + " = alloca i64, align 8\n";
                 let c = self.emit_value(cond);
-                let Val { op: cop, is_bool: cb } = c;
+                let Val { op: cop, kind: ck } = c;
                 let lid = self.nlbl;
                 self.nlbl = self.nlbl + 1;
                 let lthen = "vthen" + lid.to_string();
@@ -685,7 +793,7 @@ impl Emitter {
                     + "\n";
                 self.body = self.body + lthen + ":\n";
                 let tv = self.emit_block_value(then_block);
-                let Val { op: top, is_bool: tb } = tv;
+                let Val { op: top, kind: tk } = tv;
                 self.body =
                     self.body + "  store i64 " + top + ", ptr " + slot.clone() + ", align 8\n";
                 self.body = self.body + "  br label %" + lend.clone() + "\n";
@@ -693,7 +801,7 @@ impl Emitter {
                 match else_branch {
                     Some(eb) => {
                         let ev = self.emit_value(eb);
-                        let Val { op: eop, is_bool: ebb } = ev;
+                        let Val { op: eop, kind: ek } = ev;
                         self.body = self.body
                             + "  store i64 "
                             + eop
@@ -711,10 +819,10 @@ impl Emitter {
                 let r = self.fresh();
                 self.body =
                     self.body + "  " + r.clone() + " = load i64, ptr " + slot + ", align 8\n";
-                Val { op: r, is_bool: false }
+                Val { op: r, kind: 0 }
             }
             Blk(b) => self.emit_block_value(b),
-            _ => Val { op: "0".to_string(), is_bool: false },
+            _ => Val { op: "0".to_string(), kind: 0 },
         }
     }
 
@@ -806,6 +914,23 @@ fn bin_ir(op: BinOp) -> BinIr {
         Or => BinIr { kind: 2, text: "or".to_string() },
         _ => BinIr { kind: 0, text: "add".to_string() },
     }
+}
+
+// The LLVM type text for a value kind (0 i64, 1 i1, 2 string aggregate).
+fn kind_ty(kind: i64) -> String {
+    if kind == 1 {
+        return "i1".to_string();
+    }
+    if kind == 2 {
+        return "{ ptr, i64 }".to_string();
+    }
+    "i64".to_string()
+}
+
+// An interned string global: its symbol name and byte length.
+struct StrG {
+    name: String,
+    len: i64,
 }
 
 // A byte as two lowercase hex digits (LLVM `c"..."` `\NN` escape body).
