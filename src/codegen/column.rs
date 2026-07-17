@@ -1037,7 +1037,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(vec_val, 2, "col.fv.src.cap")
                 .unwrap()
                 .into_int_value();
-            self.emit_free_if_cap_positive(src_data, cap);
+            // Hint sized by the source element (phase-10 line 282): a
+            // multi-byte / String (24) column source Vec clears the 1 MiB
+            // fast-reject.
+            let col_elem_size = self.column_elem_size(elem).unwrap_or(1);
+            self.emit_free_if_cap_positive(src_data, cap, col_elem_size);
         }
         Ok(control.into())
     }
@@ -1188,7 +1192,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(vec_val, 2, "col.fin.cap")
                 .unwrap()
                 .into_int_value();
-            self.emit_free_if_cap_positive(src_ptr, cap);
+            // `Vec[Option[T]]` source — the Option enum is a 4-word (32-byte)
+            // element; hint by its ABI size (phase-10 line 282).
+            let opt_elem_size = self
+                .ensure_target_data()
+                .map(|td| td.get_abi_size(&option_ty))
+                .unwrap_or(1);
+            self.emit_free_if_cap_positive(src_ptr, cap, opt_elem_size);
         }
         Ok(control.into())
     }

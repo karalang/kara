@@ -580,7 +580,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_load(i64_t, cap_pp, "rcfb.cap")
                         .unwrap()
                         .into_int_value();
-                    self.emit_free_if_cap_positive(data, cap);
+                    // LLVM-type-only walker (String vs Vec erased) — 1.
+                    self.emit_free_if_cap_positive(data, cap, 1);
                 }
                 Some(BasicTypeEnum::StructType(st)) => {
                     let field_ptr = self
@@ -4292,8 +4293,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(after_bb);
             }
         }
-        // Recycling-aware release; erased payload → cap × 1 hint.
-        self.emit_free_buf_call(data, cap, 1);
+        // Recycling-aware release; hint = cap × sizeof(payload element)
+        // (phase-10 line 282), so a mid-size inline `Vec[T]` payload parks. The
+        // `&self` context reads the cached `target_data` directly; `None`
+        // element (untyped) falls back to 1.
+        let overlay_elem_size = payload_elem_ty
+            .and_then(|et| self.target_data.as_ref().map(|td| td.get_abi_size(&et)))
+            .unwrap_or(1);
+        self.emit_free_buf_call(data, cap, overlay_elem_size);
         self.builder.build_unconditional_branch(skip_bb).unwrap();
         self.builder.position_at_end(skip_bb);
     }

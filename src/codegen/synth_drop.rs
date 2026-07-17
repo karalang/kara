@@ -845,9 +845,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_conditional_branch(is_heap, free_bb, done_bb)
                         .unwrap();
                     self.builder.position_at_end(free_bb);
-                    // Recycling-aware release; erased Vec field → cap × 1
-                    // under-hint (sound; see karac_free_buf).
-                    self.emit_free_buf_call(data, cap, 1);
+                    // Recycling-aware release; hint = cap × sizeof(elem)
+                    // (phase-10 line 282) so a mid-size `Vec[T]` field parks.
+                    let vec_elem_size = self
+                        .target_data
+                        .as_ref()
+                        .map(|td| td.get_abi_size(&self.llvm_type_for_type_expr(&elem_te)))
+                        .unwrap_or(1);
+                    self.emit_free_buf_call(data, cap, vec_elem_size);
                     self.builder.build_unconditional_branch(done_bb).unwrap();
                     self.builder.position_at_end(done_bb);
                 }
@@ -2235,7 +2240,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .build_load(i64_t, cap_pp, "drop.tup.cap")
                                     .unwrap()
                                     .into_int_value();
-                                self.emit_free_if_cap_positive(data, cap);
+                                // Hint sized by the tuple element type
+                                // (phase-10 line 282): String/str → 1, Vec[T] →
+                                // sizeof(T).
+                                let tup_elem_size = self.vec_field_free_hint_elem_size(te);
+                                self.emit_free_if_cap_positive(data, cap, tup_elem_size);
                             }
                         }
                         "Map" | "HashMap" | "Set" | "HashSet" => {
@@ -2830,6 +2839,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // suffices); a self-recursive `Vec[Self]` resolves to this
                     // fn's own in-progress cache entry (RC cycles stay
                     // RC-managed, i.e. leak by design — the acyclic case frees).
+                    // Recycling hint size (phase-10 line 282): sizeof(T) for a
+                    // `Vec[T]` field, 1 for a String field / if unresolved.
+                    let field_hint_elem_size = self
+                        .struct_field_type_exprs
+                        .get(struct_name)
+                        .and_then(|v| v.get(field_idx))
+                        .cloned()
+                        .map(|fte| self.vec_field_free_hint_elem_size(&fte))
+                        .unwrap_or(1);
                     let vec_elem_drop = self
                         .struct_field_type_exprs
                         .get(struct_name)
@@ -2997,9 +3015,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.builder.build_unconditional_branch(cond_bb).unwrap();
                         self.builder.position_at_end(after_bb);
                     }
-                    // Recycling-aware release; erased Vec/String field →
-                    // cap × 1 hint (String-exact, Vec under-hint).
-                    self.emit_free_buf_call(data, cap, 1);
+                    // Recycling-aware release; hint sized by the field type
+                    // (phase-10 line 282) so a mid-size shared-struct `Vec[T]`
+                    // field parks.
+                    self.emit_free_buf_call(data, cap, field_hint_elem_size);
                     self.builder.build_unconditional_branch(skip_bb).unwrap();
                     self.builder.position_at_end(skip_bb);
                 }
@@ -3506,9 +3525,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_unconditional_branch(cond_bb).unwrap();
                     self.builder.position_at_end(after_bb);
                 }
-                // Recycling-aware release; erased enum-field Vec buffer →
-                // cap × 1 hint (String-exact, Vec under-hint).
-                self.emit_free_buf_call(data, cap, 1);
+                // Recycling-aware release; hint sized by the payload field type
+                // (phase-10 line 282): String → 1, Vec[T] → sizeof(T).
+                let enum_field_size = self.vec_field_free_hint_elem_size(te);
+                self.emit_free_buf_call(data, cap, enum_field_size);
                 self.builder.build_unconditional_branch(skip_bb).unwrap();
                 self.builder.position_at_end(skip_bb);
                 true

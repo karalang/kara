@@ -1239,7 +1239,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_extract_value(fs_val, 2, "cav.fs.cap")
             .unwrap()
             .into_int_value();
-        self.emit_free_if_cap_positive(data_ptr, fs_cap);
+        // `Vec[Fn]` outer buffer — closure element size not bound here; 1.
+        self.emit_free_if_cap_positive(data_ptr, fs_cap, 1);
 
         // 6. Output Vec[Result[T, E]] = { slots, N, N }.
         Ok(self.build_vec_value(slots_ptr, n, n))

@@ -3192,7 +3192,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, cap_pp, "soa.fstore.old.cap")
                     .unwrap()
                     .into_int_value();
-                self.emit_free_if_cap_positive(old_data, old_cap);
+                // Erased SoA-group sub-field (String vs Vec indistinguishable
+                // here) — under-hint of 1 (phase-10 line 282 leaves it).
+                self.emit_free_if_cap_positive(old_data, old_cap, 1);
             } else if self.aggregate_has_heap_field(fst) {
                 self.emit_aggregate_heap_field_frees(field_ptr, fst);
             }

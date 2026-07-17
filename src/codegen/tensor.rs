@@ -302,7 +302,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             .build_extract_value(vec_val, 2, "t.dims.cap")
                             .unwrap()
                             .into_int_value();
-                        self.emit_free_if_cap_positive(data, cap);
+                        // dims temp is a `Vec[i64]` — element ABI size 8.
+                        self.emit_free_if_cap_positive(data, cap, 8);
                     }
                     vals
                 }
@@ -2537,11 +2538,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|ti| ti.dims.get(di).copied().flatten())
     }
 
-    /// Free `data` when `cap > 0` (temporary dims-Vec disposal).
+    /// Free `data` when `cap > 0` (temporary `{ptr,len,cap}` disposal).
+    /// `elem_abi_size` is the element ABI size for the `karac_free_buf`
+    /// recycling hint (`cap × elem_abi_size`; phase-10 line 282) — pass the
+    /// exact `sizeof(T)` so a mid-size multi-byte-element buffer clears the 1
+    /// MiB cache fast-reject, `1` for a String / when the element is unknown (a
+    /// sound under-hint, never a correctness issue), or `0` to ask the allocator.
     pub(super) fn emit_free_if_cap_positive(
         &mut self,
         data: PointerValue<'ctx>,
         cap: IntValue<'ctx>,
+        elem_abi_size: u64,
     ) {
         let fn_val = self.current_fn.unwrap();
         let i64_t = self.context.i64_type();
@@ -2560,11 +2567,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(pos, do_bb, join_bb)
             .unwrap();
         self.builder.position_at_end(do_bb);
-        // Recycling-aware release (large-buffer cache). Callers are
-        // type-erased `{ptr,len,cap}` sites — hint = cap × 1: exact for a
-        // String buffer, a sound under-hint for a Vec (misses only mid-size
-        // multi-byte-element buffers, never correctness).
-        self.emit_free_buf_call(data, cap, 1);
+        self.emit_free_buf_call(data, cap, elem_abi_size);
         self.builder.build_unconditional_branch(join_bb).unwrap();
         self.builder.position_at_end(join_bb);
     }
