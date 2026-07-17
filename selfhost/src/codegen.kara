@@ -57,6 +57,12 @@ import ast.{
 struct Val {
     op: String,
     kind: i64,
+    // True iff this value OWNS a fresh heap buffer (a concat result) that its
+    // consumer must arrange to free (Slice 9). Ident loads are borrows —
+    // ownership stays with the original binder, which frees at scope exit;
+    // seed-valid programs never use a moved-out binding again, so
+    // binder-frees-once is exactly-once by construction.
+    heap: bool,
 }
 
 // Accumulates the module's string-literal GLOBALS and the `main` BODY
@@ -79,6 +85,12 @@ struct Emitter {
     // Parallel to `locals`: the slot's value kind (0 i64, 1 i1, 2 string —
     // Slice 7 typed slots; earlier slices stored everything as i64).
     locals_kind: Vec[i64],
+    // Parallel to `locals`: true iff the slot currently OWNS a heap buffer
+    // (Slice 9) — freed on reassignment (old value) and at scope exit.
+    // Compile-time approximation: seed-valid move discipline makes
+    // binder-frees-once exact; a mid-fn `return` skips the epilogue (leak,
+    // documented), as does a re-`let` inside a loop body.
+    locals_heap: Vec[bool],
     // Monotonic basic-block label id (Slice 4: `if`/`else` control flow).
     nlbl: i64,
     // True while emitting `main` (Slice 6): a `return` there is `ret i32 0`,
@@ -99,6 +111,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         ntmp: 0,
         locals: Vec.new(),
         locals_kind: Vec.new(),
+        locals_heap: Vec.new(),
         nlbl: 0,
         in_main: false,
     };
@@ -126,7 +139,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, nlbl, in_main } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -137,6 +150,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
     out = out + "declare i32 @snprintf(ptr, i64, ptr, ...)\n";
     out = out + "declare ptr @malloc(i64)\n";
     out = out + "declare ptr @memcpy(ptr, ptr, i64)\n";
+    out = out + "declare void @free(ptr)\n";
     out = out + "@.fmt_i = internal constant [5 x i8] c\"%lld\\00\"\n";
     out = out + "@.true = internal constant [5 x i8] c\"true\\00\"\n";
     out = out + "@.false = internal constant [6 x i8] c\"false\\00\"\n";
@@ -158,6 +172,7 @@ impl Emitter {
         self.body = "".to_string();
         self.locals = Vec.new();
         self.locals_kind = Vec.new();
+        self.locals_heap = Vec.new();
         let is_main = name == "main";
         self.in_main = is_main;
         let mut sig = "".to_string();
@@ -168,6 +183,7 @@ impl Emitter {
             let idx = self.locals.len();
             self.locals.push(pn);
             self.locals_kind.push(0);
+            self.locals_heap.push(false);
             if pi > 0 {
                 sig = sig + ", ";
             }
@@ -194,13 +210,23 @@ impl Emitter {
             Some(e) => {
                 if use_val {
                     let v = self.emit_value(e);
-                    let Val { op, kind } = v;
+                    let Val { op, kind, heap } = v;
                     tv = op;
                 } else {
                     self.emit_expr(e);
                 }
             }
             None => {}
+        }
+        // Scope-exit epilogue (Slice 9): free every slot that still OWNS a
+        // heap buffer. Runs before the default ret; a mid-fn `return` skips
+        // it (documented leak).
+        let mut fi = 0;
+        while fi < self.locals_heap.len() {
+            if self.locals_heap[fi] {
+                self.emit_free_slot(fi);
+            }
+            fi = fi + 1;
         }
         if is_main {
             self.funcs = self.funcs
@@ -230,7 +256,7 @@ impl Emitter {
         for st in stmts {
             self.emit_stmt(st);
         }
-        let mut v = Val { op: "0".to_string(), kind: 0 };
+        let mut v = Val { op: "0".to_string(), kind: 0, heap: false };
         match tail {
             Some(e) => {
                 v = self.emit_value(e);
@@ -270,11 +296,20 @@ impl Emitter {
                 match pattern {
                     BindingPat(bp) => {
                         let BindingPattern { name, span: bsp } = bp;
-                        let v0 = self.emit_value(value);
-                        let Val { op: v, kind: vk } = v0;
+                        let v1 = self.emit_value(value);
+                        let Val { op: v0op, kind: vk, heap: v0h } = v1;
+                        let mut v = v0op;
+                        let mut vh = v0h;
+                        if vk == 2 and not vh {
+                            let mv = self.emit_materialize(v.clone());
+                            let Val { op: mop, kind: mk, heap: mh } = mv;
+                            v = mop;
+                            vh = true;
+                        }
                         let idx = self.locals.len();
                         self.locals.push(name);
                         self.locals_kind.push(vk);
+                        self.locals_heap.push(vh);
                         let ty = kind_ty(vk);
                         let slot = "%v" + idx.to_string();
                         self.body = self.body
@@ -303,8 +338,23 @@ impl Emitter {
                         let IdentExpr { name, span: isp } = ie;
                         let idx = self.local_slot(name);
                         if idx >= 0 {
-                            let v0 = self.emit_value(value);
-                            let Val { op: v, kind: vk } = v0;
+                            let v1 = self.emit_value(value);
+                            let Val { op: v0op, kind: vk, heap: v0h } = v1;
+                            let mut v = v0op;
+                            let mut vh = v0h;
+                            if vk == 2 and not vh {
+                                let mv = self.emit_materialize(v.clone());
+                                let Val { op: mop, kind: mk, heap: mh } = mv;
+                                v = mop;
+                                vh = true;
+                            }
+                            // Free the slot's OLD owned buffer after the RHS
+                            // evaluated (the RHS may read it — `s = s + "x"`)
+                            // and before the store repoints the slot (Slice 9).
+                            if self.locals_heap[idx] {
+                                self.emit_free_slot(idx);
+                            }
+                            self.locals_heap[idx] = vh;
                             let ty = kind_ty(vk);
                             self.body = self.body
                                 + "  store "
@@ -371,14 +421,14 @@ impl Emitter {
                                 let MethodCallExpr { object, method, args: margs, span: msp } = mc;
                                 if method == "to_string" {
                                     let val = self.emit_value(object);
-                                    let Val { op, kind } = val;
-                                    self.emit_println_val(op, kind);
+                                    let Val { op, kind, heap } = val;
+                                    self.emit_println_val(op, kind, heap);
                                 }
                             }
                             other => {
                                 let val = self.emit_value(other);
-                                let Val { op, kind } = val;
-                                self.emit_println_val(op, kind);
+                                let Val { op, kind, heap } = val;
+                                self.emit_println_val(op, kind, heap);
                             }
                         }
                     }
@@ -390,7 +440,7 @@ impl Emitter {
                     for a in args {
                         let CallArg { label, mut_marker, value, span: asp } = a;
                         let v = self.emit_value(value);
-                        let Val { op, kind } = v;
+                        let Val { op, kind, heap } = v;
                         if ai > 0 {
                             alist = alist + ", ";
                         }
@@ -421,7 +471,7 @@ impl Emitter {
                 match value {
                     Some(v) => {
                         let val = self.emit_value(v);
-                        let Val { op, kind } = val;
+                        let Val { op, kind, heap } = val;
                         rv = op;
                     }
                     None => {}
@@ -442,7 +492,7 @@ impl Emitter {
                 // nested `if` for `else if`), handled by recursion.
                 let IfExpr { cond, then_block, else_branch, span } = n;
                 let c = self.emit_value(cond);
-                let Val { op: cop, kind: ck } = c;
+                let Val { op: cop, kind: ck, heap: ch } = c;
                 let lid = self.nlbl;
                 self.nlbl = self.nlbl + 1;
                 let lthen = "then" + lid.to_string();
@@ -482,7 +532,7 @@ impl Emitter {
                 self.body = self.body + "  br label %" + lhead.clone() + "\n";
                 self.body = self.body + lhead.clone() + ":\n";
                 let c = self.emit_value(cond);
-                let Val { op: cop, kind: ck } = c;
+                let Val { op: cop, kind: ck, heap: ch } = c;
                 self.body = self.body
                     + "  br i1 "
                     + cop
@@ -599,16 +649,87 @@ impl Emitter {
             + ", i64 "
             + n
             + ", 1\n";
-        Val { op: a1, kind: 2 }
+        Val { op: a1, kind: 2, heap: true }
     }
 
-    // Kind-dispatched print of an emitted value + newline (Slice 7).
-    fn emit_println_val(mut ref self, op: String, kind: i64) {
+    // Materialize a BORROWED string value (global-backed literal or an ident
+    // load) into a fresh OWNED heap copy — malloc(len) + memcpy (Slice 9).
+    // Every string BINDING owns a private buffer (the seed's String semantics:
+    // literals materialize owned Strings), so reassignment/scope-exit frees
+    // are unconditional and loop-correct; the seed's move-optimization (no
+    // copy on `let t = s`) is a later refinement, observationally identical.
+    fn emit_materialize(mut ref self, val: String) -> Val {
+        let pr = self.fresh();
+        self.body =
+            self.body + "  " + pr.clone() + " = extractvalue { ptr, i64 } " + val.clone() + ", 0\n";
+        let ln = self.fresh();
+        self.body = self.body + "  " + ln.clone() + " = extractvalue { ptr, i64 } " + val + ", 1\n";
+        let buf = self.fresh();
+        self.body =
+            self.body + "  " + buf.clone() + " = call ptr @malloc(i64 " + ln.clone() + ")\n";
+        let m = self.fresh();
+        self.body = self.body
+            + "  "
+            + m
+            + " = call ptr @memcpy(ptr "
+            + buf.clone()
+            + ", ptr "
+            + pr
+            + ", i64 "
+            + ln.clone()
+            + ")\n";
+        let a0 = self.fresh();
+        self.body = self.body
+            + "  "
+            + a0.clone()
+            + " = insertvalue { ptr, i64 } undef, ptr "
+            + buf
+            + ", 0\n";
+        let a1 = self.fresh();
+        self.body = self.body
+            + "  "
+            + a1.clone()
+            + " = insertvalue { ptr, i64 } "
+            + a0
+            + ", i64 "
+            + ln
+            + ", 1\n";
+        Val { op: a1, kind: 2, heap: true }
+    }
+
+    // Free the heap buffer a STRING VALUE owns (extract ptr, call free).
+    fn emit_free_val(mut ref self, val: String) {
+        let pr = self.fresh();
+        self.body =
+            self.body + "  " + pr.clone() + " = extractvalue { ptr, i64 } " + val + ", 0\n";
+        self.body = self.body + "  call void @free(ptr " + pr + ")\n";
+    }
+
+    // Free the heap buffer OWNED by local slot `idx` (load the aggregate,
+    // extract the pointer, free) — reassignment's old value and the scope-exit
+    // epilogue (Slice 9).
+    fn emit_free_slot(mut ref self, idx: i64) {
+        let ag = self.fresh();
+        self.body = self.body
+            + "  "
+            + ag.clone()
+            + " = load { ptr, i64 }, ptr %v"
+            + idx.to_string()
+            + ", align 8\n";
+        self.emit_free_val(ag);
+    }
+
+    // Kind-dispatched print of an emitted value + newline; frees an UNBOUND
+    // heap temp (`println("hi " + name)`) right after printing (Slice 9).
+    fn emit_println_val(mut ref self, op: String, kind: i64, heap: bool) {
         if kind == 1 {
             self.emit_println_bool(op);
         } else {
             if kind == 2 {
-                self.emit_println_strval(op);
+                self.emit_println_strval(op.clone());
+                if heap {
+                    self.emit_free_val(op);
+                }
             } else {
                 self.emit_println_int(op);
             }
@@ -686,7 +807,7 @@ impl Emitter {
         match e {
             Int(n) => {
                 let IntLit { value, suffix, span } = n;
-                Val { op: value.to_string(), kind: 0 }
+                Val { op: value.to_string(), kind: 0, heap: false }
             }
             Str(sl) => {
                 // A string literal as a VALUE (Slice 7): intern the global and
@@ -710,14 +831,14 @@ impl Emitter {
                     + ", i64 "
                     + len.to_string()
                     + ", 1\n";
-                Val { op: t1, kind: 2 }
+                Val { op: t1, kind: 2, heap: false }
             }
             Bool(n) => {
                 let BoolLit { value, span } = n;
                 if value {
-                    Val { op: "true".to_string(), kind: 1 }
+                    Val { op: "true".to_string(), kind: 1, heap: false }
                 } else {
-                    Val { op: "false".to_string(), kind: 1 }
+                    Val { op: "false".to_string(), kind: 1, heap: false }
                 }
             }
             Ident(ie) => {
@@ -726,7 +847,7 @@ impl Emitter {
                 let IdentExpr { name, span } = ie;
                 let idx = self.local_slot(name);
                 if idx < 0 {
-                    return Val { op: "0".to_string(), kind: 0 };
+                    return Val { op: "0".to_string(), kind: 0, heap: false };
                 }
                 let k = self.locals_kind[idx];
                 let ty = kind_ty(k);
@@ -739,13 +860,13 @@ impl Emitter {
                     + ", ptr %v"
                     + idx.to_string()
                     + ", align 8\n";
-                Val { op: r, kind: k }
+                Val { op: r, kind: k, heap: false }
             }
             Unary(u) => {
                 // `not b` (Slice 4): xor the i1 with true.
                 let UnaryExpr { op, operand, span } = u;
                 let inner = self.emit_value(operand);
-                let Val { op: iop, kind: ik } = inner;
+                let Val { op: iop, kind: ik, heap: ih } = inner;
                 let is_not = match op {
                     Not => true,
                     _ => false,
@@ -754,16 +875,16 @@ impl Emitter {
                     let r = self.fresh();
                     self.body =
                         self.body + "  " + r.clone() + " = xor i1 " + iop + ", true\n";
-                    return Val { op: r, kind: 1 };
+                    return Val { op: r, kind: 1, heap: false };
                 }
-                Val { op: iop, kind: ik }
+                Val { op: iop, kind: ik, heap: false }
             }
             Binary(b) => {
                 let BinaryExpr { op, left, right, span } = b;
                 let lv = self.emit_value(left);
                 let rv = self.emit_value(right);
-                let Val { op: lop, kind: lk } = lv;
-                let Val { op: rop, kind: rk } = rv;
+                let Val { op: lop, kind: lk, heap: lh } = lv;
+                let Val { op: rop, kind: rk, heap: rh } = rv;
                 // ONE match on `op` (BinOp is not Copy) yields both the class
                 // and the instruction text: comparison → `icmp <cc>` on i64 → i1;
                 // logical → `and`/`or` on i1 (non-short-circuit — output-
@@ -774,11 +895,19 @@ impl Emitter {
                 if kind == 0 and text == "add" and lk == 2 and rk == 2 {
                     // String CONCATENATION (Slice 8): malloc(l1+l2), memcpy
                     // both halves, build the fresh { ptr, i64 } aggregate.
-                    // Freeing is deferred to the drop slice — every concat
-                    // result currently leaks until process exit (documented;
-                    // the corpus mains are tiny and the oracle checks
-                    // stdout+exit only).
-                    return self.emit_concat(lop, rop);
+                    // Concat CONSUMES its operands (Slice 9): a heap-owned
+                    // operand (an unbound temp — a nested concat like
+                    // `"a" + "b" + "c"`) is freed right after the copies;
+                    // binding-owned strings arrive as borrows (heap=false)
+                    // and are freed by their binder.
+                    let out = self.emit_concat(lop.clone(), rop.clone());
+                    if lh {
+                        self.emit_free_val(lop);
+                    }
+                    if rh {
+                        self.emit_free_val(rop);
+                    }
+                    return out;
                 }
                 let r = self.fresh();
                 if kind == 1 {
@@ -792,7 +921,7 @@ impl Emitter {
                         + ", "
                         + rop
                         + "\n";
-                    return Val { op: r, kind: 1 };
+                    return Val { op: r, kind: 1, heap: false };
                 }
                 if kind == 2 {
                     self.body = self.body
@@ -805,11 +934,11 @@ impl Emitter {
                         + ", "
                         + rop
                         + "\n";
-                    return Val { op: r, kind: 1 };
+                    return Val { op: r, kind: 1, heap: false };
                 }
                 self.body =
                     self.body + "  " + r.clone() + " = " + text + " i64 " + lop + ", " + rop + "\n";
-                Val { op: r, kind: 0 }
+                Val { op: r, kind: 0, heap: false }
             }
             Call(cn) => {
                 // A user-function call in VALUE position (Slice 6).
@@ -827,7 +956,7 @@ impl Emitter {
                 for a in args {
                     let CallArg { label, mut_marker, value, span: asp } = a;
                     let v = self.emit_value(value);
-                    let Val { op, kind } = v;
+                    let Val { op, kind, heap } = v;
                     if ai > 0 {
                         alist = alist + ", ";
                     }
@@ -835,7 +964,7 @@ impl Emitter {
                     ai = ai + 1;
                 }
                 if cname == "" {
-                    return Val { op: "0".to_string(), kind: 0 };
+                    return Val { op: "0".to_string(), kind: 0, heap: false };
                 }
                 let r = self.fresh();
                 self.body = self.body
@@ -846,7 +975,7 @@ impl Emitter {
                     + "("
                     + alist
                     + ")\n";
-                Val { op: r, kind: 0 }
+                Val { op: r, kind: 0, heap: false }
             }
             If(n) => {
                 // `if` in VALUE position (Slice 6): route each branch's tail
@@ -856,7 +985,7 @@ impl Emitter {
                 let slot = self.fresh();
                 self.body = self.body + "  " + slot.clone() + " = alloca i64, align 8\n";
                 let c = self.emit_value(cond);
-                let Val { op: cop, kind: ck } = c;
+                let Val { op: cop, kind: ck, heap: ch } = c;
                 let lid = self.nlbl;
                 self.nlbl = self.nlbl + 1;
                 let lthen = "vthen" + lid.to_string();
@@ -872,7 +1001,7 @@ impl Emitter {
                     + "\n";
                 self.body = self.body + lthen + ":\n";
                 let tv = self.emit_block_value(then_block);
-                let Val { op: top, kind: tk } = tv;
+                let Val { op: top, kind: tk, heap: th } = tv;
                 self.body =
                     self.body + "  store i64 " + top + ", ptr " + slot.clone() + ", align 8\n";
                 self.body = self.body + "  br label %" + lend.clone() + "\n";
@@ -880,7 +1009,7 @@ impl Emitter {
                 match else_branch {
                     Some(eb) => {
                         let ev = self.emit_value(eb);
-                        let Val { op: eop, kind: ek } = ev;
+                        let Val { op: eop, kind: ek, heap: eh } = ev;
                         self.body = self.body
                             + "  store i64 "
                             + eop
@@ -898,10 +1027,10 @@ impl Emitter {
                 let r = self.fresh();
                 self.body =
                     self.body + "  " + r.clone() + " = load i64, ptr " + slot + ", align 8\n";
-                Val { op: r, kind: 0 }
+                Val { op: r, kind: 0, heap: false }
             }
             Blk(b) => self.emit_block_value(b),
-            _ => Val { op: "0".to_string(), kind: 0 },
+            _ => Val { op: "0".to_string(), kind: 0, heap: false },
         }
     }
 

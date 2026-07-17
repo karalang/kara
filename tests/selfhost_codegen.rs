@@ -232,5 +232,61 @@ fn selfhost_codegen_matches_seed_run() {
             kara_code, seed_code,
             "exit-code mismatch at corpus[{i}] ({src:?}): Kāra {kara_code} vs seed {seed_code}"
         );
+        leak_audit(i, src, ir);
     }
+}
+
+/// Memory audit for the emitted IR (Slice 9 — drop insertion): compile the
+/// block with clang and run it under valgrind, failing on any leak or invalid
+/// free. Skips silently when clang or valgrind is unavailable (macOS local
+/// runs); the Linux CI leg is the authoritative gate, matching the
+/// memory-sanitizer convention. The audit exists because the first drop
+/// implementation leaked in loops while passing every stdout check — output
+/// parity alone cannot see a leak.
+fn leak_audit(i: usize, src: &str, ir: &str) {
+    use std::sync::OnceLock;
+    static TOOLS: OnceLock<bool> = OnceLock::new();
+    let have = *TOOLS.get_or_init(|| {
+        let ok = |c: &str| {
+            Command::new(c)
+                .arg("--version")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        let both = ok("clang") && ok("valgrind");
+        if !both {
+            eprintln!("selfhost_codegen: clang/valgrind unavailable — leak audit skipped");
+        }
+        both
+    });
+    if !have {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("selfhost_cg_leak_{i}_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ll = dir.join("prog.ll");
+    let bin = dir.join("prog");
+    std::fs::write(&ll, ir).unwrap();
+    let cc = Command::new("clang")
+        .arg(&ll)
+        .arg("-o")
+        .arg(&bin)
+        .output()
+        .unwrap();
+    assert!(
+        cc.status.success(),
+        "clang failed on corpus[{i}] ({src:?}):\n{}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+    let vg = Command::new("valgrind")
+        .args(["--leak-check=full", "--error-exitcode=99", "--quiet"])
+        .arg(&bin)
+        .output()
+        .unwrap();
+    let vg_err = String::from_utf8_lossy(&vg.stderr);
+    assert!(
+        vg.status.code() != Some(99) && !vg_err.contains("definitely lost"),
+        "valgrind flagged corpus[{i}] ({src:?}):\n{vg_err}\n--- emitted IR ---\n{ir}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
