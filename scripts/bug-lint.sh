@@ -26,6 +26,10 @@ SURF = {"codegen","typecheck","interp","ownership","effect","lexer","parser","ru
 CLASS = {"miscompile","double-free","use-after-free","leak","crash","codegen-gap",
          "missing-feature","false-positive","soundness","run-vs-build",
          "diagnostics","perf","other"}
+# source = family[:slug] — the family token is a closed set (canonicalized
+# 2026-07-17); free-text provenance goes in `detail` as a SOURCE NOTE.
+FAM = {"kata","kata-gap","kata-gap-audit","selfhost","dogfood","probe","spike",
+       "internal","followup","test-infra","example"}
 seen = {}
 rows = []
 for i, line in enumerate(pathlib.Path(ledger).read_text().splitlines(), 1):
@@ -55,6 +59,8 @@ for i, line in enumerate(pathlib.Path(ledger).read_text().splitlines(), 1):
         errs.append(f"{bid}: bad surface '{r.get('surface')}'")
     if r.get("class") not in CLASS:
         errs.append(f"{bid}: bad class '{r.get('class')}' (allowed: {sorted(CLASS)})")
+    if r.get("source","").split(":")[0] not in FAM:
+        errs.append(f"{bid}: bad source family '{r.get('source','').split(':')[0]}' (allowed: {sorted(FAM)})")
     if r.get("status")=="fixed" and not r.get("fix"):
         warns.append(f"{bid}: fixed but no fix SHA")
 

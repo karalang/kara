@@ -40,7 +40,7 @@ that block by hand — edit the ledger and run `--inject` (see Tooling).
 |---|---|---|
 | `id` | `B-YYYY-MM-DD-N` | primary key, unique |
 | `date` | `YYYY-MM-DD` | surfaced date = the curve's x-axis |
-| `source` | `kata:<num>` · `selfhost:<comp>` · `dogfood:<name>` · `internal` | who/what surfaced it |
+| `source` | `family[:slug]` — family one of kata · kata-gap · kata-gap-audit · selfhost · dogfood · probe · spike · internal · followup · test-infra · example (e.g. `kata:42`, `selfhost:typechecker`, `followup:B-…`) | who/what surfaced it; free-text provenance goes in `detail` as a SOURCE NOTE |
 | `surface` | codegen · typecheck · interp · ownership · effect · lexer · parser · runtime · resolver · cli · autopar · other — or a `+`-joined compound (`typecheck+codegen`) | which compiler phase(s) the defect was in; parenthetical detail goes in `detail`, not here |
 | `class` | miscompile · double-free · use-after-free · leak · crash · codegen-gap · missing-feature · false-positive · soundness · run-vs-build · diagnostics · perf · other | failure mode — ONE primary class per bug (canonicalized 2026-07-17; the old free-text/port-triage values were migrated); nuance goes in `detail` |
 | `severity` | high · medium · low | `high` = soundness / miscompile / bootstrap-critical |
