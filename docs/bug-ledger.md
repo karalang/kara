@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 143 | 0 |
-| leak | 80 | 0 |
+| leak | 81 | 0 |
 | codegen-gap | 59 | 0 |
 | double-free | 59 | 0 |
 | missing-feature | 46 | 1 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 369 | 1 |
+| codegen | 370 | 1 |
 | typecheck | 61 | 2 |
 | interp | 48 | 0 |
 | ownership | 23 | 0 |
@@ -123,7 +123,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **523 surfaced · 2 open · 517 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **524 surfaced · 2 open · 518 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **523 surfaced 
 | B-2026-07-13-5 | 2026-07-13 | codegen+typecheck | medium | Three composable Tensor limitations block idiomatic numerical-stdlib .kara over generic-dim tensors: (A) a tensor reduction/transform on a NON-IDENTIFIER receiver (method chain, e.g. `a.zip_with(b, f).sum()`) fails codegen with 'no handler for method sum on non-identifier receiver' — try_compile_tensor_reduce (tensor.rs:2794) only matches Identifier/SelfValue receivers, returning None for a MethodCall receiver so dispatch falls through; (B) a generic shape parameter `D` (declared `fn f[D](t: Tensor[f32,[D]])`) is usable in the SIGNATURE but NOT in a function-BODY type annotation — `let p: Tensor[f32,[D]] = ...` fails typecheck with "const expression: 'D' is not a known const"; (C) a `ref Tensor[f32,[D]]` PARAM passed to a tensor method taking `other: ref Tensor` (zip_with) fails typecheck with 'expected Tensor, found ref Tensor'. Each is loud (compile error / --interp hint), interp-correct where reachable. | — |
 | B-2026-07-17-12 | 2026-07-17 | typecheck | medium | Unknown methods on non-exhaustive prelude types (Vec/String/Map/Set/...) silently type as Type::Error, which unifies with ANYTHING: `v.some_typo()` passes karac check, and pre-B-2026-07-16-14 even `let x: bool = v.sum()` checked clean. EXHAUSTIVE_PRELUDE (expr_method_call.rs ~5400) covers only Option/Result, so every other built-in receiver gets the silent fall-through — the check/execution contract (the AI-first wedge: check-clean must run) is open on exactly the receivers LLM authors touch most. | none |
 
-### Fixed (517)
+### Fixed (518)
 
-<details><summary>517 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>518 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -655,6 +655,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **523 surfaced 
 | B-2026-07-17-13 | codegen | low | A narrow-UNSIGNED value carried through an Option payload prints SIGNED: `Option[u8]` holding 200u8, unwrapped and printed, shows -56 (200 as i8) und… | 8d21349 |
 | B-2026-07-17-15 | codegen+autopar | high | Two annotated opaque-handle-new bindings (`let t: Interner = Interner.new()` / `let a: Arena[T] = Arena.new()`) in the same fn are auto-parallelized… | e01b609 |
 | B-2026-07-17-16 | ownership | low | Spurious RC fallback on the natural 'build a nested Vec row-by-row' shape: `while … { let mut row = Vec.new(); while … { row.push(x) } outer.push(row… | 4938f2c |
+| B-2026-07-17-17 | codegen | medium | A tensor VARIABLE reassignment (`w = w - g` / `w = w + d`, where `w: mut Tensor`) never freed the displaced old block — one `[rank][dims][data]` leak… | fbb824f |
 
 </details>
 
