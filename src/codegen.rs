@@ -1879,6 +1879,16 @@ pub(super) struct Codegen<'ctx> {
     /// elision (kata #62). A `Vec` (not a map) because the key is a `BoundTerm`
     /// and there are only a handful of pins per function.
     pub(crate) vec_len_pins: Vec<(bce_length_pin::BoundTerm, String)>,
+    /// Descending-loop bounds-check skips for the current function
+    /// (bce_length_pin.rs, B-2026-07-17-1): each maps an inner descending
+    /// loop's condition `SpanKey` to the `(idx_var, vec_vars)` whose upper
+    /// bound check that loop's body may skip (`idx_var < vec_var.len()` proven
+    /// transitively via a length pin + the enclosing counter's bound). Consumed
+    /// in `compile_while`, which pushes the matching `UpperBound` facts onto
+    /// `asserted_index_bounds` for the inner loop body. Populated at
+    /// `compile_function` (whole-body analysis, so it is stable across the
+    /// function).
+    pub(crate) descending_skips: HashMap<crate::resolver::SpanKey, bce_length_pin::DescendingSkip>,
     /// Stack of `(lo, hi)` variable-name pairs from dominating strict
     /// `while lo < hi` guards (innermost last). When a `let mid = lo +
     /// (hi - lo) / 2` (or `(lo + hi) / 2`) binding is compiled under such
@@ -6365,6 +6375,7 @@ impl<'ctx> Codegen<'ctx> {
             len_alias: HashMap::new(),
             asserted_index_bounds: Vec::new(),
             pending_vec_len_pins: HashMap::new(),
+            descending_skips: HashMap::new(),
             vec_len_pins: Vec::new(),
             binsearch_guard_stack: Vec::new(),
             binsearch_assume_emitted: false,

@@ -28855,4 +28855,42 @@ fn main() {
             "direct_vec_iterator_terminals_and_string_join_no_leak",
         );
     }
+
+    #[test]
+    fn asan_descending_loop_bce_skip_in_bounds() {
+        // B-2026-07-17-1: the descending-loop bounds-check skip
+        // (bce_length_pin.rs `compute_descending_skips`) elides the upper-half
+        // check on `row[k]` / `row[k-1]` inside `while k >= 1 { .. k = k - 1 }`,
+        // where `k` inits to `i - 1` under an enclosing `while i <= n` and `row`
+        // is pinned to `n + 1` by an inclusive fill. If the transitive
+        // `k <= i-1 <= n-1 < n+1 == row.len()` proof were wrong, an eliminated
+        // check would be an out-of-bounds read/write ASAN catches here. The
+        // canonical LeetCode #119 in-place rolling Pascal row, run to `n = 30`.
+        assert_clean_asan_run(
+            r#"
+fn get_row(row_index: i64) -> Vec[i64] {
+    let mut row: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j <= row_index { row.push(1i64); j = j + 1i64; }
+    let mut i = 2i64;
+    while i <= row_index {
+        let mut k = i - 1i64;
+        while k >= 1i64 { row[k] = row[k] + row[k - 1i64]; k = k - 1i64; }
+        i = i + 1i64;
+    }
+    row
+}
+fn main() {
+    let row = get_row(30i64);
+    let mut sum = 0i64;
+    let mut j = 0i64;
+    while j < row.len() { sum = sum + row[j]; j = j + 1i64; }
+    println(sum);
+}
+"#,
+            // Row 30 of Pascal's triangle sums to 2^30 = 1073741824.
+            &["1073741824"],
+            "descending_loop_bce_skip_in_bounds",
+        );
+    }
 }

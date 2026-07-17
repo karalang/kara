@@ -1362,8 +1362,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // pushed as an asserted fact. `compile_vec_index` consults the stack
         // and drops the matching half of its runtime bounds check.
         let pushed_bounds = self.collect_asserted_bounds_from_guard(condition);
-        let pushed_count = pushed_bounds.len();
+        let mut pushed_count = pushed_bounds.len();
         self.asserted_index_bounds.extend(pushed_bounds);
+        // Descending-loop skip (bce_length_pin.rs, B-2026-07-17-1): if this is a
+        // recognised inner descending loop, its index is transitively proven
+        // `< vec.len()` (length pin + enclosing counter bound). Push the
+        // UpperBound facts so `emit_split_bounds_check` drops the upper half;
+        // the lower half stays for LLVM to fold from the `k >= LO` guard.
+        let cond_key = crate::resolver::SpanKey::from_span(&condition.span);
+        if let Some(skip) = self.descending_skips.get(&cond_key).cloned() {
+            for vec_var in &skip.vec_vars {
+                self.asserted_index_bounds
+                    .push(super::state::AssertedIndexBound::UpperBound {
+                        idx_var: skip.idx_var.clone(),
+                        vec_var: vec_var.clone(),
+                    });
+                pushed_count += 1;
+            }
+        }
         // Monotone facts: `x >= / <= its preheader value`, consumed by
         // LLVM's range passes to fold checks the source guard can't
         // express (conditionally-updated write heads / cursors).

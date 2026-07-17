@@ -23283,6 +23283,42 @@ fn second() -> i64 {
     }
 
     #[test]
+    fn test_ir_descending_loop_bce_skip_wiring() {
+        // B-2026-07-17-1: the descending-loop skip proves `k < row.len()` for
+        // the in-place `row[k] = row[k] + row[k-1]` update, so codegen emits a
+        // LOWER-only bounds check (the signed `< 0` half, which LLVM folds from
+        // the `k >= 1` guard) — NOT the combined unsigned check. The combined
+        // path produces a `v.st.ok` block; the lower-only path produces
+        // `v.st.oob.neg` / `v.st.lower.ok`. Assert the wiring pushed the
+        // UpperBound (skip fired): the store keeps only its lower half.
+        let ir = ir_for(
+            r#"
+fn get_row(row_index: i64) -> Vec[i64] {
+    let mut row: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j <= row_index { row.push(1i64); j = j + 1i64; }
+    let mut i = 2i64;
+    while i <= row_index {
+        let mut k = i - 1i64;
+        while k >= 1i64 { row[k] = row[k] + row[k - 1i64]; k = k - 1i64; }
+        i = i + 1i64;
+    }
+    row
+}
+"#,
+        );
+        assert!(
+            ir.contains("v.st.oob.neg"),
+            "expected the descending store to keep its lower-half check, got:\n{ir}"
+        );
+        assert!(
+            !ir.contains("v.st.ok"),
+            "expected NO combined store bounds check (skip should elide the \
+             upper half), but found a `v.st.ok` block:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_array_index_store() {
         let ir = ir_for(
             r#"

@@ -57,7 +57,7 @@
 
 use crate::ast::*;
 use crate::resolver::SpanKey;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A pure-arithmetic loop bound, normalised to a span-free canonical form so the
 /// fill loop's bound and a later guard's bound compare structurally even across
@@ -1551,6 +1551,758 @@ fn stmt_all<F: Fn(&Expr) -> bool + Copy>(stmt: &Stmt, pred: F) -> bool {
     }
 }
 
+// ===================================================================
+// Descending-loop bounds-check skip (B-2026-07-17-1)
+// ===================================================================
+//
+// The ascending length-pin path above elides the upper-half check on
+// `v[c]` when a dominating guard `while c < BOUND` proves `c < v.len()`
+// (`BOUND == v.len()`). It does NOT reach the *rolling-1D-DP* idiom where
+// the inner loop walks an index DOWNWARD:
+//
+// ```text
+// let mut row = Vec.new();
+// let mut j = 0; while j <= n { row.push(1); j = j + 1 }   // len == n + 1
+// let mut i = 2;
+// while i <= n {                       // enclosing counter: i <= n
+//     let mut k = i - 1;               // k init = i - 1
+//     while k >= 1 {                   // descending: k only decreases
+//         row[k] = row[k] + row[k-1];  // <-- per-iteration bounds check
+//         k = k - 1;
+//     }
+//     i = i + 1;
+// }
+// ```
+//
+// The descending guard `k >= 1` yields a LOWER bound only, so the upper
+// half survives — a `cmp;ja` per iteration that LLVM cannot fold (it needs
+// the RELATIONAL fact `k <= i-1 <= n-1 < len`, which its interval passes
+// don't derive; confirmed empirically — an explicit `assume(k_init < len)`
+// does not fold it either). Measured cost: ~1.20x vs equal-safety Rust on
+// LeetCode #119 (bounds check is the whole gap).
+//
+// This pass recognises the shape and records, per inner descending loop, a
+// **skip** telling codegen to push `UpperBound { idx_var: k, vec_var: v }`
+// for that loop's body — routing through the SAME `asserted_index_bounds`
+// channel the ascending path uses, so `emit_split_bounds_check` drops the
+// upper half. The lower half (`k < 0`) is deliberately left in the IR;
+// LLVM folds it trivially from the dominating `k >= LO` (LO >= 0) guard, so
+// only the expensive check disappears.
+//
+// **Soundness.** The pushed fact `k < v.len()` must hold at every eval of
+// `v[k]` in the body. The proof, entirely fail-closed:
+//   1. A counted fill pins `v.len() >= B_pin` (`vec_length_lower_bounds`,
+//      the same whole-function invariance gates as `compute_vec_length_pins`
+//      plus the inclusive `<= BOUND` / `..=BOUND` forms → `B_pin == BOUND+1`).
+//   2. `k` is monotone NON-INCREASING in the body: its ONLY writes are
+//      top-level `k = k - C` / `k -= C` (C a positive int literal). So
+//      `k <= k_init` holds at every point, regardless of ordering.
+//   3. `k_init == E(i)` for a linear `E` non-decreasing in the enclosing
+//      counter `i` (coefficient of `i` >= 0), and `i` is UNWRITTEN from the
+//      enclosing loop's body-entry to the `k` init, so the enclosing guard
+//      `i <= U` (or `i < U`) gives `i <= u_max` there.
+//   4. The linear identity `B_pin - E[i := u_max] >= 1` holds — i.e.
+//      `k_init <= E(u_max) = B_pin - (>=1) < B_pin <= v.len()`. Because the
+//      subtraction cancels to a constant, every identifier of `E[i:=u_max]`
+//      also appears in `B_pin` (identical coefficients), and `B_pin`'s
+//      identifiers are proven invariant by (1) — so the relation holds at
+//      runtime, not just symbolically. Overflow in evaluating `E` traps
+//      (AOT), so a wrapped `k_init` never reaches the index (same footing
+//      as the monotone-assume tier).
+// A missed shape only keeps a bounds check; a wrongly-emitted skip would be
+// an OOB read, so every recogniser fails closed on anything it does not
+// fully understand.
+
+/// A recognised descending-loop skip, keyed (in the returned map) by the
+/// inner descending loop's condition span. Codegen pushes an
+/// `UpperBound { idx_var, vec_var }` for each `vec_var` while compiling that
+/// loop's body.
+#[derive(Debug, Clone)]
+pub(crate) struct DescendingSkip {
+    pub idx_var: String,
+    pub vec_vars: Vec<String>,
+}
+
+/// Analyse a function body and return the descending-loop skips it proves,
+/// keyed by the inner loop's condition `SpanKey`.
+pub(crate) fn compute_descending_skips(body: &Block) -> HashMap<SpanKey, DescendingSkip> {
+    let lbs = vec_length_lower_bounds(body);
+    let mut out = HashMap::new();
+    if lbs.is_empty() {
+        return out;
+    }
+    // Every loop is a candidate ENCLOSING loop; `for_each_block` visits the
+    // block that lexically contains it, so each loop is seen as a statement of
+    // its parent block.
+    for_each_block(body, &mut |block| {
+        scan_enclosing_loops(block, &lbs, &mut out)
+    });
+    out
+}
+
+/// For each direct loop statement in `block`, try to match it as the
+/// enclosing loop of a descending-index rolling-DP inner loop.
+fn scan_enclosing_loops(
+    block: &Block,
+    lbs: &HashMap<String, BoundTerm>,
+    out: &mut HashMap<SpanKey, DescendingSkip>,
+) {
+    for stmt in &block.stmts {
+        let StmtKind::Expr(e) = &stmt.kind else {
+            continue;
+        };
+        let Some((counter, u_max, enc_body)) = as_enclosing_loop(e) else {
+            continue;
+        };
+        analyze_enclosing_body(&counter, &u_max, enc_body, lbs, out);
+    }
+}
+
+/// Scan an enclosing loop body for inner descending loops that qualify.
+fn analyze_enclosing_body(
+    counter: &str,
+    u_max: &BoundTerm,
+    enc_body: &Block,
+    lbs: &HashMap<String, BoundTerm>,
+    out: &mut HashMap<SpanKey, DescendingSkip>,
+) {
+    let stmts = &enc_body.stmts;
+    for (pos, stmt) in stmts.iter().enumerate() {
+        let StmtKind::Expr(e) = &stmt.kind else {
+            continue;
+        };
+        let ExprKind::While {
+            condition, body, ..
+        } = &e.kind
+        else {
+            continue;
+        };
+        let Some(k) = as_descending_guard(condition) else {
+            continue;
+        };
+        if k == counter {
+            continue;
+        }
+        // The enclosing counter must be UNWRITTEN before this inner loop, so
+        // the enclosing guard's `counter <= u_max` still holds at the `k` init.
+        if stmts[..pos].iter().any(|s| stmt_writes_ident(s, counter)) {
+            continue;
+        }
+        // `k` must be monotone non-increasing inside the inner loop.
+        if !only_monotone_decrement(body, &k) {
+            continue;
+        }
+        // `k`'s init must be a linear expression, its only pre-loop definition.
+        let Some(e_bt) = sole_scalar_init(&stmts[..pos], &k) else {
+            continue;
+        };
+        // Each pinned Vec indexed at `k` in the body whose length-lower-bound
+        // beats the max init value gets its upper check skipped.
+        let mut vec_vars: Vec<String> = lbs
+            .iter()
+            .filter(|(v, b_pin)| {
+                block_indexes_vec_at(body, v, &k) && init_below_bound(&e_bt, counter, u_max, b_pin)
+            })
+            .map(|(v, _)| v.clone())
+            .collect();
+        if vec_vars.is_empty() {
+            continue;
+        }
+        vec_vars.sort();
+        out.insert(
+            SpanKey::from_span(&condition.span),
+            DescendingSkip {
+                idx_var: k,
+                vec_vars,
+            },
+        );
+    }
+}
+
+/// Map each counted-fill Vec to a length LOWER bound `v.len() >= BOUND`.
+/// Mirrors `compute_vec_length_pins`'s soundness gates but is keyed by Vec
+/// name and additionally recognises the INCLUSIVE fill forms
+/// (`while j <= BOUND` / `for i in 0..=BOUND` → `BOUND + 1`) that the
+/// ascending pin path deliberately omits. Kept separate so the ascending
+/// path stays byte-identical.
+fn vec_length_lower_bounds(body: &Block) -> HashMap<String, BoundTerm> {
+    let whole = region_bindings(&body.stmts, &body.final_expr);
+    let mut out = HashMap::new();
+    for_each_block(body, &mut |block| {
+        analyze_block_lbs(block, &whole, &mut out)
+    });
+    out
+}
+
+fn analyze_block_lbs(block: &Block, whole: &RegionBindings, out: &mut HashMap<String, BoundTerm>) {
+    let stmts = &block.stmts;
+    for (li, stmt) in stmts.iter().enumerate() {
+        let Some(v) = empty_vec_binding(stmt) else {
+            continue;
+        };
+        if whole.rebound.get(&v) != Some(&1) {
+            continue;
+        }
+        let Some(fill) = find_counted_fill_lb(stmts, li, &v) else {
+            continue;
+        };
+        let Some(bound) = normalize_bound(&fill.bound) else {
+            continue;
+        };
+        if let Some(iv) = &fill.counter {
+            if !counter_is_zero_before(stmts, fill.fi, iv) {
+                continue;
+            }
+        }
+        let after = &stmts[fill.fi + 1..];
+        if !vec_len_stable_after(after, &block.final_expr, &v) {
+            continue;
+        }
+        let mut idents = Vec::new();
+        bound_idents(&bound, &mut idents);
+        if idents
+            .iter()
+            .any(|b| !var_unwritten_after(after, &block.final_expr, b))
+        {
+            continue;
+        }
+        let region = region_bindings(after, &block.final_expr);
+        if region.is_rebound(&v)
+            || idents
+                .iter()
+                .any(|b| region.is_rebound(b) || region.assigned.contains(b))
+        {
+            continue;
+        }
+        // Inclusive fill runs one extra iteration, so `len >= BOUND + 1`.
+        let lb = if fill.inclusive {
+            BoundTerm::Bin(BoundOp::Add, Box::new(bound), Box::new(BoundTerm::Int(1)))
+        } else {
+            bound
+        };
+        out.insert(v, lb);
+    }
+}
+
+/// Like `vec_readonly_after`, but additionally tolerates a bare-`v` TAIL
+/// expression (returning the Vec). A tail move-out happens after every index
+/// site and leaves the length unchanged, and a post-move index would not
+/// type-check, so `len >= B_pin` still holds wherever `v[..]` is read/written.
+/// The ascending pin path keeps the stricter `vec_readonly_after` (it never
+/// needs to pin a returned Vec), so this relaxation is local to the
+/// descending analysis.
+fn vec_len_stable_after(stmts: &[Stmt], final_expr: &Option<Box<Expr>>, v: &str) -> bool {
+    stmts.iter().all(|s| stmt_vec_readonly(s, v))
+        && match final_expr.as_deref() {
+            None => true,
+            Some(e) => is_ident_expr(e, v) || expr_vec_readonly(e, v),
+        }
+}
+
+/// One recognised counted fill for the lower-bound map (all four shapes).
+struct FillLB {
+    fi: usize,
+    bound: Expr,
+    counter: Option<String>,
+    inclusive: bool,
+}
+
+/// Like `find_exact_fill_loop`, but also matches the inclusive `while j <=
+/// BOUND` and `for i in 0..=BOUND` forms and reports which was found.
+fn find_counted_fill_lb(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<FillLB> {
+    for (off, stmt) in stmts[let_idx + 1..].iter().enumerate() {
+        let fi = let_idx + 1 + off;
+        if let StmtKind::Expr(e) = &stmt.kind {
+            if let ExprKind::While {
+                condition, body, ..
+            } = &e.kind
+            {
+                if let Some((iv, bound)) = as_strict_lt(condition) {
+                    if iv != v && while_fill_body_ok(body, v, &iv, bound) {
+                        return Some(FillLB {
+                            fi,
+                            bound: bound.clone(),
+                            counter: Some(iv),
+                            inclusive: false,
+                        });
+                    }
+                }
+                if let Some((iv, bound)) = as_le(condition) {
+                    if iv != v && while_fill_body_ok(body, v, &iv, bound) {
+                        return Some(FillLB {
+                            fi,
+                            bound: bound.clone(),
+                            counter: Some(iv),
+                            inclusive: true,
+                        });
+                    }
+                }
+                if block_mentions_ident(body, v) || expr_mentions_ident(condition, v) {
+                    return None;
+                }
+                continue;
+            }
+            if let ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } = &e.kind
+            {
+                if let Some((bound, inclusive)) = for_zero_range_end_lb(pattern, iterable, v) {
+                    if for_fill_body_ok(body, v, bound) {
+                        return Some(FillLB {
+                            fi,
+                            bound: bound.clone(),
+                            counter: None,
+                            inclusive,
+                        });
+                    }
+                }
+                if block_mentions_ident(body, v) || expr_mentions_ident(iterable, v) {
+                    return None;
+                }
+                continue;
+            }
+        }
+        if let StmtKind::Expr(e) = &stmt.kind {
+            if is_push_to(e, v) {
+                continue;
+            }
+        }
+        if stmt_mentions_ident(stmt, v) {
+            return None;
+        }
+    }
+    None
+}
+
+/// `cond` as `(iv, &BOUND)` for an inclusive `iv <= BOUND` — surface
+/// `Binary(LtEq)` or trait-lowered `Call { Path([ty,"le"]), [iv, BOUND] }`.
+fn as_le(cond: &Expr) -> Option<(String, &Expr)> {
+    match &cond.kind {
+        ExprKind::Binary {
+            op: BinOp::LtEq,
+            left,
+            right,
+        } => Some((ident(left)?, right)),
+        ExprKind::Call { callee, args } if args.len() == 2 => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() == 2 && segments[1] == "le" {
+                Some((ident(&args[0].value)?, &args[1].value))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// `for I in 0..BOUND` / `0..=BOUND` (start `0` or omitted): `(&BOUND,
+/// inclusive)` when the loop var is a plain binding distinct from `v`.
+fn for_zero_range_end_lb<'a>(
+    pattern: &Pattern,
+    iterable: &'a Expr,
+    v: &str,
+) -> Option<(&'a Expr, bool)> {
+    let PatternKind::Binding(i) = &pattern.kind else {
+        return None;
+    };
+    if i == v {
+        return None;
+    }
+    let ExprKind::Range {
+        start,
+        end,
+        inclusive,
+    } = &iterable.kind
+    else {
+        return None;
+    };
+    let start_zero = matches!(
+        start.as_deref().map(|e| &e.kind),
+        None | Some(ExprKind::Integer(0, _))
+    );
+    if !start_zero {
+        return None;
+    }
+    Some((end.as_deref()?, *inclusive))
+}
+
+/// An enclosing loop whose counter has an upper bound: `(counter, u_max,
+/// body)` where `u_max` is the counter's MAX value in the body as a
+/// `BoundTerm` (`U` for `<= U` / `..=U`, `U - 1` for `< U` / `..U`).
+fn as_enclosing_loop(e: &Expr) -> Option<(String, BoundTerm, &Block)> {
+    match &e.kind {
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            let (counter, upper, inclusive) = as_counter_upper(condition)?;
+            let u_bt = normalize_bound(upper)?;
+            Some((counter, dec_if_exclusive(u_bt, inclusive), body))
+        }
+        ExprKind::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            let PatternKind::Binding(i) = &pattern.kind else {
+                return None;
+            };
+            let ExprKind::Range {
+                end: Some(end),
+                inclusive,
+                ..
+            } = &iterable.kind
+            else {
+                return None;
+            };
+            let u_bt = normalize_bound(end)?;
+            Some((i.clone(), dec_if_exclusive(u_bt, *inclusive), body))
+        }
+        _ => None,
+    }
+}
+
+/// `u_max` for an inclusive bound is `U`; for an exclusive bound it is
+/// `U - 1` (the counter never reaches `U`).
+fn dec_if_exclusive(u: BoundTerm, inclusive: bool) -> BoundTerm {
+    if inclusive {
+        u
+    } else {
+        BoundTerm::Bin(BoundOp::Sub, Box::new(u), Box::new(BoundTerm::Int(1)))
+    }
+}
+
+/// A guard `counter <cmp> U`: `(counter, &U, inclusive)`. Matches `<=`/`<`
+/// in surface `Binary` and trait-lowered `Call` forms.
+fn as_counter_upper(cond: &Expr) -> Option<(String, &Expr, bool)> {
+    if let Some((iv, u)) = as_le(cond) {
+        return Some((iv, u, true));
+    }
+    if let Some((iv, u)) = as_strict_lt(cond) {
+        return Some((iv, u, false));
+    }
+    None
+}
+
+/// A descending guard `k >= LO` / `k > LO` → `Some(k)`. `LO` is unconstrained
+/// (the lower half of the check is left for LLVM to fold from this guard).
+fn as_descending_guard(cond: &Expr) -> Option<String> {
+    match &cond.kind {
+        ExprKind::Binary {
+            op: BinOp::GtEq | BinOp::Gt,
+            left,
+            ..
+        } => ident(left),
+        ExprKind::Call { callee, args } if args.len() == 2 => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() == 2 && matches!(segments[1].as_str(), "ge" | "gt") {
+                ident(&args[0].value)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Every write to `k` in `body` is a top-level `k = k - C` / `k -= C` (C a
+/// positive int literal), and at least one such decrement exists. Any other
+/// write form disqualifies — so `k` is provably non-increasing, hence
+/// `k <= k_init` throughout.
+///
+/// Non-decrement writes are detected with `region_bindings` (exhaustive over
+/// assignment-target roots and pattern binds, including NESTED ones) plus
+/// `stmt_writes_bound` (the `mut`-marked-arg / receiver case region_bindings
+/// does not track). `stmt_writes_ident` alone is insufficient: it is blind to
+/// an assignment target buried in an inner block (e.g. `if c { k = i }`), which
+/// would break monotonicity — see the region-binding collector's section
+/// comment.
+fn only_monotone_decrement(body: &Block, k: &str) -> bool {
+    let mut saw_decrement = false;
+    for s in &body.stmts {
+        if is_clean_decrement_stmt(s, k) {
+            saw_decrement = true;
+            continue;
+        }
+        if stmt_touches_var(std::slice::from_ref(s), &None, k) {
+            return false;
+        }
+    }
+    if body.final_expr.is_some() && stmt_touches_var(&[], &body.final_expr, k) {
+        return false;
+    }
+    saw_decrement
+}
+
+/// Whether `k` is assigned (any nesting), rebound, or `mut`-written across the
+/// given region.
+fn stmt_touches_var(stmts: &[Stmt], final_expr: &Option<Box<Expr>>, k: &str) -> bool {
+    let rb = region_bindings(stmts, final_expr);
+    if rb.assigned.contains(k) || rb.is_rebound(k) {
+        return true;
+    }
+    stmts.iter().any(|s| stmt_writes_bound(s, k))
+        || final_expr.as_ref().is_some_and(|e| expr_writes_bound(e, k))
+}
+
+fn is_clean_decrement_stmt(s: &Stmt, k: &str) -> bool {
+    match &s.kind {
+        StmtKind::Assign { target, value } if is_ident_expr(target, k) => {
+            is_sub_pos_const(value, k)
+        }
+        StmtKind::CompoundAssign {
+            target,
+            op: CompoundOp::Sub,
+            value,
+        } if is_ident_expr(target, k) => is_pos_int_lit(value),
+        _ => false,
+    }
+}
+
+/// `value` is `k - C` (C a positive int literal) — surface `Binary(Sub)` or
+/// trait-lowered `Call { Path([ty,"sub"]), [k, C] }`.
+fn is_sub_pos_const(value: &Expr, k: &str) -> bool {
+    match &value.kind {
+        ExprKind::Binary {
+            op: BinOp::Sub,
+            left,
+            right,
+        } => is_ident_expr(left, k) && is_pos_int_lit(right),
+        ExprKind::Call { callee, args } if args.len() == 2 => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return false;
+            };
+            segments.len() == 2
+                && segments[1] == "sub"
+                && is_ident_expr(&args[0].value, k)
+                && is_pos_int_lit(&args[1].value)
+        }
+        _ => false,
+    }
+}
+
+fn is_ident_expr(e: &Expr, name: &str) -> bool {
+    matches!(&e.kind, ExprKind::Identifier(n) if n == name)
+}
+
+fn is_pos_int_lit(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Integer(n, _) if *n >= 1)
+}
+
+/// `k`'s sole scalar definition among `stmts` (the statements preceding the
+/// inner loop): the last top-level `let k = E` / `k = E` with `E` a
+/// pure-arithmetic (linear-normalisable) expression, provided `k` is written
+/// nowhere else (nested, compound, mut-arg). `None` on any other shape.
+fn sole_scalar_init(stmts: &[Stmt], k: &str) -> Option<BoundTerm> {
+    let mut last: Option<BoundTerm> = None;
+    for s in stmts {
+        if let Some(rhs) = top_level_scalar_def(s, k) {
+            // A non-normalisable init means we cannot reason about the value.
+            last = Some(normalize_bound(rhs)?);
+            continue;
+        }
+        if stmt_writes_ident(s, k) {
+            return None;
+        }
+    }
+    last
+}
+
+fn top_level_scalar_def<'a>(s: &'a Stmt, k: &str) -> Option<&'a Expr> {
+    match &s.kind {
+        StmtKind::Let { pattern, value, .. } if matches!(&pattern.kind, PatternKind::Binding(n) if n == k) => {
+            Some(value)
+        }
+        StmtKind::Assign { target, value } if is_ident_expr(target, k) => Some(value),
+        _ => None,
+    }
+}
+
+/// Does `body` contain an index `v[k]` / `v[k ± c]` (root `v`, index var `k`)?
+fn block_indexes_vec_at(body: &Block, v: &str, k: &str) -> bool {
+    let pred = |e: &Expr| {
+        if let ExprKind::Index { object, index } = &e.kind {
+            if let ExprKind::Identifier(n) = &object.kind {
+                return n == v && index_var_is(index, k);
+            }
+        }
+        false
+    };
+    body_any(body, &pred)
+}
+
+/// The index expression's variable root is `k`, with an optional constant
+/// offset: `k`, `k + c`, `c + k`, `k - c`.
+fn index_var_is(index: &Expr, k: &str) -> bool {
+    if is_ident_expr(index, k) {
+        return true;
+    }
+    match &index.kind {
+        ExprKind::Binary {
+            op: BinOp::Add,
+            left,
+            right,
+        } => {
+            (is_ident_expr(left, k) && is_int_lit(right))
+                || (is_int_lit(left) && is_ident_expr(right, k))
+        }
+        ExprKind::Binary {
+            op: BinOp::Sub,
+            left,
+            right,
+        } => is_ident_expr(left, k) && is_int_lit(right),
+        ExprKind::Call { callee, args } if args.len() == 2 => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return false;
+            };
+            if segments.len() != 2 {
+                return false;
+            }
+            match segments[1].as_str() {
+                "add" => {
+                    (is_ident_expr(&args[0].value, k) && is_int_lit(&args[1].value))
+                        || (is_int_lit(&args[0].value) && is_ident_expr(&args[1].value, k))
+                }
+                "sub" => is_ident_expr(&args[0].value, k) && is_int_lit(&args[1].value),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn is_int_lit(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Integer(_, _))
+}
+
+/// Deep "some sub-expression satisfies `pred`" over a block.
+fn body_any(block: &Block, pred: &dyn Fn(&Expr) -> bool) -> bool {
+    !block_all(block, |c| !expr_contains(c, pred))
+}
+
+fn expr_contains(e: &Expr, pred: &dyn Fn(&Expr) -> bool) -> bool {
+    pred(e) || !expr_children_all(e, |c| !expr_contains(c, pred))
+}
+
+// ── Linear normal form for the relational `k_init < B_pin` proof ────
+
+/// A linear combination of identifiers plus a constant. Used to prove the
+/// symbolic identity `B_pin - E[i := u_max] = const >= 1`.
+#[derive(Clone, Default)]
+struct Linear {
+    terms: BTreeMap<String, i64>,
+    konst: i64,
+}
+
+/// Normalise a `BoundTerm` to `Linear`, or `None` if it is not affine
+/// (multiplication of two non-constants, any division/remainder, or an
+/// arithmetic overflow in the coefficients — all fail closed).
+fn bound_to_linear(bt: &BoundTerm) -> Option<Linear> {
+    match bt {
+        BoundTerm::Int(n) => Some(Linear {
+            terms: BTreeMap::new(),
+            konst: *n,
+        }),
+        BoundTerm::Ident(s) => {
+            let mut terms = BTreeMap::new();
+            terms.insert(s.clone(), 1);
+            Some(Linear { terms, konst: 0 })
+        }
+        BoundTerm::Bin(op, l, r) => {
+            let a = bound_to_linear(l)?;
+            let b = bound_to_linear(r)?;
+            match op {
+                BoundOp::Add => lin_add(&a, &b),
+                BoundOp::Sub => {
+                    let neg = lin_scale(&b, -1)?;
+                    lin_add(&a, &neg)
+                }
+                BoundOp::Mul => {
+                    if a.terms.is_empty() {
+                        lin_scale(&b, a.konst)
+                    } else if b.terms.is_empty() {
+                        lin_scale(&a, b.konst)
+                    } else {
+                        None
+                    }
+                }
+                BoundOp::Div | BoundOp::Rem => None,
+            }
+        }
+    }
+}
+
+fn lin_add(a: &Linear, b: &Linear) -> Option<Linear> {
+    let mut terms = a.terms.clone();
+    for (k, v) in &b.terms {
+        let e = terms.entry(k.clone()).or_insert(0);
+        *e = e.checked_add(*v)?;
+    }
+    terms.retain(|_, v| *v != 0);
+    Some(Linear {
+        terms,
+        konst: a.konst.checked_add(b.konst)?,
+    })
+}
+
+fn lin_scale(a: &Linear, c: i64) -> Option<Linear> {
+    if c == 0 {
+        return Some(Linear::default());
+    }
+    let mut terms = BTreeMap::new();
+    for (k, v) in &a.terms {
+        terms.insert(k.clone(), v.checked_mul(c)?);
+    }
+    Some(Linear {
+        terms,
+        konst: a.konst.checked_mul(c)?,
+    })
+}
+
+/// Prove `k_init < B_pin` where `k_init == E(counter)`: substitute
+/// `counter := u_max` in `E` (valid because `E` is non-decreasing in the
+/// counter and `counter <= u_max`), then check `B_pin - E[counter:=u_max]`
+/// is a positive constant.
+fn init_below_bound(e_bt: &BoundTerm, counter: &str, u_max: &BoundTerm, b_pin: &BoundTerm) -> bool {
+    let (Some(e_lin), Some(u_lin), Some(pin_lin)) = (
+        bound_to_linear(e_bt),
+        bound_to_linear(u_max),
+        bound_to_linear(b_pin),
+    ) else {
+        return false;
+    };
+    // `E` must be non-decreasing in the counter, so its max over `counter <=
+    // u_max` is at `counter == u_max`.
+    let a = *e_lin.terms.get(counter).unwrap_or(&0);
+    if a < 0 {
+        return false;
+    }
+    // init_max = (E without the counter term) + a * u_max
+    let mut e_without = e_lin.clone();
+    e_without.terms.remove(counter);
+    let (Some(scaled_u), ..) = (lin_scale(&u_lin, a),) else {
+        return false;
+    };
+    let Some(init_max) = lin_add(&e_without, &scaled_u) else {
+        return false;
+    };
+    // diff = B_pin - init_max must be a strictly positive constant.
+    let Some(neg_init) = lin_scale(&init_max, -1) else {
+        return false;
+    };
+    let Some(diff) = lin_add(&pin_lin, &neg_init) else {
+        return false;
+    };
+    diff.terms.is_empty() && diff.konst >= 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2037,5 +2789,164 @@ mod tests {
         // exercised by the E2E tests. Here we just confirm the pin is recorded
         // for the `cols + 1` bound (fill recognised).
         assert!(pins_vec(src, "dp"));
+    }
+
+    // ── Descending-loop bounds-check skip (B-2026-07-17-1) ──────────
+
+    /// Parse `src` and return the descending skips for the first function as a
+    /// sorted `Vec<(idx_var, vec_vars)>`.
+    fn desc_skips(src: &str) -> Vec<(String, Vec<String>)> {
+        let parsed = crate::parse(src);
+        let body = parsed
+            .program
+            .items
+            .into_iter()
+            .find_map(|it| match it {
+                Item::Function(f) => Some(f.body),
+                _ => None,
+            })
+            .expect("a function");
+        let mut out: Vec<(String, Vec<String>)> = compute_descending_skips(&body)
+            .into_values()
+            .map(|s| (s.idx_var, s.vec_vars))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The canonical LeetCode #119 in-place rolling-row shape: inclusive fill
+    /// `while j <= n`, enclosing `while i <= n`, inner descending `while k >= 1`
+    /// updating `row[k] = row[k] + row[k-1]`, returning `row`.
+    #[test]
+    fn desc_fires_on_pascal_row_shape() {
+        let src = "fn get_row(n: i64) -> Vec[i64] {\n\
+            let mut row: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j <= n { row.push(1i64); j = j + 1i64; }\n\
+            let mut i = 2i64;\n\
+            while i <= n {\n\
+              let mut k = i - 1i64;\n\
+              while k >= 1i64 { row[k] = row[k] + row[k - 1i64]; k = k - 1i64; }\n\
+              i = i + 1i64;\n\
+            }\n\
+            row\n\
+        }\n";
+        assert_eq!(
+            desc_skips(src),
+            vec![("k".to_string(), vec!["row".to_string()])]
+        );
+    }
+
+    /// Exclusive enclosing bound + exclusive fill: `while j < n` (len == n),
+    /// `for i in 1..n` (i <= n-1), `k = i` init, `while k >= 1`. Proof:
+    /// `k <= i <= n-1 < n == len`.
+    #[test]
+    fn desc_fires_on_exclusive_bounds() {
+        let src = "fn f(n: i64) -> Vec[i64] {\n\
+            let mut v: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j < n { v.push(1i64); j = j + 1i64; }\n\
+            for i in 1i64..n {\n\
+              let mut k = i;\n\
+              while k >= 1i64 { v[k] = v[k] + v[k - 1i64]; k = k - 1i64; }\n\
+            }\n\
+            v\n\
+        }\n";
+        assert_eq!(
+            desc_skips(src),
+            vec![("k".to_string(), vec!["v".to_string()])]
+        );
+    }
+
+    /// Negative: init `k = i + 1` can reach `len` (`i <= n-1` ⇒ `k <= n == len`,
+    /// NOT `< len`), so the proof must FAIL closed.
+    #[test]
+    fn desc_no_fire_when_init_reaches_len() {
+        let src = "fn f(n: i64) -> Vec[i64] {\n\
+            let mut v: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j < n { v.push(1i64); j = j + 1i64; }\n\
+            for i in 1i64..n {\n\
+              let mut k = i + 1i64;\n\
+              while k >= 1i64 { v[k] = v[k] + v[k - 1i64]; k = k - 1i64; }\n\
+            }\n\
+            v\n\
+        }\n";
+        assert!(desc_skips(src).is_empty());
+    }
+
+    /// Negative: the inner loop ASCENDS (`k = k + 1`) — not monotone
+    /// non-increasing, so `k <= k_init` does not hold; must not fire.
+    #[test]
+    fn desc_no_fire_on_ascending_inner() {
+        let src = "fn f(n: i64) -> Vec[i64] {\n\
+            let mut v: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j <= n { v.push(1i64); j = j + 1i64; }\n\
+            let mut i = 2i64;\n\
+            while i <= n {\n\
+              let mut k = 1i64;\n\
+              while k >= 1i64 { v[k] = v[k] + 1i64; k = k + 1i64; }\n\
+              i = i + 1i64;\n\
+            }\n\
+            v\n\
+        }\n";
+        assert!(desc_skips(src).is_empty());
+    }
+
+    /// Negative: no length pin (the Vec is grown INSIDE the enclosing loop, so
+    /// its length is not fixed by a counted fill) — nothing to bound against.
+    #[test]
+    fn desc_no_fire_without_pin() {
+        let src = "fn f(n: i64) -> Vec[i64] {\n\
+            let mut v: Vec[i64] = Vec.new();\n\
+            let mut i = 2i64;\n\
+            while i <= n {\n\
+              v.push(0i64);\n\
+              let mut k = i - 1i64;\n\
+              while k >= 1i64 { v[k] = v[k] + v[k - 1i64]; k = k - 1i64; }\n\
+              i = i + 1i64;\n\
+            }\n\
+            v\n\
+        }\n";
+        assert!(desc_skips(src).is_empty());
+    }
+
+    /// Negative: the enclosing counter is REWRITTEN before the inner loop, so
+    /// `i <= u_max` no longer holds at the `k` init; must fail closed.
+    #[test]
+    fn desc_no_fire_when_counter_rewritten() {
+        let src = "fn f(n: i64) -> Vec[i64] {\n\
+            let mut v: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j <= n { v.push(1i64); j = j + 1i64; }\n\
+            let mut i = 2i64;\n\
+            while i <= n {\n\
+              i = i + 5i64;\n\
+              let mut k = i - 1i64;\n\
+              while k >= 1i64 { v[k] = v[k] + v[k - 1i64]; k = k - 1i64; }\n\
+            }\n\
+            v\n\
+        }\n";
+        assert!(desc_skips(src).is_empty());
+    }
+
+    /// Negative: `k` is mutated by a non-decrement write inside the inner loop
+    /// (a nested reset), so monotonicity is not provable; must not fire.
+    #[test]
+    fn desc_no_fire_on_nonmonotone_reset() {
+        let src = "fn f(n: i64) -> Vec[i64] {\n\
+            let mut v: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j <= n { v.push(1i64); j = j + 1i64; }\n\
+            let mut i = 2i64;\n\
+            while i <= n {\n\
+              let mut k = i - 1i64;\n\
+              while k >= 1i64 { v[k] = v[k] + v[k - 1i64]; if k < 0i64 { k = i; } k = k - 1i64; }\n\
+              i = i + 1i64;\n\
+            }\n\
+            v\n\
+        }\n";
+        assert!(desc_skips(src).is_empty());
     }
 }

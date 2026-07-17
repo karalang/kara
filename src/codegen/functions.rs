@@ -1998,6 +1998,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.vec_len_pins.clear();
         self.pending_vec_len_pins =
             crate::codegen::bce_length_pin::compute_vec_length_pins(&func.body);
+        // Descending-loop bounds-check skips (B-2026-07-17-1): the rolling-1D-DP
+        // in-place-update shape. Whole-body analysis, consumed in `compile_while`
+        // keyed on the inner descending loop's condition span.
+        self.descending_skips =
+            crate::codegen::bce_length_pin::compute_descending_skips(&func.body);
 
         // Slice-parameter scoped-alias metadata (alias-metadata slice 4). Runs
         // after the param-registration loop above, so its map entries survive
