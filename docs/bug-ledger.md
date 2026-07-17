@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 35 | 0 |
 | crash | 24 | 0 |
 | run-vs-build | 23 | 0 |
-| perf | 21 | 1 |
+| perf | 21 | 0 |
 | soundness | 18 | 1 |
 | diagnostics | 11 | 1 |
 | use-after-free | 3 | 0 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 369 | 4 |
+| codegen | 369 | 3 |
 | typecheck | 61 | 2 |
 | interp | 48 | 0 |
 | ownership | 22 | 0 |
@@ -123,9 +123,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **522 surfaced · 6 open · 513 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **522 surfaced · 5 open · 513 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **522 surfaced 
 | B-2026-07-17-5 | 2026-07-17 | cli | low | wasm link fails with cryptic `undefined symbol: __wasm_first_page_end` (from rustup's self-contained wasi libc.a dlmalloc.c.obj) when the PATH `wasm-ld` is older than the active rustup toolchain's wasi-libc — the linker resolution order (KARAC_WASM_LD > PATH wasm-ld > brew > rust-lld) picks the stale system linker over the version-matched rust-lld sitting in the same rustup toolchain that supplied the libc. | none |
 | B-2026-07-17-12 | 2026-07-17 | typecheck | medium | Unknown methods on non-exhaustive prelude types (Vec/String/Map/Set/...) silently type as Type::Error, which unifies with ANYTHING: `v.some_typo()` passes karac check, and pre-B-2026-07-16-14 even `let x: bool = v.sum()` checked clean. EXHAUSTIVE_PRELUDE (expr_method_call.rs ~5400) covers only Option/Result, so every other built-in receiver gets the silent fall-through — the check/execution contract (the AI-first wedge: check-clean must run) is open on exactly the receivers LLM authors touch most. | none |
 | B-2026-07-17-13 | 2026-07-17 | codegen | low | A narrow-UNSIGNED value carried through an Option payload prints SIGNED: `Option[u8]` holding 200u8, unwrapped and printed, shows -56 (200 as i8) under karac build; interp correct. The unwrap/reconstruct produces the right bit pattern (i8 truncation is correct) but the print path reads it as signed because the reconstructed value's unsigned surface type is not threaded to expr_is_unsigned_int through the Option unwrap. Reproduces with a hand-written `match racc { Some(a) => .. }` over Option[u8] (NOT reduce-specific) — same class as B-2026-07-03-21's narrow-unsigned slot printing, extended to the Option-payload path. | none |
-| B-2026-07-17-14 | 2026-07-17 | codegen | low | Descending counted loop `while k >= 1 { ..; k = k - 1 }` keeps an explicit `cmp $1` after the decrement instead of folding the guard into the `dec`'s flags. Surfaced as the RESIDUAL gap on Pascal #119 after the descending bounds-check skip (B-2026-07-17-1) removed the per-iteration bounds check: the in-place update loop then runs 8 instructions (`mov;mov;add;jo;mov;dec;cmp $1;ja`) where equal-safety `rustc -O -C overflow-checks=on` runs 7 (`mov;mov;add;jo;mov;dec;jne`) — rust lowers its `(1..=i).rev()` countdown to `dec; jne` (compare-against-0 via the decrement's ZF), kara emits a separate `cmp $0x1,%rdx` dependent on the `dec`. That one extra dependent instruction per iteration is a ~1.14-1.19x residual on the tight O(k^2) update loop (kara 341ms vs rust-ovf 289ms = 1.18x; the bounds-check fix had already moved it from 1.29x). Distinct mechanism from B-2026-07-17-1 (bounds-check elision): this is loop-guard strength reduction / countdown canonicalization. | none |
 
 ### Fixed (513)
 
