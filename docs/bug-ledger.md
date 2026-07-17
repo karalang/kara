@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 81 | 0 |
 | codegen-gap | 59 | 0 |
 | double-free | 59 | 0 |
-| missing-feature | 46 | 1 |
+| missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
 | crash | 24 | 0 |
 | run-vs-build | 23 | 0 |
@@ -109,8 +109,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 370 | 1 |
-| typecheck | 61 | 2 |
+| codegen | 370 | 0 |
+| typecheck | 61 | 1 |
 | interp | 48 | 0 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
@@ -123,18 +123,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **524 surfaced · 2 open · 518 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **524 surfaced · 1 open · 519 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-13-5 | 2026-07-13 | codegen+typecheck | medium | Three composable Tensor limitations block idiomatic numerical-stdlib .kara over generic-dim tensors: (A) a tensor reduction/transform on a NON-IDENTIFIER receiver (method chain, e.g. `a.zip_with(b, f).sum()`) fails codegen with 'no handler for method sum on non-identifier receiver' — try_compile_tensor_reduce (tensor.rs:2794) only matches Identifier/SelfValue receivers, returning None for a MethodCall receiver so dispatch falls through; (B) a generic shape parameter `D` (declared `fn f[D](t: Tensor[f32,[D]])`) is usable in the SIGNATURE but NOT in a function-BODY type annotation — `let p: Tensor[f32,[D]] = ...` fails typecheck with "const expression: 'D' is not a known const"; (C) a `ref Tensor[f32,[D]]` PARAM passed to a tensor method taking `other: ref Tensor` (zip_with) fails typecheck with 'expected Tensor, found ref Tensor'. Each is loud (compile error / --interp hint), interp-correct where reachable. | — |
 | B-2026-07-17-12 | 2026-07-17 | typecheck | medium | Unknown methods on non-exhaustive prelude types (Vec/String/Map/Set/...) silently type as Type::Error, which unifies with ANYTHING: `v.some_typo()` passes karac check, and pre-B-2026-07-16-14 even `let x: bool = v.sum()` checked clean. EXHAUSTIVE_PRELUDE (expr_method_call.rs ~5400) covers only Option/Result, so every other built-in receiver gets the silent fall-through — the check/execution contract (the AI-first wedge: check-clean must run) is open on exactly the receivers LLM authors touch most. | none |
 
-### Fixed (518)
+### Fixed (519)
 
-<details><summary>518 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>519 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -552,6 +551,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **524 surfaced 
 | B-2026-07-13-2 | codegen | high | A bare generic param `x: T` bound to a builtin COLLECTION (String/Vec/VecDeque) misses its owned-param return DEEP-COPY in the monomorph body under t… | d20a515 |
 | B-2026-07-13-3 | codegen | medium | A GENERIC function whose body is a `match` expression evaluating to a HEAP type `T` (String/Vec), monomorphized, lowers the match VALUE to the i64 co… | 0e7face,0d680d7 |
 | B-2026-07-13-4 | interp+codegen | low | Calling a method directly on an enum UNIT-VARIANT LITERAL receiver — `Dir.North.code()` — fails on BOTH surfaces (the typechecker ACCEPTS it, but nei… | 7bd38e2 |
+| B-2026-07-13-5 | codegen+typecheck | medium | Three composable Tensor limitations block idiomatic numerical-stdlib .kara over generic-dim tensors: (A) a tensor reduction/transform on a NON-IDENTI… | c006423 |
 | B-2026-07-13-6 | codegen | high | A `let` that SHADOWS an outer variable inside ANY nested scope (plain block, `if`/`else` block, `while` body, `for` body, `match` arm, nested block)… | 07fe865 |
 | B-2026-07-13-7 | codegen | high | Reading the row sub-tensors returned by `Tensor.iter_axis(n)` double-frees under JIT/native (`free(): double free detected in tcache 2`); the interpr… | 0de5fc8 |
 | B-2026-07-13-8 | codegen | high | `String.from(<String>)` returned the source's `{ptr,len,cap}` aggregate UNCHANGED (an ALIAS of its heap buffer) instead of an owned copy | 257059b |
