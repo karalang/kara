@@ -13,9 +13,10 @@
 //! to its base, like every other distinct type in the interpreter).
 //! `resolve(sym)` reads the `Vec` at the symbol's id.
 //!
-//! **Interpreter-only.** Mirrors `Pool[T]` / `Arena[T]` — no codegen
-//! lowering. The baked `interner.kara` placeholder bodies are never
-//! evaluated (this dispatch intercepts before the body runs).
+//! **Codegen twin:** `src/codegen/interner.rs` lowers the same surface
+//! to the `karac_runtime_interner_*` externs (`runtime/src/interner.rs`)
+//! for compiled binaries. The baked `interner.kara` placeholder bodies
+//! are never evaluated (this dispatch intercepts before the body runs).
 
 use std::collections::HashMap;
 

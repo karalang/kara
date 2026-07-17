@@ -266,6 +266,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // otherwise mis-size.
                     return self.context.ptr_type(AddressSpace::default()).into();
                 }
+                if name == "Interner" {
+                    // `Interner` is the opaque `*mut KaracInterner` handle
+                    // (`src/codegen/interner.rs`). The baked `struct Interner
+                    // { handle_id: i64 }` shape would otherwise lower via the
+                    // unknown-name `i64` fall-through and mis-type the slot a
+                    // `ptr` handle is stored into.
+                    return self.context.ptr_type(AddressSpace::default()).into();
+                }
                 if name == "Atomic" {
                     // `Atomic[T]` is a transparent wrapper over `T` —
                     // baked as `struct Atomic[T] { }` in

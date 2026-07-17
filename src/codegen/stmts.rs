@@ -2279,6 +2279,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         );
                         detected = true;
                     }
+                    // `let s = tab.resolve(sym)` on an Interner receiver — the
+                    // value is a BORROWED `{ptr, len, cap = 0}` String view of
+                    // the interned bytes, so register the binding as a String
+                    // for method dispatch (`s.len()`, Display, …). The `cap =
+                    // 0` static-buffer convention keeps the scope-exit free a
+                    // runtime no-op, exactly like a literal-initialized
+                    // binding. Mirrors the `rhs_is_chars` RHS-shape detection
+                    // above.
+                    let rhs_is_interner_resolve = matches!(
+                        &value.kind,
+                        ExprKind::MethodCall { object, method, .. }
+                            if method == "resolve"
+                                && matches!(
+                                    &object.kind,
+                                    ExprKind::Identifier(o)
+                                        if self.interner_vars.contains(o.as_str())
+                                )
+                    );
+                    if rhs_is_interner_resolve {
+                        self.vec_elem_types
+                            .insert(var_name.clone(), self.context.i8_type().into());
+                        self.string_vars.insert(var_name.clone());
+                        detected = true;
+                    }
                     // Explicit type annotation: let v: Vec[T] = ... or let s: String = ...
                     if let Some(ref te) = ty {
                         // B-2026-07-15-6: inside a monomorphized generic fn, a
@@ -2406,6 +2430,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let TypeKind::Path(p) = &te.kind {
                             if p.segments.last().map(|s| s.as_str()) == Some("VolatileCell") {
                                 self.register_var_from_type_expr(var_name, te);
+                                detected = true;
+                            }
+                        }
+                        // `let i: Interner = Interner.new()` — tag the binding
+                        // so `i.intern(...)` / `.resolve(...)` / `.len()`
+                        // dispatch to `compile_interner_method` (mirrors the
+                        // OnceLock arm above; the annotation-free form is
+                        // detected from the `Interner.new()` RHS at bind time).
+                        if let TypeKind::Path(p) = &te.kind {
+                            if p.segments.last().map(|s| s.as_str()) == Some("Interner") {
+                                self.interner_vars.insert(var_name.clone());
                                 detected = true;
                             }
                         }
@@ -4903,6 +4938,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                 frame.push(super::state::CleanupAction::FreeOnceHandle {
                                     once_alloca: slot.ptr,
                                     elem_drop,
+                                });
+                            }
+                        }
+                    }
+                }
+                // Interner local binding: `let i = Interner.new()` (with or
+                // without an `Interner` annotation) — tag the binding for
+                // `compile_interner_method` dispatch and queue a scope-exit
+                // `FreeInternerHandle` reclaiming the interner + every stored
+                // byte string. Gated on a fresh `Interner.new()` RHS (a rebind
+                // `let i2 = i` would double-free the shared handle — deferred,
+                // same posture as the OnceLock arm above). Phase-8 Interner
+                // codegen.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if super::interner::expr_is_interner_new(value) {
+                        self.interner_vars.insert(var_name.clone());
+                        if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
+                            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                                frame.push(super::state::CleanupAction::FreeInternerHandle {
+                                    interner_alloca: slot.ptr,
                                 });
                             }
                         }

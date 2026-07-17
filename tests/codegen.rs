@@ -4750,6 +4750,97 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_interner_dedup_and_len() {
+        // Phase-8 Interner codegen: interning equal strings returns the SAME
+        // `Symbol` (integer equality), a distinct string mints a fresh one,
+        // and `len()` counts distinct entries. Build==run parity with the
+        // interpreter (`test_interner_dedups_equal_strings`).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut tab: Interner = Interner.new();
+    let a = tab.intern("hello");
+    let b = tab.intern("hello");
+    let c = tab.intern("world");
+    println(a == b);
+    println(a == c);
+    println(tab.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "true\nfalse\n2");
+        }
+    }
+
+    #[test]
+    fn test_e2e_interner_resolve_roundtrip() {
+        // `resolve` hands back a borrowed (`cap = 0`) String view of the
+        // interned bytes; it Displays through `println` directly and prints
+        // the original text. Mirrors the interpreter
+        // `test_interner_resolve_roundtrip`.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut tab: Interner = Interner.new();
+    let a = tab.intern("alpha");
+    let b = tab.intern("beta");
+    println(tab.resolve(a));
+    println(tab.resolve(b));
+    let s = tab.resolve(a);
+    println(s.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "alpha\nbeta\n5");
+        }
+    }
+
+    #[test]
+    fn test_e2e_interner_fresh_temp_intern_arg() {
+        // A fresh-owned temp argument (`intern(p + "pha")` — a runtime concat)
+        // must dedup against the equal literal AND get its buffer materialized
+        // for scope-exit free (the runtime copies the bytes; nothing else owns
+        // the temp — the ASAN twin pins the no-leak half).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut tab: Interner = Interner.new();
+    let a = tab.intern("alpha");
+    let p = "al";
+    let b = tab.intern(p + "pha");
+    println(a == b);
+    println(tab.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "true\n1");
+        }
+    }
+
+    #[test]
+    fn test_e2e_interner_annotation_free_binding() {
+        // The annotation-free form `let mut tab = Interner.new()` — the bind
+        // site detects the `Interner.new()` RHS (no `: Interner` needed) and
+        // registers dispatch + cleanup identically.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut tab = Interner.new();
+    let a = tab.intern("x");
+    println(tab.resolve(a));
+    println(tab.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "x\n1");
+        }
+    }
+
+    #[test]
     fn test_e2e_closure_returns_struct_literal_direct() {
         // General closure fix (drives the get_or_init aggregate case): a closure
         // whose body is a struct literal is compiled with the struct as its

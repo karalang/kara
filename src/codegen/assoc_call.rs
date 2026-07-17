@@ -698,6 +698,25 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(handle);
         }
 
+        // `Interner.new()` — allocate an empty string interner and return its
+        // opaque `*mut KaracInterner` handle, stored directly in the binding's
+        // slot (non-generic — the payloads are always byte strings, `Symbol`
+        // erases to `i64`). A local binding's scope-exit `FreeInternerHandle`
+        // frees it. Phase-8 Interner codegen.
+        if type_name == "Interner" && method == "new" && _args.is_empty() {
+            let new_fn = self
+                .module
+                .get_function("karac_runtime_interner_new")
+                .expect("karac_runtime_interner_new declared in Codegen::new");
+            let handle = self
+                .builder
+                .build_call(new_fn, &[], "__interner_new")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic();
+            return Ok(handle);
+        }
+
         // Numeric primitive From: `T.from(x)` for integer/float widening.
         // Codegen currently represents all ints as LLVM i64 and floats as
         // f64, so widening is a passthrough at this layer. When narrower

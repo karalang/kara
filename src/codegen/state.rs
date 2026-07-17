@@ -688,6 +688,16 @@ pub(crate) enum CleanupAction<'ctx> {
         /// owns heap; `None` for a heap-free `T`.
         elem_drop: Option<FunctionValue<'ctx>>,
     },
+    /// Scope-exit free for a local `Interner` binding. The alloca holds the
+    /// opaque `*mut KaracInterner` handle from `Interner.new()`; the free
+    /// reclaims the interner and every stored byte string in one call
+    /// (`karac_runtime_interner_free(load(interner_alloca))` — null-handle is
+    /// a runtime no-op). No element drop is ever needed: the runtime owns all
+    /// stored bytes, and `resolve` borrows (`cap = 0` String views) never own.
+    FreeInternerHandle {
+        /// Alloca that holds the opaque `*mut KaracInterner` pointer.
+        interner_alloca: PointerValue<'ctx>,
+    },
     /// Heap-closure-env epic Slice 1 (B-2026-06-22-2): a binding holding a
     /// heap-env closure value. At scope exit, load the fat pointer, extract its
     /// env slot (the RC box `{ i64 refcount, env }`), decrement the refcount,

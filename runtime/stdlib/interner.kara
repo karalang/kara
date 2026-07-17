@@ -34,12 +34,15 @@
 // Interner state lives Rust-side in `interner_table: HashMap<i64,
 // (Vec<String>, HashMap<String, i64>)>` keyed by `Interner.handle_id`
 // — the `Vec` is the id→string lookup, the `HashMap` is the dedup
-// index. The Kāra `Interner` value carries only the handle. The
-// baked placeholder bodies below are never evaluated (the interpreter
-// intercepts before the body runs) and never reach codegen
-// (interpreter-only, like `Pool[T]` / `Arena[T]`); baked-stdlib impl
-// bodies are neither resolved nor type-checked — only the signatures
-// are the contract.
+// index. The Kāra `Interner` value carries only the handle. Under
+// `karac build` / the JIT, the same surface lowers to the opaque
+// `*mut KaracInterner` runtime handle (`src/codegen/interner.rs` +
+// `runtime/src/interner.rs`) for local bindings. The baked
+// placeholder bodies below are never evaluated (the interpreter
+// intercepts before the body runs) and never reach codegen (the
+// dispatch arms intercept first); baked-stdlib impl bodies are
+// neither resolved nor type-checked — only the signatures are the
+// contract.
 
 #[derive(Eq, Hash, Copy, Clone, Display)]
 distinct type Symbol = i64;

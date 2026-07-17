@@ -45,6 +45,7 @@ mod lifecycle;
 // GPU compute spine — phase-10 GPU codegen spike slice-0a. Opt-in only.
 #[cfg(feature = "gpu")]
 mod gpu;
+mod interner;
 mod map;
 mod mutex;
 mod once;
@@ -253,6 +254,16 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         once::karac_runtime_once_get,
         once::karac_runtime_once_is_set,
         once::karac_runtime_once_free,
+    );
+    // String interner runtime (`runtime/src/interner.rs`). Backs
+    // `Interner.new` / `.intern` / `.resolve` / `.len` + the local binding's
+    // scope-exit free.
+    keep!(
+        interner::karac_runtime_interner_new,
+        interner::karac_runtime_interner_intern,
+        interner::karac_runtime_interner_resolve,
+        interner::karac_runtime_interner_len,
+        interner::karac_runtime_interner_free,
     );
     // Bounded-channel runtime (`runtime/src/bounded_channel.rs`). Backs
     // `BoundedChannel.new` / `.send` / `.recv` + the `BoundedChannel` Drop.

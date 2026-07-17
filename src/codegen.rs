@@ -60,6 +60,7 @@ mod lljit;
 #[cfg(feature = "llvm")]
 pub use lljit::{LLJITEngine, ResourceTracker};
 mod contracts;
+mod interner;
 mod maps;
 mod method_call;
 mod module_bindings;
@@ -3268,6 +3269,14 @@ pub(super) struct Codegen<'ctx> {
     /// `Option[ref T]` / `Result` payload shape. Both primitives share one
     /// runtime primitive at v1 (the `OnceCell` never contends the lock).
     pub(crate) once_var_types: HashMap<String, (TypeExpr, bool)>,
+    /// Local bindings holding an `Interner` handle (`let i = Interner.new()`
+    /// or an `Interner`-annotated binding). Membership is the dispatch gate
+    /// for `compile_interner_method` — `Interner` is a baked stdlib struct
+    /// with no user impl, so `intern`/`resolve`/`len` must be intercepted
+    /// before the user-impl lookup. The slot holds the opaque
+    /// `*mut KaracInterner` (no element type to record — the payloads are
+    /// always byte strings, and `Symbol` erases to `i64`).
+    pub(crate) interner_vars: std::collections::HashSet<String>,
     /// B-2026-07-08-9: per-`Option[T]`-variable payload `TypeExpr`, so the
     /// f-string / `println` Display path can synthesize a concrete
     /// `Some(<T>)`/`None` renderer. Option/Result are generic built-ins whose
@@ -5508,6 +5517,56 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // String-interner runtime (`runtime/src/interner.rs`), backing
+        // `Symbol` + `Interner` (compiled into every archive — a byte-string
+        // table behind a lock has no scheduler dependency). The opaque
+        // `*mut KaracInterner` handle is stored directly in the binding's
+        // slot; `Symbol` erases to a bare `i64` id.
+        //
+        // `karac_runtime_interner_new() -> ptr` — fresh empty interner.
+        let interner_new_ty = ptr_type.fn_type(&[], false);
+        module.add_function(
+            "karac_runtime_interner_new",
+            interner_new_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_interner_intern(interner, bytes_ptr, len) -> i64` —
+        // existing id on a dedup hit, else copies the bytes and mints the
+        // next sequential id.
+        let interner_intern_ty =
+            i64_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_interner_intern",
+            interner_intern_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_interner_resolve(interner, id, out_len) -> ptr` —
+        // stable borrow into the interned bytes (length via out-param);
+        // out-of-range degrades to the empty string. Codegen wraps the pair
+        // as a `cap = 0` (never-freed) String view.
+        let interner_resolve_ty =
+            ptr_type.fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_interner_resolve",
+            interner_resolve_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_interner_len(interner) -> i64`.
+        let interner_len_ty = i64_type.fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_interner_len",
+            interner_len_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_interner_free(interner)` — scope-exit free for a
+        // local binding (`FreeInternerHandle`). Null is a no-op.
+        let interner_free_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_interner_free",
+            interner_free_ty,
+            Some(Linkage::External),
+        );
+
         // Bounded-channel runtime (`runtime/src/bounded_channel.rs`), backing
         // `BoundedChannel[T]` (also compiled into every archive — a bounded
         // queue has no scheduler dependency). The opaque
@@ -6412,6 +6471,7 @@ impl<'ctx> Codegen<'ctx> {
             map_key_type_names: HashMap::new(),
             var_elem_type_exprs: HashMap::new(),
             once_var_types: HashMap::new(),
+            interner_vars: std::collections::HashSet::new(),
             var_option_payload_te: HashMap::new(),
             var_result_payload_te: HashMap::new(),
             map_key_type_exprs: HashMap::new(),

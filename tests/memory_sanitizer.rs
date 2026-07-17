@@ -370,6 +370,69 @@ fn main() {
     }
 
     #[test]
+    fn asan_interner_local_binding_freed_no_leak() {
+        // Phase-8 Interner codegen: a local `Interner` binding's scope-exit
+        // `FreeInternerHandle` must reclaim the runtime interner + every
+        // stored byte string — a missed `karac_runtime_interner_free` leaks
+        // the table per iteration (LSan on Linux CI catches it). 40 fresh
+        // interners, each interning two distinct strings + one dedup hit and
+        // resolving one back (the borrowed `cap = 0` view must NOT be freed
+        // by the caller — a double-free here is the other failure mode).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let mut tab: Interner = Interner.new();
+        let a = tab.intern("alpha");
+        let _b = tab.intern("beta");
+        let a2 = tab.intern("alpha");
+        if a == a2 {
+            total = total + tab.resolve(a).len();
+        }
+        total = total + tab.len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // 40 * (len("alpha") + 2 distinct) = 40 * 7 = 280
+            &["280"],
+            "interner_local_binding_freed_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_interner_fresh_temp_intern_arg_no_leak() {
+        // `intern(p + "pha")` — the fresh concat temp's buffer is orphaned
+        // after the runtime copies the bytes, so the intern lowering must
+        // materialize it for scope-exit free. One leak per iteration without
+        // the materialization.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut hits: i64 = 0i64;
+    while i < 40i64 {
+        let mut tab: Interner = Interner.new();
+        let a = tab.intern("alpha");
+        let p = "al";
+        let b = tab.intern(p + "pha");
+        if a == b {
+            hits = hits + 1i64;
+        }
+        i = i + 1i64;
+    }
+    println(hits.to_string());
+}
+"#,
+            &["40"],
+            "interner_fresh_temp_intern_arg_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_oncelock_string_set_get_no_leak() {
         // B-2026-07-12-2 heap-`T` ungate (gap 1, success-path element leak): a
         // heap-owning `OnceLock[String]` `set(v)` moves `v`'s buffer into the

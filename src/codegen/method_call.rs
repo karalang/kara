@@ -4526,6 +4526,19 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `Interner` `intern`/`resolve`/`len` on a local binding. Gated on the
+        // receiver identifier's membership in `interner_vars` (populated at
+        // the `let i = Interner.new()` bind site / `Interner` annotation) —
+        // the baked stdlib struct has no user impl, so this must intercept
+        // before the user-impl lookup below. Phase-8 Interner codegen.
+        if let ExprKind::Identifier(recv_name) = &object.kind {
+            if self.interner_vars.contains(recv_name.as_str())
+                && matches!(method, "intern" | "resolve" | "len")
+            {
+                return self.compile_interner_method(recv_name, method, args);
+            }
+        }
+
         // User impl-block method on a struct receiver: route `obj.method(args)`
         // through the `Type.method` function emitted by the impl-block pass.
         // Requires knowing the object's declared type; the typechecker stashes
