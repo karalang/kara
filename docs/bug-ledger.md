@@ -105,6 +105,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 10 | 0 |
 | use-after-free | 3 | 0 |
 | memory leak (fresh-owned String argument discarded unfreed) | 1 | 0 |
+| memory unsafety (use-after-free / double-free) — owned `self` receiver returned/moved with a non-empty heap field | 1 | 1 |
 
 ### By surface
 
@@ -123,11 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 3 | 0 |
 | effect | 1 | 0 |
 | codegen (`String.replace` in src/codegen/vec_method.rs — missing arg cleanup) | 1 | 0 |
+| codegen (owned `self` receiver move-out suppression — `SelfValue` not handled where an owned struct `Identifier` is) | 1 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **508 surfaced · 6 open · 499 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **509 surfaced · 7 open · 499 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **508 surfaced 
 | B-2026-07-16-19 | 2026-07-16 | other | high | A function returning `Option[String]` built from a MOVED Vec element (`let words = s.split(" "); if words.len()>0 { Some(words[0]) } else { None }`) double-frees the element buffer when called TWICE inside an auto-parallelized `main` (JIT: 'free(): double free'; native: valgrind Invalid free under karac_par_run). Single/sequential invocation is CLEAN (the element move-out of `words[0]` into `Some` is correctly suppressed there); the bug appears only when main's statement mix makes it auto-parallelize (par_run=1). KARAC_AUTO_PAR=0 fixes it — an auto-par correctness bug, not the element-move-out itself. | none |
 | B-2026-07-16-23 | 2026-07-16 | codegen | medium | `unwrap_or(<non-Call heap default>)` mismanaged the eager default's ownership. LEG 1 (FIXED in c9593ed): an owned-binding default (moved Vec/String identifier) DOUBLE-FREED. REMAINING (open): a DIRECT array/collection-literal default (`unwrap_or([9,9,9])`) LEAKS, and a DIRECT f-string default (`unwrap_or(f"…")`) DOUBLE-FREES. Only the Call/MethodCall/String-slice (B-2026-07-16-22) and owned-binding (leg 1) default shapes are now correct. | none |
 | B-2026-07-17-2 | 2026-07-17 | codegen | high | shared-ownership-matrix frontier REGRESSION: `forwarding_chain/ResultOk` + `forwarding_chain/ResultErr` went Clean → Leak with RC-elision ON (`KARAC_RC_ELIDE_REF_PARAMS` default) — `fn eat(r: Result[Node, i64]) -> i64 { eat2(r) }` (owned param forwarded whole to a consuming callee) leaks the shared `Node` on both the Ok-side (`Result[Node, i64]`) and Err-side (`Result[i64, Node]`) containers; the `Option[Node]` cell of the SAME flow stays Clean, and the whole matrix passes with `KARAC_RC_ELIDE_REF_PARAMS=0`. Prime suspect: `e39db64` (borrow-forward relaxation of RC-elision condition 1, B-2026-07-15-21 Part C — the forwarding-chain shape is exactly its target); suspect window includes `2639536` (condition-5 fix, same day). | none |
+| B-2026-07-17-3 | 2026-07-17 | codegen (owned `self` receiver move-out suppression — `SelfValue` not handled where an owned struct `Identifier` is) | high | An owned `self` receiver method that RETURNS `self` (or `let b = self; … b`) DOUBLE-FREES the self struct's heap (Vec/String) field buffer when that field is non-empty (cap>0). The builder/fluent pattern `X.new().add(a).add(b)` crashes: JIT aborts (empty output), native masks the empty-output at -O but valgrind shows the use-after-free (`karac_realloc_or_panic` on a freed block); the interpreter is correct. FREE-FUNCTION equivalent (`fn add(bld: Builder) -> Builder { … }`) is clean — the bug is specific to the `self` receiver. | none |
 
 ### Fixed (499)
 
