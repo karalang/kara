@@ -59,6 +59,7 @@ mod kernel;
 mod lljit;
 #[cfg(feature = "llvm")]
 pub use lljit::{LLJITEngine, ResourceTracker};
+mod arena;
 mod contracts;
 mod interner;
 mod maps;
@@ -3296,6 +3297,17 @@ pub(super) struct Codegen<'ctx> {
     /// `*mut KaracInterner` (no element type to record — the payloads are
     /// always byte strings, and `Symbol` erases to `i64`).
     pub(crate) interner_vars: std::collections::HashSet<String>,
+    /// Local bindings holding an `Arena[T]` handle, with the recorded
+    /// element kind from the `let a: Arena[T] = Arena.new()` annotation.
+    /// Membership is the dispatch gate for `compile_arena_method` (the
+    /// `interner_vars` posture); the elem kind drives the per-`T` blob
+    /// marshalling. `ArenaRef[T]` / `ArenaCheckpoint` erase to bare `i64`s.
+    pub(crate) arena_vars: HashMap<String, arena::ArenaElemKind>,
+    /// Static foreign-checkpoint guard: checkpoint binding → the arena
+    /// binding that minted it (`let cp = a.high_water_mark()`). A
+    /// `rewind_to(cp)` whose owner differs from the receiver compiles to a
+    /// no-op, matching the interpreter's handle-id guard.
+    pub(crate) arena_checkpoint_owner: HashMap<String, String>,
     /// B-2026-07-08-9: per-`Option[T]`-variable payload `TypeExpr`, so the
     /// f-string / `println` Display path can synthesize a concrete
     /// `Some(<T>)`/`None` renderer. Option/Result are generic built-ins whose
@@ -5638,6 +5650,85 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // Arena runtime (`runtime/src/arena.rs`), backing `Arena[T]` +
+        // `ArenaRef[T]` (compiled into every archive — a blob table behind a
+        // lock has no scheduler dependency). The opaque `*mut KaracArena`
+        // handle is stored directly in the binding's slot; `ArenaRef[T]`
+        // erases to a bare `i64` index and `ArenaCheckpoint` to an `i64`
+        // mark. Elements are raw byte blobs; codegen owns the per-`T`
+        // interpretation (`src/codegen/arena.rs`).
+        //
+        // `karac_runtime_arena_new() -> ptr` — fresh empty arena.
+        let arena_new_ty = ptr_type.fn_type(&[], false);
+        module.add_function(
+            "karac_runtime_arena_new",
+            arena_new_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_arena_push(arena, blob_ptr, len) -> i64` — copies
+        // the blob, returns the dense index (the `ArenaRef`).
+        let arena_push_ty =
+            i64_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_arena_push",
+            arena_push_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_arena_get(arena, idx, out_len) -> ptr` — stable
+        // borrow into the stored blob (length via out-param); out-of-range
+        // degrades to empty. Codegen wraps String elements as a `cap = 0`
+        // (never-freed) String view.
+        let arena_get_ty =
+            ptr_type.fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_arena_get",
+            arena_get_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_arena_get_copy(arena, idx, dst, dst_len) -> i64` —
+        // copy-out for by-value element kinds; zero-fills `dst` on degrade
+        // so the subsequent load is always defined.
+        let arena_get_copy_ty = i64_type.fn_type(
+            &[
+                ptr_type.into(),
+                i64_type.into(),
+                ptr_type.into(),
+                i64_type.into(),
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_arena_get_copy",
+            arena_get_copy_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_arena_len(arena) -> i64` (also serves
+        // `high_water_mark` — a checkpoint IS the current length).
+        let arena_len_ty = i64_type.fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_arena_len",
+            arena_len_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_arena_rewind(arena, mark)` — truncate to the
+        // checkpoint mark (clamped by the runtime).
+        let arena_rewind_ty = context
+            .void_type()
+            .fn_type(&[ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_arena_rewind",
+            arena_rewind_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_arena_free(arena)` — scope-exit free for a local
+        // binding (`FreeArenaHandle`). Null is a no-op.
+        let arena_free_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_arena_free",
+            arena_free_ty,
+            Some(Linkage::External),
+        );
+
         // Bounded-channel runtime (`runtime/src/bounded_channel.rs`), backing
         // `BoundedChannel[T]` (also compiled into every archive — a bounded
         // queue has no scheduler dependency). The opaque
@@ -6551,6 +6642,8 @@ impl<'ctx> Codegen<'ctx> {
             var_elem_type_exprs: HashMap::new(),
             once_var_types: HashMap::new(),
             interner_vars: std::collections::HashSet::new(),
+            arena_vars: HashMap::new(),
+            arena_checkpoint_owner: HashMap::new(),
             var_option_payload_te: HashMap::new(),
             var_result_payload_te: HashMap::new(),
             map_key_type_exprs: HashMap::new(),

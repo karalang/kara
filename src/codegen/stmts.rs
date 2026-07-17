@@ -1089,6 +1089,32 @@ impl<'ctx> super::Codegen<'ctx> {
         names_with_branch.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         for (branch_idx, name, stmt) in names_with_branch {
             {
+                // Opaque-runtime-handle bindings (`let t: Interner =
+                // Interner.new()`, `let a: Arena[T] = Arena.new()`) that
+                // escape the group cannot round-trip the par join: the
+                // branch's `let` queues a scope-exit handle free
+                // (`FreeInternerHandle` / `FreeArenaHandle`) against the
+                // branch-local alloca, and the slot-source suppression loop
+                // in `emit_par_run` has no arm for the handle-free class —
+                // the branch frees the handle, the parent's joined binding
+                // then locks a dead `Mutex` (observed as a pre-main-output
+                // futex hang in `karac_runtime_interner_intern` on a
+                // two-annotated-interner program, 2026-07-17). Bail the
+                // whole group to sequential, like the heap-env-closure bail
+                // above — handle construction is cheap, so the lost
+                // parallelism is negligible. (The unannotated form already
+                // bailed by accident: `infer_expr_llvm_type` can't classify
+                // the `new()` call, so the slot inference below returns
+                // `None`.) A slot-suppression + parent-re-registration arm
+                // is the richer future alternative if a real workload ever
+                // wants handle-new lets parallelized.
+                if let StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } = &stmt.kind {
+                    if super::interner::expr_is_interner_new(value)
+                        || super::arena::expr_is_arena_new(value)
+                    {
+                        return None;
+                    }
+                }
                 let llvm_ty = self.infer_let_binding_llvm_type(stmt)?;
                 // A closure-valued return slot (a heap-env closure binding, or a
                 // COPY of one) can't round-trip the par-group join — see the
@@ -2358,6 +2384,33 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.string_vars.insert(var_name.clone());
                         detected = true;
                     }
+                    // `let s = a.get(r)` on a `String`-element Arena — the
+                    // value is a BORROWED `{ptr, len, cap = 0}` String view
+                    // of the arena-owned bytes; register the binding as a
+                    // String for method dispatch, exactly like the Interner
+                    // `resolve` arm above. And `let cp =
+                    // a.high_water_mark()` — record the minting arena for
+                    // the static foreign-checkpoint guard consumed by
+                    // `rewind_to`. Phase-8 Arena codegen.
+                    if let ExprKind::MethodCall { object, method, .. } = &value.kind {
+                        if let ExprKind::Identifier(o) = &object.kind {
+                            if method == "get"
+                                && self.arena_vars.get(o.as_str())
+                                    == Some(&super::arena::ArenaElemKind::Str)
+                            {
+                                self.vec_elem_types
+                                    .insert(var_name.clone(), self.context.i8_type().into());
+                                self.string_vars.insert(var_name.clone());
+                                detected = true;
+                            }
+                            if method == "high_water_mark"
+                                && self.arena_vars.contains_key(o.as_str())
+                            {
+                                self.arena_checkpoint_owner
+                                    .insert(var_name.clone(), o.clone());
+                            }
+                        }
+                    }
                     // Explicit type annotation: let v: Vec[T] = ... or let s: String = ...
                     if let Some(ref te) = ty {
                         // B-2026-07-15-6: inside a monomorphized generic fn, a
@@ -2498,6 +2551,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.interner_vars.insert(var_name.clone());
                                 detected = true;
                             }
+                        }
+                        // `let a: Arena[T] = Arena.new()` — record the
+                        // element kind so `a.push(...)` / `.get(...)` know
+                        // the per-`T` blob marshalling. The annotation is
+                        // the only `T` source (the `Map.new()` precedent —
+                        // a later `push` can't infer it), so an
+                        // unannotated arena binding never enters
+                        // `arena_vars` and its methods fail loudly at the
+                        // user-impl fallthrough. Phase-8 Arena codegen.
+                        if let Some(kind) = super::arena::classify_arena_annotation(te) {
+                            self.arena_vars.insert(var_name.clone(), kind);
+                            detected = true;
                         }
                     }
                     // Fall back on the typechecker-recorded surface type for
@@ -5030,6 +5095,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             if let Some(frame) = self.scope_cleanup_actions.last_mut() {
                                 frame.push(super::state::CleanupAction::FreeInternerHandle {
                                     interner_alloca: slot.ptr,
+                                });
+                            }
+                        }
+                    }
+                }
+                // Arena local binding: `let a: Arena[T] = Arena.new()` —
+                // queue a scope-exit `FreeArenaHandle` reclaiming the arena
+                // + every stored blob. Gated on a fresh `Arena.new()` RHS (a
+                // rebind `let a2 = a` would double-free the shared handle —
+                // deferred, same posture as the Interner arm above). The
+                // element kind is recorded separately from the annotation;
+                // the cleanup fires regardless so an unannotated (and
+                // therefore method-unusable) binding still frees its handle.
+                // Phase-8 Arena codegen.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if super::arena::expr_is_arena_new(value) {
+                        if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
+                            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                                frame.push(super::state::CleanupAction::FreeArenaHandle {
+                                    arena_alloca: slot.ptr,
                                 });
                             }
                         }

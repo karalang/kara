@@ -4539,6 +4539,22 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `Arena[T]` `push`/`get`/`len`/`high_water_mark`/`rewind_to` on a
+        // local binding. Gated on the receiver identifier's membership in
+        // `arena_vars` (populated at the annotated `let a: Arena[T] =
+        // Arena.new()` bind site) — same interception posture as the
+        // Interner arm above. Phase-8 Arena codegen.
+        if let ExprKind::Identifier(recv_name) = &object.kind {
+            if self.arena_vars.contains_key(recv_name.as_str())
+                && matches!(
+                    method,
+                    "push" | "get" | "len" | "high_water_mark" | "rewind_to"
+                )
+            {
+                return self.compile_arena_method(recv_name, method, args);
+            }
+        }
+
         // User impl-block method on a struct receiver: route `obj.method(args)`
         // through the `Type.method` function emitted by the impl-block pass.
         // Requires knowing the object's declared type; the typechecker stashes

@@ -4909,6 +4909,7 @@ impl<'ctx> super::Codegen<'ctx> {
             CleanupAction::FreeInternerHandle { interner_alloca } => {
                 Some(name_of(*interner_alloca))
             }
+            CleanupAction::FreeArenaHandle { arena_alloca } => Some(name_of(*arena_alloca)),
             CleanupAction::FreeClosureEnv { fat_alloca } => Some(name_of(*fat_alloca)),
             CleanupAction::DropChannelEnd { chan_alloca, .. } => Some(name_of(*chan_alloca)),
             CleanupAction::FreeInlineOptionPayload { option_slot, .. } => {
@@ -6345,6 +6346,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     .module
                     .get_function("karac_runtime_interner_free")
                     .expect("karac_runtime_interner_free declared in Codegen::new");
+                self.builder
+                    .build_call(free_fn, &[handle.into()], "")
+                    .unwrap();
+            }
+            CleanupAction::FreeArenaHandle { arena_alloca } => {
+                // Local `Arena[T]` binding: one call reclaims the arena and
+                // every stored blob (the runtime owns them all; `get`
+                // borrows are `cap = 0` views that no free path touches).
+                // Null-handle is a runtime no-op.
+                let handle = self
+                    .builder
+                    .build_load(ptr_ty, *arena_alloca, "cleanup.arena.handle")
+                    .unwrap()
+                    .into_pointer_value();
+                let free_fn = self
+                    .module
+                    .get_function("karac_runtime_arena_free")
+                    .expect("karac_runtime_arena_free declared in Codegen::new");
                 self.builder
                     .build_call(free_fn, &[handle.into()], "")
                     .unwrap();

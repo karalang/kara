@@ -717,6 +717,25 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(handle);
         }
 
+        // `Arena.new()` — allocate an empty blob arena and return its opaque
+        // `*mut KaracArena` handle, stored directly in the binding's slot
+        // (the element type `T` lives codegen-side, recorded from the
+        // binding's `Arena[T]` annotation). A local binding's scope-exit
+        // `FreeArenaHandle` frees it. Phase-8 Arena codegen.
+        if type_name == "Arena" && method == "new" && _args.is_empty() {
+            let new_fn = self
+                .module
+                .get_function("karac_runtime_arena_new")
+                .expect("karac_runtime_arena_new declared in Codegen::new");
+            let handle = self
+                .builder
+                .build_call(new_fn, &[], "__arena_new")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic();
+            return Ok(handle);
+        }
+
         // Numeric primitive From: `T.from(x)` for integer/float widening.
         // Codegen currently represents all ints as LLVM i64 and floats as
         // f64, so widening is a passthrough at this layer. When narrower

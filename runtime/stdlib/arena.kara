@@ -51,6 +51,7 @@ struct Arena[=T] {
 // item's `index` into the backing vec. Cheap to copy; no liveness
 // tracking — every handle stays valid until the arena drops (or a
 // `rewind_to` truncates past it).
+#[derive(Copy, Clone)]
 struct ArenaRef[=T] {
     arena_handle_id: i64,
     index: i64,
@@ -61,6 +62,7 @@ struct ArenaRef[=T] {
 // `rewind_to(cp)` truncates the backing vec back to `mark`. Carries
 // the source arena's `handle_id` so a checkpoint minted by one arena
 // can't rewind a different one.
+#[derive(Copy, Clone)]
 struct ArenaCheckpoint {
     arena_handle_id: i64,
     mark: i64,

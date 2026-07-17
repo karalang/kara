@@ -4841,6 +4841,163 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_arena_push_get_roundtrip_i64() {
+        // Phase-8 Arena codegen: bump-allocate three i64s; each `ArenaRef`
+        // (a bare i64 index in codegen) resolves back via `get` (copy-out
+        // through `karac_runtime_arena_get_copy`). Mirrors the interpreter
+        // `test_arena_push_get_roundtrip` + `test_arena_len_tracks_pushes`.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Arena[i64] = Arena.new();
+    let r0 = a.push(10);
+    let r1 = a.push(20);
+    let r2 = a.push(30);
+    println(a.get(r0));
+    println(a.get(r1));
+    println(a.get(r2));
+    println(a.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "10\n20\n30\n3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_arena_string_elements() {
+        // `String`-element arena: `push` copies the bytes into an
+        // arena-owned blob; `get` hands back a borrowed (`cap = 0`) String
+        // view that Displays directly and answers `.len()`. Mirrors the
+        // interpreter `test_arena_string_elements`.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Arena[String] = Arena.new();
+    let r0 = a.push("hello");
+    let r1 = a.push("world");
+    println(a.get(r0));
+    println(a.get(r1));
+    let s = a.get(r0);
+    println(s.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "hello\nworld\n5");
+        }
+    }
+
+    #[test]
+    fn test_e2e_arena_struct_elements() {
+        // The primary arena use case — an all-POD struct (AST-node / ECS-row
+        // shape) bump-allocated and read back by field. `get` copies the
+        // byte image into a fresh local (matching the interpreter's
+        // clone-on-`get`), so field access works like any struct binding.
+        // Mirrors the interpreter `test_arena_get_struct_field_access`.
+        let out = run_program(
+            r#"
+struct Node { val: i64, next: i64 }
+fn main() {
+    let a: Arena[Node] = Arena.new();
+    let r = a.push(Node { val: 7, next: 99 });
+    let n = a.get(r);
+    println(n.val);
+    println(n.next);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7\n99");
+        }
+    }
+
+    #[test]
+    fn test_e2e_arena_checkpoint_rewind() {
+        // Snapshot/restore: `high_water_mark` (erased to a bare i64 mark) +
+        // `rewind_to` truncates; pre-checkpoint handles stay valid. Mirrors
+        // the interpreter `test_arena_high_water_mark_and_rewind` +
+        // `_rewind_keeps_pre_checkpoint_items`.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Arena[i64] = Arena.new();
+    let r0 = a.push(100);
+    let cp = a.high_water_mark();
+    let _r1 = a.push(200);
+    let _r2 = a.push(300);
+    println(a.len());
+    a.rewind_to(cp);
+    println(a.len());
+    println(a.get(r0));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n1\n100");
+        }
+    }
+
+    #[test]
+    fn test_e2e_arena_foreign_checkpoint_ignored() {
+        // A checkpoint minted by a DIFFERENT arena must not truncate this
+        // one. With `ArenaCheckpoint` erased to a bare mark, the guard is
+        // static (`arena_checkpoint_owner`): the foreign `rewind_to`
+        // compiles to a no-op. ALSO regression-covers the par-group
+        // handle-escape bail (2026-07-17): two independent `Arena.new()`
+        // lets used to be auto-parallelized, and the branch's scope-exit
+        // `FreeArenaHandle` freed the handle the parent then locked — a
+        // pre-output futex hang. Mirrors the interpreter
+        // `test_arena_rewind_with_foreign_checkpoint_is_ignored`.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Arena[i64] = Arena.new();
+    let b: Arena[i64] = Arena.new();
+    let _ra = a.push(1);
+    let _rb0 = b.push(10);
+    let _rb1 = b.push(20);
+    let foreign = a.high_water_mark();
+    b.rewind_to(foreign);
+    println(b.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2");
+        }
+    }
+
+    #[test]
+    fn test_e2e_two_interners_par_group_bail() {
+        // Regression (2026-07-17, found via the Arena slice): two ANNOTATED
+        // `let t: Interner = Interner.new()` lets form an auto-par parallel
+        // group whose return-slot type IS inferable (the annotation lowers
+        // to `ptr`), so the group really parallelized — and the branch's
+        // scope-exit `FreeInternerHandle` freed the handle before the
+        // parent's `intern` locked it (futex hang on a dead Mutex, no
+        // output). The unannotated form dodged it by accident (RHS type
+        // uninferable → group bailed). Now any escaping handle-new binding
+        // bails its group to sequential (`compute_return_slots_checked`).
+        let out = run_program(
+            r#"
+fn main() {
+    let t: Interner = Interner.new();
+    let u: Interner = Interner.new();
+    let _a = t.intern("x");
+    let _b = u.intern("y");
+    println(t.len());
+    println(u.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n1");
+        }
+    }
+
+    #[test]
     fn test_e2e_closure_returns_struct_literal_direct() {
         // General closure fix (drives the get_or_init aggregate case): a closure
         // whose body is a struct literal is compiled with the struct as its

@@ -602,6 +602,69 @@ fn main() {
     }
 
     #[test]
+    fn asan_arena_local_binding_freed_no_leak() {
+        // Phase-8 Arena codegen: a local `Arena[T]` binding's scope-exit
+        // `FreeArenaHandle` must reclaim the runtime arena + every stored
+        // blob — a missed `karac_runtime_arena_free` leaks the table per
+        // iteration (LSan on Linux CI catches it). 40 fresh arenas mixing
+        // i64 pushes, a String push (arena-owned copy), a `get` read-back
+        // (the borrowed `cap = 0` String view must NOT be freed by the
+        // caller — double-free is the other failure mode), and a rewind
+        // (truncation drops are runtime-owned).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let a: Arena[i64] = Arena.new();
+        let r0 = a.push(7i64);
+        let cp = a.high_water_mark();
+        let _r1 = a.push(9i64);
+        a.rewind_to(cp);
+        total = total + a.get(r0) + a.len();
+        let s: Arena[String] = Arena.new();
+        let sr = s.push("alpha");
+        total = total + s.get(sr).len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // 40 * (7 + 1 + 5) = 520
+            &["520"],
+            "arena_local_binding_freed_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_arena_string_push_fresh_temp_no_leak() {
+        // `push(p + "pha")` — the fresh concat temp's buffer is orphaned
+        // after the runtime copies the bytes, so the push lowering must
+        // materialize it for scope-exit free (the `Interner.intern`
+        // posture). One leak per iteration without the materialization.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let a: Arena[String] = Arena.new();
+        let p = "al";
+        let r = a.push(p + "pha");
+        total = total + a.get(r).len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // 40 * len("alpha") = 200
+            &["200"],
+            "arena_string_push_fresh_temp_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_oncelock_string_set_get_no_leak() {
         // B-2026-07-12-2 heap-`T` ungate (gap 1, success-path element leak): a
         // heap-owning `OnceLock[String]` `set(v)` moves `v`'s buffer into the

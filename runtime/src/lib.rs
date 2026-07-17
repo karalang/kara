@@ -43,6 +43,7 @@ mod fatal;
 mod file;
 mod lifecycle;
 // GPU compute spine — phase-10 GPU codegen spike slice-0a. Opt-in only.
+mod arena;
 #[cfg(feature = "gpu")]
 mod gpu;
 mod interner;
@@ -269,6 +270,18 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         interner::karac_runtime_interner_resolve,
         interner::karac_runtime_interner_len,
         interner::karac_runtime_interner_free,
+    );
+    // Arena runtime (`runtime/src/arena.rs`). Backs `Arena.new` / `.push` /
+    // `.get` / `.len` / `.high_water_mark` / `.rewind_to` + the local
+    // binding's scope-exit free.
+    keep!(
+        arena::karac_runtime_arena_new,
+        arena::karac_runtime_arena_push,
+        arena::karac_runtime_arena_get,
+        arena::karac_runtime_arena_get_copy,
+        arena::karac_runtime_arena_len,
+        arena::karac_runtime_arena_rewind,
+        arena::karac_runtime_arena_free,
     );
     // Bounded-channel runtime (`runtime/src/bounded_channel.rs`). Backs
     // `BoundedChannel.new` / `.send` / `.recv` + the `BoundedChannel` Drop.

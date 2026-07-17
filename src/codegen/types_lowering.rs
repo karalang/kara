@@ -274,6 +274,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `ptr` handle is stored into.
                     return self.context.ptr_type(AddressSpace::default()).into();
                 }
+                if name == "Arena" {
+                    // `Arena[T]` is the opaque `*mut KaracArena` handle
+                    // (`src/codegen/arena.rs`) — same posture as `Interner`.
+                    return self.context.ptr_type(AddressSpace::default()).into();
+                }
+                if name == "ArenaRef" || name == "ArenaCheckpoint" {
+                    // Erased to a bare `i64` (the index / the mark). The
+                    // baked two-field struct shapes exist for the
+                    // interpreter's side-table routing, which the AOT handle
+                    // makes redundant; the foreign-checkpoint guard is
+                    // enforced statically (`arena_checkpoint_owner`).
+                    return self.context.i64_type().into();
+                }
                 if name == "Atomic" {
                     // `Atomic[T]` is a transparent wrapper over `T` —
                     // baked as `struct Atomic[T] { }` in

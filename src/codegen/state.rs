@@ -698,6 +698,18 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Alloca that holds the opaque `*mut KaracInterner` pointer.
         interner_alloca: PointerValue<'ctx>,
     },
+    /// Scope-exit free for a local `Arena[T]` binding. The alloca holds the
+    /// opaque `*mut KaracArena` handle from `Arena.new()`; the free reclaims
+    /// the arena and every stored blob in one call
+    /// (`karac_runtime_arena_free(load(arena_alloca))` — null-handle is a
+    /// runtime no-op). No element drop is ever needed: only heap-free
+    /// element kinds are lowered (scalars / all-POD structs / String bytes
+    /// the runtime owns), and `get` borrows (`cap = 0` String views) never
+    /// own.
+    FreeArenaHandle {
+        /// Alloca that holds the opaque `*mut KaracArena` pointer.
+        arena_alloca: PointerValue<'ctx>,
+    },
     /// Heap-closure-env epic Slice 1 (B-2026-06-22-2): a binding holding a
     /// heap-env closure value. At scope exit, load the fat pointer, extract its
     /// env slot (the RC box `{ i64 refcount, env }`), decrement the refcount,
