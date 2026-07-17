@@ -1579,3 +1579,48 @@ fn phase2_user_spawn_method_does_not_promote() {
         result.arc_values.get("make_handler")
     );
 }
+
+// ── Loop-body `let` re-declaration kills the prior value ────────
+
+#[test]
+fn loop_body_let_rebind_moved_out_no_rc() {
+    // B-2026-07-17-15: the natural "build a nested Vec row-by-row" shape. Each
+    // outer iteration `let mut row = Vec.new()` FRESHLY re-declares `row`, so
+    // consuming it via `outer.push(row)` is safe — the loop-body Define kills
+    // the prior iteration's value on the back-edge. `reassign_kills_by_
+    // reachability` must count that Define, not only a `=` Reassign, or `row`
+    // spuriously RC-boxes. The INNER build loop is what makes the consume C
+    // (`outer.push(row)`) and the use U (`row.push(j)`) dominance-incomparable
+    // and routes the only C->U path through the back-edge Define — the exact
+    // shape the reachability companion exists for.
+    let src = "fn f() -> i64 {\n\
+               \x20  let mut outer: Vec[Vec[i64]] = Vec.new();\n\
+               \x20  let mut i = 0;\n\
+               \x20  while i < 5 {\n\
+               \x20    let mut row: Vec[i64] = Vec.new();\n\
+               \x20    let mut j = 0;\n\
+               \x20    while j <= i {\n\
+               \x20      row.push(j);\n\
+               \x20      j = j + 1;\n\
+               \x20    }\n\
+               \x20    outer.push(row);\n\
+               \x20    i = i + 1;\n\
+               \x20  }\n\
+               \x20  outer.len()\n\
+               }";
+    let result = run(src);
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got {:?}",
+        result.errors
+    );
+    assert!(
+        result
+            .rc_values
+            .get("f")
+            .map(|m| !m.contains_key("row"))
+            .unwrap_or(true),
+        "row must NOT be RC-boxed (fresh loop-local let, moved out), got {:?}",
+        result.rc_values.get("f"),
+    );
+}

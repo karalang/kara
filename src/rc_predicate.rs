@@ -163,24 +163,34 @@ fn reassign_kills_by_reachability(
     ub: BlockId,
     ui: usize,
 ) -> bool {
-    // A reassign in C's own block, after C, kills the value on exit.
+    // A `let x = …` re-declaration inside a loop re-initialises the binding
+    // each iteration, so from a consume C's perspective the next iteration's
+    // Define kills the consumed value just as a `x = …` Reassign would. Both
+    // are rebinds; the three sibling predicates (loop-of-consume, trigger-2/3)
+    // already treat `Reassign | Define` alike, so this reachability companion
+    // must too — otherwise the natural "build a nested Vec row-by-row in a
+    // loop" shape (`while … { let mut row = Vec.new(); …; outer.push(row) }`)
+    // spuriously RC-boxes `row`, because the loop-body `let` isn't recognised
+    // as the kill that disconnects the back-edge C→U path (B-2026-07-17-…).
+    let is_rebind = |k: UseKind| matches!(k, UseKind::Reassign | UseKind::Define);
+    // A rebind in C's own block, after C, kills the value on exit.
     let cb_kills = uses
         .iter()
-        .any(|(rb, ri, r)| r.kind == UseKind::Reassign && *rb == cb && *ri > ci);
+        .any(|(rb, ri, r)| is_rebind(r.kind) && *rb == cb && *ri > ci);
     if cb_kills {
         return true;
     }
-    // A reassign in U's own block, before U, kills the value before the read.
+    // A rebind in U's own block, before U, kills the value before the read.
     let ub_kills = uses
         .iter()
-        .any(|(rb, ri, r)| r.kind == UseKind::Reassign && *rb == ub && *ri < ui);
+        .any(|(rb, ri, r)| is_rebind(r.kind) && *rb == ub && *ri < ui);
     if ub_kills {
         return true;
     }
     // Any OTHER block that rebinds the binding kills every path threading it.
     let forbidden: HashSet<BlockId> = uses
         .iter()
-        .filter(|(rb, _, r)| r.kind == UseKind::Reassign && *rb != cb && *rb != ub)
+        .filter(|(rb, _, r)| is_rebind(r.kind) && *rb != cb && *rb != ub)
         .map(|(rb, _, _)| *rb)
         .collect();
     // Nothing rebinds the value between C and U → the pure-dominance
