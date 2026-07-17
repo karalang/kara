@@ -16621,6 +16621,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_option_unsigned_unwrap_prints_unsigned() {
+        // B-2026-07-17-13: a narrow-UNSIGNED payload carried through an
+        // Option/Result value-unwrap (`unwrap` / `unwrap_or` / `expect`)
+        // reconstructs the right bits but printed SIGNED — `Option[u8]`-of-200
+        // `.unwrap_or(0)` was -56 (200 as i8) — because the unwrap result's
+        // unsigned surface type wasn't threaded to `expr_is_unsigned_int`.
+        // Signed payloads and the `None`/`Err` default arm must stay correct.
+        let out = run_program(
+            "fn main() {\n\
+                 let a: Option[u8] = Some(200u8);\n\
+                 println(a.unwrap());\n\
+                 let b: Option[u16] = Some(60000u16);\n\
+                 println(b.unwrap_or(0u16));\n\
+                 let c: Option[u32] = Some(4000000000u32);\n\
+                 println(c.expect(\"x\"));\n\
+                 let d: Option[i8] = Some(-56i8);\n\
+                 println(d.unwrap_or(0i8));\n\
+                 let g: Option[u8] = None;\n\
+                 println(g.unwrap_or(255u8));\n\
+                 let h: Result[u8, String] = Ok(250u8);\n\
+                 println(h.unwrap_or(0u8));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "200\n60000\n4000000000\n-56\n255\n250\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_print_i32_suffixed_literal_directly() {
         // `println(-123i32)` directly — exercises the literal-suffix
         // arm of `expr_is_unsigned_int` (the Unary(Neg, Integer)

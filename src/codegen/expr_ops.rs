@@ -2510,6 +2510,27 @@ impl<'ctx> super::Codegen<'ctx> {
             // type name and look the qualified key up. Same -56 print
             // symptom as the free-fn arm, method shape (2026-06-06).
             ExprKind::MethodCall { object, method, .. } => {
+                // Option/Result value-unwrap family (`unwrap` / `expect` /
+                // `unwrap_or` / `unwrap_or_else` / `unwrap_or_default`) returns
+                // the payload type `T`, so the result's signedness IS the inner
+                // payload's. The typechecker records `T` in
+                // `method_unwrap_inner_types` keyed by the call span; a
+                // narrow-UNSIGNED payload must print unsigned
+                // (`Option[u8]`-of-200 `.unwrap_or(0)` is 200, not -56 —
+                // B-2026-07-17-13, the unwrap-path sibling of the pattern-site
+                // narrow-unsigned fix). `is_some`/`is_none` also populate the
+                // table but return `bool`, so they are deliberately excluded.
+                if matches!(
+                    method.as_str(),
+                    "unwrap" | "expect" | "unwrap_or" | "unwrap_or_else" | "unwrap_or_default"
+                ) {
+                    if let Some(inner_te) = self
+                        .method_unwrap_inner_types
+                        .get(&(expr.span.offset, expr.span.length))
+                    {
+                        return super::tensor::type_expr_is_unsigned_int(inner_te);
+                    }
+                }
                 // Float→int conversion methods with an unsigned target return a
                 // bare `u*` (phase-8 cast slice 4): `saturating_to_u8` /
                 // `wrapping_to_u16` / `trunc_to_u32` … so the print / coercion
