@@ -1553,33 +1553,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("String.replace requires (from, to) arguments".to_string());
                 }
                 let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "rp");
-                let (from_data, from_len) = {
-                    let s = self.compile_expr(&args[0].value)?.into_struct_value();
-                    (
-                        self.builder
-                            .build_extract_value(s, 0, "rp.from.ptr")
-                            .unwrap()
-                            .into_pointer_value(),
-                        self.builder
-                            .build_extract_value(s, 1, "rp.from.len")
-                            .unwrap()
-                            .into_int_value(),
-                    )
-                };
-                let (to_data, to_len) = {
-                    let s = self.compile_expr(&args[1].value)?.into_struct_value();
-                    (
-                        self.builder
-                            .build_extract_value(s, 0, "rp.to.ptr")
-                            .unwrap()
-                            .into_pointer_value(),
-                        self.builder
-                            .build_extract_value(s, 1, "rp.to.len")
-                            .unwrap()
-                            .into_int_value(),
-                    )
-                };
-                Ok(self.build_string_xform_result(
+                let from_val = self.compile_expr(&args[0].value)?.into_struct_value();
+                let from_data = self
+                    .builder
+                    .build_extract_value(from_val, 0, "rp.from.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let from_len = self
+                    .builder
+                    .build_extract_value(from_val, 1, "rp.from.len")
+                    .unwrap()
+                    .into_int_value();
+                let to_val = self.compile_expr(&args[1].value)?.into_struct_value();
+                let to_data = self
+                    .builder
+                    .build_extract_value(to_val, 0, "rp.to.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let to_len = self
+                    .builder
+                    .build_extract_value(to_val, 1, "rp.to.len")
+                    .unwrap()
+                    .into_int_value();
+                let result = self.build_string_xform_result(
                     self.karac_string_replace_fn,
                     vec![
                         recv_data.into(),
@@ -1590,7 +1586,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         to_len.into(),
                     ],
                     "str.replace",
-                ))
+                );
+                // Free each fresh-owned String argument after the runtime call
+                // reads it — `replace` copies the matched/replacement bytes into
+                // its own result buffer, so a fresh-temp arg
+                // (`s.replace("-".to_string(), "_".to_string())`) has no other
+                // owner and otherwise leaks once per call (unbounded in a loop).
+                // Mirrors the `contains` / `starts_with` / `split` arg cleanup;
+                // `free_fresh_owned_str_arg` self-gates on a fresh-temp expr and
+                // the cap>0 marker, so a borrowed / literal arg is never freed.
+                self.free_fresh_owned_str_arg(&args[0].value, from_val.into());
+                self.free_fresh_owned_str_arg(&args[1].value, to_val.into());
+                Ok(result)
             }
             // `String.strip_{prefix,suffix}(p) -> Option[String]` via
             // `karac_string_strip_{prefix,suffix}`, which allocates the owned

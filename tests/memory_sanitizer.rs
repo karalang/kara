@@ -28402,4 +28402,43 @@ fn main() {
             "unwrap_or_fresh_string_default_no_leak",
         );
     }
+
+    #[test]
+    fn asan_string_replace_fresh_temp_args_no_leak() {
+        // B-2026-07-16-24: `String.replace(from, to)` never freed its fresh-owned
+        // String ARGUMENTS — the runtime helper copies the matched/replacement
+        // bytes into its own result buffer, so a fresh-temp arg
+        // (`s.replace("-".to_string(), "_".to_string())`) had no other owner and
+        // leaked once per arg per call (unbounded in a loop). The sibling
+        // arg-consuming methods (`contains`/`starts_with`/`split`/`find`) already
+        // called `free_fresh_owned_str_arg`; `replace` was the sole omission.
+        // Fixed by freeing both args after the runtime call. `free_fresh_owned_str_arg`
+        // self-gates on a fresh-temp expr + the cap>0 marker, so a borrowed
+        // identifier / literal arg is never freed (a moved owned-binding arg is
+        // reclaimed by the move machinery instead). 200× loop over three arg
+        // shapes — two fresh temps, a chained-temp arg, and a moved binding —
+        // so any per-call strand accumulates into a large LSan leak.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let s = "a-b-c-d".to_string();
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let r1 = s.replace("-".to_string(), "_".to_string());
+        total = total + (r1.len() as i64);
+        let r2 = s.replace("-".to_string().to_uppercase().to_lowercase(), "SEP".to_string());
+        total = total + (r2.len() as i64);
+        let from = "-".to_string();
+        let r3 = s.replace(from, "+".to_string());
+        total = total + (r3.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["5400"],
+            "string_replace_fresh_temp_args_no_leak",
+        );
+    }
 }
