@@ -28441,4 +28441,47 @@ fn main() {
             "string_replace_fresh_temp_args_no_leak",
         );
     }
+
+    #[test]
+    fn asan_unwrap_or_moved_binding_default_no_double_free() {
+        // B-2026-07-16-23 leg 1: `Option[T].unwrap_or(d)` where `d` is an OWNED
+        // Vec/String binding DOUBLE-FREED — `unwrap_or` consumes (moves) `d`, but
+        // the absent path bound a shallow copy of its {ptr,len,cap} to the result
+        // (freed at scope) AND the binding `d` was freed at its own scope: two
+        // frees of one buffer (native abort / JIT crash; interp fine — a
+        // memory-unsafety divergence). Fixed by suppressing the moved binding's
+        // scope-exit free (zero its cap, before the tag branch so both paths see
+        // it) and freeing the loaded copy on the present path — so the buffer is
+        // freed exactly once whichever way the branch goes. Gated to an
+        // inline-owned Vec/String binding, so a `ref` binding / scalar default is
+        // never touched. Loops 200× over both String and Vec owned-binding
+        // defaults, mixing present/absent, so a double-free aborts immediately
+        // and any residual per-iteration leak accumulates for LSan.
+        assert_clean_asan_run(
+            r#"
+fn opt_s(i: i64) -> Option[String] {
+    if i % 2 == 0 { Some("even-payload".to_string()) } else { None }
+}
+fn opt_v(i: i64) -> Option[Vec[i64]] {
+    if i % 3 == 0 { Some([i, i + 1]) } else { None }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let ds = "string-fallback".to_string();
+        let s = opt_s(i).unwrap_or(ds);
+        total = total + (s.len() as i64);
+        let dv: Vec[i64] = [7, 7, 7];
+        let v = opt_v(i).unwrap_or(dv);
+        total = total + (v.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["3233"],
+            "unwrap_or_moved_binding_default_no_double_free",
+        );
+    }
 }

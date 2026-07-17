@@ -2213,6 +2213,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
 
+            // A moved owned Vec/String binding default (`let d = "x".to_string();
+            // opt(i).unwrap_or(d)`) is CONSUMED by unwrap_or — the ownership
+            // checker treats it as a move (reusing `d` after is a move error).
+            // But `default_val` is a shallow copy of the binding's
+            // {ptr,len,cap}; without suppression the absent path binds that copy
+            // to the result (freed at scope) AND the binding `d` is freed at ITS
+            // scope → double-free (B-2026-07-16-23 leg 1). Suppress the binding's
+            // scope-exit free (zero its `cap`) HERE — before the branch, so BOTH
+            // paths see cap==0 — while the already-loaded `default_val` keeps the
+            // original cap>0 and is freed exactly once: by the present-path free
+            // below (Some/Ok) or via the result binding at scope (None/Err).
+            // Gated to a binding whose slot holds the Vec/String INLINE (owned):
+            // a `ref` binding's slot is a pointer, and a borrow cannot be moved
+            // into unwrap_or anyway, so it never reaches here — but the inline
+            // guard makes the present-path free provably safe (never frees a
+            // borrowed buffer).
+            let default_is_moved_heap_ident = matches!(
+                &default_arg.value.kind,
+                ExprKind::Identifier(n)
+                    if self.vec_elem_types.contains_key(n.as_str())
+                        && self.variables.get(n.as_str()).is_some_and(|s| matches!(
+                            s.ty,
+                            BasicTypeEnum::StructType(held) if held == self.vec_struct_type()
+                        ))
+            );
+            if default_is_moved_heap_ident {
+                self.suppress_source_vec_cleanup_for_arg(&default_arg.value);
+            }
+
             let fn_val = self.current_fn.unwrap();
             let present_bb = self.context.append_basic_block(fn_val, "uo.present");
             let absent_bb = self.context.append_basic_block(fn_val, "uo.absent");
@@ -2277,6 +2306,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // double-free. B-2026-07-16-22.
             if self.expr_yields_fresh_owned_temp(&default_arg.value)
                 || self.expr_is_fresh_owned_string_slice(&default_arg.value)
+                || default_is_moved_heap_ident
             {
                 self.free_str_vec_buffer_if_heap(default_val);
             }
