@@ -9380,23 +9380,65 @@ fn test_method_resolution_specialized_impl_correct_args_resolves() {
 }
 
 #[test]
-fn test_method_resolution_prelude_silent_fallthrough_preserved_when_method_absent() {
-    // No impl declares `truly_nonexistent_method` anywhere on `Vec` — the
-    // silent fall-through is preserved for prelude types whose method surface
-    // is only partially modelled in the impl table (the args-specialization
-    // tightening only fires when the method exists on a *different*
-    // specialization). This is the regression gate for the historical
-    // partially-implicit prelude method surface comment in
-    // `src/typechecker/expr_method_call.rs`.
-    //
-    // NOTE: `Option`/`Result` are deliberately EXEMPT from this leniency
-    // (B-2026-07-14-5) — their surface is exhaustively modelled, so an unknown
-    // method on one is a real NoMethodFound (see
-    // `test_unknown_method_on_option_is_rejected`). This gate therefore uses
-    // `Vec`, which remains on the silent path (graduating it is the open
-    // B-2026-07-17-12 — it requires modelling the full iterator-terminal-on-
-    // Vec surface that codegen handles via syntax-directed intercepts).
-    typecheck_ok("fn main() { let mut v: Vec[i64] = Vec.new(); v.truly_nonexistent_method(); }");
+fn test_unknown_method_on_vec_is_rejected() {
+    // `Vec` graduated into the exhaustive-prelude set (B-2026-07-17-12): a
+    // genuinely-absent method is now a real `NoMethodFound`, not the historical
+    // silent `Type::Error` fall-through (which unified with anything, so
+    // `v.truly_nonexistent_method()` typechecked clean and then ran on no
+    // backend). This replaces the former
+    // `test_method_resolution_prelude_silent_fallthrough_preserved_when_method_absent`
+    // gate, which asserted the pre-fix leniency.
+    let errors = typecheck_errors(
+        "fn main() { let mut v: Vec[i64] = Vec.new(); v.truly_nonexistent_method(); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+        "expected NoMethodFound for an absent Vec method, got: {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_direct_iterator_adaptor_on_vec_rejected_with_iter_hint() {
+    // Iterator adaptors/terminals called DIRECTLY on a `Vec` (no `.iter()`)
+    // run on no backend (interpreter: "method not found"; AOT: link fail /
+    // empty miscompile), so they are rejected at check with an actionable
+    // `.iter()` hint rather than an edit-distance neighbour (B-2026-07-17-12).
+    for (prog, method) in [
+        (
+            "fn main() { let v = [1, 2, 3]; v.map(|x| x * 2).collect(); }",
+            "map",
+        ),
+        ("fn main() { let v = [1, 2, 3]; v.collect(); }", "collect"),
+        (
+            "fn main() { let v = [1, 2, 3]; v.filter(|x| x > 1).count(); }",
+            "filter",
+        ),
+    ] {
+        let errors = typecheck_errors(prog);
+        let msg = errors
+            .iter()
+            .find(|e| e.kind == TypeErrorKind::NoMethodFound)
+            .map(|e| e.message.clone())
+            .unwrap_or_else(|| panic!("expected NoMethodFound for direct `.{method}()` on Vec"));
+        assert!(
+            msg.contains("require an explicit `.iter()`") && msg.contains(".iter()."),
+            "expected an `.iter()` hint for direct `.{method}()` on Vec, got: {msg}"
+        );
+    }
+}
+
+#[test]
+fn test_iterator_chain_via_iter_still_resolves_on_vec() {
+    // The regression guard for the flip above: the SUPPORTED form — an explicit
+    // `.iter()` before the adaptor/terminal — still type-resolves cleanly (it
+    // routes through the `Iterator[T]` dispatch, never the None arm). Direct
+    // numeric terminals (`v.sum()`, B-2026-07-16-14) also still resolve.
+    typecheck_ok("fn main() { let v = [1, 2, 3]; let d: Vec[i64] = v.iter().map(|x| x * 2).collect(); println(f\"{d}\"); }");
+    typecheck_ok("fn main() { let v = [1, 2, 3]; let s: i64 = v.iter().filter(|x| x > 1).sum(); println(f\"{s}\"); }");
+    typecheck_ok("fn main() { let v = [1, 2, 3]; let s: i64 = v.sum(); println(f\"{s}\"); }");
 }
 
 // ── Method resolution: stdlib typo suggestions ──────────────────

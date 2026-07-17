@@ -659,6 +659,48 @@ impl<'a> super::TypeChecker<'a> {
         )
     }
 
+    /// The `Iterator[T]` adaptor/terminal surface — the exact method set
+    /// `infer_iterator_method` (src/typechecker/stdlib_iter.rs) accepts on an
+    /// `Iterator` receiver. A direct call of one of these on a `Vec`/`VecDeque`
+    /// (no `.iter()` hop) is rejected with an actionable `.iter()` hint rather
+    /// than an edit-distance neighbour (B-2026-07-17-12). Keep in sync with the
+    /// `require_known_method` list at the tail of `infer_iterator_method`.
+    pub(super) fn is_iterator_surface_method(method: &str) -> bool {
+        matches!(
+            method,
+            "all"
+                | "any"
+                | "chain"
+                | "chunk_by"
+                | "chunks"
+                | "collect"
+                | "count"
+                | "cycle"
+                | "enumerate"
+                | "filter"
+                | "flat_map"
+                | "fold"
+                | "for_each"
+                | "inspect"
+                | "map"
+                | "max"
+                | "min"
+                | "next"
+                | "peekable"
+                | "product"
+                | "reduce"
+                | "scan"
+                | "skip"
+                | "skip_while"
+                | "step_by"
+                | "sum"
+                | "take"
+                | "take_while"
+                | "windows"
+                | "zip"
+        )
+    }
+
     /// Result type of a comptime `Type`-reflection method. The caller has
     /// already established the receiver is the `Type` pseudotype and the
     /// method is in [`Self::is_reflection_method`]. Reflection methods take
@@ -5513,15 +5555,22 @@ impl<'a> super::TypeChecker<'a> {
                     // historical silent prelude fall-through.
                     || self.env.distinct_bases.contains_key(&type_name))
                     && !crate::prelude::PRELUDE_TYPES.contains(&type_name.as_str());
-                // `Option` / `Result` are the exception among prelude types:
-                // their method surface is small and EXHAUSTIVELY modelled —
-                // every valid method (`unwrap`, `map`, `is_some`, `ok_or`,
+                // `Option` / `Result` / `Vec` / `VecDeque` are the prelude
+                // types whose method surface is EXHAUSTIVELY resolved before
+                // this fall-through, so a method that reaches here is genuinely
+                // absent. For `Option`/`Result` the surface is small and every
+                // valid method (`unwrap`, `map`, `is_some`, `ok_or`,
                 // `map_err`, …) resolves via a dedicated arm above or a baked
-                // stdlib impl and returns/short-circuits BEFORE this
-                // fall-through, so a method that reaches here is genuinely
-                // absent (verified: the full valid-method set resolves without
-                // hitting None). The overwhelmingly common way to reach here is
-                // a wrong-container call — invoking an inner-type method on an
+                // stdlib impl. For `Vec`/`VecDeque` the native surface
+                // (`push`/`pop`/`get`/`sort`/`sum`/`max`/`join`/…) resolves in
+                // dedicated arms, and the iterator ADAPTOR/TERMINAL surface
+                // (`map`/`filter`/`collect`/`fold`/…) resolves only through an
+                // explicit `.iter()` (the `Iterator[T]` dispatch above) — a
+                // direct `v.map(...)` runs on NO backend (interpreter: "method
+                // not found"; AOT: link/miscompile), so accepting it was a pure
+                // check/execution hole (B-2026-07-17-12). The common way to
+                // reach here is either that iter-less adaptor call or a
+                // wrong-container call — invoking an inner-type method on an
                 // un-unwrapped optional (`opt.len()`, `res.push(x)`,
                 // `grid.get(i).len()` where `get` returns `Option[Vec[_]]`).
                 // The silent fall-through poisoned those to `Type::Error`
@@ -5531,7 +5580,7 @@ impl<'a> super::TypeChecker<'a> {
                 // codegen “no handler for method”. Reject them here like a
                 // user-defined type, the same silent-poison tightening applied
                 // to numeric receivers (B-2026-07-03-5) and user types.
-                const EXHAUSTIVE_PRELUDE: &[&str] = &["Option", "Result"];
+                const EXHAUSTIVE_PRELUDE: &[&str] = &["Option", "Result", "Vec", "VecDeque"];
                 let is_exhaustive_prelude = EXHAUSTIVE_PRELUDE.contains(&type_name.as_str());
                 // Args-specialization tightening: even on prelude types, fire
                 // NoMethodFound when the method exists on a *different*
@@ -5592,13 +5641,35 @@ impl<'a> super::TypeChecker<'a> {
                 if (is_user_defined || is_exhaustive_prelude || method_on_other_specialization)
                     && !self.type_has_comptime_derive(&type_name)
                 {
-                    let candidates = self.env.collect_method_names(&type_name, &[]);
-                    let candidate_refs: Vec<&str> = candidates.iter().map(String::as_str).collect();
                     let mut msg = format!("no method '{}' on type '{}'", method, type_name);
-                    if let Some(suggestion) =
-                        crate::edit_distance::suggest_similar(method, &candidate_refs)
+                    // Iterator adaptors/terminals (`map`/`filter`/`collect`/…)
+                    // are not methods on a `Vec`/`VecDeque` directly — they live
+                    // on `Iterator[T]`, reached via `.iter()`. A direct
+                    // `v.map(...)` reaches here (silent `Type::Error` pre-fix,
+                    // runs on no backend). When the absent method IS an iterator
+                    // method, the actionable fix is the `.iter()` hop, not an
+                    // edit-distance neighbour — surface that instead
+                    // (B-2026-07-17-12).
+                    if matches!(type_name.as_str(), "Vec" | "VecDeque")
+                        && Self::is_iterator_surface_method(method)
                     {
-                        msg.push_str(&format!(", did you mean '{}'?", suggestion));
+                        let recv = match &object.kind {
+                            ExprKind::Identifier(n) => n.clone(),
+                            _ => "xs".to_string(),
+                        };
+                        msg.push_str(&format!(
+                            ": iterator adaptors/terminals require an explicit `.iter()` — write `{}.iter().{}(...)`",
+                            recv, method
+                        ));
+                    } else {
+                        let candidates = self.env.collect_method_names(&type_name, &[]);
+                        let candidate_refs: Vec<&str> =
+                            candidates.iter().map(String::as_str).collect();
+                        if let Some(suggestion) =
+                            crate::edit_distance::suggest_similar(method, &candidate_refs)
+                        {
+                            msg.push_str(&format!(", did you mean '{}'?", suggestion));
+                        }
                     }
                     self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
                 }
