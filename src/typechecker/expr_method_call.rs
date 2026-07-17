@@ -2170,6 +2170,28 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             };
             if let Some(tensor_args) = tensor_args.cloned() {
+                // Record the receiver's ELEMENT type keyed by the reduction call
+                // span so codegen can reduce over a NON-IDENTIFIER receiver — a
+                // tensor-producing chain like `a.zip_with(b, f).sum()`
+                // (B-2026-07-13-5 legs A/C). `MethodCall.span == receiver.span`
+                // collapses the sum/zip_with/`a` spans into one, so
+                // `expr_types` (hence `tensor_typed_exprs`) at that span holds
+                // the OUTERMOST scalar reduce result, not the intermediate
+                // Tensor — the element type is unrecoverable from the span
+                // otherwise. Reuses `temp_recv_elem_types` (the fresh-temp
+                // non-identifier collection-receiver element-type table); the
+                // by-name codegen path ignores it (it uses `tensor_var_infos`),
+                // so recording unconditionally is harmless. Only the scalar
+                // full reductions codegen wires (`sum`/`mean`/`prod`/`min`/`max`)
+                // are recorded; `sum_axis`/`mean_axis` (tensor result) stay on
+                // the by-name path.
+                if matches!(method, "sum" | "mean" | "prod" | "min" | "max")
+                    && !tensor_args.is_empty()
+                {
+                    let elem_te = Self::type_to_type_expr(&tensor_args[0]);
+                    self.temp_recv_elem_types
+                        .insert(SpanKey::from_span(span), elem_te);
+                }
                 return self.infer_tensor_reduce(method, &tensor_args, args, span);
             }
         }

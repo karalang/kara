@@ -58307,6 +58307,44 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_reduce_on_chain_receiver() {
+        // B-2026-07-13-5 legs A/C: a scalar reduction on a NON-IDENTIFIER
+        // (method-chain) receiver — `a.zip_with(b, f).sum()`, `a.map(g).max()`
+        // — failed codegen with "no handler for method 'sum' on non-identifier
+        // receiver" (try_compile_tensor_reduce only matched Identifier/Self).
+        // The receiver's element type is unrecoverable from the collided span
+        // via tensor_typed_exprs, so the typechecker records it in
+        // temp_recv_elem_types (keyed by the reduce call span) for codegen to
+        // reduce the compiled temp and free it. Covers `sum`/`prod`/`max`/`min`,
+        // a `map` chain, i64 + f32 elements, and a generic-shape-param `[D]`
+        // function (leg C).
+        let src = r#"
+fn combine[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
+    a.zip_with(b, |x, y| x + y).sum()
+}
+fn main() {
+    let a1: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]);
+    let b1: Tensor[f32, [3]] = Tensor.from([4.0f32, 5.0f32, 6.0f32]);
+    println(f"{a1.zip_with(b1, |x, y| x + y).sum()}");
+    let a2: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]);
+    let b2: Tensor[f32, [3]] = Tensor.from([4.0f32, 5.0f32, 6.0f32]);
+    println(f"{a2.zip_with(b2, |x, y| x * y).prod()}");
+    let a3: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]);
+    println(f"{a3.map(|x| x * 2.0f32).max()}");
+    let ia: Tensor[i64, [3]] = Tensor.from([10, 20, 30]);
+    let ib: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{ia.zip_with(ib, |x, y| x - y).sum()}");
+    let ga: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]);
+    let gb: Tensor[f32, [3]] = Tensor.from([4.0f32, 5.0f32, 6.0f32]);
+    println(f"{combine(ga, gb)}");
+}
+"#;
+        // 21; 4*10*18=720; max(2,4,6)=6; (9+18+27)=54; combine=21.
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "21\n720\n6\n54\n21\n");
+    }
+
+    #[test]
     fn test_e2e_zip_with_rejects_noninline() {
         // Same inline-literal boundary as `map` / the folds, on both containers.
         let col = r#"

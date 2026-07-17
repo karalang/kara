@@ -3214,7 +3214,7 @@ impl<'ctx> super::Codegen<'ctx> {
         object: &Expr,
         method: &str,
         args: &[CallArg],
-        _call_span: &Span,
+        call_span: &Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let is_full = matches!(method, "sum" | "mean" | "prod" | "min" | "max" | "range");
         let is_axis = matches!(method, "sum_axis" | "mean_axis");
@@ -3234,7 +3234,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let name = match &object.kind {
             ExprKind::Identifier(n) => n.as_str(),
             ExprKind::SelfValue => "self",
-            _ => return Ok(None),
+            // Non-identifier receiver — a tensor-producing method chain such as
+            // `a.zip_with(b, f).sum()` (B-2026-07-13-5 legs A/C). `tensor_var_infos`
+            // is keyed by binding name and has no entry for a temp; the element
+            // type comes from `temp_recv_elem_types` (recorded by the typechecker
+            // at the reduction call span, span-collision-immune). Handled for the
+            // scalar FULL reductions; other forms fall through.
+            _ => return self.try_compile_tensor_reduce_expr_receiver(object, method, call_span),
         };
         let Some(info) = self.tensor_var_infos.get(name).cloned() else {
             return Ok(None);
@@ -3262,6 +3268,51 @@ impl<'ctx> super::Codegen<'ctx> {
                 args,
             )?
         };
+        Ok(Some(result))
+    }
+
+    /// Scalar tensor reduction on a NON-IDENTIFIER receiver — a
+    /// tensor-producing method chain (`a.zip_with(b, f).sum()`,
+    /// `t.map(g).mean()`), B-2026-07-13-5 legs A/C. The receiver has no
+    /// `tensor_var_infos` entry (that table is binding-name-keyed), and its
+    /// element type is unrecoverable from the span via `tensor_typed_exprs`
+    /// because `MethodCall.span == receiver.span` collapses the reduce / chain
+    /// / base spans into one (so the span holds the outer scalar reduce result,
+    /// not the intermediate Tensor). The element `TypeExpr` was therefore
+    /// recorded span-collision-immune by the typechecker in
+    /// `temp_recv_elem_types` at the reduction call span. Compile the receiver
+    /// to a fresh tensor pointer, run the scalar reduction (shape read from the
+    /// runtime header — only `elem`/`elem_unsigned` are needed here), then free
+    /// the temp (a chain result is a fresh block owned by nothing —
+    /// `tensor_operand_is_owned_fresh_temp`). Only the scalar full reductions
+    /// (`sum`/`mean`/`prod`/`min`/`max`) are wired; the tensor-producing /
+    /// axis / arg-order forms on a chained receiver return `None` and fall
+    /// through to the existing loud diagnostic.
+    fn try_compile_tensor_reduce_expr_receiver(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        call_span: &Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        if !matches!(method, "sum" | "mean" | "prod" | "min" | "max") {
+            return Ok(None);
+        }
+        let key = (call_span.offset, call_span.length);
+        let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() else {
+            return Ok(None);
+        };
+        let elem = self.llvm_type_for_type_expr(&elem_te);
+        let elem_unsigned = type_expr_is_unsigned_int(&elem_te);
+        let t_val = self.compile_expr(object)?;
+        let t_ptr = t_val.into_pointer_value();
+        let result = self.compile_tensor_full_reduce(method, elem, elem_unsigned, t_ptr)?;
+        // The chained receiver is a fresh heap tensor owned by nothing; free it
+        // after the reduction has read it (mirrors the binop fresh-temp free).
+        if self.tensor_operand_is_owned_fresh_temp(object) {
+            self.builder
+                .build_call(self.free_fn, &[t_ptr.into()], "")
+                .unwrap();
+        }
         Ok(Some(result))
     }
 
