@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 143 | 0 |
 | leak | 80 | 0 |
 | codegen-gap | 59 | 0 |
-| double-free | 59 | 1 |
+| double-free | 59 | 0 |
 | missing-feature | 46 | 1 |
 | false-positive | 35 | 0 |
 | crash | 24 | 0 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 369 | 2 |
+| codegen | 369 | 1 |
 | typecheck | 61 | 2 |
 | interp | 48 | 0 |
 | ownership | 22 | 0 |
@@ -123,20 +123,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **522 surfaced · 4 open · 514 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **522 surfaced · 3 open · 515 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-13-5 | 2026-07-13 | codegen+typecheck | medium | Three composable Tensor limitations block idiomatic numerical-stdlib .kara over generic-dim tensors: (A) a tensor reduction/transform on a NON-IDENTIFIER receiver (method chain, e.g. `a.zip_with(b, f).sum()`) fails codegen with 'no handler for method sum on non-identifier receiver' — try_compile_tensor_reduce (tensor.rs:2794) only matches Identifier/SelfValue receivers, returning None for a MethodCall receiver so dispatch falls through; (B) a generic shape parameter `D` (declared `fn f[D](t: Tensor[f32,[D]])`) is usable in the SIGNATURE but NOT in a function-BODY type annotation — `let p: Tensor[f32,[D]] = ...` fails typecheck with "const expression: 'D' is not a known const"; (C) a `ref Tensor[f32,[D]]` PARAM passed to a tensor method taking `other: ref Tensor` (zip_with) fails typecheck with 'expected Tensor, found ref Tensor'. Each is loud (compile error / --interp hint), interp-correct where reachable. | — |
-| B-2026-07-16-23 | 2026-07-16 | codegen | medium | `unwrap_or(<non-Call heap default>)` mismanaged the eager default's ownership. LEG 1 (FIXED in c9593ed): an owned-binding default (moved Vec/String identifier) DOUBLE-FREED. REMAINING (open): a DIRECT array/collection-literal default (`unwrap_or([9,9,9])`) LEAKS, and a DIRECT f-string default (`unwrap_or(f"…")`) DOUBLE-FREES. Only the Call/MethodCall/String-slice (B-2026-07-16-22) and owned-binding (leg 1) default shapes are now correct. | none |
 | B-2026-07-17-5 | 2026-07-17 | cli | low | wasm link fails with cryptic `undefined symbol: __wasm_first_page_end` (from rustup's self-contained wasi libc.a dlmalloc.c.obj) when the PATH `wasm-ld` is older than the active rustup toolchain's wasi-libc — the linker resolution order (KARAC_WASM_LD > PATH wasm-ld > brew > rust-lld) picks the stale system linker over the version-matched rust-lld sitting in the same rustup toolchain that supplied the libc. | none |
 | B-2026-07-17-12 | 2026-07-17 | typecheck | medium | Unknown methods on non-exhaustive prelude types (Vec/String/Map/Set/...) silently type as Type::Error, which unifies with ANYTHING: `v.some_typo()` passes karac check, and pre-B-2026-07-16-14 even `let x: bool = v.sum()` checked clean. EXHAUSTIVE_PRELUDE (expr_method_call.rs ~5400) covers only Option/Result, so every other built-in receiver gets the silent fall-through — the check/execution contract (the AI-first wedge: check-clean must run) is open on exactly the receivers LLM authors touch most. | none |
 
-### Fixed (514)
+### Fixed (515)
 
-<details><summary>514 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>515 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -641,6 +640,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **522 surfaced 
 | B-2026-07-16-20 | other+interp | medium | A `.to_string()` chained as the receiver of another method (`s.to_string().to_uppercase()`, `s.trim().to_string()…`) build-failed with 'Vec/String me… | c043d03 |
 | B-2026-07-16-21 | codegen | medium | A heap-String-returning method used as the RECEIVER of another method (`s.to_uppercase().to_lowercase()`, `e.to_uppercase().split(",")`, `c.trim().to… | c043d03 |
 | B-2026-07-16-22 | codegen | medium | `Option[String].unwrap_or(default)` / `Result[String,E].unwrap_or(default)` leaks a fresh heap-String default once per call when the receiver is data… | 598765b |
+| B-2026-07-16-23 | codegen | medium | `unwrap_or(<non-Call heap default>)` mismanaged the eager default's ownership | ed0b9db |
 | B-2026-07-16-24 | codegen | medium | `String.replace(from, to)` never freed its fresh-owned String ARGUMENTS — a fresh-temp arg (`s.replace(a.to_string(), b.to_string())`) leaks once per… | 7be908c |
 | B-2026-07-17-2 | codegen | high | shared-ownership-matrix frontier REGRESSION: `forwarding_chain/ResultOk` + `forwarding_chain/ResultErr` went Clean → Leak with RC-elision ON (`KARAC_… | 3830213 — Result-carried payload exclusion at rc-elide classification (src/rc_elide.rs condition-1 filter): a param whose declared type wraps a shared handle in Result (at any nesting) is never admitted to the elidable set. Root cause confirmed as the e39db64 borrow-forward relaxation admitting the `eat2(r)` bare forward while `eat` itself stayed un-elided (forwarding escapes condition 2): `eat` compiled the forward as a MOVE (own release suppressed) and `eat2` skipped its elided release — nobody freed the Node. The pair-elision is edge-local (skip call-site retain + skip callee release = net zero) and is only balanced when the edge carries that pair: Option[shared]/bare-shared args follow the caller-retains convention (both halves exist), Result[shared] args follow the MOVE convention (no retain twin — the B-2026-07-12-24 scope-exit-dec residual), so Result edges have no pair to skip. Re-admitting Result is gated on B-2026-07-12-24 giving Result[shared] locals a real scope-exit release. Verified: matrix repro leak gone (valgrind 0 definitely lost, interp parity, elidable set empty for the chain), the Option twin of the SAME chain still elides and is valgrind-clean, treesum win intact at 26.8% elide-on vs off (0.364s vs 0.462s, within the 17-32% band), shared_ownership_matrix frontier restored (FLOWS.expected untouched per the filing's instruction). Unit pin: rc_elide::tests::result_carried_param_never_elides. |
 | B-2026-07-17-3 | codegen | high | An owned `self` receiver method returned/moved with a non-empty heap (Vec/String) field DOUBLE-FREES the field buffer | 13eda85 (direct-return leg, sibling session) + 2df786d (rebind leg) — both legs were the same missing-SelfValue gate at different call sites of the owned-struct move-out suppression. Direct return (`fn ident(self) -> T {{ self }}`): suppress_source_vec_cleanup_for_arg_ex's var_name match gained a SelfValue -> 'self' arm (gated to an inline-struct self slot so ref self never GEPs through a borrow pointer). Rebind (`let mut b = self; ...; b` — the builder/fluent shape): the Let-arm's move-source resolution in stmts.rs likewise resolves SelfValue to 'self', routing it into the same helper (and into suppress_user_drop_for_var for user-Drop structs) exactly like a plain owned-struct Identifier move. NOT a deeper deep-copy interaction after all — the deep-copy at entry was correct; only the suppression routing missed SelfValue. Verified: builder chain, String-field rebind, user-Drop rebind — interp/JIT/native parity, valgrind clean (drop count exactly matches the two deep-copied instances); memory_sanitizer + codegen suites green. Pins: asan_owned_self_direct_return_no_double_free (13eda85), asan_owned_self_rebind_builder_chain_no_double_free (this fix). |
