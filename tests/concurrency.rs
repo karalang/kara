@@ -1550,7 +1550,7 @@ fn test_cost_model_call_plus_literal_collection_marked_trivial() {
     let analysis = analyze(
         r#"
         effect resource R;
-        fn report(v: Vec[String]) writes(R) {}
+        fn report(v: ref Vec[String]) writes(R) {}
         fn main() {
             let a: Vec[String] = ["x", "y"];
             report(a);
@@ -1559,6 +1559,12 @@ fn test_cost_model_call_plus_literal_collection_marked_trivial() {
         }
         "#,
     );
+    // `report` takes `ref Vec[String]` (B-2026-07-16-19): an OWNED bare
+    // container arg is a consuming read of a captured heap local, which the
+    // move-hazard gate now keeps out of par groups entirely (the branch
+    // would free the callee-consumed buffer the parent's scope-exit free
+    // still references). The borrow form preserves this test's actual
+    // subject — the constant-init cost-model classification.
     let main_fc = get_function(&analysis, "main");
     let g = main_fc
         .parallel_groups
@@ -3981,5 +3987,178 @@ fn test_non_recursive_independent_calls_still_group() {
     assert!(
         !fc.parallel_groups.is_empty(),
         "independent non-recursive calls must still form a parallel group"
+    );
+}
+
+// ── B-2026-07-16-19: move-hazard gate — consuming reads of captured owned-
+// heap bindings keep their statements OUT of par groups. The par-branch env
+// bit-copies a capture, so a branch that moves heap ownership out of it
+// (match payload move, owned call arg, Option/Result combinator receiver)
+// frees a buffer the parent's scope-exit cleanup still references — the
+// double-free class the stmt-vs-stmt conflict graph cannot see.
+
+#[test]
+fn test_move_hazard_consuming_match_on_option_string_blocks_group() {
+    // The B-2026-07-16-19 repro shape: `match r { Some(w) => .. }` on an
+    // un-annotated Option[String] binding, grouped (pre-fix) with an
+    // independent Option-returning call. `analyze_typed` so the hazard
+    // classification exercises the real pipeline's `expr_types` path (the
+    // `pattern_binding_types` string is just "Option" — payload lost).
+    let analysis = analyze_typed(
+        r#"
+        fn first_word(s: String) -> Option[String] {
+            let words = s.split(" ");
+            if words.len() > 0 { Some(words[0]) } else { None }
+        }
+        fn main() {
+            let r = first_word("hello world");
+            match r {
+                Some(w) => println(w),
+                None => println("e"),
+            };
+            let e = first_word("");
+            println(e.unwrap_or("none").len());
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "the consuming `match r` must not enter a par group (and the \
+         remaining eligible stmt cannot form a group of one); got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_move_hazard_owned_vec_call_arg_blocks_group() {
+    // Bare owned-container call arg: `eat(s)` moves `s` into the callee
+    // (param is bare `String`), so the stmt must not be grouped with the
+    // independent `work(..)` sibling. Annotated binding — the declared-type
+    // hazard path.
+    let analysis = analyze_typed(
+        r#"
+        effect resource R;
+        fn eat(s: String) -> i64 writes(R) { s.len() }
+        fn work(n: i64) -> i64 {
+            let mut t = 0;
+            let mut i = 0;
+            while i < n { t = t + i; i = i + 1; }
+            t
+        }
+        fn main() {
+            let s: String = "kara-language-compiler" + "-with-heap-payload";
+            let a = eat(s);
+            let b = work(50000);
+            println(a + b);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "an owned bare-container call arg is a consuming read; got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_move_hazard_ref_param_reader_calls_still_group() {
+    // The bread-and-butter reader fan-out must SURVIVE the gate: two calls
+    // borrowing the same Vec through `ref` params are non-consuming.
+    let analysis = analyze_typed(
+        r#"
+        effect resource R;
+        effect resource S;
+        fn total(v: ref Vec[i64]) -> i64 writes(R) {
+            let mut t = 0;
+            for x in v.iter() { t = t + x; }
+            t
+        }
+        fn peak(v: ref Vec[i64]) -> i64 writes(S) {
+            let mut m = 0;
+            for x in v.iter() { if x > m { m = x; } }
+            m
+        }
+        fn main() {
+            let v: Vec[i64] = [3, 1, 4, 1, 5, 9, 2, 6];
+            let a = total(v);
+            let b = peak(v);
+            println(a + b);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc
+            .parallel_groups
+            .iter()
+            .any(|g| g.statement_indices.len() >= 2),
+        "ref-param reader calls are non-consuming and must still group; got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_move_hazard_publish_only_option_calls_still_group() {
+    // Two Option[String]-returning calls with literal args consume nothing
+    // pre-existing — they publish fresh bindings through return slots. The
+    // gate must leave them grouped (the branch-side publish suppression +
+    // parent re-registration make the slot round-trip safe).
+    let analysis = analyze_typed(
+        r#"
+        fn first_word(s: String) -> Option[String] {
+            let words = s.split(" ");
+            if words.len() > 0 { Some(words[0]) } else { None }
+        }
+        fn main() {
+            let a = first_word("aa bb");
+            let b = first_word("cc dd");
+            println(a.unwrap_or("x").len());
+            println(b.unwrap_or("y").len());
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc
+            .parallel_groups
+            .iter()
+            .any(|g| g.statement_indices.len() >= 2),
+        "publish-only Option-returning calls must still group; got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_move_hazard_option_combinator_receiver_blocks_group() {
+    // `r.unwrap_or(..)` consumes the Option receiver (the payload moves into
+    // the result) — the stmt must not enter a group while the parent still
+    // owns `r`'s payload cleanup.
+    let analysis = analyze_typed(
+        r#"
+        fn first_word(s: String) -> Option[String] {
+            let words = s.split(" ");
+            if words.len() > 0 { Some(words[0]) } else { None }
+        }
+        fn work(n: i64) -> i64 {
+            let mut t = 0;
+            let mut i = 0;
+            while i < n { t = t + i; i = i + 1; }
+            t
+        }
+        fn main() {
+            let r = first_word("hello world");
+            let a = r.unwrap_or("x").len();
+            let b = work(50000);
+            println(a + b);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "an Option-combinator receiver is a consuming read; got {:?}",
+        main_fc.parallel_groups
     );
 }

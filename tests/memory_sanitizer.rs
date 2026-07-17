@@ -28484,4 +28484,117 @@ fn main() {
             "unwrap_or_moved_binding_default_no_double_free",
         );
     }
+    #[test]
+    fn asan_auto_par_consuming_match_on_option_string_no_double_free() {
+        // B-2026-07-16-19: a fn returning `Option[String]` built from a MOVED
+        // Vec element (`Some(words[0])` after `split`), called twice in a main
+        // whose statement mix auto-parallelizes. Pre-fix the `match r` stmt was
+        // lifted into a par-branch worker: the worker's match moved the payload
+        // out of its bit-copied env alloca and freed it, then the parent's
+        // scope-exit `FreeInlineOptionPayload` freed the same buffer again
+        // (JIT: "free(): double free"; native: valgrind Invalid free under
+        // karac_par_run). The analyzer's move-hazard gate now keeps the
+        // consuming match sequential.
+        assert_clean_asan_run(
+            r#"
+fn first_word(s: String) -> Option[String] {
+    let words = s.split(" ");
+    if words.len() > 0 { Some(words[0]) } else { None }
+}
+fn main() {
+    let r = first_word("hello world");
+    match r {
+        Some(w) => println(w),
+        None => println("e"),
+    };
+    let e = first_word("");
+    println(e.unwrap_or("none").len());
+}
+"#,
+            &["hello", "0"],
+            "auto_par_consuming_match_on_option_string_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_auto_par_published_option_string_slots_no_double_free_no_leak() {
+        // B-2026-07-16-19 (publish leg): two Option[String]-returning calls
+        // with literal args STILL auto-parallelize (nothing consumed — the
+        // bindings are published through par return slots). Pre-fix each
+        // branch freed the payload it had just published (the branch-exit
+        // suppression loop knew Vec / RC / Map / .. shapes but not
+        // `FreeInlineOptionPayload`), so the parent's `unwrap_or` consumed
+        // freed memory and freed it again. Post-fix the branch tag-sentinels
+        // its action and the parent re-registers the payload free against its
+        // rebind alloca — exactly one owner. LSan (Linux CI) also guards the
+        // no-leak half: a dropped re-registration would leak both payloads.
+        assert_clean_asan_run(
+            r#"
+fn first_word(s: String) -> Option[String] {
+    let words = s.split(" ");
+    if words.len() > 0 { Some(words[0]) } else { None }
+}
+fn main() {
+    let a = first_word("aaaaaaaaaaaaaaaaaaaaaaaaaaaaa bb");
+    let b = first_word("ccccccccccccccccccccccccccccc dd");
+    println(a.unwrap_or("x").len());
+    println(b.unwrap_or("y").len());
+}
+"#,
+            &["29", "29"],
+            "auto_par_published_option_string_slots_no_double_free_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_published_option_slot_payload_never_consumed_no_leak() {
+        // B-2026-07-16-19 (parent-ownership leg): published Option[String]
+        // slots whose payloads are never consumed after the join (`is_some()`
+        // reads only). The parent's re-registered `FreeInlineOptionPayload`
+        // is the ONLY thing standing between this shape and a per-slot
+        // payload leak — LSan on the Linux CI leg is the authoritative gate.
+        assert_clean_asan_run(
+            r#"
+fn first_word(s: String) -> Option[String] {
+    let words = s.split(" ");
+    if words.len() > 0 { Some(words[0]) } else { None }
+}
+fn main() {
+    let a = first_word("aaaaaaaaaaaaaaaaaaaaaaaaaaaaa bb");
+    let b = first_word("ccccccccccccccccccccccccccccc dd");
+    println(a.is_some());
+    println(b.is_some());
+}
+"#,
+            &["true", "true"],
+            "published_option_slot_payload_never_consumed_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_sequential_unwrap_or_on_named_option_binding_no_double_free() {
+        // B-2026-07-17-4 (sequential, surfaced while fixing B-2026-07-16-19):
+        // `let a = r.unwrap_or("x").len();` on a let-bound Option[String].
+        // `unwrap_or`'s present branch reconstitutes the payload as a SHALLOW
+        // alias that the chained `.len()` consumes and frees as an owned temp;
+        // pre-fix the receiver binding's scope-exit `FreeInlineOptionPayload`
+        // freed the same buffer again (`free(): double free` with NO auto-par
+        // involved — main serializes here). `unwrap`/`expect` already
+        // suppressed the source (B-2026-07-10-2); `unwrap_or` now does too.
+        assert_clean_asan_run(
+            r#"
+fn first_word(s: String) -> Option[String] {
+    let words = s.split(" ");
+    if words.len() > 0 { Some(words[0]) } else { None }
+}
+fn main() {
+    let r = first_word("hello world");
+    let a = r.unwrap_or("x").len();
+    println(a);
+}
+"#,
+            &["5"],
+            "sequential_unwrap_or_on_named_option_binding_no_double_free",
+        );
+    }
 }

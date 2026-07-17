@@ -2324,6 +2324,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_phi(inner_ll, "uo.val")
                 .map_err(|e| format!("codegen: unwrap_or phi: {:?}", e))?;
             phi.add_incoming(&[(&present_val, present_end), (&default_val, absent_bb)]);
+            // B-2026-07-17-4: like `unwrap`/`expect` (B-2026-07-10-2, below),
+            // `unwrap_or` CONSUMES the receiver — the present branch's
+            // reconstituted payload is a SHALLOW alias of the receiver's
+            // inline heap buffer, and the consumer now owns it (a chained
+            // `.len()` frees it as an owned temp). A LET-BOUND identifier
+            // receiver's scope-exit `FreeInlineOptionPayload` would free the
+            // same buffer again → double-free (`let a =
+            // r.unwrap_or("x").len();` aborted; the absent path is
+            // unaffected — zeroing a payload-less slot is a no-op). Same
+            // no-op cases as the unwrap site: fresh-temp receiver, non-heap
+            // payload.
+            self.suppress_inline_option_result_binding_move(object);
             return Ok(Some(phi.as_basic_value()));
         }
 

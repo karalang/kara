@@ -2017,8 +2017,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 // intact pointer. Mirrors the Vec `cap=0` suppression
                 // pattern, generalised over the RC cleanup shapes.
                 let frame_idx = self.scope_cleanup_actions.len().saturating_sub(1);
+                let published_ptr = self.variables.get(&slot.binding_name).map(|v| v.ptr);
                 let mut nullify_local: Option<PointerValue<'ctx>> = None;
                 let mut zero_opt_tag: Option<(PointerValue<'ctx>, StructType<'ctx>)> = None;
+                // Inline `Option`/`Result` payload slots (B-2026-07-16-19):
+                // the branch's `let e = first_word("")` registered a tag-
+                // guarded `FreeInlineOptionPayload` (or the Result / Option-
+                // Map sibling) against the branch-local alloca. The slot-
+                // write above published the WHOLE tagged value — payload
+                // pointer included — to the parent, so the branch's drain
+                // must not fire (pre-fix it freed the payload the parent
+                // was about to consume: `a.unwrap_or(..)` after the join
+                // read freed memory, then freed it again). Suppress by
+                // storing a tag the action's runtime guard matches with NO
+                // live variant — chosen at compile time to differ from
+                // `some_tag` / `ok_tag` / `err_tag` — mirroring the
+                // `RcDecOption` zero-tag suppression above. The parent
+                // rebind site re-registers the equivalent cleanup against
+                // its fresh alloca (stmts.rs slot-rebind loop), making the
+                // parent the unique owner.
+                let mut sentinel_tag_stores: Vec<(PointerValue<'ctx>, StructType<'ctx>, u64)> =
+                    Vec::new();
+                fn tag_not_in(live: &[u64]) -> u64 {
+                    (0..=live.len() as u64 + 1)
+                        .find(|c| !live.contains(c))
+                        .unwrap_or(u64::MAX)
+                }
                 if let Some(frame) = self.scope_cleanup_actions.get(frame_idx) {
                     for action in frame {
                         match action {
@@ -2036,9 +2060,59 @@ impl<'ctx> super::Codegen<'ctx> {
                             } if *name == slot.binding_name => {
                                 zero_opt_tag = Some((*option_slot, *option_ty));
                             }
+                            CleanupAction::FreeInlineOptionPayload {
+                                option_slot,
+                                option_ty,
+                                some_tag,
+                                ..
+                            } if Some(*option_slot) == published_ptr => {
+                                sentinel_tag_stores.push((
+                                    *option_slot,
+                                    *option_ty,
+                                    tag_not_in(&[*some_tag]),
+                                ));
+                            }
+                            CleanupAction::FreeInlineOptionMapPayload {
+                                option_slot,
+                                option_ty,
+                                some_tag,
+                                ..
+                            } if Some(*option_slot) == published_ptr => {
+                                sentinel_tag_stores.push((
+                                    *option_slot,
+                                    *option_ty,
+                                    tag_not_in(&[*some_tag]),
+                                ));
+                            }
+                            CleanupAction::FreeInlineResultPayload {
+                                result_slot,
+                                result_ty,
+                                ok_tag,
+                                err_tag,
+                                ..
+                            } if Some(*result_slot) == published_ptr => {
+                                sentinel_tag_stores.push((
+                                    *result_slot,
+                                    *result_ty,
+                                    tag_not_in(&[*ok_tag, *err_tag]),
+                                ));
+                            }
                             _ => {}
                         }
                     }
+                }
+                for (tagged_slot, tagged_ty, sentinel) in sentinel_tag_stores {
+                    let tag_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            tagged_ty,
+                            tagged_slot,
+                            0,
+                            &format!("{}_par_suppress_payload_tag", slot.binding_name),
+                        )
+                        .unwrap();
+                    let sentinel_c = self.context.i64_type().const_int(sentinel, false);
+                    let _ = self.builder.build_store(tag_ptr, sentinel_c);
                 }
                 if let Some(ptr) = nullify_local {
                     let null = self.context.ptr_type(AddressSpace::default()).const_null();

@@ -1520,11 +1520,35 @@ impl<'a> ConcurrencyChecker<'a> {
         // Names of locals whose declared/recorded type is a heap-owning
         // container — feeds `captured_container_mutations` (B-2026-07-15-2).
         let container_locals = self.collect_container_locals(&func.body);
+        // B-2026-07-16-19: per-stmt consuming reads of move-hazard locals.
+        // A statement that MOVES heap ownership out of a binding it captured
+        // (a `match r { Some(w) => .. }` on an `Option[String]`, a bare owned
+        // heap arg to a consuming callee, `let y = s;`) must not enter a par
+        // group: the branch env bit-copies the binding, the branch's move
+        // machinery suppresses/frees only its LOCAL copy, and the parent's
+        // scope-exit cleanup still fires on the original — a double-free the
+        // stmt-vs-stmt conflict graph cannot see (the hazard is stmt-vs-
+        // scope-exit, not stmt-vs-stmt).
+        let move_hazards = self.collect_move_hazard_locals(&func.body);
+        let consuming_hazard_reads: Vec<HashSet<String>> = stmts
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let mut set = self.stmt_consuming_hazard_reads(s, &move_hazards);
+                // Names the stmt itself introduces are its own to consume —
+                // the branch-local move machinery is complete for those.
+                for n in &stmt_infos[i].let_introduced {
+                    set.remove(n);
+                }
+                set
+            })
+            .collect();
         let parallel_groups = self.find_parallel_groups(
             &stmt_infos,
             &graph,
             total_statements,
             &container_locals,
+            &consuming_hazard_reads,
             &func.name,
         );
 
@@ -3222,12 +3246,459 @@ impl<'a> ConcurrencyChecker<'a> {
         out
     }
 
+    /// Locals whose type OWNS non-RC heap — a bare container
+    /// (`Vec`/`String`/`Map`/`Set`/`SortedMap`/`SortedSet`) or an
+    /// `Option[..]`/`Result[..]` whose payload carries one. These are the
+    /// bindings for which a par-branch capture is a bit-copy of an OWNING
+    /// header: a consuming use inside the branch (payload move-out, owned
+    /// call arg) frees heap the parent's scope-exit cleanup still references
+    /// (B-2026-07-16-19). `shared` payloads are excluded — RC capture
+    /// bookkeeping keeps each side's counts balanced, so a consumed
+    /// `Option[SharedNode]` capture is safe.
+    ///
+    /// Classification mirrors `collect_container_locals`: the declared
+    /// annotation when present, else the typechecker's recorded binding type
+    /// (string form). `HashMap` value is `true` when the type is an
+    /// `Option`/`Result` wrapper (whose combinator METHODS consume `self`),
+    /// `false` for a bare container (whose methods are ref-self dominated).
+    fn collect_move_hazard_locals(&self, block: &Block) -> HashMap<String, bool> {
+        fn head_is_container(head: &str) -> bool {
+            matches!(
+                head,
+                "Vec" | "String" | "Map" | "Set" | "SortedMap" | "SortedSet"
+            )
+        }
+        fn type_expr_hazard(te: &TypeExpr) -> Option<bool> {
+            match &te.kind {
+                TypeKind::Path(p) => {
+                    let head = p.segments.last().map(String::as_str).unwrap_or("");
+                    if head_is_container(head) {
+                        return Some(false);
+                    }
+                    if matches!(head, "Option" | "Result") {
+                        let payload_hazard = p.generic_args.iter().flatten().any(
+                            |a| matches!(a, GenericArg::Type(t) if type_expr_hazard(t).is_some()),
+                        );
+                        if payload_hazard {
+                            return Some(true);
+                        }
+                    }
+                    None
+                }
+                _ => None,
+            }
+        }
+        // Semantic-`Type` twin for the un-annotated case, resolved from the
+        // typechecker's `expr_types` keyed by the LET RHS's span — the
+        // `pattern_binding_types` string records only the head name
+        // ("Option"), losing the payload that decides hazard-ness.
+        fn semantic_type_hazard(t: &crate::typechecker::types::Type) -> Option<bool> {
+            use crate::typechecker::types::Type as T;
+            match t {
+                T::Str => Some(false),
+                T::Named { name, args } => {
+                    if head_is_container(name) {
+                        return Some(false);
+                    }
+                    if matches!(name.as_str(), "Option" | "Result")
+                        && args.iter().any(|a| semantic_type_hazard(a).is_some())
+                    {
+                        return Some(true);
+                    }
+                    None
+                }
+                _ => None,
+            }
+        }
+        fn classify_let(
+            this: &ConcurrencyChecker,
+            pattern: &Pattern,
+            ty: &Option<TypeExpr>,
+            value_span: Option<&crate::token::Span>,
+            out: &mut HashMap<String, bool>,
+        ) {
+            let PatternKind::Binding(name) = &pattern.kind else {
+                return;
+            };
+            let hazard = match ty {
+                Some(te) => type_expr_hazard(te),
+                None => value_span.and_then(|vs| {
+                    this.types
+                        .and_then(|t| t.expr_types.get(&SpanKey::from_span(vs)))
+                        .and_then(semantic_type_hazard)
+                }),
+            };
+            if let Some(is_wrapper) = hazard {
+                out.insert(name.clone(), is_wrapper);
+            }
+        }
+        fn walk_block(this: &ConcurrencyChecker, block: &Block, out: &mut HashMap<String, bool>) {
+            for stmt in &block.stmts {
+                walk_stmt(this, stmt, out);
+            }
+            if let Some(fe) = &block.final_expr {
+                walk_expr(this, fe, out);
+            }
+        }
+        fn walk_stmt(this: &ConcurrencyChecker, stmt: &Stmt, out: &mut HashMap<String, bool>) {
+            match &stmt.kind {
+                StmtKind::Let {
+                    pattern, ty, value, ..
+                } => {
+                    classify_let(this, pattern, ty, Some(&value.span), out);
+                    walk_expr(this, value, out);
+                }
+                StmtKind::LetUninit { name, ty, .. } => {
+                    if let Some(is_wrapper) = type_expr_hazard(ty) {
+                        out.insert(name.clone(), is_wrapper);
+                    }
+                }
+                StmtKind::LetElse {
+                    pattern,
+                    ty,
+                    value,
+                    else_block,
+                    ..
+                } => {
+                    classify_let(this, pattern, ty, Some(&value.span), out);
+                    walk_expr(this, value, out);
+                    walk_block(this, else_block, out);
+                }
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    walk_block(this, body, out);
+                }
+                StmtKind::Assign { target, value } => {
+                    walk_expr(this, target, out);
+                    walk_expr(this, value, out);
+                }
+                StmtKind::MultiAssign { targets, values } => {
+                    for e in targets.iter().chain(values.iter()) {
+                        walk_expr(this, e, out);
+                    }
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
+                    walk_expr(this, target, out);
+                    walk_expr(this, value, out);
+                }
+                StmtKind::Expr(e) => walk_expr(this, e, out),
+            }
+        }
+        fn walk_expr(this: &ConcurrencyChecker, e: &Expr, out: &mut HashMap<String, bool>) {
+            match &e.kind {
+                ExprKind::Block(b)
+                | ExprKind::Seq(b)
+                | ExprKind::Par(b)
+                | ExprKind::Unsafe(b)
+                | ExprKind::Try(b)
+                | ExprKind::Comptime(b) => walk_block(this, b, out),
+                ExprKind::LabeledBlock { body, .. } => walk_block(this, body, out),
+                ExprKind::If {
+                    condition,
+                    then_block,
+                    else_branch,
+                } => {
+                    walk_expr(this, condition, out);
+                    walk_block(this, then_block, out);
+                    if let Some(eb) = else_branch {
+                        walk_expr(this, eb, out);
+                    }
+                }
+                ExprKind::IfLet {
+                    value,
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    walk_expr(this, value, out);
+                    walk_block(this, then_block, out);
+                    if let Some(eb) = else_branch {
+                        walk_expr(this, eb, out);
+                    }
+                }
+                ExprKind::Match { scrutinee, arms } => {
+                    walk_expr(this, scrutinee, out);
+                    for arm in arms {
+                        walk_expr(this, &arm.body, out);
+                    }
+                }
+                ExprKind::While { body, .. }
+                | ExprKind::WhileLet { body, .. }
+                | ExprKind::For { body, .. }
+                | ExprKind::Loop { body, .. } => walk_block(this, body, out),
+                ExprKind::Lock { body, .. } => walk_block(this, body, out),
+                ExprKind::Providers { body, .. } => walk_block(this, body, out),
+                _ => {}
+            }
+        }
+        let mut out = HashMap::new();
+        walk_block(self, block, &mut out);
+        out
+    }
+
+    /// The set of move-hazard locals this statement CONSUMES — reads that
+    /// transfer heap ownership out of the binding, so the stmt must not run
+    /// in a par-branch worker while the parent still owns the original
+    /// (B-2026-07-16-19). Consuming shapes recognized:
+    ///
+    ///   * `match X { .. }` / `if let P = X` on a bare hazard binding where
+    ///     some arm pattern binds a payload out (the proven-broken repro:
+    ///     the branch moves the payload into the arm binding and frees it,
+    ///     the parent's scope-exit payload free fires again);
+    ///   * a METHOD call on a bare `Option`/`Result` hazard receiver — the
+    ///     combinator family (`unwrap*`/`map*`/`ok`/`take`/..) consumes
+    ///     `self` (bare-container receivers stay eligible: their methods are
+    ///     ref-self dominated, and gating them would de-parallelize the
+    ///     bread-and-butter `v.iter().sum()` reader workers);
+    ///   * a bare hazard binding as a call arg in an OWNED parameter
+    ///     position — a user free fn whose param is neither `ref` /
+    ///     `mut ref` / `mut Slice`, or a `Some`/`Ok`/`Err` constructor
+    ///     (unresolvable callees — builtins like `println` — are treated as
+    ///     borrowing);
+    ///   * a bare hazard binding as ANY method-call argument (`v2.push(s)`
+    ///     moves; read-only bare-container method args are rare enough that
+    ///     the over-approximation costs little);
+    ///   * a bare hazard binding as a `let`/`Assign` RHS (alias-move), a
+    ///     struct-literal / array / tuple element (move into aggregate), or
+    ///     a `for` iterable (owned iteration).
+    ///
+    /// Names introduced by the statement itself are the caller's job to
+    /// subtract (see `analyze_function`).
+    fn stmt_consuming_hazard_reads(
+        &self,
+        stmt: &Stmt,
+        hazards: &HashMap<String, bool>,
+    ) -> HashSet<String> {
+        fn bare_name(e: &Expr) -> Option<&str> {
+            match &e.kind {
+                ExprKind::Identifier(n) => Some(n.as_str()),
+                _ => None,
+            }
+        }
+        struct W<'a> {
+            this: &'a ConcurrencyChecker<'a>,
+            hazards: &'a HashMap<String, bool>,
+            out: HashSet<String>,
+        }
+        impl W<'_> {
+            fn mark_if_hazard(&mut self, e: &Expr) {
+                if let Some(n) = bare_name(e) {
+                    if self.hazards.contains_key(n) {
+                        self.out.insert(n.to_string());
+                    }
+                }
+            }
+            fn callee_param_owned(&self, callee: &str, idx: usize) -> bool {
+                match self.this.function_bodies.get(callee) {
+                    Some(f) => f.params.get(idx).is_none_or(|p| {
+                        !matches!(
+                            p.ty.kind,
+                            TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
+                        )
+                    }),
+                    // Unresolvable callee: builtins (`println`, `assert`, ..)
+                    // borrow their args — treat as non-consuming.
+                    None => false,
+                }
+            }
+            fn block(&mut self, b: &Block) {
+                for s in &b.stmts {
+                    self.stmt(s);
+                }
+                if let Some(fe) = &b.final_expr {
+                    self.expr(fe);
+                }
+            }
+            fn stmt(&mut self, s: &Stmt) {
+                match &s.kind {
+                    StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                        self.mark_if_hazard(value);
+                        self.expr(value);
+                        if let StmtKind::LetElse { else_block, .. } = &s.kind {
+                            self.block(else_block);
+                        }
+                    }
+                    StmtKind::LetUninit { .. } => {}
+                    StmtKind::Assign { target, value } => {
+                        self.mark_if_hazard(value);
+                        self.expr(target);
+                        self.expr(value);
+                    }
+                    StmtKind::MultiAssign { targets, values } => {
+                        for v in values {
+                            self.mark_if_hazard(v);
+                        }
+                        for e in targets.iter().chain(values.iter()) {
+                            self.expr(e);
+                        }
+                    }
+                    StmtKind::CompoundAssign { target, value, .. } => {
+                        self.expr(target);
+                        self.expr(value);
+                    }
+                    StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                        self.block(body);
+                    }
+                    StmtKind::Expr(e) => self.expr(e),
+                }
+            }
+            fn expr(&mut self, e: &Expr) {
+                match &e.kind {
+                    ExprKind::Match { scrutinee, arms } => {
+                        if let Some(n) = bare_name(scrutinee) {
+                            if self.hazards.contains_key(n)
+                                && arms.iter().any(|a| !a.pattern.binding_names().is_empty())
+                            {
+                                self.out.insert(n.to_string());
+                            }
+                        }
+                        self.expr(scrutinee);
+                        for arm in arms {
+                            self.expr(&arm.body);
+                        }
+                    }
+                    ExprKind::IfLet {
+                        pattern,
+                        value,
+                        then_block,
+                        else_branch,
+                    } => {
+                        if let Some(n) = bare_name(value) {
+                            if self.hazards.contains_key(n) && !pattern.binding_names().is_empty() {
+                                self.out.insert(n.to_string());
+                            }
+                        }
+                        self.expr(value);
+                        self.block(then_block);
+                        if let Some(eb) = else_branch {
+                            self.expr(eb);
+                        }
+                    }
+                    ExprKind::MethodCall { object, args, .. } => {
+                        if let Some(n) = bare_name(object) {
+                            // Wrapper (`Option`/`Result`) receivers: the
+                            // combinator family consumes self.
+                            if self.hazards.get(n).copied() == Some(true) {
+                                self.out.insert(n.to_string());
+                            }
+                        }
+                        for a in args {
+                            self.mark_if_hazard(&a.value);
+                        }
+                        self.expr(object);
+                        for a in args {
+                            self.expr(&a.value);
+                        }
+                    }
+                    ExprKind::Call { callee, args } => {
+                        if let Some(cn) = bare_name(callee) {
+                            let is_ctor = matches!(cn, "Some" | "Ok" | "Err");
+                            for (i, a) in args.iter().enumerate() {
+                                if let Some(n) = bare_name(&a.value) {
+                                    if self.hazards.contains_key(n)
+                                        && (is_ctor || self.callee_param_owned(cn, i))
+                                    {
+                                        self.out.insert(n.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        self.expr(callee);
+                        for a in args {
+                            self.expr(&a.value);
+                        }
+                    }
+                    ExprKind::For { iterable, body, .. } => {
+                        self.mark_if_hazard(iterable);
+                        self.expr(iterable);
+                        self.block(body);
+                    }
+                    ExprKind::StructLiteral { fields, spread, .. } => {
+                        for f in fields {
+                            self.mark_if_hazard(&f.value);
+                            self.expr(&f.value);
+                        }
+                        if let Some(sp) = spread {
+                            self.expr(sp);
+                        }
+                    }
+                    ExprKind::ArrayLiteral(elems) | ExprKind::Tuple(elems) => {
+                        for el in elems {
+                            self.mark_if_hazard(el);
+                            self.expr(el);
+                        }
+                    }
+                    ExprKind::Block(b)
+                    | ExprKind::Seq(b)
+                    | ExprKind::Par(b)
+                    | ExprKind::Unsafe(b)
+                    | ExprKind::Try(b)
+                    | ExprKind::Comptime(b) => self.block(b),
+                    ExprKind::LabeledBlock { body, .. } => self.block(body),
+                    ExprKind::If {
+                        condition,
+                        then_block,
+                        else_branch,
+                    } => {
+                        self.expr(condition);
+                        self.block(then_block);
+                        if let Some(eb) = else_branch {
+                            self.expr(eb);
+                        }
+                    }
+                    ExprKind::While {
+                        condition, body, ..
+                    } => {
+                        self.expr(condition);
+                        self.block(body);
+                    }
+                    ExprKind::WhileLet { value, body, .. } => {
+                        self.expr(value);
+                        self.block(body);
+                    }
+                    ExprKind::Loop { body, .. } => self.block(body),
+                    ExprKind::Lock { body, .. } | ExprKind::Providers { body, .. } => {
+                        self.block(body)
+                    }
+                    ExprKind::Binary { left, right, .. } => {
+                        self.expr(left);
+                        self.expr(right);
+                    }
+                    ExprKind::Unary { operand, .. } => self.expr(operand),
+                    ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                        self.expr(object)
+                    }
+                    ExprKind::Index { object, index } => {
+                        self.expr(object);
+                        self.expr(index);
+                    }
+                    ExprKind::Range { start, end, .. } => {
+                        if let Some(s) = start {
+                            self.expr(s);
+                        }
+                        if let Some(en) = end {
+                            self.expr(en);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut w = W {
+            this: self,
+            hazards,
+            out: HashSet::new(),
+        };
+        w.stmt(stmt);
+        w.out
+    }
+
     fn find_parallel_groups(
         &self,
         infos: &[StmtInfo],
         graph: &ConflictGraph,
         n: usize,
         container_locals: &HashSet<String>,
+        consuming_hazard_reads: &[HashSet<String>],
         enclosing_fn: &str,
     ) -> Vec<ParallelGroup> {
         let mut groups: Vec<ParallelGroup> = Vec::new();
@@ -3275,6 +3746,21 @@ impl<'a> ConcurrencyChecker<'a> {
             // early-exit / coroutine-boundary seed guards. See
             // `stmt_has_channel_op`.
             if infos[start].has_channel_op {
+                assigned[start] = true;
+                continue;
+            }
+
+            // B-2026-07-16-19: a statement that CONSUMES a move-hazard local
+            // captured from outside itself (moves heap ownership out of a
+            // `match`/`if let` payload, an owned call arg, a bare-RHS alias)
+            // must not run in a par-branch worker: the branch's move
+            // machinery suppresses/frees only the branch's bit-copied env
+            // alloca, while the parent's scope-exit cleanup still fires on
+            // the original — a double-free the stmt-vs-stmt conflict graph
+            // cannot model (the conflicting "read" is the parent's implicit
+            // scope-exit drop, not a sibling statement). Sequential is
+            // always correct; auto-par is only an optimization.
+            if !consuming_hazard_reads[start].is_empty() {
                 assigned[start] = true;
                 continue;
             }
@@ -3335,6 +3821,12 @@ impl<'a> ConcurrencyChecker<'a> {
                 // A channel-op statement ends the group at its sibling
                 // boundary too (seed-side guard's candidate mirror).
                 if infos[candidate].has_channel_op {
+                    break;
+                }
+
+                // Consuming read of a move-hazard capture ends the group too
+                // (seed-side guard's candidate mirror, B-2026-07-16-19).
+                if !consuming_hazard_reads[candidate].is_empty() {
                     break;
                 }
 

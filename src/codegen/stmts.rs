@@ -734,6 +734,61 @@ impl<'ctx> super::Codegen<'ctx> {
                                 alloca,
                                 &slot_ownership,
                             );
+                            // Inline Option/Result payload slots
+                            // (B-2026-07-16-19): the branch tag-sentinel-
+                            // suppressed its own `FreeInlineOptionPayload` /
+                            // Result / Option-Map action when it published
+                            // the value (par_blocks.rs slot-publish loop) —
+                            // re-register the equivalent tag-guarded payload
+                            // free against the parent's fresh alloca,
+                            // mirroring the sequential let path's registrar
+                            // dispatch (each registrar no-ops for the other
+                            // shapes). Without this the moved-in payload
+                            // leaks at parent scope exit; with the pre-fix
+                            // branch drain it was a use-after-free +
+                            // double-free instead. Keyed on the defining
+                            // stmt exactly like the sequential path: RHS
+                            // span → `enum_inst_type_exprs`, falling back to
+                            // the `let` annotation.
+                            if let Some(def_stmt) = group_stmts.get(slot.branch_index) {
+                                if let StmtKind::Let {
+                                    pattern, ty, value, ..
+                                } = &def_stmt.kind
+                                {
+                                    let name_matches = matches!(
+                                        &pattern.kind,
+                                        PatternKind::Binding(n) if *n == slot.binding_name
+                                    );
+                                    if name_matches
+                                        && (matches!(value.kind, ExprKind::Call { .. })
+                                            || self.rhs_is_fresh_inline_enum(value))
+                                    {
+                                        let opt_te = self
+                                            .enum_inst_type_exprs
+                                            .get(&(value.span.offset, value.span.length))
+                                            .cloned()
+                                            .or_else(|| ty.clone())
+                                            .or_else(|| self.untyped_let_boxed_enum_te(value));
+                                        if let Some(te) = opt_te {
+                                            self.track_inline_option_payload_var(
+                                                &slot.binding_name,
+                                                alloca,
+                                                &te,
+                                            );
+                                            self.track_inline_result_payload_var(
+                                                &slot.binding_name,
+                                                alloca,
+                                                &te,
+                                            );
+                                            self.track_inline_option_map_payload_var(
+                                                &slot.binding_name,
+                                                alloca,
+                                                &te,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
