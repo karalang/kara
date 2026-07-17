@@ -85,6 +85,17 @@ const CORPUS: &[&str] = &[
     "fn main() { println(\"a\" + \"b\" + \"c\") }",
     "fn main() { let name = \"kara\"; println(\"hi \" + name) }",
     "fn main() { let mut s = \"\"; let mut i = 0; while i < 3 { s = s + \"ab\"; i = i + 1; } println(s) }",
+    // Slice 10: string params & returns — heap values cross fn boundaries.
+    // Contract: args MOVE IN (caller materializes a borrowed arg into an owned
+    // copy; a heap temp transfers directly); callee owns+frees its params; a
+    // returned borrow is materialized; a discarded owned result is freed.
+    "fn greet(name: String) -> String { \"hi \" + name }\nfn main() { println(greet(\"kara\")) }",
+    "fn id(s: String) -> String { s }\nfn main() { println(id(\"echo\")) }",
+    "fn make() -> String { \"a\" + \"b\" }\nfn main() { let s = make(); println(s) }",
+    "fn make() -> String { \"z\" + \"z\" }\nfn main() { make(); println(\"done\") }",
+    "fn wrap(s: String) -> String { \"[\" + s + \"]\" }\nfn main() { println(wrap(wrap(\"x\"))) }",
+    "fn shout(s: String) { println(s + \"!\") }\nfn main() { shout(\"hey\"); shout(\"ho\") }",
+    "fn pad(a: String, b: String) -> String { a + \" \" + b }\nfn main() { println(pad(\"left\", \"right\")) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

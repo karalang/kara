@@ -27,6 +27,8 @@ import ast.{
     Item,
     FnDefNode,
     FnParamNode,
+    TypeExpr,
+    PathType,
     Block,
     Stmt,
     LetStmt,
@@ -96,6 +98,18 @@ struct Emitter {
     // True while emitting `main` (Slice 6): a `return` there is `ret i32 0`,
     // in a user fn `ret i64 <v>`.
     in_main: bool,
+    // Signature table (Slice 10) — collected over all items BEFORE any body is
+    // emitted so call sites know param/return kinds regardless of declaration
+    // order. Parallel vecs keyed by fn index; param kinds are FLATTENED
+    // (`sig_par_kinds[sig_par_off[i] .. +sig_par_cnt[i]]`) — no Vec[Vec].
+    sig_names: Vec[String],
+    // Return kind: -1 unit, 0 i64, 2 string (bool returns unsupported).
+    sig_ret: Vec[i64],
+    sig_par_kinds: Vec[i64],
+    sig_par_off: Vec[i64],
+    sig_par_cnt: Vec[i64],
+    // The CURRENT fn's return kind (drives the `return` arm's ret type).
+    cur_ret: i64,
 }
 
 // Emit a whole program as LLVM IR text. Walks the items, emits `main`'s body
@@ -114,7 +128,14 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         locals_heap: Vec.new(),
         nlbl: 0,
         in_main: false,
+        sig_names: Vec.new(),
+        sig_ret: Vec.new(),
+        sig_par_kinds: Vec.new(),
+        sig_par_off: Vec.new(),
+        sig_par_cnt: Vec.new(),
+        cur_ret: -1,
     };
+    e.collect_sigs(items);
     for it in items {
         match it {
             Func(f) => {
@@ -130,16 +151,16 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
                     doc,
                     span,
                 } = f;
-                let has_ret = match ret {
-                    Some(t) => true,
-                    None => false,
+                let rk = match ret {
+                    Some(t) => kind_of_type(t),
+                    None => 0 - 1,
                 };
-                e.emit_fn(name, params, has_ret, body);
+                e.emit_fn(name, params, rk, body);
             }
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_off, sig_par_cnt, cur_ret } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -160,6 +181,52 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
 }
 
 impl Emitter {
+    // Signature COLLECT pass (Slice 10) — borrows `items` (the emit loop then
+    // consumes them; same two-pass shape as the typechecker's Slice 5). Field
+    // reads through the `ref` (`f.name`, `f.params`, `f.ret`) are owned
+    // deep-copies; the `Option[TypeExpr]` is matched INLINE (never passed by
+    // value to a helper — B-2026-07-11-37).
+    fn collect_sigs(mut ref self, items: ref Vec[Item]) {
+        for it in items {
+            match it {
+                Func(f) => {
+                    self.sig_names.push(f.name);
+                    let rk = match f.ret {
+                        Some(t) => kind_of_type(t),
+                        None => 0 - 1,
+                    };
+                    self.sig_ret.push(rk);
+                    let off = self.sig_par_kinds.len();
+                    self.sig_par_off.push(off);
+                    // Indexed reads through the ref (`f.params[i].ty` — the
+                    // typechecker's proven `s.fields[fi].ty` idiom); copying
+                    // the whole params Vec (`let ps = f.params`) through the
+                    // borrow crashed the seed's AOT build (run-vs-build).
+                    let cnt = f.params.len();
+                    let mut pi2 = 0;
+                    while pi2 < cnt {
+                        self.sig_par_kinds.push(kind_of_type(f.params[pi2].ty));
+                        pi2 = pi2 + 1;
+                    }
+                    self.sig_par_cnt.push(cnt);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Index of fn `name` in the signature table, -1 if unknown.
+    fn sig_index(ref self, name: ref String) -> i64 {
+        let mut i = 0;
+        while i < self.sig_names.len() {
+            if self.sig_names[i] == name {
+                return i;
+            }
+            i = i + 1;
+        }
+        0 - 1
+    }
+
     // Emit ONE function definition (Slice 6). Per-fn state (`body`, `locals`)
     // resets; `ntmp`/`nlbl` keep counting (registers/labels are function-scoped
     // in LLVM, so uniqueness across fns is merely convenient). Each parameter
@@ -168,29 +235,38 @@ impl Emitter {
     // (always `ret i32 0`); a user fn becomes `define i64 @u_<name>` (the
     // `u_` prefix keeps user names clear of libc/runtime symbols) whose tail
     // expression is its return value (default 0). Everything is i64.
-    fn emit_fn(mut ref self, name: String, params: Vec[FnParamNode], has_ret: bool, b: Block) {
+    fn emit_fn(mut ref self, name: String, params: Vec[FnParamNode], rk: i64, b: Block) {
         self.body = "".to_string();
         self.locals = Vec.new();
         self.locals_kind = Vec.new();
         self.locals_heap = Vec.new();
         let is_main = name == "main";
         self.in_main = is_main;
+        self.cur_ret = rk;
         let mut sig = "".to_string();
         let mut pre = "".to_string();
         let mut pi = 0;
         for p in params {
             let FnParamNode { name: pn, ty, span } = p;
+            // Typed params (Slice 10): the declared type picks the slot kind;
+            // a String param arrives as an OWNED `{ ptr, i64 }` aggregate the
+            // callee frees at its epilogue (args move in — the caller passes
+            // an owned copy or transfers a temp).
+            let pk = kind_of_type(ty);
+            let pty = kind_ty(pk);
             let idx = self.locals.len();
             self.locals.push(pn);
-            self.locals_kind.push(0);
-            self.locals_heap.push(false);
+            self.locals_kind.push(pk);
+            self.locals_heap.push(pk == 2);
             if pi > 0 {
                 sig = sig + ", ";
             }
-            sig = sig + "i64 %a" + pi.to_string();
-            pre = pre + "  %v" + idx.to_string() + " = alloca i64, align 8\n";
+            sig = sig + pty.clone() + " %a" + pi.to_string();
+            pre = pre + "  %v" + idx.to_string() + " = alloca " + pty.clone() + ", align 8\n";
             pre = pre
-                + "  store i64 %a"
+                + "  store "
+                + pty
+                + " %a"
                 + pi.to_string()
                 + ", ptr %v"
                 + idx.to_string()
@@ -203,15 +279,34 @@ impl Emitter {
         }
         // A VALUE-returning fn's tail is its return value; a UNIT fn's tail
         // (main, or any fn without `-> T`) is a side-effect expression (e.g. a
-        // trailing `println`) — walked as a statement.
-        let use_val = has_ret and not is_main;
+        // trailing `println`) — walked as a statement. A STRING return value
+        // that is a BORROW (a returned param/local — freed by this fn's own
+        // epilogue) is MATERIALIZED into an owned copy the caller receives.
+        let use_val = rk >= 0 and not is_main;
         let mut tv = "0".to_string();
+        if rk == 2 {
+            tv = "zeroinitializer".to_string();
+        }
         match tail {
             Some(e) => {
                 if use_val {
                     let v = self.emit_value(e);
                     let Val { op, kind, heap } = v;
-                    tv = op;
+                    if rk == 2 {
+                        if kind == 2 {
+                            if heap {
+                                tv = op;
+                            } else {
+                                let mv = self.emit_materialize(op);
+                                let Val { op: mop, kind: mk, heap: mh } = mv;
+                                tv = mop;
+                            }
+                        }
+                    } else {
+                        if kind == 0 {
+                            tv = op;
+                        }
+                    }
                 } else {
                     self.emit_expr(e);
                 }
@@ -235,15 +330,23 @@ impl Emitter {
                 + self.body.clone()
                 + "  ret i32 0\n}\n";
         } else {
+            let mut rty = "i64".to_string();
+            if rk == 2 {
+                rty = "{ ptr, i64 }".to_string();
+            }
             self.funcs = self.funcs
-                + "define i64 @u_"
+                + "define "
+                + rty.clone()
+                + " @u_"
                 + name
                 + "("
                 + sig
                 + ") {\nentry:\n"
                 + pre
                 + self.body.clone()
-                + "  ret i64 "
+                + "  ret "
+                + rty
+                + " "
                 + tv
                 + "\n}\n";
         }
@@ -434,29 +537,59 @@ impl Emitter {
                     }
                 } else {
                     // A user-function call in STATEMENT position (Slice 6):
-                    // emit it and discard the result.
+                    // emit it and discard the result — freeing a discarded
+                    // OWNED string result (Slice 10).
+                    let si = self.sig_index(cname);
                     let mut alist = "".to_string();
                     let mut ai = 0;
                     for a in args {
                         let CallArg { label, mut_marker, value, span: asp } = a;
                         let v = self.emit_value(value);
                         let Val { op, kind, heap } = v;
+                        let mut pk = 0;
+                        if si >= 0 {
+                            if ai < self.sig_par_cnt[si] {
+                                pk = self.sig_par_kinds[self.sig_par_off[si] + ai];
+                            }
+                        }
+                        let mut aop = op;
+                        if pk == 2 and kind == 2 and not heap {
+                            let mv = self.emit_materialize(aop.clone());
+                            let Val { op: mop, kind: mk, heap: mh } = mv;
+                            aop = mop;
+                        }
                         if ai > 0 {
                             alist = alist + ", ";
                         }
-                        alist = alist + "i64 " + op;
+                        alist = alist + kind_ty(pk) + " " + aop;
                         ai = ai + 1;
                     }
                     if cname != "" {
+                        let mut rk = 0;
+                        if si >= 0 {
+                            rk = self.sig_ret[si];
+                        }
                         let r = self.fresh();
-                        self.body = self.body
-                            + "  "
-                            + r
-                            + " = call i64 @u_"
-                            + cname
-                            + "("
-                            + alist
-                            + ")\n";
+                        if rk == 2 {
+                            self.body = self.body
+                                + "  "
+                                + r.clone()
+                                + " = call { ptr, i64 } @u_"
+                                + cname
+                                + "("
+                                + alist
+                                + ")\n";
+                            self.emit_free_val(r);
+                        } else {
+                            self.body = self.body
+                                + "  "
+                                + r
+                                + " = call i64 @u_"
+                                + cname
+                                + "("
+                                + alist
+                                + ")\n";
+                        }
                     }
                 }
             }
@@ -468,18 +601,35 @@ impl Emitter {
                 // block to keep the module well-formed.
                 let ReturnExpr { value, span } = re;
                 let mut rv = "0".to_string();
+                if self.cur_ret == 2 {
+                    rv = "zeroinitializer".to_string();
+                }
                 match value {
                     Some(v) => {
                         let val = self.emit_value(v);
                         let Val { op, kind, heap } = val;
-                        rv = op;
+                        if self.cur_ret == 2 and kind == 2 and not heap {
+                            // A returned BORROW (param/local) becomes an owned
+                            // copy — this fn's epilogue frees the original.
+                            // (A mid-fn return still skips the epilogue —
+                            // documented leak.)
+                            let mv = self.emit_materialize(op);
+                            let Val { op: mop, kind: mk, heap: mh } = mv;
+                            rv = mop;
+                        } else {
+                            rv = op;
+                        }
                     }
                     None => {}
                 }
                 if self.in_main {
                     self.body = self.body + "  ret i32 0\n";
                 } else {
-                    self.body = self.body + "  ret i64 " + rv + "\n";
+                    if self.cur_ret == 2 {
+                        self.body = self.body + "  ret { ptr, i64 } " + rv + "\n";
+                    } else {
+                        self.body = self.body + "  ret i64 " + rv + "\n";
+                    }
                 }
                 let lid = self.nlbl;
                 self.nlbl = self.nlbl + 1;
@@ -951,22 +1101,55 @@ impl Emitter {
                     }
                     _ => {}
                 }
+                let si = self.sig_index(cname);
                 let mut alist = "".to_string();
                 let mut ai = 0;
                 for a in args {
                     let CallArg { label, mut_marker, value, span: asp } = a;
                     let v = self.emit_value(value);
                     let Val { op, kind, heap } = v;
+                    // Param kind from the signature table (Slice 10): a String
+                    // param takes an OWNED aggregate — a borrowed arg (ident /
+                    // literal) is materialized into a private copy (args move
+                    // in; the binder keeps and later frees its own buffer), a
+                    // heap temp transfers ownership directly.
+                    let mut pk = 0;
+                    if si >= 0 {
+                        if ai < self.sig_par_cnt[si] {
+                            pk = self.sig_par_kinds[self.sig_par_off[si] + ai];
+                        }
+                    }
+                    let mut aop = op;
+                    if pk == 2 and kind == 2 and not heap {
+                        let mv = self.emit_materialize(aop.clone());
+                        let Val { op: mop, kind: mk, heap: mh } = mv;
+                        aop = mop;
+                    }
                     if ai > 0 {
                         alist = alist + ", ";
                     }
-                    alist = alist + "i64 " + op;
+                    alist = alist + kind_ty(pk) + " " + aop;
                     ai = ai + 1;
                 }
                 if cname == "" {
                     return Val { op: "0".to_string(), kind: 0, heap: false };
                 }
+                let mut rk = 0;
+                if si >= 0 {
+                    rk = self.sig_ret[si];
+                }
                 let r = self.fresh();
+                if rk == 2 {
+                    self.body = self.body
+                        + "  "
+                        + r.clone()
+                        + " = call { ptr, i64 } @u_"
+                        + cname
+                        + "("
+                        + alist
+                        + ")\n";
+                    return Val { op: r, kind: 2, heap: true };
+                }
                 self.body = self.body
                     + "  "
                     + r.clone()
@@ -1121,6 +1304,27 @@ fn bin_ir(op: BinOp) -> BinIr {
         And => BinIr { kind: 2, text: "and".to_string() },
         Or => BinIr { kind: 2, text: "or".to_string() },
         _ => BinIr { kind: 0, text: "add".to_string() },
+    }
+}
+
+// Map a DECLARED type to a value kind (Slice 10): String → 2, bool → 1,
+// everything else (the int widths) → 0.
+fn kind_of_type(t: TypeExpr) -> i64 {
+    match t {
+        PathTy(p) => {
+            let PathType { segments, generics, span } = p;
+            if segments.len() == 0 {
+                return 0;
+            }
+            if segments[0] == "String" {
+                return 2;
+            }
+            if segments[0] == "bool" {
+                return 1;
+            }
+            0
+        }
+        _ => 0,
     }
 }
 

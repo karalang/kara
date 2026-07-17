@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 143 | 0 |
 | leak | 81 | 0 |
+| double-free | 60 | 1 |
 | codegen-gap | 59 | 0 |
-| double-free | 59 | 0 |
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
 | crash | 24 | 0 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 370 | 0 |
+| codegen | 371 | 1 |
 | typecheck | 63 | 1 |
 | interp | 48 | 0 |
 | ownership | 23 | 0 |
@@ -123,13 +123,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **526 surfaced · 1 open · 521 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **527 surfaced · 2 open · 521 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-17-19 | 2026-07-17 | typecheck | low | Unknown methods on a fixed-size `Array[T, N]` silently type as Type::Error and pass `karac check`, then run on no backend — the same check/execution hole B-2026-07-17-12/-18 closed for the Named prelude types, but `Array[T, N]` is a STRUCTURAL `Type::Array{element,size}`, not `Type::Named{"Array"}`, so it bypasses the Named-keyed EXHAUSTIVE_PRELUDE None arm entirely; adding "Array" to that list is dead code. | — |
+| B-2026-07-17-20 | 2026-07-17 | codegen | high | Copying a Vec field out of a MATCH-BOUND enum payload borrowed from a ref-Vec element double-frees under AOT: `for it in items { match it { Fu(f) => { let ps = f.params; for p in ps {..} } } }` with `items: ref Vec[It]` aborts free(): double free (interp correct, prints the right sum). The struct-only twin (no enum layer — `for it in items { let ps = it.params; }` on ref Vec[F]) is CLEAN; the enum-payload match binding is essential. | — |
 
 ### Fixed (521)
 
