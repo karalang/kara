@@ -18409,6 +18409,43 @@ fn main() {
 }
 
 #[test]
+fn test_autograd_reverse_mode_tensor_activations() {
+    // std.autograd tensor-valued activations — interpreter parity with
+    // tests/codegen.rs::test_e2e_autograd_tensor_activations. relu gates the
+    // gradient on the input sign ([0,1] for x=[-1,2]); sigmoid'(0)=0.25;
+    // tanh'(0)=1.
+    let out = run_no_errors(
+        r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let x0: Tensor[f32, [?]] = Tensor.from([-1.0, 2.0]);
+    let x = TensorVar.leaf(t, x0);
+    let r = x.relu();
+    r.backward();
+    println(x.grad_at(0));
+    println(x.grad_at(1));
+
+    let t2 = TensorTape.new();
+    let z0: Tensor[f32, [?]] = Tensor.from([0.0]);
+    let z = TensorVar.leaf(t2, z0);
+    let s = z.sigmoid();
+    s.backward();
+    println(z.grad_at(0));
+
+    let t3 = TensorTape.new();
+    let w0: Tensor[f32, [?]] = Tensor.from([0.0]);
+    let w = TensorVar.leaf(t3, w0);
+    let y = w.tanh();
+    y.backward();
+    println(w.grad_at(0));
+}
+"#,
+    );
+    assert_eq!(out, "0\n1\n0.25\n1\n");
+}
+
+#[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors
     // (the last Sleef building block). `>>` is logical on unsigned lanes and

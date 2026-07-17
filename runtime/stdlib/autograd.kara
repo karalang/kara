@@ -21,11 +21,14 @@
 //
 // **Tensor-valued surface (`TensorTape` / `TensorVar`).** The same tape/backward
 // mechanism with the node payload widened from `f64` to `Tensor[f32, [?]]` — a
-// dynamic-shape rank-1 f32 tensor. v1 covers the element-wise linear ops whose
+// dynamic-shape rank-1 f32 tensor. It covers the element-wise ops whose
 // vector-Jacobian products are themselves element-wise and shape-preserving:
-// `add` · `sub` · `mul` (Hadamard) · `neg`. Every node's operands and gradient
-// share one shape, so no broadcasting or reduction is needed; `backward` seeds
-// the output gradient to an all-ones tensor (`d out / d out = 1` element-wise).
+// the arithmetic `add` · `sub` · `mul` (Hadamard) · `neg` and the activations
+// `relu` · `sigmoid` · `tanh` (forward via `Tensor.map`, backward the element-
+// wise derivative — ReLU gates on the input sign, sigmoid/tanh read the stored
+// output). Every node's operands and gradient share one shape, so no
+// broadcasting or reduction is needed; `backward` seeds the output gradient to
+// an all-ones tensor (`d out / d out = 1` element-wise).
 // The design's shape-typed generic `Var[T, S]` (with `Var.track` / `var.detach`),
 // matmul/broadcast/reduction ops (and the scalar-loss `sum`), the softmax/gelu/
 // silu activations, the losses, `grad`/`value_and_grad`, and the
@@ -396,6 +399,47 @@ impl TensorVar {
         TensorVar { tape: tp, idx: idx }
     }
 
+    /// Element-wise ReLU: `max(0, self)`. Backward passes the gradient straight
+    /// through where the input was positive and blocks it (0) otherwise.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn relu(ref self) -> TensorVar {
+        let tp = self.tape;
+        let sv = tp.values[self.idx];
+        let v: Tensor[f32, [?]] = sv.map(|e| if e > 0.0 { e } else { 0.0 });
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(6, self.idx, -1);
+        TensorVar { tape: tp, idx: idx }
+    }
+
+    /// Element-wise logistic sigmoid `1 / (1 + e^-self)`. Backward is
+    /// `s·(1 − s)` on the output `s`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn sigmoid(ref self) -> TensorVar {
+        let tp = self.tape;
+        let sv = tp.values[self.idx];
+        let v: Tensor[f32, [?]] = sv.map(|e| 1.0 / (1.0 + (0.0 - e).exp()));
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(7, self.idx, -1);
+        TensorVar { tape: tp, idx: idx }
+    }
+
+    /// Element-wise hyperbolic tangent. Backward is `1 − t²` on the output `t`.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn tanh(ref self) -> TensorVar {
+        let tp = self.tape;
+        let sv = tp.values[self.idx];
+        let v: Tensor[f32, [?]] = sv.map(|e| e.tanh());
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(8, self.idx, -1);
+        TensorVar { tape: tp, idx: idx }
+    }
+
     /// Run the reverse pass from this node: seed its gradient to an all-ones
     /// tensor, then walk every node newest→oldest applying each op's local
     /// (element-wise) vector-Jacobian product to its parents. Nodes are
@@ -436,6 +480,25 @@ impl TensorVar {
                 5 => {
                     let ga = tp.grads[a];
                     tp.grads[a] = ga - g;
+                }
+                6 => {
+                    // ReLU: pass the gradient where the INPUT was positive.
+                    let xa = tp.values[a];
+                    let mask: Tensor[f32, [?]] = xa.map(|e| if e > 0.0 { 1.0 } else { 0.0 });
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + g * mask;
+                }
+                7 => {
+                    // Sigmoid: s·(1 − s) on the OUTPUT s (this node's value).
+                    let sv = tp.values[i];
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + g * sv * (1.0 - sv);
+                }
+                8 => {
+                    // Tanh: 1 − t² on the OUTPUT t (this node's value).
+                    let tv = tp.values[i];
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + g * (1.0 - tv * tv);
                 }
                 _ => {}
             }

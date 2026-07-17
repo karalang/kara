@@ -453,6 +453,30 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_autograd_tensor_activations() {
+        // The tensor-valued activation path: `Tensor.map` forwards plus the
+        // backward VJPs that allocate extra temps (relu's `mask`, sigmoid/tanh's
+        // `g * s * (1-s)` chains). LSan-clean over the whole tape.
+        assert_clean_asan_run(
+            r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let x0: Tensor[f32, [?]] = Tensor.from([-1.0, 2.0, 0.5]);
+    let x = TensorVar.leaf(t, x0);
+    let a = x.relu();
+    let b = a.tanh();
+    let c = b.sigmoid();
+    c.backward();
+    println(x.grad_at(0));
+}
+"#,
+            &["0"],
+            "asan_autograd_tensor_activations",
+        );
+    }
+
     // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ───────────
     // A returned capturing closure gets a reference-counted HEAP environment
     // (`emit_rc_alloc { i64 refcount, env }`); the owning `let f = make(..)`
