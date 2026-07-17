@@ -68299,6 +68299,58 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_autograd_gradient_descent_training() {
+        // End-to-end reverse-mode TRAINING loop (mirrors
+        // examples/autograd_training.kara): minimize mean-squared error by
+        // gradient descent, learning target=[3,5,7] from a zero start. Each step
+        // builds a fresh tape, backprops the loss, and steps the weights down the
+        // gradient (`w = w - lr·dL/dw`). Outputs rounded so both backends agree:
+        // initial loss 28 → final loss 0, weights converge to [3,5,7].
+        if let Some(out) = run_program(
+            r#"
+import std.autograd.{TensorTape, TensorVar};
+fn loss_of(w: ref Tensor[f32, [?]], target: ref Tensor[f32, [?]]) -> f32 {
+    let tape = TensorTape.new();
+    let wv = TensorVar.leaf(tape, w);
+    let tv = TensorVar.leaf(tape, target);
+    let loss = wv.mse(tv);
+    let lv = loss.value();
+    lv[0]
+}
+fn main() {
+    let target: Tensor[f32, [?]] = Tensor.from([3.0, 5.0, 7.0]);
+    let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
+    let lr = 0.75;
+    let l0 = loss_of(w, target);
+    println(f"{l0.round()}");
+    let mut step = 0;
+    while step < 40 {
+        let tape = TensorTape.new();
+        let wv = TensorVar.leaf(tape, w);
+        let tv = TensorVar.leaf(tape, target);
+        let loss = wv.mse(tv);
+        loss.backward();
+        let grad: Tensor[f32, [?]] = wv.grad();
+        let step_dir: Tensor[f32, [?]] = grad * lr;
+        w = w - step_dir;
+        step = step + 1;
+    }
+    let lf = loss_of(w, target);
+    println(f"{lf.round()}");
+    let w0 = w[0];
+    let w1 = w[1];
+    let w2 = w[2];
+    println(f"{w0.round()}");
+    println(f"{w1.round()}");
+    println(f"{w2.round()}");
+}
+"#,
+        ) {
+            assert_eq!(out, "28\n0\n3\n5\n7\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_embeddings_cosine_similarity_matrix() {
         // `std.embeddings.cosine_similarity_matrix` (phase-11): the Q×N
         // bulk-scoring path — a `[Q, D]` query block vs a `[N, D]` corpus →

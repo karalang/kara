@@ -5707,6 +5707,33 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.struct_types.contains_key(tn.as_str())
                                 && !self.shared_types.contains_key(tn.as_str())
                         });
+                    // Tensor VARIABLE reassignment (`w = w - g`, the gradient-
+                    // descent update). The slot holds a single `ptr` to a
+                    // `[rank][dims][data]` block; overwriting it orphans the old
+                    // block unless we free it first — a per-assignment LEAK,
+                    // unbounded in a training loop. `val` (the fresh op result,
+                    // or a moved binding's block) is already computed, so the old
+                    // block's last read has happened; free it now. Skip a
+                    // self-assign (`w = w`), whose `val` IS the old block.
+                    // `free(null)` is a no-op, so the move-suppression sentinel
+                    // (a nulled slot) needs no guard. Mirrors the Vec/Map/struct
+                    // eager-free above.
+                    let lhs_is_tensor = self.tensor_var_infos.contains_key(name.as_str());
+                    let rhs_is_self_ident =
+                        matches!(&value.kind, ExprKind::Identifier(rn) if rn == name);
+                    if lhs_is_tensor && !rhs_is_self_ident {
+                        if let Some(slot) = self.variables.get(name).copied() {
+                            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                            let old = self
+                                .builder
+                                .build_load(ptr_ty, slot.ptr, "t.reassign.old")
+                                .unwrap()
+                                .into_pointer_value();
+                            self.builder
+                                .build_call(self.free_fn, &[old.into()], "")
+                                .unwrap();
+                        }
+                    }
                     if let Some(slot) = self.variables.get(name).copied() {
                         // Coerce a scalar RHS to the slot's width before
                         // storing — narrow-int arithmetic computes at i64
@@ -5717,6 +5744,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         // is non-scalar. Mirrors the let-binding boundary.
                         let cval = self.coerce_scalar_to_type(val, slot.ty);
                         self.builder.build_store(slot.ptr, cval).unwrap();
+                    }
+                    // Tensor move (`w = other`, an owned tensor binding moved
+                    // into `w`): after the store both slots hold the same block
+                    // pointer, so null the source's slot to disarm its
+                    // `FreeTensor` — the LHS now owns the block. A no-op for a
+                    // fresh-value RHS (`w = w - g`, a Binary) since
+                    // `suppress_source_vec_cleanup_for_arg` only nulls a
+                    // recorded tensor/Vec/Map binding, and for the self-assign
+                    // skipped above.
+                    if lhs_is_tensor && !rhs_is_self_ident {
+                        self.suppress_source_vec_cleanup_for_arg(value);
                     }
                     // Move-aware suppression for `outer = inner;` when
                     // the LHS is a tracked Vec / String and the RHS is

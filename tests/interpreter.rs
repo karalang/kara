@@ -18645,6 +18645,55 @@ fn main() {
 }
 
 #[test]
+fn test_autograd_reverse_mode_gradient_descent_training() {
+    // End-to-end training loop — interpreter parity with
+    // tests/codegen.rs::test_e2e_autograd_gradient_descent_training. Gradient
+    // descent minimizing MSE learns target=[3,5,7]: loss 28 → 0, w → [3,5,7]
+    // (rounded, so both backends agree despite f64-vs-f32 precision).
+    let out = run_no_errors(
+        r#"
+import std.autograd.{TensorTape, TensorVar};
+fn loss_of(w: ref Tensor[f32, [?]], target: ref Tensor[f32, [?]]) -> f32 {
+    let tape = TensorTape.new();
+    let wv = TensorVar.leaf(tape, w);
+    let tv = TensorVar.leaf(tape, target);
+    let loss = wv.mse(tv);
+    let lv = loss.value();
+    lv[0]
+}
+fn main() {
+    let target: Tensor[f32, [?]] = Tensor.from([3.0, 5.0, 7.0]);
+    let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
+    let lr = 0.75;
+    let l0 = loss_of(w, target);
+    println(f"{l0.round()}");
+    let mut step = 0;
+    while step < 40 {
+        let tape = TensorTape.new();
+        let wv = TensorVar.leaf(tape, w);
+        let tv = TensorVar.leaf(tape, target);
+        let loss = wv.mse(tv);
+        loss.backward();
+        let grad: Tensor[f32, [?]] = wv.grad();
+        let step_dir: Tensor[f32, [?]] = grad * lr;
+        w = w - step_dir;
+        step = step + 1;
+    }
+    let lf = loss_of(w, target);
+    println(f"{lf.round()}");
+    let w0 = w[0];
+    let w1 = w[1];
+    let w2 = w[2];
+    println(f"{w0.round()}");
+    println(f"{w1.round()}");
+    println(f"{w2.round()}");
+}
+"#,
+    );
+    assert_eq!(out, "28\n0\n3\n5\n7\n");
+}
+
+#[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors
     // (the last Sleef building block). `>>` is logical on unsigned lanes and

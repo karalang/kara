@@ -1,0 +1,84 @@
+// Gradient-descent training with `std.autograd` — a tiny end-to-end demo of
+// reverse-mode automatic differentiation driving a real optimization loop.
+//
+// The task is the "hello world" of autograd: starting from a zero vector,
+// learn a target vector `[3, 5, 7]` by minimizing the mean-squared error
+//
+//     L(w) = mean((w - target)²)
+//
+// Each training step is the canonical forward → backward → update cycle:
+//
+//   1. FORWARD  — build a fresh `Tape`, wrap the current weights as a leaf
+//                 `Var`, and compute the loss (which records the op graph).
+//   2. BACKWARD — `loss.backward()` walks that graph in reverse, filling in
+//                 `dL/dw` for every node (here `2·(w - target) / N`).
+//   3. UPDATE   — step the weights DOWN the gradient: `w = w - lr · dL/dw`.
+//
+// A fresh tape per step is the standard reverse-mode idiom: the graph is
+// rebuilt each iteration from the updated weights, and last step's tape (with
+// all its intermediate tensors) is freed at the end of the loop body. The
+// weights themselves are a plain `Tensor` carried across steps — the tape only
+// ever holds a copy.
+//
+// With learning rate 0.75 over N=3 elements the error shrinks by half each
+// step, so after 40 steps the weights have converged to the target and the
+// loss has fallen from ~28 to 0. Outputs are rounded so the result is exact on
+// every backend (the interpreter keeps f64 while codegen uses f32).
+//
+// Run it:  karac run examples/autograd_training.kara
+//
+// Expected output (initial loss, final loss, then the three learned weights):
+//   28
+//   0
+//   3
+//   5
+//   7
+
+import std.autograd.{TensorTape, TensorVar};
+
+// One measurement of the loss L(w) = mean((w - target)²), as a scalar. Builds
+// a throwaway tape (we only want the forward value, not gradients here).
+fn loss_of(w: ref Tensor[f32, [?]], target: ref Tensor[f32, [?]]) -> f32 {
+    let tape = TensorTape.new();
+    let wv = TensorVar.leaf(tape, w);
+    let tv = TensorVar.leaf(tape, target);
+    let loss = wv.mse(tv);
+    let lv = loss.value();
+    lv[0]
+}
+
+fn main() {
+    let target: Tensor[f32, [?]] = Tensor.from([3.0, 5.0, 7.0]);
+    let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
+    let lr = 0.75;
+
+    // Loss before any training — the weights start at zero, far from target.
+    let l0 = loss_of(w, target);
+    println(f"{l0.round()}");
+
+    // Gradient-descent loop: forward → backward → update, 40 steps.
+    let mut step = 0;
+    while step < 40 {
+        let tape = TensorTape.new();
+        let wv = TensorVar.leaf(tape, w);
+        let tv = TensorVar.leaf(tape, target);
+        let loss = wv.mse(tv);
+        loss.backward();
+        // dL/dw = 2·(w - target)/N, read back off the tape as a plain tensor.
+        let grad: Tensor[f32, [?]] = wv.grad();
+        let step_dir: Tensor[f32, [?]] = grad * lr;
+        w = w - step_dir;
+        step = step + 1;
+    }
+
+    // Loss after training has collapsed to ~0, and the weights match target.
+    let lf = loss_of(w, target);
+    println(f"{lf.round()}");
+
+    let w0 = w[0];
+    let w1 = w[1];
+    let w2 = w[2];
+    println(f"{w0.round()}");
+    println(f"{w1.round()}");
+    println(f"{w2.round()}");
+}

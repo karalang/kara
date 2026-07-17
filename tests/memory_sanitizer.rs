@@ -109,6 +109,15 @@ mod memory_sanitizer_tests {
         // the const-0 fallback and double-frees, an ASAN-harness-only artifact
         // absent from shipped binaries.
         karac::desugar_program(&mut parsed.program);
+        // Splice gated stdlib modules (`import std.autograd.{…}` etc.) into the
+        // program before resolve — mirroring the CLI pipeline (lib.rs) and the
+        // codegen harness. Without it the ownership pass never sees a gated fn's
+        // signature, so a `ref`-param stdlib fn (`TensorVar.leaf(tape, w)`) is
+        // conservatively treated as MOVING its argument — a false `UseAfterMove`
+        // when the arg is reused (e.g. a training loop's carried weights), even
+        // though `karac check` (which expands) accepts the program. A no-op for
+        // programs with no gated import.
+        karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -571,6 +580,67 @@ fn main() {
 "#,
             &["4"],
             "asan_autograd_mse_loss",
+        );
+    }
+
+    #[test]
+    fn asan_tensor_var_reassign_loop_no_leak() {
+        // B-2026-07-17-17: a tensor VARIABLE reassignment (`w = w + d`) never
+        // freed the displaced old block — one leak per assignment, unbounded in a
+        // loop (the gradient-descent `w = w - lr·grad` update). The slot's old
+        // `[rank][dims][data]` pointer is now freed before the overwrite. 5
+        // iterations → 5 leaked blocks pre-fix; LSan-clean after.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
+    let d: Tensor[f32, [?]] = Tensor.from([1.0, 1.0, 1.0]);
+    let mut k = 0;
+    while k < 5 {
+        w = w + d;
+        k = k + 1;
+    }
+    let w0 = w[0];
+    println(f"{w0}");
+}
+"#,
+            &["5"],
+            "asan_tensor_var_reassign_loop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_autograd_gradient_descent_training() {
+        // The end-to-end training loop — the strongest leak test in the autograd
+        // set: it builds and drops a FRESH tape every iteration (each owning its
+        // Vec[Tensor] value/grad columns) and reassigns the carried `w` tensor
+        // per step. A per-iteration leak (a stranded tape, an unfreed old `w`,
+        // an unfreed grad temp) would accumulate across all 12 steps. LSan-clean.
+        assert_clean_asan_run(
+            r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let target: Tensor[f32, [?]] = Tensor.from([3.0, 5.0, 7.0]);
+    let mut w: Tensor[f32, [?]] = Tensor.from([0.0, 0.0, 0.0]);
+    let lr = 0.75;
+    let mut step = 0;
+    while step < 12 {
+        let tape = TensorTape.new();
+        let wv = TensorVar.leaf(tape, w);
+        let tv = TensorVar.leaf(tape, target);
+        let loss = wv.mse(tv);
+        loss.backward();
+        let grad: Tensor[f32, [?]] = wv.grad();
+        let step_dir: Tensor[f32, [?]] = grad * lr;
+        w = w - step_dir;
+        step = step + 1;
+    }
+    let w0 = w[0];
+    println(f"{w0.round()}");
+}
+"#,
+            &["3"],
+            "asan_autograd_gradient_descent_training",
         );
     }
 
