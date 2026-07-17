@@ -492,6 +492,19 @@ impl TensorVar {
         TensorVar { tape: tp, idx: idx }
     }
 
+    /// Mean squared error against a `target` variable: `mean((self − target)²)`,
+    /// the canonical regression loss. A pure composition of the primitive ops —
+    /// it records `sub` → `mul` → `mean` nodes on the tape, so `backward` flows
+    /// through them with no dedicated op-code. `dL/d(self) = 2·(self − target)/N`.
+    /// The target is a `Var` (typically a leaf whose gradient is ignored); its
+    /// gradient is the negation of `self`'s, available on the same tape.
+    #[must_use = "a loss is only useful once you call backward() and read a gradient"]
+    pub fn mse(ref self, target: ref TensorVar) -> TensorVar {
+        let d = self.sub(target);
+        let sq = d.mul(d);
+        sq.mean()
+    }
+
     /// Run the reverse pass from this node: seed its gradient to an all-ones
     /// tensor, then walk every node newest→oldest applying each op's local
     /// (element-wise) vector-Jacobian product to its parents. Nodes are

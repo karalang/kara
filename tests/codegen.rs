@@ -68233,6 +68233,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_autograd_mse_loss() {
+        // `std.autograd` mean-squared-error loss — a pure composition of sub →
+        // mul → mean (no dedicated op-code; backward flows through them).
+        // pred=[3,5], target=[1,1] → d=[2,4], mse = mean([4,16]) = 10;
+        // dL/dpred = 2d/N = [2,4].
+        if let Some(out) = run_program(
+            r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let p0: Tensor[f32, [?]] = Tensor.from([3.0, 5.0]);
+    let g0: Tensor[f32, [?]] = Tensor.from([1.0, 1.0]);
+    let pred = TensorVar.leaf(t, p0);
+    let target = TensorVar.leaf(t, g0);
+    let loss = pred.mse(target);
+    let lv = loss.value();
+    println(f"{lv[0]}");
+    loss.backward();
+    println(pred.grad_at(0));
+    println(pred.grad_at(1));
+}
+"#,
+        ) {
+            assert_eq!(out, "10\n2\n4\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_embeddings_cosine_similarity_matrix() {
         // `std.embeddings.cosine_similarity_matrix` (phase-11): the Q×N
         // bulk-scoring path — a `[Q, D]` query block vs a `[N, D]` corpus →

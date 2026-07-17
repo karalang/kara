@@ -551,6 +551,29 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_autograd_mse_loss() {
+        // The composed MSE loss (sub → mul → mean) — exercises the whole tensor
+        // tape through a realistic loss + its backward. LSan-clean.
+        assert_clean_asan_run(
+            r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t = TensorTape.new();
+    let p0: Tensor[f32, [?]] = Tensor.from([3.0, 5.0]);
+    let g0: Tensor[f32, [?]] = Tensor.from([1.0, 1.0]);
+    let pred = TensorVar.leaf(t, p0);
+    let target = TensorVar.leaf(t, g0);
+    let loss = pred.mse(target);
+    loss.backward();
+    println(pred.grad_at(1));
+}
+"#,
+            &["4"],
+            "asan_autograd_mse_loss",
+        );
+    }
+
     // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ───────────
     // A returned capturing closure gets a reference-counted HEAP environment
     // (`emit_rc_alloc { i64 refcount, env }`); the owning `let f = make(..)`
