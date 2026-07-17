@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 23 | 0 |
 | run-vs-build | 23 | 0 |
 | perf | 21 | 1 |
-| soundness | 18 | 2 |
+| soundness | 18 | 1 |
 | diagnostics | 11 | 1 |
 | use-after-free | 3 | 0 |
 
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 368 | 4 |
-| typecheck | 61 | 3 |
-| interp | 48 | 1 |
+| typecheck | 61 | 2 |
+| interp | 48 | 0 |
 | ownership | 22 | 0 |
 | other | 18 | 0 |
 | autopar | 14 | 0 |
@@ -123,23 +123,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **521 surfaced · 7 open · 511 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **521 surfaced · 6 open · 512 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-13-5 | 2026-07-13 | codegen+typecheck | medium | Three composable Tensor limitations block idiomatic numerical-stdlib .kara over generic-dim tensors: (A) a tensor reduction/transform on a NON-IDENTIFIER receiver (method chain, e.g. `a.zip_with(b, f).sum()`) fails codegen with 'no handler for method sum on non-identifier receiver' — try_compile_tensor_reduce (tensor.rs:2794) only matches Identifier/SelfValue receivers, returning None for a MethodCall receiver so dispatch falls through; (B) a generic shape parameter `D` (declared `fn f[D](t: Tensor[f32,[D]])`) is usable in the SIGNATURE but NOT in a function-BODY type annotation — `let p: Tensor[f32,[D]] = ...` fails typecheck with "const expression: 'D' is not a known const"; (C) a `ref Tensor[f32,[D]]` PARAM passed to a tensor method taking `other: ref Tensor` (zip_with) fails typecheck with 'expected Tensor, found ref Tensor'. Each is loud (compile error / --interp hint), interp-correct where reachable. | — |
 | B-2026-07-16-23 | 2026-07-16 | codegen | medium | `unwrap_or(<non-Call heap default>)` mismanaged the eager default's ownership. LEG 1 (FIXED in c9593ed): an owned-binding default (moved Vec/String identifier) DOUBLE-FREED. REMAINING (open): a DIRECT array/collection-literal default (`unwrap_or([9,9,9])`) LEAKS, and a DIRECT f-string default (`unwrap_or(f"…")`) DOUBLE-FREES. Only the Call/MethodCall/String-slice (B-2026-07-16-22) and owned-binding (leg 1) default shapes are now correct. | none |
 | B-2026-07-17-5 | 2026-07-17 | cli | low | wasm link fails with cryptic `undefined symbol: __wasm_first_page_end` (from rustup's self-contained wasi libc.a dlmalloc.c.obj) when the PATH `wasm-ld` is older than the active rustup toolchain's wasi-libc — the linker resolution order (KARAC_WASM_LD > PATH wasm-ld > brew > rust-lld) picks the stale system linker over the version-matched rust-lld sitting in the same rustup toolchain that supplied the libc. | none |
-| B-2026-07-17-6 | 2026-07-17 | typecheck+interp | medium | `match <non-Option scalar/String> { Some(v) => …, None => … }` (Option-variant patterns on a scrutinee that is NOT an Option) PASSES `karac check` but PANICS the interpreter: 'internal error: entered unreachable code: non-exhaustive match … should be caught by exhaustiveness checker' (src/interpreter/pattern_match.rs:46). Also accepts a USER enum variant pattern on a non-matching scrutinee (`match i64 { Color.Red => … }`). Result patterns (`Ok/Err`) are CORRECTLY rejected — an asymmetry. A plausible real mistake (confusing Channel `recv()->T` with `try_recv()->Option[T]`) yields an internal-error crash, not a clear diagnostic. | none |
 | B-2026-07-17-12 | 2026-07-17 | typecheck | medium | Unknown methods on non-exhaustive prelude types (Vec/String/Map/Set/...) silently type as Type::Error, which unifies with ANYTHING: `v.some_typo()` passes karac check, and pre-B-2026-07-16-14 even `let x: bool = v.sum()` checked clean. EXHAUSTIVE_PRELUDE (expr_method_call.rs ~5400) covers only Option/Result, so every other built-in receiver gets the silent fall-through — the check/execution contract (the AI-first wedge: check-clean must run) is open on exactly the receivers LLM authors touch most. | none |
 | B-2026-07-17-13 | 2026-07-17 | codegen | low | A narrow-UNSIGNED value carried through an Option payload prints SIGNED: `Option[u8]` holding 200u8, unwrapped and printed, shows -56 (200 as i8) under karac build; interp correct. The unwrap/reconstruct produces the right bit pattern (i8 truncation is correct) but the print path reads it as signed because the reconstructed value's unsigned surface type is not threaded to expr_is_unsigned_int through the Option unwrap. Reproduces with a hand-written `match racc { Some(a) => .. }` over Option[u8] (NOT reduce-specific) — same class as B-2026-07-03-21's narrow-unsigned slot printing, extended to the Option-payload path. | none |
 | B-2026-07-17-14 | 2026-07-17 | codegen | low | Descending counted loop `while k >= 1 { ..; k = k - 1 }` keeps an explicit `cmp $1` after the decrement instead of folding the guard into the `dec`'s flags. Surfaced as the RESIDUAL gap on Pascal #119 after the descending bounds-check skip (B-2026-07-17-1) removed the per-iteration bounds check: the in-place update loop then runs 8 instructions (`mov;mov;add;jo;mov;dec;cmp $1;ja`) where equal-safety `rustc -O -C overflow-checks=on` runs 7 (`mov;mov;add;jo;mov;dec;jne`) — rust lowers its `(1..=i).rev()` countdown to `dec; jne` (compare-against-0 via the decrement's ZF), kara emits a separate `cmp $0x1,%rdx` dependent on the `dec`. That one extra dependent instruction per iteration is a ~1.14-1.19x residual on the tight O(k^2) update loop (kara 341ms vs rust-ovf 289ms = 1.18x; the bounds-check fix had already moved it from 1.29x). Distinct mechanism from B-2026-07-17-1 (bounds-check elision): this is loop-guard strength reduction / countdown canonicalization. | none |
 
-### Fixed (511)
+### Fixed (512)
 
-<details><summary>511 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>512 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -649,6 +648,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **521 surfaced 
 | B-2026-07-17-3 | codegen | high | An owned `self` receiver method returned/moved with a non-empty heap (Vec/String) field DOUBLE-FREES the field buffer | 13eda85 (direct-return leg, sibling session) + 2df786d (rebind leg) — both legs were the same missing-SelfValue gate at different call sites of the owned-struct move-out suppression. Direct return (`fn ident(self) -> T {{ self }}`): suppress_source_vec_cleanup_for_arg_ex's var_name match gained a SelfValue -> 'self' arm (gated to an inline-struct self slot so ref self never GEPs through a borrow pointer). Rebind (`let mut b = self; ...; b` — the builder/fluent shape): the Let-arm's move-source resolution in stmts.rs likewise resolves SelfValue to 'self', routing it into the same helper (and into suppress_user_drop_for_var for user-Drop structs) exactly like a plain owned-struct Identifier move. NOT a deeper deep-copy interaction after all — the deep-copy at entry was correct; only the suppression routing missed SelfValue. Verified: builder chain, String-field rebind, user-Drop rebind — interp/JIT/native parity, valgrind clean (drop count exactly matches the two deep-copied instances); memory_sanitizer + codegen suites green. Pins: asan_owned_self_direct_return_no_double_free (13eda85), asan_owned_self_rebind_builder_chain_no_double_free (this fix). |
 | B-2026-07-17-4 | codegen | high | `let a = r.unwrap_or("x").len();` on a let-bound `Option[String]` double-frees SEQUENTIALLY (no auto-par): unwrap_or's present branch reconstitutes t… | d9cd7a2 — calls.rs unwrap_or arm now calls suppress_inline_option_result_binding_move(object) at the merge point, the exact suppression unwrap/expect gained in B-2026-07-10-2 (same no-op cases: fresh-temp receiver, non-heap payload; the absent path zeroes a payload-less slot harmlessly). Pin: asan_sequential_unwrap_or_on_named_option_binding_no_double_free. |
 | B-2026-07-17-1 | codegen | low | In-place single-row DP `while k >= 1 { row[k] = row[k] + row[k-1]; k = k-1 }` (Pascal #119, and the general rolling-DP shape) keeps a per-iteration b… | 6474a73 |
+| B-2026-07-17-6 | typecheck+interp | medium | `match <non-Option scalar/String> { Some(v) => …, None => … }` (Option-variant patterns on a scrutinee that is NOT an Option) PASSES `karac check` bu… | b71fdd3 |
 | B-2026-07-17-7 | codegen | high | `Vec[Tensor]` element ownership was never wired through codegen — a `Vec[Tensor]` (tensor-valued-autograd `Tape` grads/values columns) leaked every e… | 87443ed |
 | B-2026-07-17-8 | codegen | medium | Par-tabulate install of a pre-seeded accumulator takes the combine APPEND arm — a serial total×elem memcpy on the parent thread per dispatch while ev… | 7b7ba41a |
 | B-2026-07-17-9 | codegen | medium | Routing Vec/String frees through an unattributed karac_free_buf declaration turned every cleanup drain into a clobber-everything opaque call — LLVM k… | 7b7ba41a |
