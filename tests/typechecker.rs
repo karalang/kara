@@ -9441,6 +9441,45 @@ fn test_iterator_chain_via_iter_still_resolves_on_vec() {
     typecheck_ok("fn main() { let v = [1, 2, 3]; let s: i64 = v.sum(); println(f\"{s}\"); }");
 }
 
+#[test]
+fn test_unknown_method_on_tensor_dataframe_rejected() {
+    // The B-2026-07-17-12 gate, extended to the `Type::Named` numerical prelude
+    // types `Tensor` and `DataFrame`: a genuinely-absent method is a real
+    // NoMethodFound, not the silent `Type::Error` that unified with anything and
+    // ran on no backend. (The fixed-size `Array[T, N]` type is a STRUCTURAL
+    // `Type::Array`, not `Type::Named{"Array"}`, so it never reaches the
+    // Named-keyed arm — its unknown-method hole is a separate follow-up.)
+    for (prog, ty) in [
+        (
+            "fn main() { let t: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]); t.some_typo(); }",
+            "Tensor",
+        ),
+        (
+            "fn main() { let mut d: DataFrame = DataFrame.new(); d.some_typo(); }",
+            "DataFrame",
+        ),
+    ] {
+        let errors = typecheck_errors(prog);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+            "expected NoMethodFound for an absent {ty} method, got: {:?}",
+            errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_graduated_numeric_types_legit_methods_still_resolve() {
+    // Regression guard for the Tensor/DataFrame graduation: the real method
+    // surfaces still resolve (they return before the None arm).
+    typecheck_ok("fn main() { let t: Tensor[f32, [3]] = Tensor.from([1.0f32, 2.0f32, 3.0f32]); let u = t.map(|x| x * 2.0f32); println(f\"{u.sum()}\"); }");
+    typecheck_ok(
+        "fn main() { let mut d: DataFrame = DataFrame.new(); d.insert(\"a\", Column.from_vec([1i64, 2i64, 3i64])); let c: Column[i64] = d.column(\"a\"); println(f\"{d.width()} {d.height()} {c.len()}\"); }",
+    );
+}
+
 // ── Method resolution: stdlib typo suggestions ──────────────────
 //
 // Each per-type `infer_*_method` arm in the typechecker now emits a

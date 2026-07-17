@@ -5555,21 +5555,29 @@ impl<'a> super::TypeChecker<'a> {
                     // historical silent prelude fall-through.
                     || self.env.distinct_bases.contains_key(&type_name))
                     && !crate::prelude::PRELUDE_TYPES.contains(&type_name.as_str());
-                // `Option` / `Result` / `Vec` / `VecDeque` are the prelude
-                // types whose method surface is EXHAUSTIVELY resolved before
-                // this fall-through, so a method that reaches here is genuinely
-                // absent. For `Option`/`Result` the surface is small and every
-                // valid method (`unwrap`, `map`, `is_some`, `ok_or`,
-                // `map_err`, …) resolves via a dedicated arm above or a baked
-                // stdlib impl. For `Vec`/`VecDeque` the native surface
-                // (`push`/`pop`/`get`/`sort`/`sum`/`max`/`join`/…) resolves in
-                // dedicated arms, and the iterator ADAPTOR/TERMINAL surface
-                // (`map`/`filter`/`collect`/`fold`/…) resolves only through an
-                // explicit `.iter()` (the `Iterator[T]` dispatch above) — a
-                // direct `v.map(...)` runs on NO backend (interpreter: "method
-                // not found"; AOT: link/miscompile), so accepting it was a pure
-                // check/execution hole (B-2026-07-17-12). The common way to
-                // reach here is either that iter-less adaptor call or a
+                // These prelude types have method surfaces EXHAUSTIVELY
+                // resolved before this fall-through, so a method that reaches
+                // here is genuinely absent. For `Option`/`Result` the surface
+                // is small and every valid method (`unwrap`, `map`, `is_some`,
+                // `ok_or`, `map_err`, …) resolves via a dedicated arm above or
+                // a baked stdlib impl. For `Vec`/`VecDeque` the native
+                // surface (`push`/`pop`/`get`/`len`/`sort`/`sum`/`join`/…)
+                // resolves in dedicated arms, and the iterator ADAPTOR/TERMINAL
+                // surface (`map`/`filter`/`collect`/`fold`/…) resolves only
+                // through an explicit `.iter()` (the `Iterator[T]` dispatch
+                // above) — a direct `v.map(...)` runs on NO backend
+                // (interpreter: "method not found"; AOT: link/miscompile), so
+                // accepting it was a pure check/execution hole
+                // (B-2026-07-17-12, extended to `Tensor`/`DataFrame`).
+                // For `Tensor`/`DataFrame` the numerical surface
+                // (`reshape`/`zip_with`/`matmul`/`map`/`sum`/…) resolves in
+                // `infer_tensor_*` / the dataframe arms; an absent name that
+                // slips past them ran on no backend just the same. (The
+                // fixed-size `Array[T, N]` type is a STRUCTURAL `Type::Array`,
+                // not `Type::Named{"Array"}`, so it never reaches this
+                // Named-keyed arm — its own unknown-method hole is a separate
+                // follow-up.) The common
+                // way to reach here is either that iter-less adaptor call or a
                 // wrong-container call — invoking an inner-type method on an
                 // un-unwrapped optional (`opt.len()`, `res.push(x)`,
                 // `grid.get(i).len()` where `get` returns `Option[Vec[_]]`).
@@ -5580,7 +5588,8 @@ impl<'a> super::TypeChecker<'a> {
                 // codegen “no handler for method”. Reject them here like a
                 // user-defined type, the same silent-poison tightening applied
                 // to numeric receivers (B-2026-07-03-5) and user types.
-                const EXHAUSTIVE_PRELUDE: &[&str] = &["Option", "Result", "Vec", "VecDeque"];
+                const EXHAUSTIVE_PRELUDE: &[&str] =
+                    &["Option", "Result", "Vec", "VecDeque", "Tensor", "DataFrame"];
                 let is_exhaustive_prelude = EXHAUSTIVE_PRELUDE.contains(&type_name.as_str());
                 // Args-specialization tightening: even on prelude types, fire
                 // NoMethodFound when the method exists on a *different*
@@ -5649,7 +5658,9 @@ impl<'a> super::TypeChecker<'a> {
                     // runs on no backend). When the absent method IS an iterator
                     // method, the actionable fix is the `.iter()` hop, not an
                     // edit-distance neighbour — surface that instead
-                    // (B-2026-07-17-12).
+                    // (B-2026-07-17-12). Scoped to the iterable sequence types;
+                    // `Tensor`/`DataFrame` are not `.iter()`-adapted, so an
+                    // absent method there falls to the edit-distance suggestion.
                     if matches!(type_name.as_str(), "Vec" | "VecDeque")
                         && Self::is_iterator_surface_method(method)
                     {
