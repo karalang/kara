@@ -2257,6 +2257,29 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?
             };
+            // `unwrap_or`'s default is evaluated EAGERLY (before the branch), so
+            // in the present (Some/Ok) path it is DISCARDED and its heap buffer
+            // leaks once per call — unbounded in a loop (the pure-constant-Some
+            // case elides the default entirely, so the leak only shows on a
+            // data-dependent receiver). Free it here for the two proven-safe
+            // fresh-owned shapes: a Call/MethodCall temp
+            // (`unwrap_or("d".to_string())`) and a `String[a..b]` slice, each a
+            // fresh `cap>0` buffer with no other owner (the absent path binds it
+            // to the result, freed once at scope; the present path frees it here,
+            // once — no double-free). `free_str_vec_buffer_if_heap`'s cap>0 guard
+            // additionally no-ops on a scalar / borrowed (cap==0) default. Other
+            // default shapes are EXCLUDED, left for the follow-up
+            // B-2026-07-16-23: a place-expr (identifier / field / index) default
+            // is either borrowed (must not be freed) or a moved owned binding
+            // that needs scope-exit move-suppression (a pre-existing
+            // double-free); an f-string / collection-literal default is already
+            // temp-tracked by the statement machinery, so freeing it here would
+            // double-free. B-2026-07-16-22.
+            if self.expr_yields_fresh_owned_temp(&default_arg.value)
+                || self.expr_is_fresh_owned_string_slice(&default_arg.value)
+            {
+                self.free_str_vec_buffer_if_heap(default_val);
+            }
             let present_end = self.builder.get_insert_block().unwrap();
             self.builder.build_unconditional_branch(merge_bb).unwrap();
 

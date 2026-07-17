@@ -28363,4 +28363,43 @@ fn main() {
             "chained_string_method_intermediate_temp_no_leak",
         );
     }
+
+    #[test]
+    fn asan_unwrap_or_fresh_string_default_no_leak() {
+        // B-2026-07-16-22: `Option[String].unwrap_or(default)` /
+        // `Result[String, E].unwrap_or(default)` evaluate the default EAGERLY
+        // (before the tag branch); the present (Some/Ok) path discarded a fresh
+        // heap-String default without freeing it — a leak once per call,
+        // unbounded in a loop. Only surfaces on a data-dependent receiver (a
+        // constant Some elides the default). Fixed by freeing the discarded
+        // default in the present block, gated on a fresh-owned Call/MethodCall /
+        // String-slice default so a borrowed / moved-binding default is never
+        // touched. Loops 200× over both Option and Result receivers, each with a
+        // fresh `"…".to_string()` default, mixing present/absent per iteration
+        // so any per-call strand accumulates into a large LSan leak.
+        assert_clean_asan_run(
+            r#"
+fn opt(i: i64) -> Option[String] {
+    if i % 2 == 0 { Some("even-value".to_string()) } else { None }
+}
+fn res(i: i64) -> Result[String, String] {
+    if i % 3 == 0 { Ok("ok-value".to_string()) } else { Err("e".to_string()) }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let a = opt(i).unwrap_or("odd-default".to_string());
+        total = total + (a.len() as i64);
+        let b = res(i).unwrap_or("res-default".to_string());
+        total = total + (b.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["4099"],
+            "unwrap_or_fresh_string_default_no_leak",
+        );
+    }
 }
