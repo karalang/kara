@@ -7427,6 +7427,13 @@ impl<'ctx> Codegen<'ctx> {
         // earlier cells, which this module's item scan cannot see.
         self.runtime_panic_prefix_needed = self.main_symbol_override.is_some()
             || (!self.strip_contracts && contracts::program_declares_contracts(program));
+        // Eagerly cache the host `TargetData` up front (phase-10 line 282): the
+        // `&self` drop-synthesis paths read `self.target_data` to size the
+        // `karac_free_buf` recycling hint (`cap × elem_abi_size`) for a
+        // multi-byte-element Vec FIELD, and a `None` there would silently
+        // under-hint back to `cap × 1`. Ignore a target-machine failure — the
+        // hint falls back to `1` (a sound under-hint, never a correctness issue).
+        let _ = self.ensure_target_data();
         // Level 2 crash diagnostics — Part 2: stand up DWARF debug-info state
         // before any function compiles (no-op unless KARAC_DEBUG_INFO is set and
         // a source filename was threaded in via set_source_filename, which runs

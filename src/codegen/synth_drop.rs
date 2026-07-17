@@ -207,9 +207,16 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .builder
                                 .build_int_to_ptr(data_word, ptr_ty, "drop.data.p")
                                 .unwrap();
-                            // Recycling-aware release; type-erased payload
-                            // → hint = cap × 1 (String-exact, Vec under-hint).
-                            self.emit_free_buf_call(data_ptr, cap_val, 1);
+                            // Recycling-aware release; hint sized by the
+                            // payload field type (phase-10 line 282) so a
+                            // mid-size `Vec[T]` enum payload is parked.
+                            let payload_hint_elem_size = variant_field_tes
+                                .iter()
+                                .find(|(n, _)| n == variant_name)
+                                .and_then(|(_, tes)| tes.get(fi))
+                                .map(|fte| self.vec_field_free_hint_elem_size(fte))
+                                .unwrap_or(1);
+                            self.emit_free_buf_call(data_ptr, cap_val, payload_hint_elem_size);
                             // After freeing, zero the cap word so a
                             // re-entrant invocation (via aliased binding,
                             // unusual in v1 but defensive) becomes a no-op
@@ -1524,6 +1531,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     // insert block, so capture it before opening the cap-guard
                     // blocks below (same discipline as the nested-shared Vec
                     // arm in `emit_nested_struct_shared_rc_decs`).
+                    // Recycling hint size (phase-10 line 282): the resolved
+                    // field type sizes the `karac_free_buf` fast-reject —
+                    // `sizeof(T)` for a `Vec[T]` field (so a mid-size grid is
+                    // parked), `1` for a String field, `1` if unresolved.
+                    let field_hint_elem_size = self
+                        .struct_field_type_exprs
+                        .get(struct_name)
+                        .and_then(|v| v.get(field_idx))
+                        .cloned()
+                        .map(|fte| match subst {
+                            Some(subst) => {
+                                crate::codegen::helpers::subst_type_params_in_type_expr(&fte, subst)
+                            }
+                            None => fte,
+                        })
+                        .map(|fte| self.vec_field_free_hint_elem_size(&fte))
+                        .unwrap_or(1);
                     let vec_elem_drop = self
                         .struct_field_type_exprs
                         .get(struct_name)
@@ -1699,9 +1723,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.builder.build_unconditional_branch(cond_bb).unwrap();
                         self.builder.position_at_end(after_bb);
                     }
-                    // Recycling-aware release; erased Vec/String field →
-                    // cap × 1 hint (String-exact, Vec under-hint).
-                    self.emit_free_buf_call(data, cap, 1);
+                    // Recycling-aware release; hint sized by the field type
+                    // (phase-10 line 282) so a mid-size `Vec[T]` field is parked.
+                    self.emit_free_buf_call(data, cap, field_hint_elem_size);
                     self.builder.build_unconditional_branch(skip_bb).unwrap();
                     self.builder.position_at_end(skip_bb);
                 }

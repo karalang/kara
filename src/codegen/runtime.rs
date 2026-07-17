@@ -3391,6 +3391,30 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
     }
 
+    /// The `elem_abi_size` to hand `emit_free_buf_call` when freeing a
+    /// Vec/String buffer whose declared FIELD/payload type is `fte` (phase-10
+    /// line 282). A `String`'s element is a byte, so `1` is already exact; a
+    /// `Vec[T]` returns `sizeof(T)` so a mid-size multi-byte-element buffer
+    /// clears the recycling cache's 1 MiB fast-reject that a `cap × 1`
+    /// under-hint wrongly tripped (e.g. a 2 MiB `Vec[Cell]` field: cap 262144,
+    /// `cap × 1` < 1 MiB → never parked; `cap × sizeof(Cell)` ≥ 1 MiB → parked).
+    /// Falls back to `1` for a non-Vec `fte` or when `target_data` isn't cached
+    /// — a sound under-hint, never a correctness issue (the hint only gates the
+    /// cache fast-reject, never sizing; the cache uses `malloc_usable_size`).
+    pub(super) fn vec_field_free_hint_elem_size(&self, fte: &TypeExpr) -> u64 {
+        if self.is_string_type_expr(fte) {
+            return 1;
+        }
+        match crate::codegen::helpers::vec_inner_type_expr(fte) {
+            Some(elem_te) => self
+                .target_data
+                .as_ref()
+                .map(|td| td.get_abi_size(&self.llvm_type_for_type_expr(&elem_te)))
+                .unwrap_or(1),
+            None => 1,
+        }
+    }
+
     pub(super) fn emit_free_vec_buffer_if_owned(
         &mut self,
         vec_alloca: PointerValue<'ctx>,

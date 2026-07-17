@@ -2881,6 +2881,36 @@ mod codegen_tests {
         }
     }
 
+    /// IR pin (phase-10 line 282): a struct's `Vec[T]` field drop sizes the
+    /// `karac_free_buf` recycling hint by `cap × sizeof(T)` (the erased sites
+    /// used a `cap × 1` under-hint that wrongly fast-rejected a mid-size
+    /// multi-byte-element buffer from the 1 MiB cache). A `Vec[i64]` field must
+    /// multiply cap by 8; also confirms `target_data` is cached (else it would
+    /// silently fall back to 1).
+    #[test]
+    fn ir_struct_vec_field_free_hint_uses_elem_abi_size() {
+        let ir = ir_for(
+            "struct Grid { cells: Vec[i64] }\n\
+             fn main() {\n\
+             let g = Grid { cells: Vec.filled(4i64, 7i64) };\n\
+             println(g.cells.len().to_string());\n\
+             }\n",
+        );
+        let hint_muls: Vec<&str> = ir
+            .lines()
+            .filter(|l| l.contains("freebuf.bytes") && l.contains("mul"))
+            .collect();
+        assert!(
+            !hint_muls.is_empty(),
+            "no `freebuf.bytes` hint mul emitted for the struct Vec field drop:\n{ir}"
+        );
+        assert!(
+            hint_muls.iter().any(|l| l.contains(", 8")),
+            "Vec[i64] field free hint not sized by elem abi size (want `mul i64 %cap, 8`, \
+             got a `cap × 1` under-hint — target_data missing?): {hint_muls:?}"
+        );
+    }
+
     // ── Type-aware operator dispatch: signed vs unsigned ─────────
     //
     // Signedness-sensitive integer ops (Div/Mod/Lt/LtEq/Gt/GtEq/Shr)
