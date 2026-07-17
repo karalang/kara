@@ -104,6 +104,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 16 | 1 |
 | diagnostics | 11 | 1 |
 | use-after-free | 3 | 0 |
+| typecheck soundness hole (ill-typed variant pattern accepted) → interpreter panic (unreachable non-exhaustive match) | 1 | 1 |
 
 ### By surface
 
@@ -121,11 +122,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 | parser | 3 | 0 |
 | effect | 1 | 0 |
+| typechecker (pattern-vs-scrutinee type checking — `check_pattern_against`) → interpreter ICE | 1 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **512 surfaced · 8 open · 501 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **513 surfaced · 9 open · 501 fixed** (2026-05-20 → 2026-07-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **512 surfaced 
 | B-2026-07-17-3 | 2026-07-17 | codegen | high | An owned `self` receiver method returned/moved with a non-empty heap (Vec/String) field DOUBLE-FREES the field buffer. DIRECT-RETURN leg (`fn ident(self) -> T { self }`) FIXED in 13eda85. The REBIND leg (`fn add(self){ let mut b = self; b.field.push(x); b }`, the common builder/fluent shape) STILL crashes (native UAF / JIT abort; interp correct) — a deeper deep-copy-at-entry interaction. Free-function equivalent is clean throughout; the bug is `self`-receiver-specific. | none |
 | B-2026-07-17-5 | 2026-07-17 | cli | low | wasm link fails with cryptic `undefined symbol: __wasm_first_page_end` (from rustup's self-contained wasi libc.a dlmalloc.c.obj) when the PATH `wasm-ld` is older than the active rustup toolchain's wasi-libc — the linker resolution order (KARAC_WASM_LD > PATH wasm-ld > brew > rust-lld) picks the stale system linker over the version-matched rust-lld sitting in the same rustup toolchain that supplied the libc. | none |
 | B-2026-07-17-1 | 2026-07-17 | codegen | low | In-place single-row DP `while k >= 1 { row[k] = row[k] + row[k-1]; k = k-1 }` (Pascal #119, and the general rolling-DP shape) keeps a per-iteration bounds check codegen does not eliminate — kata #119 ran 416ms vs equal-safety Rust (rustc -O -C overflow-checks=on) 311ms = 1.34x, and vs C (no checks) 239ms = 1.74x. asm isolation: the update loop emits `cmp %rbx,%rdx; ja <panic>` before the `row[k]` / `row[k-1]` loads (one check covers both, since k-1 < k), while the SIBLING `row_hash` fold loop (`while j < row.len() { row[j] }`) in the SAME binary has NO bounds check (BCE fired there). So codegen's BCE handles the canonical forward `j < v.len()` and the binary-search `mid` (B-2026-06-16-1) but NOT this pattern: the index `k` is bounded by the OUTER loop var `i` (k <= i-1) and `i <= row_index` while `len = row_index + 1`, so `k < len` holds only transitively (k <= i-1 <= row_index-1 < len). The overflow check (`jo`) is present in both kara and equal-safety Rust and is NOT the gap (rust -O 274ms vs rust-ovf 311ms shows the overflow tax is ~13%; the residual 311->416 is the bounds check). Same BCE class as the fixed binary-search B-2026-06-16-1 (there get_unchecked pinned the check as ~85% of the gap), a distinct index-derivation pattern. | none |
+| B-2026-07-17-6 | 2026-07-17 | typechecker (pattern-vs-scrutinee type checking — `check_pattern_against`) → interpreter ICE | medium | `match <non-Option scalar/String> { Some(v) => …, None => … }` (Option-variant patterns on a scrutinee that is NOT an Option) PASSES `karac check` but PANICS the interpreter: 'internal error: entered unreachable code: non-exhaustive match … should be caught by exhaustiveness checker' (src/interpreter/pattern_match.rs:46). Also accepts a USER enum variant pattern on a non-matching scrutinee (`match i64 { Color.Red => … }`). Result patterns (`Ok/Err`) are CORRECTLY rejected — an asymmetry. A plausible real mistake (confusing Channel `recv()->T` with `try_recv()->Option[T]`) yields an internal-error crash, not a clear diagnostic. | none |
 
 ### Fixed (501)
 
