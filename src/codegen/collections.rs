@@ -3963,11 +3963,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|te| self.tensor_var_info_from_type_expr(te).is_some());
 
         if self.llvm_ty_is_vec_struct(elem_ty) {
-            self.emit_free_vec_buffer_if_owned(elem_ptr);
+            // Inner element size unknown here (the overwritten element is
+            // itself a `{ptr,len,cap}`) — cap × 1 hint (String-exact, Vec
+            // under-hint), keeping hot small element overwrites at libc cost.
+            self.emit_free_vec_buffer_if_owned(elem_ptr, 1);
         } else if elem_is_tensor {
             // Free the displaced old block, then take over the new one.
             // `free(null)` is a no-op, so the move-suppression sentinel needs no
-            // guard (same convention as `FreeVecBuffer`'s tensor drain).
+            // guard (same convention as `FreeVecBuffer`'s tensor drain). A
+            // tensor element is a `[rank][dims][data]` BLOCK, not a
+            // `{ptr,len,cap}` data buffer — it stays on libc `free`, not the
+            // recycling entry.
             let old_block = self
                 .builder
                 .build_load(ptr_ty, elem_ptr, "vidx.t.old")

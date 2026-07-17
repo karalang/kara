@@ -4948,10 +4948,10 @@ fn main() {
             .expect("loop.cond back-edge not found inside loop.body");
         let body_slice = &worker[body_start..backedge_pos];
         assert!(
-            body_slice.contains("call void @free("),
-            "expected at least one `call void @free(...)` between `loop.body:` \
-             and the back-edge `br label %loop.cond` (per-iter cleanup drain) — \
-             this is the leak-fix invariant. body_slice:\n{body_slice}"
+            body_slice.contains("call void @free(") || body_slice.contains("@karac_free_buf("),
+            "expected at least one buffer release (`@free` or `@karac_free_buf`) between \
+             `loop.body:` and the back-edge `br label %loop.cond` (per-iter cleanup \
+             drain) — this is the leak-fix invariant. body_slice:\n{body_slice}"
         );
     }
 
@@ -6263,6 +6263,126 @@ fn main() {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0], "200");
         assert_eq!(lines[1], "1", "heap-let par tabulate values corrupted");
+    }
+
+    // ── Par tabulate in-place install (2026-07-16) ───────────────────────
+    //
+    // When the accumulator already has room (`cap - len >= iter_total` —
+    // the shape the Vec.new()-in-counted-loop → with_capacity(n) rewrite
+    // produces on EVERY rewritten par collect), workers write directly
+    // into the accumulator's buffer at `data + len·elem` and the install
+    // is one `len` store. The old always-premalloc form pushed this shape
+    // through the combine's append arm: a serial `total·elem`-byte memcpy
+    // on the parent thread per dispatch while every worker sat parked —
+    // measured 2.1× wall on the 1M-cell LBM substep (the "fresh-buffer
+    // tax", previously mis-attributed to page-fault serialization; the
+    // sample profile shows main+platform_memmove at 61% of loop wall).
+    // A too-small accumulator keeps the premalloc + combine path.
+
+    #[test]
+    fn test_ir_par_tabulate_emits_inplace_and_premalloc_arms() {
+        let ir = ir_for_par(
+            r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.new();
+    let mut c: i64 = 0i64;
+    #[par_unordered]
+    while c < 100000i64 {
+        out.push(c * 2i64);
+        c = c + 1i64;
+    }
+    println(out.len());
+}
+"#,
+        );
+        for pin in [
+            "tab.has_room",
+            "tab.inplace",
+            "tab.premalloc",
+            "tab.install.ip",
+            "tab.install.combine",
+        ] {
+            assert!(
+                ir.contains(pin),
+                "par tabulate must carry both the in-place and premalloc arms ({pin} missing); got:\n{ir}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_par_tabulate_inplace_preseeded_append() {
+        // Pre-seeded accumulator WITH room: two pre-existing elements, cap
+        // reserved for all 102 — the in-place arm writes at data + 2·elem,
+        // and the install must NOT touch the pre-existing prefix. Order is
+        // load-bearing: prefix first, then collected elements in source
+        // order.
+        let src = r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.with_capacity(102i64);
+    out.push(-7i64);
+    out.push(-9i64);
+    let mut c: i64 = 0i64;
+    #[par_unordered]
+    while c < 100i64 {
+        out.push(c * 3i64);
+        c = c + 1i64;
+    }
+    let mut ok: i64 = 1i64;
+    if out[0i64] != -7i64 { ok = 0i64; }
+    if out[1i64] != -9i64 { ok = 0i64; }
+    let mut i: i64 = 0i64;
+    while i < 100i64 {
+        if out[i + 2i64] != i * 3i64 { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(
+            lines,
+            vec!["102", "1"],
+            "pre-seeded in-place append corrupted"
+        );
+    }
+
+    #[test]
+    fn test_e2e_par_tabulate_capacity_too_small_keeps_combine_semantics() {
+        // Pre-seeded accumulator WITHOUT room (cap 4 << 102 needed): the
+        // premalloc + combine append path must produce the identical
+        // result as the in-place arm above.
+        let src = r#"
+fn main() {
+    let mut out: Vec[i64] = Vec.with_capacity(4i64);
+    out.push(-7i64);
+    out.push(-9i64);
+    let mut c: i64 = 0i64;
+    #[par_unordered]
+    while c < 100i64 {
+        out.push(c * 3i64);
+        c = c + 1i64;
+    }
+    let mut ok: i64 = 1i64;
+    if out[0i64] != -7i64 { ok = 0i64; }
+    if out[1i64] != -9i64 { ok = 0i64; }
+    let mut i: i64 = 0i64;
+    while i < 100i64 {
+        if out[i + 2i64] != i * 3i64 { ok = 0i64; }
+        i = i + 1i64;
+    }
+    println(out.len());
+    println(ok);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(
+            lines,
+            vec!["102", "1"],
+            "small-cap combine append corrupted"
+        );
     }
 
     // ── Sequential collect tabulate (2026-07-16) ─────────────────────────

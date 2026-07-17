@@ -3362,7 +3362,40 @@ impl<'ctx> super::Codegen<'ctx> {
         true
     }
 
-    pub(super) fn emit_free_vec_buffer_if_owned(&mut self, vec_alloca: PointerValue<'ctx>) {
+    /// Emit `karac_free_buf(data, bytes_hint)` — the recycling-aware release
+    /// for an owned Vec/String DATA buffer (`runtime/src/alloc.rs`
+    /// large-buffer cache). `elem_abi_size` sizes the hint as
+    /// `cap * elem_abi_size`; pass `1` for String/byte buffers (cap IS the
+    /// byte count) and `0` for "element size unknown", which emits hint `0`
+    /// = "runtime asks the allocator". The hint is a fast-path filter only —
+    /// the runtime re-derives the real size before caching — so a wrong one
+    /// can cost a recycling opportunity, never correctness. Callers must
+    /// already have guarded ownership (`cap > 0`); this emits inside their
+    /// owned branch.
+    pub(super) fn emit_free_buf_call(
+        &self,
+        data: PointerValue<'ctx>,
+        cap: IntValue<'ctx>,
+        elem_abi_size: u64,
+    ) {
+        let i64_t = self.context.i64_type();
+        let hint = if elem_abi_size == 0 {
+            i64_t.const_zero()
+        } else {
+            self.builder
+                .build_int_mul(cap, i64_t.const_int(elem_abi_size, false), "freebuf.bytes")
+                .unwrap()
+        };
+        self.builder
+            .build_call(self.free_buf_fn, &[data.into(), hint.into()], "")
+            .unwrap();
+    }
+
+    pub(super) fn emit_free_vec_buffer_if_owned(
+        &mut self,
+        vec_alloca: PointerValue<'ctx>,
+        elem_abi_size: u64,
+    ) {
         let vec_ty = self.vec_struct_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
@@ -3403,9 +3436,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(owned, free_bb, after_bb)
             .unwrap();
         self.builder.position_at_end(free_bb);
-        self.builder
-            .build_call(self.free_fn, &[data.into()], "")
-            .unwrap();
+        self.emit_free_buf_call(data, cap, elem_abi_size);
         self.builder.build_unconditional_branch(after_bb).unwrap();
         self.builder.position_at_end(after_bb);
     }
@@ -4237,9 +4268,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(after_bb);
             }
         }
-        self.builder
-            .build_call(self.free_fn, &[data.into()], "")
-            .unwrap();
+        // Recycling-aware release; erased payload → cap × 1 hint.
+        self.emit_free_buf_call(data, cap, 1);
         self.builder.build_unconditional_branch(skip_bb).unwrap();
         self.builder.position_at_end(skip_bb);
     }
@@ -5624,9 +5654,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             .build_load(ptr_ty, inner_data_ptr, "cleanup.drop.inner.data")
                             .unwrap()
                             .into_pointer_value();
-                        self.builder
-                            .build_call(self.free_fn, &[inner_data.into()], "")
-                            .unwrap();
+                        // Recycling-aware release; erased inner element
+                        // buffer → cap × 1 hint.
+                        self.emit_free_buf_call(inner_data, inner_cap, 1);
                         self.builder
                             .build_unconditional_branch(inner_skip_bb)
                             .unwrap();
@@ -5736,9 +5766,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .build_load(ptr_ty, fdata_ptr, "cleanup.tup.field.data")
                                 .unwrap()
                                 .into_pointer_value();
-                            self.builder
-                                .build_call(self.free_fn, &[fdata.into()], "")
-                                .unwrap();
+                            // Recycling-aware release; erased tuple field
+                            // buffer → cap × 1 hint.
+                            self.emit_free_buf_call(fdata, fcap, 1);
                             self.builder.build_unconditional_branch(fskip_bb).unwrap();
                             self.builder.position_at_end(fskip_bb);
                         }
@@ -5892,9 +5922,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.position_at_end(mafter_bb);
                 }
 
-                self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
-                    .unwrap();
+                // Recycling-aware outer-buffer release (large-buffer cache):
+                // hint = cap × element abi size when the element LLVM type
+                // is known. A String / untyped binding passes element size 1
+                // — exact for String (cap IS the byte count), a sound
+                // under-hint otherwise.
+                let elem_abi_size = match elem_ty {
+                    Some(et) => self
+                        .target_data
+                        .as_ref()
+                        .map(|td| td.get_abi_size(et))
+                        .unwrap_or(0),
+                    None => 1,
+                };
+                self.emit_free_buf_call(data, cap, elem_abi_size);
                 self.builder.build_unconditional_branch(skip_bb).unwrap();
                 self.builder.position_at_end(skip_bb);
             }
@@ -7041,10 +7082,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
         // Copy existing data into new buffer (memcpy with len=0 is safe per C spec).
         self.builder.build_memcpy(new_buf, 1, data, 1, len).unwrap();
-        // Free old heap buffer (free(null) is a no-op per C spec).
-        self.builder
-            .build_call(self.free_fn, &[data.into()], "")
-            .unwrap();
+        // Free old heap buffer (karac_free_buf(null) is a no-op, matching
+        // free(null) per C spec). String — old cap IS the byte count.
+        self.emit_free_buf_call(data, cap, 1);
         // Update data pointer and cap in the alloca.
         self.builder.build_store(data_ptr_ptr, new_buf).unwrap();
         self.builder.build_store(cap_ptr, new_cap).unwrap();

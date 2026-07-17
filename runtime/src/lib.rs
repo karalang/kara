@@ -122,11 +122,15 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // Without the realloc entry the LLJIT `dlsym` generator can't materialize it,
     // so `karac run` (JIT) fails at lookup on ANY Vec-growing program with
     // "Symbols not found: [_karac_realloc_or_panic]" (B-2026-07-12-22).
+    // `karac_free_buf` is the release-side sibling (large-buffer recycling
+    // cache): codegen routes Vec/String data-buffer frees through it, so it
+    // is exactly as JIT-load-bearing as the realloc entry.
     keep!(
         alloc::karac_alloc_fallible,
         alloc::karac_alloc_or_panic,
         alloc::karac_realloc_or_panic,
         alloc::karac_alloc_zeroed_or_panic,
+        alloc::karac_free_buf,
     );
     // Embedded critical-section RAII guard (`critical_section.acquire()`,
     // b6ea37a1). Codegen's synthesized drop calls

@@ -207,9 +207,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .builder
                                 .build_int_to_ptr(data_word, ptr_ty, "drop.data.p")
                                 .unwrap();
-                            self.builder
-                                .build_call(self.free_fn, &[data_ptr.into()], "")
-                                .unwrap();
+                            // Recycling-aware release; type-erased payload
+                            // → hint = cap × 1 (String-exact, Vec under-hint).
+                            self.emit_free_buf_call(data_ptr, cap_val, 1);
                             // After freeing, zero the cap word so a
                             // re-entrant invocation (via aliased binding,
                             // unusual in v1 but defensive) becomes a no-op
@@ -695,9 +695,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(ptr_ty, data_pp, "nstr.str.data")
                     .unwrap()
                     .into_pointer_value();
-                self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
-                    .unwrap();
+                // Recycling-aware release; String — cap IS the byte count.
+                self.emit_free_buf_call(data, cap, 1);
                 self.builder.build_unconditional_branch(done_bb).unwrap();
                 self.builder.position_at_end(done_bb);
                 continue;
@@ -839,9 +838,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_conditional_branch(is_heap, free_bb, done_bb)
                         .unwrap();
                     self.builder.position_at_end(free_bb);
-                    self.builder
-                        .build_call(self.free_fn, &[data.into()], "")
-                        .unwrap();
+                    // Recycling-aware release; erased Vec field → cap × 1
+                    // under-hint (sound; see karac_free_buf).
+                    self.emit_free_buf_call(data, cap, 1);
                     self.builder.build_unconditional_branch(done_bb).unwrap();
                     self.builder.position_at_end(done_bb);
                 }
@@ -1700,9 +1699,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.builder.build_unconditional_branch(cond_bb).unwrap();
                         self.builder.position_at_end(after_bb);
                     }
-                    self.builder
-                        .build_call(self.free_fn, &[data.into()], "")
-                        .unwrap();
+                    // Recycling-aware release; erased Vec/String field →
+                    // cap × 1 hint (String-exact, Vec under-hint).
+                    self.emit_free_buf_call(data, cap, 1);
                     self.builder.build_unconditional_branch(skip_bb).unwrap();
                     self.builder.position_at_end(skip_bb);
                 }
@@ -2974,9 +2973,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.builder.build_unconditional_branch(cond_bb).unwrap();
                         self.builder.position_at_end(after_bb);
                     }
-                    self.builder
-                        .build_call(self.free_fn, &[data.into()], "")
-                        .unwrap();
+                    // Recycling-aware release; erased Vec/String field →
+                    // cap × 1 hint (String-exact, Vec under-hint).
+                    self.emit_free_buf_call(data, cap, 1);
                     self.builder.build_unconditional_branch(skip_bb).unwrap();
                     self.builder.position_at_end(skip_bb);
                 }
@@ -3483,9 +3482,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_unconditional_branch(cond_bb).unwrap();
                     self.builder.position_at_end(after_bb);
                 }
-                self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
-                    .unwrap();
+                // Recycling-aware release; erased enum-field Vec buffer →
+                // cap × 1 hint (String-exact, Vec under-hint).
+                self.emit_free_buf_call(data, cap, 1);
                 self.builder.build_unconditional_branch(skip_bb).unwrap();
                 self.builder.position_at_end(skip_bb);
                 true

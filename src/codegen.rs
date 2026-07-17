@@ -1822,6 +1822,15 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) alloc_or_panic_fn: FunctionValue<'ctx>,
     /// free function for heap deallocation.
     pub(crate) free_fn: FunctionValue<'ctx>,
+    /// `karac_free_buf(ptr, bytes_hint)` — recycling-aware release for
+    /// Vec/String DATA buffers (`runtime/src/alloc.rs` large-buffer cache).
+    /// Emitted at the buffer-release sites that own a `{data, len, cap}`
+    /// heap buffer (scope-exit `FreeVecBuffer` drain, overwrite-free,
+    /// synthesized Vec/String drop fns); everything else stays on `free_fn`.
+    /// `bytes_hint` is `cap * elem_size` when the site knows the element
+    /// size, else `0` = "unknown, runtime asks the allocator" — a wrong
+    /// hint can only cost a recycling opportunity, never correctness.
+    pub(crate) free_buf_fn: FunctionValue<'ctx>,
     /// exit function for runtime panics.
     pub(crate) exit_fn: FunctionValue<'ctx>,
     /// memcmp for string comparison.
@@ -3682,9 +3691,15 @@ impl<'ctx> Codegen<'ctx> {
         // ASAN/valgrind on any OS). Setting the layout makes `coro.size` and the
         // backend agree. Best-effort: if the target machine can't be created we
         // leave the default layout (non-coro modules are unaffected).
+        let mut init_target_data = None;
         if let Ok(tm) = create_target_machine() {
             module.set_triple(&tm.get_triple());
             module.set_data_layout(&tm.get_target_data().get_data_layout());
+            // Capture the TargetData now so `&self` emitters (the scope-exit
+            // cleanup drain's recycling-hint math) can read it immutably —
+            // `ensure_target_data` stays as the lazy path for the cold start
+            // where the machine couldn't be created here.
+            init_target_data = Some(tm.get_target_data());
         }
         let builder = context.create_builder();
 
@@ -3808,6 +3823,52 @@ impl<'ctx> Codegen<'ctx> {
             .void_type()
             .fn_type(&[BasicMetadataTypeEnum::from(ptr_type)], false);
         let free_fn = module.add_function("free", free_type, Some(Linkage::External));
+        let free_buf_type = context.void_type().fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_type),
+                BasicMetadataTypeEnum::from(i64_type),
+            ],
+            false,
+        );
+        let free_buf_fn =
+            module.add_function("karac_free_buf", free_buf_type, Some(Linkage::External));
+        // LLVM knows libc `free`'s semantics BY NAME (TargetLibraryInfo); an
+        // opaque replacement is a clobber-everything call that kills store
+        // forwarding / LICM / dead-heap elimination around every cleanup
+        // drain (measured +55% instructions on a String-churn loop). Declare
+        // the same contract explicitly: touches only its pointee + allocator
+        // internals, always returns, never unwinds, and is the malloc
+        // family's free (`allockind("free")` value = AllocFnKind::Free).
+        {
+            use inkwell::attributes::{Attribute, AttributeLoc};
+            // memory(argmem: readwrite, inaccessiblemem: readwrite) —
+            // 2 bits per location: argmem=0b11, inaccessible=0b11<<2.
+            let memory_kind = Attribute::get_named_enum_kind_id("memory");
+            let allockind_kind = Attribute::get_named_enum_kind_id("allockind");
+            for attr in [
+                context.create_enum_attribute(memory_kind, 0b1111),
+                context.create_enum_attribute(allockind_kind, 1 << 2),
+                context.create_enum_attribute(Attribute::get_named_enum_kind_id("nounwind"), 0),
+                context.create_enum_attribute(Attribute::get_named_enum_kind_id("willreturn"), 0),
+                context.create_enum_attribute(Attribute::get_named_enum_kind_id("mustprogress"), 0),
+            ] {
+                free_buf_fn.add_attribute(AttributeLoc::Function, attr);
+            }
+            free_buf_fn.add_attribute(
+                AttributeLoc::Function,
+                context.create_string_attribute("alloc-family", "malloc"),
+            );
+            // `allockind("free")` is inert without `allocptr` marking WHICH
+            // argument is the freed allocation — this is what lets DSE kill
+            // stores into (and then the allocation of) a buffer whose only
+            // remaining use is this call, exactly as it does for libc free.
+            for param_attr in ["allocptr", "nocapture", "noundef"] {
+                free_buf_fn.add_attribute(
+                    AttributeLoc::Param(0),
+                    context.create_enum_attribute(Attribute::get_named_enum_kind_id(param_attr), 0),
+                );
+            }
+        }
 
         let exit_type = context
             .void_type()
@@ -6291,6 +6352,7 @@ impl<'ctx> Codegen<'ctx> {
             alloc_fallible_fn,
             alloc_or_panic_fn,
             free_fn,
+            free_buf_fn,
             exit_fn,
             memcmp_fn,
             sched_yield_fn,
@@ -6522,7 +6584,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_error_trace_push_fn,
             karac_error_trace_clear_fn,
             karac_test_record_failure_fn,
-            target_data: None,
+            target_data: init_target_data,
             target_is_aarch64: !crate::target::active_target_is_wasm()
                 && driver::native_target_is_aarch64(),
             target_is_x86_64: !crate::target::active_target_is_wasm()
@@ -8247,8 +8309,10 @@ impl<'ctx> Codegen<'ctx> {
             if elems_need_drop {
                 self.emit_boxed_elems_drop_loop(handle);
             }
-            // The box points to a `{data,len,cap}` value; free its owned buffer.
-            self.emit_free_vec_buffer_if_owned(handle);
+            // The box points to a `{data,len,cap}` value; free its owned
+            // buffer (element size unknown at this generic handle path —
+            // hint 0, the runtime asks the allocator).
+            self.emit_free_vec_buffer_if_owned(handle, 0);
         }
         // Then free the box allocation itself.
         self.builder
@@ -8329,8 +8393,9 @@ impl<'ctx> Codegen<'ctx> {
                 .build_in_bounds_gep(vec_ty, data, &[i], "kfree.elem")
                 .unwrap()
         };
-        // Free this element's own owned buffer.
-        self.emit_free_vec_buffer_if_owned(elem_ptr);
+        // Free this element's own owned buffer (inner element size unknown
+        // at this generic handle path — hint 0).
+        self.emit_free_vec_buffer_if_owned(elem_ptr, 0);
         let next = self
             .builder
             .build_int_add(i, i64_t.const_int(1, false), "kfree.i.next")

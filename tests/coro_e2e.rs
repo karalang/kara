@@ -2013,8 +2013,9 @@ mod tests {
              serve_buf.destroy:\n{destroy}"
         );
         assert!(
-            destroy.contains("call void @free(ptr %cleanup.data)"),
-            "destroy clone must call free on the Vec buffer pointer; \
+            destroy.contains("call void @karac_free_buf(ptr %cleanup.data"),
+            "destroy clone must release the Vec buffer pointer (recycling-aware \
+             karac_free_buf since the large-buffer cache); \
              serve_buf.destroy:\n{destroy}"
         );
         // …and the frame itself is freed exactly once, after the heap drops.

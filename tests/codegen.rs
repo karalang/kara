@@ -28528,6 +28528,167 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_scope_exit_vec_free_routes_through_free_buf() {
+        // Large-buffer recycling (phase-10 allocator buffer recycling): the
+        // scope-exit `FreeVecBuffer` drain releases a Vec's data buffer
+        // through `karac_free_buf(data, bytes_hint)` — the runtime recycling
+        // cache's entry point — not bare libc `free`. The hint is
+        // `cap * elem_size` (the `freebuf.bytes` mul), so sub-MB frees
+        // short-circuit to libc without a cache lock or allocator query.
+        let src = r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7_i64);
+    println(f"{v.len()}");
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("karac_free_buf"),
+            "expected the scope-exit Vec buffer free to route through karac_free_buf; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("freebuf.bytes"),
+            "expected a cap * elem_size bytes hint (freebuf.bytes mul) at the free site; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_vec_reassign_overwrite_free_routes_through_free_buf() {
+        // The eager overwrite-free on `g = build(2)` (the swap-chain shape —
+        // `grid = next` in the LBM katas) must also route through
+        // `karac_free_buf`: this is the free that recycles a ping-ponged
+        // grid buffer. In this program every heap release is a Vec data
+        // buffer, so no bare `call void @free(` may remain at all — the
+        // strongest form of "all Vec-buffer frees are recycling-aware".
+        let src = r#"
+fn build(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(n);
+    return v;
+}
+
+fn main() {
+    let mut g: Vec[i64] = build(1);
+    g = build(2);
+    println(f"{g[0]}");
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("ov.free"),
+            "expected the reassignment to emit the overwrite-free block; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("karac_free_buf"),
+            "expected the overwrite free to route through karac_free_buf; got:\n{ir}"
+        );
+        assert!(
+            !ir.contains("call void @free("),
+            "no bare libc free may remain for a program whose only heap is Vec buffers; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_vec_of_strings_drop_fns_route_through_free_buf() {
+        // The synthesized drop fns are a separate emission site from the
+        // scope-exit drain: `karac_drop_Vec_String` frees the outer buffer
+        // (elem size = the 24-byte `{ptr,len,cap}` stride) and calls
+        // `karac_drop_String` per element (hint = cap × 1, exact for a
+        // String). Both must carry the recycling entry.
+        let src = r#"
+fn make() -> Vec[Vec[String]] {
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    let mut inner: Vec[String] = Vec.new();
+    inner.push("a".to_string());
+    outer.push(inner);
+    return outer;
+}
+
+fn main() {
+    let o = make();
+    println(f"{o.len()}");
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("karac_drop_Vec_String"),
+            "expected the recursive vec drop fn to be emitted; got:\n{ir}"
+        );
+        let drop_fn_ir = ir
+            .split("define internal void @karac_drop_Vec_String")
+            .nth(1)
+            .map(|rest| rest.split("\n}").next().unwrap_or(""))
+            .unwrap_or("");
+        assert!(
+            drop_fn_ir.contains("karac_free_buf"),
+            "expected karac_drop_Vec_String's buffer free to route through karac_free_buf; got:\n{drop_fn_ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_big_vec_loop_recycles_transparently() {
+        // 6 iterations × 2 MiB fresh Vec[i64]: iteration 1's buffer parks in
+        // the runtime recycling cache at scope exit and later iterations'
+        // exact-capacity reserve takes it back (same pages). Recycling must
+        // be observationally invisible — byte-exact values, exact len — or
+        // the cache is serving wrong-sized/aliased memory. (The perf claim
+        // is benched, not unit-tested.)
+        let src = r#"
+fn main() {
+    let mut total: i64 = 0;
+    let mut it: i64 = 0;
+    while it < 6 {
+        let mut v: Vec[i64] = Vec.new();
+        let mut i: i64 = 0;
+        while i < 262144 {
+            v.push(i + it);
+            i = i + 1;
+        }
+        total = total + v[0] + v[262143] + v.len();
+        it = it + 1;
+    }
+    println(f"{total}");
+}
+"#;
+        // Σ v[0] = Σ it = 15; Σ v[262143] = 6·262143 + 15; Σ len = 6·262144.
+        assert_eq!(run_program(src).as_deref(), Some("3145752\n"));
+    }
+
+    #[test]
+    fn test_e2e_swap_chain_reassign_recycles_transparently() {
+        // The LBM ping-pong shape: `grid = next` overwrite-frees the old
+        // 2 MiB grid (parks it), and the next step's `Vec.with_capacity`
+        // allocation takes it straight back from the cache. Values must
+        // survive N swap generations byte-exact.
+        let src = r#"
+fn main() {
+    let mut grid: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 262144 {
+        grid.push(i);
+        i = i + 1;
+    }
+    let mut step: i64 = 0;
+    while step < 4 {
+        let mut next: Vec[i64] = Vec.with_capacity(262144);
+        let mut j: i64 = 0;
+        while j < 262144 {
+            next.push(grid[j] + 1);
+            j = j + 1;
+        }
+        grid = next;
+        step = step + 1;
+    }
+    let out: i64 = grid[0] + grid[262143];
+    println(f"{out}");
+}
+"#;
+        // grid[0] = 0+4, grid[262143] = 262143+4 → 262151.
+        assert_eq!(run_program(src).as_deref(), Some("262151\n"));
+    }
+
+    #[test]
     fn test_ir_discarded_unit_call_no_owned_temp() {
         // Negative: a discarded Call/MethodCall that does NOT yield a
         // Vec/String (here a unit-returning `println`) must not spuriously
@@ -33826,7 +33987,13 @@ fn main() {
                 in_main = true;
             }
             if in_main {
-                if line.contains("call void @free(") {
+                // Vec/String data-buffer releases route through the
+                // recycling entry `karac_free_buf` (large-buffer cache);
+                // box/handle frees stay on libc `free`. Count both — these
+                // tests pin THAT a buffer is released, not which allocator
+                // entry releases it.
+                if line.contains("call void @free(") || line.contains("call void @karac_free_buf(")
+                {
                     frees += 1;
                 }
                 if line == "}" {
@@ -52220,7 +52387,7 @@ fn main() {
         // `@free` calls in main's body come from `Vec.push`'s realloc
         // path (`call void @free(ptr %data4)`) and are NOT what we want
         // to compare against — scope to the `%cleanup.data` form.
-        let cleanup_free_pat = "call void @free(ptr %cleanup.data";
+        let cleanup_free_pat = "call void @karac_free_buf(ptr %cleanup.data";
         let pos_free1 = ir.find(cleanup_free_pat).unwrap_or_else(|| {
             panic!("expected first cleanup-time `@free` (matching `{cleanup_free_pat}`) in main; got:\n{ir}")
         });

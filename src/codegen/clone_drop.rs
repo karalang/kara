@@ -1815,9 +1815,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(ptr_ty, data_pp, "data")
             .unwrap()
             .into_pointer_value();
-        self.builder
-            .build_call(self.free_fn, &[data.into()], "")
-            .unwrap();
+        // Recycling-aware release (large-buffer cache): for a String, cap IS
+        // the byte count — an exact hint.
+        self.emit_free_buf_call(data, cap, 1);
         self.builder.build_unconditional_branch(exit_bb).unwrap();
 
         self.builder.position_at_end(exit_bb);
@@ -2329,9 +2329,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(free_bb);
-        self.builder
-            .build_call(self.free_fn, &[data.into()], "")
-            .unwrap();
+        // Recycling-aware release (large-buffer cache): hint = cap × elem
+        // abi size, both exact here.
+        let elem_abi_size = self
+            .ensure_target_data()
+            .map(|td| td.get_abi_size(&elem_ty))
+            .unwrap_or(0);
+        self.emit_free_buf_call(data, cap, elem_abi_size);
         self.builder.build_unconditional_branch(exit_bb).unwrap();
 
         self.builder.position_at_end(exit_bb);

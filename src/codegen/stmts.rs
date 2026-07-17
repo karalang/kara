@@ -5582,7 +5582,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                 None => false,
                             };
                             if !released {
-                                self.emit_free_vec_buffer_if_owned(slot.ptr);
+                                // Recycling hint: the reassigned var's element
+                                // LLVM type when registered (a Vec), else 1 —
+                                // exact for a String binding (cap IS bytes).
+                                let elem_abi_size = match self.vec_elem_types.get(name).copied() {
+                                    Some(t) => self
+                                        .ensure_target_data()
+                                        .map(|td| td.get_abi_size(&t))
+                                        .unwrap_or(0),
+                                    None => 1,
+                                };
+                                self.emit_free_vec_buffer_if_owned(slot.ptr, elem_abi_size);
                             }
                         }
                     }

@@ -1901,9 +1901,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_memcpy(dst_tail, 8, src_data, 8, src_bytes_append)
             .unwrap();
-        self.builder
-            .build_call(self.free_fn, &[src_data.into()], "")
-            .unwrap();
+        // Recycling-aware release of the worker partial (hint 0 = ask the
+        // allocator; once per worker per dispatch, size-erased here).
+        self.emit_free_buf_call(src_data, zero, 0);
         self.builder.build_store(dst_len_p, new_len).unwrap();
         self.builder.build_store(src_data_p, null_ptr).unwrap();
         self.builder.build_store(src_len_p, zero).unwrap();
@@ -1935,7 +1935,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let new_data = self
             .builder
-            .build_call(self.malloc_fn, &[new_bytes.into()], "new.data")
+            .build_call(self.alloc_or_panic_fn, &[new_bytes.into()], "new.data")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -1964,12 +1964,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // free(null) is a no-op per C spec — dst.data is null here only
         // when dst.cap > 0 was impossible (i.e. unreachable for this
         // path, since adopt_bb caught dst.cap == 0).
-        self.builder
-            .build_call(self.free_fn, &[dst_data.into()], "")
-            .unwrap();
-        self.builder
-            .build_call(self.free_fn, &[src_data.into()], "")
-            .unwrap();
+        self.emit_free_buf_call(dst_data, zero, 0);
+        self.emit_free_buf_call(src_data, zero, 0);
         self.builder.build_store(dst_data_p, new_data).unwrap();
         self.builder.build_store(dst_len_p, new_len).unwrap();
         self.builder.build_store(dst_cap_p, new_cap).unwrap();
@@ -2493,10 +2489,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // buffer is guaranteed to be installed into the accumulator on
         // the same path; a zero-iteration loop leaves the accumulator
         // untouched, exactly like its sequential form.
+        // (cont_bb, base, total64, in_place: i1, need, acc_len_p)
+        #[allow(clippy::type_complexity)]
         let mut tab_state: Option<(
             inkwell::basic_block::BasicBlock<'ctx>,
             PointerValue<'ctx>,
             IntValue<'ctx>,
+            IntValue<'ctx>,
+            IntValue<'ctx>,
+            PointerValue<'ctx>,
         )> = None;
         if let Some(elem_size_bytes) = tabulate_elem_size {
             let zero_w = iter_total.get_type().const_zero();
@@ -2510,6 +2511,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_conditional_branch(is_pos, then_bb, cont_bb)
                 .unwrap();
             self.builder.position_at_end(then_bb);
+            let vec_ty = self.vec_struct_type();
             // Positive on this path, so zext == sext.
             let total64 = if iter_total.get_type().get_bit_width() < 64 {
                 self.builder
@@ -2518,6 +2520,87 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 iter_total
             };
+            // In-place fast path: when the accumulator already has room for
+            // every produced element (`cap - len >= total` — the shape the
+            // `Vec.new()`-in-a-counted-loop → `with_capacity(n)` rewrite and
+            // any user pre-reservation produce), workers write DIRECTLY into
+            // the accumulator's buffer at `data + len·elem` and the install
+            // is a single `len = need` store. The old always-premalloc form
+            // made this exact shape take the combine's append arm: a fully
+            // serial `total·elem`-byte memcpy on the parent thread per
+            // dispatch while every worker sat parked — measured as 2.1× wall
+            // on the 1M-cell LBM substep (the "fresh-buffer tax", which
+            // profiling attributed to this copy, NOT to page faults). The
+            // tabulate recognizer guarantees the body never reads the
+            // accumulator, so the in-place buffer cannot alias any read the
+            // workers perform (same ownership argument as the alias scopes).
+            // A too-small accumulator (including the empty `{null,0,0}`)
+            // keeps the premalloc + combine path: adopt when empty, correct
+            // append when pre-seeded beyond capacity.
+            let acc_data_p = self
+                .builder
+                .build_struct_gep(vec_ty, acc_slot.ptr, 0, "tab.acc.data.p")
+                .unwrap();
+            let acc_len_p = self
+                .builder
+                .build_struct_gep(vec_ty, acc_slot.ptr, 1, "tab.acc.len.p")
+                .unwrap();
+            let acc_cap_p = self
+                .builder
+                .build_struct_gep(vec_ty, acc_slot.ptr, 2, "tab.acc.cap.p")
+                .unwrap();
+            let acc_len = self
+                .builder
+                .build_load(i64_t, acc_len_p, "tab.acc.len")
+                .unwrap()
+                .into_int_value();
+            let acc_cap = self
+                .builder
+                .build_load(i64_t, acc_cap_p, "tab.acc.cap")
+                .unwrap()
+                .into_int_value();
+            let need = self
+                .builder
+                .build_int_add(acc_len, total64, "tab.need")
+                .unwrap();
+            // Signed compare: an SSO-inline / static marker (`cap <= 0`)
+            // must fail has_room and take the premalloc path.
+            let has_room = self
+                .builder
+                .build_int_compare(IntPredicate::SGE, acc_cap, need, "tab.has_room")
+                .unwrap();
+            let inplace_bb = self.context.append_basic_block(parent_fn, "tab.inplace");
+            let premalloc_bb = self.context.append_basic_block(parent_fn, "tab.premalloc");
+            let dispatch_bb = self.context.append_basic_block(parent_fn, "tab.dispatch");
+            self.builder
+                .build_conditional_branch(has_room, inplace_bb, premalloc_bb)
+                .unwrap();
+
+            self.builder.position_at_end(inplace_bb);
+            let acc_data = self
+                .builder
+                .build_load(ptr_ty, acc_data_p, "tab.acc.data")
+                .unwrap()
+                .into_pointer_value();
+            let len_byte_off = self
+                .builder
+                .build_int_mul(
+                    acc_len,
+                    i64_t.const_int(elem_size_bytes, false),
+                    "tab.len.byteoff",
+                )
+                .unwrap();
+            let i8_t = self.context.i8_type();
+            let inplace_base = unsafe {
+                self.builder
+                    .build_gep(i8_t, acc_data, &[len_byte_off], "tab.base.ip")
+                    .unwrap()
+            };
+            self.builder
+                .build_unconditional_branch(dispatch_bb)
+                .unwrap();
+
+            self.builder.position_at_end(premalloc_bb);
             let bytes = self
                 .builder
                 .build_int_mul(
@@ -2528,12 +2611,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             let buf = self
                 .builder
-                .build_call(self.malloc_fn, &[bytes.into()], "tab.buf")
+                .build_call(self.alloc_or_panic_fn, &[bytes.into()], "tab.buf")
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()
                 .into_pointer_value();
-            tab_state = Some((cont_bb, buf, total64));
+            self.builder
+                .build_unconditional_branch(dispatch_bb)
+                .unwrap();
+
+            self.builder.position_at_end(dispatch_bb);
+            let base_phi = self.builder.build_phi(ptr_ty, "tab.base").unwrap();
+            base_phi.add_incoming(&[(&inplace_base, inplace_bb), (&buf, premalloc_bb)]);
+            let base = base_phi.as_basic_value().into_pointer_value();
+            let bool_t = self.context.bool_type();
+            let ip_phi = self.builder.build_phi(bool_t, "tab.is_inplace").unwrap();
+            ip_phi.add_incoming(&[
+                (&bool_t.const_int(1, false), inplace_bb),
+                (&bool_t.const_zero(), premalloc_bb),
+            ]);
+            let in_place = ip_phi.as_basic_value().into_int_value();
+            tab_state = Some((cont_bb, base, total64, in_place, need, acc_len_p));
         }
 
         // Env struct: [tabulate buf?] + lo (if present) + captures by
@@ -2564,10 +2662,10 @@ impl<'ctx> super::Codegen<'ctx> {
             let env_alloca = self.create_entry_alloca(parent_fn, "__reduce_env", env_ty.into());
             let mut env_agg = env_ty.get_undef();
             let mut next_field: u32 = 0;
-            if let Some((_, buf, _)) = &tab_state {
+            if let Some((_, base, ..)) = &tab_state {
                 env_agg = self
                     .builder
-                    .build_insert_value(env_agg, *buf, next_field, "__tab_env_buf")
+                    .build_insert_value(env_agg, *base, next_field, "__tab_env_buf")
                     .unwrap()
                     .into_struct_value();
                 next_field += 1;
@@ -2627,7 +2725,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let iter_total_widened = match &tab_state {
             // Tabulate already widened inside the guard's then-block.
-            Some((_, _, total64)) => *total64,
+            Some((_, _, total64, ..)) => *total64,
             None => {
                 if iter_total.get_type().get_bit_width() < 64 {
                     self.builder
@@ -2735,12 +2833,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // gets the correct append semantics (elements copied after the
         // pre-existing items, `buf` freed).
         match tab_state {
-            Some((cont_bb, buf, total64)) => {
+            Some((cont_bb, base, total64, in_place, need, acc_len_p)) => {
+                // In-place install: workers already wrote every element into
+                // the accumulator's own buffer — publishing is one `len`
+                // store (data/cap untouched). Premalloc install: wrap the
+                // filled buffer and fold through combine_fn (adopt for the
+                // empty accumulator, append semantics otherwise).
+                let ip_bb = self.context.append_basic_block(parent_fn, "tab.install.ip");
+                let cm_bb = self
+                    .context
+                    .append_basic_block(parent_fn, "tab.install.combine");
+                self.builder
+                    .build_conditional_branch(in_place, ip_bb, cm_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(ip_bb);
+                self.builder.build_store(acc_len_p, need).unwrap();
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                self.builder.position_at_end(cm_bb);
                 let temp_slot = self.create_entry_alloca(parent_fn, "__tab_res", vec_ty.into());
                 let mut result = vec_ty.get_undef();
                 result = self
                     .builder
-                    .build_insert_value(result, buf, 0, "tab.res.data")
+                    .build_insert_value(result, base, 0, "tab.res.data")
                     .unwrap()
                     .into_struct_value();
                 result = self

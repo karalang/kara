@@ -2560,9 +2560,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(pos, do_bb, join_bb)
             .unwrap();
         self.builder.position_at_end(do_bb);
-        self.builder
-            .build_call(self.free_fn, &[data.into()], "")
-            .unwrap();
+        // Recycling-aware release (large-buffer cache). Callers are
+        // type-erased `{ptr,len,cap}` sites — hint = cap × 1: exact for a
+        // String buffer, a sound under-hint for a Vec (misses only mid-size
+        // multi-byte-element buffers, never correctness).
+        self.emit_free_buf_call(data, cap, 1);
         self.builder.build_unconditional_branch(join_bb).unwrap();
         self.builder.position_at_end(join_bb);
     }
