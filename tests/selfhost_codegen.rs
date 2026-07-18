@@ -148,6 +148,15 @@ const CORPUS: &[&str] = &[
     "struct User { name: String, age: i64 }\nfn mk(n: String, a: i64) -> User { User { name: n, age: a } }\nfn main() { let u = mk(\"kara\", 1); println(u.name); println(u.age.to_string()) }",
     "struct Pair { a: String, b: String }\nfn main() { let p = Pair { a: \"x\" + \"1\", b: \"y\" }; println(p.a + p.b) }",
     "struct User { name: String, age: i64 }\nfn main() { let mut u = User { name: \"one\", age: 1 }; u = User { name: \"two\", age: 2 }; println(u.name); println(u.age.to_string()) }",
+    // Slice 16: Vec[String] — kind from the LET ANNOTATION (the single-pass
+    // emitter cannot infer element kinds from later pushes); the vec OWNS its
+    // elements (borrowed pushes materialize, temps transfer; reads borrow);
+    // scope exit frees each element then the buffer. Valgrind-gated.
+    "fn main() { let v: Vec[String] = Vec.new(); println(v.len().to_string()) }",
+    "fn main() { let mut v: Vec[String] = Vec.new(); v.push(\"alpha\"); v.push(\"beta\"); println(v.len().to_string()); println(v[0]); println(v[1]) }",
+    "fn main() { let mut v: Vec[String] = Vec.new(); v.push(\"x\" + \"1\"); v.push(\"y\" + \"2\"); let mut i = 0; while i < v.len() { println(v[i]); i = i + 1; } }",
+    "fn main() { let mut v: Vec[String] = Vec.new(); let mut i = 0; while i < 4 { v.push(\"n\" + i.to_string()); i = i + 1; } println(v[3]); println(v.len().to_string()) }",
+    "fn main() { let mut v: Vec[String] = Vec.new(); v.push(\"keep\"); let s = v[0]; println(s + \"-copy\"); println(v[0]) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

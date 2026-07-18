@@ -308,6 +308,19 @@ impl Emitter {
                 if segments[0] == "bool" {
                     return 1;
                 }
+                if segments[0] == "Vec" {
+                    // Slice 16: Vec[String] (kind 4, {ptr,i64} elements) vs
+                    // Vec[i64] (kind 3). The element kind comes from the
+                    // annotation — the single-pass emitter cannot infer it
+                    // from later pushes.
+                    if generics.len() == 1 {
+                        let gk = self.kind_of_ty(generics[0]);
+                        if gk == 2 {
+                            return 4;
+                        }
+                    }
+                    return 3;
+                }
                 let mut i = 0;
                 while i < self.st_names.len() {
                     if self.st_names[i] == segments[0] {
@@ -609,6 +622,23 @@ impl Emitter {
                                 vh = true;
                             }
                         }
+                        let mut vk2 = vk;
+                        if vk == 3 {
+                            // `let mut v: Vec[String] = Vec.new()` (Slice 16):
+                            // the annotation retypes the zeroinit vec to kind 4
+                            // (bit-identical empty header, different element
+                            // discipline from here on).
+                            match ty {
+                                Some(t) => {
+                                    let dk = self.kind_of_ty(t);
+                                    if dk == 4 {
+                                        vk2 = 4;
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+                        let vk = vk2;
                         let idx = self.locals.len();
                         self.locals.push(name);
                         self.locals_kind.push(vk);
@@ -846,7 +876,107 @@ impl Emitter {
                         }
                         _ => {}
                     }
-                    if slot >= 0 and self.locals_kind[slot] == 3 {
+                    if slot >= 0 and self.locals_kind[slot] == 4 {
+                        // `v.push(s)` on a Vec[String] (Slice 16): the vec OWNS
+                        // its elements — a borrowed arg materializes in, a heap
+                        // temp transfers. 16-byte {ptr,i64} elements.
+                        let mut ev = "zeroinitializer".to_string();
+                        for ma in margs {
+                            let CallArg { label, mut_marker, value, span: asp } = ma;
+                            let av = self.emit_value(value);
+                            let Val { op: aop, kind: ak, heap: ah } = av;
+                            if ak == 2 and not ah {
+                                let mv = self.emit_materialize(aop.clone());
+                                let Val { op: mop, kind: mk, heap: mh } = mv;
+                                ev = mop;
+                            } else {
+                                ev = aop;
+                            }
+                        }
+                        let sp = "%v" + slot.to_string();
+                        let ag = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + ag.clone()
+                            + " = load { ptr, i64, i64 }, ptr "
+                            + sp.clone()
+                            + ", align 8\n";
+                        let pr = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pr.clone()
+                            + " = extractvalue { ptr, i64, i64 } "
+                            + ag.clone()
+                            + ", 0\n";
+                        let ln = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + ln.clone()
+                            + " = extractvalue { ptr, i64, i64 } "
+                            + ag
+                            + ", 1\n";
+                        let n1 = self.fresh();
+                        self.body =
+                            self.body + "  " + n1.clone() + " = add i64 " + ln.clone() + ", 1\n";
+                        let by = self.fresh();
+                        self.body =
+                            self.body + "  " + by.clone() + " = mul i64 " + n1.clone() + ", 16\n";
+                        let np = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + np.clone()
+                            + " = call ptr @realloc(ptr "
+                            + pr
+                            + ", i64 "
+                            + by
+                            + ")\n";
+                        let ep = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + ep.clone()
+                            + " = getelementptr { ptr, i64 }, ptr "
+                            + np.clone()
+                            + ", i64 "
+                            + ln
+                            + "\n";
+                        self.body = self.body
+                            + "  store { ptr, i64 } "
+                            + ev
+                            + ", ptr "
+                            + ep
+                            + ", align 8\n";
+                        let a0 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a0.clone()
+                            + " = insertvalue { ptr, i64, i64 } undef, ptr "
+                            + np
+                            + ", 0\n";
+                        let a1 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a1.clone()
+                            + " = insertvalue { ptr, i64, i64 } "
+                            + a0
+                            + ", i64 "
+                            + n1.clone()
+                            + ", 1\n";
+                        let a2 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a2.clone()
+                            + " = insertvalue { ptr, i64, i64 } "
+                            + a1
+                            + ", i64 "
+                            + n1
+                            + ", 2\n";
+                        self.body = self.body
+                            + "  store { ptr, i64, i64 } "
+                            + a2
+                            + ", ptr "
+                            + sp
+                            + ", align 8\n";
+                    } else if slot >= 0 and self.locals_kind[slot] == 3 {
                         let mut ev = "0".to_string();
                         for ma in margs {
                             let CallArg { label, mut_marker, value, span: asp } = ma;
@@ -1508,8 +1638,79 @@ impl Emitter {
             + idx.to_string()
             + ", align 8\n";
         let pr = self.fresh();
-        self.body =
-            self.body + "  " + pr.clone() + " = extractvalue " + ty + " " + ag + ", 0\n";
+        self.body = self.body
+            + "  "
+            + pr.clone()
+            + " = extractvalue "
+            + ty.clone()
+            + " "
+            + ag.clone()
+            + ", 0\n";
+        if k == 4 {
+            // Vec[String] (Slice 16): free each element's buffer before the
+            // outer buffer — a label loop over [0, len).
+            let ln = self.fresh();
+            self.body =
+                self.body + "  " + ln.clone() + " = extractvalue " + ty + " " + ag + ", 1\n";
+            let lid = self.nlbl;
+            self.nlbl = self.nlbl + 1;
+            let lh = "fl" + lid.to_string();
+            let lb = "flb" + lid.to_string();
+            let le = "fle" + lid.to_string();
+            let islot = self.fresh();
+            self.body = self.body + "  " + islot.clone() + " = alloca i64, align 8\n";
+            self.body = self.body + "  store i64 0, ptr " + islot.clone() + ", align 8\n";
+            self.body = self.body + "  br label %" + lh.clone() + "\n";
+            self.body = self.body + lh.clone() + ":\n";
+            let iv = self.fresh();
+            self.body = self.body
+                + "  "
+                + iv.clone()
+                + " = load i64, ptr "
+                + islot.clone()
+                + ", align 8\n";
+            let c = self.fresh();
+            self.body = self.body
+                + "  "
+                + c.clone()
+                + " = icmp slt i64 "
+                + iv.clone()
+                + ", "
+                + ln
+                + "\n";
+            self.body = self.body
+                + "  br i1 "
+                + c
+                + ", label %"
+                + lb.clone()
+                + ", label %"
+                + le.clone()
+                + "\n";
+            self.body = self.body + lb + ":\n";
+            let ep = self.fresh();
+            self.body = self.body
+                + "  "
+                + ep.clone()
+                + " = getelementptr { ptr, i64 }, ptr "
+                + pr.clone()
+                + ", i64 "
+                + iv.clone()
+                + "\n";
+            let el = self.fresh();
+            self.body = self.body
+                + "  "
+                + el.clone()
+                + " = load { ptr, i64 }, ptr "
+                + ep
+                + ", align 8\n";
+            self.emit_free_val(el);
+            let nx = self.fresh();
+            self.body = self.body + "  " + nx.clone() + " = add i64 " + iv + ", 1\n";
+            self.body =
+                self.body + "  store i64 " + nx + ", ptr " + islot + ", align 8\n";
+            self.body = self.body + "  br label %" + lh + "\n";
+            self.body = self.body + le + ":\n";
+        }
         self.body = self.body + "  call void @free(ptr " + pr + ")\n";
     }
 
@@ -1971,6 +2172,34 @@ impl Emitter {
                 let Val { op: oop, kind: ok, heap: oh } = ov;
                 let iv = self.emit_value(index);
                 let Val { op: iop2, kind: ik2, heap: ih2 } = iv;
+                if ok == 4 {
+                    // `v[i]` on a Vec[String] (Slice 16): the element is a
+                    // BORROW — the vec keeps ownership; a binding materializes.
+                    let pr4 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + pr4.clone()
+                        + " = extractvalue { ptr, i64, i64 } "
+                        + oop
+                        + ", 0\n";
+                    let ep4 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + ep4.clone()
+                        + " = getelementptr { ptr, i64 }, ptr "
+                        + pr4
+                        + ", i64 "
+                        + iop2
+                        + "\n";
+                    let r4 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + r4.clone()
+                        + " = load { ptr, i64 }, ptr "
+                        + ep4
+                        + ", align 8\n";
+                    return Val { op: r4, kind: 2, heap: false };
+                }
                 if ok != 3 {
                     return Val { op: "0".to_string(), kind: 0, heap: false };
                 }
@@ -2134,7 +2363,7 @@ impl Emitter {
                     // `v.len()` (Slice 13): extract the len field.
                     let ov = self.emit_value(object);
                     let Val { op: oop, kind: ok, heap: oh } = ov;
-                    if ok == 3 {
+                    if ok == 3 or ok == 4 {
                         let r = self.fresh();
                         self.body = self.body
                             + "  "
@@ -2331,7 +2560,7 @@ fn kind_ty(kind: i64) -> String {
     if kind == 2 {
         return "{ ptr, i64 }".to_string();
     }
-    if kind == 3 {
+    if kind == 3 or kind == 4 {
         return "{ ptr, i64, i64 }".to_string();
     }
     "i64".to_string()
