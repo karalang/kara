@@ -22981,3 +22981,31 @@ fn test_critical_section_inert_under_tree_walk_interpreter() {
     );
     assert_eq!(out, "42\n99\n");
 }
+
+#[test]
+fn gpu_upload_download_get_clean_compiled_only_diagnostic() {
+    // GPU-SLIP-4h sibling: `gpu.upload` / `gpu.download` are compiled-only
+    // (the tree-walk interpreter has no device-buffer model). They must
+    // produce a clean runtime diagnostic — the previous fall-through hit the
+    // `unreachable!("variable 'gpu' not found")` ICE.
+    let errors = runtime_errors(
+        "struct P { a: f32 }\n\
+         #[gpu]\n\
+         fn step(p: P) -> P { p }\n\
+         fn main() {\n\
+             let mut v: Vec[P] = Vec.new();\n\
+             v.push(P { a: 1.0 });\n\
+             let buf = gpu.upload(v);\n\
+             println(1);\n\
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "gpu.upload under the interpreter must produce a runtime error"
+    );
+    assert!(
+        errors[0].message.contains("compiled path"),
+        "expected the compiled-only diagnostic, got: {:?}",
+        errors[0].message
+    );
+}

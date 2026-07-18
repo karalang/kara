@@ -3279,6 +3279,12 @@ pub(super) struct Codegen<'ctx> {
     #[allow(dead_code)]
     pub(crate) provider_lookup_result_ty: StructType<'ctx>,
     // ── Map runtime ───────────────────────────────────────────────
+    /// GPU-SLIP-4h: per-`GpuBuffer` binding → element struct name, recorded
+    /// when `let buf = gpu.upload(vec)` / a resident `gpu.dispatch` binds a
+    /// handle. `gpu.download` into a PLAIN (un-layouted) `Vec[S]` target
+    /// needs `S` to synthesize the default interleaved manifest, and the
+    /// `{handle, n}` value itself is type-erased.
+    pub(crate) gpu_buffer_elem_structs: HashMap<String, String>,
     /// Per-variable Map key LLVM type (variable name → K LLVM type).
     pub(crate) map_key_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Per-variable Map value LLVM type (variable name → V LLVM type).
@@ -6721,6 +6727,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_tracing_reset_fn,
             provider_frame_ty,
             provider_lookup_result_ty,
+            gpu_buffer_elem_structs: HashMap::new(),
             map_key_types: HashMap::new(),
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),

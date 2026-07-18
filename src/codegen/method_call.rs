@@ -15800,12 +15800,15 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
         // Recover the SoA group structure from a `layout` block for `S` (the same
-        // grouping the buffer was uploaded with).
+        // grouping the buffer was uploaded with) — or, when the program declares
+        // NO layout for `S`, the default single interleaved group (GPU-SLIP-4h;
+        // upload used the same rule, so handle and manifest always agree).
         let soa = self
             .soa_layouts
             .values()
             .find(|l| l.struct_name == struct_name)
             .cloned()
+            .or_else(|| self.default_gpu_soa_layout(&struct_name))
             .ok_or_else(|| {
                 format!("gpu.dispatch resident: no `layout` block found for `{struct_name}`")
             })?;
@@ -15940,31 +15943,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .struct_type(&[i64_t.into(), i64_t.into()], false)
     }
 
-    /// GPU-SLIP-4b: lower `gpu.upload(vec)` — move a SoA `Vec[S]` to a resident
-    /// GPU buffer, returning a `GpuBuffer[S]` value `{handle, n}`. Reuses the SoA
-    /// dispatch path's group-pointer read + `in_ptrs` + `group_strides`; the
-    /// runtime keeps the buffers resident and returns an opaque handle.
-    fn compile_gpu_upload(&mut self, args: &[CallArg]) -> Result<BasicValueEnum<'ctx>, String> {
-        let ExprKind::Identifier(vec_name) = &args[0].value.kind else {
-            return Err("gpu.upload buffer must be a bare `layout` binding".to_string());
-        };
-        let soa = self
-            .active_soa_layout(vec_name)
-            .ok_or_else(|| format!("gpu.upload: `{vec_name}` has no active SoA layout"))?;
-        if soa.cold_group.is_some() {
-            return Err(
-                "gpu.upload: a `cold` layout group is not supported (CG-4 Path A)".to_string(),
-            );
-        }
+    /// Read a SoA `layout` binding's per-group data pointers + element count
+    /// (spill + struct_gep — the multi-pointer SoA struct layout). Factored
+    /// from `compile_gpu_upload` so the plain-`Vec[S]` arm (GPU-SLIP-4h) can
+    /// share the upload tail.
+    fn read_soa_group_ptrs_len(
+        &mut self,
+        buf_expr: &Expr,
+        soa: &crate::codegen::state::SoaLayout,
+    ) -> Result<
+        (
+            crate::codegen::state::SoaLayout,
+            Vec<inkwell::values::PointerValue<'ctx>>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
         let num_groups = soa.num_groups;
-        if num_groups == 0 {
-            return Err("gpu.upload: the layout has no field groups".to_string());
-        }
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-
-        // Read the SoA buffer's per-group pointers + len (spill + struct_gep).
-        let sv = self.compile_expr(&args[0].value)?.into_struct_value();
+        let sv = self.compile_expr(buf_expr)?.into_struct_value();
         let vec_ty = sv.get_type();
         let spill = self.builder.build_alloca(vec_ty, "gpu.up.buf").unwrap();
         self.builder.build_store(spill, sv).unwrap();
@@ -15991,7 +15989,131 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i64_t, len_field, "gpu.up.n")
             .unwrap()
             .into_int_value();
+        Ok((soa.clone(), group_ptrs, n))
+    }
 
+    /// GPU-SLIP-4h: synthesize the DEFAULT GPU layout for an un-layouted
+    /// all-`f32` struct `S`: ONE interleaved group (`aos`) carrying every
+    /// field in declaration order. This is the measured-fastest shape on the
+    /// LBM harness (the 9-single-field-group SoA split cost 1.18× wall via
+    /// 18-buffer binds + a 9-field download scatter; the interleaved form is
+    /// an `array<S>`-shaped device buffer, so upload/download are verbatim
+    /// copies and the bind group is minimal — hand-wgpu-equal access).
+    ///
+    /// Returns `None` when the program declares ANY `layout` block over `S`:
+    /// the grouping is then the user's explicit choice, and an un-layouted
+    /// binding stays an error — a handle uploaded under one grouping and
+    /// dispatched under another would read garbage, so upload / dispatch /
+    /// download must all resolve the SAME manifest, which this rule
+    /// guarantees (all three fall back only when no `S` layout exists).
+    pub(super) fn default_gpu_soa_layout(
+        &self,
+        struct_name: &str,
+    ) -> Option<crate::codegen::state::SoaLayout> {
+        if self
+            .soa_layouts
+            .values()
+            .any(|l| l.struct_name == struct_name)
+        {
+            return None;
+        }
+        let program = self.program_snapshot.clone()?;
+        let sdef = program.items.iter().find_map(|it| match it {
+            crate::ast::Item::StructDef(sd) if sd.name == struct_name => Some(sd),
+            _ => None,
+        })?;
+        let fields: Vec<String> = sdef.fields.iter().map(|f| f.name.clone()).collect();
+        if fields.is_empty() {
+            return None;
+        }
+        let field_indices: Vec<usize> = (0..fields.len()).collect();
+        Some(crate::codegen::state::SoaLayout {
+            name: format!("__gpu_default_{struct_name}"),
+            struct_name: struct_name.to_string(),
+            groups: vec![crate::codegen::state::SoaGroup {
+                name: "aos".to_string(),
+                fields,
+                field_indices,
+                elem_type: None,
+                align: None,
+                is_cold: false,
+            }],
+            cold_group: None,
+            num_groups: 1,
+        })
+    }
+
+    /// GPU-SLIP-4b: lower `gpu.upload(vec)` — move a `Vec[S]` to a resident
+    /// GPU buffer, returning a `GpuBuffer[S]` value `{handle, n}`. A SoA
+    /// `layout` binding uploads one device buffer per group (the SoA dispatch
+    /// path's group-pointer read); a PLAIN un-layouted `Vec[S]` (GPU-SLIP-4h)
+    /// uploads its AoS data buffer as ONE interleaved group — stride =
+    /// `n_fields × 4`, a verbatim copy. The runtime keeps the buffers
+    /// resident and returns an opaque handle.
+    fn compile_gpu_upload(&mut self, args: &[CallArg]) -> Result<BasicValueEnum<'ctx>, String> {
+        let ExprKind::Identifier(vec_name) = &args[0].value.kind else {
+            return Err("gpu.upload buffer must be a bare binding".to_string());
+        };
+        let (soa, group_ptrs, n) = if let Some(soa) = self.active_soa_layout(vec_name) {
+            if soa.cold_group.is_some() {
+                return Err(
+                    "gpu.upload: a `cold` layout group is not supported (CG-4 Path A)".to_string(),
+                );
+            }
+            if soa.num_groups == 0 {
+                return Err("gpu.upload: the layout has no field groups".to_string());
+            }
+            self.read_soa_group_ptrs_len(&args[0].value, &soa)?
+        } else {
+            // Un-layouted `Vec[S]` (GPU-SLIP-4h): default interleaved group.
+            let struct_name = self
+                .var_elem_type_exprs
+                .get(vec_name)
+                .and_then(|te| match &te.kind {
+                    crate::ast::TypeKind::Path(p) if p.segments.len() == 1 => {
+                        Some(p.segments[0].clone())
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    format!("gpu.upload: `{vec_name}` has no registered struct element type")
+                })?;
+            let soa = self.default_gpu_soa_layout(&struct_name).ok_or_else(|| {
+                format!(
+                    "gpu.upload: `{vec_name}` is not bound to the `layout` block declared for \
+                     `{struct_name}` — bind the layout variable, or remove the layout to use \
+                     the default interleaved GPU buffer"
+                )
+            })?;
+            let i64_t = self.context.i64_type();
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let sv = self.compile_expr(&args[0].value)?.into_struct_value();
+            let vec_ty = sv.get_type();
+            let spill = self.builder.build_alloca(vec_ty, "gpu.up.buf").unwrap();
+            self.builder.build_store(spill, sv).unwrap();
+            let data_p = self
+                .builder
+                .build_struct_gep(vec_ty, spill, 0, "gpu.up.aos.data.p")
+                .unwrap();
+            let data = self
+                .builder
+                .build_load(ptr_ty, data_p, "gpu.up.aos.data")
+                .unwrap()
+                .into_pointer_value();
+            let len_p = self
+                .builder
+                .build_struct_gep(vec_ty, spill, 1, "gpu.up.aos.len.p")
+                .unwrap();
+            let n = self
+                .builder
+                .build_load(i64_t, len_p, "gpu.up.aos.len")
+                .unwrap()
+                .into_int_value();
+            (soa, vec![data], n)
+        };
+        let num_groups = soa.num_groups;
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let arr_ty = ptr_ty.array_type(num_groups as u32);
         let in_ptrs = self.builder.build_alloca(arr_ty, "gpu.up.in_ptrs").unwrap();
         for (k, gp) in group_ptrs.iter().enumerate() {

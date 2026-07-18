@@ -33483,3 +33483,69 @@ fn test_mut_ref_heap_does_not_read_as_value() {
         errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
     );
 }
+
+// ── GPU-SLIP-4h: default interleaved layout for un-layouted gpu.upload ──
+//
+// `gpu.upload(vec)` on a plain `Vec[S]` (all-f32 struct, NO `layout` block
+// anywhere for `S`) is accepted — codegen uploads the AoS buffer as ONE
+// interleaved device group, the measured-fastest shape. When a layout over
+// `S` exists but the uploaded binding is not that layout variable, the
+// error stands (upload/dispatch/download must agree on the grouping).
+
+const GPU_DEFAULT_PRELUDE: &str = "struct P { a: f32, b: f32 }\n\
+     #[gpu]\n\
+     fn step(p: P) -> P { P { a: p.a + p.b, b: p.b } }\n";
+
+#[test]
+fn gpu_upload_accepts_unlayouted_vec_when_no_layout_exists() {
+    let src = format!(
+        "{GPU_DEFAULT_PRELUDE}fn main() {{\n\
+         \x20   let mut v: Vec[P] = Vec.new();\n\
+         \x20   v.push(P {{ a: 1.0, b: 2.0 }});\n\
+         \x20   let buf = gpu.upload(v);\n\
+         \x20   let buf2 = gpu.dispatch(step, buf);\n\
+         \x20   let back = gpu.download(buf2);\n\
+         \x20   println(back.len());\n\
+         }}\n"
+    );
+    typecheck_ok(&src);
+}
+
+#[test]
+fn gpu_upload_rejects_unlayouted_binding_when_struct_layout_exists() {
+    // A layout over `P` exists (bound to `w`), but `v` is a plain Vec — the
+    // grouping would be ambiguous, so this stays an error.
+    let src = format!(
+        "{GPU_DEFAULT_PRELUDE}layout w: Vec[P] {{\n    group ga {{ a }} group gb {{ b }}\n}}\n\
+         fn main() {{\n\
+         \x20   let mut v: Vec[P] = Vec.new();\n\
+         \x20   v.push(P {{ a: 1.0, b: 2.0 }});\n\
+         \x20   let buf = gpu.upload(v);\n\
+         \x20   println(1);\n\
+         }}\n"
+    );
+    let errs = typecheck_errors(&src);
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_GPU_UPLOAD_BUFFER")),
+        "expected E_GPU_UPLOAD_BUFFER for an un-layouted binding while a `P` layout exists; got: {errs:?}"
+    );
+}
+
+#[test]
+fn gpu_upload_still_rejects_non_f32_struct_without_layout() {
+    let src = "struct Q { a: i64 }\n\
+         #[gpu]\n\
+         fn stepq(q: Q) -> Q { q }\n\
+         fn main() {\n\
+         \x20   let mut v: Vec[Q] = Vec.new();\n\
+         \x20   let buf = gpu.upload(v);\n\
+         \x20   println(1);\n\
+         }\n";
+    let errs = typecheck_errors(src);
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_GPU_UPLOAD_BUFFER")),
+        "expected E_GPU_UPLOAD_BUFFER for a non-f32 struct; got: {errs:?}"
+    );
+}

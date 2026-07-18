@@ -2762,6 +2762,142 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         );
         self.track_gpu_buffer_var(alloca);
+        // GPU-SLIP-4h: record the handle's element struct so a later
+        // `gpu.download` into a PLAIN `Vec[S]` target can synthesize the
+        // default interleaved manifest ({handle, n} itself is type-erased).
+        if let Some(sn) = self.gpu_value_elem_struct(value) {
+            self.gpu_buffer_elem_structs
+                .insert(var_name.to_string(), sn);
+        }
+        Ok(())
+    }
+
+    /// The element struct name `S` behind a `gpu.upload(vec)` /
+    /// resident-`gpu.dispatch(kernel, buf, …)` value expression, for the
+    /// GPU-SLIP-4h handle registry: upload derives it from the uploaded
+    /// binding (its SoA layout, else its registered element type); a resident
+    /// dispatch from the kernel's return type.
+    fn gpu_value_elem_struct(&self, value: &Expr) -> Option<String> {
+        let ExprKind::MethodCall { method, args, .. } = &value.kind else {
+            return None;
+        };
+        match method.as_str() {
+            "upload" => {
+                let ExprKind::Identifier(vec_name) = &args.first()?.value.kind else {
+                    return None;
+                };
+                if let Some(soa) = self.active_soa_layout(vec_name) {
+                    return Some(soa.struct_name);
+                }
+                self.var_elem_type_exprs
+                    .get(vec_name)
+                    .and_then(|te| match &te.kind {
+                        crate::ast::TypeKind::Path(p) if p.segments.len() == 1 => {
+                            Some(p.segments[0].clone())
+                        }
+                        _ => None,
+                    })
+            }
+            "dispatch" => {
+                let ExprKind::Identifier(kernel_name) = &args.first()?.value.kind else {
+                    return None;
+                };
+                let program = self.program_snapshot.clone()?;
+                program.items.iter().find_map(|it| match it {
+                    crate::ast::Item::Function(f) if &f.name == kernel_name && f.is_gpu => {
+                        match f.return_type.as_ref().map(|t| &t.kind) {
+                            Some(crate::ast::TypeKind::Path(p)) if p.segments.len() == 1 => {
+                                Some(p.segments[0].clone())
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// GPU-SLIP-4h: bind `let <plain> = gpu.download(buf)` where the target is
+    /// NOT a SoA `layout` binding — the un-layouted default. The buffer's
+    /// element struct comes from the handle registry (recorded at the
+    /// `gpu.upload` / resident-dispatch binding); the manifest is the same
+    /// default single interleaved group upload used, so the runtime's
+    /// "scatter" descriptors are the identity mapping and the returned AoS
+    /// buffer IS the plain `Vec[S]` data buffer — wrap it as `{ptr, n, n}`
+    /// and register the binding like any owned Vec.
+    pub(super) fn compile_plain_let_from_gpu_download(
+        &mut self,
+        var_name: &str,
+        value: &Expr,
+    ) -> Result<(), String> {
+        let ExprKind::MethodCall { args, .. } = &value.kind else {
+            return Err("compile_plain_let_from_gpu_download: expected a gpu.download".to_string());
+        };
+        let ExprKind::Identifier(buf_name) = &args[0].value.kind else {
+            return Err(
+                "gpu.download: the buffer must be a bare `GpuBuffer` binding in this build"
+                    .to_string(),
+            );
+        };
+        let struct_name = self
+            .gpu_buffer_elem_structs
+            .get(buf_name)
+            .cloned()
+            .ok_or_else(|| {
+                format!("gpu.download: `{buf_name}` is not a known `GpuBuffer` binding")
+            })?;
+        let soa = self.default_gpu_soa_layout(&struct_name).ok_or_else(|| {
+            format!(
+                "gpu.download result must bind to the SoA `layout` variable declared for \
+                 `{struct_name}` (`let <layout-var> = gpu.download(buf)`)"
+            )
+        })?;
+        let (aos_ptr, n) = self.compile_gpu_download_aos(value, &soa)?;
+
+        let fn_val = self.current_fn.unwrap();
+        let vec_ty = self.vec_struct_type();
+        let mut agg = vec_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, aos_ptr, 0, "gpu.dl.vec.data")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 1, "gpu.dl.vec.len")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 2, "gpu.dl.vec.cap")
+            .unwrap()
+            .into_struct_value();
+        let alloca = self.create_entry_alloca(fn_val, var_name, vec_ty.into());
+        self.builder.build_store(alloca, agg).unwrap();
+        self.variables.insert(
+            var_name.to_string(),
+            super::state::VarSlot {
+                ptr: alloca,
+                ty: vec_ty.into(),
+            },
+        );
+        // Register the element type (indexing + field access) and the
+        // scope-exit buffer free, like any owned `Vec[S]` binding.
+        let elem_te = crate::ast::TypeExpr {
+            kind: crate::ast::TypeKind::Path(crate::ast::PathExpr {
+                segments: vec![struct_name.clone()],
+                generic_args: None,
+                span: value.span.clone(),
+            }),
+            span: value.span.clone(),
+        };
+        let elem_llvm = self.llvm_type_for_type_expr(&elem_te);
+        self.vec_elem_types.insert(var_name.to_string(), elem_llvm);
+        self.var_elem_type_exprs
+            .insert(var_name.to_string(), elem_te);
+        self.track_vec_var(alloca, Some(elem_llvm));
         Ok(())
     }
 

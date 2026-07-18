@@ -7365,16 +7365,48 @@ impl<'a> super::TypeChecker<'a> {
             );
             return gpu_buffer(struct_ty);
         };
-        if !self
+        // GPU-SLIP-4h: an un-layouted binding is fine when the program
+        // declares NO `layout` block over `S` — codegen then uploads the
+        // plain AoS buffer as ONE interleaved device group (the
+        // measured-fastest default). When some layout for `S` DOES exist,
+        // the grouping is the user's explicit choice and an unbound
+        // binding stays an error (upload/dispatch/download must agree on
+        // the grouping, and "which layout did you mean" is ambiguous).
+        let elem_is_struct_of = |te: &TypeExpr| -> bool {
+            match &te.kind {
+                crate::ast::TypeKind::Path(p) => {
+                    p.segments.len() == 1
+                        && p.segments[0] == "Vec"
+                        && p.generic_args.as_ref().is_some_and(|ga| {
+                            ga.iter().any(|a| match a {
+                                crate::ast::GenericArg::Type(t) => match &t.kind {
+                                    crate::ast::TypeKind::Path(ep) => {
+                                        ep.segments.len() == 1 && ep.segments[0] == *struct_name
+                                    }
+                                    _ => false,
+                                },
+                                _ => false,
+                            })
+                        })
+                }
+                _ => false,
+            }
+        };
+        let has_named_layout = self
             .program
             .items
             .iter()
-            .any(|it| matches!(it, Item::LayoutDef(l) if l.name == *buf_name))
-        {
+            .any(|it| matches!(it, Item::LayoutDef(l) if l.name == *buf_name));
+        let struct_has_layout =
+            self.program.items.iter().any(
+                |it| matches!(it, Item::LayoutDef(l) if elem_is_struct_of(&l.collection_type)),
+            );
+        if !has_named_layout && struct_has_layout {
             self.type_error(
                 format!(
-                    "error[E_GPU_UPLOAD_BUFFER]: `gpu.upload` requires a `layout` block for \
-                     `{buf_name}` (each field group becomes a GPU buffer)"
+                    "error[E_GPU_UPLOAD_BUFFER]: `gpu.upload` requires the `layout` binding for \
+                     `{struct_name}` — a `layout` block over `{struct_name}` exists, so bind that \
+                     variable (or remove the layout to use the default interleaved GPU buffer)"
                 ),
                 args[0].value.span.clone(),
                 TypeErrorKind::TypeMismatch,

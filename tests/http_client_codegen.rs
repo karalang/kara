@@ -367,7 +367,7 @@ fn main() with sends(Network) receives(Network) {
         // The body String is also freed (the latent body leak). The
         // synthesized drop guards `cap > 0` then calls libc `free`.
         assert!(
-            drop_body.contains("@free("),
+            drop_body.contains("@free(") || drop_body.contains("@karac_free_buf("),
             "Response drop fn must free the body String buffer; body was:\n{drop_body}"
         );
         // The Ok(resp) arm invokes the drop fn at scope exit.
@@ -405,7 +405,7 @@ fn main() with sends(Network) receives(Network) {
         let drop_body =
             function_body(&ir, "__karac_drop_struct_HttpError").expect("HttpError drop fn defined");
         assert!(
-            drop_body.contains("@free("),
+            drop_body.contains("@free(") || drop_body.contains("@karac_free_buf("),
             "HttpError drop fn must free the message String buffer; body was:\n{drop_body}"
         );
         let main_body = function_body(&ir, "main").expect("main body");

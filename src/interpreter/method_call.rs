@@ -596,6 +596,19 @@ impl<'a> super::Interpreter<'a> {
                 ("ast", "item") => return self.eval_ast_item_builder(args, span),
                 ("compiler", "error") => return self.eval_compiler_error(args, span),
                 ("gpu", "dispatch") => return self.eval_gpu_dispatch(args, span),
+                // `gpu.upload` / `gpu.download` (resident device buffers) are
+                // compiled-only: the tree-walk interpreter has no device-buffer
+                // model. A clean diagnostic, not the `variable 'gpu' not found`
+                // ICE the fall-through used to hit (B-2026-07-18-5).
+                ("gpu", "upload") | ("gpu", "download") => {
+                    return self.record_runtime_error(
+                        format!(
+                            "gpu.{method} requires the compiled path (`karac build`) — resident \
+                             GPU buffers have no interpreter model"
+                        ),
+                        span,
+                    )
+                }
                 // Critical sections (design.md § Critical sections). The
                 // tree-walk interpreter is single-threaded with no real
                 // interrupts, so acquiring is inert — return the guard value;

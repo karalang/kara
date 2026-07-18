@@ -34972,6 +34972,50 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_gpu_upload_unlayouted_defaults_to_single_interleaved_group() {
+        // GPU-SLIP-4h: `gpu.upload` on a plain `Vec[S]` (no `layout` block for
+        // `S` anywhere) synthesizes ONE interleaved device group — the WGSL
+        // binds a single `array<G_aos>` in/out pair (hand-wgpu-equal access,
+        // verbatim upload/download copies) instead of one buffer per field.
+        // Codegen-only: no GPU is touched, so this is CI-safe.
+        let src = r#"
+struct P2 { a: f32, b: f32 }
+
+#[gpu]
+fn stepp(p: P2) -> P2 {
+    P2 { a: p.a + p.b, b: p.b }
+}
+
+fn main() {
+    let mut v: Vec[P2] = Vec.new();
+    v.push(P2 { a: 1.0, b: 2.0 });
+    let buf = gpu.upload(v);
+    let buf2 = gpu.dispatch(stepp, buf);
+    let back = gpu.download(buf2);
+    println(back.len());
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("aos_in: array<G_aos>") && ir.contains("aos_out: array<G_aos>"),
+            "expected the default single interleaved group (aos_in/aos_out over array<G_aos>) \
+             in the embedded WGSL; got:\n{ir}"
+        );
+        assert!(
+            !ir.contains("a_in: array<f32>"),
+            "per-field buffers must not be emitted for the un-layouted default; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("karac_runtime_gpu_upload_soa"),
+            "upload must route through the resident upload entry; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("karac_runtime_gpu_download_soa"),
+            "download must route through the resident download entry; got:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_struct_destructure_bound_field_freed() {
         // A bound heap field is freed via its binding's scope-exit cleanup.
         let src = format!(

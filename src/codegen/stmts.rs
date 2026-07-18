@@ -2888,6 +2888,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.is_gpu_upload_call(value) || self.is_gpu_resident_dispatch_call(value) {
                         return self.compile_let_from_gpu_upload(var_name, value);
                     }
+                    // GPU-SLIP-4h: `let <plain> = gpu.download(buf)` — the
+                    // un-layouted default target (a SoA-laid-out target was
+                    // taken by the scatter arm above).
+                    if self.is_gpu_download_call(value) {
+                        return self.compile_plain_let_from_gpu_download(var_name, value);
+                    }
                 }
                 // Map.new(): emit karac_map_new with sizes and (stub) fn pointers.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
