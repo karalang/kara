@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 60 | 0 |
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
-| run-vs-build | 27 | 0 |
+| run-vs-build | 28 | 0 |
 | crash | 26 | 0 |
 | perf | 21 | 0 |
 | soundness | 20 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 383 | 0 |
 | typecheck | 64 | 0 |
-| interp | 49 | 0 |
+| interp | 50 | 0 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -123,15 +123,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **539 surfaced · 0 open · 535 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **540 surfaced · 0 open · 536 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (535)
+### Fixed (536)
 
-<details><summary>535 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>536 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -670,6 +670,7 @@ _None — the ledger is fully drained._
 | B-2026-07-18-9 | codegen | high | An ASSOCIATED-fn call (`Type.method(...)`) passing a FRESH-TEMP value to a `ref`/`mut ref` param passed the temp BY VALUE instead of spilling it to a… | 5fa16cb |
 | B-2026-07-18-10 | codegen | high | `Tensor.{from,zeros,ones,full}` in an ARGUMENT position laid its data out at the literal's DEFAULT element width (f64 for `-1.0`, i64 for `1`) rather… | 5fa16cb |
 | B-2026-07-18-11 | typecheck+codegen | medium | `OnceLock[T].get().unwrap_or(<value>)` fails the LLVM verifier and `.unwrap()` faults at run time (interp fine) — the `Option[ref T]` payload from a… | 162a13f |
+| B-2026-07-18-12 | interp | medium | `Stats.*` on a `Slice[T]` value (`Stats.mean(v.as_slice())`, the declared `ref Slice[f64]` param's canonical form) read ZERO elements in the tree-wal… | c3b28ef |
 
 </details>
 
