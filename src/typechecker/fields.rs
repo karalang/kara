@@ -21,6 +21,29 @@ use super::{
 };
 
 impl<'a> super::TypeChecker<'a> {
+    /// A field access (`x.field`) whose receiver is a type with no named
+    /// fields — a primitive (`i64`/`f64`/`bool`/`char`), `String`, or any other
+    /// non-struct/non-union type. Emits a clean `no field '…' on type '…'`
+    /// diagnostic and returns `Type::Error`. Before this, these arms returned
+    /// the *silent* `Type::Error` with no diagnostic, so `"42".parse` /
+    /// `n.foo` PASSED `karac check` and then ICE'd the interpreter (field access
+    /// on a `Value::String`) / failed codegen ("Undefined variable") — a
+    /// soundness/diagnostics hole (B-2026-07-18-23). Method calls and struct
+    /// field access were already checked; only bare field access on a fieldless
+    /// receiver leaked through. Numeric tuple indexing (`t.0`) is a distinct AST
+    /// node (`TupleIndex`) and never reaches here.
+    fn field_access_on_fieldless_type(&mut self, field: &str, obj_ty: &Type, span: &Span) -> Type {
+        let ty_name = super::types::impl_table_key(obj_ty)
+            .map(|(n, _)| n)
+            .unwrap_or_else(|| "this type".to_string());
+        self.type_error(
+            format!("no field '{field}' on type '{ty_name}'"),
+            span.clone(),
+            TypeErrorKind::TypeMismatch,
+        );
+        Type::Error
+    }
+
     pub(super) fn infer_field_access(&mut self, object: &Expr, field: &str, span: &Span) -> Type {
         // Primitive-type associated constants — `i64.MAX`, `f64.INFINITY`,
         // `usize.MAX`, etc. The parser emits these as
@@ -116,9 +139,9 @@ impl<'a> super::TypeChecker<'a> {
             Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
                 Type::Named { name, .. } => name.clone(),
                 Type::Shared(name) => name.clone(),
-                _ => return Type::Error,
+                _ => return self.field_access_on_fieldless_type(field, &obj_ty, span),
             },
-            _ => return Type::Error,
+            _ => return self.field_access_on_fieldless_type(field, &obj_ty, span),
         };
 
         // Line 549 slice 2a: union receivers route here through the same

@@ -461,6 +461,38 @@ fn test_struct_unknown_field_access() {
     assert!(errors[0].message.contains("z"));
 }
 
+#[test]
+fn test_field_access_on_fieldless_type_rejected() {
+    // B-2026-07-18-23: field access of ANY field on a primitive / String
+    // (a type with no named fields) was silently accepted — `infer_field_access`
+    // returned the poison `Type::Error` WITHOUT a diagnostic, so `karac check`
+    // passed and the interpreter then ICE'd (field access on a Value::String) /
+    // codegen failed. Struct field access and method CALLS on primitives were
+    // already checked; only bare field access on a fieldless receiver leaked.
+    // Now each emits a clean `no field '…' on type '…'`.
+    for (src, ty) in [
+        ("fn main() { let x = \"42\".parse; let _ = x; }", "String"),
+        ("fn main() { let x = \"hi\".foo; let _ = x; }", "String"),
+        (
+            "fn main() { let n: i64 = 5; let x = n.foo; let _ = x; }",
+            "i64",
+        ),
+        (
+            "fn main() { let b: bool = true; let x = b.bar; let _ = x; }",
+            "bool",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("no field") && e.message.contains(ty)),
+            "expected a `no field ... on type '{ty}'` diagnostic for `{src}`, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
 // ── Category 7: Enum Operations ─────────────────────────────────
 
 #[test]
