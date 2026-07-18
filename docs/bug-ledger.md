@@ -94,22 +94,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 143 | 0 |
 | leak | 83 | 1 |
+| codegen-gap | 60 | 1 |
 | double-free | 60 | 0 |
-| codegen-gap | 59 | 0 |
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
 | crash | 26 | 0 |
-| run-vs-build | 26 | 1 |
+| run-vs-build | 26 | 0 |
 | perf | 21 | 0 |
 | soundness | 20 | 0 |
 | diagnostics | 11 | 0 |
-| use-after-free | 4 | 1 |
+| use-after-free | 4 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 379 | 3 |
+| codegen | 380 | 2 |
 | typecheck | 63 | 0 |
 | interp | 49 | 0 |
 | ownership | 23 | 0 |
@@ -123,19 +123,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **535 surfaced · 3 open · 528 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **536 surfaced · 2 open · 530 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-17-21 | 2026-07-17 | codegen | high | AOT MISCOMPILE (use-after-free): a loop containing `let x = Some(shared T); vec.push(x)` frees the LAST pushed element, so reading vec[N-1] after the loop returns garbage / crashes. interp (oracle) is correct; AOT diverges. Regressed since ~e2fb091b (kata #101 was 80745775-correct earlier the same day); live on main 84c01472. RC-elision-independent (fails with KARAC_RC_ELIDE_REF_PARAMS=0 too). | loop-local `let x = Some(shared); vec.push(x)` over-releases the LAST-pushed Vec[Option[shared]] element (use-after-free); fix the loop-body scope-exit RC handling of a named shared binding moved into a Vec |
-| B-2026-07-18-4 | 2026-07-18 | codegen | medium | A STRUCT-VARIANT enum payload's Vec field bound DIRECTLY in a match arm over a borrowed ref-Vec element, then moved into a local (`enum It { Fu { params: Vec[P] } }`; `for it in items { match it { Fu { params } => { let ps = params; for p in ps {..} } } }`, `items: ref Vec[It]`), miscompiles under AOT to an EMPTY Vec — the sum is 0 vs the interpreter's correct value. check-clean, interp-correct, AOT wrong-output (not a crash). | — |
 | B-2026-07-18-6 | 2026-07-18 | codegen | medium | PRE-EXISTING on main (not from the B-2026-07-18-2 fix — reproduced with it stashed): tests/http_client_codegen.rs test_ir_http_error_drop_frees_message + test_ir_response_drop_frees_headers_handle are RED — the synthesized HttpError/Response drop fns no longer free the message String buffer / headers handle (the IR-shape assertion finds only a cap-zero GEP, no free). Likely fallout of the 3324eea exact-free-buf-hints drop-site rework window. | — |
+| B-2026-07-18-8 | 2026-07-18 | codegen | medium | String built one byte at a time (`out.push_str(s[d..d+1])` in a loop) emits ~1.15-1.56x more instructions than equal-safety Rust: push_str's per-append copy is a branchy variable-length inlined memcpy because the slice length reaches codegen as a RUNTIME value; Rust's &s[d..d+1] carries the const-foldable length 1 and collapses to a single store. | docs/implementation_checklist/phase-10-targets.md § 'String char-append residual'; data: Kara/SWEEP_TRACKER_v2.md § Equal-safety investigation + Kara/ovf_equal_safety_triage.tsv |
 
-### Fixed (528)
+### Fixed (530)
 
-<details><summary>528 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>530 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -662,9 +661,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **535 surfaced 
 | B-2026-07-17-18 | typecheck | low | Unknown methods on the Type::Named numerical prelude types `Tensor` and `DataFrame` silently typed as Type::Error (same check/execution hole B-2026-0… | aee4a66 |
 | B-2026-07-17-19 | typecheck+codegen | low | Unknown methods on a fixed-size `Array[T, N]` silently type as Type::Error and pass `karac check`, then run on no backend — the same check/execution… | 4e6cbc8 |
 | B-2026-07-17-20 | codegen | high | Copying a Vec field out of a MATCH-BOUND enum payload borrowed from a ref-Vec element double-frees under AOT: `for it in items { match it { Fu(f) =>… | 3140c6d |
+| B-2026-07-17-21 | codegen | high | AOT MISCOMPILE (use-after-free): a loop containing `let x = Some(shared T); vec.push(x)` frees the LAST pushed element, so reading vec[N-1] after the… | 62ca0962 |
 | B-2026-07-18-2 | codegen | high | CONTEXT-DEPENDENT AOT memory corruption in the selfhost codegen generator once the Slice-12 struct machinery (a ~21-Vec-field Emitter struct + Struct… | 8c5cc150 |
 | B-2026-07-18-1 | codegen | medium | KARAC_AUTO_PAR=0 (auto_par_disabled) did NOT disable the parallel REDUCE lowering — only the parallel-group dispatch | 4d6efad |
 | B-2026-07-18-3 | codegen | medium | Consuming a BOXED `Option` payload whose type is a heap-containing tuple (e.g | eab5026 |
+| B-2026-07-18-4 | codegen | medium | A STRUCT-VARIANT enum payload's Vec field bound DIRECTLY in a match arm over a borrowed ref-Vec element, then moved into a local (`enum It { Fu { par… | 8c9fb2b |
 | B-2026-07-18-5 | interp | low | gpu.upload / gpu.download ICE the interpreter with `unreachable!("variable 'gpu' not found")` — no interpreter arm exists for the resident-buffer API… | fcdf5202 |
 | B-2026-07-18-7 | codegen | high | Plain struct-variable REASSIGNMENT (`let mut p = P { x: 1, y: 2 }; p = P { x: 10, y: 20 }`) now emits a reference to `karac_runtime_gpu_free_soa`, so… | 13f9c2a |
 
