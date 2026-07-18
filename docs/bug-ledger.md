@@ -98,22 +98,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 60 | 0 |
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
-| run-vs-build | 28 | 0 |
+| run-vs-build | 30 | 1 |
 | crash | 26 | 0 |
 | perf | 21 | 0 |
 | soundness | 20 | 0 |
 | diagnostics | 11 | 0 |
 | use-after-free | 4 | 0 |
-| check-passes/codegen-defers consistency hole + misleading diagnostic | 1 | 1 |
-| missing-feature (bidirectional inference gap; safe rejection of valid code, not a miscompile) | 1 | 1 |
+| other | 1 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 385 | 1 |
+| codegen | 389 | 3 |
 | typecheck | 64 | 0 |
-| interp | 50 | 0 |
+| interp | 52 | 1 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -123,24 +122,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 | parser | 3 | 0 |
 | effect | 1 | 0 |
-| codegen (f-string / Display of a whole tuple value) vs interpreter | 1 | 1 |
-| codegen (`<int>.parse` / `<int>.from_str_radix` / `f64.parse` assoc-fns in src/codegen/assoc_call.rs — missing arg cleanup) | 1 | 0 |
-| typechecker (expected-type propagation into METHOD-CALL arguments — `expr_method_call.rs`) | 1 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **545 surfaced · 3 open · 538 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **546 surfaced · 3 open · 539 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-18-13 | 2026-07-18 | codegen | high | Kata #415 add_strings measures 13.4x equal-safety Rust TODAY (89.1B vs 6.25B instrs, ~178K instr per 38-digit addition) — catastrophically worse than the 1.19x recorded in the June triage that B-2026-07-18-8 quoted. Kata file unchanged since its first-bench commit, so either the June number measured a different lane or a compiler regression landed in the past month. UNATTRIBUTED. | docs/implementation_checklist/phase-10-targets.md § 'String char-append residual' (same entry — this row carries the #415 outlier) |
-| B-2026-07-18-14 | 2026-07-18 | codegen (f-string / Display of a whole tuple value) vs interpreter | low | Interpolating a WHOLE TUPLE value in an f-string / `println` (`f"{t}"` where `t: (i64, i64)` or `(i64, String)`) passes `karac check` and renders `(3, 7)` in the interpreter, but FAILS `karac build`/JIT with 'Display of a struct in an f-string is supported when the interpolated expression is a variable or field access … bind a struct literal or call result to a `let` first'. The hint is MISLEADING — `t` is already a let-bound variable, so following it does not help. Affects ALL tuple element types (scalar and heap). Field-index interpolation (`f"{t.0} {t.1}"`) works on every backend. | none |
-| B-2026-07-18-17 | 2026-07-18 | typechecker (expected-type propagation into METHOD-CALL arguments — `expr_method_call.rs`) | low | The typechecker does NOT propagate a method parameter's (substituted) expected type into the ARGUMENT's own inference, so a type-inferred constructor argument (`Vec.new()`, `Map.new()`, `"".to_string()`) whose element/type param must come from the callee's signature is left as `?T` and rejected: `m.get_or(k, Vec.new())` on `Map[String, Vec[i64]]` → `expected 'Vec<i64>', found 'Vec<?T0>'`. Expected-type propagation DOES work for free-function call arguments and let-bindings — only method-call arguments miss it. Common idiom (`map.get_or(k, Vec.new())`); workaround is to bind an annotated default first (`let d: Vec[i64] = Vec.new(); m.get_or(k, d)`). | none |
+| B-2026-07-18-14 | 2026-07-18 | codegen+interp | low | Interpolating a WHOLE TUPLE value in an f-string / `println` (`f"{t}"` where `t: (i64, i64)` or `(i64, String)`) passes `karac check` and renders `(3, 7)` in the interpreter, but FAILS `karac build`/JIT with 'Display of a struct in an f-string is supported when the interpolated expression is a variable or field access … bind a struct literal or call result to a `let` first'. The hint is MISLEADING — `t` is already a let-bound variable, so following it does not help. Affects ALL tuple element types (scalar and heap). Field-index interpolation (`f"{t.0} {t.1}"`) works on every backend. | none |
+| B-2026-07-18-17 | 2026-07-18 | codegen | low | The typechecker does NOT propagate a method parameter's (substituted) expected type into the ARGUMENT's own inference, so a type-inferred constructor argument (`Vec.new()`, `Map.new()`, `"".to_string()`) whose element/type param must come from the callee's signature is left as `?T` and rejected: `m.get_or(k, Vec.new())` on `Map[String, Vec[i64]]` → `expected 'Vec<i64>', found 'Vec<?T0>'`. Expected-type propagation DOES work for free-function call arguments and let-bindings — only method-call arguments miss it. Common idiom (`map.get_or(k, Vec.new())`); workaround is to bind an annotated default first (`let d: Vec[i64] = Vec.new(); m.get_or(k, d)`). | none |
 
-### Fixed (538)
+### Fixed (539)
 
-<details><summary>538 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>539 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -681,7 +677,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **545 surfaced 
 | B-2026-07-18-11 | typecheck+codegen | medium | `OnceLock[T].get().unwrap_or(<value>)` fails the LLVM verifier and `.unwrap()` faults at run time (interp fine) — the `Option[ref T]` payload from a… | 162a13f |
 | B-2026-07-18-12 | interp | medium | `Stats.*` on a `Slice[T]` value (`Stats.mean(v.as_slice())`, the declared `ref Slice[f64]` param's canonical form) read ZERO elements in the tree-wal… | c3b28ef |
 | B-2026-07-18-15 | codegen | high | String accumulator built by `push(char)` in a counted loop was mis-lowered through the Vec TABULATE reduction path, overrunning the byte buffer by 3… | 90fe2ad |
-| B-2026-07-18-16 | codegen (`<int>.parse` / `<int>.from_str_radix` / `f64.parse` assoc-fns in src/codegen/assoc_call.rs — missing arg cleanup) | medium | `<int>.parse(s)` / `<int>.from_str_radix(s, r)` / `f64.parse(s)` never freed their fresh-owned String ARGUMENT — a fresh-temp arg (`i64.parse("42".to… | 9ef97b4 |
+| B-2026-07-18-16 | codegen | medium | `<int>.parse(s)` / `<int>.from_str_radix(s, r)` / `f64.parse(s)` never freed their fresh-owned String ARGUMENT — a fresh-temp arg (`i64.parse("42".to… | 9ef97b4 |
+| B-2026-07-18-20 | codegen+interp | high | The whole `std.encoding` surface (`Base64`/`Hex` encode/decode, `Url` encode/decode) SILENTLY MISCOMPILED under `karac build` / `karac run` (JIT) | cb49f4f |
 
 </details>
 
