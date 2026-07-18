@@ -2419,6 +2419,37 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_owned_param_into_vec_literal_no_double_free() {
+        // B-2026-07-18-38: an owned (caller-retains) String/Vec PARAM used as a
+        // Vec-literal element (`fn dup(x: String) -> Vec[String] { [x] }`)
+        // double-freed under AOT/JIT (interp was correct). The by-value header
+        // ABI leaves the buffer's free with the CALLER, so the returned Vec's
+        // element aliased the caller's arg and both freed it. The move-out
+        // cap-zero doesn't cover this — an owned param registers no callee-side
+        // FreeVecBuffer, so zeroing its slot is a no-op. `compile_vec_prefix_
+        // literal` now deep-copies owned-param elements (like tuple/push/return/
+        // struct-field/map-value do). Covers single-elem, multi-elem, a
+        // non-escaping local Vec of a param, and a Vec[Vec] param.
+        if let Some(out) = run_program(
+            "fn dup(x: String) -> Vec[String] { [x] }\n\
+             fn two(a: String, b: String) -> Vec[String] { [a, b] }\n\
+             fn local_use(x: String) -> i64 { let v = [x]; v.len() }\n\
+             fn dupv(x: Vec[i64]) -> Vec[Vec[i64]] { [x] }\n\
+             fn main() {\n\
+                 println(dup(\"z\".to_string())[0]);\n\
+                 let t = two(\"p\".to_string(), \"q\".to_string());\n\
+                 println(t[0]);\n\
+                 println(t[1]);\n\
+                 println(local_use(\"hi\".to_string()));\n\
+                 let vv = dupv([1, 2, 3]);\n\
+                 println(vv[0][2]);\n\
+             }",
+        ) {
+            assert_eq!(out, "z\np\nq\n1\n3\n");
+        }
+    }
+
+    #[test]
     fn e2e_ref_atomic_param_aliases_caller_cell() {
         // B-2026-07-18-30: a `ref Atomic[T]` / `mut ref Atomic[T]` parameter's
         // alloca holds a POINTER to the caller's atomic storage, but

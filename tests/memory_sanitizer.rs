@@ -14477,6 +14477,33 @@ fn main() { let b = B { v: "hi".to_string(), n: 5 }; println(b.get()); }
     }
 
     #[test]
+    fn asan_owned_param_into_vec_literal_no_double_free() {
+        // B-2026-07-18-38: an owned (caller-retains) String/Vec param used as a
+        // Vec-literal element (`fn dup(x: String) -> Vec[String] { [x] }`) — the
+        // by-value header ABI leaves the buffer's free with the caller, so the
+        // returned Vec's element aliased the caller's arg and both freed it (a
+        // double-free the move-out cap-zero couldn't cover: an owned param has
+        // no callee-side FreeVecBuffer). `compile_vec_prefix_literal` now
+        // deep-copies owned-param elements, like every other retaining consume
+        // site. Covers a returned Vec, a non-escaping local Vec, and a Vec[Vec].
+        assert_clean_asan_run(
+            r#"
+fn dup(x: String) -> Vec[String] { [x] }
+fn local_use(x: String) -> i64 { let v = [x]; v.len() }
+fn dupv(x: Vec[i64]) -> Vec[Vec[i64]] { [x] }
+fn main() {
+    println(dup("z".to_string())[0]);
+    println(local_use("hi".to_string()));
+    let vv = dupv([1, 2, 3]);
+    println(vv[0][2]);
+}
+"#,
+            &["z", "1", "3"],
+            "owned_param_into_vec_literal",
+        );
+    }
+
+    #[test]
     fn asan_struct_param_field_returned_no_double_free() {
         // The moved-out field is RETURNED to the caller: the deep-copy is the
         // returned value (caller owns it), the param's original field is freed

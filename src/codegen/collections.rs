@@ -1011,6 +1011,20 @@ impl<'ctx> super::Codegen<'ctx> {
             // the next element's compile). No-ops for fresh temps
             // (`.to_string()` / `.clone()`) and POD elements.
             self.suppress_fstr_acc_if_moved_out(e);
+            // B-2026-07-18-38: an owned (caller-retains) String/Vec PARAM used
+            // as a literal element (`fn dup(x: String) -> Vec[String] { [x] }`)
+            // is passed by value while the CALLER keeps the buffer's scope-exit
+            // free, so the Vec must own an INDEPENDENT copy — otherwise the
+            // Vec's element and the caller's arg alias the same buffer and both
+            // free it (double-free under AOT/JIT; interp was correct). The
+            // move-suppression `cap = 0` below does not cover this: an owned
+            // param registers no callee-side `FreeVecBuffer`, so zeroing its
+            // slot is a no-op — the alias survives into the returned Vec. Mirror
+            // every other retaining consume site (return/tuple/push/struct
+            // field/map value all call this). Runs BEFORE the cap-zero so the
+            // copy reads the source's real `cap`; a no-op for locals, fresh
+            // temps, `cap == 0` sources, and POD elements.
+            let v = self.maybe_defensive_copy_param_arg(e, v);
             self.suppress_source_vec_cleanup_for_arg(e);
             if let ExprKind::Identifier(name) = &e.kind {
                 self.suppress_map_cleanup_for_tail_identifier(name);
