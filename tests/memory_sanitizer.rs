@@ -2939,6 +2939,50 @@ fn main() {
     }
 
     #[test]
+    fn asan_boxed_opt_heap_tuple_consume_no_leak() {
+        // B-2026-07-18-3: consuming a BOXED `Option[(String,String)]` payload (a
+        // >3-word heap-owning tuple that `coerce_to_payload_words` heap-boxes)
+        // must free the reconstructed tuple's inner String buffers at the
+        // binding's scope exit. `Vec.pop()` on a `Vec[(String,String)]` is the
+        // canonical shared producer (it transfers the element out without
+        // cloning), so it stands in for any `-> Option[wide-heap-tuple]` (the
+        // SortedMap min/max/floor/ceiling among them). Two consuming shapes:
+        //  - whole-tuple binding `Some(kv)` then `kv.0`/`kv.1` — the leak shape
+        //    the fix targets (the box drop now runs the tuple's per-element inner
+        //    drop; before, box-only-free stranded 2 String buffers per iter);
+        //  - per-element destructure `Some((a, b))` — already clean (each leaf
+        //    binding owns its field), pinned here so the fix doesn't regress it.
+        // Looped so any per-iteration imbalance accumulates for LSan; ASan would
+        // flag a double-free if the box drop and a binding drop both fired.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let mut v: Vec[(String, String)] = Vec.new();
+        v.push((f"key-{n}-padpad", f"val-{n}-padpad"));
+        match v.pop() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
+
+        let mut w: Vec[(String, String)] = Vec.new();
+        w.push((f"k2-{n}-padpad", f"v2-{n}-padpad"));
+        match w.pop() { Some((a, b)) => println(f"{a}={b}"), None => println("n") }
+        n = n + 1;
+    }
+}
+"#,
+            &[
+                "key-0-padpad=val-0-padpad",
+                "k2-0-padpad=v2-0-padpad",
+                "key-1-padpad=val-1-padpad",
+                "k2-1-padpad=v2-1-padpad",
+                "key-2-padpad=val-2-padpad",
+                "k2-2-padpad=v2-2-padpad",
+            ],
+            "asan_boxed_opt_heap_tuple_consume_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_sorted_map_string_key_iter_no_leak() {
         // B-2026-07-09-17: `SortedMap[String, String]` ordered observation. The
         // `keys()`/`values()`/`entries()` producers DEEP-CLONE each half into
@@ -2989,10 +3033,12 @@ fn main() {
         // Vec — LSan flags a leak if a clone / the sorted-key scratch is unfreed,
         // ASan a double-free if a clone aliases a map buffer). Looped so any
         // imbalance accumulates. The String min/max/floor/ceiling path (a boxed
-        // Option[(String,String)] payload) is covered by the interpreter and the
-        // run/build codegen E2E, but inherits the PRE-EXISTING boxed-Option-
-        // payload inner-heap drop leak (B-2026-07-18-3, shared with Vec.pop) —
-        // deliberately excluded here so this test gates on my own code.
+        // Option[(String,String)] payload consumed via a whole-tuple `Some(kv)`
+        // binding) was the driver for B-2026-07-18-3 (now FIXED: the box drop
+        // runs the tuple's per-element inner-heap drop) — it is exercised here
+        // too, so this test now also gates that fix. (The narrow residual — an
+        // *unbound* `Some(_)` boxed heap-tuple, which carries no static type via
+        // its wildcard pattern — stays deferred; spike §1, oversized-enum-payload.)
         assert_clean_asan_run(
             r#"
 fn main() {
@@ -3013,6 +3059,12 @@ fn main() {
         let _ = s.insert(f"kb-{n}-pad-pad", f"vb-{n}-pad-pad");
         let _ = s.insert(f"ka-{n}-pad-pad", f"va-{n}-pad-pad");
         let _ = s.insert(f"kc-{n}-pad-pad", f"vc-{n}-pad-pad");
+        // Whole-tuple `Some(kv)` consumption of the boxed Option[(String,String)]
+        // payload — the B-2026-07-18-3 leak shape.
+        match s.min() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
+        match s.max() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
+        match s.floor(f"kbb-{n}-pad") { Some(kv) => println(f"{kv.0}"), None => println("n") }
+        match s.ceiling(f"kaa-{n}-pad") { Some(kv) => println(f"{kv.0}"), None => println("n") }
         let rs = s.range(f"ka-{n}-pad-pad", f"kb-{n}-pad-pad");
         println(f"{rs.len()}");
         n = n + 1i64;
@@ -3020,8 +3072,36 @@ fn main() {
 }
 "#,
             &[
-                "1=10", "5=50", "3", "3", "2", "2", "1=10", "5=50", "3", "3", "2", "2", "1=10",
-                "5=50", "3", "3", "2", "2",
+                "1=10",
+                "5=50",
+                "3",
+                "3",
+                "2",
+                "ka-0-pad-pad=va-0-pad-pad",
+                "kc-0-pad-pad=vc-0-pad-pad",
+                "kb-0-pad-pad",
+                "kb-0-pad-pad",
+                "2",
+                "1=10",
+                "5=50",
+                "3",
+                "3",
+                "2",
+                "ka-1-pad-pad=va-1-pad-pad",
+                "kc-1-pad-pad=vc-1-pad-pad",
+                "kb-1-pad-pad",
+                "kb-1-pad-pad",
+                "2",
+                "1=10",
+                "5=50",
+                "3",
+                "3",
+                "2",
+                "ka-2-pad-pad=va-2-pad-pad",
+                "kc-2-pad-pad=vc-2-pad-pad",
+                "kb-2-pad-pad",
+                "kb-2-pad-pad",
+                "2",
             ],
             "asan_sorted_map_ordered_methods_no_leak",
         );

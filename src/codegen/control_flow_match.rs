@@ -4926,6 +4926,47 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 return;
             }
+            // Whole-TUPLE payload binding (`Some(kv)` where `kv: (String,
+            // String)`, B-2026-07-18-3): the box holds a >3-word tuple whose
+            // String/Vec fields leak under the box-only free — the bound `kv`
+            // is an unboxed COPY that aliases the box's inner buffers and
+            // registers no drop of its own (the same shape as the whole-STRUCT
+            // `inner_struct_name` case below, but a tuple has no type name, so
+            // it needs a synthesized per-element drop fn instead). Route the box
+            // drop through `synthesize_tuple_drop_fn_te`, mirroring
+            // `clone_and_track_borrow_binding`'s tuple branch. Sound with no
+            // double-free: box-only-free never touches the inner buffers, and a
+            // whole-tuple match binding is not otherwise drop-registered (unlike
+            // a per-element destructure `Some((a, b))`, whose leaf bindings each
+            // own their field — that path stays box-only via the `_ => None`
+            // arm below). Excludes borrow scrutinees (their payload aliases the
+            // container's storage) and the shared/nested-Option cases handled
+            // above.
+            if let PatternKind::Binding(_) = &payload.kind {
+                if !scrutinee_is_borrow {
+                    let pkey = (payload.span.offset, payload.span.length);
+                    if matches!(
+                        self.pattern_binding_types.get(&pkey).map(|s| s.as_str()),
+                        Some("Tuple")
+                    ) {
+                        if let Some(te) = self.pattern_binding_inner_types.get(&pkey).cloned() {
+                            if let TypeKind::Tuple(elem_tes) = &te.kind {
+                                if let BasicTypeEnum::StructType(agg_ty) =
+                                    self.llvm_type_for_type_expr(&te)
+                                {
+                                    let elem_tes = elem_tes.clone();
+                                    let inner_drop =
+                                        self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes);
+                                    self.track_boxed_enum_var_with_inner_drop(
+                                        &enum_name, alloca, &enum_name, &variant, inner_drop,
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             let inner_struct_name: Option<String> = match &payload.kind {
                 PatternKind::Binding(_) if !scrutinee_is_borrow => {
                     let pkey = (payload.span.offset, payload.span.length);
