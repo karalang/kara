@@ -3298,6 +3298,17 @@ pub(super) struct Codegen<'ctx> {
     /// needs `S` to synthesize the default interleaved manifest, and the
     /// `{handle, n}` value itself is type-erased.
     pub(crate) gpu_buffer_elem_structs: HashMap<String, String>,
+    /// Names of variables that are actually a `GpuBuffer` (`{handle, n}` value,
+    /// bound by `let buf = gpu.upload(...)` / a resident `gpu.dispatch`). The
+    /// gpu-buffer LLVM type is an anonymous `{i64, i64}`, which is STRUCTURALLY
+    /// identical to any 2-field all-`i64` user struct (`struct P { x: i64,
+    /// y: i64 }`), so the gpu-buffer reassign / method arms must NOT key on
+    /// `vs.ty == gpu_buffer_type()` alone — a plain `P` reassign otherwise routes
+    /// old-value cleanup through `karac_runtime_gpu_free_soa` and pulls in the
+    /// opt-in GPU archive, breaking `karac run`/`build` for a non-GPU program
+    /// (B-2026-07-18-7). This is the authoritative membership test. Cleared
+    /// per-function.
+    pub(crate) gpu_buffer_vars: HashSet<String>,
     /// Per-variable Map key LLVM type (variable name → K LLVM type).
     pub(crate) map_key_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Per-variable Map value LLVM type (variable name → V LLVM type).
@@ -6742,6 +6753,7 @@ impl<'ctx> Codegen<'ctx> {
             provider_frame_ty,
             provider_lookup_result_ty,
             gpu_buffer_elem_structs: HashMap::new(),
+            gpu_buffer_vars: HashSet::new(),
             map_key_types: HashMap::new(),
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),

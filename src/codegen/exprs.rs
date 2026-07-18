@@ -2762,6 +2762,11 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         );
         self.track_gpu_buffer_var(alloca);
+        // Authoritative gpu-buffer membership (B-2026-07-18-7): the `{i64, i64}`
+        // buffer type structurally collides with any 2-field all-`i64` user
+        // struct, so downstream reassign / method arms must key on this set, not
+        // on the LLVM type alone.
+        self.gpu_buffer_vars.insert(var_name.to_string());
         // GPU-SLIP-4h: record the handle's element struct so a later
         // `gpu.download` into a PLAIN `Vec[S]` target can synthesize the
         // default interleaved manifest ({handle, n} itself is type-erased).

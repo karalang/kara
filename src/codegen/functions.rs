@@ -1195,6 +1195,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_accessor_let_payload.clear();
         self.for_loop_owned_agg_vars.clear();
         self.borrowed_agg_payload_struct_vars.clear();
+        self.gpu_buffer_vars.clear();
         self.owned_struct_params.clear();
         self.shared_enum_payload_view_vars.clear();
         self.rc_fallback_heap_types.clear();

@@ -18130,6 +18130,31 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_two_field_i64_struct_reassign_not_gpu_buffer() {
+        // B-2026-07-18-7: a 2-field all-`i64` user struct lowers to the anonymous
+        // `{i64, i64}` that is ALSO the GPU-buffer handle type, so the reassign
+        // arm's `vs.ty == gpu_buffer_type()` check misfired — `p = P { … }`
+        // routed old-value cleanup through `karac_runtime_gpu_free_soa`, so both
+        // `karac run` (JIT symbol-not-found) and `karac build` (gpu-archive link
+        // demand) failed for this non-GPU program. The reassign now gates on the
+        // authoritative `gpu_buffer_vars` set, so a plain struct reassign takes
+        // the normal path and references no GPU symbol.
+        let out = run_program(
+            r#"
+struct P { x: i64, y: i64 }
+fn main() {
+    let mut p = P { x: 1, y: 2 };
+    p = P { x: 10, y: 20 };
+    println((p.x + p.y).to_string());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "30");
+        }
+    }
+
+    #[test]
     fn test_e2e_struct_field_access() {
         let out = run_program(
             r#"

@@ -5355,10 +5355,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // double-buffer move. Free the displaced handle + store the new
                 // one (the general store would leak the old device buffers).
                 if let ExprKind::Identifier(name) = &target.kind {
-                    if self
-                        .variables
-                        .get(name)
-                        .is_some_and(|vs| vs.ty == self.gpu_buffer_type().into())
+                    // B-2026-07-18-7: gate on the authoritative gpu-buffer-var
+                    // set, NOT on `vs.ty == gpu_buffer_type()` — the `{i64, i64}`
+                    // buffer type collides with any 2-field all-`i64` user struct
+                    // (`struct P { x: i64, y: i64 }`), so a plain `p = P { … }`
+                    // reassign would otherwise route old-value cleanup through the
+                    // gpu SoA free (`karac_runtime_gpu_free_soa`) and drag in the
+                    // opt-in GPU archive, breaking `karac run`/`build` for a
+                    // non-GPU program.
+                    if self.gpu_buffer_vars.contains(name)
+                        && self
+                            .variables
+                            .get(name)
+                            .is_some_and(|vs| vs.ty == self.gpu_buffer_type().into())
                     {
                         let name = name.clone();
                         return self.compile_gpu_buffer_assign(&name, value);
