@@ -2951,6 +2951,35 @@ impl<'ctx> super::Codegen<'ctx> {
         // and the capture defensive-copy (which key off `owned_vecstr_params`)
         // see the CLOSURE's params during the body compile, not the outer fn's.
         let saved_owned_vecstr_params = std::mem::take(&mut self.owned_vecstr_params);
+        // Isolate the borrowed-alias set (B-2026-07-18-42). A closure that
+        // captures a whole heap Vec/String and RETURNS it (or otherwise
+        // retaining-consumes it) must hand back an INDEPENDENT buffer, because in
+        // BOTH env models the captured value's buffer is owned by something the
+        // frame will still free:
+        //   * stack-env (non-escaping): the env holds a bit-copy of the source's
+        //     `{ptr,len,cap}` header — an ALIAS. The ownership pass treats the
+        //     capture as a read/borrow, not a move (the source is still usable
+        //     after the closure), so the enclosing frame stays the owner and
+        //     frees the source at scope exit.
+        //   * heap-env (escaping): the RC env box OWNS the captured buffer
+        //     (deep-copied at capture for an owned param, moved-in with a
+        //     cap-zeroed source for a local) and frees it via the per-closure
+        //     env-drop fn at RC-zero. That env may be called any number of times,
+        //     so the return cannot MOVE the buffer out of the env.
+        // Either way, returning the captured value directly hands back an alias
+        // of a buffer that gets freed elsewhere, so the receiver's free and that
+        // owner's free hit the same buffer — a double-free under AOT/JIT (the
+        // interpreter clones, so it was a run-vs-build divergence:
+        // `fn f(x: String) -> String { let g = || x; g() }` and the escaping
+        // `fn mk(x: String) -> Fn() -> String { || x }`). Registering each
+        // captured heap var in `for_loop_borrow_vars` for the body compile routes
+        // every retaining-consume site (tail return, tuple, push, struct field,
+        // map value — all keyed on this set via `maybe_defensive_copy_param_arg`)
+        // through a defensive deep-copy, so the returned value owns an
+        // independent buffer while the env / source keeps its own. Taken +
+        // restored so the outer fn / sibling closures don't inherit these names;
+        // inserted at the capture-unpack step below.
+        let saved_for_loop_borrow_vars = std::mem::take(&mut self.for_loop_borrow_vars);
 
         // 7. Build the closure body.
         self.current_fn = Some(closure_fn);
@@ -3027,6 +3056,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.var_type_names
                         .insert(root_name.clone(), type_name.clone());
                 }
+                // B-2026-07-18-42: a stack-env whole-heap capture aliases the
+                // outer owner — mark it a borrowed alias so a body return / other
+                // retaining consume deep-copies instead of handing back the alias.
+                // Gated on `vec_elem_types` (the Vec/String set — matches
+                // `maybe_defensive_copy_param_arg`'s own gate); a disjoint
+                // sub-field/struct capture is naturally excluded.
+                if !is_heap_env && self.vec_elem_types.contains_key(root_name) {
+                    self.for_loop_borrow_vars.insert(root_name.clone());
+                }
             }
         } else if !free_vars.is_empty() {
             for (i, var_name) in free_vars.iter().enumerate() {
@@ -3068,6 +3106,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(type_name) = saved_var_types.get(var_name) {
                     self.var_type_names
                         .insert(var_name.clone(), type_name.clone());
+                }
+                // B-2026-07-18-42: a whole-heap capture must be deep-copied at a
+                // body return / other retaining consume — the buffer is owned by
+                // the frame (stack-env alias) or the RC env box (heap-env), never
+                // by the return value. Mark it borrowed so the consume sites
+                // deep-copy. (mutref captures already `continue`d above.)
+                if self.vec_elem_types.contains_key(var_name) {
+                    self.for_loop_borrow_vars.insert(var_name.clone());
                 }
             }
         }
@@ -3228,6 +3274,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // `owned_vecstr_params` to decide whether a captured Vec/String is a
         // caller-retained param — B-2026-06-22-2).
         self.owned_vecstr_params = saved_owned_vecstr_params;
+        // Restore the borrowed-alias set (B-2026-07-18-42): the captured-heap
+        // borrow marks are scoped to this closure's body compile only, so the
+        // outer fn / sibling closures don't inherit them. Restored BEFORE the
+        // env is built below (env-build reads `owned_vecstr_params`, not this
+        // set, but keep the restore grouped with the other body-scoped state).
+        self.for_loop_borrow_vars = saved_for_loop_borrow_vars;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }

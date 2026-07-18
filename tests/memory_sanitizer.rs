@@ -14504,6 +14504,36 @@ fn main() {
     }
 
     #[test]
+    fn asan_closure_returns_captured_heap_no_leak_no_double_free() {
+        // B-2026-07-18-42: a closure capturing a whole heap String/Vec and
+        // RETURNING it. The captured buffer is owned by the enclosing frame
+        // (stack-env alias) or the RC env box (heap-env), so returning the alias
+        // directly double-freed (receiver + owner). The fix deep-copies the
+        // captured value at the body return, keeping the copy independent of the
+        // owner's buffer. This exercises both a double-free (returning the alias)
+        // and, on the LSan leg, a leak (over-copying without balancing the env
+        // drop): the escaping closure is invoked TWICE so a per-call over-copy
+        // would strand a buffer. Covers stack-env param, stack-env local, and an
+        // escaping heap-env closure called multiple times.
+        assert_clean_asan_run(
+            r#"
+fn dup(x: String) -> String { let g = || x; g() }
+fn loc() -> String { let s = "L".to_string(); let g = || s; g() }
+fn mk(x: String) -> Fn() -> String { || x }
+fn main() {
+    println(dup("P".to_string()));
+    println(loc());
+    let g = mk("E".to_string());
+    println(g());
+    println(g());
+}
+"#,
+            &["P", "L", "E", "E"],
+            "closure_returns_captured_heap",
+        );
+    }
+
+    #[test]
     fn asan_struct_param_field_returned_no_double_free() {
         // The moved-out field is RETURNED to the caller: the deep-copy is the
         // returned value (caller owns it), the param's original field is freed

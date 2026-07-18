@@ -2450,6 +2450,33 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_closure_returns_captured_heap_no_double_free() {
+        // B-2026-07-18-42: a closure that captures a whole heap String/Vec and
+        // RETURNS it double-freed under AOT/JIT (interp correct) — the captured
+        // value's buffer is owned by the enclosing frame (stack-env alias) or the
+        // RC env box (heap-env), never by the return value, so handing back the
+        // alias made the receiver's free collide with that owner's free. Marking
+        // captured heap vars as borrowed aliases routes the body return through
+        // the same defensive deep-copy every other consume site uses. Covers a
+        // stack-env param capture (immediately invoked), a stack-env LOCAL
+        // capture, and an ESCAPING (heap-env) closure returned then invoked.
+        if let Some(out) = run_program(
+            "fn dup(x: String) -> String { let g = || x; g() }\n\
+             fn loc() -> String { let s = \"L\".to_string(); let g = || s; g() }\n\
+             fn mk(x: String) -> Fn() -> String { || x }\n\
+             fn main() {\n\
+                 println(dup(\"P\".to_string()));\n\
+                 println(loc());\n\
+                 let g = mk(\"E\".to_string());\n\
+                 println(g());\n\
+                 println(g());\n\
+             }",
+        ) {
+            assert_eq!(out, "P\nL\nE\nE\n");
+        }
+    }
+
+    #[test]
     fn e2e_ref_atomic_param_aliases_caller_cell() {
         // B-2026-07-18-30: a `ref Atomic[T]` / `mut ref Atomic[T]` parameter's
         // alloca holds a POINTER to the caller's atomic storage, but
