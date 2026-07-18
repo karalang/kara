@@ -1439,6 +1439,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 return;
             }
         }
+        // Interner / Arena[T] — baked opaque-handle stdlib structs (no user
+        // impl), so register the binding into the dispatch gate the same way
+        // the OnceLock arm above does. This is what lets a `ref Interner` /
+        // `ref Arena[T]` (or owned) FUNCTION PARAMETER dispatch its methods:
+        // params route through this registrar (`compile_function`'s param
+        // loop), and `get_data_ptr` already resolves the ref-param
+        // indirection so `load_{interner,arena}_handle`'s single load yields
+        // the handle for both a local binding and a `ref` param. NO scope-exit
+        // free is queued here — that stays at the `Interner.new()` /
+        // `Arena.new()` let-site (stmts.rs), so a borrowed param never
+        // double-frees the caller's handle. The let-binding path registers
+        // these directly at the bind site too; a second insert here is
+        // idempotent. Arena's element kind is classified from the annotation
+        // (the `Map.new()` precedent — a param carries its `Arena[T]`).
+        if let TypeKind::Path(path) = &te.kind {
+            let head = path.segments.last().map(|s| s.as_str());
+            if head == Some("Interner") {
+                self.var_type_names
+                    .insert(var_name.to_string(), "Interner".to_string());
+                self.interner_vars.insert(var_name.to_string());
+                return;
+            }
+            if head == Some("Arena") {
+                if let Some(kind) = super::arena::classify_arena_annotation(te) {
+                    self.var_type_names
+                        .insert(var_name.to_string(), "Arena".to_string());
+                    self.arena_vars.insert(var_name.to_string(), kind);
+                    return;
+                }
+            }
+        }
         // Tensor[T, Shape] — register the element type + static dims so
         // indexing / method dispatch and the cleanup tracker recognise
         // the binding (`src/codegen/tensor.rs`). Splice-bearing shapes

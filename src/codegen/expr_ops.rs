@@ -2207,6 +2207,24 @@ impl<'ctx> super::Codegen<'ctx> {
             // `obj.f.m()`) also work. Plain-struct sibling of
             // `shared_type_for_call_like`.
             ExprKind::MethodCall { object, method, .. } => {
+                // `arena.get(r)` on a struct-element arena returns the element
+                // struct by value (compile_arena_get loads it), so a chained
+                // `arena.get(r).field` needs the element struct's name here to
+                // find the field layout. Without this the generic
+                // `compile_field_access` tail can't resolve the field index and
+                // silently returns the `i64 0` placeholder — a miscompile of
+                // `arena.get(r).field` (the bound form `let n = arena.get(r);
+                // n.field` already worked, since `n` is registered). `get` is a
+                // compiler-builtin, so it never reaches `fn_return_type_names`.
+                if method == "get" {
+                    if let ExprKind::Identifier(recv) = &object.kind {
+                        if let Some(super::arena::ArenaElemKind::Struct(name)) =
+                            self.arena_vars.get(recv.as_str())
+                        {
+                            return Some(name.clone());
+                        }
+                    }
+                }
                 let recv_ty = self.type_name_of_expr(object)?;
                 let fn_name = format!("{recv_ty}.{method}");
                 self.fn_return_type_names.get(&fn_name).cloned()

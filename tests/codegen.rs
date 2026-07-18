@@ -5123,6 +5123,98 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_arena_as_ref_param() {
+        // Arena/Interner as function PARAMETERS — the primary arena use case
+        // ("pass the arena to functions that build nodes"). Was loud-fail
+        // ("no handler for method 'push' on variable 'a'") because a
+        // `ref Arena[T]` param wasn't registered in `arena_vars`;
+        // `register_var_from_type_expr` now registers it (params route
+        // through it), and `get_data_ptr` already resolves the ref-param
+        // indirection so the handle load works for both a local binding and
+        // a `ref` param. Covers scalar + struct elements and a returned
+        // `ArenaRef[T]` handle. interp == JIT == AOT.
+        let out = run_program(
+            r#"
+struct Node { val: i64, kids: i64 }
+fn build(a: ref Arena[Node], v: i64) -> ArenaRef[Node] {
+    a.push(Node { val: v, kids: 0 })
+}
+fn total(a: ref Arena[i64]) -> i64 {
+    let r0 = a.push(3);
+    let r1 = a.push(4);
+    a.get(r0) + a.get(r1)
+}
+fn main() {
+    let a: Arena[Node] = Arena.new();
+    let r0 = build(a, 10);
+    let r1 = build(a, 20);
+    println(a.get(r0).val);
+    println(a.get(r1).val);
+    println(a.len());
+    let b: Arena[i64] = Arena.new();
+    println(total(b));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "10\n20\n2\n7");
+        }
+    }
+
+    #[test]
+    fn test_e2e_interner_as_ref_param() {
+        // `ref Interner` parameter dispatch (same registration fix). A helper
+        // interns through a borrowed interner; dedup + count survive across
+        // the call boundary.
+        let out = run_program(
+            r#"
+fn add(t: ref Interner, s: ref String) -> Symbol {
+    t.intern(s)
+}
+fn main() {
+    let mut t: Interner = Interner.new();
+    let a = add(t, "x");
+    let b = add(t, "x");
+    let c = add(t, "y");
+    println(a == b);
+    println(a == c);
+    println(t.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "true\nfalse\n2");
+        }
+    }
+
+    #[test]
+    fn test_e2e_arena_chained_get_field() {
+        // Regression: `arena.get(r).field` chained (field access directly on
+        // the struct-returning get) read the `i64 0` placeholder — the
+        // generic `compile_field_access` tail couldn't resolve the element
+        // struct's field index because `type_name_of_expr` had no arm for a
+        // compiler-builtin `arena.get(...)` MethodCall. The bound form
+        // (`let n = arena.get(r); n.field`) always worked (n is registered).
+        // A silent miscompile (wrong value, not a crash) that shipped with
+        // the Arena codegen slice; fixed by resolving the arena-get element
+        // struct name in `type_name_of_expr`.
+        let out = run_program(
+            r#"
+struct Node { val: i64, kids: i64 }
+fn main() {
+    let a: Arena[Node] = Arena.new();
+    let r = a.push(Node { val: 42, kids: 7 });
+    println(a.get(r).val);
+    println(a.get(r).kids);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42\n7");
+        }
+    }
+
+    #[test]
     fn test_e2e_two_interners_par_group_bail() {
         // Regression (2026-07-17, found via the Arena slice): two ANNOTATED
         // `let t: Interner = Interner.new()` lets form an auto-par parallel
