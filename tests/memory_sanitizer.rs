@@ -916,6 +916,42 @@ fn main() {
     }
 
     #[test]
+    fn asan_string_push_counted_loop_no_overflow() {
+        // B-2026-07-18-15: a `String` accumulator built by `push(char)` inside a
+        // counted `while` loop was mis-lowered through the Vec *tabulate*
+        // reduction path. A `String` shares `Vec`'s `{ptr,len,cap}` layout, so
+        // `llvm_ty_is_vec_struct` cannot tell them apart — the tabulate reserved
+        // `trip_count * elem_size` (elem_size = 1 for the byte buffer) and did
+        // fixed-stride *element* stores, but each `push(char)` writes a 4-byte
+        // char slot, overrunning the buffer by 3 bytes per char (heap
+        // buffer-overflow — valgrind: "Invalid write of size 4 … inside a block
+        // of size N"). The fix bails a String accumulator out of both the
+        // tabulate and Collect reduction lowerings to the correct per-push
+        // codegen (which grows for the char encoding). Regression guard: the
+        // 7-char build must be ASAN-clean and print the string + its length.
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> String {
+    let mut out = "";
+    let mut i = 0;
+    while i < n {
+        out.push('x');
+        i = i + 1;
+    }
+    return out;
+}
+fn main() {
+    let s = build(7);
+    println(s);
+    println(s.len().to_string());
+}
+"#,
+            &["xxxxxxx", "7"],
+            "string_push_counted_loop_no_overflow",
+        );
+    }
+
+    #[test]
     fn asan_oncelock_string_set_get_no_leak() {
         // B-2026-07-12-2 heap-`T` ungate (gap 1, success-path element leak): a
         // heap-owning `OnceLock[String]` `set(v)` moves `v`'s buffer into the
@@ -3106,7 +3142,7 @@ fn main() {
 
     #[test]
     fn asan_boxed_opt_heap_tuple_consume_no_leak() {
-        // B-2026-07-18-3: consuming a BOXED `Option[(String,String)]` payload (a
+        // B-2026-07-18-15: consuming a BOXED `Option[(String,String)]` payload (a
         // >3-word heap-owning tuple that `coerce_to_payload_words` heap-boxes)
         // must free the reconstructed tuple's inner String buffers at the
         // binding's scope exit. `Vec.pop()` on a `Vec[(String,String)]` is the
@@ -3200,7 +3236,7 @@ fn main() {
         // ASan a double-free if a clone aliases a map buffer). Looped so any
         // imbalance accumulates. The String min/max/floor/ceiling path (a boxed
         // Option[(String,String)] payload consumed via a whole-tuple `Some(kv)`
-        // binding) was the driver for B-2026-07-18-3 (now FIXED: the box drop
+        // binding) was the driver for B-2026-07-18-15 (now FIXED: the box drop
         // runs the tuple's per-element inner-heap drop) — it is exercised here
         // too, so this test now also gates that fix. (The narrow residual — an
         // *unbound* `Some(_)` boxed heap-tuple, which carries no static type via
@@ -3226,7 +3262,7 @@ fn main() {
         let _ = s.insert(f"ka-{n}-pad-pad", f"va-{n}-pad-pad");
         let _ = s.insert(f"kc-{n}-pad-pad", f"vc-{n}-pad-pad");
         // Whole-tuple `Some(kv)` consumption of the boxed Option[(String,String)]
-        // payload — the B-2026-07-18-3 leak shape.
+        // payload — the B-2026-07-18-15 leak shape.
         match s.min() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
         match s.max() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
         match s.floor(f"kbb-{n}-pad") { Some(kv) => println(f"{kv.0}"), None => println("n") }

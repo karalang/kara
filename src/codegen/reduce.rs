@@ -1562,6 +1562,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.llvm_ty_is_vec_struct(acc_slot.ty) {
             return Ok(None);
         }
+        // A `String` shares `Vec`'s `{ptr,len,cap}` layout but `push(char)`
+        // writes a variable-width UTF-8 encoding, not a fixed `elem_size`
+        // element — the fixed-stride element stores here overrun the buffer
+        // (B-2026-07-18-15). Bail to the correct per-push codegen.
+        if self.string_vars.contains(&reduction.accumulator) {
+            return Ok(None);
+        }
         let elem_ty = self.vec_elem_type_for_var(&reduction.accumulator);
         if !llvm_ty_is_pod(elem_ty) {
             return Ok(None);
@@ -3062,6 +3069,18 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         };
         if !self.llvm_ty_is_vec_struct(acc_slot.ty) {
+            return Ok(None);
+        }
+        // A `String` shares the `{ptr,len,cap}` layout with `Vec`, so
+        // `llvm_ty_is_vec_struct` cannot tell them apart — but a `String`'s
+        // `push(char)` writes a variable-width (up to 4-byte) UTF-8 encoding,
+        // NOT a fixed `elem_size`-byte element. The tabulate reserves
+        // `trip_count * elem_size` (elem_size = 1 for the byte buffer) and
+        // does fixed-stride element stores, so a `while … { s.push(c) }`
+        // String build overran the buffer by ~3 bytes/char (heap
+        // buffer-overflow, B-2026-07-18-15). Bail to the normal per-push
+        // codegen, which grows correctly for the char encoding.
+        if self.string_vars.contains(&acc) {
             return Ok(None);
         }
         // The accumulator must be a direct owned local — a `ref`/`mut ref`
