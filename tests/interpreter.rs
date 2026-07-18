@@ -8523,6 +8523,24 @@ fn test_assert_ne_failure_shows_debug_format() {
 }
 
 #[test]
+fn test_assert_two_arg_uses_string_literal_message() {
+    // B-2026-07-18-26: `assert(cond, "msg")` — the optional 2-arg form the
+    // typechecker accepts and the compiler emits for tensor shape-checks — now
+    // reports the string-literal message on failure (was: silently ignored,
+    // always "assertion failed"). Kept symmetric with codegen's compile_assert.
+    let errors = runtime_errors("fn main() { assert(1 == 2, \"shape mismatch\"); }");
+    assert!(!errors.is_empty(), "expected a runtime error");
+    assert_eq!(errors[0].message, "shape mismatch");
+}
+
+#[test]
+fn test_assert_two_arg_passing_does_not_fire() {
+    // The 2-arg form must run cleanly when the condition holds.
+    let out = run("fn main() { assert(1 == 1, \"unused\"); println(7); }");
+    assert_eq!(out, "7\n");
+}
+
+#[test]
 fn test_assert_eq_failure_integer_values() {
     let errors = runtime_errors("fn main() { assert_eq(1i64, 2i64); }");
     assert!(!errors.is_empty(), "expected a runtime error");

@@ -41,8 +41,20 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
         call_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        if args.len() != 1 {
-            return Err(format!("assert() expects 1 argument, found {}", args.len()));
+        // `assert(cond)` is the documented 1-arg form (design.md § test
+        // builtins). The optional 2-arg `assert(cond, "msg")` form — which the
+        // typechecker accepts and the compiler itself emits for tensor
+        // shape-checks (design.md § dim asserts) — carries a failure message;
+        // the interpreter accepts it too, so codegen must, or it is a
+        // run-vs-build divergence (B-2026-07-18-26). A string-LITERAL message
+        // is threaded into the failure record (matching the interpreter); a
+        // dynamic message falls back to "assertion failed" in BOTH backends so
+        // they stay consistent.
+        if args.is_empty() || args.len() > 2 {
+            return Err(format!(
+                "assert() expects 1 or 2 arguments, found {}",
+                args.len()
+            ));
         }
         let cond_val = self.compile_expr(&args[0].value)?;
         let cond_i1 = match cond_val {
@@ -50,6 +62,10 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => {
                 return Err("assert() argument must be a bool expression".to_string());
             }
+        };
+        let msg = match args.get(1).map(|a| &a.value.kind) {
+            Some(ExprKind::StringLit(s)) => s.clone(),
+            _ => "assertion failed".to_string(),
         };
 
         let cur_fn = self
@@ -63,7 +79,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Failure path
         self.builder.position_at_end(fail_bb);
-        self.emit_test_record_failure_and_exit(call_span, "assertion failed", None, None);
+        self.emit_test_record_failure_and_exit(call_span, &msg, None, None);
 
         // Continuation
         self.builder.position_at_end(cont_bb);

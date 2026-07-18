@@ -367,10 +367,21 @@ impl<'a> super::Interpreter<'a> {
             Some(a) => self.eval_expr_inner(&a.value),
             None => return self.record_runtime_error("assert called with no arguments", span),
         };
+        if self.pending_cf.is_some() {
+            return cond;
+        }
         if matches!(cond, Value::Bool(true)) {
             return Value::Unit;
         }
-        self.record_runtime_error("assertion failed", span)
+        // Optional 2-arg `assert(cond, "msg")` failure message. A string
+        // LITERAL is used verbatim; a dynamic message falls back to the bare
+        // "assertion failed" — kept symmetric with codegen's `compile_assert`
+        // so the two backends report the same text (B-2026-07-18-26).
+        let msg = match args.get(1).map(|a| &a.value.kind) {
+            Some(ExprKind::StringLit(s)) => s.as_str(),
+            _ => "assertion failed",
+        };
+        self.record_runtime_error(msg, span)
     }
 
     pub(crate) fn eval_builtin_assert_eq(&mut self, args: &[CallArg], span: &Span) -> Value {

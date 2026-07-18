@@ -2370,6 +2370,25 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_assert_two_arg_message_form_compiles_and_runs() {
+        // B-2026-07-18-26: the 2-arg `assert(cond, "msg")` form (accepted by
+        // the typechecker + interpreter, and emitted by the compiler for tensor
+        // shape-checks) was REJECTED by codegen ("assert() expects 1 argument,
+        // found 2") — a run-vs-build divergence. Codegen now accepts 1-or-2 args
+        // and threads a string-literal message. A passing 2-arg assert must run
+        // cleanly and fall through to the rest of `main`.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 assert(1 == 1, \"never fires\");\n\
+                 assert(2 > 1);\n\
+                 println(42);\n\
+             }",
+        ) {
+            assert_eq!(out, "42\n");
+        }
+    }
+
+    #[test]
     fn e2e_option_ref_payload_display_matches_interpreter() {
         // B-2026-07-18-24: `Vec.first()` / `.get(i)` / `.last()` are typed
         // `Option[ref T]` (the borrow-typed accessor, B-2026-07-14-11). For a
