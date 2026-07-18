@@ -9480,6 +9480,64 @@ fn test_graduated_numeric_types_legit_methods_still_resolve() {
     );
 }
 
+#[test]
+fn test_fixed_array_read_methods_are_modelled() {
+    // B-2026-07-17-19: a scalar-element fixed `Array[T, N]` now models
+    // `len`/`is_empty`/`get`/`first`/`last`/`contains` (was silent Type::Error).
+    // `get`/`first`/`last` type as `Option[T]`, `contains` as `bool` — so a
+    // wrong-type binding is now a real error, not silently absorbed by Error.
+    typecheck_ok(
+        "fn main() { let a: Array[i64, 3] = [1, 2, 3]; match a.get(0) { Some(v) => println(f\"{v}\"), None => {} } let _ = a.first(); let _ = a.last(); let _ = a.contains(2); println(f\"{a.len()} {a.is_empty()}\"); }",
+    );
+    // Soundness: `get` is `Option[i64]`, not `Type::Error` — binding it to a
+    // `bool` must be rejected (pre-fix the silent Error unified with anything).
+    let errors = typecheck_errors(
+        "fn main() { let a: Array[i64, 3] = [1, 2, 3]; let x: bool = a.get(0); println(f\"{x}\"); }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected a type error binding Array.get()'s Option[i64] to bool"
+    );
+    // f64 element resolves too (codegen reconstructs the float payload).
+    typecheck_ok(
+        "fn main() { let a: Array[f64, 3] = [1.5, 2.5, 3.5]; match a.get(1) { Some(v) => println(f\"{v}\"), None => {} } println(f\"{a.contains(2.5)}\"); }",
+    );
+}
+
+#[test]
+fn test_absent_fixed_array_methods_rejected_with_iter_hint() {
+    // B-2026-07-17-19: methods the backends don't run on a fixed array
+    // (`to_vec`/`rev`/typos) are rejected, not silently typed Error; a direct
+    // iterator adaptor gets the actionable `.iter()` hint (arrays are iterable).
+    for prog in [
+        "fn main() { let a: Array[i64, 3] = [1, 2, 3]; a.some_typo(); }",
+        "fn main() { let a: Array[i64, 3] = [1, 2, 3]; let _ = a.to_vec(); }",
+        "fn main() { let a: Array[i64, 3] = [1, 2, 3]; let _ = a.rev(); }",
+    ] {
+        let errors = typecheck_errors(prog);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+            "expected NoMethodFound for an absent fixed-array method in: {prog}"
+        );
+    }
+    let errors = typecheck_errors(
+        "fn main() { let a: Array[i64, 3] = [1, 2, 3]; let _ = a.map(|x| x * 2).collect(); }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::NoMethodFound)
+        .map(|e| e.message.clone())
+        .expect("expected NoMethodFound for direct `.map()` on Array");
+    assert!(
+        msg.contains("require an explicit `.iter()`") && msg.contains(".iter()."),
+        "expected an `.iter()` hint for direct `.map()` on a fixed array, got: {msg}"
+    );
+    // The supported `.iter()` chain still resolves.
+    typecheck_ok("fn main() { let a: Array[i64, 3] = [1, 2, 3]; let s: i64 = a.iter().map(|x| x * 2).sum(); println(f\"{s}\"); }");
+}
+
 // ── Method resolution: stdlib typo suggestions ──────────────────
 //
 // Each per-type `infer_*_method` arm in the typechecker now emits a

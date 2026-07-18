@@ -470,6 +470,136 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Codegen for the read-only method surface of a fixed-size `Array[T, N]`
+    /// with a SCALAR element (`get`/`first`/`last`/`contains`/`is_empty`), over
+    /// the array's stack storage. `elem0_ptr` is the element-0 address (a `T*`),
+    /// `elem_ty` the LLVM element type, `n` the STATIC length from the array
+    /// type. `len`/`as_ptr`/`iter` are handled by their own arms; this closes
+    /// the rest of the surface the interpreter already runs (array dispatched as
+    /// "Vec") so `karac build` matches `karac run`/`--interp` (B-2026-07-17-19).
+    /// Mirrors the Vec `get`/`first`/`last` lowering (bounds-check → GEP → load →
+    /// `Option[T]` via phis) but the length is a compile-time constant, so
+    /// out-of-storage `first`/`last` on an (impossible) empty array fold to a
+    /// static `None`.
+    pub(super) fn compile_fixed_array_read(
+        &mut self,
+        elem0_ptr: inkwell::values::PointerValue<'ctx>,
+        elem_ty: BasicTypeEnum<'ctx>,
+        n: u64,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        match method {
+            "is_empty" => Ok(self
+                .context
+                .bool_type()
+                .const_int((n == 0) as u64, false)
+                .into()),
+            "get" | "first" | "last" => {
+                // Resolve the index and whether it is statically out of storage
+                // (only the degenerate empty-array `first`/`last`).
+                let (idx_val, static_none) = match method {
+                    "get" => {
+                        if args.is_empty() {
+                            return Err("Array.get requires an index argument".to_string());
+                        }
+                        let raw = self.compile_expr(&args[0].value)?.into_int_value();
+                        // Normalize to i64 so the bounds compare is width-uniform
+                        // (the typechecker types the index as i64, but be robust).
+                        let idx = if raw.get_type().get_bit_width() == 64 {
+                            raw
+                        } else {
+                            self.builder
+                                .build_int_z_extend(raw, i64_t, "arr.idx.zext")
+                                .unwrap()
+                        };
+                        (idx, false)
+                    }
+                    "first" => (i64_t.const_zero(), n == 0),
+                    _ /* last */ => {
+                        if n == 0 {
+                            (i64_t.const_zero(), true)
+                        } else {
+                            (i64_t.const_int(n - 1, false), false)
+                        }
+                    }
+                };
+                if static_none {
+                    let option_ty = self.enum_layouts["Option"].llvm_type;
+                    return Ok(option_ty.const_zero().into());
+                }
+                let n_val = i64_t.const_int(n, false);
+                let fn_val = self.current_fn.unwrap();
+                let oob_bb = self.context.append_basic_block(fn_val, "arr.get.oob");
+                let valid_bb = self.context.append_basic_block(fn_val, "arr.get.valid");
+                let merge_bb = self.context.append_basic_block(fn_val, "arr.get.merge");
+                let in_bounds = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, idx_val, n_val, "arr.in_bounds")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_bounds, valid_bb, oob_bb)
+                    .unwrap();
+                // Out-of-bounds → None.
+                self.builder.position_at_end(oob_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                // In-bounds → Some(elem[idx]).
+                self.builder.position_at_end(valid_bb);
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, elem0_ptr, &[idx_val], "arr.elem.ptr")
+                        .map_err(|e| format!("Array.{method} gep: {e}"))?
+                };
+                let elem_val = self
+                    .builder
+                    .build_load(elem_ty, elem_ptr, "arr.elem")
+                    .unwrap();
+                let some_words = self.coerce_to_payload_words(elem_val, 3)?;
+                let valid_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                self.builder.position_at_end(merge_bb);
+                Ok(self.build_option_some_via_phis(&some_words, valid_end, oob_bb, "arr.opt"))
+            }
+            "contains" => {
+                if args.is_empty() {
+                    return Err("Array.contains requires an argument".to_string());
+                }
+                let needle = self.compile_expr(&args[0].value)?;
+                let bool_t = self.context.bool_type();
+                // Unrolled OR of `elem[i] == needle` — fixed arrays are small and
+                // N is static, so no runtime loop is needed. Empty array → false.
+                let mut acc = bool_t.const_zero();
+                for i in 0..n {
+                    let idx = i64_t.const_int(i, false);
+                    let elem_ptr = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, elem0_ptr, &[idx], "arr.c.ptr")
+                            .map_err(|e| format!("Array.contains gep: {e}"))?
+                    };
+                    let elem_val = self
+                        .builder
+                        .build_load(elem_ty, elem_ptr, "arr.c.elem")
+                        .unwrap();
+                    let eq = match (elem_val, needle) {
+                        (BasicValueEnum::IntValue(e), BasicValueEnum::IntValue(x)) => self
+                            .builder
+                            .build_int_compare(IntPredicate::EQ, e, x, "arr.c.eq")
+                            .unwrap(),
+                        (BasicValueEnum::FloatValue(e), BasicValueEnum::FloatValue(x)) => self
+                            .builder
+                            .build_float_compare(inkwell::FloatPredicate::OEQ, e, x, "arr.c.eq")
+                            .unwrap(),
+                        _ => return Err("Array.contains supports scalar elements only".to_string()),
+                    };
+                    acc = self.builder.build_or(acc, eq, "arr.c.acc").unwrap();
+                }
+                Ok(acc.into())
+            }
+            other => Err(format!("no fixed-array read arm for '{other}'")),
+        }
+    }
+
     pub(super) fn compile_method_call(
         &mut self,
         object: &Expr,
@@ -3890,6 +4020,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         };
                         return Ok(elem0.into());
                     }
+                    // Read-only surface `get`/`first`/`last`/`contains`/
+                    // `is_empty` over a SCALAR-element fixed array (the
+                    // interpreter runs these via array-as-Vec; codegen matches
+                    // here — B-2026-07-17-19). Non-scalar elements are gated out
+                    // by the typechecker (they stay rejected at check).
+                    let elem_ty = at.get_element_type();
+                    if matches!(
+                        elem_ty,
+                        BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)
+                    ) && matches!(method, "get" | "first" | "last" | "contains" | "is_empty")
+                    {
+                        let zero = self.context.i32_type().const_zero();
+                        let elem0 = unsafe {
+                            self.builder
+                                .build_in_bounds_gep(at, slot.ptr, &[zero, zero], "arr.elem0")
+                                .map_err(|e| format!("Array.{method} gep: {e}"))?
+                        };
+                        return self.compile_fixed_array_read(
+                            elem0,
+                            elem_ty,
+                            at.len() as u64,
+                            method,
+                            args,
+                        );
+                    }
                 }
                 // Ref Array methods — ref_params has the inner type
                 if let Some(&BasicTypeEnum::ArrayType(at)) = self.ref_params.get(name.as_str()) {
@@ -3909,6 +4064,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             format!("Array.{method}: no data pointer for ref array '{name}'")
                         })?;
                         return Ok(data.into());
+                    }
+                    // Read-only surface over a `ref Array` — the ref param's data
+                    // pointer is already element-0 (a `T*`), so pass it straight
+                    // through (B-2026-07-17-19).
+                    let elem_ty = at.get_element_type();
+                    if matches!(
+                        elem_ty,
+                        BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)
+                    ) && matches!(method, "get" | "first" | "last" | "contains" | "is_empty")
+                    {
+                        let data = self.get_data_ptr(name).ok_or_else(|| {
+                            format!("Array.{method}: no data pointer for ref array '{name}'")
+                        })?;
+                        return self.compile_fixed_array_read(
+                            data,
+                            elem_ty,
+                            at.len() as u64,
+                            method,
+                            args,
+                        );
                     }
                 }
                 // SoA layout methods

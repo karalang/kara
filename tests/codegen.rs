@@ -23659,6 +23659,45 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_fixed_array_read_methods() {
+        // B-2026-07-17-19: the fixed-array read surface `get`/`first`/`last`/
+        // `contains`/`is_empty` now codegens (was "no handler for method 'get'"
+        // AOT build-fail), matching the interpreter (which dispatches a fixed
+        // array as a Vec). Covers i64, f64 (the payload must reconstruct as a
+        // float, not its i64 bit pattern — the typechecker types `get` as
+        // `Option[f64]`), bool, and a `ref Array` param.
+        let out = run_program(
+            r#"
+fn sum_ref(a: ref Array[i64, 3]) -> i64 {
+    let mut s = 0;
+    match a.first() { Some(v) => { s = s + v; }, None => {} }
+    match a.last() { Some(v) => { s = s + v; }, None => {} }
+    if a.contains(20) { s = s + 100; }
+    s
+}
+fn main() {
+    let a: Array[i64, 4] = [10, 20, 30, 40];
+    match a.get(2) { Some(v) => println(f"g={v}"), None => println("g=none") }
+    match a.get(9) { Some(v) => println(f"g9={v}"), None => println("g9=none") }
+    println(f"c20={a.contains(20)} c99={a.contains(99)} len={a.len()} e={a.is_empty()}");
+    let fa: Array[f64, 3] = [1.5, 2.5, 3.5];
+    match fa.get(1) { Some(v) => println(f"f={v}"), None => println("f=none") }
+    let ba: Array[bool, 2] = [true, false];
+    println(f"bc={ba.contains(false)}");
+    let a3: Array[i64, 3] = [10, 20, 30];
+    println(f"ref={sum_ref(a3)}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "g=30\ng9=none\nc20=true c99=false len=4 e=false\nf=2.5\nbc=true\nref=140\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_array_for_loop() {
         let out = run_program(
             r#"

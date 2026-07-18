@@ -2146,6 +2146,97 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Fixed-size `Array[T, N]` read-only method surface for a SCALAR
+        // element (B-2026-07-17-19). A fixed array is a structural
+        // `Type::Array`, not `Type::Named`, so it otherwise falls through to
+        // the silent `Type::Error` catch-all — which typechecked `a.get(0)` /
+        // `a.contains(x)` clean and then either ran only under the interpreter
+        // (which dispatches a fixed array as a Vec) or BUILD-FAILED under AOT.
+        // Model exactly the subset both backends now run (`compile_fixed_array_
+        // read` provides the matching codegen): `len`/`is_empty`/`get`/`first`/
+        // `last`/`contains`. `iter`/`into_iter`/`as_slice`/`as_ptr` are handled
+        // by their own arms (above / the iterator-source arm below), so they are
+        // deliberately excluded here to fall through to them; the wider Vec
+        // surface (`to_vec`/`slice`/`rev`/iterator adaptors) is NOT modelled and
+        // is rejected at the structural fall-through. Non-scalar element arrays
+        // (String/Vec/struct elements) need heap/borrow handling the codegen
+        // arm does not provide, so they are excluded and stay rejected.
+        if matches!(
+            method,
+            "len" | "is_empty" | "get" | "first" | "last" | "contains"
+        ) {
+            let array_elem = match &obj_ty {
+                Type::Array { element, .. } => Some((**element).clone()),
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Array { element, .. } => Some((**element).clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = array_elem {
+                if matches!(
+                    elem,
+                    Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+                ) {
+                    let option_elem = Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![elem.clone()],
+                    };
+                    match method {
+                        "len" => {
+                            if !args.is_empty() {
+                                self.type_error(
+                                    "Array.len() takes no arguments".to_string(),
+                                    span.clone(),
+                                    TypeErrorKind::WrongNumberOfArgs,
+                                );
+                            }
+                            return Type::Int(IntSize::I64);
+                        }
+                        "is_empty" => {
+                            if !args.is_empty() {
+                                self.type_error(
+                                    "Array.is_empty() takes no arguments".to_string(),
+                                    span.clone(),
+                                    TypeErrorKind::WrongNumberOfArgs,
+                                );
+                            }
+                            return Type::Bool;
+                        }
+                        "first" | "last" => {
+                            if !args.is_empty() {
+                                self.type_error(
+                                    format!("Array.{}() takes no arguments", method),
+                                    span.clone(),
+                                    TypeErrorKind::WrongNumberOfArgs,
+                                );
+                            }
+                            return option_elem;
+                        }
+                        "get" => {
+                            for arg in args {
+                                let at = self.infer_expr(&arg.value);
+                                self.check_assignable(
+                                    &Type::Int(IntSize::I64),
+                                    &at,
+                                    arg.value.span.clone(),
+                                );
+                            }
+                            return option_elem;
+                        }
+                        "contains" => {
+                            for arg in args {
+                                let at = self.infer_expr(&arg.value);
+                                self.check_assignable(&elem, &at, arg.value.span.clone());
+                            }
+                            return Type::Bool;
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+        }
+
         // `Slice[T]` and `mut Slice[T]` method dispatch. These types are not
         // `Type::Named` so they fall through the generic branch below; handle
         // them here before the named-type extraction.
@@ -5374,6 +5465,33 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         return Type::Error;
                     }
+                } else if matches!(receiver_for_lookup, Type::Array { .. }) {
+                    // A fixed-size `Array[T, N]` receiver whose method was not
+                    // resolved by the modelled read arm (`len`/`is_empty`/`get`/
+                    // `first`/`last`/`contains`), the iterator-source arm
+                    // (`iter`/`into_iter`), or `as_slice`/`as_ptr`: the method is
+                    // genuinely absent on both backends (`to_vec`/`slice`/`rev`
+                    // are interp 'method not found'; a direct iterator adaptor
+                    // `a.map(...)` miscompiles). Reject rather than the silent
+                    // `Type::Error` (B-2026-07-17-19), with the same actionable
+                    // `.iter()` hint Vec uses when the name is an iterator-
+                    // surface method (a fixed array is iterable).
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    let mut msg = format!("no method '{}' on type 'Array'", method);
+                    if Self::is_iterator_surface_method(method) {
+                        let recv = match &object.kind {
+                            ExprKind::Identifier(n) => n.clone(),
+                            _ => "xs".to_string(),
+                        };
+                        msg.push_str(&format!(
+                            ": iterator adaptors/terminals require an explicit `.iter()` — write `{}.iter().{}(...)`",
+                            recv, method
+                        ));
+                    }
+                    self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
+                    return Type::Error;
                 } else {
                     // For other non-named types (`String`/`bool`/`char` left on
                     // the historical silent fall-through — String has a large
