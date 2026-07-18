@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 151 | 0 |
 | leak | 85 | 0 |
-| double-free | 63 | 1 |
+| double-free | 63 | 0 |
 | codegen-gap | 62 | 0 |
 | missing-feature | 48 | 1 |
 | false-positive | 36 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 404 | 2 |
+| codegen | 404 | 1 |
 | typecheck | 70 | 1 |
 | interp | 55 | 1 |
 | ownership | 23 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **567 surfaced · 2 open · 561 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **567 surfaced · 1 open · 562 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-18-38 | 2026-07-18 | codegen | medium | An owned HEAP param (or local) moved into a VEC/ARRAY LITERAL that is returned/bound DOUBLE-FREES under AOT (interp correct): `fn dup(x: String) -> Vec[String] { [x] }` -> `--interp` builds `["z"]`, `karac build`/JIT aborts `free(): double free`. Every OTHER move-out sink is clean — `fn f(x: String) -> String { x }` (direct return), `W { s: x }` (struct literal), `(x, 1)` (tuple), `Some(x)` (Option), and `Vec.new() + v.push(x)` all correctly transfer ownership; the array/vec LITERAL element position is the one sink that does not suppress the moved element source. | src/codegen/collections.rs |
 | B-2026-07-18-41 | 2026-07-18 | typecheck+interp+codegen | low | `Iterator.rev()` was unimplemented — `v.iter().rev()` rejected with `no method 'rev' on type 'Iterator'` in both backends. Now shipped for the typechecker + interpreter (`v.iter().rev()`, composing with adaptors on both sides and any terminal/for-loop); CODEGEN is DEFERRED with a loud `--interp` bail (status stays OPEN for the codegen leg). | src/codegen/method_call.rs |
 
-### Fixed (561)
+### Fixed (562)
 
-<details><summary>561 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>562 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -698,6 +697,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **567 surfaced 
 | B-2026-07-18-35 | typecheck+interp | low | `SortedMap` lacked the `.entry()` API that `Map` has, so idiomatic ORDERED aggregation (`m.entry(k).and_modify(\|c\| c += 1).or_insert(1)`, `m.entry(k)… | 83ec9a5 |
 | B-2026-07-18-36 | codegen | medium | A CHAINED width-sensitive integer intrinsic (`x.leading_zeros().leading_zeros()`, also `rotate_left`/`count_ones` chains) miscompiled under codegen w… | a71708d |
 | B-2026-07-18-37 | codegen | high | A by-value-`self` method returning a HEAP field directly as its tail — `fn get(self) -> String { self.v }`, the canonical owned accessor — DOUBLE-FRE… | dbf8994 |
+| B-2026-07-18-38 | codegen | medium | An owned HEAP param (or local) moved into a VEC/ARRAY LITERAL that is returned/bound DOUBLE-FREES under AOT (interp correct): `fn dup(x: String) -> V… | 2d60d38 |
 | B-2026-07-18-39 | typecheck+codegen | high | An iterator chain whose SOURCE is a TEMPORARY Vec (a `vec![…]` literal or a call result, NOT a `let`-bound variable) SILENTLY miscompiled to 0/empty… | 8f70020 |
 | B-2026-07-18-40 | codegen | medium | Displaying `Option[ref String]` — the borrow-typed result of `Vec[String].get(i)` / `.first()` / `.last()` — failed under codegen with the deferred s… | 6c76b81 |
 
