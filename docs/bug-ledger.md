@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 85 | 0 |
 | codegen-gap | 62 | 0 |
 | double-free | 61 | 0 |
-| missing-feature | 46 | 0 |
+| missing-feature | 47 | 0 |
 | false-positive | 36 | 0 |
 | run-vs-build | 33 | 0 |
 | crash | 27 | 0 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 398 | 0 |
-| typecheck | 67 | 0 |
-| interp | 53 | 0 |
+| typecheck | 68 | 0 |
+| interp | 54 | 0 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **560 surfaced · 0 open · 556 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **561 surfaced · 0 open · 557 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (556)
+### Fixed (557)
 
-<details><summary>556 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>557 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -692,6 +692,7 @@ _None — the ledger is fully drained._
 | B-2026-07-18-32 | codegen | medium | A GENERIC function body that RECONSTRUCTS a struct with heap fields, monomorphized with a HEAP `T` (`String`), emits INVALID LLVM IR (interp correct) | 62c5330 |
 | B-2026-07-18-33 | typecheck+codegen | medium | `Option/Result.map` over a HEAP payload (String/Vec) now works under codegen, unblocked by fixing a chained-method span collision | 58a45ea,4b941dc |
 | B-2026-07-18-34 | codegen | high | A fresh owned/heap ARGUMENT temp passed to a predicate call inside a `while` CONDITION leaked one allocation PER ITERATION (unbounded) under AOT/JIT… | 7bcbd47 |
+| B-2026-07-18-35 | typecheck+interp | low | `SortedMap` lacked the `.entry()` API that `Map` has, so idiomatic ORDERED aggregation (`m.entry(k).and_modify(\|c\| c += 1).or_insert(1)`, `m.entry(k)… | 83ec9a5 |
 
 </details>
 
