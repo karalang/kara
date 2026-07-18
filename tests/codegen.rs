@@ -2398,6 +2398,34 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_ref_atomic_param_aliases_caller_cell() {
+        // B-2026-07-18-30: a `ref Atomic[T]` / `mut ref Atomic[T]` parameter's
+        // alloca holds a POINTER to the caller's atomic storage, but
+        // `resolve_atomic_storage` returned the pointer-holding slot itself, so
+        // `fn bump(c: ref Atomic[i64]) { c.fetch_add(1,..) }` RMW'd the slot and
+        // the caller's cell never changed (build printed 0 vs the interpreter's
+        // 2) — a run-vs-build divergence with no `par` involved. The fix derefs
+        // the ref-param pointer before the atomic op. Covers ref (fetch_add),
+        // mut ref (store via a `mut` call marker), and read-only (load).
+        if let Some(out) = run_program(
+            "fn bump(c: ref Atomic[i64]) { let _ = c.fetch_add(1, MemoryOrdering.SeqCst); }\n\
+             fn setit(c: mut ref Atomic[i64]) { c.store(9, MemoryOrdering.SeqCst); }\n\
+             fn readit(c: ref Atomic[i64]) -> i64 { c.load(MemoryOrdering.SeqCst) }\n\
+             fn main() {\n\
+                 let c = Atomic.new(0);\n\
+                 bump(c);\n\
+                 bump(c);\n\
+                 println(c.load(MemoryOrdering.SeqCst));\n\
+                 println(readit(c));\n\
+                 setit(mut c);\n\
+                 println(c.load(MemoryOrdering.SeqCst));\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n2\n9\n");
+        }
+    }
+
+    #[test]
     fn e2e_assert_two_arg_message_form_compiles_and_runs() {
         // B-2026-07-18-26: the 2-arg `assert(cond, "msg")` form (accepted by
         // the typechecker + interpreter, and emitted by the compiler for tensor

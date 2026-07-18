@@ -13337,6 +13337,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         format!("codegen: Atomic receiver '{}' has no slot", name)
                     })?;
                 let is_bool = self.atomic_var_inner_is_bool.contains(name.as_str());
+                // A `ref Atomic[T]` / `mut ref Atomic[T]` PARAMETER: its alloca
+                // holds a POINTER to the caller's atomic storage (recorded in
+                // `ref_params`, "alloca holds a pointer-to-data" — functions.rs),
+                // so the atomic op must operate through the LOADED pointer, not
+                // the alloca itself (which holds the address, not the value).
+                // Without the deref, `fn bump(c: ref Atomic[i64]) {
+                // c.fetch_add(1, ..) }` RMW'd the pointer-holding slot and the
+                // caller's cell never changed (interp counted, build stayed 0) —
+                // a run-vs-build divergence with no `par` involved
+                // (B-2026-07-18-30). `ref_params[name]` is the atomic's VALUE
+                // type (the peeled inner), which is the correct `elem_ty`.
+                if let Some(&inner_ty) = self.ref_params.get(name.as_str()) {
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    let storage_ptr = self
+                        .builder
+                        .build_load(ptr_ty, slot.ptr, "atomic.ref.deref")
+                        .unwrap()
+                        .into_pointer_value();
+                    return Ok((storage_ptr, inner_ty, is_bool));
+                }
                 Ok((slot.ptr, slot.ty, is_bool))
             }
             ExprKind::FieldAccess {
