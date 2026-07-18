@@ -788,7 +788,7 @@ fn run_static_checks(
     desugar_program(&mut parsed.program);
 
     // Splice gated stdlib modules (`import std.secret.{Secret};`,
-    // `import std.stats.{...};`, …) into the program before resolve, matching
+    // `import std.autograd.{Tape};`, …) into the program before resolve, matching
     // the CLI single-file pipeline (`run_program_full` / `cli.rs`). A no-op for
     // programs with no gated import. Without this, `check_source` resolves the
     // import against baked signatures but `run_playground` has no spliced method

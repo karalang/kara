@@ -1459,9 +1459,79 @@ impl<'a> super::Resolver<'a> {
     /// Single-file mode (no tree attached) skips cross-module validation and
     /// just registers the symbol so downstream passes see the name in scope.
     /// This keeps `karac run file.kara` unchanged.
+    /// Single-file mode only: emit `UnknownModule` for a std-rooted import
+    /// that names no baked stdlib module. `std` is the compiler's own
+    /// namespace and fully known at compile time, so it can be validated even
+    /// without a `ProgramTree` (unlike a user cross-file import, which stays
+    /// trusted). Valid gated imports were already spliced out upstream by
+    /// `expand_gated_stdlib_imports`, so this only ever fires on a genuine
+    /// typo / nonexistent `std.*` module. See the `collect_import` single-file
+    /// call site for the full rationale (B-2026-07-18-25).
+    fn report_bogus_single_file_std_import(&mut self, imp: &ImportDecl) {
+        if imp.path.first().map(String::as_str) != Some("std") {
+            return; // user cross-file import — not our namespace, trusted
+        }
+        // A braced import (`import std.web.{X}`) references the module
+        // `imp.path`; a bare import (`import std.web;` / `import std.web.net;`)
+        // references `imp.path ++ [item]`. Accept if EITHER shape resolves to
+        // an importable module.
+        if crate::prelude::is_importable_stdlib_module(&imp.path) {
+            return;
+        }
+        let bare_ok = imp.items.iter().any(|it| {
+            let mut full = imp.path.clone();
+            full.push(it.name.clone());
+            crate::prelude::is_importable_stdlib_module(&full)
+        });
+        if bare_ok {
+            return;
+        }
+        // Bogus — report the deepest std path the user wrote (the bare form's
+        // module is `path ++ [first item]`; the braced form's is `path`).
+        let deepest: Vec<String> = if imp.path.len() >= 2 {
+            imp.path.clone()
+        } else {
+            let mut p = imp.path.clone();
+            if let Some(it) = imp.items.first() {
+                p.push(it.name.clone());
+            }
+            p
+        };
+        let wanted = deepest.join(".");
+        let names = crate::prelude::importable_stdlib_module_names();
+        let candidates: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let suggestion = suggest_similar(&wanted, &candidates);
+        let mut message = format!("unknown module `{wanted}`");
+        if let Some(ref s) = suggestion {
+            message.push_str(&format!(", did you mean `{s}`?"));
+        }
+        self.errors.push(ResolveError {
+            message,
+            span: imp.span.clone(),
+            kind: ResolveErrorKind::UnknownModule,
+            suggestion,
+            replacement: None,
+            stub_hint: None,
+        });
+    }
+
     fn collect_import(&mut self, imp: &ImportDecl) {
         let Some(tree) = self.tree else {
-            // Single-file mode — bind without validation.
+            // Single-file mode — cross-module validation is skipped (the file
+            // may be one translation unit of a larger build the single-file
+            // resolver can't see), so *user* imports are trusted and bound
+            // as-is. But `std` is the COMPILER'S OWN namespace, fully known at
+            // compile time regardless of build shape, so a std-rooted import
+            // that names no baked stdlib module is definitively bogus. Left
+            // unreported it bound a dead alias (`import std.math;` → `math`)
+            // that then ICE'd both backends on use ("variable 'math' not found
+            // ... should be caught by resolver"). Valid gated imports are
+            // spliced + removed by `expand_gated_stdlib_imports` BEFORE
+            // resolution, so any std-rooted import still present here is a typo
+            // / nonexistent module. Report it (mirroring the tree-mode
+            // `UnknownModule`), then still bind the names below so downstream
+            // passes don't cascade `UndefinedName` (B-2026-07-18-25).
+            self.report_bogus_single_file_std_import(imp);
             for item in &imp.items {
                 let bound = item.alias.clone().unwrap_or_else(|| item.name.clone());
                 let mut full = imp.path.clone();

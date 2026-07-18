@@ -200,6 +200,44 @@ fn test_pub_use_decl_visibility() {
 }
 
 #[test]
+fn test_bogus_std_import_rejected_single_file() {
+    // B-2026-07-18-25: a std-rooted `import` naming no baked stdlib module
+    // (`import std.math`) was SILENTLY accepted in single-file mode — it bound
+    // a dead `math` alias that then ICE'd both backends on use ("variable
+    // 'math' not found ... should be caught by resolver"). `std` is the
+    // compiler's own namespace, fully known at compile time, so it is validated
+    // even without a module tree. (`use` is the trusted cross-module-reference
+    // mechanism and is deliberately NOT validated — see the tests below.)
+    for src in [
+        "import std.math;\nfn main() { }",
+        "import std.completelybogus;\nfn main() { }",
+        "import std.foo.{Bar};\nfn main() { }",
+    ] {
+        let errors = resolve_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == ResolveErrorKind::UnknownModule
+                    && e.message.contains("unknown module")),
+            "expected UnknownModule for `{src}`, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_valid_std_and_user_imports_still_accepted() {
+    // The fix must NOT flag real gated stdlib modules, the prelude, a trusted
+    // user cross-file `import` (single-file mode can't see its module tree), or
+    // a `use` of any path (the trusted cross-module-reference mechanism).
+    resolve_ok("import std.autograd.{Tape};\nfn main() { }");
+    resolve_ok("import std.web.{Server};\nfn main() { }");
+    resolve_ok("import std.prelude.{Vec};\nfn main() { }");
+    resolve_ok("import mymod.{Foo};\nfn main() { }");
+    resolve_ok("use std.collections.HashMap;\nfn main() { }");
+}
+
+#[test]
 fn test_duplicate_top_level_error() {
     let errors = resolve_errors("fn foo() { }\nfn foo() { }");
     assert!(errors[0].kind == ResolveErrorKind::DuplicateDefinition);

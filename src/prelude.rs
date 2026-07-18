@@ -1171,6 +1171,32 @@ pub fn synthetic_gated_modules() -> Vec<(Vec<String>, Vec<Item>)> {
         .collect()
 }
 
+/// True if `path` names a baked-stdlib module user code may `import` — a
+/// gated module ([`GATED_STDLIB_SOURCES`]: `std.web`, `std.autograd`, …) or
+/// the prelude ([`PRELUDE_PATH_SEGMENTS`]: `std.prelude`). This is the whole
+/// compile-time-known set of importable `std.*` module *paths*; every other
+/// `std.*` name is either a prelude-global item that needs no import (the
+/// `Stats` / `Base64` types) or a typo (`std.math`). Mirrors the module paths
+/// the multi-file tree builder seeds into `ProgramTree.graph.by_path`
+/// (`std.prelude` + [`synthetic_gated_modules`]), so single-file and tree mode
+/// agree on which `std.*` imports resolve.
+pub fn is_importable_stdlib_module(path: &[String]) -> bool {
+    let eq = |segs: &[&str]| {
+        segs.len() == path.len() && segs.iter().zip(path).all(|(a, b)| *a == b.as_str())
+    };
+    eq(PRELUDE_PATH_SEGMENTS) || GATED_STDLIB_SOURCES.iter().any(|(p, _)| eq(p))
+}
+
+/// Display names of the importable `std.*` modules, for a resolver
+/// "did you mean" suggestion. Gated modules in source order, prelude last.
+pub fn importable_stdlib_module_names() -> Vec<String> {
+    GATED_STDLIB_SOURCES
+        .iter()
+        .map(|(p, _)| p.join("."))
+        .chain(std::iter::once(PRELUDE_PATH_SEGMENTS.join(".")))
+        .collect()
+}
+
 /// Resolve one import declaration against the gated baked stdlib: if
 /// `path` names a [`GATED_STDLIB_SOURCES`] module, return a real `Item`
 /// clone (stdlib_origin = true, alias applied) for every brace-listed
