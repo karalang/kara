@@ -2726,6 +2726,62 @@ fn main() {
         );
     }
 
+    /// B-2026-07-18-1: `KARAC_AUTO_PAR=0` (`auto_par_disabled`) must disable the
+    /// PARALLEL reduce lowering too, not only the parallel-group dispatch.
+    /// Before the fix the gate lived only in `compile_function_body`, but the
+    /// reduce is dispatched from `compile_block` / `compile_stmt`, so a
+    /// `sum += k` reduce still emitted `call void @karac_par_reduce` under
+    /// AUTO_PAR=0 — the "sequential" benchmark build wasn't sequential.
+    /// `#[ignore]` because it toggles the process-global `KARAC_AUTO_PAR` env;
+    /// run serially via `cargo test --features llvm -- --ignored`.
+    #[test]
+    #[ignore]
+    fn test_auto_par_env_gate_disables_par_reduce() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..100000i64 {
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let build = |src: &str| -> String {
+            let mut parsed = karac::parse(src);
+            assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+            let resolved = karac::resolve(&parsed.program);
+            let typed = karac::typecheck(&parsed.program, &resolved);
+            karac::lower(&mut parsed.program, &typed);
+            let effects = karac::effectcheck(&parsed.program);
+            let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+            karac::codegen::compile_to_ir_with_options(
+                &parsed.program,
+                None,
+                Some(&analysis),
+                None,
+                None,
+            )
+            .expect("codegen failed")
+        };
+        // Gate-on baseline: the reduce lowers to a par_reduce fan-out.
+        std::env::remove_var("KARAC_AUTO_PAR");
+        let ir_on = build(src);
+        assert!(
+            ir_on.contains("call void @karac_par_reduce"),
+            "with auto-par on, the reduce should emit a karac_par_reduce call; got:\n{ir_on}"
+        );
+        // Gate-off: the SAME reduce must fall back to a sequential loop.
+        std::env::set_var("KARAC_AUTO_PAR", "0");
+        let ir_off = build(src);
+        std::env::remove_var("KARAC_AUTO_PAR");
+        assert!(
+            !ir_off.contains("call void @karac_par_reduce"),
+            "with KARAC_AUTO_PAR=0, the reduce must NOT emit karac_par_reduce; got:\n{ir_off}"
+        );
+    }
+
     /// B-2026-06-15-3: a reduction that captures a large fixed-size array
     /// must pass it through the worker env BY POINTER, not inline. Capturing
     /// `[N x i64]` by value made the worker `alloca [N x i64]` + load the

@@ -92,6 +92,20 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         };
 
+        // `KARAC_AUTO_PAR=0` (`auto_par_disabled`) must disable ALL auto-par
+        // codegen (codegen.rs `auto_par_disabled` doc). `compile_function_body`
+        // gates the parallel-GROUP dispatch, but reduction lowering is reached
+        // from `compile_block` / `compile_stmt` (stmts.rs:44/813), which run in
+        // the disabled mode too — so without this gate a `sum += f(x)` reduce
+        // still emits a `karac_par_reduce` fan-out under AUTO_PAR=0, and the
+        // "sequential" benchmark build isn't sequential (B-2026-07-18-…). Fall
+        // back to the plain sequential loop for every PARALLEL reduction; the
+        // sequential tabulate (a `reduction.seq` Collect) is not a fan-out, so
+        // it stays — AUTO_PAR=0 drops parallelism, not sequential optimizations.
+        if self.auto_par_disabled && !(reduction.op == ReductionOp::Collect && reduction.seq) {
+            return Ok(None);
+        }
+
         // Collect-style reductions take a separate code path — accumulator
         // is a `Vec[T]` (24-byte `{ptr, len, cap}`), not an integer; per-worker
         // partials live in 24-byte slots; init writes an empty Vec; combine
