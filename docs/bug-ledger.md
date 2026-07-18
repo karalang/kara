@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 36 | 0 |
 | run-vs-build | 32 | 1 |
 | crash | 27 | 0 |
-| soundness | 21 | 0 |
+| soundness | 22 | 1 |
 | perf | 21 | 0 |
 | diagnostics | 12 | 0 |
 | use-after-free | 4 | 0 |
@@ -121,18 +121,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | resolver | 10 | 0 |
 | lexer | 3 | 0 |
 | parser | 3 | 0 |
-| effect | 1 | 0 |
+| effect | 2 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **552 surfaced · 3 open · 545 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **553 surfaced · 4 open · 545 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-18-13 | 2026-07-18 | codegen | high | Kata #415 add_strings measures 13.4x equal-safety Rust TODAY (89.1B vs 6.25B instrs, ~178K instr per 38-digit addition) — catastrophically worse than the 1.19x recorded in the June triage that B-2026-07-18-8 quoted. Kata file unchanged since its first-bench commit, so either the June number measured a different lane or a compiler regression landed in the past month. UNATTRIBUTED. | docs/implementation_checklist/phase-10-targets.md § 'String char-append residual' (same entry — this row carries the #415 outlier) |
 | B-2026-07-18-14 | 2026-07-18 | codegen+interp | low | Interpolating a WHOLE TUPLE value in an f-string / `println` (`f"{t}"` where `t: (i64, i64)` or `(i64, String)`) passes `karac check` and renders `(3, 7)` in the interpreter, but FAILS `karac build`/JIT with 'Display of a struct in an f-string is supported when the interpolated expression is a variable or field access … bind a struct literal or call result to a `let` first'. The hint is MISLEADING — `t` is already a let-bound variable, so following it does not help. Affects ALL tuple element types (scalar and heap). Field-index interpolation (`f"{t.0} {t.1}"`) works on every backend. | none |
 | B-2026-07-18-17 | 2026-07-18 | codegen | low | The typechecker does NOT propagate a method parameter's (substituted) expected type into the ARGUMENT's own inference, so a type-inferred constructor argument (`Vec.new()`, `Map.new()`, `"".to_string()`) whose element/type param must come from the callee's signature is left as `?T` and rejected: `m.get_or(k, Vec.new())` on `Map[String, Vec[i64]]` → `expected 'Vec<i64>', found 'Vec<?T0>'`. Expected-type propagation DOES work for free-function call arguments and let-bindings — only method-call arguments miss it. Common idiom (`map.get_or(k, Vec.new())`); workaround is to bind an annotated default first (`let d: Vec[i64] = Vec.new(); m.get_or(k, d)`). | none |
+| B-2026-07-18-27 | 2026-07-18 | effect | medium | Assigning a captured LOCAL `let mut` binding from inside a `par { }` branch is NOT caught by the concurrency-write checker, and produces DIVERGENT run-vs-build garbage. `fn main() { let mut a = 0; let mut b = 0; par { a = 10; b = 20; } print(a + b); }` passes `karac check` but yields interp=20 (only the last branch's env merges back: a=0,b=20) vs build=0 (no write-back: a=0,b=0) — neither is the naive 30, and the two backends disagree. The design's data-race-freedom guarantee (design.md line 104) and the par-write rule (design.md line 1329) intend such a write to be a COMPILE ERROR unless the binding is Atomic/Mutex/RwLock/Arc. | src/effectchecker/modbind_synth.rs |
 
 ### Fixed (545)
 
