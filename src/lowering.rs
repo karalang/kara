@@ -272,6 +272,28 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             }
         })
         .collect();
+    // Sibling to `string_typed_exprs`: spans of every expression typed as a
+    // BORROW of a `Vec`/`VecDeque`/`Slice`. Codegen consults it to bind a
+    // whole-collection re-borrow (`let ps = params`, `params: ref Vec[T]`) as
+    // an alias with no scope-exit free — the container owns the buffer
+    // (B-2026-07-18-4). The inner-type check mirrors the typechecker's
+    // `bind_pattern_types` borrow peel so the two stay in lock-step.
+    program.borrow_vec_typed_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| {
+            let inner = match ty {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                _ => return None,
+            };
+            let is_vec_like = matches!(
+                inner,
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque") && args.len() == 1
+            ) || matches!(inner, Type::Slice { .. });
+            is_vec_like.then_some((k.0, k.1))
+        })
+        .collect();
     // Spans of every `Iterator[..]`-typed expression — the sound gate for
     // materialized iterator-let inlining (B-2026-07-11-19): codegen only
     // inlines a `let it = <chain>` when the RHS is genuinely `Iterator`-typed,

@@ -2606,6 +2606,12 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch arm — `String` and `Vec[u8]` are indistinguishable from
     /// the LLVM value alone, so the span-set is what tells them apart.
     pub(crate) string_typed_exprs: HashSet<(usize, usize)>,
+    /// Spans of every expression typed `Ref`/`MutRef` of a `Vec`/`VecDeque`/
+    /// `Slice` (from `Program.borrow_vec_typed_exprs`). The Let path consults
+    /// it so a whole-collection re-borrow (`let ps = params`, `params: ref
+    /// Vec[T]`) binds `ps` as an alias with no scope-exit free instead of a
+    /// second owner that double-frees the container's buffer (B-2026-07-18-4).
+    pub(crate) borrow_vec_typed_exprs: HashSet<(usize, usize)>,
     /// Spans of every `Iterator[..]`-typed expression (from
     /// `Program.iterator_typed_exprs`) — the sound gate for materializing an
     /// iterator-let binding (B-2026-07-11-19).
@@ -6659,6 +6665,7 @@ impl<'ctx> Codegen<'ctx> {
             user_ref_method_names: std::collections::HashSet::new(),
             heuristic_inline_hints: std::collections::HashMap::new(),
             string_typed_exprs: HashSet::new(),
+            borrow_vec_typed_exprs: HashSet::new(),
             iterator_typed_exprs: HashSet::new(),
             fn_value_typed_exprs: HashMap::new(),
             call_type_subs: HashMap::new(),
@@ -7701,6 +7708,7 @@ impl<'ctx> Codegen<'ctx> {
         // LLVM struct shape is identical to `Vec[u8]` and a few other
         // 3-word types, so the value alone can't distinguish them.
         self.string_typed_exprs = program.string_typed_exprs.clone();
+        self.borrow_vec_typed_exprs = program.borrow_vec_typed_exprs.clone();
         self.iterator_typed_exprs = program.iterator_typed_exprs.clone();
         self.fn_value_typed_exprs = program.fn_value_typed_exprs.clone();
         // Per-generic-call-site resolved type-arg substitution — lets
@@ -8828,6 +8836,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_callee_effectful = tp.callee_effectful.clone();
         let mut t_method_callee_types = tp.method_callee_types.clone();
         let mut t_string_typed_exprs = tp.string_typed_exprs.clone();
+        let mut t_borrow_vec_typed_exprs = tp.borrow_vec_typed_exprs.clone();
         let mut t_unsigned_vector_exprs = tp.unsigned_vector_exprs.clone();
         let mut t_expr_struct_type_names = tp.expr_struct_type_names.clone();
         let mut t_user_ord_typed_exprs = tp.user_ord_typed_exprs.clone();
@@ -8856,6 +8865,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(&mut self.callee_effectful, &mut t_callee_effectful);
                 std::mem::swap(&mut self.method_callee_types, &mut t_method_callee_types);
                 std::mem::swap(&mut self.string_typed_exprs, &mut t_string_typed_exprs);
+                std::mem::swap(
+                    &mut self.borrow_vec_typed_exprs,
+                    &mut t_borrow_vec_typed_exprs,
+                );
                 std::mem::swap(
                     &mut self.unsigned_vector_exprs,
                     &mut t_unsigned_vector_exprs,

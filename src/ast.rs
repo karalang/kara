@@ -704,6 +704,15 @@ pub struct Program {
     /// the same `{ptr, i64, i64}` LLVM struct shape without taking a
     /// `TypeCheckResult` dependency.
     pub string_typed_exprs: StringTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: spans of
+    /// every expression whose Kāra type is a BORROW of a `Vec` / `VecDeque` /
+    /// `Slice` (`Ref(Vec[T])` / `MutRef(..)`). Lets codegen recognise a
+    /// whole-collection re-borrow — `let ps = params` where `params: ref
+    /// Vec[T]` was bound in a match over a borrowed scrutinee — and bind `ps`
+    /// as an alias (no scope-exit free) rather than a second owner that
+    /// double-frees the container's buffer (B-2026-07-18-4). Reuses the
+    /// span-keyed `StringTypedExprsTable` shape.
+    pub borrow_vec_typed_exprs: StringTypedExprsTable,
     /// Spans of every `Iterator[..]`-typed expression — the sound gate for
     /// materialized iterator-let inlining (B-2026-07-11-19).
     pub iterator_typed_exprs: IteratorTypedExprsTable,

@@ -1392,6 +1392,65 @@ fn main() {
     }
 
     #[test]
+    fn asan_match_bound_struct_variant_vec_field_reborrow_no_double_free() {
+        // B-2026-07-18-4: a STRUCT-VARIANT payload's Vec field bound DIRECTLY
+        // (`match it { Fu { params } => … }`) then whole-moved into a local
+        // (`let ps = params`) over `items: ref Vec[It]`. `params` is typed
+        // `ref Vec[T]` (a borrow of the container-owned buffer), so `ps` is a
+        // re-borrow that must alias with NO scope-exit free. Pre-fix `ps` was
+        // unregistered (AOT compiled `for p in ps` to an empty Vec — wrong
+        // answer); the naive dispatch-only fix then armed a `FreeVecBuffer` on
+        // the alias → `free(): double free`. The alias-bind fix keeps the
+        // container the sole owner. 300 iters over Vec[i64-struct] and
+        // Vec[String] payload elements: a missed alias double-frees (ASAN); an
+        // over-eager copy that never frees leaks (LSan).
+        assert_clean_asan_run(
+            r#"
+struct P { n: i64 }
+struct Q { s: String }
+enum It { Fu { params: Vec[P], tags: Vec[Q] }, Other }
+fn collect(items: ref Vec[It]) -> i64 {
+    let mut total = 0;
+    for it in items {
+        match it {
+            It.Fu { params, tags } => {
+                let ps = params;
+                for p in ps { total = total + p.n; }
+                let ts = tags;
+                for t in ts { total = total + t.s.len(); }
+            }
+            It.Other => {}
+        }
+    }
+    total
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 300 {
+        let mut items: Vec[It] = Vec.new();
+        let mut ps: Vec[P] = Vec.new();
+        ps.push(P { n: 1 });
+        ps.push(P { n: 2 });
+        let mut tg: Vec[Q] = Vec.new();
+        tg.push(Q { s: f"tag-{i}" });
+        items.push(It.Fu { params: ps, tags: tg });
+        items.push(It.Other);
+        total = total + collect(items);
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // per iter: params 1+2=3, tags len("tag-<i>") for i in 0..299.
+            // i<10 → 5 chars, 10..=99 → 6, 100..=299 → 7:
+            // 3*300 + (5*10 + 6*90 + 7*200) = 900 + (50 + 540 + 1400) = 2890.
+            &["2890"],
+            "match_bound_struct_variant_vec_field_reborrow_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_string_from_owned_source_copies_no_double_free() {
         // B-2026-07-13-8: `String.from(<String>)` returned the source aggregate
         // UNCHANGED (an alias of its `{ptr,len,cap}` buffer), so a fresh owned

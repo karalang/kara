@@ -3152,6 +3152,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 let borrow_elided = borrow_elided
                     || self.is_nonshared_heap_value_map_get_unwrap(value)
                     || self.borrowed_vec_get_unwrap_heap_inner(value).is_some();
+                // A whole-Vec re-borrow of a BORROWED collection binding — an
+                // IDENTIFIER RHS typed `ref Vec[T]` / `ref VecDeque[T]` / `ref
+                // Slice[T]` (`let ps = params` where `params` was bound in a
+                // match over a borrowed scrutinee, so the typechecker infers
+                // `ps: ref Vec[T]`). `ps` aliases the container-owned buffer and
+                // must take NO scope-exit free — treat it as borrow-elided (no
+                // clone, no `track_vec_var`) and skip the source suppression
+                // below (nothing to suppress: `params` is itself a borrow the
+                // container frees). Without this the alias armed a
+                // `FreeVecBuffer` that double-freed the container's buffer
+                // (B-2026-07-18-4). Gated on a bare-Identifier RHS: a
+                // borrow-typed FIELD-ACCESS RHS (`let ps = f.params`) is the
+                // B-2026-07-17-20 shape handled by the deep-copy path
+                // (`borrowed_agg_payload_struct_vars`), a distinct mechanism.
+                // The typechecker keeps `local_scope[ps] = ref Vec[T]`, so a
+                // chain (`let ps2 = ps`) re-infers the same borrow type and
+                // borrow-elides identically — no codegen-side propagation
+                // needed.
+                let rhs_is_borrowed_payload_vec = matches!(&value.kind, ExprKind::Identifier(_))
+                    && self
+                        .borrow_vec_typed_exprs
+                        .contains(&(value.span.offset, value.span.length));
+                let borrow_elided = borrow_elided || rhs_is_borrowed_payload_vec;
                 let val = if borrow_elided {
                     val
                 } else {
@@ -4201,6 +4224,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // Track Vec variables for scope cleanup.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
+                    // A whole-Vec re-borrow (`let ps = params`, B-2026-07-18-4)
+                    // inherits the source's Vec dispatch registration so
+                    // `ps.len()` / `for p in ps` resolve — the typechecker
+                    // records nothing extra for a borrow-typed binding (peeling
+                    // in `bind_pattern_types` would misclassify `ref Vec` PARAMS,
+                    // whose state-struct field must stay `ptr`), so copy it from
+                    // the source here. Purely a dispatch registry write: no
+                    // `track_vec_var` fires (the block below is skipped for
+                    // `borrow_elided`), so the alias never double-frees.
+                    if rhs_is_borrowed_payload_vec {
+                        if let ExprKind::Identifier(src) = &value.kind {
+                            if let Some(&elem_ty) = self.vec_elem_types.get(src.as_str()) {
+                                self.vec_elem_types.insert(var_name.clone(), elem_ty);
+                                if let Some(te) =
+                                    self.var_elem_type_exprs.get(src.as_str()).cloned()
+                                {
+                                    self.var_elem_type_exprs.insert(var_name.clone(), te);
+                                }
+                            }
+                        }
+                    }
                     if let Some(&elem_ty) = self.vec_elem_types.get(var_name.as_str()) {
                         // B-2026-06-10-2: a Vec/String field moved OUT of a
                         // by-value struct param (`let inner = h.v`) is bound as
@@ -4345,7 +4389,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         // sibling): it got its own copy above, and the
                         // container — not this local — is the single owner
                         // that frees the aliased element buffer.
-                        if !rhs_retains_own_copy {
+                        //
+                        // Also skipped for a borrowed-payload re-borrow (`let
+                        // ps = params`, B-2026-07-18-4): `params` is itself a
+                        // borrow the container frees — there is nothing to
+                        // suppress, and zeroing its cap would corrupt the
+                        // borrow's header for any later read of `params`.
+                        if !rhs_retains_own_copy && !rhs_is_borrowed_payload_vec {
                             self.suppress_source_vec_cleanup_for_arg(value);
                         }
                         // Sibling case for `let t: String = f"…";` — the

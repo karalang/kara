@@ -25471,6 +25471,51 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_bound_struct_variant_vec_field_reborrow_over_ref_vec() {
+        // B-2026-07-18-4: a STRUCT-VARIANT enum payload's Vec field bound
+        // DIRECTLY (`match it { Fu { params } => … }`, not through a struct
+        // payload `f`), then whole-moved into a local (`let ps = params`), over
+        // `items: ref Vec[It]`. `params` is typed `ref Vec[P]` (a borrow of the
+        // container-owned buffer), so `ps` is a re-borrow. Pre-fix the binding
+        // recorded none of the Vec dispatch tables — `ps.len()` build-failed and
+        // `for p in ps` compiled to an EMPTY Vec (AOT sum 0 vs interp 9). The
+        // typechecker now peels the borrow to register `ps`'s element type, and
+        // codegen binds `ps` as an alias (no scope-exit free) so the container
+        // stays the sole owner. Locks run == build parity and no double-free.
+        let out = run_program(
+            r#"
+struct P { n: i64 }
+enum It { Fu { params: Vec[P] }, Other }
+fn collect(items: ref Vec[It]) -> i64 {
+    let mut total = 0;
+    for it in items {
+        match it {
+            It.Fu { params } => {
+                let ps = params;
+                for p in ps { total = total + p.n; }
+            }
+            It.Other => {}
+        }
+    }
+    total
+}
+fn main() {
+    let mut items: Vec[It] = Vec.new();
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { n: 4 });
+    ps.push(P { n: 5 });
+    items.push(It.Fu { params: ps });
+    items.push(It.Other);
+    println(collect(items).to_string());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "9");
+        }
+    }
+
+    #[test]
     fn test_e2e_match_some_node_let_destructure_tuple_payload() {
         // The kata's canonical BFS shape: `Some(node) => let (i, d) = node`
         // where `node: (i64, i64)` is reconstituted as a tuple struct
