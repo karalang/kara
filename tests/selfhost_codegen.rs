@@ -170,6 +170,15 @@ const CORPUS: &[&str] = &[
     // token-text extraction via substring, accumulation into Vec[String],
     // keyword recognition via string equality. Composes eight slices.
     "fn is_alnum(b: u8) -> bool { (b >= 48 and b <= 57) or (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or b == 95 }\nfn main() { let src = \"let x1 = 42 + foo * 7\"; let mut toks: Vec[String] = Vec.new(); let mut i = 0; let mut start = 0 - 1; for b in src.bytes() { if is_alnum(b) { if start < 0 { start = i; } } else { if start >= 0 { toks.push(src.substring(start, i)); start = 0 - 1; } if b != 32 { toks.push(src.substring(i, i + 1)); } } i = i + 1; } if start >= 0 { toks.push(src.substring(start, i)); } let mut j = 0; while j < toks.len() { let t = toks[j]; if t == \"let\" { println(\"kw \" + t) } else { println(\"tok \" + t) } j = j + 1; } }",
+    // Slice 18: Vec[<struct>] — vectors of heap-bearing structs (kind
+    // 2000+si; stride from field kinds; per-element String-field frees in the
+    // drop loop). The tokenizer upgrades to real Token structs {kind, text}.
+    "struct Token { kind: i64, text: String }\nfn main() { let mut toks: Vec[Token] = Vec.new(); toks.push(Token { kind: 1, text: \"let\" }); toks.push(Token { kind: 2, text: \"x\" + \"1\" }); let mut i = 0; while i < toks.len() { let t = toks[i]; println(t.kind.to_string() + \":\" + t.text); i = i + 1; } }",
+    "struct P { x: i64, y: i64 }\nfn main() { let mut ps: Vec[P] = Vec.new(); let mut i = 0; while i < 4 { ps.push(P { x: i, y: i * i }); i = i + 1; } let mut s = 0; let mut j = 0; while j < ps.len() { s = s + ps[j].y; j = j + 1; } println(s.to_string()) }",
+    // STRUCT TOKENIZER: kinds classified (1 word, 2 number, 3 symbol), text
+    // extracted via substring, accumulated into Vec[Token] — the tokenizer
+    // capstone upgraded to parser-shaped DATA, not just strings.
+    "struct Token { kind: i64, text: String }\nfn is_digit(b: u8) -> bool { b >= 48 and b <= 57 }\nfn is_alpha(b: u8) -> bool { (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or b == 95 }\nfn main() { let src = \"x1 = 42 + foo7\"; let mut toks: Vec[Token] = Vec.new(); let mut i = 0; let mut start = 0 - 1; let mut num = false; for b in src.bytes() { if is_alpha(b) or is_digit(b) { if start < 0 { start = i; num = is_digit(b); } } else { if start >= 0 { if num { toks.push(Token { kind: 2, text: src.substring(start, i) }); } else { toks.push(Token { kind: 1, text: src.substring(start, i) }); } start = 0 - 1; } if b != 32 { toks.push(Token { kind: 3, text: src.substring(i, i + 1) }); } } i = i + 1; } if start >= 0 { if num { toks.push(Token { kind: 2, text: src.substring(start, i) }); } else { toks.push(Token { kind: 1, text: src.substring(start, i) }); } } let mut j = 0; while j < toks.len() { let t = toks[j]; println(t.kind.to_string() + \" \" + t.text); j = j + 1; } }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

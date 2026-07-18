@@ -319,13 +319,17 @@ impl Emitter {
                 }
                 if segments[0] == "Vec" {
                     // Slice 16: Vec[String] (kind 4, {ptr,i64} elements) vs
-                    // Vec[i64] (kind 3). The element kind comes from the
-                    // annotation — the single-pass emitter cannot infer it
-                    // from later pushes.
+                    // Vec[i64] (kind 3); Slice 18: Vec[<struct>] (kind
+                    // 2000+si). The element kind comes from the annotation —
+                    // the single-pass emitter cannot infer it from later
+                    // pushes.
                     if generics.len() == 1 {
                         let gk = self.kind_of_ty(generics[0]);
                         if gk == 2 {
                             return 4;
+                        }
+                        if gk >= 10 and gk < 1000 {
+                            return 2000 + (gk - 10);
                         }
                     }
                     return 3;
@@ -354,6 +358,9 @@ impl Emitter {
     // struct text is REBUILT from field kinds on each call — returning a
     // stored Vec[String] element from a method is an AOT double-free.
     fn ty_text(ref self, kind: i64) -> String {
+        if kind >= 2000 {
+            return "{ ptr, i64, i64 }".to_string();
+        }
         if kind >= 1000 {
             return "{ i64, i64 }".to_string();
         }
@@ -646,8 +653,8 @@ impl Emitter {
                             match ty {
                                 Some(t) => {
                                     let dk = self.kind_of_ty(t);
-                                    if dk == 4 {
-                                        vk2 = 4;
+                                    if dk == 4 or dk >= 2000 {
+                                        vk2 = dk;
                                     }
                                 }
                                 None => {}
@@ -928,7 +935,121 @@ impl Emitter {
                         }
                         _ => {}
                     }
-                    if slot >= 0 and self.locals_kind[slot] == 4 {
+                    if slot >= 0 and self.locals_kind[slot] >= 2000 {
+                        // `v.push(Token { .. })` on a Vec[<struct>] (Slice 18):
+                        // the vec owns the element — a fresh literal transfers
+                        // (its String fields are already owned); a borrowed
+                        // struct materializes its String fields in.
+                        let esi = self.locals_kind[slot] - 2000;
+                        let sty = self.ty_text(10 + esi);
+                        let stride = self.st_stride(esi);
+                        let mut ev = "zeroinitializer".to_string();
+                        for ma in margs {
+                            let CallArg { label, mut_marker, value, span: asp } = ma;
+                            let av = self.emit_value(value);
+                            let Val { op: aop, kind: ak, heap: ah } = av;
+                            if ak >= 10 and ak < 1000 and not ah and self.st_has_heap(ak - 10) {
+                                let mv = self.emit_materialize_struct(aop.clone(), ak - 10);
+                                let Val { op: mop, kind: mk, heap: mh } = mv;
+                                ev = mop;
+                            } else {
+                                ev = aop;
+                            }
+                        }
+                        let sp = "%v" + slot.to_string();
+                        let ag = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + ag.clone()
+                            + " = load { ptr, i64, i64 }, ptr "
+                            + sp.clone()
+                            + ", align 8\n";
+                        let pr = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pr.clone()
+                            + " = extractvalue { ptr, i64, i64 } "
+                            + ag.clone()
+                            + ", 0\n";
+                        let ln = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + ln.clone()
+                            + " = extractvalue { ptr, i64, i64 } "
+                            + ag
+                            + ", 1\n";
+                        let n1 = self.fresh();
+                        self.body =
+                            self.body + "  " + n1.clone() + " = add i64 " + ln.clone() + ", 1\n";
+                        let by = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + by.clone()
+                            + " = mul i64 "
+                            + n1.clone()
+                            + ", "
+                            + stride.to_string()
+                            + "\n";
+                        let np = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + np.clone()
+                            + " = call ptr @realloc(ptr "
+                            + pr
+                            + ", i64 "
+                            + by
+                            + ")\n";
+                        let ep = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + ep.clone()
+                            + " = getelementptr "
+                            + sty.clone()
+                            + ", ptr "
+                            + np.clone()
+                            + ", i64 "
+                            + ln
+                            + "\n";
+                        self.body = self.body
+                            + "  store "
+                            + sty
+                            + " "
+                            + ev
+                            + ", ptr "
+                            + ep
+                            + ", align 8\n";
+                        let a0 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a0.clone()
+                            + " = insertvalue { ptr, i64, i64 } undef, ptr "
+                            + np
+                            + ", 0\n";
+                        let a1 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a1.clone()
+                            + " = insertvalue { ptr, i64, i64 } "
+                            + a0
+                            + ", i64 "
+                            + n1.clone()
+                            + ", 1\n";
+                        let a2 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a2.clone()
+                            + " = insertvalue { ptr, i64, i64 } "
+                            + a1
+                            + ", i64 "
+                            + n1
+                            + ", 2\n";
+                        self.body = self.body
+                            + "  store { ptr, i64, i64 } "
+                            + a2
+                            + ", ptr "
+                            + sp
+                            + ", align 8\n";
+                    } else if slot >= 0 and self.locals_kind[slot] == 4 {
                         // `v.push(s)` on a Vec[String] (Slice 16): the vec OWNS
                         // its elements — a borrowed arg materializes in, a heap
                         // temp transfers. 16-byte {ptr,i64} elements.
@@ -1745,6 +1866,25 @@ impl Emitter {
         false
     }
 
+    // Byte stride of struct `si` as a Vec element (Slice 18): i64/enum-free
+    // POD fields are 8 bytes, String fields 16 ({ptr,i64}); bool-field structs
+    // are excluded from vec elements by corpus discipline (i1 packing).
+    fn st_stride(ref self, si: i64) -> i64 {
+        let off = self.st_off[si];
+        let cnt = self.st_cnt[si];
+        let mut n = 0;
+        let mut fi = 0;
+        while fi < cnt {
+            if self.st_field_kinds[off + fi] == 2 {
+                n = n + 16;
+            } else {
+                n = n + 8;
+            }
+            fi = fi + 1;
+        }
+        n
+    }
+
     // Deep-copy a BORROWED struct value's String fields into a fresh OWNED
     // aggregate (Slice 15): each String field routes through
     // `emit_materialize`; POD fields ride along in the original aggregate.
@@ -1844,7 +1984,7 @@ impl Emitter {
             self.emit_free_struct_val(ag2, k - 10);
             return;
         }
-        let ty = kind_ty(k);
+        let ty = self.ty_text(k);
         let ag = self.fresh();
         self.body = self.body
             + "  "
@@ -1863,6 +2003,86 @@ impl Emitter {
             + " "
             + ag.clone()
             + ", 0\n";
+        if k >= 2000 {
+            // Vec[<struct>] (Slice 18): free each element's String fields
+            // before the outer buffer — a label loop over [0, len).
+            let esi = k - 2000;
+            if self.st_has_heap(esi) {
+                let sty = self.ty_text(10 + esi);
+                let ln = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + ln.clone()
+                    + " = extractvalue "
+                    + ty.clone()
+                    + " "
+                    + ag.clone()
+                    + ", 1\n";
+                let lid = self.nlbl;
+                self.nlbl = self.nlbl + 1;
+                let lh = "sfl" + lid.to_string();
+                let lb = "sflb" + lid.to_string();
+                let le = "sfle" + lid.to_string();
+                let islot = self.fresh();
+                self.body = self.body + "  " + islot.clone() + " = alloca i64, align 8\n";
+                self.body = self.body + "  store i64 0, ptr " + islot.clone() + ", align 8\n";
+                self.body = self.body + "  br label %" + lh.clone() + "\n";
+                self.body = self.body + lh.clone() + ":\n";
+                let iv = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + iv.clone()
+                    + " = load i64, ptr "
+                    + islot.clone()
+                    + ", align 8\n";
+                let c = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + c.clone()
+                    + " = icmp slt i64 "
+                    + iv.clone()
+                    + ", "
+                    + ln
+                    + "\n";
+                self.body = self.body
+                    + "  br i1 "
+                    + c
+                    + ", label %"
+                    + lb.clone()
+                    + ", label %"
+                    + le.clone()
+                    + "\n";
+                self.body = self.body + lb + ":\n";
+                let ep = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + ep.clone()
+                    + " = getelementptr "
+                    + sty.clone()
+                    + ", ptr "
+                    + pr.clone()
+                    + ", i64 "
+                    + iv.clone()
+                    + "\n";
+                let el = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + el.clone()
+                    + " = load "
+                    + sty.clone()
+                    + ", ptr "
+                    + ep
+                    + ", align 8\n";
+                self.emit_free_struct_val(el, esi);
+                let nx = self.fresh();
+                self.body = self.body + "  " + nx.clone() + " = add i64 " + iv + ", 1\n";
+                self.body = self.body + "  store i64 " + nx + ", ptr " + islot + ", align 8\n";
+                self.body = self.body + "  br label %" + lh + "\n";
+                self.body = self.body + le + ":\n";
+            }
+            self.body = self.body + "  call void @free(ptr " + pr + ")\n";
+            return;
+        }
         if k == 4 {
             // Vec[String] (Slice 16): free each element's buffer before the
             // outer buffer — a label loop over [0, len).
@@ -2422,6 +2642,41 @@ impl Emitter {
                 let Val { op: oop, kind: ok, heap: oh } = ov;
                 let iv = self.emit_value(index);
                 let Val { op: iop2, kind: ik2, heap: ih2 } = iv;
+                if ok >= 2000 {
+                    // `v[i]` on a Vec[<struct>] (Slice 18): load the element
+                    // as a BORROW — the vec keeps ownership; a binding
+                    // deep-copies via the struct materialize path.
+                    let esi = ok - 2000;
+                    let sty = self.ty_text(10 + esi);
+                    let prs = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + prs.clone()
+                        + " = extractvalue { ptr, i64, i64 } "
+                        + oop
+                        + ", 0\n";
+                    let eps = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + eps.clone()
+                        + " = getelementptr "
+                        + sty.clone()
+                        + ", ptr "
+                        + prs
+                        + ", i64 "
+                        + iop2
+                        + "\n";
+                    let rs = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + rs.clone()
+                        + " = load "
+                        + sty
+                        + ", ptr "
+                        + eps
+                        + ", align 8\n";
+                    return Val { op: rs, kind: 10 + esi, heap: false };
+                }
                 if ok == 4 {
                     // `v[i]` on a Vec[String] (Slice 16): the element is a
                     // BORROW — the vec keeps ownership; a binding materializes.
@@ -2628,7 +2883,7 @@ impl Emitter {
                     // `v.len()` (Slice 13): extract the len field.
                     let ov = self.emit_value(object);
                     let Val { op: oop, kind: ok, heap: oh } = ov;
-                    if ok == 3 or ok == 4 {
+                    if ok == 3 or ok == 4 or ok >= 2000 {
                         let r = self.fresh();
                         self.body = self.body
                             + "  "
