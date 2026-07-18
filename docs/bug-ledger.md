@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 149 | 0 |
+| miscompile | 150 | 0 |
 | leak | 85 | 0 |
 | codegen-gap | 62 | 0 |
 | double-free | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 398 | 0 |
+| codegen | 399 | 0 |
 | typecheck | 68 | 0 |
 | interp | 54 | 0 |
 | ownership | 23 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **561 surfaced · 0 open · 557 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **562 surfaced · 0 open · 558 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (557)
+### Fixed (558)
 
-<details><summary>557 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>558 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -693,6 +693,7 @@ _None — the ledger is fully drained._
 | B-2026-07-18-33 | typecheck+codegen | medium | `Option/Result.map` over a HEAP payload (String/Vec) now works under codegen, unblocked by fixing a chained-method span collision | 58a45ea,4b941dc |
 | B-2026-07-18-34 | codegen | high | A fresh owned/heap ARGUMENT temp passed to a predicate call inside a `while` CONDITION leaked one allocation PER ITERATION (unbounded) under AOT/JIT… | 7bcbd47 |
 | B-2026-07-18-35 | typecheck+interp | low | `SortedMap` lacked the `.entry()` API that `Map` has, so idiomatic ORDERED aggregation (`m.entry(k).and_modify(\|c\| c += 1).or_insert(1)`, `m.entry(k)… | 83ec9a5 |
+| B-2026-07-18-36 | codegen | medium | A CHAINED width-sensitive integer intrinsic (`x.leading_zeros().leading_zeros()`, also `rotate_left`/`count_ones` chains) miscompiled under codegen w… | a71708d |
 
 </details>
 
