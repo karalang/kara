@@ -13947,6 +13947,28 @@ fn main() {
         );
     }
 
+    /// B-2026-07-18-41 — `Iterator.rev()` is interpreter-only; codegen must bail
+    /// LOUD (naming rev + pointing at `--interp`) for every chain shape that
+    /// includes it — the terminal-over-rev (`v.iter().rev().sum()`), the
+    /// adaptor-over-rev (`v.iter().rev().collect()`), rev-over-adaptor
+    /// (`v.iter().map(f).rev()`), and the `for x in v.iter().rev()` loop — never
+    /// a silent empty iteration (the for-loop's `_ =>` fall-through hazard).
+    #[test]
+    fn e2e_iter_rev_deferred_loud_message() {
+        for src in [
+            "fn main() { let n: i64 = vec![1,2,3].iter().rev().sum(); println(n); }\n",
+            "fn main() { let v = vec![1,2,3]; let w: Vec[i64] = v.iter().rev().collect(); println(w.get(0)); }\n",
+            "fn main() { let v = vec![1,2,3]; for x in v.iter().rev() { println(x); } }\n",
+            "fn main() { let v = vec![1,2,3]; let w: Vec[i64] = v.iter().map(|x| x*2).rev().collect(); println(w.get(0)); }\n",
+        ] {
+            let err = ir_result(src).expect_err("rev chain must bail loud, not silently skip");
+            assert!(
+                err.contains("Iterator.rev()") && err.contains("--interp"),
+                "expected rev loud-bail message, got: {err}"
+            );
+        }
+    }
+
     /// Positive guard: the `for (i, x)` enumerate DESTRUCTURE path (the handled
     /// case) must keep compiling and producing the right answer — the
     /// B-2026-07-14-7 loud-bail must not regress it.

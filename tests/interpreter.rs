@@ -14444,6 +14444,40 @@ fn main() {
 }
 
 #[test]
+fn test_iter_rev_reverses_order() {
+    // B-2026-07-18-41 — `rev()` yields the elements in reverse. Unlike the lazy
+    // per-element adaptors, it drains the upstream, reverses, and replays, so it
+    // composes with adaptors on BOTH sides: `map(f).rev()` reverses the mapped
+    // sequence, `rev().map(f)` maps the reversed one, and `rev().filter(p)`
+    // filters after reversal. A `for` loop and a `collect`/`fold` terminal both
+    // consume the reversed iterator. (Interpreter-only; codegen defers rev.)
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    for x in v.iter().rev() { println(x); }
+    let a: Vec[i64] = v.iter().rev().collect();
+    println(a.get(0));
+    let b: Vec[i64] = v.iter().map(|x| x * 10).rev().collect();
+    println(b.get(0));
+    let c: Vec[i64] = v.iter().rev().map(|x| x * 10).collect();
+    println(c.get(0));
+    println(v.iter().rev().fold(0, |acc, x| acc * 10 + x));
+    let d: Vec[i64] = v.iter().rev().filter(|x| x % 2 == 0).collect();
+    println(d.get(0));
+}
+"#,
+    );
+    // for: 4 3 2 1; a.get(0)=Some(4); b (map*10 then rev).get(0)=Some(40);
+    // c (rev then map*10).get(0)=Some(40); fold builds 4321;
+    // d (rev [4,3,2,1] then keep even).get(0)=Some(4)
+    assert_eq!(
+        output,
+        "4\n3\n2\n1\nSome(4)\nSome(40)\nSome(40)\n4321\nSome(4)\n"
+    );
+}
+
+#[test]
 fn test_iter_collect_after_filter_drops_rejected_elements() {
     // filter then collect — only elements that pass the predicate land
     // in the resulting Vec.

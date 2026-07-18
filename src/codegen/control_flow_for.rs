@@ -95,6 +95,21 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `for x in <iter-chain>.rev()` — reverse iteration is deferred in
+        // codegen (interpreter-only, B-2026-07-18-41). Bail LOUD here: the
+        // `.rev()` iterable would otherwise fall through to the silent `_ =>`
+        // arm below (body never runs — output empty vs the interpreter's
+        // reversed sequence). Mirrors the `compile_method_call` guard for
+        // terminal/adaptor rev chains.
+        if Self::chain_receiver_contains_rev(iterable) {
+            return Err(
+                "`Iterator.rev()` is not yet supported under `karac build`/`karac run` \
+                 (codegen); it works under the tree-walk interpreter. Re-run with \
+                 `--interp` (or `KARAC_RUN_JIT=0`)."
+                    .to_string(),
+            );
+        }
+
         // `for x in coll.iter()` / `for x in coll.into_iter()` —
         // codegen iterates the underlying storage directly via the
         // existing `compile_for_*_var` paths (no `Value::Iterator`

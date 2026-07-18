@@ -185,6 +185,30 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Iterator { source, steps });
                 }
             }
+            "rev" => {
+                // Reversal is NOT a lazy per-element step — it needs the whole
+                // sequence. Drain the upstream (firing every existing adaptor
+                // closure in forward order), reverse the collected items, and
+                // return a fresh EAGER iterator over them, so any downstream
+                // adaptor/terminal (map/filter/fold/collect/for) then runs over
+                // the reversed order. Correct for any upstream chain and element
+                // type. (Codegen defers `rev` — B-2026-07-18-41.)
+                if matches!(obj, Value::Iterator { .. }) {
+                    let mut iter_val = obj;
+                    let mut out = Vec::new();
+                    while let Some(v) = self.iterator_step(&mut iter_val) {
+                        out.push(v);
+                    }
+                    out.reverse();
+                    return Some(Value::Iterator {
+                        source: IteratorSource::Eager {
+                            items: out,
+                            cursor: 0,
+                        },
+                        steps: Vec::new(),
+                    });
+                }
+            }
             "take" | "skip" => {
                 // Lazy count-bounded adaptors. Negative `n` clamps to
                 // zero — `take(-1)` yields nothing; `skip(-1)` skips

@@ -612,6 +612,19 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Does the RECEIVER spine of a method-call expression contain an
+    /// `Iterator.rev()` step? Walks `object` links only (an argument closure's
+    /// own `.rev()` is a separate scope). Used to bail codegen loudly for any
+    /// chain that includes the deferred `rev` adaptor (B-2026-07-18-41).
+    pub(super) fn chain_receiver_contains_rev(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::MethodCall { object, method, .. } => {
+                method == "rev" || Self::chain_receiver_contains_rev(object)
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn compile_method_call(
         &mut self,
         object: &Expr,
@@ -649,6 +662,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(&(call_span.offset, call_span.length))
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
+
+        // `<iter-chain>.rev()` — reverse iteration. The interpreter implements it
+        // (drain-reverse-replay); codegen defers it because the forward-only
+        // fused-chain lowering (`peel_fused_map_filter_chain` + the synthetic
+        // `for elem in <base>` desugar) cannot express a reversal without
+        // materialize-and-reverse plumbing threaded through every terminal. Bail
+        // LOUD (not a silent skip / confusing generic "no handler" error) as soon
+        // as `rev` appears anywhere on the receiver spine — whether this call IS
+        // `.rev()` (`v.iter().rev()`) or a terminal/adaptor OVER a rev chain
+        // (`v.iter().rev().collect()`, `v.iter().map(f).rev().sum()`). Only the
+        // receiver spine is walked (a `.rev()` inside a closure arg is a separate
+        // scope). B-2026-07-18-41 (typecheck+interp shipped; codegen deferred).
+        if (method == "rev" && args.is_empty()) || Self::chain_receiver_contains_rev(object) {
+            return Err(
+                "`Iterator.rev()` is not yet supported under `karac build`/`karac run` \
+                 (codegen); it works under the tree-walk interpreter. Re-run with \
+                 `--interp` (or `KARAC_RUN_JIT=0`)."
+                    .to_string(),
+            );
+        }
 
         // `gpu.dispatch(kernel, buffer)` (spike slice-0c). The typechecker
         // baked the kernel's WGSL into `gpu_dispatch_wgsl`; lower to a call to

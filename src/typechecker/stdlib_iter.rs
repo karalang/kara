@@ -355,6 +355,29 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Tuple(vec![Type::Int(IntSize::I64), item.clone()])],
                 }
             }
+            "rev" => {
+                // `rev() -> Iterator[T]` — yields the same elements in reverse
+                // order. Element type passes through unchanged. Unlike the lazy
+                // streaming adaptors, reversal is not a per-element step: the
+                // interpreter drains the upstream, reverses, and replays (see
+                // `method_call_iter.rs`). Codegen defers it (loud `--interp`
+                // hint) — the forward-only fused-chain lowering can't express a
+                // reversal yet (B-2026-07-18-41).
+                if !args.is_empty() {
+                    self.type_error(
+                        "Iterator.rev() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
             "take" | "skip" => {
                 // `take(n: i64) -> Iterator[T]` and `skip(n: i64) ->
                 // Iterator[T]`. Argument is checked against i64; the
@@ -862,6 +885,7 @@ impl<'a> super::TypeChecker<'a> {
                     "peekable",
                     "product",
                     "reduce",
+                    "rev",
                     "scan",
                     "skip",
                     "skip_while",
