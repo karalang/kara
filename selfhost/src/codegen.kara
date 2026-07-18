@@ -433,7 +433,11 @@ impl Emitter {
             let idx = self.locals.len();
             self.locals.push(pn);
             self.locals_kind.push(pk);
-            self.locals_heap.push(pk == 2);
+            let mut owns = pk == 2;
+            if pk >= 10 and pk < 1000 {
+                owns = self.st_has_heap(pk - 10);
+            }
+            self.locals_heap.push(owns);
             if pi > 0 {
                 sig = sig + ", ";
             }
@@ -481,6 +485,16 @@ impl Emitter {
                     } else {
                         if kind == rk {
                             tv = op;
+                            if rk >= 10 and rk < 1000 and not heap {
+                                // A returned BORROW of a heap-bearing struct
+                                // (Slice 15): the caller receives an owned
+                                // deep copy; the epilogue frees the original.
+                                if self.st_has_heap(rk - 10) {
+                                    let mv = self.emit_materialize_struct(tv.clone(), rk - 10);
+                                    let Val { op: mop, kind: mk, heap: mh } = mv;
+                                    tv = mop;
+                                }
+                            }
                         }
                     }
                 } else {
@@ -585,6 +599,16 @@ impl Emitter {
                             v = mop;
                             vh = true;
                         }
+                        if vk >= 10 and vk < 1000 and not vh {
+                            // A borrowed heap-bearing struct (Slice 15): the
+                            // binding owns a deep copy of its String fields.
+                            if self.st_has_heap(vk - 10) {
+                                let mv = self.emit_materialize_struct(v.clone(), vk - 10);
+                                let Val { op: mop, kind: mk, heap: mh } = mv;
+                                v = mop;
+                                vh = true;
+                            }
+                        }
                         let idx = self.locals.len();
                         self.locals.push(name);
                         self.locals_kind.push(vk);
@@ -626,6 +650,14 @@ impl Emitter {
                                 let Val { op: mop, kind: mk, heap: mh } = mv;
                                 v = mop;
                                 vh = true;
+                            }
+                            if vk >= 10 and vk < 1000 and not vh {
+                                if self.st_has_heap(vk - 10) {
+                                    let mv = self.emit_materialize_struct(v.clone(), vk - 10);
+                                    let Val { op: mop, kind: mk, heap: mh } = mv;
+                                    v = mop;
+                                    vh = true;
+                                }
                             }
                             // Free the slot's OLD owned buffer after the RHS
                             // evaluated (the RHS may read it — `s = s + "x"`)
@@ -734,6 +766,15 @@ impl Emitter {
                             let Val { op: mop, kind: mk, heap: mh } = mv;
                             aop = mop;
                         }
+                        if pk >= 10 and pk < 1000 and kind == pk and not heap {
+                            // A borrowed heap-bearing struct arg moves in as a
+                            // deep copy (Slice 15); a temp transfers.
+                            if self.st_has_heap(pk - 10) {
+                                let mv = self.emit_materialize_struct(aop.clone(), pk - 10);
+                                let Val { op: mop, kind: mk, heap: mh } = mv;
+                                aop = mop;
+                            }
+                        }
                         if ai > 0 {
                             alist = alist + ", ";
                         }
@@ -767,6 +808,9 @@ impl Emitter {
                                 + "("
                                 + alist
                                 + ")\n";
+                            if rk < 1000 and self.st_has_heap(rk - 10) {
+                                self.emit_free_struct_val(r, rk - 10);
+                            }
                         } else {
                             self.body = self.body
                                 + "  "
@@ -918,7 +962,17 @@ impl Emitter {
                     Some(v) => {
                         let val = self.emit_value(v);
                         let Val { op, kind, heap } = val;
-                        if self.cur_ret == 2 and kind == 2 and not heap {
+                        if self.cur_ret >= 10
+                            and self.cur_ret < 1000
+                            and kind == self.cur_ret
+                            and not heap
+                            and self.st_has_heap(self.cur_ret - 10)
+                        {
+                            let mv =
+                                self.emit_materialize_struct(op.clone(), self.cur_ret - 10);
+                            let Val { op: mop2, kind: mk2, heap: mh2 } = mv;
+                            rv = mop2;
+                        } else if self.cur_ret == 2 and kind == 2 and not heap {
                             // A returned BORROW (param/local) becomes an owned
                             // copy — this fn's epilogue frees the original.
                             // (A mid-fn return still skips the epilogue —
@@ -1329,6 +1383,90 @@ impl Emitter {
         Val { op: "0".to_string(), kind: 0, heap: false }
     }
 
+    // True iff struct `si` has any direct String field (Slice 15 — the
+    // heap-bearing test; Vec fields in structs are a deferred surface).
+    fn st_has_heap(ref self, si: i64) -> bool {
+        let off = self.st_off[si];
+        let cnt = self.st_cnt[si];
+        let mut fi = 0;
+        while fi < cnt {
+            if self.st_field_kinds[off + fi] == 2 {
+                return true;
+            }
+            fi = fi + 1;
+        }
+        false
+    }
+
+    // Deep-copy a BORROWED struct value's String fields into a fresh OWNED
+    // aggregate (Slice 15): each String field routes through
+    // `emit_materialize`; POD fields ride along in the original aggregate.
+    fn emit_materialize_struct(mut ref self, op: String, si: i64) -> Val {
+        let sty = self.ty_text(10 + si);
+        let off = self.st_off[si];
+        let cnt = self.st_cnt[si];
+        let mut cur = op.clone();
+        let mut fi = 0;
+        while fi < cnt {
+            if self.st_field_kinds[off + fi] == 2 {
+                let f = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + f.clone()
+                    + " = extractvalue "
+                    + sty.clone()
+                    + " "
+                    + op.clone()
+                    + ", "
+                    + fi.to_string()
+                    + "\n";
+                let mv = self.emit_materialize(f);
+                let Val { op: mop, kind: mk, heap: mh } = mv;
+                let r = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + r.clone()
+                    + " = insertvalue "
+                    + sty.clone()
+                    + " "
+                    + cur
+                    + ", { ptr, i64 } "
+                    + mop
+                    + ", "
+                    + fi.to_string()
+                    + "\n";
+                cur = r;
+            }
+            fi = fi + 1;
+        }
+        Val { op: cur, kind: 10 + si, heap: true }
+    }
+
+    // Free every String field a struct VALUE owns (Slice 15).
+    fn emit_free_struct_val(mut ref self, op: String, si: i64) {
+        let sty = self.ty_text(10 + si);
+        let off = self.st_off[si];
+        let cnt = self.st_cnt[si];
+        let mut fi = 0;
+        while fi < cnt {
+            if self.st_field_kinds[off + fi] == 2 {
+                let f = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + f.clone()
+                    + " = extractvalue "
+                    + sty.clone()
+                    + " "
+                    + op.clone()
+                    + ", "
+                    + fi.to_string()
+                    + "\n";
+                self.emit_free_val(f);
+            }
+            fi = fi + 1;
+        }
+    }
+
     // Free the heap buffer a STRING VALUE owns (extract ptr, call free).
     fn emit_free_val(mut ref self, val: String) {
         let pr = self.fresh();
@@ -1344,6 +1482,21 @@ impl Emitter {
     // ptr from `Vec.new()`) is safe.
     fn emit_free_slot(mut ref self, idx: i64) {
         let k = self.locals_kind[idx];
+        if k >= 10 and k < 1000 {
+            // A struct slot (Slice 15): free each owned String field.
+            let sty = self.ty_text(k);
+            let ag2 = self.fresh();
+            self.body = self.body
+                + "  "
+                + ag2.clone()
+                + " = load "
+                + sty
+                + ", ptr %v"
+                + idx.to_string()
+                + ", align 8\n";
+            self.emit_free_struct_val(ag2, k - 10);
+            return;
+        }
         let ty = kind_ty(k);
         let ag = self.fresh();
         self.body = self.body
@@ -1666,6 +1819,15 @@ impl Emitter {
                         let Val { op: mop, kind: mk, heap: mh } = mv;
                         aop = mop;
                     }
+                    if pk >= 10 and pk < 1000 and kind == pk and not heap {
+                        // A borrowed heap-bearing struct arg moves in as a
+                        // deep copy (Slice 15); a temp transfers.
+                        if self.st_has_heap(pk - 10) {
+                            let mv = self.emit_materialize_struct(aop.clone(), pk - 10);
+                            let Val { op: mop, kind: mk, heap: mh } = mv;
+                            aop = mop;
+                        }
+                    }
                     if ai > 0 {
                         alist = alist + ", ";
                     }
@@ -1702,7 +1864,11 @@ impl Emitter {
                         + "("
                         + alist
                         + ")\n";
-                    return Val { op: r, kind: rk, heap: false };
+                    let mut rh = false;
+                    if rk < 1000 {
+                        rh = self.st_has_heap(rk - 10);
+                    }
+                    return Val { op: r, kind: rk, heap: rh };
                 }
                 self.body = self.body
                     + "  "
@@ -1850,8 +2016,17 @@ impl Emitter {
                     let StructLitField { name: fname, value, shorthand, span: fsp } = lf;
                     let v = self.emit_value(value);
                     let Val { op, kind, heap } = v;
+                    let mut fop2 = op;
+                    if kind == 2 and not heap {
+                        // The literal OWNS its String fields (Slice 15):
+                        // materialize a borrowed value in; a heap temp
+                        // transfers directly.
+                        let mv = self.emit_materialize(fop2.clone());
+                        let Val { op: mop, kind: mk, heap: mh } = mv;
+                        fop2 = mop;
+                    }
                     lit_names.push(fname);
-                    lit_ops.push(op);
+                    lit_ops.push(fop2);
                 }
                 let off = self.st_off[si];
                 let cnt = self.st_cnt[si];
@@ -1886,7 +2061,11 @@ impl Emitter {
                     cur = r;
                     fi = fi + 1;
                 }
-                Val { op: cur, kind: 10 + si, heap: false }
+                Val {
+                    op: cur,
+                    kind: 10 + si,
+                    heap: self.st_has_heap(si),
+                }
             }
             Field(fa) => {
                 // POD struct FIELD READ (Slice 12): extractvalue by declared

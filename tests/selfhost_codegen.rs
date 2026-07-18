@@ -138,6 +138,16 @@ const CORPUS: &[&str] = &[
     "enum Op { Add(i64), Zero }\nfn main() { let e = Op.Zero; match e { Add(n) => { println(n.to_string()) } _ => { println(\"other\") } } }",
     "enum Op { Add(i64), Zero }\nfn main() { let x = match Op.Add(20) { Add(n) => n * 2, Zero => 0 }; println(x.to_string()) }",
     "enum Op { Add(i64), Zero }\nfn mk(n: i64) -> Op { if n > 0 { return Op.Add(n); } Op.Zero }\nfn main() { println(match mk(4) { Add(n) => n + 100, Zero => 0 }.to_string()); println(match mk(0 - 1) { Add(n) => n, Zero => 99 }.to_string()) }",
+    // Slice 15: String fields in structs — the literal owns its fields
+    // (borrows materialize in), whole-struct binding deep-copies, scope exit
+    // frees each String field, params/returns ride the materialize-on-borrow
+    // contract. All valgrind-gated.
+    "struct User { name: String, age: i64 }\nfn main() { let u = User { name: \"ada\", age: 36 }; println(u.name); println(u.age.to_string()) }",
+    "struct User { name: String, age: i64 }\nfn main() { let u = User { name: \"ada\", age: 36 }; let v = u; println(v.name) }",
+    "struct User { name: String, age: i64 }\nfn describe(u: User) -> String { u.name + \"/\" + u.age.to_string() }\nfn main() { println(describe(User { name: \"bo\", age: 7 })) }",
+    "struct User { name: String, age: i64 }\nfn mk(n: String, a: i64) -> User { User { name: n, age: a } }\nfn main() { let u = mk(\"kara\", 1); println(u.name); println(u.age.to_string()) }",
+    "struct Pair { a: String, b: String }\nfn main() { let p = Pair { a: \"x\" + \"1\", b: \"y\" }; println(p.a + p.b) }",
+    "struct User { name: String, age: i64 }\nfn main() { let mut u = User { name: \"one\", age: 1 }; u = User { name: \"two\", age: 2 }; println(u.name); println(u.age.to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
