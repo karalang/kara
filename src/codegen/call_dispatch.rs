@@ -4410,10 +4410,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // corrupt the caller. Shared (RC) structs are left to the refcount
         // machinery.
         if let ExprKind::FieldAccess { object, field } = &arg_expr.kind {
-            if let ExprKind::Identifier(s) = &object.kind {
+            // The receiver is an owned struct binding — a named `Identifier`
+            // OR an owned `self` receiver (`fn get(self) -> String { self.v }`),
+            // which parses as `SelfValue`, not `Identifier("self")`. Both bind an
+            // inline struct slot under a name (`self` normalises to the "self"
+            // binding); WITHOUT the `SelfValue` arm a method's `self.field`
+            // tail-return move-out was not cap-zeroed, so `self`'s callee-owned
+            // StructDrop freed the moved heap field AND the caller freed the
+            // returned value — a double-free (the free-fn `b.field` form already
+            // worked via the Identifier arm) (B-2026-07-18-37).
+            let recv = match &object.kind {
+                ExprKind::Identifier(s) => Some(s.as_str()),
+                ExprKind::SelfValue => Some("self"),
+                _ => None,
+            };
+            if let Some(s) = recv {
                 if let (Some(slot), Some(struct_name)) = (
-                    self.variables.get(s.as_str()).copied(),
-                    self.var_type_names.get(s.as_str()).cloned(),
+                    self.variables.get(s).copied(),
+                    self.var_type_names.get(s).cloned(),
                 ) {
                     if !self.shared_types.contains_key(struct_name.as_str()) {
                         if let Some(&st) = self.struct_types.get(struct_name.as_str()) {

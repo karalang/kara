@@ -14402,6 +14402,24 @@ fn main() { let n = build(); println(firstn(n)); }
     }
 
     #[test]
+    fn asan_self_field_move_out_tail_return_no_double_free() {
+        // B-2026-07-18-37: a by-value-`self` method returning a heap field as its
+        // tail (`fn get(self) -> String { self.v }`) — `self.v` is
+        // `FieldAccess { object: SelfValue }`, which the tail-return field-move-out
+        // suppression missed (it only matched `Identifier`), so `self`'s
+        // callee-owned StructDrop freed the moved buffer the caller now owns.
+        assert_clean_asan_run(
+            r#"
+struct B { v: String, n: i64 }
+impl B { fn get(self) -> String { self.v } }
+fn main() { let b = B { v: "hi".to_string(), n: 5 }; println(b.get()); }
+"#,
+            &["hi"],
+            "self_field_move_out_tail_return",
+        );
+    }
+
+    #[test]
     fn asan_struct_param_field_returned_no_double_free() {
         // The moved-out field is RETURNED to the caller: the deep-copy is the
         // returned value (caller owns it), the param's original field is freed

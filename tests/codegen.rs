@@ -2398,6 +2398,27 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_self_field_move_out_tail_return_no_double_free() {
+        // B-2026-07-18-37: a by-value-`self` method returning a HEAP field
+        // directly as the tail (`fn get(self) -> String { self.v }`) double-freed
+        // under AOT — `self.v` parses as `FieldAccess { object: SelfValue, .. }`,
+        // not `Identifier("self")`, so the tail-return field-move-out suppression
+        // (which cap-zeroes the moved field so `self`'s callee-owned StructDrop
+        // skips it) never fired for `self`. The free-fn `fn get(b: B) { b.v }`
+        // form already worked (Identifier arm). Prints the field once, cleanly.
+        if let Some(out) = run_program(
+            "struct B { v: String, n: i64 }\n\
+             impl B { fn get(self) -> String { self.v } }\n\
+             fn main() {\n\
+                 let b = B { v: \"hi\".to_string(), n: 5 };\n\
+                 println(b.get());\n\
+             }",
+        ) {
+            assert_eq!(out, "hi\n");
+        }
+    }
+
+    #[test]
     fn e2e_ref_atomic_param_aliases_caller_cell() {
         // B-2026-07-18-30: a `ref Atomic[T]` / `mut ref Atomic[T]` parameter's
         // alloca holds a POINTER to the caller's atomic storage, but
