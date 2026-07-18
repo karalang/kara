@@ -114,11 +114,12 @@ const CORPUS: &[&str] = &[
     "struct P { x: i64, y: i64 }\nfn dist2(p: P) -> i64 { p.x * p.x + p.y * p.y }\nfn main() { println(dist2(P { x: 3, y: 4 }).to_string()) }",
     "struct P { x: i64, y: i64 }\nfn mk(a: i64, b: i64) -> P { P { x: a, y: b } }\nfn main() { let p = mk(2, 5); println((p.y - p.x).to_string()) }",
     "struct F { on: bool, n: i64 }\nfn main() { let f = F { on: true, n: 8 }; if f.on { println(f.n.to_string()) } }",
-    // Struct-var REASSIGNMENT is deferred: the SEED currently miscompiles it
-    // (B-2026-07-18-7 — a plain reassign emits a karac_runtime_gpu_free_soa
-    // reference, breaking karac run AND build; the Kara emitter handles it
-    // correctly, so the oracle's seed leg is the red one).
     "struct P { x: i64, y: i64 }\nfn shift(p: P, d: i64) -> P { P { x: p.x + d, y: p.y + d } }\nfn main() { let p = shift(P { x: 1, y: 2 }, 10); println((p.x + p.y).to_string()) }",
+    // Struct-var reassignment — deferred while B-2026-07-18-7 was open (the
+    // SEED emitted a gpu_free_soa reference on a plain reassign, breaking
+    // run+build while the Kara emitter was already correct); re-landed on the
+    // 13f9c2a seed fix.
+    "struct P { x: i64, y: i64 }\nfn main() { let mut p = P { x: 1, y: 2 }; p = P { x: 10, y: 20 }; println((p.x + p.y).to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
