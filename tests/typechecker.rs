@@ -688,6 +688,35 @@ fn test_entry_or_insert_with_closure_returning_v() {
 }
 
 #[test]
+fn test_map_constructor_default_arg_infers_from_concrete_value_slot() {
+    // B-2026-07-18-17: a type-inferred constructor argument to a Map method
+    // (`get_or`/`insert`) whose VALUE slot is a CONCRETE generic type must
+    // resolve its element from that slot instead of being left as `Vec[?T]`
+    // and rejected. `check_map_slot_arg` now pushes the concrete slot as the
+    // expected type (`check_expr`), matching how a free-function argument
+    // infers. The bare-`Map.new()` back-inference path (an UNRESOLVED slot)
+    // must still work — the guard keeps it on plain inference + unify.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut m: Map[String, Vec[i64]] = Map.new();\n\
+             let _cur: Vec[i64] = m.get_or(\"k\".to_string(), Vec.new());\n\
+             m.insert(\"k\".to_string(), Vec.new());\n\
+             let mut m2: Map[i64, String] = Map.new();\n\
+             let _s: String = m2.get_or(1, \"\".to_string());\n\
+         }",
+    );
+    // Regression guard for the unresolved-slot back-inference (`Map.new()`
+    // with no annotation pins K/V from insert/get) — must not break.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut m = Map.new();\n\
+             m.insert(\"k\".to_string(), 42);\n\
+             let _v: i64 = m.get_or(\"k\".to_string(), 0);\n\
+         }",
+    );
+}
+
+#[test]
 fn test_entry_and_modify_returns_entry_for_chaining() {
     // `and_modify(f: Fn(mut ref V)) -> Entry[K, V]`. The bare and_modify
     // (without further chaining) returns Entry[K, V] so subsequent

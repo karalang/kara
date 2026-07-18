@@ -27,7 +27,23 @@ impl<'a> super::TypeChecker<'a> {
     /// unification keeps the assignability check from comparing the
     /// now-stale typevar against the (just-pinned) argument type.
     fn check_map_slot_arg(&mut self, slot: &Type, arg: &CallArg) {
-        let arg_ty = self.infer_expr(&arg.value);
+        // Two directions, chosen by whether the slot is already concrete:
+        //  * CONCRETE slot (`Map[K, Vec[i64]]` → slot `Vec[i64]`): push it as
+        //    the EXPECTED type via `check_expr` so a type-inferred constructor
+        //    argument resolves its element against the slot — `m.get_or(k,
+        //    Vec.new())` / `m.insert(k, Vec.new())` pins `Vec[i64]` instead of
+        //    leaving `Vec[?T]` and erroring (B-2026-07-18-17).
+        //  * UNRESOLVED slot (`Map.new()` → bare `?V`, or a generic-body `V`):
+        //    `check_expr` against a bare typevar/typeparam would `check_assignable`
+        //    it and spuriously report `expected '?V', found '…'`, so infer the
+        //    arg plainly and let the `unify_types` back-propagation below pin the
+        //    slot from the arg (this helper's original job).
+        let pre_slot = resolve_type_var_top(slot, &self.env.substitutions);
+        let arg_ty = if matches!(pre_slot, Type::TypeVar(_) | Type::TypeParam(_)) {
+            self.infer_expr(&arg.value)
+        } else {
+            self.check_expr(&arg.value, &pre_slot)
+        };
         unify_types(
             slot,
             &arg_ty,
