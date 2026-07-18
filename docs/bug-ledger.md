@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
 | crash | 26 | 0 |
-| run-vs-build | 25 | 1 |
+| run-vs-build | 26 | 2 |
 | perf | 21 | 0 |
 | soundness | 20 | 0 |
 | diagnostics | 11 | 0 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 378 | 4 |
+| codegen | 379 | 5 |
 | typecheck | 63 | 0 |
 | interp | 49 | 0 |
 | ownership | 23 | 0 |
@@ -123,9 +123,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **534 surfaced · 4 open · 526 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **535 surfaced · 5 open · 526 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -133,6 +133,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **534 surfaced 
 | B-2026-07-18-3 | 2026-07-18 | codegen | medium | Consuming a BOXED `Option` payload whose type is a heap-containing tuple (e.g. `Option[(String,String)]`, a >3-word payload that `coerce_to_payload_words` heap-boxes) does not free the reconstructed tuple's inner heap (the String buffers) at the binding's scope exit — a per-consumption leak. Reads correctly (output right), so unbox-for-read works; only the drop of the reconstructed wide payload's inner heap is missing. Affects `Vec[(String,String)].pop()` and any `-> Option[wide-heap-tuple]` (the SortedMap min/max/floor/ceiling among them). | none |
 | B-2026-07-18-4 | 2026-07-18 | codegen | medium | A STRUCT-VARIANT enum payload's Vec field bound DIRECTLY in a match arm over a borrowed ref-Vec element, then moved into a local (`enum It { Fu { params: Vec[P] } }`; `for it in items { match it { Fu { params } => { let ps = params; for p in ps {..} } } }`, `items: ref Vec[It]`), miscompiles under AOT to an EMPTY Vec — the sum is 0 vs the interpreter's correct value. check-clean, interp-correct, AOT wrong-output (not a crash). | — |
 | B-2026-07-18-6 | 2026-07-18 | codegen | medium | PRE-EXISTING on main (not from the B-2026-07-18-2 fix — reproduced with it stashed): tests/http_client_codegen.rs test_ir_http_error_drop_frees_message + test_ir_response_drop_frees_headers_handle are RED — the synthesized HttpError/Response drop fns no longer free the message String buffer / headers handle (the IR-shape assertion finds only a cap-zero GEP, no free). Likely fallout of the 3324eea exact-free-buf-hints drop-site rework window. | — |
+| B-2026-07-18-7 | 2026-07-18 | codegen | high | Plain struct-variable REASSIGNMENT (`let mut p = P { x: 1, y: 2 }; p = P { x: 10, y: 20 }`) now emits a reference to `karac_runtime_gpu_free_soa`, so BOTH `karac run` (JIT 'Symbols not found: karac_runtime_gpu_free_soa') and `karac build` (link error demanding the opt-in GPU archive: 'this program calls gpu.dispatch') fail for a 2-line non-GPU program; `--interp` correct (prints 30). A basic language construct is unusable on both compiled backends without the heavyweight GPU archive. | — |
 
 ### Fixed (526)
 

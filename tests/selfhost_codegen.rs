@@ -105,6 +105,20 @@ const CORPUS: &[&str] = &[
     "fn main() { println(true.to_string() + \"!\") }",
     "fn main() { let mut i = 0; let mut acc = \"\"; while i < 3 { acc = acc + i.to_string(); i = i + 1; } println(acc) }",
     "fn main() { println((0 - 99).to_string() + \"/\" + (7 * 6).to_string()) }",
+    // Slice 12: POD structs — construction (reordered literals), field reads,
+    // struct params/returns/calls, bool fields. (Unblocked by the
+    // B-2026-07-18-2 seed fix: the AOT-built generator previously double-freed
+    // on any struct-bearing input.)
+    "struct P { x: i64, y: i64 }\nfn main() { let p = P { x: 3, y: 4 }; println(p.x.to_string()); println(p.y.to_string()) }",
+    "struct P { x: i64, y: i64 }\nfn main() { let p = P { y: 9, x: 1 }; println((p.x + p.y).to_string()) }",
+    "struct P { x: i64, y: i64 }\nfn dist2(p: P) -> i64 { p.x * p.x + p.y * p.y }\nfn main() { println(dist2(P { x: 3, y: 4 }).to_string()) }",
+    "struct P { x: i64, y: i64 }\nfn mk(a: i64, b: i64) -> P { P { x: a, y: b } }\nfn main() { let p = mk(2, 5); println((p.y - p.x).to_string()) }",
+    "struct F { on: bool, n: i64 }\nfn main() { let f = F { on: true, n: 8 }; if f.on { println(f.n.to_string()) } }",
+    // Struct-var REASSIGNMENT is deferred: the SEED currently miscompiles it
+    // (B-2026-07-18-7 — a plain reassign emits a karac_runtime_gpu_free_soa
+    // reference, breaking karac run AND build; the Kara emitter handles it
+    // correctly, so the oracle's seed leg is the red one).
+    "struct P { x: i64, y: i64 }\nfn shift(p: P, d: i64) -> P { P { x: p.x + d, y: p.y + d } }\nfn main() { let p = shift(P { x: 1, y: 2 }, 10); println((p.x + p.y).to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
