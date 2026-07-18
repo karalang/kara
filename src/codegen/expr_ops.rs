@@ -3064,7 +3064,24 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         self.builder.position_at_end(rhs_bb);
+        // Per-RHS cleanup frame. The RHS is a *conditionally-executed* block
+        // (reached only when the LHS doesn't short-circuit), so any fresh heap
+        // temp it creates — e.g. a `.clone()` argument for a predicate call in
+        // `lo >= 0 and contains(items[i].clone())` — must be freed here, on the
+        // path where it was created, rather than by an enclosing frame drained
+        // at a merge/loop point reached on both paths. Without this, a re-drained
+        // enclosing frame (a loop body, or a `while` condition frame) re-frees
+        // the temp's stale tracking slot on the short-circuit skip iteration —
+        // `cap` is still non-zero from the last taken iteration — double-freeing
+        // it. `if`/`match` already scope their conditional sub-blocks this way;
+        // short-circuit `and`/`or` is the sibling that was missing it. The RHS
+        // *value* is a plain `i1`, never heap, so nothing live escapes the drain.
+        self.scope_cleanup_actions.push(Vec::new());
         let rhs_val = self.compile_expr(right)?.into_int_value();
+        self.drain_top_frame_with_emit();
+        // Capture the insert block AFTER the drain: a `FreeVecBuffer` drain emits
+        // a `cap > 0` guard (its own basic blocks), so the block that actually
+        // branches to `merge_bb` — and feeds the phi — is the post-drain join.
         let rhs_end_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_bb).unwrap();
 

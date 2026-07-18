@@ -1366,7 +1366,20 @@ impl<'ctx> super::Codegen<'ctx> {
         });
 
         self.builder.position_at_end(cond_bb);
+        // Per-iteration cleanup frame for temporaries created while evaluating
+        // the condition — e.g. `.clone()` argument temps for a predicate call
+        // (`while has_more(items[i].clone()) { .. }`) or a fresh heap temp the
+        // guard consumes. `cond_bb` is re-entered every iteration, so without a
+        // frame here those temps would land in the *enclosing* scope's frame
+        // (pushed before this loop, drained once after it), leaking one
+        // allocation per iteration — an unbounded leak. Mirrors the body frame
+        // below; drained after the condition value is materialized (a plain
+        // `i1`, never heap) and before the branch, so it runs on both the
+        // taken and not-taken edges. Condition temps are never live in the
+        // body (guards are `bool`), so freeing here is always safe.
+        self.scope_cleanup_actions.push(Vec::new());
         let cond_val = self.compile_expr(condition)?.into_int_value();
+        self.drain_top_frame_with_emit();
         self.builder
             .build_conditional_branch(cond_val, body_bb, exit_bb)
             .unwrap();

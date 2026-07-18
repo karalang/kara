@@ -29624,6 +29624,57 @@ fn main() {
     }
 
     #[test]
+    fn asan_while_condition_predicate_call_clone_arg_no_leak() {
+        // Dogfood find (2026-07-18): a fresh owned/heap argument temp passed to
+        // a predicate call inside a `while` CONDITION leaked one allocation per
+        // iteration — an UNBOUNDED leak — because `compile_while` gave the loop
+        // body a per-iteration cleanup frame but evaluated the condition with no
+        // frame, so the `.clone()` arg temp landed in the enclosing scope's
+        // frame (drained once, after the loop). The identical call in an `if`
+        // condition was clean (the `if` sits inside a body frame drained each
+        // iteration). Fixed by wrapping the while-condition in its own
+        // per-iteration frame drained right after the guard is materialized; the
+        // short-circuit `and`/`or` RHS (`n < K and f(v[i].clone())`) additionally
+        // scopes its conditionally-created temps in `compile_short_circuit` so a
+        // skip iteration doesn't re-drain a stale slot (double-free). Loops
+        // enough to make a per-iteration leak or double-free unmistakable to
+        // LSan. `keep` accumulates so the predicate result is observable.
+        assert_clean_asan_run(
+            r#"
+fn wants(s: String, budget: i64) -> bool { budget > 0 }
+fn ranks(cf: i64, cw: String, bf: i64, bw: String) -> bool {
+    if cf != bf { cf > bf } else { cw < bw }
+}
+fn main() {
+    let mut words: Vec[String] = Vec.new();
+    words.push("alpha-heap-string".to_string());
+    words.push("beta-heap-string".to_string());
+    // Direct predicate call in a while condition (no short-circuit).
+    let mut n = 60i64;
+    let mut keep = 0i64;
+    while wants(words[0].clone(), n) {
+        keep = keep + 1;
+        n = n - 1;
+    }
+    // Short-circuit `and`-RHS predicate call, sometimes skipped.
+    let mut i = 0i64;
+    let mut hits = 0i64;
+    while i < 40 {
+        if i % 3 == 0 and ranks(1, words[0].clone(), 0, words[1].clone()) {
+            hits = hits + 1;
+        }
+        i = i + 1;
+    }
+    println(keep);
+    println(hits);
+}
+"#,
+            &["60", "14"],
+            "while_condition_predicate_call_clone_arg_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_descending_loop_bce_skip_in_bounds() {
         // B-2026-07-17-1: the descending-loop bounds-check skip
         // (bce_length_pin.rs `compute_descending_skips`) elides the upper-half
