@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 143 | 0 |
-| leak | 81 | 0 |
+| leak | 82 | 1 |
 | double-free | 60 | 1 |
 | codegen-gap | 59 | 0 |
 | missing-feature | 46 | 0 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 374 | 2 |
+| codegen | 375 | 3 |
 | typecheck | 63 | 0 |
 | interp | 48 | 0 |
 | ownership | 23 | 0 |
@@ -123,14 +123,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **529 surfaced · 2 open · 523 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **530 surfaced · 3 open · 523 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-17-20 | 2026-07-17 | codegen | high | Copying a Vec field out of a MATCH-BOUND enum payload borrowed from a ref-Vec element double-frees under AOT: `for it in items { match it { Fu(f) => { let ps = f.params; for p in ps {..} } } }` with `items: ref Vec[It]` aborts free(): double free (interp correct, prints the right sum). The struct-only twin (no enum layer — `for it in items { let ps = it.params; }` on ref Vec[F]) is CLEAN; the enum-payload match binding is essential. | — |
 | B-2026-07-18-2 | 2026-07-18 | codegen | high | CONTEXT-DEPENDENT AOT memory corruption in the selfhost codegen generator once the Slice-12 struct machinery (a ~21-Vec-field Emitter struct + StructLit/Field emit_value arms with nested loops over self-field tables) executes on a struct-bearing input: the karac-build generator SIGABRTs (free(): double free / glibc abort) while `karac run --interp` produces byte-correct IR (verified: the interp-emitted IR runs green under the JIT). NOT attributable to a single line: bisection kept moving the crash across shapes (returning `self.st_ty[i]` from a method, `lit_ops[li].clone()`, bare `let want = self.st_field_names[off+fi]` in a loop, even an EMPTY while body once a sibling table field was removed) — the trigger is the surrounding frame/layout context, not the specific read. A dummy replacement Vec field does NOT restore green, so it is not purely field-count. | — |
+| B-2026-07-18-3 | 2026-07-18 | codegen | medium | Consuming a BOXED `Option` payload whose type is a heap-containing tuple (e.g. `Option[(String,String)]`, a >3-word payload that `coerce_to_payload_words` heap-boxes) does not free the reconstructed tuple's inner heap (the String buffers) at the binding's scope exit — a per-consumption leak. Reads correctly (output right), so unbox-for-read works; only the drop of the reconstructed wide payload's inner heap is missing. Affects `Vec[(String,String)].pop()` and any `-> Option[wide-heap-tuple]` (the SortedMap min/max/floor/ceiling among them). | none |
 
 ### Fixed (523)
 
@@ -660,7 +661,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **529 surfaced 
 | B-2026-07-17-17 | codegen | medium | A tensor VARIABLE reassignment (`w = w - g` / `w = w + d`, where `w: mut Tensor`) never freed the displaced old block — one `[rank][dims][data]` leak… | fbb824f |
 | B-2026-07-17-18 | typecheck | low | Unknown methods on the Type::Named numerical prelude types `Tensor` and `DataFrame` silently typed as Type::Error (same check/execution hole B-2026-0… | aee4a66 |
 | B-2026-07-17-19 | typecheck+codegen | low | Unknown methods on a fixed-size `Array[T, N]` silently type as Type::Error and pass `karac check`, then run on no backend — the same check/execution… | 4e6cbc8 |
-| B-2026-07-18-1 | codegen | medium | KARAC_AUTO_PAR=0 (auto_par_disabled) did NOT disable the parallel REDUCE lowering — only the parallel-group dispatch | e945c48 |
+| B-2026-07-18-1 | codegen | medium | KARAC_AUTO_PAR=0 (auto_par_disabled) did NOT disable the parallel REDUCE lowering — only the parallel-group dispatch | 4d6efad |
 
 </details>
 
