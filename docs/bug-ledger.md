@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 60 | 0 |
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
-| run-vs-build | 31 | 1 |
+| run-vs-build | 32 | 1 |
 | crash | 27 | 0 |
 | soundness | 21 | 0 |
 | perf | 21 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 391 | 3 |
+| codegen | 392 | 3 |
 | typecheck | 65 | 0 |
-| interp | 52 | 1 |
+| interp | 53 | 1 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **551 surfaced · 3 open · 544 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **552 surfaced · 3 open · 545 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -134,9 +134,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **551 surfaced 
 | B-2026-07-18-14 | 2026-07-18 | codegen+interp | low | Interpolating a WHOLE TUPLE value in an f-string / `println` (`f"{t}"` where `t: (i64, i64)` or `(i64, String)`) passes `karac check` and renders `(3, 7)` in the interpreter, but FAILS `karac build`/JIT with 'Display of a struct in an f-string is supported when the interpolated expression is a variable or field access … bind a struct literal or call result to a `let` first'. The hint is MISLEADING — `t` is already a let-bound variable, so following it does not help. Affects ALL tuple element types (scalar and heap). Field-index interpolation (`f"{t.0} {t.1}"`) works on every backend. | none |
 | B-2026-07-18-17 | 2026-07-18 | codegen | low | The typechecker does NOT propagate a method parameter's (substituted) expected type into the ARGUMENT's own inference, so a type-inferred constructor argument (`Vec.new()`, `Map.new()`, `"".to_string()`) whose element/type param must come from the callee's signature is left as `?T` and rejected: `m.get_or(k, Vec.new())` on `Map[String, Vec[i64]]` → `expected 'Vec<i64>', found 'Vec<?T0>'`. Expected-type propagation DOES work for free-function call arguments and let-bindings — only method-call arguments miss it. Common idiom (`map.get_or(k, Vec.new())`); workaround is to bind an annotated default first (`let d: Vec[i64] = Vec.new(); m.get_or(k, d)`). | none |
 
-### Fixed (544)
+### Fixed (545)
 
-<details><summary>544 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>545 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -684,6 +684,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **551 surfaced 
 | B-2026-07-18-23 | typecheck | medium | Field access of ANY field on a type with no named fields — a primitive (`i64`/`f64`/`bool`/`char`), `String`, or other non-struct/non-union — was SIL… | dae02ea |
 | B-2026-07-18-24 | codegen | low | Displaying an `Option[ref T]` with a SCALAR payload — the type of `Vec.first()` / `.get(i)` / `.last()` (the borrow-typed accessor, B-2026-07-14-11)… | 24471c6 |
 | B-2026-07-18-25 | resolver | medium | A std-rooted `import` naming a nonexistent baked-stdlib module (`import std.math`, `import std.completelybogus`, `import std.foo.{Bar}`) was SILENTLY… | d7a5e52 |
+| B-2026-07-18-26 | codegen+interp | low | The 2-arg `assert(cond, "msg")` form — accepted by the typechecker, run by the interpreter, and emitted by the COMPILER itself for tensor shape-check… | 8c2cfc4 |
 
 </details>
 
