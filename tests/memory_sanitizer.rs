@@ -412,6 +412,32 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_tensor_ref_arg_free_fn_no_leak() {
+        // B-2026-07-18-10 residual: the FREE-FN sibling — an inline
+        // `Tensor.from([…])` passed as a `ref Tensor` arg to a free fn. The
+        // materialized fresh-temp block is freed via `FreeTensor` (not leaked)
+        // and the borrow reads correctly. Looped so any per-call leak accumulates.
+        assert_clean_asan_run(
+            r#"
+fn sum_first_two(v: ref Tensor[f32, [?]]) -> f32 {
+    let s: Tensor[f32, [?]] = v + 0.0;
+    s[0] + s[1]
+}
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let r = sum_first_two(Tensor.from([1.0, 2.0, 3.0]));
+        println(f"{r}");
+        n = n + 1;
+    }
+}
+"#,
+            &["3", "3", "3"],
+            "asan_freshtemp_tensor_ref_arg_free_fn_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_vec_tensor_element_overwrite() {
         // (b) overwrite — `s.grads[0] = old + g` frees the displaced old element
         // block (read into the fresh sum first) and takes over the new one.

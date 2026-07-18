@@ -68667,6 +68667,23 @@ fn main() { println(P.second(Tensor.from([-1.0, 2.0, 3.0]))); }
     }
 
     #[test]
+    fn test_e2e_freshtemp_tensor_ref_arg_free_fn() {
+        // B-2026-07-18-10 residual: the FREE-FN sibling of the assoc-call case
+        // above. `f(Tensor.from([-1.0, 2.0]))` into a `ref Tensor[f32,…]` free-fn
+        // param laid the unsuffixed f64 literals out 8-byte-wide (misread by the
+        // f32 reader) — the free-fn rvalue-ref path now threads the callee's
+        // declared element type and registers the materialized temp's FreeTensor.
+        if let Some(out) = run_program(
+            r#"
+fn second(v: ref Tensor[f32, [?]]) -> f32 { v[1] }
+fn main() { println(second(Tensor.from([-1.0, 2.0, 3.0]))); }
+"#,
+        ) {
+            assert_eq!(out, "2\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_autograd_tensor_scalar_loss() {
         // `std.autograd` tensor-valued `sum` reduction — the terminal that turns
         // a tensor computation into a scalar loss. L = sum(x²) at x=[1,2,3] → 14;

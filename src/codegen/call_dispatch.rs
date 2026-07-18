@@ -1448,7 +1448,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (which the old vec-struct-only check missed entirely).
                 // The `cap > 0` / null guards inside the cleanup actions
                 // keep the registration safe to apply unconditionally.
+                // Thread the callee's DECLARED tensor element type into
+                // `pending_let_tensor_info` around the arg compile so an inline
+                // `Tensor.{from,…}` bound to a `ref Tensor[f32,…]` free-fn param
+                // lays its data out at the expected element width — the free-fn
+                // sibling of the assoc-call threading (B-2026-07-18-10). Without
+                // it the unsuffixed f64 literals produce an 8-byte block the f32
+                // callee misreads.
+                let param_tensor = self
+                    .fn_param_tensor_info
+                    .get(&name)
+                    .and_then(|v| v.get(i).cloned().flatten());
+                let saved_pending_tensor = param_tensor.as_ref().map(|info| {
+                    let prev = self.pending_let_tensor_info.take();
+                    self.pending_let_tensor_info = Some(info.clone());
+                    prev
+                });
                 let val = self.compile_expr(&a.value)?;
+                if let Some(prev) = saved_pending_tensor {
+                    self.pending_let_tensor_info = prev;
+                }
                 let cur_fn = self
                     .builder
                     .get_insert_block()
@@ -1457,7 +1476,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 let temp =
                     self.create_entry_alloca(cur_fn, &format!("ref_rvalue_arg{i}"), val.get_type());
                 self.builder.build_store(temp, val).unwrap();
-                self.queue_ref_rvalue_arg_cleanup(temp, val, &a.value);
+                // A materialized fresh-owned TENSOR temp needs a `FreeTensor`
+                // (its block has no other cleanup owner); everything else routes
+                // through the shared Vec/String/Map owned-temp cleanup. Mirrors
+                // the assoc-call path (B-2026-07-18-9).
+                if param_tensor.is_some() && self.expr_yields_fresh_owned_temp(&a.value) {
+                    self.track_tensor_var(temp);
+                } else {
+                    self.queue_ref_rvalue_arg_cleanup(temp, val, &a.value);
+                }
                 compiled_args.push(temp.into());
                 continue;
             }
