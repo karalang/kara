@@ -612,6 +612,37 @@ impl<'ctx> super::Codegen<'ctx> {
                         // behavior (read-only sound); a move-out of THEIR heap
                         // children is the remaining open half of B-2026-07-09-12,
                         // tracked in the ledger.
+                        // B-2026-07-18-29: a shared-enum struct payload whose only
+                        // non-duplicable fields are shared/RC (a DIRECT `shared` /
+                        // `Vec[shared]` child, e.g. `MethodCallExpr.object: Expr`)
+                        // fails `struct_clone_fully_duplicates` (its clone would
+                        // shallow-copy the handle), but IS deep-copyable with
+                        // shared-child RETAIN — copy-supported only under the
+                        // shared-retain mode. Probe it so the branch below owns it.
+                        // The retain-copy is sound only for a struct that
+                        // `struct_clone_fully_duplicates` UNDER the shared-retain
+                        // mode admits: that predicate recurses into Vec/nested
+                        // fields (its shared arm becomes duplicable-via-rc-inc
+                        // under the flag, but a `Vec[struct-with-shared/Option]`
+                        // element still bails because its element clone can't be
+                        // reproduced). `aggregate_param_copy_supported_struct` is
+                        // too loose here — it treats a bare `Vec` as copyable
+                        // without inspecting the element — so a `Vec[Arg]` field
+                        // whose `Arg` carries an `Option[String]`/shared child
+                        // slipped through and the element deep-copy leaked
+                        // (B-2026-07-18-29 regression on the parser's `CallNode`).
+                        let payload_copyable_with_retain = self
+                            .pattern_binding_scrutinee_is_shared_enum
+                            && self.struct_types.contains_key(tn)
+                            && !self.shared_types.contains_key(tn)
+                            && !self.struct_clone_fully_duplicates(tn, &mut Vec::new())
+                            && {
+                                let saved = self.copy_support_for_loop_shared_mode;
+                                self.copy_support_for_loop_shared_mode = true;
+                                let ok = self.struct_clone_fully_duplicates(tn, &mut Vec::new());
+                                self.copy_support_for_loop_shared_mode = saved;
+                                ok
+                            };
                         if self.pattern_binding_scrutinee_is_shared_enum
                             && self.struct_types.contains_key(tn)
                             && !self.shared_types.contains_key(tn)
@@ -623,6 +654,28 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .unwrap();
                                 self.track_struct_var(tn, alloca);
                             }
+                        } else if payload_copyable_with_retain {
+                            // Upgrade the view to an OWNED deep copy with shared-child
+                            // retain (String/Vec buffers duplicated, bare shared
+                            // handles rc-inc'd, balancing the box's rc-drop), exactly
+                            // as `make_aggregate_param_callee_owned` does for a
+                            // copy-supported by-value struct param — with the two
+                            // `*_shared_mode` flags enabled so a DIRECT shared field
+                            // is retained not bailed. `track_struct_var` registers the
+                            // COMBINED drop (value-drop + shared-field rc-DEC via
+                            // `struct_owns_shared_field`). The move-out suppression at
+                            // the shared-enum variant constructor
+                            // (`suppress_struct_cleanup_for_tail_identifier`) retracts
+                            // this drop when the owned struct is re-wrapped, so exactly
+                            // the new box owns it (no double-free, no leak).
+                            let saved_dc = self.deep_copy_rc_inc_bare_shared;
+                            let saved_cs = self.copy_support_for_loop_shared_mode;
+                            self.deep_copy_rc_inc_bare_shared = true;
+                            self.copy_support_for_loop_shared_mode = true;
+                            self.deep_copy_struct_heap_fields_in_place(alloca, tn);
+                            self.copy_support_for_loop_shared_mode = saved_cs;
+                            self.deep_copy_rc_inc_bare_shared = saved_dc;
+                            self.track_struct_var(tn, alloca);
                         } else {
                             // B-2026-07-09-12 clone-on-extract — a shared-enum struct
                             // payload NOT deep-cloned above (it carries shared /

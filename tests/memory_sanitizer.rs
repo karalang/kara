@@ -29624,6 +29624,65 @@ fn main() {
     }
 
     #[test]
+    fn asan_rewrap_match_bound_shared_enum_struct_payload_no_double_free() {
+        // B-2026-07-18-29: re-wrapping a match-bound shared-enum STRUCT payload
+        // that carries a DIRECT shared/RC child (`MethodCallExpr.object: Expr`)
+        // into a new variant node (`match v { MethodCall(mc) => emit(MethodCall(mc)) }`)
+        // double-freed under AOT (single non-String child → UAF), interp correct.
+        // The payload failed `struct_clone_fully_duplicates` (its clone would
+        // shallow-copy the shared handle), so it was bound as a non-owning VIEW
+        // aliasing the RC box; moving the whole view into the re-wrapped node made
+        // a SECOND owner of the aliased buffers. Fixed in three coordinated pieces:
+        // (1) upgrade the view to an OWNED deep copy with shared-child RETAIN at
+        // bind (deep_copy + copy_support_for_loop_shared_mode); (2) `track_struct_var`
+        // registers the COMBINED value-drop + shared-field rc-DEC (already picked
+        // for a `struct_owns_shared_field` struct); (3) at the shared-enum variant
+        // constructor, retract the moved binding's combined StructDrop wholesale
+        // (`suppress_struct_cleanup_for_tail_identifier`) so exactly the new box
+        // owns it. Loops 300× building a fresh node each time (fresh inner shared
+        // node + String + Vec payload) and round-trips it through the re-wrap, so a
+        // per-iteration double-free aborts and any leak accumulates for LSan.
+        assert_clean_asan_run(
+            r#"
+struct MCall { object: Expr, method: String, args: Vec[i64] }
+shared enum Expr {
+    Lit(String),
+    MethodCall(MCall),
+}
+fn emit(e: Expr) -> i64 {
+    match e {
+        Lit(s) => s.len(),
+        MethodCall(mc) => mc.method.len() + mc.args.len(),
+    }
+}
+fn process(value: Expr) -> i64 {
+    match value {
+        Lit(s) => s.len(),
+        MethodCall(mc) => emit(MethodCall(mc)),
+    }
+}
+fn main() {
+    let mut total = 0i64;
+    let mut i = 0i64;
+    while i < 300 {
+        let inner: Expr = Lit("x".to_string());
+        let mut a: Vec[i64] = Vec.new();
+        a.push(1);
+        a.push(2);
+        let mc = MCall { object: inner, method: "substring".to_string(), args: a };
+        let v: Expr = MethodCall(mc);
+        total = total + process(v);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["3300"],
+            "rewrap_match_bound_shared_enum_struct_payload_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_while_condition_predicate_call_clone_arg_no_leak() {
         // Dogfood find (2026-07-18): a fresh owned/heap argument temp passed to
         // a predicate call inside a `while` CONDITION leaked one allocation per

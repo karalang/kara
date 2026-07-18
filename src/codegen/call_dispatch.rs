@@ -2714,6 +2714,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let ExprKind::Identifier(n) = &arg.value.kind {
                     let n = n.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&n);
+                    // B-2026-07-18-29: a struct binding that owns a `shared` /
+                    // `Vec[shared]` field, moved whole into this shared-enum
+                    // variant, hands its inline shared children to the new box.
+                    // The cap-zeroing above suppresses only its buffer half; its
+                    // combined StructDrop still rc-DECs the shared children,
+                    // double-decing against the box's own rc-drop. Retract it.
+                    if let Some(tn) = self.var_type_names.get(&n).cloned() {
+                        if self.struct_owns_shared_field(&tn, &mut Vec::new()) {
+                            self.suppress_struct_cleanup_for_tail_identifier(&n);
+                        }
+                    }
                 }
             }
             return Ok(Some(ptr.into()));
@@ -3763,6 +3774,36 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the handle). For tail-return callers the inner scopes have already
     /// drained, so only the function-body frame remains and the all-frames
     /// scan is equivalent to the old top-frame-only behavior.
+    /// Struct sibling of [`Self::suppress_map_cleanup_for_tail_identifier`]
+    /// (B-2026-07-18-29): a tracked struct binding moved WHOLE into an
+    /// enum-variant payload (`MethodCall(mc)` — a shared-enum tuple variant
+    /// re-wrapping a match-bound-then-owned struct) hands ALL of its heap to the
+    /// new enum box. Its scope-exit `StructDrop` — which for a struct owning a
+    /// `shared`/`Vec[shared]` field runs the COMBINED value-drop + shared-field
+    /// rc-DEC — must therefore be retracted wholesale: the value-drop would
+    /// re-free the String/Vec buffers the box now owns AND the shared-field
+    /// rc-DEC would double-dec the box's inline shared children. Zeroing the
+    /// source's caps (`suppress_source_vec_cleanup_for_arg`) neutralizes only the
+    /// buffer half, not the rc-DEC, so a full retraction is required. Removes the
+    /// binding's `StructDrop` from whichever frame holds it (a move site can fire
+    /// with a transient inner arg/method-eval frame on top — same rationale as
+    /// the Map sibling).
+    pub(super) fn suppress_struct_cleanup_for_tail_identifier(&mut self, name: &str) {
+        let slot_ptr = match self.variables.get(name) {
+            Some(s) => s.ptr,
+            None => return,
+        };
+        for frame in self.scope_cleanup_actions.iter_mut() {
+            frame.retain(|action| {
+                !matches!(
+                    action,
+                    crate::codegen::state::CleanupAction::StructDrop { struct_alloca, .. }
+                        if *struct_alloca == slot_ptr
+                )
+            });
+        }
+    }
+
     pub(super) fn suppress_map_cleanup_for_tail_identifier(&mut self, name: &str) {
         let slot_ptr = match self.variables.get(name) {
             Some(s) => s.ptr,
