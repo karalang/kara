@@ -889,6 +889,44 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .cloned();
 
+        // B-2026-07-18-48: a NON-identifier receiver (struct/enum literal, call
+        // result) whose typechecker-resolved `Type.method` names a USER impl
+        // method must dispatch to that method BEFORE the builtin Vec/String
+        // routing below. A single-heap-field struct (`struct R { v: String }`)
+        // shares String's `{ptr,len,cap}` LLVM shape, so for a literal receiver
+        // — whose user type isn't in `var_type_names` — a same-named builtin
+        // method (`get`/`take`/`unwrap`/…) hijacked the call via shape detection
+        // (`R { v: "x" }.get()` → "Vec.get requires an index argument"; interp
+        // resolved `R.get`). `try_compile_freshtemp_user_method` self-gates
+        // (returns `Ok(None)` unless the receiver is a non-identifier fresh-temp
+        // user struct/enum whose `dispatch_key` `Type.method` exists), so this is
+        // a no-op for identifier/self receivers and for genuine builtin calls;
+        // when it fires it materializes the receiver and re-dispatches through
+        // the identifier path (which resolves the user method). The identical
+        // call remains as a fallback further below for any path that reaches it.
+        //
+        // Gated to receivers that are true TEMPORARIES (a struct/enum literal or
+        // a call result) — NOT a PLACE expression (`v[i]`, `s.field`, `t.0`).
+        // Materializing a place into a temp would break write-back for a
+        // `mut ref self` method (`v[0].bump()` must mutate the element in place,
+        // not a copy — the indexed-receiver / field-receiver specialized paths
+        // below handle those and MUST keep priority). Place receivers still reach
+        // the identical fallback call further down after those paths, unchanged.
+        if !matches!(
+            &object.kind,
+            ExprKind::Index { .. } | ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            if let Some(result) = self.try_compile_freshtemp_user_method(
+                object,
+                method,
+                args,
+                dispatch_key.as_deref(),
+                call_span,
+            )? {
+                return Ok(result);
+            }
+        }
+
         // Distinct-type `.raw()` unwrap (design.md § Distinct Types). A
         // distinct type is a zero-cost wrapper — its compiled value already
         // IS the base value (layout-identical), so `.raw()` returns the

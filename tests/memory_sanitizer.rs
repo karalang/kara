@@ -14589,6 +14589,32 @@ fn main() {
     }
 
     #[test]
+    fn asan_user_method_builtin_name_on_literal_receiver_clean() {
+        // B-2026-07-18-48: dispatching a user method (builtin-colliding name) on
+        // a struct/enum LITERAL receiver materializes the receiver into a temp
+        // and re-dispatches. The owned-`self` method consumes that temp (its
+        // drop frees the payload), so the materialization must NOT also drop the
+        // caller's copy — verify no double-free / leak across a struct literal, an
+        // enum literal, and a call-result receiver.
+        assert_clean_asan_run(
+            r#"
+struct R { v: String }
+impl R { fn get(self) -> String { self.v } }
+enum E { A(String) }
+impl E { fn take(self) -> String { match self { E.A(s) => s } } }
+fn mk() -> R { R { v: "chained".to_string() } }
+fn main() {
+    println(R { v: "structlit".to_string() }.get());
+    println(E.A("enumlit".to_string()).take());
+    println(mk().get());
+}
+"#,
+            &["structlit", "enumlit", "chained"],
+            "user_method_builtin_name_on_literal_receiver",
+        );
+    }
+
+    #[test]
     fn asan_struct_param_field_returned_no_double_free() {
         // The moved-out field is RETURNED to the caller: the deep-copy is the
         // returned value (caller owns it), the param's original field is freed

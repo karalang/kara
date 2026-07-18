@@ -2543,6 +2543,34 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_user_method_builtin_name_on_literal_receiver() {
+        // B-2026-07-18-48: a user method whose name collides with a builtin
+        // Vec/String method (`get`/`take`/…), called on a NON-identifier receiver
+        // (a struct/enum literal or call result) with a heap-shaped receiver,
+        // was hijacked by the builtin shape-based dispatch — a single-heap-field
+        // struct (`R { v: String }`) shares String's `{ptr,len,cap}` LLVM layout,
+        // and a literal receiver's user type isn't in `var_type_names`, so
+        // `R { v: "x" }.get()` misrouted to `Vec.get` ("requires an index
+        // argument"). The fix dispatches a typechecker-resolved user
+        // `Type.method` before the builtin routing. Covers a struct literal, an
+        // enum literal, and a chained (call-result) receiver.
+        if let Some(out) = run_program(
+            "struct R { v: String }\n\
+             impl R { fn get(self) -> String { self.v } }\n\
+             enum E { A(String) }\n\
+             impl E { fn take(self) -> String { match self { E.A(s) => s } } }\n\
+             fn mk() -> R { R { v: \"chained\".to_string() } }\n\
+             fn main() {\n\
+                 println(R { v: \"structlit\".to_string() }.get());\n\
+                 println(E.A(\"enumlit\".to_string()).take());\n\
+                 println(mk().get());\n\
+             }",
+        ) {
+            assert_eq!(out, "structlit\nenumlit\nchained\n");
+        }
+    }
+
+    #[test]
     fn e2e_ref_atomic_param_aliases_caller_cell() {
         // B-2026-07-18-30: a `ref Atomic[T]` / `mut ref Atomic[T]` parameter's
         // alloca holds a POINTER to the caller's atomic storage, but
