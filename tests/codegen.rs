@@ -25367,6 +25367,48 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_bound_payload_vec_field_copy_over_ref_vec() {
+        // B-2026-07-17-20: `for it in items { match it { Fu(f) => { let ps =
+        // f.params; … } } }` over `items: ref Vec[It]` — copying a Vec field out
+        // of a match-bound struct payload that aliases a borrowed ref-Vec enum
+        // element. Pre-fix this AOT-crashed with `free(): double free` (the copy
+        // shallow-aliased the container's buffer); now the field deep-copies.
+        // Locks run == build parity on the exact repro.
+        let out = run_program(
+            r#"
+struct P { n: i64 }
+struct F { name: String, params: Vec[P] }
+enum It { Fu(F), Other }
+fn collect(items: ref Vec[It]) -> i64 {
+    let mut total = 0;
+    for it in items {
+        match it {
+            It.Fu(f) => {
+                let ps = f.params;
+                for p in ps { total = total + p.n; }
+            }
+            It.Other => {}
+        }
+    }
+    total
+}
+fn main() {
+    let mut items: Vec[It] = Vec.new();
+    let mut ps1: Vec[P] = Vec.new();
+    ps1.push(P { n: 1 });
+    ps1.push(P { n: 2 });
+    items.push(It.Fu(F { name: "a", params: ps1 }));
+    items.push(It.Other);
+    println(collect(items).to_string());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3");
+        }
+    }
+
+    #[test]
     fn test_e2e_match_some_node_let_destructure_tuple_payload() {
         // The kata's canonical BFS shape: `Some(node) => let (i, d) = node`
         // where `node: (i64, i64)` is reconstituted as a tuple struct

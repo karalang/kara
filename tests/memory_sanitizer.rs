@@ -1337,6 +1337,61 @@ fn main() {
     }
 
     #[test]
+    fn asan_match_bound_enum_payload_vec_field_copy_no_double_free() {
+        // B-2026-07-17-20: copying a Vec field OUT of a match-bound struct
+        // payload that aliases a BORROWED ref-Vec enum element
+        // (`for it in items { match it { Fu(f) => { let ps = f.params; … } } }`,
+        // `items: ref Vec[It]`) shallow-aliased the container's buffer, so the
+        // copy's scope-exit free AND the caller's element drop freed the same
+        // buffer → `free(): double free`, SIGABRT 134. The struct payload binding
+        // now deep-copies the extracted field (the enum-payload sibling of the
+        // for-loop struct-element path). 300 iters, both Vec[i64-struct] and
+        // Vec[String] payload elements.
+        assert_clean_asan_run(
+            r#"
+struct P { n: i64 }
+struct F { name: String, params: Vec[P], tags: Vec[String] }
+enum It { Fu(F), Other }
+fn collect(items: ref Vec[It]) -> i64 {
+    let mut total = 0;
+    for it in items {
+        match it {
+            It.Fu(f) => {
+                let ps = f.params;
+                for p in ps { total = total + p.n; }
+                let ts = f.tags;
+                for t in ts { total = total + t.len(); }
+            }
+            It.Other => {}
+        }
+    }
+    total
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 300 {
+        let mut items: Vec[It] = Vec.new();
+        let mut ps: Vec[P] = Vec.new();
+        ps.push(P { n: 1 });
+        ps.push(P { n: 2 });
+        let mut tg: Vec[String] = Vec.new();
+        tg.push("tag");
+        items.push(It.Fu(F { name: f"n-{i}", params: ps, tags: tg }));
+        items.push(It.Other);
+        total = total + collect(items);
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // per iter: params 1+2=3, tags len("tag")=3 → 6/iter × 300 = 1800.
+            &["1800"],
+            "match_bound_enum_payload_vec_field_copy_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_string_from_owned_source_copies_no_double_free() {
         // B-2026-07-13-8: `String.from(<String>)` returned the source aggregate
         // UNCHANGED (an alias of its `{ptr,len,cap}` buffer), so a fresh owned

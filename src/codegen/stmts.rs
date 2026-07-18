@@ -1652,7 +1652,14 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::FieldAccess { object, .. }
                 if matches!(&object.kind, ExprKind::Identifier(p)
                     if self.owned_struct_params.contains(p.as_str())
-                        || self.for_loop_owned_agg_vars.contains(p.as_str()))
+                        || self.for_loop_owned_agg_vars.contains(p.as_str())
+                        // B-2026-07-17-20: a Vec field copied out of a match-bound
+                        // struct payload that aliases a borrowed / container-owned
+                        // enum element (`match it { Fu(f) => { let ps = f.params } }`
+                        // over `items: ref Vec[It]`). The container frees the field
+                        // buffer; the copy must be independent, like the for-loop
+                        // struct-element sibling above.
+                        || self.borrowed_agg_payload_struct_vars.contains(p.as_str()))
         );
         // B-2026-07-09-12 clone-on-extract (field-access-move form) — the source is
         // a Vec field of a shared-enum-payload VIEW (`let a = c.args`). Same hazard

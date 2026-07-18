@@ -376,6 +376,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         )?;
                     }
                 }
+                // B-2026-07-17-20: on the borrow path, a struct payload binding
+                // aliases the container-owned enum element, so a Vec/String field
+                // COPIED OUT of it (`let ps = f.params`) must deep-copy. Register
+                // the struct payload binding name(s) so
+                // `deep_copy_owned_struct_param_field_move` fires (the enum-payload
+                // sibling of the for-loop struct-element path). Covers both the
+                // ptr-bind and value-bind routes.
+                if self.pattern_binding_is_borrow {
+                    self.register_borrowed_agg_payload_struct_bindings(&arm.pattern);
+                }
             }
 
             // Arm GUARD (`pat if cond => body`): after the pattern matched and
@@ -1029,6 +1039,74 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         self.no_arm_payload_escapes(arms)
+    }
+
+    /// Register the STRUCT payload binding(s) of a match arm's pattern into
+    /// `borrowed_agg_payload_struct_vars` (B-2026-07-17-20). Called only on the
+    /// borrow path (`pattern_binding_is_borrow`), where the binding aliases a
+    /// container-owned aggregate; a Vec/String field copied out of it then
+    /// deep-copies via `deep_copy_owned_struct_param_field_move`. Restricted to
+    /// bindings whose bound value is an LLVM struct (a payload with fields to
+    /// copy out); non-struct payloads (`Fu(i)`) can never be a field-access
+    /// source, so they are skipped to keep the set tight.
+    pub(super) fn register_borrowed_agg_payload_struct_bindings(&mut self, pattern: &Pattern) {
+        let mut names: Vec<String> = Vec::new();
+        Self::collect_variant_payload_binding_names(pattern, false, &mut names);
+        // Register the payload binding name(s). A borrow-mode payload binding is
+        // materialized as a POINTER alias into the enum payload (not a struct
+        // VALUE), so no `StructType` gate is applied here — the field-access RHS
+        // gate in `deep_copy_owned_struct_param_field_move` (RHS is `f.field`,
+        // dest is a Vec) already makes a non-struct payload (`Fu(i)`) inert.
+        for n in names {
+            if self.variables.contains_key(n.as_str()) {
+                self.borrowed_agg_payload_struct_vars.insert(n);
+            }
+        }
+    }
+
+    /// Collect `Binding` leaf names that sit in a variant/struct PAYLOAD
+    /// position (inside a `TupleVariant` / `Struct` pattern), skipping a
+    /// top-level whole-scrutinee binding (`other => …`). `in_payload` becomes
+    /// true once a variant/struct sub-pattern is entered.
+    fn collect_variant_payload_binding_names(
+        pattern: &Pattern,
+        in_payload: bool,
+        out: &mut Vec<String>,
+    ) {
+        match &pattern.kind {
+            PatternKind::Binding(n) => {
+                if in_payload {
+                    out.push(n.clone());
+                }
+            }
+            PatternKind::AtBinding { name, pattern, .. } => {
+                if in_payload {
+                    out.push(name.clone());
+                }
+                Self::collect_variant_payload_binding_names(pattern, in_payload, out);
+            }
+            PatternKind::TupleVariant { patterns, .. } => {
+                for p in patterns {
+                    Self::collect_variant_payload_binding_names(p, true, out);
+                }
+            }
+            PatternKind::Struct { fields, .. } => {
+                for f in fields {
+                    if let Some(sub) = &f.pattern {
+                        Self::collect_variant_payload_binding_names(sub, true, out);
+                    } else {
+                        // Field shorthand `Struct { x }` binds `x` directly.
+                        out.push(f.name.clone());
+                    }
+                }
+            }
+            PatternKind::Tuple(ps) | PatternKind::Or(ps) => {
+                for p in ps {
+                    Self::collect_variant_payload_binding_names(p, in_payload, out);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// True when the scrutinee is a bare `for`-loop element binding whose

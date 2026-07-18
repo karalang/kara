@@ -2010,6 +2010,20 @@ pub(super) struct Codegen<'ctx> {
     /// copy-support); removed on shadow-rebind; cleared per-function alongside
     /// `for_loop_borrow_vars`.
     pub(crate) for_loop_owned_agg_vars: HashSet<String>,
+    /// Struct payload bindings from a match arm on a BORROWED / owned-elsewhere
+    /// scrutinee (`pattern_binding_is_borrow` — e.g. `for it in items { match it
+    /// { Fu(f) => … } }` over `items: ref Vec[It]`, classed read-only by
+    /// `scrutinee_is_readonly_owned_agg_loop_var`). The binding `f` aliases the
+    /// container's live-variant payload, whose heap fields the container owns and
+    /// frees — so a Vec/String field COPIED OUT of `f` (`let ps = f.params`)
+    /// must own an independent buffer, exactly like a for-loop struct element
+    /// (`for_loop_owned_agg_vars`). Consulted by
+    /// `deep_copy_owned_struct_param_field_move`. Without it, `ps` shallow-aliased
+    /// the container's buffer and both freed it → double-free (B-2026-07-17-20;
+    /// the struct-only twin `for f in items { let ps = f.params }` was already
+    /// clean via `for_loop_owned_agg_vars`, but the enum-payload match binding
+    /// reached neither set). Cleared per-function alongside the sibling sets.
+    pub(crate) borrowed_agg_payload_struct_vars: HashSet<String>,
     /// LLJIT Slice 6c prerequisite (B-2026-07-08-5 fix): the index sub-pattern
     /// of a `for (i, v) in xs.iter().enumerate()` loop, threaded from
     /// `compile_for`'s `.enumerate()` arm into the underlying container loop
@@ -6552,6 +6566,7 @@ impl<'ctx> Codegen<'ctx> {
             for_loop_borrow_vars: HashSet::new(),
             borrow_accessor_let_payload: std::collections::HashMap::new(),
             for_loop_owned_agg_vars: HashSet::new(),
+            borrowed_agg_payload_struct_vars: HashSet::new(),
             enumerate_index_pattern: None,
             owned_struct_params: HashSet::new(),
             shared_enum_payload_view_vars: std::collections::HashMap::new(),
