@@ -2475,9 +2475,10 @@ mod codegen_tests {
         // so an UNannotated `let x = v.first(); println(x)` (and a bare
         // `println(v.first())`) failed codegen with the deferred struct-Display
         // error while the interpreter rendered `Some(10)`. A scalar-ref peel at
-        // the registration + call-result sites closes it; a `ref String` payload
-        // (a real pointer) stays deferred, unpeeled. Covers i64/f64/usize-word
-        // scalars, the None arm, both the let-place and bare-call sites.
+        // the registration + call-result sites closes it. (A `ref String` payload
+        // is peeled too — see `e2e_option_ref_string_payload_display`, B-2026-07-18-40.)
+        // Covers i64/f64/usize-word scalars, the None arm, both the let-place and
+        // bare-call sites.
         if let Some(out) = run_program(
             "fn main() {\n\
                  let v = [10, 20, 30];\n\
@@ -2493,6 +2494,40 @@ mod codegen_tests {
              }",
         ) {
             assert_eq!(out, "Some(10)\nSome(30)\nSome(20)\nSome(1.5)\nNone\n");
+        }
+    }
+
+    #[test]
+    fn e2e_option_ref_string_payload_display() {
+        // B-2026-07-18-40 — `Vec[String].get(i)` / `.first()` / `.last()` are
+        // typed `Option[ref String]`, but codegen builds the `Some` payload by
+        // loading the element's whole `{ptr,len,cap}` into the 3 inline payload
+        // words (`coerce_to_payload_words(_, 3)`) — byte-identical to a plain
+        // `Option[String]`. Display previously rejected the `ref String` payload
+        // as non-reconstructable (deferred struct-Display error) while the
+        // interpreter rendered `Some(alpha)`; peeling `ref String`/`ref str` to
+        // the owned renderer closes it. Display is read-only (appends a byte
+        // copy) so the borrowed Vec buffer is untouched — leak/double-free-free
+        // (asan_display_option_ref_string_from_get). Covers get/first/last, the
+        // bare-call and let-place sites, an f-string, the None arm, and the Vec
+        // staying usable afterward.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[String] = [\"alpha\", \"beta\", \"gamma\"];\n\
+                 println(v.get(0));\n\
+                 println(v.first());\n\
+                 println(v.last());\n\
+                 let x = v.get(1);\n\
+                 println(x);\n\
+                 println(f\"{x}\");\n\
+                 println(v.get(9));\n\
+                 println(v.len());\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "Some(alpha)\nSome(alpha)\nSome(gamma)\nSome(beta)\nSome(beta)\nNone\n3\n"
+            );
         }
     }
 

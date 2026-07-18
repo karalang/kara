@@ -893,12 +893,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// binding falls through to the deferred struct-Display error (a run-vs-build
     /// divergence — the interpreter renders it, codegen refused).
     ///
-    /// RESTRICTED to scalars: a `ref String` / `ref Vec` borrow is a real
-    /// pointer whose layout differs from the inline value, so those stay on the
-    /// deferred path (unchanged) rather than being misread.
+    /// Peels a scalar inner as above, AND a `ref String` / `ref str`: the
+    /// borrow-typed `Vec[String].get(i)` / `.first()` / `.last()` return
+    /// `Option[ref String]`, but codegen builds the `Some` payload by loading the
+    /// element's whole `{ptr,len,cap}` and coercing it to the 3 inline payload
+    /// words (`vec_method.rs` `get`/`first`/`last`, `coerce_to_payload_words(_, 3)`)
+    /// — byte-identical to a plain `Option[String]`. So the DISPLAY render is the
+    /// same; peeling routes it through the owned-`String` renderer (B-2026-07-18-39
+    /// sibling). Display is read-only and never frees the payload buffer (the
+    /// renderer appends a COPY of the bytes into a fresh accumulator), so the
+    /// borrow's shared Vec buffer is untouched — no double-free. A `ref Vec` /
+    /// other compound borrow still stays on the deferred path.
     pub(super) fn peel_scalar_ref_display_payload(te: &TypeExpr) -> TypeExpr {
         if let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &te.kind {
-            if Self::is_scalar_word_display_field(inner) {
+            if Self::is_scalar_word_display_field(inner)
+                || Self::is_inline_displayable_payload(inner)
+            {
                 return (**inner).clone();
             }
         }

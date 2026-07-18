@@ -522,6 +522,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_display_option_ref_string_from_get() {
+        // B-2026-07-18-40 — displaying `Option[ref String]` (the borrow-typed
+        // result of `Vec[String].get(i)` / `.first()` / `.last()`) routes through
+        // the owned-`Option[String]` renderer (inline `{ptr,len,cap}` payload,
+        // byte-identical). Display is read-only — it appends a COPY of the bytes
+        // — so the borrowed Vec buffer must NOT be freed by the display (would
+        // double-free with the Vec's own drop). The Vec stays usable afterward.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let v: Vec[String] = ["alpha", "beta", "gamma"];
+    println(v.get(0));
+    println(v.first());
+    let x = v.get(1);
+    println(x);
+    println(f"{x}");
+    println(v.get(2));
+    println(v.len());
+}
+"#,
+            &[
+                "Some(alpha)",
+                "Some(alpha)",
+                "Some(beta)",
+                "Some(beta)",
+                "Some(gamma)",
+                "3",
+            ],
+            "asan_display_option_ref_string_from_get",
+        );
+    }
+
+    #[test]
     fn asan_autograd_tensor_valued_module() {
         // The full `std.autograd` tensor-valued surface end-to-end: leaf copies,
         // the fresh-local value/grad pushes, the `backward` accumulation, and the
