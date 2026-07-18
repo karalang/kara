@@ -31,13 +31,78 @@ struct GpuContext {
     queue: wgpu::Queue,
 }
 
+/// CG-6: pick the adapter, honoring `KARAC_GPU=<index>`.
+///
+/// Unset → wgpu's default `request_adapter` (the platform's preferred
+/// high-performance device), exactly as before. Set → the N-th adapter in
+/// `enumerate_adapters` order; a non-numeric value or an out-of-range index
+/// is a structured error LISTING every available adapter (index, name,
+/// backend, device type), so the fix is copy-paste visible. The error is
+/// returned (not aborted) so the once-cell caller can route it through the
+/// same fatal path as "no adapter"; unit tests exercise it in-process.
+fn select_adapter(
+    instance: &wgpu::Instance,
+    requested: Option<&str>,
+) -> Result<wgpu::Adapter, String> {
+    let Some(raw) = requested else {
+        return pollster::block_on(
+            instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
+        )
+        .map_err(|_| "no GPU adapter is available on this host".to_string());
+    };
+    let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+    let listing = || {
+        let mut msg = String::new();
+        if adapters.is_empty() {
+            msg.push_str("  (no adapters found)\n");
+        }
+        for (i, a) in adapters.iter().enumerate() {
+            let info = a.get_info();
+            msg.push_str(&format!(
+                "  KARAC_GPU={i}: {} [{:?}, {:?}]\n",
+                info.name, info.backend, info.device_type
+            ));
+        }
+        msg
+    };
+    let Ok(idx) = raw.parse::<usize>() else {
+        return Err(format!(
+            "KARAC_GPU must be a device index, got `{raw}`. Available:\n{}",
+            listing()
+        ));
+    };
+    if idx >= adapters.len() {
+        return Err(format!(
+            "KARAC_GPU={idx} is out of range ({} adapter(s) available). Available:\n{}",
+            adapters.len(),
+            listing()
+        ));
+    }
+    Ok(adapters.into_iter().nth(idx).expect("index checked above"))
+}
+
 fn gpu_context() -> Option<&'static GpuContext> {
     static CTX: OnceLock<Option<GpuContext>> = OnceLock::new();
     CTX.get_or_init(|| {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
+        // CG-6: `KARAC_GPU=<index>` device override. A selection ERROR (bad
+        // index / unparseable) must not silently fall back to the default
+        // adapter — print the structured message and abort here, mirroring
+        // the no-adapter posture (a `gpu.dispatch` has no CPU fallback).
+        let requested = std::env::var("KARAC_GPU").ok();
+        let adapter = match select_adapter(&instance, requested.as_deref()) {
+            Ok(a) => a,
+            Err(msg) => {
+                if requested.is_some() {
+                    crate::fatal::eprint_fmt(format_args!("runtime error: {msg}\n"));
+                    std::process::exit(1);
+                }
+                // No override + no adapter: preserve the existing behaviour —
+                // yield None and let each entry point report its own
+                // structured no-GPU error.
+                return None;
+            }
+        };
         // Request the ADAPTER's full limits, not `Limits::default()`. The default
         // is wgpu's conservative cross-platform floor (`max_storage_buffers_per_
         // shader_stage = 8`), which caps a Path-A SoA kernel at 4 fields (in+out
@@ -922,6 +987,34 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     output[i] = input[i] * 2.0;
 }
 "#;
+
+    #[test]
+    fn select_adapter_honors_index_and_reports_structured_errors() {
+        // CG-6. All three legs run against the real instance: a valid index
+        // (0) must yield an adapter when any exist; an out-of-range index
+        // and a non-numeric value must produce the structured listing
+        // error, never a silent default-adapter fallback.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let n = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all())).len();
+        if n == 0 {
+            eprintln!("gpu-cg6: no GPU adapters — skipping");
+            return;
+        }
+        assert!(
+            select_adapter(&instance, Some("0")).is_ok(),
+            "index 0 must select the first adapter"
+        );
+        let oor = select_adapter(&instance, Some("99")).unwrap_err();
+        assert!(
+            oor.contains("out of range") && oor.contains("KARAC_GPU=0:"),
+            "out-of-range error must list available adapters; got: {oor}"
+        );
+        let bad = select_adapter(&instance, Some("metal")).unwrap_err();
+        assert!(
+            bad.contains("must be a device index") && bad.contains("KARAC_GPU=0:"),
+            "non-numeric error must list available adapters; got: {bad}"
+        );
+    }
 
     #[test]
     fn doubles_an_f32_buffer_on_the_gpu() {
