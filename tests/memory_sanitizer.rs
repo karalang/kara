@@ -14534,6 +14534,35 @@ fn main() {
     }
 
     #[test]
+    fn asan_generic_struct_heap_field_move_out_no_double_free() {
+        // B-2026-07-18-44: a generic struct's owned-by-value param/self whose
+        // heap String field is returned (moved out). The monomorph analogue of
+        // B-2026-07-18-37: the cap-zero GEP'd the erased generic base layout and
+        // the mono-`str`-spelled field wasn't recognized as copy-supported, so
+        // `self` stayed a caller-retains alias and the returned field aliased a
+        // buffer both the caller and the return binding freed. Covers a free fn
+        // and a method, single- and two-field generic structs.
+        assert_clean_asan_run(
+            r#"
+struct Box[T] { v: T }
+struct Box2[T] { v: T, n: i64 }
+fn take[T](b: Box[T]) -> T { b.v }
+impl[T] Box[T] { fn get(self) -> T { self.v } }
+impl[T] Box2[T] { fn get(self) -> T { self.v } }
+fn main() {
+    println(take(Box { v: "a".to_string() }));
+    let b = Box { v: "b".to_string() };
+    println(b.get());
+    let b2 = Box2 { v: "c".to_string(), n: 1 };
+    println(b2.get());
+}
+"#,
+            &["a", "b", "c"],
+            "generic_struct_heap_field_move_out",
+        );
+    }
+
+    #[test]
     fn asan_struct_param_field_returned_no_double_free() {
         // The moved-out field is RETURNED to the caller: the deep-copy is the
         // returned value (caller owns it), the param's original field is freed

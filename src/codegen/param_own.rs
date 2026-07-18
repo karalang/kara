@@ -314,7 +314,22 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Path(p) => {
                 let head = p.segments.first().map(String::as_str).unwrap_or("");
                 match head {
-                    "String" | "Vec" | "VecDeque" => true,
+                    // "str" is the typechecker-internal spelling of `String` (see
+                    // `is_string_type_expr` / `type_expr_has_drop_heap`, which
+                    // already treat the two as synonyms). It appears here when a
+                    // generic field's bare `T` is resolved through a MONOMORPH
+                    // subst whose value is `str` — e.g. a METHOD monomorph
+                    // (`impl[T] Box[T] { fn get(self) -> T { self.v } }` at
+                    // T=String records `type_subst_names["T"] = "str"`, whereas the
+                    // free-fn twin records `String`). Omitting it made
+                    // `aggregate_param_copy_supported_struct_mono` bail, so the
+                    // generic method's owned `self` was NOT entry-copied (stayed a
+                    // caller-retains alias) and returning `self.v` double-freed the
+                    // aliased buffer (B-2026-07-18-44; the free-fn twin already
+                    // worked via the `String` spelling). `deep_copy_one_aggregate_
+                    // field` copies it correctly (it keys on `is_string_type_expr`,
+                    // which matches both spellings).
+                    "String" | "str" | "Vec" | "VecDeque" => true,
                     "Slice" => true,
                     // Heap the outer-buffer copy can't duplicate → bail.
                     "Map" | "HashMap" | "Set" | "HashSet" | "SortedSet" | "SortedMap"

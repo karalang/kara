@@ -2477,6 +2477,38 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_generic_struct_heap_field_move_out_no_double_free() {
+        // B-2026-07-18-44: a GENERIC struct's owned-by-value param/self whose
+        // heap field is returned (moved out) double-freed under AOT/JIT — the
+        // monomorph analogue of the non-generic B-2026-07-18-37. Two root gaps:
+        // (1) the field move-out cap-zero GEP'd the generic base struct type
+        // (erased placeholder fields) instead of the concrete mono layout, and
+        // the receiver-type guard rejected the mono slot type; (2) a generic
+        // method monomorph records `type_subst_names["T"] = "str"` (vs the
+        // free-fn's "String"), which `field_copy_supported` didn't recognize, so
+        // `self` was never entry-copied and stayed a caller-retains alias.
+        // Fixed by making the cap-zero mono-aware and treating "str" as "String".
+        // Covers a free fn (`b.v`) and a method (`self.v`), single- and
+        // two-field generic structs, at T=String.
+        if let Some(out) = run_program(
+            "struct Box[T] { v: T }\n\
+             struct Box2[T] { v: T, n: i64 }\n\
+             fn take[T](b: Box[T]) -> T { b.v }\n\
+             impl[T] Box[T] { fn get(self) -> T { self.v } }\n\
+             impl[T] Box2[T] { fn get(self) -> T { self.v } }\n\
+             fn main() {\n\
+                 println(take(Box { v: \"a\".to_string() }));\n\
+                 let b = Box { v: \"b\".to_string() };\n\
+                 println(b.get());\n\
+                 let b2 = Box2 { v: \"c\".to_string(), n: 1 };\n\
+                 println(b2.get());\n\
+             }",
+        ) {
+            assert_eq!(out, "a\nb\nc\n");
+        }
+    }
+
+    #[test]
     fn e2e_ref_atomic_param_aliases_caller_cell() {
         // B-2026-07-18-30: a `ref Atomic[T]` / `mut ref Atomic[T]` parameter's
         // alloca holds a POINTER to the caller's atomic storage, but

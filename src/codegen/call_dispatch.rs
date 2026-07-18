@@ -4279,22 +4279,46 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         field: &str,
     ) {
-        let Some(&st) = self.struct_types.get(struct_name) else {
-            return;
-        };
         let Some(field_names) = self.struct_field_names.get(struct_name) else {
             return;
         };
         let Some(idx) = field_names.iter().position(|n| n == field) else {
             return;
         };
-        let fname = self
-            .struct_field_type_names
+        // GEP struct type: inside a generic-fn monomorph use the CONCRETE mono
+        // struct type — its field offsets match the stored value, whereas the
+        // generic base type has an erased placeholder at each bare-`T` position
+        // (`Box[T].v` at T=String: base lays the field out as `i64`, the mono as
+        // `{ptr,len,cap}`), so GEP-ing field 2 (`cap`) off the base would write
+        // the wrong offset. Outside a monomorph (empty subst) this returns the
+        // base type, so non-generic callers are byte-identical to before.
+        // B-2026-07-18-44.
+        let Some(st) = self
+            .mono_struct_type_from_active_subst(struct_name)
+            .or_else(|| self.struct_types.get(struct_name).copied())
+        else {
+            return;
+        };
+        // Concrete field type, resolved through the active monomorph subst so a
+        // bare-`T` field is seen as its real type (a no-op outside a monomorph).
+        let field_te = self
+            .struct_field_type_exprs
             .get(struct_name)
             .and_then(|v| v.get(idx))
-            .and_then(|o| o.as_deref())
-            .unwrap_or("")
-            .to_string();
+            .map(|te| self.subst_monomorph_type_params(te));
+        let fname = field_te
+            .as_ref()
+            .and_then(|te| match &te.kind {
+                TypeKind::Path(p) => p.segments.first().map(|s| s.to_string()),
+                _ => None,
+            })
+            .or_else(|| {
+                self.struct_field_type_names
+                    .get(struct_name)
+                    .and_then(|v| v.get(idx))
+                    .and_then(|o| o.clone())
+            })
+            .unwrap_or_default();
         let Ok(field_ptr) = self
             .builder
             .build_struct_gep(st, base_ptr, idx as u32, "sfld.move.p")
@@ -4303,7 +4327,14 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let vec_ty = self.vec_struct_type();
         let zero = self.context.i64_type().const_int(0, false);
-        if matches!(fname.as_str(), "Vec" | "VecDeque" | "String") {
+        // Match Vec/String by concrete LLVM shape too: a String field resolved
+        // through the monomorph subst carries the name `str`, which the name list
+        // below would miss — but it lowers to the same `{ptr,len,cap}` vec struct.
+        let field_is_vecish = matches!(fname.as_str(), "Vec" | "VecDeque" | "String")
+            || field_te
+                .as_ref()
+                .is_some_and(|te| self.llvm_type_for_type_expr(te) == vec_ty.into());
+        if field_is_vecish {
             if let Ok(cap_ptr) =
                 self.builder
                     .build_struct_gep(vec_ty, field_ptr, 2, "sfld.move.cap")
@@ -4430,11 +4461,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.var_type_names.get(s).cloned(),
                 ) {
                     if !self.shared_types.contains_key(struct_name.as_str()) {
-                        if let Some(&st) = self.struct_types.get(struct_name.as_str()) {
-                            if matches!(
-                                slot.ty,
-                                inkwell::types::BasicTypeEnum::StructType(held) if held == st
-                            ) {
+                        let gep_st = self
+                            .mono_struct_type_from_active_subst(struct_name.as_str())
+                            .or_else(|| self.struct_types.get(struct_name.as_str()).copied());
+                        // The slot must hold the struct INLINE (owned): a `ref
+                        // Struct` param's slot is an 8-byte pointer, not the
+                        // struct value, so cap-zeroing there would corrupt the
+                        // caller. Accept the slot when it equals EITHER the base
+                        // struct type OR — inside a generic-fn monomorph — the
+                        // concrete mono struct type (`Box[T].get` at T=String:
+                        // the slot is the mono `{ {ptr,len,cap} }`, not the
+                        // generic base whose field is an erased `i64`). Without
+                        // the mono arm a generic method/free-fn returning a heap
+                        // field of an owned by-value self/param never cap-zeroed
+                        // the moved field, so the mono struct-drop freed it AND
+                        // the caller freed the returned value — a double-free
+                        // (B-2026-07-18-44; the monomorph analogue of the
+                        // non-generic B-2026-07-18-37).
+                        if let (BasicTypeEnum::StructType(held), Some(st)) = (slot.ty, gep_st) {
+                            if held == st {
                                 self.zero_struct_field_move_cap(slot.ptr, &struct_name, field);
                             }
                         }
