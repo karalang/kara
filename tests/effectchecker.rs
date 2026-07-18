@@ -7341,6 +7341,80 @@ fn test_par_block_bare_write_rejected() {
 }
 
 #[test]
+fn test_par_block_captured_local_let_mut_write_rejected() {
+    // B-2026-07-18-27: a captured FUNCTION-LOCAL `let mut` written from a par
+    // branch (not a module binding) must ALSO be rejected. A local carries no
+    // synthetic per-binding resource, so the module-binding conflict pass
+    // above never sees it; the write then races and diverges run-vs-build
+    // (codegen copies each branch's env by value and drops the write; the
+    // interpreter merges only the last branch). One diagnostic per offending
+    // captured binding.
+    let errors = effectcheck_errors(
+        "fn run() {\n\
+             let mut a = 0;\n\
+             let mut b = 0;\n\
+             par { a = 10; b = 20; }\n\
+         }",
+    );
+    assert!(
+        has_par_conflict_for(&errors, "a"),
+        "expected par-write rejection for captured local 'a'; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        has_par_conflict_for(&errors, "b"),
+        "expected par-write rejection for captured local 'b'; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_par_block_atomic_local_method_not_rejected() {
+    // The sanctioned escape (B-2026-07-18-28): a captured `Atomic` local
+    // mutated via `.fetch_add` in par branches is NOT an assignment (it is a
+    // method call) and `Atomic` is a concurrency primitive — no par-write
+    // conflict is raised. Codegen shares it by pointer, and the ownership
+    // exemption lets it pass `check`.
+    let result = effectcheck_all(
+        "fn run() {\n\
+             let c = Atomic.new(0);\n\
+             par {\n\
+                 c.fetch_add(1, MemoryOrdering.SeqCst);\n\
+                 c.fetch_add(1, MemoryOrdering.SeqCst);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ModuleBindingWriteInPar),
+        "an Atomic local mutated via fetch_add in par must NOT be flagged; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_par_block_branch_local_let_mut_not_rejected() {
+    // Conservative-check guard (B-2026-07-18-27): a `let mut` declared INSIDE a
+    // par branch is branch-local, not a captured enclosing binding, so its
+    // in-branch write is safe and must not be flagged.
+    let result = effectcheck_all(
+        "fn run() {\n\
+             par {\n\
+                 { let mut x = 0; x = x + 1; }\n\
+                 { let mut y = 0; y = y + 1; }\n\
+             }\n\
+         }",
+    );
+    assert!(
+        !has_par_conflict_for(&result.errors, "x") && !has_par_conflict_for(&result.errors, "y"),
+        "branch-local `let mut` writes must NOT be flagged; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_par_block_write_via_callee_rejected() {
     // Transitive write via a function call inside `par { }`. The
     // effect-set check is the load-bearing property: the callee
@@ -7406,16 +7480,19 @@ fn test_par_block_reader_writer_cross_branch_rejected() {
 
 #[test]
 fn test_par_block_reader_reader_allowed() {
+    // Two branches that each READ the module binding COUNTER — reader+reader is
+    // a non-conflict, so no `ModuleBindingWriteInPar` fires. Each branch reads
+    // COUNTER into a BRANCH-LOCAL `let` (not a captured outer `let mut`); a
+    // captured-local write like `snap1 = COUNTER` would itself race and is
+    // correctly rejected by the B-2026-07-18-27 captured-local-write rule, so
+    // the read is expressed without one.
     let result = effectcheck_ok(
         "let mut COUNTER: i64 = 0;\n\
-         fn run() -> i64 {\n\
-             let mut snap1: i64 = 0;\n\
-             let mut snap2: i64 = 0;\n\
+         fn run() {\n\
              par {\n\
-                 snap1 = COUNTER;\n\
-                 snap2 = COUNTER;\n\
+                 { let s1: i64 = COUNTER; print(s1); }\n\
+                 { let s2: i64 = COUNTER; print(s2); }\n\
              }\n\
-             snap1 + snap2\n\
          }",
     );
     assert!(

@@ -151,6 +151,268 @@ fn type_is_concurrency_primitive(ty: &TypeExpr) -> bool {
     matches!(last, "Atomic" | "Mutex" | "RwLock" | "Arc")
 }
 
+/// True when a LOCAL `let` binding declares a concurrency primitive — either
+/// by an explicit `Atomic[T]` / `Mutex[T]` / `RwLock[T]` / `Arc[..]`
+/// annotation, or (unannotated) by an `X.new(..)` constructor RHS for one of
+/// those wrapper types (`let c = Atomic.new(0)` parses as
+/// `Call(Path([\"Atomic\", \"new\"]), ..)`). Such a binding is the SANCTIONED
+/// escape for mutating captured state inside `par {}` (design.md §1329, and
+/// B-2026-07-18-28 makes the Atomic/Mutex case actually work under codegen),
+/// so a write to it must NOT be flagged by the captured-local-write check.
+fn is_concurrency_primitive_local_decl(ty: Option<&TypeExpr>, value: &Expr) -> bool {
+    if let Some(te) = ty {
+        if type_is_concurrency_primitive(te) {
+            return true;
+        }
+    }
+    if let ExprKind::Call { callee, .. } = &value.kind {
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && matches!(segments[0].as_str(), "Atomic" | "Mutex" | "RwLock" | "Arc")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The three name-sets the captured-local-write check needs (B-2026-07-18-27),
+/// gathered in one AST pass over a function body:
+/// - `mut_nonprim`: `let mut` locals declared OUTSIDE any `par {}` whose type
+///   is not a concurrency primitive — the bindings a par-branch write races.
+/// - `prim`: locals (any) declared OUTSIDE `par {}` whose type IS a
+///   concurrency primitive — the sanctioned escape, never flagged.
+/// - `branch_local`: every binding name declared INSIDE some `par {}` branch —
+///   these shadow enclosing names, so a same-named write in a branch targets
+///   the branch-local, not a capture, and must not be flagged.
+#[derive(Default)]
+struct ParWriteScope {
+    mut_nonprim: HashSet<String>,
+    prim: HashSet<String>,
+    branch_local: HashSet<String>,
+}
+
+fn collect_par_write_scope_block(block: &Block, in_par: bool, out: &mut ParWriteScope) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let {
+                is_mut,
+                pattern,
+                ty,
+                value,
+            } => {
+                collect_par_write_scope_expr(value, in_par, out);
+                let is_prim = is_concurrency_primitive_local_decl(ty.as_ref(), value);
+                for name in pattern.binding_names() {
+                    if in_par {
+                        out.branch_local.insert(name);
+                    } else if is_prim {
+                        out.prim.insert(name);
+                    } else if *is_mut {
+                        out.mut_nonprim.insert(name);
+                    }
+                }
+            }
+            StmtKind::LetElse {
+                pattern,
+                ty,
+                value,
+                else_block,
+            } => {
+                collect_par_write_scope_expr(value, in_par, out);
+                collect_par_write_scope_block(else_block, in_par, out);
+                // `let ... else` carries no `is_mut` and is rarely mutable;
+                // record only the primitive escape / branch-local shadow so a
+                // hypothetical mutable one is never wrongly flagged.
+                let is_prim = is_concurrency_primitive_local_decl(ty.as_ref(), value);
+                for name in pattern.binding_names() {
+                    if in_par {
+                        out.branch_local.insert(name);
+                    } else if is_prim {
+                        out.prim.insert(name);
+                    }
+                }
+            }
+            StmtKind::LetUninit { is_mut, name, .. } => {
+                if in_par {
+                    out.branch_local.insert(name.clone());
+                } else if *is_mut {
+                    out.mut_nonprim.insert(name.clone());
+                }
+            }
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                collect_par_write_scope_expr(target, in_par, out);
+                collect_par_write_scope_expr(value, in_par, out);
+            }
+            StmtKind::Expr(e) => collect_par_write_scope_expr(e, in_par, out),
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                collect_par_write_scope_block(body, in_par, out)
+            }
+            StmtKind::MultiAssign { .. } => {}
+        }
+    }
+    if let Some(e) = &block.final_expr {
+        collect_par_write_scope_expr(e, in_par, out);
+    }
+}
+
+fn collect_par_write_scope_expr(expr: &Expr, in_par: bool, out: &mut ParWriteScope) {
+    macro_rules! ge {
+        ($e:expr) => {
+            collect_par_write_scope_expr($e, in_par, out)
+        };
+    }
+    macro_rules! gb {
+        ($b:expr) => {
+            collect_par_write_scope_block($b, in_par, out)
+        };
+    }
+    match &expr.kind {
+        // Descend into par branches with `in_par = true` so their local decls
+        // register as branch-local shadows (and nested pars stay in_par).
+        ExprKind::Par(b) => collect_par_write_scope_block(b, true, out),
+        ExprKind::Block(b)
+        | ExprKind::Comptime(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Try(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Providers { body: b, .. }
+        | ExprKind::LabeledBlock { body: b, .. } => gb!(b),
+        ExprKind::Loop { body, .. } => gb!(body),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            ge!(condition);
+            gb!(then_block);
+            if let Some(eb) = else_branch {
+                ge!(eb);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            ge!(value);
+            gb!(then_block);
+            if let Some(eb) = else_branch {
+                ge!(eb);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            ge!(condition);
+            gb!(body);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            ge!(value);
+            gb!(body);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            ge!(iterable);
+            gb!(body);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            ge!(scrutinee);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    ge!(g);
+                }
+                ge!(&arm.body);
+            }
+        }
+        ExprKind::Closure { body, .. } => ge!(body),
+        ExprKind::Lock { mutex, body, .. } => {
+            ge!(mutex);
+            gb!(body);
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::NilCoalesce { left, right }
+        | ExprKind::Pipe { left, right } => {
+            ge!(left);
+            ge!(right);
+        }
+        ExprKind::Unary { operand, .. } => ge!(operand),
+        ExprKind::Call { callee, args } => {
+            ge!(callee);
+            for a in args {
+                ge!(&a.value);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            ge!(object);
+            for a in args {
+                ge!(&a.value);
+            }
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => ge!(object),
+        ExprKind::OptionalChain { object, args, .. } => {
+            ge!(object);
+            if let Some(args) = args {
+                for a in args {
+                    ge!(&a.value);
+                }
+            }
+        }
+        ExprKind::Index { object, index } => {
+            ge!(object);
+            ge!(index);
+        }
+        ExprKind::Question(inner) | ExprKind::Cast { expr: inner, .. } => ge!(inner),
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                ge!(s);
+            }
+            if let Some(e) = end {
+                ge!(e);
+            }
+        }
+        ExprKind::Tuple(items)
+        | ExprKind::ArrayLiteral(items)
+        | ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for it in items {
+                ge!(it);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            ge!(value);
+            ge!(count);
+        }
+        ExprKind::MapLiteral(entries) => {
+            for (k, v) in entries {
+                ge!(k);
+                ge!(v);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                ge!(&f.value);
+            }
+            if let Some(s) = spread {
+                ge!(s);
+            }
+        }
+        ExprKind::Return(opt) | ExprKind::Break { value: opt, .. } => {
+            if let Some(e) = opt {
+                ge!(e);
+            }
+        }
+        ExprKind::InterpolatedStringLit(parts) => {
+            for part in parts {
+                if let ParsedInterpolationPart::Expr(e, _) = part {
+                    ge!(e);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 impl<'a> super::EffectChecker<'a> {
     /// For every module-level `let mut BINDING`, seed `inferred_effects`
     /// with two synthetic callee keys carrying the read/write effects
@@ -300,6 +562,76 @@ impl<'a> super::EffectChecker<'a> {
                 subtype_trace: None,
                 replacement: None,
             });
+        }
+    }
+
+    /// B-2026-07-18-27: reject a captured LOCAL `let mut` written from inside a
+    /// `par {}` branch. `check_one_par_block` above only catches MODULE-level
+    /// bindings (they carry synthetic per-binding write effects); a captured
+    /// local carries none, so `let mut a = 0; par { a = 10; }` slipped through
+    /// the static check — a data race that then produces DIVERGENT results
+    /// (codegen copies each branch's env by value and drops the write; the
+    /// interpreter merges only the last branch), never the naive answer. Per
+    /// design.md §104 (data-race freedom) + §1329 such a write must be a
+    /// compile error unless the binding is wrapped in Atomic/Mutex/RwLock/Arc
+    /// (the sanctioned escape B-2026-07-18-28 makes actually work), or marked
+    /// `#[thread_local]` for per-task state.
+    ///
+    /// The check is deliberately CONSERVATIVE (the ledger flagged over-rejection
+    /// risk): it flags only a `let mut` local declared outside every `par {}`
+    /// (`mut_nonprim`) that is neither a concurrency primitive (`prim`) nor
+    /// shadowed by any par-branch-local of the same name (`branch_local`). The
+    /// resolver already guarantees a name assigned inside a branch is in scope,
+    /// so any surviving flagged root is necessarily a captured enclosing
+    /// binding — no per-branch scope stack needed. Bindings shadowed in a
+    /// SIBLING branch are conservatively skipped (a rare false negative, never
+    /// a false positive).
+    pub(crate) fn check_captured_local_par_writes(&mut self) {
+        let work: Vec<Block> = self
+            .function_bodies
+            .values()
+            .map(|f| f.body.clone())
+            .chain(self.method_bodies.values().map(|f| f.body.clone()))
+            .collect();
+        for body in &work {
+            let mut scope = ParWriteScope::default();
+            collect_par_write_scope_block(body, false, &mut scope);
+            // The flag set: enclosing non-primitive `let mut` locals that are
+            // neither the sanctioned primitive escape nor a par-branch shadow.
+            let flagged: HashSet<String> = scope
+                .mut_nonprim
+                .iter()
+                .filter(|n| !scope.prim.contains(*n) && !scope.branch_local.contains(*n))
+                .cloned()
+                .collect();
+            if flagged.is_empty() {
+                continue;
+            }
+            // One diagnostic per offending binding per function body (dedup
+            // across the body's par blocks and any nested-par re-report).
+            let mut reported: HashSet<String> = HashSet::new();
+            for (par_block, par_span) in collect_par_blocks_in_block(body) {
+                let mut roots: HashSet<String> = HashSet::new();
+                collect_assigned_roots_block(&par_block, &mut roots);
+                let mut ordered: Vec<&String> =
+                    roots.iter().filter(|r| flagged.contains(*r)).collect();
+                ordered.sort(); // deterministic diagnostic order
+                for root in ordered {
+                    if !reported.insert(root.clone()) {
+                        continue;
+                    }
+                    self.errors.push(super::EffectError {
+                        message: format!(
+                            "local let mut '{}' cannot be written from inside par {{ }} — each branch runs on its own thread, so the write races and is dropped under codegen (the interpreter merges only the last branch); wrap it in Atomic[T], Mutex[T], RwLock[T], or Arc[shared struct S], or use #[thread_local] for per-task state",
+                            root
+                        ),
+                        span: par_span.clone(),
+                        kind: super::EffectErrorKind::ModuleBindingWriteInPar,
+                        subtype_trace: None,
+                        replacement: None,
+                    });
+                }
+            }
         }
     }
 

@@ -320,6 +320,67 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_par_multi_branch_bare_atomic_local_shared_by_pointer() {
+        // B-2026-07-18-28: 2+ par branches mutating a captured BARE `Atomic`
+        // local (`let c = Atomic.new(0)`, not a par-struct field) must all RMW
+        // the ONE parent cell. Pre-fix the env struct copied the Atomic BY
+        // VALUE, so each branch's `fetch_add` hit a private copy and the parent
+        // read 0 (interp gave 2). Now concurrency primitives are captured by
+        // pointer, so the mutations are visible after the barrier — and the
+        // ownership exemption lets the sanctioned pattern pass `check`, which is
+        // why `run_program`'s `assert_ownership_clean` doesn't trip.
+        let out = run_program(
+            r#"
+fn main() {
+    let c = Atomic.new(0);
+    par {
+        c.fetch_add(1, MemoryOrdering.SeqCst);
+        c.fetch_add(1, MemoryOrdering.SeqCst);
+    }
+    print(c.load(MemoryOrdering.SeqCst));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "2",
+                "two par branches over a captured bare Atomic must total 2; got {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_par_multi_branch_bare_mutex_local_shared_by_pointer() {
+        // Mutex sibling of B-2026-07-18-28: `Mutex[T]` is likewise an inline
+        // `{ i64 flag, T }` cell, so a by-value capture gave each branch a
+        // private lock+value. Captured by pointer, the TAS-spinlock and the
+        // guarded value are shared, so four `lock m { m = m + 1 }` branches
+        // total 4 rather than dropping to the last-writer's private copy.
+        let out = run_program(
+            r#"
+fn main() {
+    let m = Mutex.new(0);
+    par {
+        lock m { m = m + 1; }
+        lock m { m = m + 1; }
+        lock m { m = m + 1; }
+        lock m { m = m + 1; }
+    }
+    lock m { print(m); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "4",
+                "four par branches over a captured bare Mutex must total 4; got {out:?}"
+            );
+        }
+    }
+
     /// Regression: codegen must keep REJECTING the implicit-ordering form (the
     /// `build` side of B-2026-06-30-5) rather than silently defaulting an
     /// ordering. Uses a `ref`-param receiver whose field types as `Type::Error`

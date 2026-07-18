@@ -257,6 +257,22 @@ impl<'a> super::OwnershipChecker<'a> {
     /// region boundaries".) The `is_par` check precedes `is_shared`; the two
     /// are mutually exclusive but the order makes the exemption explicit.
     fn classify_binding_type(&self, name: &str) -> Option<BindingKind> {
+        // Concurrency primitives — `Atomic[T]`, `Mutex[T]`, `RwLock[T]`,
+        // `Arc[..]` — are cross-task-safe BY DEFINITION: they are the
+        // design-sanctioned escape for sharing mutable state across `par {}` /
+        // `spawn` / TaskGroup boundaries (design.md §1329 concurrency rule +
+        // § Part 5b). Their par captures are shared by POINTER, not copied by
+        // value, so every branch RMW / lock hits the one cell
+        // (B-2026-07-18-28) — a binding of one of these types reachable from
+        // 2+ sibling branches is safe, not an `E_CONCURRENT_*` conflict. The
+        // baked stdlib registers `struct Atomic[T] {}` / `Mutex[T]` / … as
+        // ordinary structs in `struct_info`, so WITHOUT this early exemption
+        // the plain-`struct` arm below mis-classifies them as `Plain` and the
+        // sanctioned pattern is rejected at `karac check`. Same `None`-means-
+        // exempt contract as the `par struct` / `par enum` arms below.
+        if matches!(name, "Atomic" | "Mutex" | "RwLock" | "Arc") {
+            return None;
+        }
         if let Some(info) = self.typecheck_result.struct_info.get(name) {
             if info.is_par {
                 return None;

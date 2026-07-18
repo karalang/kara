@@ -1134,6 +1134,7 @@ impl<'a> EffectChecker<'a> {
         self.check_with_e_unification();
         self.check_profile_compat();
         self.check_modbind_par_conflicts();
+        self.check_captured_local_par_writes();
         // Phase-10: effect-driven target gating — reachable-from-entry
         // host-resource availability for the current target.
         self.check_target_gate();

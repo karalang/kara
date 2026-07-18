@@ -65,6 +65,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// carrying an explicit `Result[...]` path annotation match.
     /// Inferred Result types (`let r = maybe_fail();`) fold in
     /// alongside slice 2's typechecker-side hooks. Returns `None`
+    /// True for the INLINE-value concurrency primitives whose par captures
+    /// must be shared by pointer rather than copied by value (B-2026-07-18-28):
+    /// `Atomic[T]` (a bare `T` cell) and `Mutex[T]` (`{ i64 flag, T }`). Both
+    /// live directly in the binding's stack slot, so a by-value env copy gives
+    /// each branch a private cell whose RMW / lock is invisible to the parent
+    /// and to sibling branches. `Arc`/`shared` capture is handled separately by
+    /// `ParCaptureMode::SharedRc` (already a shared heap pointer), and plain
+    /// `let mut` captures are rejected upstream by the concurrency checker
+    /// (B-2026-07-18-27) — so this set is exactly the two by-pointer cells.
+    /// The classification is by codegen's `var_type_names` surface tag, the
+    /// same tag `resolve_atomic_storage` / the `lock` lowering dispatch on.
+    fn is_par_shared_cell_type(type_name: Option<&str>) -> bool {
+        matches!(type_name, Some("Atomic") | Some("Mutex"))
+    }
+
     /// for non-let statements and for lets without a Result-shaped
     /// annotation.
     fn branch_result_binding_name(stmt: &Stmt) -> Option<String> {
@@ -639,8 +654,31 @@ impl<'ctx> super::Codegen<'ctx> {
         //    struct shape predictable per spawn-site for downstream
         //    debugger introspection).
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let mut env_field_types: Vec<BasicTypeEnum<'ctx>> =
-            captures.iter().map(|n| self.variables[n].ty).collect();
+        // Concurrency primitives stored as INLINE value cells — `Atomic[T]`
+        // (a bare `T` slot) and `Mutex[T]` (`{ i64 flag, T }`) — must be
+        // captured BY POINTER so every branch's RMW / lock hits the SAME
+        // parent cell. Capturing by value gives each branch a private copy
+        // whose mutations are silently dropped, and dropped mutations is the
+        // whole of B-2026-07-18-28 (the design-recommended `Atomic`/`Mutex`
+        // escape hatch producing a wrong answer with no diagnostic). The
+        // parent frame outlives every branch (`karac_par_run` is a barrier),
+        // so threading its alloca address through the env struct is sound — and
+        // it is the only way real cross-thread atomicity/mutual-exclusion holds.
+        let par_shared_cell: Vec<bool> = captures
+            .iter()
+            .map(|n| Self::is_par_shared_cell_type(self.var_type_names.get(n).map(String::as_str)))
+            .collect();
+        let mut env_field_types: Vec<BasicTypeEnum<'ctx>> = captures
+            .iter()
+            .zip(&par_shared_cell)
+            .map(|(n, &by_ptr)| {
+                if by_ptr {
+                    ptr_ty.into()
+                } else {
+                    self.variables[n].ty
+                }
+            })
+            .collect();
         let provider_head_idx = env_field_types.len();
         env_field_types.push(ptr_ty.into());
         // phase-8 line 153: i64 snapshot of the parent thread's active
@@ -677,7 +715,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut env_agg = env_struct_ty.get_undef();
         for (i, name) in captures.iter().enumerate() {
             let slot = self.variables[name];
-            let val = self.builder.build_load(slot.ty, slot.ptr, name).unwrap();
+            // Shared-cell capture (Atomic/Mutex): thread the parent alloca
+            // ADDRESS through the env struct instead of the loaded value, so
+            // the branch binds to the one shared cell (B-2026-07-18-28).
+            let val: BasicValueEnum<'ctx> = if par_shared_cell[i] {
+                slot.ptr.into()
+            } else {
+                self.builder.build_load(slot.ty, slot.ptr, name).unwrap()
+            };
             env_agg = self
                 .builder
                 .build_insert_value(env_agg, val, i as u32, "__par_env_field")
@@ -1672,6 +1717,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_extract_value(env_val.into_struct_value(), i as u32, var_name)
                     .unwrap();
+                // Shared-cell capture (Atomic/Mutex, B-2026-07-18-28): the env
+                // field is the PARENT alloca address, not a value copy. Bind the
+                // branch-local directly to that shared address (no private
+                // alloca, no store) so `.fetch_add` / `.store` / `lock {}` RMW
+                // the one parent cell and the mutation is visible after the
+                // barrier. `saved_var_types` is the parent's `var_type_names`
+                // (mem::take'd above), so this classification matches the
+                // by-pointer decision `emit_par_run` made when it built the env
+                // struct; `saved_vars` still holds the parent slot's value type
+                // (`i64` for Atomic, `{i64,T}` for Mutex) that the atomic/lock
+                // codegen reads back through `resolve_atomic_storage`.
+                if Self::is_par_shared_cell_type(saved_var_types.get(var_name).map(String::as_str))
+                {
+                    let shared_ptr = field_val.into_pointer_value();
+                    let value_ty = saved_vars.get(var_name).map(|s| s.ty).unwrap_or(cap_ty);
+                    self.variables.insert(
+                        var_name.clone(),
+                        VarSlot {
+                            ptr: shared_ptr,
+                            ty: value_ty,
+                        },
+                    );
+                    if let Some(type_name) = saved_var_types.get(var_name) {
+                        self.var_type_names
+                            .insert(var_name.clone(), type_name.clone());
+                    }
+                    continue;
+                }
                 let alloca = self.create_entry_alloca(branch_fn, var_name, cap_ty);
                 self.builder.build_store(alloca, field_val).unwrap();
                 self.variables.insert(
