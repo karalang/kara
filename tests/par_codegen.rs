@@ -6441,6 +6441,132 @@ fn main() {
         );
     }
 
+    // ── B-2026-07-17-21: tabulate declines RC/heap-payload elements ──────
+    //
+    // LLVM-level POD is not semantic POD: `Option[shared T]` and heap-payload
+    // enums lower to all-i64 words (pointers ride as ptrtoint / payload
+    // words), so the type-level gate alone let them into the tabulate/collect
+    // raw-store paths — but the pushed binding's per-iteration cleanup still
+    // released the payload, over-freeing every stored element (AOT UAF; the
+    // interpreter was correct). Both the seq-tabulate gate and the par
+    // collect gate now consult `vec_elem_agg_drop_for_type_expr` — the SAME
+    // oracle the scope-exit cleanup uses — and decline any element type that
+    // needs per-element drop work.
+
+    const RC_ELEM_SEQ_SRC: &str = r#"
+shared struct Node2 {
+    val: i64,
+}
+
+fn main() {
+    let mut v: Vec[Option[Node2]] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5i64 {
+        let x = Some(Node2 { val: i * 10i64 });
+        v.push(x);
+        i = i + 1i64;
+    }
+    let mut total: i64 = 0;
+    let mut j: i64 = 0;
+    while j < 5i64 {
+        match v[j] {
+            Some(n) => { total = total + n.val; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(total);
+}
+"#;
+
+    const HEAP_ENUM_ELEM_SRC: &str = r#"
+enum Tok2 {
+    Word(String),
+    Num(i64),
+}
+
+fn main() {
+    let mut v: Vec[Tok2] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 4i64 {
+        let x = Tok2.Word(f"w{i}");
+        v.push(x);
+        i = i + 1i64;
+    }
+    let mut total: i64 = 0;
+    let mut j: i64 = 0;
+    while j < 4i64 {
+        match v[j] {
+            Tok2.Word(s) => { total = total + (s.len() as i64); }
+            Tok2.Num(n) => { total = total + n; }
+        }
+        j = j + 1i64;
+    }
+    println(total);
+}
+"#;
+
+    #[test]
+    fn test_ir_seq_tabulate_declines_opt_shared_and_heap_enum_elements() {
+        let ir = ir_for_par(RC_ELEM_SEQ_SRC);
+        assert!(
+            !ir.contains("stab.run"),
+            "seq tabulate must DECLINE a Vec[Option[shared]] accumulator \
+             (raw store cannot move RC ownership); got:\n{ir}"
+        );
+        let ir2 = ir_for_par(HEAP_ENUM_ELEM_SRC);
+        assert!(
+            !ir2.contains("stab.run"),
+            "seq tabulate must DECLINE a heap-payload enum accumulator; got:\n{ir2}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_seq_push_loop_opt_shared_element_values_survive() {
+        let Some(out) = run_program(RC_ELEM_SEQ_SRC) else {
+            return;
+        };
+        assert_eq!(
+            out.trim(),
+            "100",
+            "Vec[Option[shared]] elements over-released (B-2026-07-17-21)"
+        );
+    }
+
+    #[test]
+    fn test_e2e_seq_push_loop_heap_enum_element_values_survive() {
+        let Some(out) = run_program(HEAP_ENUM_ELEM_SRC) else {
+            return;
+        };
+        assert_eq!(
+            out.trim(),
+            "8",
+            "heap-payload enum elements over-released (B-2026-07-17-21)"
+        );
+    }
+
+    #[test]
+    fn test_e2e_par_push_loop_heap_enum_declines_and_survives() {
+        // Par leg of B-2026-07-17-21: the par collect gate must also decline
+        // (workers' raw stores + the combine's byte-moves can't transfer
+        // per-element ownership). Values must survive read-back.
+        let src = HEAP_ENUM_ELEM_SRC.replace(
+            "    while i < 4i64 {",
+            "    #[par_unordered]\n    while i < 4i64 {",
+        );
+        let ir = ir_for_par(&src);
+        assert!(
+            !ir.contains("worker_collect_tab_") && !ir.contains("reduce_worker_collect"),
+            "par collect must DECLINE a heap-payload enum accumulator; got:\n{ir}"
+        );
+        let Some(out) = run_program(&src) else { return };
+        assert_eq!(
+            out.trim(),
+            "8",
+            "par heap-enum elements over-released (B-2026-07-17-21 par leg)"
+        );
+    }
+
     // ── Sequential collect tabulate (2026-07-16) ─────────────────────────
     //
     // The unannotated sibling of par tabulate: a counted single-push loop

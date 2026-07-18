@@ -1566,6 +1566,23 @@ impl<'ctx> super::Codegen<'ctx> {
         if !llvm_ty_is_pod(elem_ty) {
             return Ok(None);
         }
+        // B-2026-07-17-21 (par leg): LLVM-level POD is NOT semantic POD — a
+        // heap-payload enum (`Tok::Word(String)`) or `Option[shared T]`
+        // element lowers to all-i64 words (pointers ride as payload words),
+        // so it passes the check above, but the workers' raw stores and the
+        // combine's byte-moves cannot transfer per-element ownership: the
+        // pushed binding's per-iteration cleanup still releases the payload
+        // (use-after-free on read-back). Same semantic oracle as the seq
+        // tabulate gate — the scope-exit cleanup's own drop classifier.
+        if let Some(elem_te) = self
+            .var_elem_type_exprs
+            .get(&reduction.accumulator)
+            .cloned()
+        {
+            if self.vec_elem_agg_drop_for_type_expr(&elem_te).is_some() {
+                return Ok(None);
+            }
+        }
         // ABI (alloc) size, NOT store size: Vec's push/index GEPs stride by
         // `elem_ty.size_of()` = alloc size (tail padding included), so the
         // combine's byte offsets must match. A padded struct element
@@ -3056,6 +3073,23 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_ty = self.vec_elem_type_for_var(&acc);
         if !llvm_ty_is_pod(elem_ty) {
             return Ok(None);
+        }
+        // B-2026-07-17-21: LLVM-level POD is NOT semantic POD. An
+        // `Option[shared T]` / heap-payload enum element lowers to all-i64
+        // words (the pointer rides as `ptrtoint`, the String data pointer as
+        // a payload word), so it passes the check above — but the raw
+        // tabulate store is a MOVE the ownership bookkeeping doesn't see:
+        // the pushed binding's per-iteration cleanup still releases the
+        // payload, over-freeing every element the loop stores (use-after-
+        // free / double-free on read-back). Decline any element whose type
+        // needs per-element drop work — the SAME oracle the scope-exit
+        // cleanup drain uses, so the gate and the cleanup can never disagree.
+        // Scalars, POD structs (the LBM Cell shape), and Option[scalar] all
+        // return None here and keep the lowering.
+        if let Some(elem_te) = self.var_elem_type_exprs.get(&acc).cloned() {
+            if self.vec_elem_agg_drop_for_type_expr(&elem_te).is_some() {
+                return Ok(None);
+            }
         }
         let elem_size = self.ensure_target_data()?.get_abi_size(&elem_ty);
         if elem_size == 0 {
