@@ -54,6 +54,11 @@ import ast.{
     FieldAccessExpr,
     IndexExpr,
     PathExpr,
+    MatchExpr,
+    MatchArm,
+    TupleVariantPattern,
+    EnumDefNode,
+    VariantNode,
     Pattern,
     BindingPattern,
 };
@@ -126,6 +131,16 @@ struct Emitter {
     st_field_kinds: Vec[i64],
     st_off: Vec[i64],
     st_cnt: Vec[i64],
+    // Enum table (Slice 14) — variants with 0 or 1 i64 payload; a value is a
+    // `{ i64, i64 }` (tag, payload) aggregate, kind `1000 + index`. Variant
+    // names/payload-arity FLATTENED like the struct tables. The tag is the
+    // DECLARATION index — internal to the emitted program, so seed tag parity
+    // is not required (output parity only).
+    en_names: Vec[String],
+    en_var_names: Vec[String],
+    en_var_pl: Vec[i64],
+    en_off: Vec[i64],
+    en_cnt: Vec[i64],
 }
 
 // Emit a whole program as LLVM IR text. Walks the items, emits `main`'s body
@@ -155,6 +170,11 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         st_field_kinds: Vec.new(),
         st_off: Vec.new(),
         st_cnt: Vec.new(),
+        en_names: Vec.new(),
+        en_var_names: Vec.new(),
+        en_var_pl: Vec.new(),
+        en_off: Vec.new(),
+        en_cnt: Vec.new(),
     };
     e.collect_sigs(items);
     for it in items {
@@ -181,7 +201,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_off, sig_par_cnt, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_off, sig_par_cnt, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, en_names, en_var_names, en_var_pl, en_off, en_cnt } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -228,6 +248,22 @@ impl Emitter {
                         fi = fi + 1;
                     }
                     self.st_cnt.push(cnt);
+                }
+                Enum(ed) => {
+                    // Slice 14: variant names + payload arity (0 or 1 — the
+                    // first tuple type's KIND is not tracked; payloads are i64
+                    // this slice).
+                    self.en_names.push(ed.name);
+                    let off = self.en_var_names.len();
+                    self.en_off.push(off);
+                    let cnt = ed.variants.len();
+                    let mut vi = 0;
+                    while vi < cnt {
+                        self.en_var_names.push(ed.variants[vi].name);
+                        self.en_var_pl.push(ed.variants[vi].tuple_types.len());
+                        vi = vi + 1;
+                    }
+                    self.en_cnt.push(cnt);
                 }
                 _ => {}
             }
@@ -279,6 +315,13 @@ impl Emitter {
                     }
                     i = i + 1;
                 }
+                let mut j = 0;
+                while j < self.en_names.len() {
+                    if self.en_names[j] == segments[0] {
+                        return 1000 + j;
+                    }
+                    j = j + 1;
+                }
                 0
             }
             _ => 0,
@@ -289,6 +332,9 @@ impl Emitter {
     // struct text is REBUILT from field kinds on each call — returning a
     // stored Vec[String] element from a method is an AOT double-free.
     fn ty_text(ref self, kind: i64) -> String {
+        if kind >= 1000 {
+            return "{ i64, i64 }".to_string();
+        }
         if kind >= 10 {
             let si = kind - 10;
             let off = self.st_off[si];
@@ -327,6 +373,32 @@ impl Emitter {
                 return i;
             }
             i = i + 1;
+        }
+        0 - 1
+    }
+
+    // Index of enum `name` in the enum table, -1 if unknown.
+    fn en_index(ref self, name: ref String) -> i64 {
+        let mut i = 0;
+        while i < self.en_names.len() {
+            if self.en_names[i] == name {
+                return i;
+            }
+            i = i + 1;
+        }
+        0 - 1
+    }
+
+    // Tag (declaration index) of `vname` within enum `ei`, -1 if not a variant.
+    fn en_variant_tag(ref self, ei: i64, vname: ref String) -> i64 {
+        let off = self.en_off[ei];
+        let cnt = self.en_cnt[ei];
+        let mut vi = 0;
+        while vi < cnt {
+            if self.en_var_names[off + vi] == vname {
+                return vi;
+            }
+            vi = vi + 1;
         }
         0 - 1
     }
@@ -708,6 +780,10 @@ impl Emitter {
                     }
                 }
             }
+            Match(mn) => {
+                let v = self.emit_match(mn, false);
+                let Val { op: mo, kind: mk2, heap: mh2 } = v;
+            }
             MethodCall(mcs) => {
                 // A method call in STATEMENT position (Slice 13). `v.push(x)`
                 // on a Vec[i64] local grows by exactly one element per push —
@@ -1082,6 +1158,177 @@ impl Emitter {
         Val { op: a1, kind: 2, heap: true }
     }
 
+    // Lower a `match` over an ENUM scrutinee (Slice 14). Arms chain
+    // compare-and-branch on the extracted tag; a TupleVariantPat binds its one
+    // i64 payload; a BindingPat whose name IS a variant of the scrutinee's
+    // enum matches that variant (the seed's rule — a bare `Red =>` arm parses
+    // as a binding), otherwise it is a catch-all binding the WHOLE enum value;
+    // WildcardPat is a bare catch-all. Arms after a catch-all emit into an
+    // unreachable-but-well-formed block. In value form each arm body's i64
+    // value routes through a result slot (the if-as-value pattern). Guards are
+    // not lowered (corpus-free surface).
+    fn emit_match(mut ref self, m: MatchExpr, want_value: bool) -> Val {
+        let MatchExpr { scrutinee, arms, span } = m;
+        let sv = self.emit_value(scrutinee);
+        let Val { op: sop, kind: sk, heap: sh } = sv;
+        if sk < 1000 {
+            return Val { op: "0".to_string(), kind: 0, heap: false };
+        }
+        let ei = sk - 1000;
+        let tg = self.fresh();
+        self.body = self.body
+            + "  "
+            + tg.clone()
+            + " = extractvalue { i64, i64 } "
+            + sop.clone()
+            + ", 0\n";
+        let mut rslot = "".to_string();
+        if want_value {
+            rslot = self.fresh();
+            self.body = self.body + "  " + rslot.clone() + " = alloca i64, align 8\n";
+        }
+        let mid = self.nlbl;
+        self.nlbl = self.nlbl + 1;
+        let lend = "endmatch" + mid.to_string();
+        let mut ai = 0;
+        for arm in arms {
+            let MatchArm { pattern, guard, body, span: asp } = arm;
+            let mut tag = 0 - 1;
+            let mut bind_payload = "".to_string();
+            let mut bind_whole = "".to_string();
+            match pattern {
+                TupleVariantPat(tvp) => {
+                    let TupleVariantPattern { segments, elems, span: tsp } = tvp;
+                    let li = segments.len() - 1;
+                    let vn = segments[li];
+                    tag = self.en_variant_tag(ei, vn);
+                    for el in elems {
+                        match el {
+                            BindingPat(bp) => {
+                                let BindingPattern { name: bn, span: bsp } = bp;
+                                bind_payload = bn;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                BindingPat(bp) => {
+                    let BindingPattern { name: bn, span: bsp } = bp;
+                    let vt = self.en_variant_tag(ei, bn.clone());
+                    if vt >= 0 {
+                        tag = vt;
+                    } else {
+                        bind_whole = bn;
+                    }
+                }
+                _ => {}
+            }
+            if tag >= 0 {
+                let lbody = "marm" + mid.to_string() + "_" + ai.to_string();
+                let lnext = "mnext" + mid.to_string() + "_" + ai.to_string();
+                let c = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + c.clone()
+                    + " = icmp eq i64 "
+                    + tg.clone()
+                    + ", "
+                    + tag.to_string()
+                    + "\n";
+                self.body = self.body
+                    + "  br i1 "
+                    + c
+                    + ", label %"
+                    + lbody.clone()
+                    + ", label %"
+                    + lnext.clone()
+                    + "\n";
+                self.body = self.body + lbody + ":\n";
+                if bind_payload != "" {
+                    let pl = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + pl.clone()
+                        + " = extractvalue { i64, i64 } "
+                        + sop.clone()
+                        + ", 1\n";
+                    let idx = self.locals.len();
+                    self.locals.push(bind_payload);
+                    self.locals_kind.push(0);
+                    self.locals_heap.push(false);
+                    self.body =
+                        self.body + "  %v" + idx.to_string() + " = alloca i64, align 8\n";
+                    self.body = self.body
+                        + "  store i64 "
+                        + pl
+                        + ", ptr %v"
+                        + idx.to_string()
+                        + ", align 8\n";
+                }
+                if want_value {
+                    let bv = self.emit_value(body);
+                    let Val { op: bop, kind: bk, heap: bh } = bv;
+                    self.body = self.body
+                        + "  store i64 "
+                        + bop
+                        + ", ptr "
+                        + rslot.clone()
+                        + ", align 8\n";
+                } else {
+                    self.emit_expr(body);
+                }
+                self.body = self.body + "  br label %" + lend.clone() + "\n";
+                self.body = self.body + lnext + ":\n";
+            } else {
+                if bind_whole != "" {
+                    let idx = self.locals.len();
+                    self.locals.push(bind_whole);
+                    self.locals_kind.push(sk);
+                    self.locals_heap.push(false);
+                    self.body = self.body
+                        + "  %v"
+                        + idx.to_string()
+                        + " = alloca { i64, i64 }, align 8\n";
+                    self.body = self.body
+                        + "  store { i64, i64 } "
+                        + sop.clone()
+                        + ", ptr %v"
+                        + idx.to_string()
+                        + ", align 8\n";
+                }
+                if want_value {
+                    let bv = self.emit_value(body);
+                    let Val { op: bop, kind: bk, heap: bh } = bv;
+                    self.body = self.body
+                        + "  store i64 "
+                        + bop
+                        + ", ptr "
+                        + rslot.clone()
+                        + ", align 8\n";
+                } else {
+                    self.emit_expr(body);
+                }
+                self.body = self.body + "  br label %" + lend.clone() + "\n";
+                let ldead = "mdead" + mid.to_string() + "_" + ai.to_string();
+                self.body = self.body + ldead + ":\n";
+            }
+            ai = ai + 1;
+        }
+        self.body = self.body + "  br label %" + lend.clone() + "\n";
+        self.body = self.body + lend + ":\n";
+        if want_value {
+            let r = self.fresh();
+            self.body = self.body
+                + "  "
+                + r.clone()
+                + " = load i64, ptr "
+                + rslot
+                + ", align 8\n";
+            return Val { op: r, kind: 0, heap: false };
+        }
+        Val { op: "0".to_string(), kind: 0, heap: false }
+    }
+
     // Free the heap buffer a STRING VALUE owns (extract ptr, call free).
     fn emit_free_val(mut ref self, val: String) {
         let pr = self.fresh();
@@ -1339,18 +1586,26 @@ impl Emitter {
                 let CallExpr { callee, args, span } = cn;
                 let mut cname = "".to_string();
                 let mut vec_new = false;
+                let mut enum_ei = 0 - 1;
+                let mut enum_tag = 0 - 1;
                 match callee {
                     Ident(ie) => {
                         let IdentExpr { name, span: isp } = ie;
                         cname = name;
                     }
                     Path(pe) => {
-                        // `Vec.new()` parses as a CALL with a PATH callee
-                        // (Slice 13), not a MethodCall.
+                        // `Vec.new()` / `Enum.Variant(payload)` both parse as a
+                        // CALL with a PATH callee (Slices 13 + 14).
                         let PathExpr { segments, span: psp } = pe;
                         if segments.len() == 2 {
                             if segments[0] == "Vec" and segments[1] == "new" {
                                 vec_new = true;
+                            } else {
+                                let ei2 = self.en_index(segments[0]);
+                                if ei2 >= 0 {
+                                    enum_ei = ei2;
+                                    enum_tag = self.en_variant_tag(ei2, segments[1]);
+                                }
                             }
                         }
                     }
@@ -1358,6 +1613,34 @@ impl Emitter {
                 }
                 if vec_new {
                     return Val { op: "zeroinitializer".to_string(), kind: 3, heap: true };
+                }
+                if enum_ei >= 0 and enum_tag >= 0 {
+                    // Payload-carrying construction `Op.Add(5)` (Slice 14):
+                    // { tag, payload } — one i64 payload this slice.
+                    let mut pv = "0".to_string();
+                    for a in args {
+                        let CallArg { label, mut_marker, value, span: asp } = a;
+                        let av = self.emit_value(value);
+                        let Val { op: aop, kind: ak, heap: ah } = av;
+                        pv = aop;
+                    }
+                    let a0 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + a0.clone()
+                        + " = insertvalue { i64, i64 } undef, i64 "
+                        + enum_tag.to_string()
+                        + ", 0\n";
+                    let a1 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + a1.clone()
+                        + " = insertvalue { i64, i64 } "
+                        + a0
+                        + ", i64 "
+                        + pv
+                        + ", 1\n";
+                    return Val { op: a1, kind: 1000 + enum_ei, heap: false };
                 }
                 let si = self.sig_index(cname);
                 let mut alist = "".to_string();
@@ -1483,6 +1766,36 @@ impl Emitter {
                     self.body + "  " + r.clone() + " = load i64, ptr " + slot + ", align 8\n";
                 Val { op: r, kind: 0, heap: false }
             }
+            Match(mn) => self.emit_match(mn, true),
+            Path(pe) => {
+                // A bare qualified path `Enum.Variant` (payload-less
+                // construction, Slice 14): { tag, 0 }.
+                let PathExpr { segments, span } = pe;
+                if segments.len() == 2 {
+                    let ei = self.en_index(segments[0]);
+                    if ei >= 0 {
+                        let tag = self.en_variant_tag(ei, segments[1]);
+                        if tag >= 0 {
+                            let a0 = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + a0.clone()
+                                + " = insertvalue { i64, i64 } undef, i64 "
+                                + tag.to_string()
+                                + ", 0\n";
+                            let a1 = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + a1.clone()
+                                + " = insertvalue { i64, i64 } "
+                                + a0
+                                + ", i64 0, 1\n";
+                            return Val { op: a1, kind: 1000 + ei, heap: false };
+                        }
+                    }
+                }
+                Val { op: "0".to_string(), kind: 0, heap: false }
+            }
             Index(ix) => {
                 // `v[i]` (Slice 13, Vec[i64] elements): extract the buffer
                 // pointer, gep, load. In-bounds by corpus discipline — the
@@ -1581,7 +1894,7 @@ impl Emitter {
                 let FieldAccessExpr { object, field, span } = fa;
                 let v = self.emit_value(object);
                 let Val { op, kind, heap } = v;
-                if kind < 10 {
+                if kind < 10 or kind >= 1000 {
                     return Val { op: "0".to_string(), kind: 0, heap: false };
                 }
                 let si = kind - 10;

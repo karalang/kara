@@ -128,6 +128,16 @@ const CORPUS: &[&str] = &[
     "fn main() { let mut v = Vec.new(); v.push(7); v.push(8); println((v[0] * v[1]).to_string()) }",
     "fn main() { let mut v = Vec.new(); let mut i = 0; while i < 6 { v.push(i * i); i = i + 1; } let mut s = 0; let mut j = 0; while j < v.len() { s = s + v[j]; j = j + 1; } println(s.to_string()) }",
     "fn main() { let mut a = Vec.new(); let mut b = Vec.new(); a.push(1); b.push(2); b.push(3); println((a.len() + b.len()).to_string()); println((a[0] + b[1]).to_string()) }",
+    // Slice 14: enums + match — {tag,payload} aggregates (0/1 i64 payload),
+    // qualified construction (bare path + call-with-path), value- and
+    // statement-position match, payload bindings, bare-variant arms
+    // (BindingPat whose name IS a variant), wildcard, enum params/returns.
+    "enum Op { Add(i64), Neg(i64), Zero }\nfn eval(o: Op) -> i64 { match o { Add(n) => n, Neg(n) => 0 - n, Zero => 0 } }\nfn main() { println(eval(Op.Add(5)).to_string()); println(eval(Op.Neg(3)).to_string()); println(eval(Op.Zero).to_string()) }",
+    "enum Color { Red, Green, Blue }\nfn main() { let c = Color.Green; match c { Red => { println(\"r\") } Green => { println(\"g\") } Blue => { println(\"b\") } } }",
+    "enum Op { Add(i64), Zero }\nfn main() { let e = Op.Add(7); match e { Add(n) => { println(n.to_string()) } _ => { println(\"other\") } } }",
+    "enum Op { Add(i64), Zero }\nfn main() { let e = Op.Zero; match e { Add(n) => { println(n.to_string()) } _ => { println(\"other\") } } }",
+    "enum Op { Add(i64), Zero }\nfn main() { let x = match Op.Add(20) { Add(n) => n * 2, Zero => 0 }; println(x.to_string()) }",
+    "enum Op { Add(i64), Zero }\nfn mk(n: i64) -> Op { if n > 0 { return Op.Add(n); } Op.Zero }\nfn main() { println(match mk(4) { Add(n) => n + 100, Zero => 0 }.to_string()); println(match mk(0 - 1) { Add(n) => n, Zero => 99 }.to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
