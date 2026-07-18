@@ -2098,6 +2098,16 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) soa_return_locals: std::collections::HashSet<String>,
     /// Function parameter ref-ness (function name → vec of is_ref per param).
     pub(crate) fn_param_ref: HashMap<String, Vec<bool>>,
+    /// Per-parameter `Tensor[T, S]` info (function name → vec of `Some(info)`
+    /// for each `(ref) Tensor` param, `None` otherwise). Lets a call site thread
+    /// the DECLARED element type of a tensor param into `pending_let_tensor_info`
+    /// before compiling a `Tensor.{from,zeros,ones,full}` argument — so an
+    /// unsuffixed-literal `Tensor.from([-1.0, 2.0])` bound to a `ref
+    /// Tensor[f32, …]` param lays its data out at the expected element width
+    /// (the argument-position sibling of the let-annotation threading via
+    /// `tensor_var_infos`). B-2026-07-18-9.
+    pub(crate) fn_param_tensor_info:
+        HashMap<String, Vec<Option<crate::codegen::state::TensorVarInfo<'ctx>>>>,
     /// `unsafe extern` imports that carry `#[link_name("symbol")]`: maps the
     /// Kāra fn identifier → the foreign symbol it actually binds. The import
     /// is registered in the LLVM module under the *symbol* name, so call
@@ -6607,6 +6617,7 @@ impl<'ctx> Codegen<'ctx> {
             owned_struct_params: HashSet::new(),
             shared_enum_payload_view_vars: std::collections::HashMap::new(),
             fn_param_ref: HashMap::new(),
+            fn_param_tensor_info: HashMap::new(),
             extern_link_names: HashMap::new(),
             fn_return_type_names: HashMap::new(),
             fn_return_type_exprs: HashMap::new(),

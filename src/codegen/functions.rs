@@ -554,6 +554,23 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|p| matches!(&p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
             .collect();
         self.fn_param_ref.insert(func.name.clone(), ref_flags);
+        // Record per-param `Tensor[T, S]` info so a call site can thread the
+        // DECLARED element type into a `Tensor.{from,…}` argument (B-2026-07-18-10;
+        // peel one `ref`/`mut ref` — a tensor value is a single `ptr`, so a
+        // borrow has the same element/dims info as the owned form).
+        let tensor_infos: Vec<Option<crate::codegen::state::TensorVarInfo<'ctx>>> = func
+            .params
+            .iter()
+            .map(|p| {
+                let bare = match &p.ty.kind {
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                    _ => &p.ty,
+                };
+                self.tensor_var_info_from_type_expr(bare)
+            })
+            .collect();
+        self.fn_param_tensor_info
+            .insert(func.name.clone(), tensor_infos);
         // Record slice-param element types for call-site coercion.
         let slice_elems: Vec<Option<BasicTypeEnum<'ctx>>> = func
             .params

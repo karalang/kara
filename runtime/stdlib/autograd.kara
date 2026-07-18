@@ -24,14 +24,18 @@
 // dynamic-shape rank-1 f32 tensor. It covers the element-wise ops whose
 // vector-Jacobian products are themselves element-wise and shape-preserving:
 // the arithmetic `add` · `sub` · `mul` (Hadamard) · `neg` and the activations
-// `relu` · `sigmoid` · `tanh` (forward via `Tensor.map`, backward the element-
-// wise derivative — ReLU gates on the input sign, sigmoid/tanh read the stored
-// output), plus the scalar reductions `sum` and `mean` (`[N]` → `[1]`, the
-// terminals that turn a tensor computation into a scalar loss you can
-// `backward()`). Every element-wise node's operands and gradient share one
-// shape; the reductions are the only shape-changing ops (their backward
-// broadcasts the scalar upstream gradient back to the input shape). `backward`
-// seeds the output gradient to an all-ones tensor (`d out / d out = 1`).
+// `relu` · `sigmoid` · `tanh` · `silu` · `gelu` (forward via `Tensor.map`,
+// backward the element-wise derivative — ReLU gates on the input sign,
+// sigmoid/tanh read the stored output, GELU uses the tanh approximation, and
+// SiLU composes `mul(sigmoid)`), plus `softmax` (the one non-element-wise
+// activation, dense-Jacobian backward), the scalar reductions `sum` and `mean`
+// (`[N]` → `[1]`), and the losses `mse` · `bce` · `cross_entropy` (`[N]` → `[1]`
+// terminals that turn a tensor computation into a scalar you can `backward()`;
+// `cross_entropy` fuses softmax so its backward is the clean `softmax(x) − t`).
+// Element-wise nodes' operands and gradient share one shape; softmax/the
+// reductions/the losses are the shape-changing ops (their backward broadcasts
+// the scalar/dense upstream gradient back to the input shape). `backward` seeds
+// the output gradient to an all-ones tensor (`d out / d out = 1`).
 //
 // **Matrix-valued surface (`MatTape` / `MatVar`).** The tensor tape lifted to
 // rank-2 `Tensor[f32, [?, ?]]` so it can carry `matmul` — the op the rank-1
@@ -41,18 +45,21 @@
 // of a linear layer. `backward` seeds an all-ones matrix.
 //
 // The design's shape-typed generic `Var[T, S]` (with `Var.track` / `var.detach`),
-// broadcast/batched ops, the softmax/gelu/silu activations, the losses, `grad`/
-// `value_and_grad`, and the `writes(GradTape)` effect integration are the
-// follow-on slices.
+// broadcast/batched ops, `grad` / `value_and_grad`, and the `writes(GradTape)`
+// effect integration are the follow-on slices. (The softmax/gelu/silu
+// activations and the mse/bce/cross_entropy losses are shipped, above.)
 //
 // **Design note — integer op-codes, not an enum.** Each tape stores its nodes'
 // ops as parallel `Vec[i64]` columns (`kind`/`pa`/`pb`) rather than an `enum Op`
 // payload. A gated `import` splices the named types (`Tape`, `Var`, `TensorTape`,
 // `TensorVar`, `MatTape`, `MatVar`) and their `impl` blocks, but not a separate
 // helper enum — so encoding the op as an integer keeps the module to the
-// importable types. The op-code legend (shared across tapes): 0 leaf · 1 add ·
-// 2 sub · 3 mul · 4 div · 5 neg · 6 relu · 7 sigmoid · 8 tanh · 9 sum · 10 mean
-// (9/10 tensor tape) · 11 matmul (matrix tape).
+// importable types. The op-code legend: 0 leaf · 1 add · 2 sub · 3 mul · 4 div ·
+// 5 neg · 6 relu · 7 sigmoid · 8 tanh (shared 0–8). Tensor tape adds 9 sum ·
+// 10 mean · 11 softmax · 12 gelu · 13 bce · 14 cross_entropy (silu/mse compose
+// existing codes, so record none of their own). Matrix tape adds 11 matmul —
+// the tapes have independent reverse-sweep switches, so 11 means softmax on the
+// tensor tape and matmul on the matrix tape with no collision.
 
 /// The append-only differentiation tape: parallel columns indexed by node id.
 /// `values` holds each node's forward value, `grads` its accumulated gradient
@@ -452,6 +459,60 @@ impl TensorVar {
         TensorVar { tape: tp, idx: idx }
     }
 
+    /// Element-wise SiLU / swish: `self · sigmoid(self)`. A pure composition of
+    /// the primitive `sigmoid` and `mul` ops — it records a `sigmoid` node then a
+    /// `mul` node, so `backward` flows through both with no dedicated op-code and
+    /// the product rule reconstructs the exact derivative
+    /// `σ(x) + x·σ(x)(1 − σ(x))` automatically.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn silu(ref self) -> TensorVar {
+        let s = self.sigmoid();
+        self.mul(s)
+    }
+
+    /// Element-wise softmax `s_i = e^(x_i) / Σ_j e^(x_j)` over the whole rank-1
+    /// tensor — the only activation whose vector-Jacobian product is *not*
+    /// element-wise (its Jacobian `J_ij = s_i(δ_ij − s_j)` is dense). Forward is
+    /// numerically stabilised by subtracting the max before exponentiating; the
+    /// dense-Jacobian backward is `grad_x = s ⊙ (g − Σ(g ⊙ s))`, read off the
+    /// stored output `s`. Op-code 11 on the tensor tape.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn softmax(ref self) -> TensorVar {
+        let tp = self.tape;
+        let sv = tp.values[self.idx];
+        let mx = sv.max();
+        let shifted: Tensor[f32, [?]] = sv - mx;
+        let ex: Tensor[f32, [?]] = shifted.map(|e| e.exp());
+        let denom = ex.sum();
+        let v: Tensor[f32, [?]] = ex / denom;
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(11, self.idx, -1);
+        TensorVar { tape: tp, idx: idx }
+    }
+
+    /// Element-wise GELU via the tanh approximation used by GPT/BERT:
+    /// `0.5·x·(1 + tanh(√(2/π)·(x + 0.044715·x³)))`. Backward is the per-element
+    /// derivative of that closed form, computed from the stored input `x`:
+    /// `0.5(1+t) + 0.5·x·(1−t²)·√(2/π)·(1 + 3·0.044715·x²)` where
+    /// `t = tanh(√(2/π)(x + 0.044715x³))`. Op-code 12 on the tensor tape.
+    #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
+    pub fn gelu(ref self) -> TensorVar {
+        let tp = self.tape;
+        let sv = tp.values[self.idx];
+        let v: Tensor[f32, [?]] = sv.map(|e| {
+            let c = 0.7978845608028654;
+            let u = c * (e + 0.044715 * e * e * e);
+            0.5 * e * (1.0 + u.tanh())
+        });
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(12, self.idx, -1);
+        TensorVar { tape: tp, idx: idx }
+    }
+
     /// Reduce every element to a scalar total, stored as a `[1]` tensor — the
     /// terminal that turns a tensor computation into a scalar loss you can
     /// `backward()`. The only shape-changing op (input `[N]` → output `[1]`):
@@ -503,6 +564,63 @@ impl TensorVar {
         let d = self.sub(target);
         let sq = d.mul(d);
         sq.mean()
+    }
+
+    /// Binary cross-entropy against a `target` label variable, where `self` holds
+    /// per-element PROBABILITIES `p ∈ (0, 1)` (typically a `sigmoid` output):
+    /// `mean(−t·ln(p) − (1−t)·ln(1−p))`, a `[1]` scalar loss. Op-code 13.
+    /// Backward accumulates `dL/dp = (p − t) / (p·(1−p)) / N` into `self`; the
+    /// `target` is treated as a constant label (its gradient is not propagated —
+    /// the usual convention). For raw logits prefer `sigmoid` then `bce`; a fused
+    /// numerically-stable BCE-with-logits is a later slice. `p` must stay off the
+    /// `{0, 1}` endpoints (where `ln` / the backward denominator diverge).
+    #[must_use = "a loss is only useful once you call backward() and read a gradient"]
+    pub fn bce(ref self, target: ref TensorVar) -> TensorVar {
+        let tp = self.tape;
+        let p = tp.values[self.idx];
+        let t = tp.values[target.idx];
+        let logp: Tensor[f32, [?]] = p.map(|e| e.ln());
+        let log1mp: Tensor[f32, [?]] = p.map(|e| (1.0 - e).ln());
+        let term: Tensor[f32, [?]] = t * logp + (1.0 - t) * log1mp;
+        let neg: Tensor[f32, [?]] = term * -1.0;
+        let s = neg.sum();
+        let ones: Tensor[f32, [?]] = p * 0.0 + 1.0;
+        let nf = ones.sum();
+        let m = s / nf;
+        let v: Tensor[f32, [?]] = Tensor.full([1], m);
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(13, self.idx, target.idx);
+        TensorVar { tape: tp, idx: idx }
+    }
+
+    /// Softmax cross-entropy over LOGITS: `self` holds unnormalised class scores,
+    /// `target` a probability distribution / one-hot label. Fuses the softmax so
+    /// the backward is the clean, stable `dL/dx = softmax(x) − t` (the reason
+    /// softmax and cross-entropy are paired). Forward is
+    /// `L = −Σ_i t_i·ln(softmax(x)_i)`, a `[1]` scalar (numerically stabilised by
+    /// the max-shift inside the softmax). Op-code 14. Backward accumulates
+    /// `(softmax(x) − t)` into `self`; the `target` distribution is a constant.
+    #[must_use = "a loss is only useful once you call backward() and read a gradient"]
+    pub fn cross_entropy(ref self, target: ref TensorVar) -> TensorVar {
+        let tp = self.tape;
+        let x = tp.values[self.idx];
+        let t = tp.values[target.idx];
+        let mx = x.max();
+        let shifted: Tensor[f32, [?]] = x - mx;
+        let ex: Tensor[f32, [?]] = shifted.map(|e| e.exp());
+        let denom = ex.sum();
+        let s: Tensor[f32, [?]] = ex / denom;
+        let logs: Tensor[f32, [?]] = s.map(|e| e.ln());
+        let terms: Tensor[f32, [?]] = t * logs;
+        let l = terms.sum();
+        let v: Tensor[f32, [?]] = Tensor.full([1], 0.0 - l);
+        let zg: Tensor[f32, [?]] = v * 0.0;
+        tp.values.push(v);
+        tp.grads.push(zg);
+        let idx = tp.push_node(14, self.idx, target.idx);
+        TensorVar { tape: tp, idx: idx }
     }
 
     /// Run the reverse pass from this node: seed its gradient to an all-ones
@@ -583,6 +701,57 @@ impl TensorVar {
                     let gs = g[0] / n;
                     let ga = tp.grads[a];
                     tp.grads[a] = ga + (xa * 0.0 + gs);
+                }
+                11 => {
+                    // Softmax: dense-Jacobian VJP grad_x = s ⊙ (g − Σ(g ⊙ s)),
+                    // s = this node's stored output (the softmax values).
+                    let sv = tp.values[i];
+                    let gs = g * sv;
+                    let dot = gs.sum();
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + sv * (g - dot);
+                }
+                12 => {
+                    // GELU (tanh approx): per-element derivative on the INPUT x.
+                    let xa = tp.values[a];
+                    let dmask: Tensor[f32, [?]] = xa.map(|e| {
+                        let c = 0.7978845608028654;
+                        let u = c * (e + 0.044715 * e * e * e);
+                        let t = u.tanh();
+                        let du = c * (1.0 + 0.134145 * e * e);
+                        0.5 * (1.0 + t) + 0.5 * e * (1.0 - t * t) * du
+                    });
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + g * dmask;
+                }
+                13 => {
+                    // BCE: dL/dp = (p − t) / (p·(1−p)) / N into `self` (a); the
+                    // target (b) is a constant label — no gradient propagated.
+                    let p = tp.values[a];
+                    let t = tp.values[b];
+                    let ones: Tensor[f32, [?]] = p * 0.0 + 1.0;
+                    let nf = ones.sum();
+                    let num: Tensor[f32, [?]] = p - t;
+                    let den: Tensor[f32, [?]] = p * (1.0 - p);
+                    let per: Tensor[f32, [?]] = num / den;
+                    let gs = g[0] / nf;
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + per * gs;
+                }
+                14 => {
+                    // Softmax cross-entropy (logits): dL/dx = (softmax(x) − t)·g
+                    // into `self` (a), recomputing softmax from the stored input;
+                    // the target distribution (b) is constant.
+                    let x = tp.values[a];
+                    let t = tp.values[b];
+                    let mx = x.max();
+                    let shifted: Tensor[f32, [?]] = x - mx;
+                    let ex: Tensor[f32, [?]] = shifted.map(|e| e.exp());
+                    let denom = ex.sum();
+                    let s: Tensor[f32, [?]] = ex / denom;
+                    let gs = g[0];
+                    let ga = tp.grads[a];
+                    tp.grads[a] = ga + (s - t) * gs;
                 }
                 _ => {}
             }

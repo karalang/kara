@@ -18542,6 +18542,50 @@ fn main() {
 }
 
 #[test]
+fn test_autograd_reverse_mode_activations_and_losses() {
+    // Phase-11 autograd `silu`/`softmax`/`gelu` activations + `bce`/
+    // `cross_entropy` losses — interpreter parity with
+    // tests/codegen.rs::test_e2e_autograd_activations_and_losses (f32-exact
+    // gradients: silu'(0)=0.5, softmax([0,0]) weighted grad [0.25,-0.25],
+    // gelu'(0)=0.5, bce(0.8,1) grad -0.625, softmax-CE grad [-0.5,0.5]).
+    let out = run_no_errors(
+        r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t1 = TensorTape.new();
+    let a = TensorVar.leaf(t1, Tensor.from([0.0, 1.0]));
+    let y = a.silu(); let s = y.sum(); s.backward();
+    println(a.grad_at(0));
+
+    let t2 = TensorTape.new();
+    let x = TensorVar.leaf(t2, Tensor.from([0.0, 0.0]));
+    let c = TensorVar.leaf(t2, Tensor.from([1.0, 0.0]));
+    let sm = x.softmax(); let l = sm.mul(c).sum(); l.backward();
+    println(x.grad_at(0)); println(x.grad_at(1));
+
+    let t3 = TensorTape.new();
+    let g = TensorVar.leaf(t3, Tensor.from([0.0]));
+    let gy = g.gelu(); let gs = gy.sum(); gs.backward();
+    println(g.grad_at(0));
+
+    let t4 = TensorTape.new();
+    let p = TensorVar.leaf(t4, Tensor.from([0.8, 0.3]));
+    let tg = TensorVar.leaf(t4, Tensor.from([1.0, 0.0]));
+    let lb = p.bce(tg); lb.backward();
+    println(p.grad_at(0));
+
+    let t5 = TensorTape.new();
+    let xc = TensorVar.leaf(t5, Tensor.from([0.0, 0.0]));
+    let oh = TensorVar.leaf(t5, Tensor.from([1.0, 0.0]));
+    let lc = xc.cross_entropy(oh); lc.backward();
+    println(xc.grad_at(0)); println(xc.grad_at(1));
+}
+"#,
+    );
+    assert_eq!(out, "0.5\n0.25\n-0.25\n0.5\n-0.625\n-0.5\n0.5\n");
+}
+
+#[test]
 fn test_autograd_reverse_mode_tensor_scalar_loss() {
     // std.autograd tensor-valued `sum` reduction — interpreter parity with
     // tests/codegen.rs::test_e2e_autograd_tensor_scalar_loss. L = sum(x²) at

@@ -2231,33 +2231,97 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(&qualified)
                 .cloned()
                 .unwrap_or_default();
+            let param_tensor_infos = self.fn_param_tensor_info.get(&qualified).cloned();
             let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
             for (i, a) in _args.iter().enumerate() {
                 let is_ref = ref_flags.get(i).copied().unwrap_or(false);
-                if is_ref {
+                // Thread the callee's DECLARED tensor element type into
+                // `pending_let_tensor_info` for the duration of this arg so a
+                // `Tensor.{from,zeros,ones,full}` argument lays its data out at
+                // the expected element width (e.g. `TensorVar.leaf(t,
+                // Tensor.from([-1.0, 2.0]))` into a `ref Tensor[f32, …]` param —
+                // without this the unsuffixed f64 literals produce an 8-byte
+                // block that the f32 tape misreads). Save/restore so an
+                // enclosing let / a non-tensor arg is unaffected. B-2026-07-18-10.
+                let param_tensor = param_tensor_infos
+                    .as_ref()
+                    .and_then(|v| v.get(i).cloned().flatten());
+                let is_tensor_param = param_tensor.is_some();
+                let saved_pending_tensor = param_tensor.map(|info| {
+                    let prev = self.pending_let_tensor_info.take();
+                    self.pending_let_tensor_info = Some(info);
+                    prev
+                });
+                // A materialized FRESH-OWNED tensor temp (`Tensor.from(…)` /
+                // `Tensor.zeros(…)` / a transform call — never a borrow-return)
+                // passed to a `ref Tensor` param has no other cleanup owner, so
+                // register its block for scope-exit `FreeTensor` — the tensor
+                // sibling of the `track_vec_var` call `materialize_rvalue_for_ref_arg`
+                // already makes for a Vec/String temp (else the block leaks once
+                // per call; B-2026-07-18-9). Only for the materialize path (a
+                // place / index-borrow / identifier arg is owned elsewhere).
+                let track_tensor_temp =
+                    is_tensor_param && self.expr_yields_fresh_owned_temp(&a.value);
+                let arg_meta: BasicMetadataValueEnum<'ctx> = if is_ref {
+                    // Ref param: pass a POINTER to caller-side data, not the
+                    // loaded value — mirroring the free-fn ref-arg path in
+                    // `compile_call`. An Identifier place forwards its data
+                    // ptr; a `vec[idx]` place forwards the element ptr; any
+                    // other RVALUE (a fresh temp — `Type.from(...)`, an
+                    // f-string, an arithmetic result) is MATERIALIZED into a
+                    // slot so the callee's `ref` param receives a pointer.
+                    // Without the rvalue-materialization fallback the assoc-call
+                    // path passed a fresh-temp arg BY VALUE: for String/Vec an
+                    // LLVM verifier mismatch (`{ptr,i64,i64}` vs `ptr`); for
+                    // Tensor (whose value is already a `ptr`) it type-checked
+                    // but the callee dereferenced the block's rank word as a
+                    // pointer → SIGSEGV (the `TensorVar.leaf(t, Tensor.from(…))`
+                    // autograd crash, B-2026-07-18-9). The free-fn call path
+                    // (`compile_call`) already did this; only the
+                    // `Type.method(...)` assoc-call path was missing it.
                     if let ExprKind::Identifier(var_name) = &a.value.kind {
                         if let Some(ptr) = self.get_data_ptr(var_name) {
-                            compiled_args.push(ptr.into());
-                            continue;
+                            ptr.into()
+                        } else {
+                            let val = self.compile_expr(&a.value)?;
+                            let slot = self.materialize_rvalue_for_ref_arg(val, i);
+                            if track_tensor_temp {
+                                self.track_tensor_var(slot.into_pointer_value());
+                            }
+                            slot.into()
                         }
+                    } else if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&a.value)? {
+                        elem_ptr.into()
+                    } else {
+                        let val = self.compile_expr(&a.value)?;
+                        let slot = self.materialize_rvalue_for_ref_arg(val, i);
+                        if track_tensor_temp {
+                            self.track_tensor_var(slot.into_pointer_value());
+                        }
+                        slot.into()
                     }
+                } else {
+                    let val = self.compile_expr(&a.value)?;
+                    // `Option[shared T]` arg-share discipline — mirrors the
+                    // free-fn call path in `compile_call`: a tracked
+                    // Identifier binding gets a tag+null-guarded inner inc so
+                    // the callee receives an independent +1 (its param
+                    // `RcDecOption` decs at exit; the caller's binding keeps
+                    // its own +1 for its scope-exit dec); a FieldAccess arg
+                    // reading an `Option[shared T]` field gets the loaded
+                    // inner inc'd (the niche field read is a bare ptr load).
+                    // Without these, passing the same binding twice — or
+                    // reusing it after the call — read freed memory (probe
+                    // `m.total(chain); m.total(chain)`, 2026-06-05,
+                    // pre-existing on the conventional ABI).
+                    self.share_option_shared_ref_for_arg(&a.value);
+                    self.share_option_shared_field_ref_for_arg(&a.value, val);
+                    val.into()
+                };
+                if let Some(prev) = saved_pending_tensor {
+                    self.pending_let_tensor_info = prev;
                 }
-                let val = self.compile_expr(&a.value)?;
-                // `Option[shared T]` arg-share discipline — mirrors the
-                // free-fn call path in `compile_call`: a tracked
-                // Identifier binding gets a tag+null-guarded inner inc so
-                // the callee receives an independent +1 (its param
-                // `RcDecOption` decs at exit; the caller's binding keeps
-                // its own +1 for its scope-exit dec); a FieldAccess arg
-                // reading an `Option[shared T]` field gets the loaded
-                // inner inc'd (the niche field read is a bare ptr load).
-                // Without these, passing the same binding twice — or
-                // reusing it after the call — read freed memory (probe
-                // `m.total(chain); m.total(chain)`, 2026-06-05,
-                // pre-existing on the conventional ABI).
-                self.share_option_shared_ref_for_arg(&a.value);
-                self.share_option_shared_field_ref_for_arg(&a.value, val);
-                compiled_args.push(val.into());
+                compiled_args.push(arg_meta);
             }
             // Niche-ABI pack/unpack at the static `Type.method(...)`
             // boundary — positions are 1:1 with the declared params

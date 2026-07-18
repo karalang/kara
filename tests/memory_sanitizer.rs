@@ -375,6 +375,43 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_tensor_ref_arg_assoc_call_no_crash() {
+        // B-2026-07-18-9: a FRESH-TEMP tensor (`Tensor.from(...)`) passed as a
+        // `ref Tensor` arg to an ASSOCIATED fn (`S.ins(...)`) that pushes
+        // `value + 0.0` into a shared-struct `Vec[Tensor]` field. The assoc-call
+        // arg path passed the fresh temp BY VALUE (only Identifier args got the
+        // `get_data_ptr` pointer); the callee then dereferenced the tensor
+        // block's rank word as a pointer → SIGSEGV under `karac build` (a named
+        // binding was clean). Now the rvalue is materialized into a slot and its
+        // pointer passed, matching the free-fn path. This is the exact shape the
+        // autograd `TensorVar.leaf(t, Tensor.from(…))` call hits. Looped so any
+        // per-iteration imbalance in the pushed element blocks accumulates.
+        assert_clean_asan_run(
+            r#"
+shared struct S { mut vals: Vec[Tensor[f32, [?]]] }
+impl S {
+    fn new() -> S { S { vals: Vec.new() } }
+    fn ins(t: S, value: ref Tensor[f32, [?]]) {
+        let v: Tensor[f32, [?]] = value + 0.0;
+        t.vals.push(v);
+    }
+}
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let s = S.new();
+        S.ins(s, Tensor.from([-1.0, 2.0, 3.0]));
+        println(f"{s.vals.len()}");
+        n = n + 1;
+    }
+}
+"#,
+            &["1", "1", "1"],
+            "asan_freshtemp_tensor_ref_arg_assoc_call_no_crash",
+        );
+    }
+
+    #[test]
     fn asan_vec_tensor_element_overwrite() {
         // (b) overwrite — `s.grads[0] = old + g` frees the displaced old element
         // block (read into the fresh sum first) and takes over the new one.
@@ -580,6 +617,50 @@ fn main() {
 "#,
             &["4"],
             "asan_autograd_mse_loss",
+        );
+    }
+
+    #[test]
+    fn asan_autograd_activations_and_losses() {
+        // The Phase-11 autograd activations (`silu`/`softmax`/`gelu`) and losses
+        // (`bce`/`cross_entropy`) end-to-end: each forward pushes value/grad
+        // tensors onto the tape, backward walks the new op-codes (11 softmax /
+        // 12 gelu / 13 bce / 14 cross_entropy; silu composes mul∘sigmoid) with
+        // their temp allocations, then the tape drops. Leaf inputs are inline
+        // `Tensor.from([…])` — the fresh-temp `ref Tensor` arg path (B-2026-07-18-9)
+        // + the f32 element-width threading (B-2026-07-18-10). LSan-clean over the
+        // whole tape lifecycle.
+        assert_clean_asan_run(
+            r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t1 = TensorTape.new();
+    let a = TensorVar.leaf(t1, Tensor.from([0.0, 1.0, -2.0]));
+    let y = a.silu();
+    let z = y.softmax();
+    let g = z.gelu();
+    let s = g.sum();
+    s.backward();
+    let ga = a.grad_at(0);
+    println(f"{ga == ga}");
+
+    let t2 = TensorTape.new();
+    let p = TensorVar.leaf(t2, Tensor.from([0.8, 0.3]));
+    let tg = TensorVar.leaf(t2, Tensor.from([1.0, 0.0]));
+    let lb = p.bce(tg);
+    lb.backward();
+    println(f"{p.grad_at(0) < 0.0}");
+
+    let t3 = TensorTape.new();
+    let x = TensorVar.leaf(t3, Tensor.from([1.0, 2.0, 3.0]));
+    let oh = TensorVar.leaf(t3, Tensor.from([0.0, 0.0, 1.0]));
+    let lc = x.cross_entropy(oh);
+    lc.backward();
+    println(f"{x.grad_at(2) < 0.0}");
+}
+"#,
+            &["true", "true", "true"],
+            "asan_autograd_activations_and_losses",
         );
     }
 

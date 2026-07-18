@@ -68593,6 +68593,80 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_autograd_activations_and_losses() {
+        // Phase-11 autograd activations (`silu`/`softmax`/`gelu`) + losses
+        // (`bce`/`cross_entropy`). Leaf inputs are INLINE `Tensor.from([…])` —
+        // the fresh-temp `ref Tensor` arg path (B-2026-07-18-9) + the f32
+        // element-width threading (B-2026-07-18-10); before those fixes this shape
+        // segfaulted / misread the tape under `karac build`. Inputs are chosen so
+        // every printed gradient is f32-exact:
+        //   silu'(0) = σ(0) = 0.5.
+        //   softmax([0,0]) = [0.5,0.5]; weighting by c=[1,0] gives
+        //     grad_x = s⊙(c − ⟨c,s⟩) = [0.5·0.5, 0.5·(−0.5)] = [0.25, −0.25].
+        //   gelu'(0) = 0.5·(1+tanh(0)) = 0.5.
+        //   bce(p=0.8,t=1) grad = (p−t)/(p(1−p))/N = (−0.2)/(0.16)/2 = −0.625.
+        //   cross_entropy(logits=[0,0], onehot=[1,0]) grad = softmax−onehot
+        //     = [0.5−1, 0.5−0] = [−0.5, 0.5].
+        // Byte-identical to `karac run` (all values f32-exact, no precision gap).
+        if let Some(out) = run_program(
+            r#"
+import std.autograd.{TensorTape, TensorVar};
+fn main() {
+    let t1 = TensorTape.new();
+    let a = TensorVar.leaf(t1, Tensor.from([0.0, 1.0]));
+    let y = a.silu(); let s = y.sum(); s.backward();
+    println(a.grad_at(0));
+
+    let t2 = TensorTape.new();
+    let x = TensorVar.leaf(t2, Tensor.from([0.0, 0.0]));
+    let c = TensorVar.leaf(t2, Tensor.from([1.0, 0.0]));
+    let sm = x.softmax(); let l = sm.mul(c).sum(); l.backward();
+    println(x.grad_at(0)); println(x.grad_at(1));
+
+    let t3 = TensorTape.new();
+    let g = TensorVar.leaf(t3, Tensor.from([0.0]));
+    let gy = g.gelu(); let gs = gy.sum(); gs.backward();
+    println(g.grad_at(0));
+
+    let t4 = TensorTape.new();
+    let p = TensorVar.leaf(t4, Tensor.from([0.8, 0.3]));
+    let tg = TensorVar.leaf(t4, Tensor.from([1.0, 0.0]));
+    let lb = p.bce(tg); lb.backward();
+    println(p.grad_at(0));
+
+    let t5 = TensorTape.new();
+    let xc = TensorVar.leaf(t5, Tensor.from([0.0, 0.0]));
+    let oh = TensorVar.leaf(t5, Tensor.from([1.0, 0.0]));
+    let lc = xc.cross_entropy(oh); lc.backward();
+    println(xc.grad_at(0)); println(xc.grad_at(1));
+}
+"#,
+        ) {
+            assert_eq!(out, "0.5\n0.25\n-0.25\n0.5\n-0.625\n-0.5\n0.5\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_freshtemp_tensor_ref_arg_assoc_call() {
+        // B-2026-07-18-9 / B-2026-07-18-10: an inline `Tensor.from([…])` passed as
+        // a `ref Tensor[f32,…]` arg to an ASSOCIATED fn. Before the fix the
+        // assoc-call path passed the fresh temp by value (crash) and the f64
+        // literals were laid out 8-byte-wide for the f32 param (misread). Now the
+        // rvalue is materialized to a slot + pointer-passed, and the callee's
+        // declared f32 element type is threaded to `Tensor.from`. Reads the
+        // element back through the borrow.
+        if let Some(out) = run_program(
+            r#"
+struct P {}
+impl P { fn second(v: ref Tensor[f32, [?]]) -> f32 { v[1] } }
+fn main() { println(P.second(Tensor.from([-1.0, 2.0, 3.0]))); }
+"#,
+        ) {
+            assert_eq!(out, "2\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_autograd_tensor_scalar_loss() {
         // `std.autograd` tensor-valued `sum` reduction — the terminal that turns
         // a tensor computation into a scalar loss. L = sum(x²) at x=[1,2,3] → 14;
