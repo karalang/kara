@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 63 | 1 |
 | missing-feature | 48 | 1 |
 | false-positive | 36 | 0 |
-| run-vs-build | 35 | 1 |
+| run-vs-build | 36 | 1 |
 | crash | 27 | 0 |
 | soundness | 23 | 0 |
 | perf | 21 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 411 | 5 |
+| codegen | 411 | 4 |
 | typecheck | 70 | 1 |
-| interp | 55 | 1 |
+| interp | 56 | 2 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **574 surfaced · 5 open · 565 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **575 surfaced · 5 open · 566 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -134,11 +134,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **574 surfaced 
 | B-2026-07-18-43 | 2026-07-18 | codegen | medium | A closure that captures a Vec and RETURNS it, then the result is INDEXED, fails codegen with `Index operator applied to non-array type` (interp correct): `fn f(v: Vec[i64]) -> i64 { let g = || v; g()[1] }` and the local-capture sibling `let v = [1,2,3]; let g = || v; g()[0]`. The closure-call result's element/Vec type is not tracked, so `g()[i]` doesn't recognize the return as a Vec. `g().len()` (non-index) on the same shape WORKS, so it is specifically the index-into-closure-call-result type inference that is missing. | src/codegen/closures.rs |
 | B-2026-07-18-45 | 2026-07-18 | codegen | medium | A generic struct whose type param is bound to a WHOLE Vec (`Box[Vec[i64]]`) and whose field is returned (moved out) double-frees under AOT/JIT (interp correct): `fn get[T](b: Box[T]) -> T { b.v }` / `impl[T] Box[T] { fn get(self) -> T { self.v } }` at T=Vec[i64] both abort `free(): double free`. The T=String sibling is fixed (B-2026-07-18-44); the residual is specifically a whole-Vec-typed T. | src/codegen/param_own.rs |
 | B-2026-07-18-46 | 2026-07-18 | codegen | medium | A closure that captures a whole heap-bearing STRUCT (a struct with a String/Vec field) and RETURNS it miscompiles under AOT/JIT (interp correct): `struct W { s: String } fn f(w: W) -> W { let g = || w; g() }` prints GARBAGE instead of the field. Distinct from B-2026-07-18-42 (which fixed whole Vec/String captures returned from a closure); a struct capture is not tracked in `vec_elem_types` so the borrow-alias deep-copy that -42 wired in does not fire for it. | src/codegen/closures.rs |
-| B-2026-07-18-48 | 2026-07-18 | codegen | medium | A USER method whose name collides with a builtin Vec/String method (`get`/`take`/`unwrap`/…), called on a NON-IDENTIFIER receiver (a struct/enum LITERAL) and returning a HEAP type, is misrouted to the Vec/String method handler under AOT/JIT (interp correct): `struct R { v: String } impl R { fn get(self) -> String { self.v } } fn main() { println(R { v: "q".to_string() }.get()); }` -> `error: codegen failed: Vec.get requires an index argument`. Binding the receiver to a variable first (`let r = R{..}; r.get()`) works; an i64-returning `get` on a literal receiver works. | src/codegen/method_call.rs |
+| B-2026-07-18-49 | 2026-07-18 | interp | medium | A user method literally named `unwrap` on a user enum/struct is mis-resolved to the builtin Option/Result `unwrap` by the INTERPRETER (prints the value's Display), while codegen (post B-2026-07-18-48) correctly calls the user method: `enum E { A(String) } impl E { fn unwrap(self) -> String { match self { E.A(s) => s } } } fn main() { let e = E.A("hi".to_string()); println(e.unwrap()); }` -> interp `A(hi)` (WRONG — the enum Display), build `hi` (correct). The reverse divergence direction from most run-vs-build bugs (interp wrong, build right). | src/interpreter |
 
-### Fixed (565)
+### Fixed (566)
 
-<details><summary>565 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>566 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -707,6 +707,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **574 surfaced 
 | B-2026-07-18-42 | codegen | high | A closure that CAPTURES a whole heap String/Vec and RETURNS it double-frees under AOT/JIT (interp correct): `fn f(x: String) -> String { let g = \|\| x… | f96d2f2 |
 | B-2026-07-18-44 | codegen | high | A GENERIC struct's owned by-value param/self whose HEAP FIELD is returned (moved out) double-frees under AOT/JIT (interp correct): `fn take[T](b: Box… | 3ea24dd |
 | B-2026-07-18-47 | codegen | high | An enum METHOD with owned `self` that MATCHES its heap payload double-frees under AOT/JIT (interp correct): `impl E { fn take(self) -> String { match… | 6b23dcb |
+| B-2026-07-18-48 | codegen | medium | A USER method whose name collides with a builtin Vec/String method (`get`/`take`/`unwrap`/…), called on a NON-IDENTIFIER receiver (a struct/enum LITE… | d402c8f |
 
 </details>
 
