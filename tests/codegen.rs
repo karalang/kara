@@ -2370,6 +2370,37 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_option_ref_payload_display_matches_interpreter() {
+        // B-2026-07-18-24: `Vec.first()` / `.get(i)` / `.last()` are typed
+        // `Option[ref T]` (the borrow-typed accessor, B-2026-07-14-11). For a
+        // SCALAR element the `ref` is a type-system artifact — the value is
+        // returned by copy in the Some payload word — but the Display
+        // registration rejected the `ref`-wrapped payload as non-reconstructable,
+        // so an UNannotated `let x = v.first(); println(x)` (and a bare
+        // `println(v.first())`) failed codegen with the deferred struct-Display
+        // error while the interpreter rendered `Some(10)`. A scalar-ref peel at
+        // the registration + call-result sites closes it; a `ref String` payload
+        // (a real pointer) stays deferred, unpeeled. Covers i64/f64/usize-word
+        // scalars, the None arm, both the let-place and bare-call sites.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v = [10, 20, 30];\n\
+                 let a = v.first();\n\
+                 let b = v.last();\n\
+                 println(a);\n\
+                 println(b);\n\
+                 println(v.get(1));\n\
+                 let fv = [1.5, 2.5];\n\
+                 println(fv.first());\n\
+                 let mut empty: Vec[i64] = Vec.new();\n\
+                 println(empty.first());\n\
+             }",
+        ) {
+            assert_eq!(out, "Some(10)\nSome(30)\nSome(20)\nSome(1.5)\nNone\n");
+        }
+    }
+
+    #[test]
     fn e2e_map_values_keys_collect_to_vec() {
         // B-2026-07-08-17: `<map>.values().collect()` / `.keys().collect()`
         // failed codegen with "no handler for method 'collect' on non-identifier

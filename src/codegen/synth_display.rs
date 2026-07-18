@@ -846,7 +846,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// A field type that occupies exactly ONE payload word, so a struct made of
     /// them reconstructs from the ≤3 sequential inline-payload words. Scalars
     /// only — String/str are 3-word `{ptr,len,cap}` values and would overflow.
-    fn is_scalar_word_display_field(te: &TypeExpr) -> bool {
+    pub(super) fn is_scalar_word_display_field(te: &TypeExpr) -> bool {
         if let TypeKind::Path(p) = &te.kind {
             if let Some(seg) = p.segments.last() {
                 return matches!(
@@ -879,6 +879,32 @@ impl<'ctx> super::Codegen<'ctx> {
     /// a String field (3 words) or > 3 fields overflows the inline area (the
     /// payload is heap-BOXED), so it stays on the deferred path (a clean error,
     /// not invalid IR).
+    /// Peel a single `ref` / `mut ref` layer from an Option/Result Display
+    /// payload `TypeExpr` when the borrowed inner is a SCALAR primitive.
+    ///
+    /// `Vec.first()` / `.get(i)` / `.last()` are typed `Option[ref T]` — the
+    /// borrow-typed accessor (B-2026-07-14-11). For a scalar element the borrow
+    /// is a pure type-system artifact: the accessor returns the value BY COPY in
+    /// the Some payload word, so the runtime layout is byte-identical to a plain
+    /// `Option[T]` (proven by the annotated `let x: Option[i64] = v.first()` form
+    /// already rendering the correct value). Peeling lets the Display registration
+    /// (`var_option_payload_te` / `var_result_payload_te`) recognise the inline
+    /// payload for an UNannotated `let x = v.first()`; without it the whole
+    /// binding falls through to the deferred struct-Display error (a run-vs-build
+    /// divergence — the interpreter renders it, codegen refused).
+    ///
+    /// RESTRICTED to scalars: a `ref String` / `ref Vec` borrow is a real
+    /// pointer whose layout differs from the inline value, so those stay on the
+    /// deferred path (unchanged) rather than being misread.
+    pub(super) fn peel_scalar_ref_display_payload(te: &TypeExpr) -> TypeExpr {
+        if let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &te.kind {
+            if Self::is_scalar_word_display_field(inner) {
+                return (**inner).clone();
+            }
+        }
+        te.clone()
+    }
+
     pub(super) fn is_reconstructable_display_payload(&self, te: &TypeExpr) -> bool {
         if Self::is_inline_displayable_payload(te) {
             return true;
@@ -2191,12 +2217,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // inline-displayable payloads (primitives + String) exactly as the
         // variable path does — the 4-i64 aggregate reload can't reconstruct a
         // boxed/wide-struct payload.
+        // A scalar `ref T` payload (a bare `println(v.first())` on a Vec, typed
+        // `Option[ref T]`) is peeled to `T` — the borrow is a same-width copy in
+        // the payload word, matching `Option[T]`'s layout (B-2026-07-18-24). The
+        // variable path applies the identical peel at `let`-binding registration.
         let disp = if let Some(pte) = Self::option_payload_te(&full_te) {
+            let pte = Self::peel_scalar_ref_display_payload(&pte);
             if !self.is_reconstructable_display_payload(&pte) {
                 return Ok(None);
             }
             self.emit_option_display_te(&pte)
         } else if let Some((ok_te, err_te)) = Self::result_payload_tes(&full_te) {
+            let ok_te = Self::peel_scalar_ref_display_payload(&ok_te);
+            let err_te = Self::peel_scalar_ref_display_payload(&err_te);
             if !self.is_reconstructable_display_payload(&ok_te)
                 || !self.is_reconstructable_display_payload(&err_te)
             {

@@ -1592,8 +1592,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // synthesizer reconstructs the payload from ≤3 words, which
                     // is invalid for a boxed/wide payload (its word is a
                     // pointer). Compound payloads fall through to the generic
-                    // display error, unchanged.
+                    // display error, unchanged. A scalar `ref T` payload (from a
+                    // `Vec.first()`/`.get()`/`.last()` binding, typed
+                    // `Option[ref T]`) is peeled to `T` — the borrow is a copy at
+                    // that width, so its layout matches `Option[T]`
+                    // (B-2026-07-14-11 / B-2026-07-18-24).
                     if let Some(pte) = Self::option_payload_te(te) {
+                        let pte = Self::peel_scalar_ref_display_payload(&pte);
                         if self.is_reconstructable_display_payload(&pte) {
                             self.var_option_payload_te.insert(var_name.to_string(), pte);
                         }
@@ -1601,6 +1606,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Some("Result") => {
                     if let Some((ok, err)) = Self::result_payload_tes(te) {
+                        let ok = Self::peel_scalar_ref_display_payload(&ok);
+                        let err = Self::peel_scalar_ref_display_payload(&err);
                         if self.is_reconstructable_display_payload(&ok)
                             && self.is_reconstructable_display_payload(&err)
                         {
