@@ -11043,8 +11043,8 @@ fn main() {
         // reusing the call + ctor codegen — with the absent receiver passed
         // through. Covers a fn-reference and an annotated closure, a Result Ok
         // (mapped) and Err (passthrough), a type-changing map (i64 -> bool),
-        // and a chain. interp == JIT == AOT; scalar payloads (a heap payload
-        // defers loudly to the interpreter, verified separately).
+        // and a chain. interp == JIT == AOT (heap payloads now supported too —
+        // see test_e2e_option_result_map_heap_payload).
         if let Some(out) = run_program(
             "fn dbl(n: i64) -> i64 { n * 2 }\n\
              fn main() {\n\
@@ -11063,6 +11063,64 @@ fn main() {
         ) {
             assert_eq!(out, "10\n-1\n42\n-99\n11\ntrue\n");
         }
+    }
+
+    #[test]
+    fn test_e2e_option_result_map_heap_payload() {
+        // B-2026-07-12-11 heap half: `Option/Result.map` over a HEAP payload
+        // (String / Vec) routes through match-synthesis, which owns the
+        // move-out / drop / receiver-suppression machinery; the typechecker
+        // records the mapper's solved `Fn(T)->R` so codegen types the closure.
+        // Covers: scalar-returning (Vec→len, String→len, Result Ok→len), the
+        // CHAINED `map(f).unwrap_or(d)` idiom (works via the Slice-1 span-
+        // collision fix), identity MOVE (`|x| x`), a heap-returning mapper with
+        // an annotated param (`|s: String| s.to_uppercase()`), and a named-fn
+        // heap-returning mapper. interp == JIT == AOT.
+        if let Some(out) = run_program(
+            "fn shout(s: String) -> String { s.to_uppercase() }\n\
+             fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(10); v.push(20); v.push(30);\n\
+                 let opt: Option[Vec[i64]] = Some(v);\n\
+                 println(f\"{opt.map(|xs| xs.len()).unwrap_or(-1)}\");\n\
+                 let s: Option[String] = Some(f\"hello\");\n\
+                 println(f\"{s.map(|x| x.len()).unwrap_or(-1)}\");\n\
+                 let mv: Option[String] = Some(f\"kept\");\n\
+                 let same = mv.map(|x| x);\n\
+                 match same { Some(x) => { println(f\"{x.len()}\"); } None => { println(\"none\"); } }\n\
+                 let ok: Result[String, i64] = Ok(f\"data\");\n\
+                 println(f\"{ok.map(|d| d.len()).unwrap_or(-1)}\");\n\
+                 let up: Option[String] = Some(f\"hi\");\n\
+                 match up.map(|x: String| x.to_uppercase()) { Some(x) => { println(x); } None => { println(\"none\"); } }\n\
+                 let nf: Option[String] = Some(f\"yo\");\n\
+                 match nf.map(shout) { Some(x) => { println(x); } None => { println(\"none\"); } }\n\
+                 let none: Option[String] = None;\n\
+                 println(f\"{none.map(|x| x.len()).unwrap_or(-1)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n5\n4\n4\nHI\nYO\n-1\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_map_heap_unannotated_gated() {
+        // The un-annotated heap-RETURNING mapper (`|s| s.to_uppercase()`)
+        // remains a clean loud build gate (B-2026-07-12-10 residual: the
+        // typechecker can't infer the mapper's return without a param
+        // annotation, and codegen can't recover String-vs-Vec from the shared
+        // LLVM type). It must NOT silently miscompile — it fails the build with
+        // an actionable message, while `--interp` still runs it.
+        let err = ir_result(
+            "fn main() {\n\
+                 let s: Option[String] = Some(f\"hi\");\n\
+                 match s.map(|x| x.to_uppercase()) { Some(x) => { println(x); } None => {} }\n\
+             }",
+        )
+        .expect_err("un-annotated heap-returning map mapper must be gated at codegen");
+        assert!(
+            err.contains("un-annotated closure that returns a String/Vec"),
+            "expected the un-annotated heap-map gate, got: {err}"
+        );
     }
 
     #[test]

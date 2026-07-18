@@ -952,6 +952,42 @@ fn main() {
     }
 
     #[test]
+    fn asan_option_map_heap_payload_no_leak() {
+        // B-2026-07-12-11 heap half: `Option.map` over a heap payload routes
+        // through match-synthesis for correct ownership. A read-only mapper
+        // frees the payload buffer exactly once (the receiver owns the
+        // moved-out payload); a MOVE mapper (`|x| x`) transfers the buffer to
+        // the result without a receiver double-free; a heap-RETURNING mapper
+        // (annotated `to_uppercase`) frees the source and owns the fresh result;
+        // and a CHAINED `map(f).unwrap_or(d)` (Slice-1 span fix) is exercised
+        // too. 40 iterations so any leak / double-free trips LSan / ASAN.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let mut v: Vec[i64] = Vec.new();
+        v.push(1i64); v.push(2i64); v.push(3i64);
+        let opt: Option[Vec[i64]] = Some(v);
+        total = total + opt.map(|xs| xs.len()).unwrap_or(0i64);
+        let s: Option[String] = Some(f"hello");
+        let same = s.map(|x| x);
+        match same { Some(x) => { total = total + x.len(); } None => {} }
+        let up: Option[String] = Some(f"hi");
+        match up.map(|x: String| x.to_uppercase()) { Some(x) => { total = total + x.len(); } None => {} }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // 40 * (3 + 5 + 2) = 400
+            &["400"],
+            "option_map_heap_payload_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_oncelock_string_set_get_no_leak() {
         // B-2026-07-12-2 heap-`T` ungate (gap 1, success-path element leak): a
         // heap-owning `OnceLock[String]` `set(v)` moves `v`'s buffer into the

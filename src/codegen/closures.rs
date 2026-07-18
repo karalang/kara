@@ -2829,7 +2829,39 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             })
             .collect();
-        let return_ty = self.infer_closure_return_type(body, &closure_param_types);
+        // Return type: the structural heuristic `infer_closure_return_type` is
+        // correct and usage-specific for most bodies (e.g. an `a.cmp(b)`
+        // Ordering result that `sort_by` extracts a tag from), so it is the
+        // default. But it CANNOT resolve a method-call body whose receiver's
+        // SURFACE type it can't recover from LLVM types alone — `|s|
+        // s.to_uppercase()` returns a String, yet String and Vec share one LLVM
+        // type, so the heuristic falls back to `i64` and the body's
+        // `{ptr,i64,i64}` return mismatches the declared `i64` (heap-returning
+        // `.map()` mapper). Narrowly override ONLY that case: the
+        // typechecker-recorded `Fn(T) -> R` says the return is a String/Vec
+        // (`vec_struct`) but the heuristic gave up to `i64`. Every other shape
+        // keeps the heuristic. Heap-payload map codegen (B-2026-07-12-11).
+        let heuristic_rt = self.infer_closure_return_type(body, &closure_param_types);
+        let return_ty = match inferred_fn_te.as_ref() {
+            Some(TypeExpr {
+                kind:
+                    TypeKind::FnType {
+                        return_type: Some(rt),
+                        ..
+                    },
+                ..
+            }) => {
+                let recorded = self.llvm_type_for_type_expr(rt);
+                if recorded == self.vec_struct_type().into()
+                    && heuristic_rt == self.context.i64_type().into()
+                {
+                    recorded
+                } else {
+                    heuristic_rt
+                }
+            }
+            _ => heuristic_rt,
+        };
 
         // 5. Declare the closure function: fn(ptr env_ptr, T0, T1, ...) -> R.
         let ptr_ty = self.context.ptr_type(AddressSpace::default());

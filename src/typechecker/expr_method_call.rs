@@ -2591,6 +2591,23 @@ impl<'a> super::TypeChecker<'a> {
                     SpanKey::for_method_call(span, args_close_span),
                     Self::type_to_type_expr(&t_resolved),
                 );
+                // Record the SOLVED mapper `Fn(T) -> R` at the closure's own
+                // span. The lowering pass folds Function-typed `expr_types`
+                // entries into `Program.fn_value_typed_exprs`, which codegen's
+                // closure compilation reads to type an UN-ANNOTATED closure
+                // param/return. Without it the mapper falls back to `i64`
+                // params — and since `String`/`Vec` share one LLVM type,
+                // codegen can't otherwise tell `|s| s.to_uppercase()` returns a
+                // String — so a heap-payload `.map()` mapper mis-typed. Recorded
+                // only for a closure LITERAL (a fn-reference arg keeps its own
+                // recorded type). Heap-payload map codegen (B-2026-07-12-11).
+                if matches!(&args[0].value.kind, ExprKind::Closure { .. }) {
+                    let mapper_fn_ty = Type::Function {
+                        params: vec![t_resolved.clone()],
+                        return_type: Box::new(r_resolved.clone()),
+                    };
+                    self.record_expr_type(&args[0].value.span, &mapper_fn_ty);
+                }
                 let result = if enum_name == "Option" {
                     Type::Named {
                         name: "Option".to_string(),

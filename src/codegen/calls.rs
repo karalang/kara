@@ -1368,6 +1368,178 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   Result: Err=0,  Ok=1
     /// Both share the same "tag != 0 ⇒ payload-bearing" shape, so a
     /// single value-extraction path covers both.
+    /// `true` when `expr` syntactically produces a heap `String` — a string
+    /// literal / f-string, or a String→String builtin method call
+    /// (`trim`/case/`to_string`/`repeat`/`replace`), recursing through a block
+    /// tail. Gates an un-annotated `.map()` mapper whose heap return the
+    /// typechecker can't infer without a param annotation (B-2026-07-12-10).
+    fn closure_body_produces_heap_string(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::InterpolatedStringLit(_) => true,
+            ExprKind::MethodCall { method, .. } => matches!(
+                method.as_str(),
+                "trim"
+                    | "trim_start"
+                    | "trim_end"
+                    | "to_lowercase"
+                    | "to_uppercase"
+                    | "to_string"
+                    | "repeat"
+                    | "replace"
+            ),
+            ExprKind::Block(b) | ExprKind::Seq(b) => b
+                .final_expr
+                .as_ref()
+                .is_some_and(|e| Self::closure_body_produces_heap_string(e)),
+            _ => false,
+        }
+    }
+
+    /// Seed `pattern_binding_types` + `pattern_binding_inner_types` for a
+    /// codegen-SYNTHESIZED pattern binding (which the typechecker never saw),
+    /// mirroring what those tables hold for the same binding in a hand-written
+    /// match. `pattern_binding_types` gets the payload's canonical head name
+    /// (`Vec` / `String` / struct name / `Tuple`); `pattern_binding_inner_types`
+    /// gets the element type for a `Vec`/`Slice` payload, else the whole
+    /// payload TypeExpr. `type_to_type_expr` lowers `Type::Str` to the head
+    /// `"str"`, but the pattern tables canonicalize String to `"String"`, so
+    /// normalize that. Used by the `.map()`-over-heap match synthesis.
+    fn seed_synthetic_pattern_binding_type(&mut self, span: &crate::token::Span, te: &TypeExpr) {
+        let key = (span.offset, span.length);
+        match &te.kind {
+            TypeKind::Path(p) => {
+                if let Some(head) = p.segments.last() {
+                    let canonical = if head == "str" {
+                        "String"
+                    } else {
+                        head.as_str()
+                    };
+                    self.pattern_binding_types
+                        .insert(key, canonical.to_string());
+                }
+            }
+            TypeKind::Tuple(_) => {
+                self.pattern_binding_types.insert(key, "Tuple".to_string());
+            }
+            _ => {}
+        }
+        let inner = super::helpers::vec_inner_type_expr(te)
+            .or_else(|| super::helpers::slice_inner_type_expr(te));
+        match inner {
+            Some(el) => {
+                self.pattern_binding_inner_types.insert(key, el);
+            }
+            None => {
+                self.pattern_binding_inner_types.insert(key, te.clone());
+            }
+        }
+    }
+
+    /// Lower `opt.map(f)` / `res.map(f)` over a HEAP payload by synthesizing the
+    /// equivalent `match` and compiling it, so the match codegen's heap-payload
+    /// ownership machinery (move-out, arm-body drop / move suppression,
+    /// receiver-payload suppression) handles the buffer. The synthesized
+    /// pattern-binding types are seeded from `inner_te` / `err_te` (keyed on the
+    /// MAPPER's span — unique per closure — to avoid colliding with the outer
+    /// call in a chain); the mapper closure keeps its real span so its
+    /// typechecker-recorded `Fn(T) -> R` drives inference. B-2026-07-12-11.
+    fn compile_map_via_match_synthesis(
+        &mut self,
+        object: &Expr,
+        mapper: &Expr,
+        inner_te: &TypeExpr,
+        err_te: Option<&TypeExpr>,
+        call_span: &crate::token::Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let is_result = self.type_name_of_expr(object).as_deref() == Some("Result");
+        let x_name = "__karac_map_x";
+        let e_name = "__karac_map_e";
+        // Key the synthesized bindings on the MAPPER's span (unique per
+        // closure), not `call_span`: the parser gives a method call the same
+        // span as its receiver, so a chained `opt.map(f).unwrap_or(d)` would
+        // collide on `call_span`. Ok/Err bindings need distinct keys, so nudge
+        // the length.
+        let mut x_span = mapper.span.clone();
+        x_span.length += 2;
+        let mut e_span = mapper.span.clone();
+        e_span.length += 3;
+        self.seed_synthetic_pattern_binding_type(&x_span, inner_te);
+        if let Some(ete) = err_te {
+            self.seed_synthetic_pattern_binding_type(&e_span, ete);
+        }
+        let mk = |kind: ExprKind| Expr {
+            kind,
+            span: call_span.clone(),
+        };
+        let arg = |value: Expr| CallArg {
+            label: None,
+            mut_marker: false,
+            span: value.span.clone(),
+            value,
+        };
+        let bind_pat_spanned = |name: &str, span: crate::token::Span| Pattern {
+            kind: PatternKind::Binding(name.to_string()),
+            span,
+        };
+        let bind_pat = |name: &str| Pattern {
+            kind: PatternKind::Binding(name.to_string()),
+            span: call_span.clone(),
+        };
+        let call_f = mk(ExprKind::Call {
+            callee: Box::new(mapper.clone()),
+            args: vec![arg(mk(ExprKind::Identifier(x_name.to_string())))],
+        });
+        let present_ctor = if is_result { "Ok" } else { "Some" };
+        let present_body = mk(ExprKind::Call {
+            callee: Box::new(mk(ExprKind::Identifier(present_ctor.to_string()))),
+            args: vec![arg(call_f)],
+        });
+        let present_arm = MatchArm {
+            pattern: Pattern {
+                kind: PatternKind::TupleVariant {
+                    path: vec![present_ctor.to_string()],
+                    patterns: vec![bind_pat_spanned(x_name, x_span.clone())],
+                },
+                span: call_span.clone(),
+            },
+            guard: None,
+            body: present_body,
+            span: call_span.clone(),
+        };
+        let absent_arm = if is_result {
+            let err_body = mk(ExprKind::Call {
+                callee: Box::new(mk(ExprKind::Identifier("Err".to_string()))),
+                args: vec![arg(mk(ExprKind::Identifier(e_name.to_string())))],
+            });
+            MatchArm {
+                pattern: Pattern {
+                    kind: PatternKind::TupleVariant {
+                        path: vec!["Err".to_string()],
+                        patterns: vec![bind_pat_spanned(e_name, e_span.clone())],
+                    },
+                    span: call_span.clone(),
+                },
+                guard: None,
+                body: err_body,
+                span: call_span.clone(),
+            }
+        } else {
+            MatchArm {
+                pattern: bind_pat("None"),
+                guard: None,
+                body: mk(ExprKind::Identifier("None".to_string())),
+                span: call_span.clone(),
+            }
+        };
+        let match_expr = mk(ExprKind::Match {
+            scrutinee: Box::new(object.clone()),
+            arms: vec![present_arm, absent_arm],
+        });
+        self.compile_expr(&match_expr)
+    }
+
     pub(super) fn try_compile_option_result_method(
         &mut self,
         object: &Expr,
@@ -1476,12 +1648,48 @@ impl<'ctx> super::Codegen<'ctx> {
         // so it defers loudly to the interpreter. B-2026-07-12-11.
         if method == "map" && args.len() == 1 {
             if !super::vec_method::is_trivially_copyable_te(&inner_te) {
-                return Err(
-                    "codegen: Option/Result.map over a non-trivially-copyable payload \
-                     (String / Vec / struct) is not yet supported under `karac build`; \
-                     re-run with `--interp` (or `KARAC_RUN_JIT=0`)"
-                        .to_string(),
-                );
+                // Heap payload (String / Vec / heap struct): the hand-rolled
+                // trivially-copyable path below only shallow-copies the payload
+                // (unsound for a mapper that MOVES or RETURNS heap). Delegate to
+                // the match codegen — `opt.map(f)` is exactly `match opt {
+                // Some(x) => Some(f(x)), None => None }` (Ok/Err for Result) —
+                // which owns the correct heap-payload move-out / drop /
+                // receiver-suppression machinery. The typechecker records the
+                // mapper's solved `Fn(T) -> R`, so codegen types the closure.
+                // Chained `map(f).unwrap_or(d)` now works because the span-
+                // collision fix (Slice 1) keys `method_unwrap_*` on
+                // `args_close_span`. B-2026-07-12-11 heap half.
+                //
+                // Residual gate: an UN-ANNOTATED closure with a heap-String-
+                // producing body (`|s| s.to_uppercase()`). The typechecker
+                // can't infer its return from the payload `T` without a param
+                // annotation (B-2026-07-12-10), and codegen can't recover the
+                // surface type from the shared String/Vec LLVM type — so it
+                // would silently miscompile. Detect it syntactically and gate
+                // cleanly (annotate the param, or use --interp). Scalar / move /
+                // annotated / named-fn mappers resolve concretely and proceed.
+                if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                    let all_unannotated = params.iter().all(|p| p.ty.is_none());
+                    if all_unannotated && Self::closure_body_produces_heap_string(body) {
+                        return Err(
+                            "codegen: Option/Result.map with an un-annotated closure that \
+                             returns a String/Vec is not yet supported under `karac build`; \
+                             annotate the closure parameter (`|x: T| ...`) or run with \
+                             `--interp` (or `KARAC_RUN_JIT=0`)"
+                                .to_string(),
+                        );
+                    }
+                }
+                let err_te = self.method_unwrap_err_types.get(&key).cloned();
+                return self
+                    .compile_map_via_match_synthesis(
+                        object,
+                        &args[0].value,
+                        &inner_te,
+                        err_te.as_ref(),
+                        call_span,
+                    )
+                    .map(Some);
             }
             let is_result = self.type_name_of_expr(object).as_deref() == Some("Result");
             let present_variant = if is_result { "Ok" } else { "Some" };
