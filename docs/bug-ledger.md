@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
 | crash | 26 | 0 |
-| run-vs-build | 26 | 2 |
+| run-vs-build | 26 | 1 |
 | perf | 21 | 0 |
 | soundness | 20 | 0 |
 | diagnostics | 11 | 0 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 379 | 4 |
+| codegen | 379 | 3 |
 | typecheck | 63 | 0 |
 | interp | 49 | 0 |
 | ownership | 23 | 0 |
@@ -123,20 +123,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **535 surfaced · 4 open · 527 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **535 surfaced · 3 open · 528 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-17-21 | 2026-07-17 | codegen | high | AOT MISCOMPILE (use-after-free): a loop containing `let x = Some(shared T); vec.push(x)` frees the LAST pushed element, so reading vec[N-1] after the loop returns garbage / crashes. interp (oracle) is correct; AOT diverges. Regressed since ~e2fb091b (kata #101 was 80745775-correct earlier the same day); live on main 84c01472. RC-elision-independent (fails with KARAC_RC_ELIDE_REF_PARAMS=0 too). | loop-local `let x = Some(shared); vec.push(x)` over-releases the LAST-pushed Vec[Option[shared]] element (use-after-free); fix the loop-body scope-exit RC handling of a named shared binding moved into a Vec |
 | B-2026-07-18-4 | 2026-07-18 | codegen | medium | A STRUCT-VARIANT enum payload's Vec field bound DIRECTLY in a match arm over a borrowed ref-Vec element, then moved into a local (`enum It { Fu { params: Vec[P] } }`; `for it in items { match it { Fu { params } => { let ps = params; for p in ps {..} } } }`, `items: ref Vec[It]`), miscompiles under AOT to an EMPTY Vec — the sum is 0 vs the interpreter's correct value. check-clean, interp-correct, AOT wrong-output (not a crash). | — |
 | B-2026-07-18-6 | 2026-07-18 | codegen | medium | PRE-EXISTING on main (not from the B-2026-07-18-2 fix — reproduced with it stashed): tests/http_client_codegen.rs test_ir_http_error_drop_frees_message + test_ir_response_drop_frees_headers_handle are RED — the synthesized HttpError/Response drop fns no longer free the message String buffer / headers handle (the IR-shape assertion finds only a cap-zero GEP, no free). Likely fallout of the 3324eea exact-free-buf-hints drop-site rework window. | — |
-| B-2026-07-18-7 | 2026-07-18 | codegen | high | Plain struct-variable REASSIGNMENT (`let mut p = P { x: 1, y: 2 }; p = P { x: 10, y: 20 }`) now emits a reference to `karac_runtime_gpu_free_soa`, so BOTH `karac run` (JIT 'Symbols not found: karac_runtime_gpu_free_soa') and `karac build` (link error demanding the opt-in GPU archive: 'this program calls gpu.dispatch') fail for a 2-line non-GPU program; `--interp` correct (prints 30). A basic language construct is unusable on both compiled backends without the heavyweight GPU archive. | — |
 
-### Fixed (527)
+### Fixed (528)
 
-<details><summary>527 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>528 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -667,6 +666,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **535 surfaced 
 | B-2026-07-18-1 | codegen | medium | KARAC_AUTO_PAR=0 (auto_par_disabled) did NOT disable the parallel REDUCE lowering — only the parallel-group dispatch | 4d6efad |
 | B-2026-07-18-3 | codegen | medium | Consuming a BOXED `Option` payload whose type is a heap-containing tuple (e.g | eab5026 |
 | B-2026-07-18-5 | interp | low | gpu.upload / gpu.download ICE the interpreter with `unreachable!("variable 'gpu' not found")` — no interpreter arm exists for the resident-buffer API… | fcdf5202 |
+| B-2026-07-18-7 | codegen | high | Plain struct-variable REASSIGNMENT (`let mut p = P { x: 1, y: 2 }; p = P { x: 10, y: 20 }`) now emits a reference to `karac_runtime_gpu_free_soa`, so… | 13f9c2a |
 
 </details>
 
