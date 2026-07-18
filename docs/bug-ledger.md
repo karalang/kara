@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 150 | 0 |
 | leak | 85 | 0 |
+| double-free | 63 | 1 |
 | codegen-gap | 62 | 0 |
-| double-free | 62 | 0 |
 | missing-feature | 47 | 0 |
 | false-positive | 36 | 0 |
 | run-vs-build | 33 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 400 | 0 |
+| codegen | 401 | 1 |
 | typecheck | 68 | 0 |
 | interp | 54 | 0 |
 | ownership | 23 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **563 surfaced · 0 open · 559 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **564 surfaced · 1 open · 559 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-18-38 | 2026-07-18 | codegen | medium | An owned HEAP param (or local) moved into a VEC/ARRAY LITERAL that is returned/bound DOUBLE-FREES under AOT (interp correct): `fn dup(x: String) -> Vec[String] { [x] }` -> `--interp` builds `["z"]`, `karac build`/JIT aborts `free(): double free`. Every OTHER move-out sink is clean — `fn f(x: String) -> String { x }` (direct return), `W { s: x }` (struct literal), `(x, 1)` (tuple), `Some(x)` (Option), and `Vec.new() + v.push(x)` all correctly transfer ownership; the array/vec LITERAL element position is the one sink that does not suppress the moved element source. | src/codegen/collections.rs |
 
 ### Fixed (559)
 
