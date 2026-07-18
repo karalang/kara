@@ -2925,6 +2925,54 @@ fn main() {
     }
 
     #[test]
+    fn asan_sorted_map_ordered_methods_no_leak() {
+        // B-2026-07-18-1: the ordered-only `SortedMap` codegen methods. Exercises
+        // the memory behavior of my new code on its CLEAN paths: min/max/floor/
+        // ceiling over i64 keys/values (sorted-keys scratch alloc/free + Option
+        // construction — inline 2-word payload, no boxing) plus `range` over
+        // STRING keys/values (deep-cloned (String,String) tuples into the result
+        // Vec — LSan flags a leak if a clone / the sorted-key scratch is unfreed,
+        // ASan a double-free if a clone aliases a map buffer). Looped so any
+        // imbalance accumulates. The String min/max/floor/ceiling path (a boxed
+        // Option[(String,String)] payload) is covered by the interpreter and the
+        // run/build codegen E2E, but inherits the PRE-EXISTING boxed-Option-
+        // payload inner-heap drop leak (B-2026-07-18-3, shared with Vec.pop) —
+        // deliberately excluded here so this test gates on my own code.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut n: i64 = 0i64;
+    while n < 3i64 {
+        let mut m: SortedMap[i64, i64] = SortedMap.new();
+        let _ = m.insert(5i64, 50i64);
+        let _ = m.insert(1i64, 10i64);
+        let _ = m.insert(3i64, 30i64);
+        match m.min() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
+        match m.max() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
+        match m.floor(4i64) { Some(kv) => println(f"{kv.0}"), None => println("n") }
+        match m.ceiling(2i64) { Some(kv) => println(f"{kv.0}"), None => println("n") }
+        let ri = m.range(2i64, 5i64);
+        println(f"{ri.len()}");
+
+        let mut s: SortedMap[String, String] = SortedMap.new();
+        let _ = s.insert(f"kb-{n}-pad-pad", f"vb-{n}-pad-pad");
+        let _ = s.insert(f"ka-{n}-pad-pad", f"va-{n}-pad-pad");
+        let _ = s.insert(f"kc-{n}-pad-pad", f"vc-{n}-pad-pad");
+        let rs = s.range(f"ka-{n}-pad-pad", f"kb-{n}-pad-pad");
+        println(f"{rs.len()}");
+        n = n + 1i64;
+    }
+}
+"#,
+            &[
+                "1=10", "5=50", "3", "3", "2", "2", "1=10", "5=50", "3", "3", "2", "2", "1=10",
+                "5=50", "3", "3", "2", "2",
+            ],
+            "asan_sorted_map_ordered_methods_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_string_strip_prefix_suffix_heap_no_leak() {
         // Phase 8 § String — `strip_{prefix,suffix}(p) -> Option[String]`
         // ALLOCATES the owned remainder copy for the matched case

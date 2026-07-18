@@ -958,6 +958,450 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// `SortedMap.min()` / `max()` / `floor(k)` / `ceiling(k)` — the ordered
+    /// single-entry lookups, returning `Option[(K,V)]` (B-2026-07-18-1). Built
+    /// on the sorted-keys buffer (`emit_sorted_keys_buf`): pick the target index
+    /// (0 for `min`, len-1 for `max`, a comparator scan for `floor`/`ceiling`),
+    /// then deep-clone that key + its looked-up value into a `(K,V)` tuple
+    /// wrapped in `Some`, or `None` when the map is empty / no key satisfies the
+    /// bound. `min`/`max` need no argument; `floor`/`ceiling` take the pivot key.
+    /// Only integer/String keys sort under codegen (via `emit_sorted_key_cmp_fn`,
+    /// which rejects other `Ord` key types with an actionable message).
+    #[allow(clippy::too_many_arguments)]
+    fn compile_sorted_map_option_lookup(
+        &mut self,
+        var_name: &str,
+        method: &str,
+        map_handle: PointerValue<'ctx>,
+        key_ty: BasicTypeEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let fn_val = self.current_fn.unwrap();
+
+        let key_te = self
+            .map_key_type_exprs
+            .get(var_name)
+            .cloned()
+            .ok_or_else(|| format!("SortedMap.{method}: unknown key type for '{var_name}'"))?;
+        let val_te = self.var_elem_type_exprs.get(var_name).cloned();
+        let key_clone = self.emit_clone_fn_for_type_expr(&key_te);
+        let val_clone = val_te
+            .as_ref()
+            .map(|te| self.emit_clone_fn_for_type_expr(te));
+        // Emits (and validates support for) the ascending key comparator; used
+        // by floor/ceiling and required to have run before the sorted-keys call.
+        let cmp_fn = self.emit_sorted_key_cmp_fn(&key_te)?;
+
+        // floor/ceiling take a pivot key argument; store it in an alloca so the
+        // comparator (which takes key POINTERS) can read it.
+        let needs_arg = matches!(method, "floor" | "ceiling");
+        let arg_pivot = if needs_arg {
+            let arg = args
+                .first()
+                .ok_or_else(|| format!("SortedMap.{method} expects 1 argument"))?;
+            let av = self.compile_expr(&arg.value)?;
+            let av = self.coerce_scalar_to_type(av, key_ty);
+            let slot = self.create_entry_alloca(fn_val, "smol.argk", key_ty);
+            self.builder.build_store(slot, av).unwrap();
+            Some((slot, &arg.value, av))
+        } else {
+            None
+        };
+
+        let (kbuf, len) = self.emit_sorted_keys_buf(map_handle, &key_te)?;
+
+        // Compute (found, idx) into allocas. min/max are direct; floor/ceiling
+        // scan the ascending buffer.
+        let found_slot = self.create_entry_alloca(fn_val, "smol.found", bool_t.into());
+        let idx_slot = self.create_entry_alloca(fn_val, "smol.idx", i64_t.into());
+        let zero = i64_t.const_zero();
+        let one = i64_t.const_int(1, false);
+        let len_pos = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, len, zero, "smol.nonempty")
+            .unwrap();
+        match method {
+            "min" => {
+                self.builder.build_store(found_slot, len_pos).unwrap();
+                self.builder.build_store(idx_slot, zero).unwrap();
+            }
+            "max" => {
+                self.builder.build_store(found_slot, len_pos).unwrap();
+                let last = self.builder.build_int_sub(len, one, "smol.last").unwrap();
+                self.builder.build_store(idx_slot, last).unwrap();
+            }
+            "floor" | "ceiling" => {
+                // Scan i = 0..len comparing kbuf[i] to the pivot. floor keeps the
+                // LAST key <= pivot (largest, since ascending); ceiling keeps the
+                // FIRST key >= pivot (smallest). Conditional stores via select.
+                self.builder
+                    .build_store(found_slot, bool_t.const_zero())
+                    .unwrap();
+                self.builder.build_store(idx_slot, zero).unwrap();
+                let (pivot_slot, _, _) = arg_pivot.as_ref().unwrap();
+                let is_floor = method == "floor";
+                let i_slot = self.create_entry_alloca(fn_val, "smol.i", i64_t.into());
+                self.builder.build_store(i_slot, zero).unwrap();
+                let loop_bb = self.context.append_basic_block(fn_val, "smol.loop");
+                let body_bb = self.context.append_basic_block(fn_val, "smol.body");
+                let cont_bb = self.context.append_basic_block(fn_val, "smol.cont");
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+                self.builder.position_at_end(loop_bb);
+                let i_cur = self
+                    .builder
+                    .build_load(i64_t, i_slot, "smol.i.cur")
+                    .unwrap()
+                    .into_int_value();
+                let more = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, i_cur, len, "smol.more")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(more, body_bb, cont_bb)
+                    .unwrap();
+                self.builder.position_at_end(body_bb);
+                let kptr = unsafe {
+                    self.builder
+                        .build_gep(key_ty, kbuf, &[i_cur], "smol.kptr")
+                        .unwrap()
+                };
+                let c = self
+                    .builder
+                    .build_call(cmp_fn, &[kptr.into(), (*pivot_slot).into()], "smol.cmp")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let i32z = self.context.i32_type().const_zero();
+                let cur_found = self
+                    .builder
+                    .build_load(bool_t, found_slot, "smol.f.cur")
+                    .unwrap()
+                    .into_int_value();
+                // in-range: floor → cmp <= 0; ceiling → cmp >= 0.
+                let pred = if is_floor {
+                    inkwell::IntPredicate::SLE
+                } else {
+                    inkwell::IntPredicate::SGE
+                };
+                let in_range = self
+                    .builder
+                    .build_int_compare(pred, c, i32z, "smol.inrange")
+                    .unwrap();
+                // floor: take on every in-range i (keeps the last/largest).
+                // ceiling: take only the FIRST in-range i (found still false).
+                let take = if is_floor {
+                    in_range
+                } else {
+                    let not_found = self.builder.build_not(cur_found, "smol.notfound").unwrap();
+                    self.builder
+                        .build_and(in_range, not_found, "smol.take")
+                        .unwrap()
+                };
+                let new_found = self
+                    .builder
+                    .build_or(cur_found, take, "smol.f.new")
+                    .unwrap();
+                self.builder.build_store(found_slot, new_found).unwrap();
+                let cur_idx = self
+                    .builder
+                    .build_load(i64_t, idx_slot, "smol.idx.cur")
+                    .unwrap()
+                    .into_int_value();
+                let new_idx = self
+                    .builder
+                    .build_select(take, i_cur, cur_idx, "smol.idx.new")
+                    .unwrap()
+                    .into_int_value();
+                self.builder.build_store(idx_slot, new_idx).unwrap();
+                let i_next = self
+                    .builder
+                    .build_int_add(i_cur, one, "smol.i.next")
+                    .unwrap();
+                self.builder.build_store(i_slot, i_next).unwrap();
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+                self.builder.position_at_end(cont_bb);
+            }
+            _ => {
+                return Err(format!(
+                    "compile_sorted_map_option_lookup: bad method '{method}'"
+                ))
+            }
+        }
+
+        // Free the fresh-owned pivot arg (floor/ceiling) — a lookup arg, never
+        // stored (no-op for a borrowed/literal/scalar key).
+        if let Some((_, arg_expr, av)) = arg_pivot {
+            self.free_fresh_owned_str_arg(arg_expr, av);
+        }
+
+        let found = self
+            .builder
+            .build_load(bool_t, found_slot, "smol.found.v")
+            .unwrap()
+            .into_int_value();
+        let some_bb = self.context.append_basic_block(fn_val, "smol.some");
+        let none_bb = self.context.append_basic_block(fn_val, "smol.none");
+        let merge_bb = self.context.append_basic_block(fn_val, "smol.merge");
+        self.builder
+            .build_conditional_branch(found, some_bb, none_bb)
+            .unwrap();
+
+        // Some: clone kbuf[idx] + its value into a fresh (K,V) tuple.
+        self.builder.position_at_end(some_bb);
+        let idx = self
+            .builder
+            .build_load(i64_t, idx_slot, "smol.idx.f")
+            .unwrap()
+            .into_int_value();
+        let kptr = unsafe {
+            self.builder
+                .build_gep(key_ty, kbuf, &[idx], "smol.f.kptr")
+                .unwrap()
+        };
+        let k_slot = self.create_entry_alloca(fn_val, "smol.k", key_ty);
+        self.kvg_emit_half(Some(key_clone), key_ty, kptr, k_slot, "smol.k.clone");
+        let raw_val = self.create_entry_alloca(fn_val, "smol.rawv", val_ty);
+        self.builder
+            .build_call(
+                self.karac_map_get_fn,
+                &[map_handle.into(), kptr.into(), raw_val.into()],
+                "smol.get",
+            )
+            .unwrap();
+        let v_slot = self.create_entry_alloca(fn_val, "smol.v", val_ty);
+        self.kvg_emit_half(val_clone, val_ty, raw_val, v_slot, "smol.v.clone");
+        let kv_struct_ty = self.context.struct_type(&[key_ty, val_ty], false);
+        let k_v = self.builder.build_load(key_ty, k_slot, "smol.k.v").unwrap();
+        let v_v = self.builder.build_load(val_ty, v_slot, "smol.v.v").unwrap();
+        let mut tuple = kv_struct_ty.get_undef();
+        tuple = self
+            .builder
+            .build_insert_value(tuple, k_v, 0, "smol.kv.k")
+            .unwrap()
+            .into_struct_value();
+        tuple = self
+            .builder
+            .build_insert_value(tuple, v_v, 1, "smol.kv.v")
+            .unwrap()
+            .into_struct_value();
+        let words = self.coerce_to_payload_words(tuple.into(), 3)?;
+        let some_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(none_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        let opt = self.build_option_some_via_phis(&words, some_end_bb, none_bb, "smol.opt");
+        // `free(NULL)` is a no-op (empty map → null buffer).
+        self.builder
+            .build_call(self.free_fn, &[kbuf.into()], "")
+            .unwrap();
+        Ok(opt)
+    }
+
+    /// `SortedMap.range(lo, hi)` — the INCLUSIVE `[lo, hi]` sub-range as a fresh
+    /// `Vec[(K,V)]` in ascending key order (B-2026-07-18-1). Scans the sorted
+    /// keys, keeps those with `lo <= key <= hi` (via the ascending comparator),
+    /// and deep-clones each matching key + its looked-up value into the result.
+    /// Over-allocates to `len` entries (upper bound) and reports the matched
+    /// `count` as the Vec's len/cap. Integer/String keys only (as `min`/etc.).
+    fn compile_sorted_map_range(
+        &mut self,
+        var_name: &str,
+        map_handle: PointerValue<'ctx>,
+        key_ty: BasicTypeEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let vec_ty = self.vec_struct_type();
+        let fn_val = self.current_fn.unwrap();
+
+        let key_te = self
+            .map_key_type_exprs
+            .get(var_name)
+            .cloned()
+            .ok_or_else(|| format!("SortedMap.range: unknown key type for '{var_name}'"))?;
+        let val_te = self.var_elem_type_exprs.get(var_name).cloned();
+        let key_clone = self.emit_clone_fn_for_type_expr(&key_te);
+        let val_clone = val_te
+            .as_ref()
+            .map(|te| self.emit_clone_fn_for_type_expr(te));
+        let cmp_fn = self.emit_sorted_key_cmp_fn(&key_te)?;
+
+        // Compile lo/hi pivots into allocas (comparator takes key pointers).
+        let lo_arg = args
+            .first()
+            .ok_or_else(|| "SortedMap.range expects 2 arguments".to_string())?;
+        let hi_arg = args
+            .get(1)
+            .ok_or_else(|| "SortedMap.range expects 2 arguments".to_string())?;
+        let lo_v = self.compile_expr(&lo_arg.value)?;
+        let lo_v = self.coerce_scalar_to_type(lo_v, key_ty);
+        let lo_slot = self.create_entry_alloca(fn_val, "smr.lo", key_ty);
+        self.builder.build_store(lo_slot, lo_v).unwrap();
+        let hi_v = self.compile_expr(&hi_arg.value)?;
+        let hi_v = self.coerce_scalar_to_type(hi_v, key_ty);
+        let hi_slot = self.create_entry_alloca(fn_val, "smr.hi", key_ty);
+        self.builder.build_store(hi_slot, hi_v).unwrap();
+
+        let kv_struct_ty = self.context.struct_type(&[key_ty, val_ty], false);
+        let elem_size = kv_struct_ty.size_of().unwrap();
+        let (kbuf, len) = self.emit_sorted_keys_buf(map_handle, &key_te)?;
+        let alloc_bytes = self
+            .builder
+            .build_int_mul(len, elem_size, "smr.bytes")
+            .unwrap();
+        let buf = self
+            .builder
+            .build_call(self.malloc_fn, &[alloc_bytes.into()], "smr.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let raw_val = self.create_entry_alloca(fn_val, "smr.rawv", val_ty);
+        let count_slot = self.create_entry_alloca(fn_val, "smr.count", i64_t.into());
+        let i_slot = self.create_entry_alloca(fn_val, "smr.i", i64_t.into());
+        let zero = i64_t.const_zero();
+        let one = i64_t.const_int(1, false);
+        let i32z = self.context.i32_type().const_zero();
+        self.builder.build_store(count_slot, zero).unwrap();
+        self.builder.build_store(i_slot, zero).unwrap();
+
+        let loop_bb = self.context.append_basic_block(fn_val, "smr.loop");
+        let body_bb = self.context.append_basic_block(fn_val, "smr.body");
+        let keep_bb = self.context.append_basic_block(fn_val, "smr.keep");
+        let next_bb = self.context.append_basic_block(fn_val, "smr.next");
+        let exit_bb = self.context.append_basic_block(fn_val, "smr.exit");
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+        self.builder.position_at_end(loop_bb);
+        let i_cur = self
+            .builder
+            .build_load(i64_t, i_slot, "smr.i.cur")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i_cur, len, "smr.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let kptr = unsafe {
+            self.builder
+                .build_gep(key_ty, kbuf, &[i_cur], "smr.kptr")
+                .unwrap()
+        };
+        let c_lo = self
+            .builder
+            .build_call(cmp_fn, &[kptr.into(), lo_slot.into()], "smr.clo")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let c_hi = self
+            .builder
+            .build_call(cmp_fn, &[kptr.into(), hi_slot.into()], "smr.chi")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let ge_lo = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGE, c_lo, i32z, "smr.gelo")
+            .unwrap();
+        let le_hi = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLE, c_hi, i32z, "smr.lehi")
+            .unwrap();
+        let in_range = self.builder.build_and(ge_lo, le_hi, "smr.inr").unwrap();
+        self.builder
+            .build_conditional_branch(in_range, keep_bb, next_bb)
+            .unwrap();
+
+        // keep_bb: clone (key, value) into buf[count]; count++.
+        self.builder.position_at_end(keep_bb);
+        let count_cur = self
+            .builder
+            .build_load(i64_t, count_slot, "smr.count.cur")
+            .unwrap()
+            .into_int_value();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(kv_struct_ty, buf, &[count_cur], "smr.eptr")
+                .unwrap()
+        };
+        let k_dst = self
+            .builder
+            .build_struct_gep(kv_struct_ty, elem_ptr, 0, "smr.kv.k")
+            .unwrap();
+        let v_dst = self
+            .builder
+            .build_struct_gep(kv_struct_ty, elem_ptr, 1, "smr.kv.v")
+            .unwrap();
+        self.kvg_emit_half(Some(key_clone), key_ty, kptr, k_dst, "smr.k.clone");
+        self.builder
+            .build_call(
+                self.karac_map_get_fn,
+                &[map_handle.into(), kptr.into(), raw_val.into()],
+                "smr.get",
+            )
+            .unwrap();
+        self.kvg_emit_half(val_clone, val_ty, raw_val, v_dst, "smr.v.clone");
+        let count_next = self
+            .builder
+            .build_int_add(count_cur, one, "smr.count.next")
+            .unwrap();
+        self.builder.build_store(count_slot, count_next).unwrap();
+        self.builder.build_unconditional_branch(next_bb).unwrap();
+
+        self.builder.position_at_end(next_bb);
+        let i_next = self
+            .builder
+            .build_int_add(i_cur, one, "smr.i.next")
+            .unwrap();
+        self.builder.build_store(i_slot, i_next).unwrap();
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder
+            .build_call(self.free_fn, &[kbuf.into()], "")
+            .unwrap();
+        // Free fresh-owned lo/hi pivots (lookup args, never stored).
+        self.free_fresh_owned_str_arg(&lo_arg.value, lo_v);
+        self.free_fresh_owned_str_arg(&hi_arg.value, hi_v);
+        let count = self
+            .builder
+            .build_load(i64_t, count_slot, "smr.count.f")
+            .unwrap()
+            .into_int_value();
+        let mut vec_val = vec_ty.get_undef();
+        vec_val = self
+            .builder
+            .build_insert_value(vec_val, buf, 0, "smr.vec.data")
+            .unwrap()
+            .into_struct_value();
+        vec_val = self
+            .builder
+            .build_insert_value(vec_val, count, 1, "smr.vec.len")
+            .unwrap()
+            .into_struct_value();
+        vec_val = self
+            .builder
+            .build_insert_value(vec_val, count, 2, "smr.vec.cap")
+            .unwrap()
+            .into_struct_value();
+        Ok(vec_val.into())
+    }
+
     /// Compile a method call on a `Map[K,V]` variable.
     pub(super) fn compile_map_method(
         &mut self,
@@ -1764,6 +2208,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(i64_t.const_int(0, false).into())
             }
             "keys" | "values" | "entries" => self.compile_map_keys_values_entries(var_name, method),
+            // SortedMap ordered-only methods (B-2026-07-18-1). Gated to a sorted
+            // receiver — a plain (hash) Map never typechecks these — so the
+            // sorted-keys backbone (`emit_sorted_keys_buf`) is always valid here.
+            "min" | "max" | "floor" | "ceiling"
+                if self.sorted_collection_vars.contains(var_name) =>
+            {
+                self.compile_sorted_map_option_lookup(
+                    var_name, method, map_handle, key_ty, val_ty, args,
+                )
+            }
+            "range" if self.sorted_collection_vars.contains(var_name) => {
+                self.compile_sorted_map_range(var_name, map_handle, key_ty, val_ty, args)
+            }
             _ => Err(format!("codegen: Map.{method} not yet implemented")),
         }
     }

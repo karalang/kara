@@ -12188,6 +12188,54 @@ fn main() {
     }
 
     #[test]
+    fn e2e_sorted_map_ordered_methods_codegen() {
+        // B-2026-07-18-1: the ordered-only `SortedMap` methods — `min`/`max`/
+        // `floor`/`ceiling` (-> Option[(K,V)]) and `range` (inclusive [lo,hi] ->
+        // Vec[(K,V)]) — previously ran only under the interpreter ("codegen:
+        // Map.min not yet implemented"). Now byte-identical to `karac run`.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut m: SortedMap[i64, i64] = SortedMap.new();\n\
+                 let _ = m.insert(5_i64, 50_i64); let _ = m.insert(1_i64, 10_i64);\n\
+                 let _ = m.insert(3_i64, 30_i64);\n\
+                 match m.min() { Some(kv) => println(f\"{kv.0}={kv.1}\"), None => println(\"n\") }\n\
+                 match m.max() { Some(kv) => println(f\"{kv.0}={kv.1}\"), None => println(\"n\") }\n\
+                 match m.floor(4_i64) { Some(kv) => println(f\"{kv.0}\"), None => println(\"n\") }\n\
+                 match m.ceiling(2_i64) { Some(kv) => println(f\"{kv.0}\"), None => println(\"n\") }\n\
+                 match m.floor(0_i64) { Some(kv) => println(f\"{kv.0}\"), None => println(\"n\") }\n\
+                 match m.ceiling(9_i64) { Some(kv) => println(f\"{kv.0}\"), None => println(\"n\") }\n\
+                 let r = m.range(2_i64, 5_i64); println(f\"{r.len()}\");\n\
+                 let mut e: SortedMap[i64, i64] = SortedMap.new();\n\
+                 match e.min() { Some(kv) => println(f\"{kv.0}\"), None => println(\"empty\") }\n\
+             }",
+        ) {
+            assert_eq!(out, "1=10\n5=50\n3\n3\nn\nn\n2\nempty\n");
+        }
+    }
+
+    #[test]
+    fn e2e_sorted_map_ordered_methods_string_codegen() {
+        // The heap path: `SortedMap[String, String]` ordered methods deep-clone
+        // the key/value halves into the returned `Option`/`Vec` (the Option
+        // payload heap-boxes the wide (String,String) tuple). Byte-identical to
+        // `karac run`.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut m: SortedMap[String, String] = SortedMap.new();\n\
+                 let _ = m.insert(\"banana\", \"yellow\"); let _ = m.insert(\"apple\", \"red\");\n\
+                 let _ = m.insert(\"cherry\", \"dark\");\n\
+                 match m.min() { Some(kv) => println(f\"{kv.0}={kv.1}\"), None => println(\"n\") }\n\
+                 match m.max() { Some(kv) => println(f\"{kv.0}={kv.1}\"), None => println(\"n\") }\n\
+                 match m.floor(\"boo\") { Some(kv) => println(f\"{kv.0}\"), None => println(\"n\") }\n\
+                 match m.ceiling(\"boo\") { Some(kv) => println(f\"{kv.0}\"), None => println(\"n\") }\n\
+                 let r = m.range(\"apple\", \"banana\"); println(f\"{r.len()}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "apple=red\ncherry=dark\nbanana\ncherry\n2\n");
+        }
+    }
+
+    #[test]
     fn e2e_map_try_insert_question_propagation_codegen() {
         // `Map.try_insert` composes with `?`: a helper returning
         // `Result[(), AllocError]` propagates any `Err` and discards the
