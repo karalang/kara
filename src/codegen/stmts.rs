@@ -1718,7 +1718,13 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         match &value.kind {
             ExprKind::Identifier(src) if self.for_loop_owned_agg_vars.contains(src.as_str()) => {
+                // B-2026-07-18-2: rc-INC a direct bare-`shared` field during the
+                // whole-move copy (the container drain rc-DECs its element's
+                // handle; the new owner's drop decs the inc'd copy — balanced).
+                let saved = self.deep_copy_rc_inc_bare_shared;
+                self.deep_copy_rc_inc_bare_shared = true;
                 self.deep_copy_struct_heap_fields_in_place(alloca, struct_name);
+                self.deep_copy_rc_inc_bare_shared = saved;
             }
             ExprKind::StructLiteral { fields, .. } => {
                 let Some(&st) = self.struct_types.get(struct_name) else {

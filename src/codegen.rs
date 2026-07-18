@@ -2330,6 +2330,19 @@ pub(super) struct Codegen<'ctx> {
     /// leaked because the drop side hadn't yet been reconciled — it since was, so
     /// the entry-copy inc is now balanced.)
     pub(crate) deep_copy_rc_inc_bare_shared: bool,
+    /// B-2026-07-18-2 — for-loop STRICT-SHARED copy-support mode for
+    /// `field_copy_supported`: a DIRECT bare-`shared` field becomes supported
+    /// (the move-out "copy" is an rc-INC via `deep_copy_rc_inc_bare_shared`,
+    /// symmetric with the element drain's rc-DEC), while `Option`/`Result`
+    /// fields become UNSUPPORTED — a shared-bearing struct's drain skips
+    /// Option fields (the synthesis gate sees it as non-copy-supported), so a
+    /// registered element's aliased Option leaf would lose its `!view_src`
+    /// leaf-cleanup and leak (caught by
+    /// `asan_vec_of_struct_shared_and_option_field_consumed_no_leak`). The
+    /// for-loop registration gate ORs this strict variant with the classic
+    /// predicate, so legacy-supported shapes are untouched. Consulted ONLY in
+    /// `field_copy_supported`; false everywhere else.
+    pub(crate) copy_support_for_loop_shared_mode: bool,
     /// Set by `compile_match` when the scrutinee enum is the type-erased
     /// `Option` / `Result` (B-2026-06-13-13 residual A). Their inline / boxed
     /// payloads are owned by the dedicated `FreeInlineOptionPayload` /
@@ -6603,6 +6616,7 @@ impl<'ctx> Codegen<'ctx> {
             pattern_binding_is_borrow: false,
             pattern_binding_scrutinee_is_elidable_param: false,
             deep_copy_rc_inc_bare_shared: false,
+            copy_support_for_loop_shared_mode: false,
             pattern_binding_scrutinee_is_option_result: false,
             pattern_binding_scrutinee_optres_area: 0,
             pattern_binding_scrutinee_is_shared_enum: false,

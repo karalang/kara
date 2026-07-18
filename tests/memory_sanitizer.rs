@@ -12973,6 +12973,48 @@ fn main() {
     }
 
     #[test]
+    fn asan_for_loop_shared_bearing_struct_elem_move_out_no_double_free() {
+        // B-2026-07-18-2: a for-loop over `Vec[S]` where S carries a DIRECT
+        // `shared` handle field alongside a String. The bare-shared field made
+        // `field_copy_supported` bail, so the element was never registered in
+        // `for_loop_owned_agg_vars` — a destructured String leaf pushed into an
+        // outer Vec and a whole-move (`let x = lf`) both aliased the element's
+        // String buffer and double-freed against the container's per-element
+        // drain. The registration now runs copy-support in allow-bare-shared
+        // mode; move-out copies rc-INC the handle (drain rc-DECs — balanced,
+        // so LSan must also see no leak). ≥36-byte String so the fault is loud.
+        assert_clean_asan_run(
+            r#"
+shared enum T2 { Num(i64) }
+struct Slf { name: String, value: T2 }
+fn main() {
+    let mut fs: Vec[Slf] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        fs.push(Slf { name: "shared-bearing-elem-move-out-guard-xxxx".to_string(), value: T2.Num(3) });
+        i = i + 1;
+    }
+    let mut lit_names: Vec[String] = Vec.new();
+    let mut n = 0;
+    for lf in fs {
+        let Slf { name: fname, value } = lf;
+        match value { T2.Num(k) => { n = n + k; } _ => {} }
+        lit_names.push(fname);
+    }
+    for lf2 in fs {
+        let x = lf2;
+        n = n + x.name.len();
+    }
+    println(lit_names.len());
+    println(n);
+}
+"#,
+            &["6", "252"],
+            "for_loop_shared_bearing_struct_elem_move_out",
+        );
+    }
+
+    #[test]
     fn asan_module_scope_map_string_keys_no_double_free() {
         // Module-scope `Map.new()` (phase-8-stdlib-floor.md "Map.new() /
         // Set.new() as module-binding initialisers"). The handle lives in

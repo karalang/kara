@@ -1691,9 +1691,25 @@ impl<'ctx> super::Codegen<'ctx> {
             // recursive copy-support so the defensive copy is complete (copy-
             // depth == drop-depth); a POD struct/enum needs no copy but the
             // in-place deep-copy is a harmless no-op there.
+            // B-2026-07-18-2: register EITHER on the classic predicate
+            // (legacy shapes, unchanged) OR on the strict-shared variant —
+            // direct bare-`shared` fields allowed (move-out rc-INCs them,
+            // symmetric with the drain's rc-DEC), `Option`/`Result` fields
+            // banned (their leaf-cleanup/drain balance differs for
+            // non-classic structs). Without registration the destructured
+            // String leaves alias the element's buffers and double-free
+            // against the drain.
+            let for_loop_copy_supported =
+                self.aggregate_param_copy_supported_struct(head, &mut Vec::new()) || {
+                    let saved = self.copy_support_for_loop_shared_mode;
+                    self.copy_support_for_loop_shared_mode = true;
+                    let ok = self.aggregate_param_copy_supported_struct(head, &mut Vec::new());
+                    self.copy_support_for_loop_shared_mode = saved;
+                    ok
+                };
             if self.struct_types.contains_key(head)
                 && !self.shared_types.contains_key(head)
-                && self.aggregate_param_copy_supported_struct(head, &mut Vec::new())
+                && for_loop_copy_supported
             {
                 self.for_loop_owned_agg_vars.insert(name.to_string());
                 return;

@@ -5932,6 +5932,43 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("35\n2\n"));
     }
 
+    #[test]
+    fn for_loop_shared_bearing_struct_element_destructure_and_whole_move() {
+        // B-2026-07-18-2: a for-loop over `Vec[S]` where S carries a DIRECT
+        // `shared` handle field. `field_copy_supported` hard-bailed on the
+        // bare-shared field, so the element was never registered in
+        // `for_loop_owned_agg_vars` — a destructured String leaf
+        // (`let S { name, .. } = lf; sink.push(name)`) and a whole-move
+        // (`let x = lf`) both aliased the element's buffers and double-freed
+        // against the container's per-element drain (SIGABRT; interp correct —
+        // surfaced by the selfhost codegen generator's StructLit arm). Now the
+        // for-loop registration runs copy-support in allow-bare-shared mode and
+        // the move-out copies rc-INC the handle, symmetric with the drain's
+        // rc-DEC.
+        let src = "shared enum T2 { Num(i64) }\n\
+                   struct Slf { name: String, value: T2 }\n\
+                   fn main() {\n\
+                   \x20   let mut fs: Vec[Slf] = Vec.new();\n\
+                   \x20   fs.push(Slf { name: \"ab\", value: T2.Num(3) });\n\
+                   \x20   fs.push(Slf { name: \"cde\", value: T2.Num(4) });\n\
+                   \x20   let mut lit_names: Vec[String] = Vec.new();\n\
+                   \x20   let mut n = 0;\n\
+                   \x20   for lf in fs {\n\
+                   \x20       let Slf { name: fname, value } = lf;\n\
+                   \x20       match value { T2.Num(k) => { n = n + k; } _ => {} }\n\
+                   \x20       lit_names.push(fname);\n\
+                   \x20   }\n\
+                   \x20   for lf2 in fs {\n\
+                   \x20       let x = lf2;\n\
+                   \x20       n = n + x.name.len();\n\
+                   \x20   }\n\
+                   \x20   println(lit_names.len());\n\
+                   \x20   println(n);\n\
+                   }\n";
+        // n = 3+4 (payloads) + 2+3 (name lens) = 12; both loops complete.
+        assert_eq!(run_program(src).as_deref(), Some("2\n12\n"));
+    }
+
     /// Reassign-and-use of the by-value loop local computes correctly on the
     /// build side too: `x = x * 2` scales the local, `total + x` reads it, so
     /// `(3*2)+(4*2) = 14` — matching `karac run`. (B-2026-06-30-6.)

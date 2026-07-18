@@ -322,6 +322,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // struct/enum-inline, plain-enum = B-27) and every `Result`
                     // stay caller-retains (this routine can't duplicate them, and
                     // the drop correspondingly leaves them excluded).
+                    // B-2026-07-18-2: under for-loop strict-shared mode an
+                    // `Option` field is UNSUPPORTED — a shared-bearing struct's
+                    // drain (synthesized as non-copy-supported) skips Option
+                    // fields, so a registered element's aliased Option leaf
+                    // would lose its leaf-cleanup and leak.
+                    "Option" if self.copy_support_for_loop_shared_mode => false,
                     "Option" => {
                         Self::option_payload_te(fte)
                             .map(|pt| {
@@ -345,7 +351,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     "Result" => false,
                     _ if is_primitive_type_name(head) => true,
-                    _ if self.shared_types.contains_key(head) => false,
+                    // B-2026-07-18-2: a DIRECT `shared` handle field is copyable
+                    // in for-loop strict-shared mode — the "copy" is an rc-INC of
+                    // the box (`deep_copy_rc_inc_bare_shared` arm), symmetric with
+                    // the drop's rc-DEC. Hard bail outside that mode (entry-copy
+                    // / clone / drop-synthesis gates keep their meaning).
+                    _ if self.shared_types.contains_key(head) => {
+                        self.copy_support_for_loop_shared_mode
+                    }
                     _ if self.struct_types.contains_key(head) => {
                         self.aggregate_param_copy_supported_struct(head, stack)
                     }
@@ -431,7 +444,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => false,
                     },
                     _ if is_primitive_type_name(head) => true,
-                    _ if self.shared_types.contains_key(head) => false,
+                    // B-2026-07-18-2: a DIRECT `shared` handle field is copyable
+                    // in for-loop strict-shared mode — the "copy" is an rc-INC of
+                    // the box (`deep_copy_rc_inc_bare_shared` arm), symmetric with
+                    // the drop's rc-DEC. Hard bail outside that mode (entry-copy
+                    // / clone / drop-synthesis gates keep their meaning).
+                    _ if self.shared_types.contains_key(head) => {
+                        self.copy_support_for_loop_shared_mode
+                    }
                     _ if self.struct_types.contains_key(head) => {
                         self.struct_clone_fully_duplicates(head, stack)
                     }
