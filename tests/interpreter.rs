@@ -11693,6 +11693,24 @@ fn test_stats_mean() {
 }
 
 #[test]
+fn test_encoding_on_slice() {
+    // B-2026-07-18-20: `Base64.encode`/`Hex.encode` on a `Slice[u8]` value
+    // (`v.as_slice()`, the declared `Slice[u8]` param's canonical form) read
+    // ZERO bytes in the interpreter — the byte extraction matched only
+    // `Value::Array`, so a `Value::Slice` produced "" while a Vec arg encoded
+    // the real bytes. Now the interpreter views `storage[start..start+len]` and
+    // a slice encodes identically to the underlying Vec.
+    let output = run("fn main() {\n\
+             let v: Vec[u8] = vec![72u8, 105u8];\n\
+             let s: Slice[u8] = v.as_slice();\n\
+             println(Base64.encode(v));\n\
+             println(Base64.encode(s));\n\
+             println(Hex.encode(s));\n\
+         }");
+    assert_eq!(output, "SGk=\nSGk=\n4869\n");
+}
+
+#[test]
 fn test_stats_on_slice() {
     // B-2026-07-18-12: `Stats.*` on a `Slice[f64]` value (`v.as_slice()`, the
     // declared `ref Slice[f64]` param's canonical form) read ZERO elements in

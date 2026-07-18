@@ -506,6 +506,25 @@ mod codegen_tests {
         compile_to_ir(&parsed.program, None, None)
     }
 
+    #[test]
+    fn encoding_builtins_rejected_by_codegen() {
+        // B-2026-07-18-20: `std.encoding` (`Base64`/`Hex`/`Url` encode/decode) has
+        // no codegen lowering — codegen must REJECT it with an actionable message
+        // rather than fall through to the assoc-call `const 0` default and
+        // silently miscompile (a `String` function returning the integer 0, a
+        // silent run-vs-build divergence). The interpreter computes them
+        // correctly; the reject points the user at `karac run`.
+        for prog in [
+            "fn main() { let v: Vec[u8] = vec![1u8, 2u8]; println(Base64.encode(v)); }",
+            "fn main() { let v: Vec[u8] = vec![1u8, 2u8]; println(Base64.encode_url_safe(v)); }",
+            "fn main() { let v: Vec[u8] = vec![1u8, 2u8]; println(Hex.encode(v)); }",
+            "fn main() { let v: Vec[u8] = vec![1u8, 2u8]; println(Hex.encode_upper(v)); }",
+        ] {
+            let err = ir_result(prog).expect_err("std.encoding encode must be rejected by codegen");
+            assert!(err.contains("interpreter-only in v1"), "got: {err}");
+        }
+    }
+
     // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ──
     // A function may RETURN a capturing closure with POD captures (heap RC env,
     // see heap_env_returned_capturing_closure_runs); the caller may then CALL

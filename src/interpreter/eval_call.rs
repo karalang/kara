@@ -1001,17 +1001,30 @@ impl<'a> super::Interpreter<'a> {
                     };
                 }
                 "Base64.encode" | "Base64.encode_url_safe" | "Hex.encode" | "Hex.encode_upper" => {
+                    let to_bytes = |vals: &[Value]| -> Vec<u8> {
+                        vals.iter()
+                            .map(|v| match v {
+                                Value::Int(i) => *i as u8,
+                                _ => 0,
+                            })
+                            .collect()
+                    };
                     let bytes: Vec<u8> = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {
-                            Value::Array(rc) => rc
-                                .read()
-                                .unwrap()
-                                .iter()
-                                .map(|v| match v {
-                                    Value::Int(i) => *i as u8,
-                                    _ => 0,
-                                })
-                                .collect(),
+                            Value::Array(rc) => to_bytes(&rc.read().unwrap()),
+                            // A `Slice[u8]` argument (`Base64.encode(v.as_slice())`,
+                            // the declared `Slice[u8]` param's canonical form)
+                            // views `storage[start..start+len]`. Without this arm a
+                            // non-empty slice fell to the empty case, so encoding a
+                            // slice produced "" while a Vec arg read the real bytes
+                            // — the same run-vs-build/interp class as the
+                            // Stats-on-slice bug (B-2026-07-18-12).
+                            Value::Slice {
+                                storage,
+                                start,
+                                len,
+                                ..
+                            } => to_bytes(&storage.read().unwrap()[start..start + len]),
                             _ => Vec::new(),
                         }
                     } else {
