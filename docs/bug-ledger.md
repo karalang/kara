@@ -100,8 +100,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 36 | 0 |
 | run-vs-build | 30 | 1 |
 | crash | 27 | 0 |
+| soundness | 21 | 0 |
 | perf | 21 | 0 |
-| soundness | 20 | 0 |
 | diagnostics | 11 | 0 |
 | use-after-free | 4 | 0 |
 | other | 1 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 390 | 3 |
-| typecheck | 64 | 0 |
+| typecheck | 65 | 0 |
 | interp | 52 | 1 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **548 surfaced · 3 open · 541 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **549 surfaced · 3 open · 542 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -134,9 +134,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **548 surfaced 
 | B-2026-07-18-14 | 2026-07-18 | codegen+interp | low | Interpolating a WHOLE TUPLE value in an f-string / `println` (`f"{t}"` where `t: (i64, i64)` or `(i64, String)`) passes `karac check` and renders `(3, 7)` in the interpreter, but FAILS `karac build`/JIT with 'Display of a struct in an f-string is supported when the interpolated expression is a variable or field access … bind a struct literal or call result to a `let` first'. The hint is MISLEADING — `t` is already a let-bound variable, so following it does not help. Affects ALL tuple element types (scalar and heap). Field-index interpolation (`f"{t.0} {t.1}"`) works on every backend. | none |
 | B-2026-07-18-17 | 2026-07-18 | codegen | low | The typechecker does NOT propagate a method parameter's (substituted) expected type into the ARGUMENT's own inference, so a type-inferred constructor argument (`Vec.new()`, `Map.new()`, `"".to_string()`) whose element/type param must come from the callee's signature is left as `?T` and rejected: `m.get_or(k, Vec.new())` on `Map[String, Vec[i64]]` → `expected 'Vec<i64>', found 'Vec<?T0>'`. Expected-type propagation DOES work for free-function call arguments and let-bindings — only method-call arguments miss it. Common idiom (`map.get_or(k, Vec.new())`); workaround is to bind an annotated default first (`let d: Vec[i64] = Vec.new(); m.get_or(k, d)`). | none |
 
-### Fixed (541)
+### Fixed (542)
 
-<details><summary>541 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>542 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -681,6 +681,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **548 surfaced 
 | B-2026-07-18-20 | codegen+interp | high | The whole `std.encoding` surface (`Base64`/`Hex` encode/decode, `Url` encode/decode) SILENTLY MISCOMPILED under `karac build` / `karac run` (JIT) | cb49f4f |
 | B-2026-07-18-21 | codegen | medium | Chained `arena.get(r).field` on a struct-element `Arena[T]` silently reads the `i64 0` placeholder instead of the stored field (AOT/JIT; interp corre… | 5c3f61f |
 | B-2026-07-18-22 | runtime | low | Both GPU dispatch entrypoints (karac_runtime_gpu_dispatch + karac_runtime_gpu_dispatch_resident) called `std::slice::from_raw_parts(uniform_ptrs, n_u… | b06159d |
+| B-2026-07-18-23 | typecheck | medium | Field access of ANY field on a type with no named fields — a primitive (`i64`/`f64`/`bool`/`char`), `String`, or other non-struct/non-union — was SIL… | dae02ea |
 
 </details>
 
