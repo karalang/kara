@@ -152,6 +152,47 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(self.context.struct_type(&field_types, false))
     }
 
+    /// Mono struct type for a generic struct literal that sits INSIDE a
+    /// generic-fn monomorph body (B-2026-07-18-32) — the fallback for when the
+    /// span-keyed per-instantiation record is absent (`struct_inst_mono_type_
+    /// for_expr` returns None). Such a literal (`fn swap[T](p: Pair[T]) ->
+    /// Pair[T] { Pair { a: p.b, b: p.a } }` at `T = String`) carries no
+    /// recorded instantiation, but the ACTIVE monomorph substitution
+    /// (`type_subst_names` / `type_subst_type_exprs`, threaded through
+    /// `subst_monomorph_type_params`) does bind `T -> String`. Resolve each of
+    /// the struct's declared field `TypeExpr`s through that active subst and
+    /// build the concrete LLVM struct type, so a heap-`T` field widens to its
+    /// real `{ptr,len,cap}` shape instead of the generic base's erased `i64`
+    /// placeholder — the mismatch that produced `insertvalue { i64, i64 },
+    /// { ptr, i64, i64 }` invalid IR. `None` outside a monomorph context or for
+    /// a non-generic struct; at `T = i64` the built type equals the base
+    /// layout, so the change is a no-op there. The substitution keys on the
+    /// active monomorph's param names — which match the struct's own param
+    /// names in the overwhelmingly common `struct Pair[T]` + `fn f[T](Pair[T])`
+    /// shape; a struct whose param name diverges from the enclosing fn's falls
+    /// back to the base layout (unchanged from before this fix).
+    pub(super) fn mono_struct_type_from_active_subst(
+        &self,
+        name: &str,
+    ) -> Option<inkwell::types::StructType<'ctx>> {
+        if self.type_subst_names.is_empty() && self.type_subst_type_exprs.is_empty() {
+            return None;
+        }
+        let params = self.struct_generic_params.get(name)?;
+        if params.is_empty() {
+            return None;
+        }
+        let field_tes = self.struct_field_type_exprs.get(name)?;
+        let field_types: Vec<BasicTypeEnum<'ctx>> = field_tes
+            .iter()
+            .map(|te| {
+                let concrete = self.subst_monomorph_type_params(te);
+                self.llvm_type_for_type_expr(&concrete)
+            })
+            .collect();
+        Some(self.context.struct_type(&field_types, false))
+    }
+
     /// The per-instantiation mono struct type for a struct-literal (or any
     /// struct-typed) expression, recovered from the lowering pass's span-keyed
     /// instantiation record (`enum_inst_type_exprs`, which captures every

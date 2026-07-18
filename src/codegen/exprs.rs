@@ -1019,8 +1019,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Per-instantiation layout for a generic struct literal:
                     // recover this literal's recorded instantiation (`Box[f64]`)
                     // from its span and build the mono struct type so a non-i64
-                    // field stores at its real width (B-2026-07-03-23).
-                    let mono_ty = self.struct_inst_mono_type_for_expr(expr);
+                    // field stores at its real width (B-2026-07-03-23). When the
+                    // literal sits INSIDE a generic-fn monomorph body (`fn
+                    // swap[T](p: Pair[T]) -> Pair[T] { Pair { a: p.b, b: p.a } }`
+                    // at `T = String`) it has NO span-recorded instantiation, so
+                    // the span path returns None and the base `{i64,i64}`
+                    // placeholder layout would be used — producing `insertvalue
+                    // { i64, i64 }, { ptr, i64, i64 }` invalid IR. Fall back to
+                    // resolving the struct's fields through the ACTIVE monomorph
+                    // substitution (B-2026-07-18-32).
+                    let mono_ty = self
+                        .struct_inst_mono_type_for_expr(expr)
+                        .or_else(|| self.mono_struct_type_from_active_subst(name));
                     self.compile_struct_init(name, fields, mono_ty)
                 }
             }

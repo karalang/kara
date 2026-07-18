@@ -2481,6 +2481,79 @@ fn test_build_project_codegen_two_files_runs() {
 
 #[cfg(feature = "llvm")]
 #[test]
+fn test_build_generic_struct_reconstruct_heap_field_no_double_free_at_o0() {
+    // B-2026-07-18-32 — a generic fn that RECONSTRUCTS a struct out of another
+    // owned generic-struct param's heap fields (`Pair { a: p.b, b: p.a }`),
+    // monomorphized at a HEAP `T` (`String`), double-freed. The mono param was
+    // left caller-retains — its bare-`T` fields failed the base copy-support
+    // check (`field_copy_supported` bails on the erased `T`) — so the callee
+    // MOVED the fields into the returned literal, aliasing the caller's buffers,
+    // which both the caller's scope-exit drop and the returned value freed. The
+    // fix entry-copies the mono param's heap fields at the concrete layout so it
+    // is callee-owned like its non-generic twin.
+    //
+    // The redundant free is ELIMINATED by -O2 (LLVM dedups the `free(p);
+    // free(p)` on the same derived pointer), so the DEFAULT `karac build` masks
+    // it; this test forces `KARAC_OPT_LEVEL=0` — the configuration `karac run`
+    // (JIT) and -O0 actually ship for quick iteration, where the pre-fix binary
+    // aborted `free(): double free detected in tcache 2`. It also guards the
+    // paired invalid-IR leg (B-2026-07-18-32's struct-literal mono-type fix):
+    // before it, the literal used the erased `{i64,i64}` layout for a
+    // `{ptr,len,cap}` field and failed module verification at any opt level.
+    let tmp = scratch_project("gen-struct-reconstruct-o0");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"swap_demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "struct Pair[T] { a: T, b: T }\n\
+         fn swap[T](p: Pair[T]) -> Pair[T] { Pair { a: p.b, b: p.a } }\n\
+         fn main() {\n\
+        \x20    let p = Pair { a: \"x\".to_string(), b: \"y\".to_string() };\n\
+        \x20    let q = swap(p);\n\
+        \x20    print(q.a); print(q.b);\n\
+         }\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_OPT_LEVEL", "0")
+        .arg("build")
+        .output()
+        .unwrap();
+    // Assert the build succeeds (same archive-present precondition every other
+    // `#[cfg(feature = "llvm")]` codegen build test in this file relies on) —
+    // a hard failure here also guards the paired invalid-IR leg, which a
+    // soft-skip on a missing `Built:` line would mask.
+    assert!(
+        out.status.success(),
+        "build failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("Built: "),
+        "expected `Built: ...` line; stdout={}",
+        String::from_utf8_lossy(&out.stdout),
+    );
+
+    let exe_path = tmp.join("swap_demo");
+    let run = common::output_with_hang_watchdog(
+        std::process::Command::new(&exe_path),
+        std::time::Duration::from_secs(15),
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+    let run = run.expect("executable should be runnable");
+    assert!(
+        run.status.success(),
+        "double-free regression (B-2026-07-18-32): generic Pair[String] \
+         reconstruct aborted at -O0; exit={:?} stderr={}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "yx");
+}
+
+#[cfg(feature = "llvm")]
+#[test]
 fn test_build_project_codegen_three_module_chain_runs() {
     // Pins topological emission order — `db.users` must declare its
     // symbols before `db` references them, which must declare before

@@ -96,7 +96,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // Non-shared user STRUCT.
         if self.struct_types.contains_key(type_name) && !self.shared_types.contains_key(type_name) {
             if !self.aggregate_param_copy_supported_struct(type_name, &mut Vec::new()) {
-                return false;
+                // B-2026-07-18-31/-32 — a GENERIC struct param whose fields are
+                // bare type params (`Pair[T] { a: T, b: T }`) fails the base
+                // copy-support check: `field_copy_supported` sees the erased `T`
+                // and bails at its conservative `_ => false` arm, so the param
+                // stays caller-retains. But the callee still MOVES those fields
+                // out into a returned literal (`Pair { a: p.b, b: p.a }`) —
+                // aliasing the caller's buffers, which both the caller's own
+                // drop and the returned value then free (double-free, masked at
+                // -O2 but live under `karac run`/-O0). When an active monomorph
+                // subst resolves the params to copy-supported heap types AND the
+                // slot is the concrete mono layout, entry-copy the mono heap
+                // fields so the param is callee-owned exactly like its concrete
+                // twin (`struct PairS { a: String, b: String }`), which never
+                // had this bug. The mono entry-copy GEPs the CONCRETE layout, so
+                // it is offset-correct for any field count — unlike the base
+                // bare-`T`-reinterpret drop path (B-2026-07-15-11), which stays
+                // single-field-gated.
+                return self.try_make_generic_struct_param_callee_owned(type_name, slot);
             }
             // B-2026-07-10-4: rc-inc buried bare-shared during entry-copy so it stays
             // symmetric with the combined drop's per-element rc-dec (a copy-supported
@@ -516,6 +533,142 @@ impl<'ctx> super::Codegen<'ctx> {
         for (i, fte) in ftes.iter().enumerate() {
             self.deep_copy_one_aggregate_field(base_ptr, st, i as u32, fte);
         }
+    }
+
+    /// B-2026-07-18-31/-32 — make a GENERIC by-value struct param callee-owned
+    /// when its fields are bare type params erased by the base layout but bound
+    /// to copy-supported heap types by the active monomorph subst. Returns
+    /// `true` (ownership taken: mono entry-copy + mono drop registered) or
+    /// `false` (left caller-retains, unchanged). Only engages when (a) an active
+    /// subst exists, (b) the concrete mono struct layout is buildable, and (c)
+    /// every field, resolved through the subst, is copy-supported. Outside a
+    /// monomorph — or for a struct whose fields don't all resolve to
+    /// copy-supported types — it is a no-op, so non-generic params and the
+    /// existing base path are untouched.
+    fn try_make_generic_struct_param_callee_owned(
+        &mut self,
+        type_name: &str,
+        slot: PointerValue<'ctx>,
+    ) -> bool {
+        // The mono layout drives the field GEPs; absent it (no active subst /
+        // non-generic struct) there is nothing to widen, so bail to
+        // caller-retains exactly as before.
+        let Some(mono_st) = self.mono_struct_type_from_active_subst(type_name) else {
+            return false;
+        };
+        if !self.aggregate_param_copy_supported_struct_mono(type_name) {
+            return false;
+        }
+        let saved = self.deep_copy_rc_inc_bare_shared;
+        self.deep_copy_rc_inc_bare_shared = true;
+        self.deep_copy_struct_heap_fields_in_place_mono(slot, type_name, mono_st);
+        self.deep_copy_rc_inc_bare_shared = saved;
+        // Register the PER-MONOMORPH drop (`__karac_drop_struct_Pair$str`) so a
+        // field NOT moved out (e.g. `fn peek[T](p: Pair[T]) -> T { p.a.clone()
+        // }`) still frees its entry-copied buffer; the base drop skips the
+        // erased bare-`T` fields and would leak it. Fields that ARE moved out
+        // have their caps zeroed by `suppress_struct_field_move_into_literal`,
+        // so the mono drop no-ops on them.
+        match self.active_subst_struct_inst(type_name) {
+            Some(inst) => self.track_struct_var_inst(type_name, slot, Some(inst)),
+            None => self.track_struct_var(type_name, slot),
+        }
+        true
+    }
+
+    /// Mono twin of [`aggregate_param_copy_supported_struct`]: resolve each
+    /// declared field `TypeExpr` through the ACTIVE monomorph subst before
+    /// classifying, so a generic struct whose fields are bare type params
+    /// (`Pair[T] { a: T, b: T }`) is judged on its CONCRETE instantiation
+    /// (`T = String` → `String` is copyable) instead of bailing at
+    /// `field_copy_supported`'s bare-`T` `_ => false` arm. A field that resolves
+    /// to a NESTED generic struct (`Inner[T]` → `Inner[String]`) still recurses
+    /// through the base `aggregate_param_copy_supported_struct`, which reads
+    /// `Inner`'s own erased bare-`T` fields and bails — so a nested-generic
+    /// field keeps the caller-retains behavior (a documented residual, same
+    /// class as B-2026-07-15-11's single-field gate).
+    fn aggregate_param_copy_supported_struct_mono(&self, struct_name: &str) -> bool {
+        if self.shared_types.contains_key(struct_name) {
+            return false;
+        }
+        let Some(ftes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
+            return false;
+        };
+        // A struct with no heap-typed field after resolution has nothing to copy
+        // — treat as unsupported so we don't needlessly flip it to callee-owned
+        // (its base path already returned false, i.e. caller-retains no-op).
+        let mut any_heap = false;
+        for fte in &ftes {
+            let resolved = self.subst_monomorph_type_params(fte);
+            if !self.field_copy_supported(&resolved, &mut vec![struct_name.to_string()]) {
+                return false;
+            }
+            if self.type_expr_has_drop_heap(&resolved) {
+                any_heap = true;
+            }
+        }
+        any_heap
+    }
+
+    /// Mono twin of [`deep_copy_struct_heap_fields_in_place`]: GEP at the
+    /// CONCRETE mono struct layout (`mono_st`) and classify each field through
+    /// its subst-resolved `TypeExpr`, so a generic struct param's bare-`T` heap
+    /// fields (`Pair[String]`) are entry-copied at their real `{ptr,len,cap}`
+    /// offsets. The base-layout twin GEPs the erased `{i64,…}` and reads bare
+    /// `T`, so it copies nothing (B-2026-07-18-32).
+    fn deep_copy_struct_heap_fields_in_place_mono(
+        &mut self,
+        base_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+        mono_st: StructType<'ctx>,
+    ) {
+        let Some(ftes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
+            return;
+        };
+        for (i, fte) in ftes.iter().enumerate() {
+            let resolved = self.subst_monomorph_type_params(fte);
+            self.deep_copy_one_aggregate_field(base_ptr, mono_st, i as u32, &resolved);
+        }
+    }
+
+    /// Build the concrete generic instantiation `TypeExpr` (`Pair[String]`) for
+    /// `struct_name` from the ACTIVE monomorph subst, so a callee-owned generic
+    /// param's scope-exit drop is registered as the per-monomorph
+    /// `__karac_drop_struct_Pair$str`. `None` when the struct declares no
+    /// generic params or the subst binds none of them (in which case the caller
+    /// falls back to the base name-keyed drop).
+    fn active_subst_struct_inst(&self, struct_name: &str) -> Option<TypeExpr> {
+        use crate::ast::{GenericArg, PathExpr};
+        use crate::token::Span;
+        let params = self.struct_generic_params.get(struct_name)?;
+        if params.is_empty() {
+            return None;
+        }
+        let mut args = Vec::with_capacity(params.len());
+        for p in params {
+            let te = if let Some(full) = self.type_subst_type_exprs.get(p) {
+                full.clone()
+            } else {
+                let name = self.type_subst_names.get(p)?;
+                TypeExpr {
+                    kind: TypeKind::Path(PathExpr {
+                        segments: vec![name.clone()],
+                        generic_args: None,
+                        span: Span::default(),
+                    }),
+                    span: Span::default(),
+                }
+            };
+            args.push(GenericArg::Type(te));
+        }
+        Some(TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![struct_name.to_string()],
+                generic_args: Some(args),
+                span: Span::default(),
+            }),
+            span: Span::default(),
+        })
     }
 
     /// Rc-INC the shared box handle stored at `slot` (an 8-byte RC pointer word),
