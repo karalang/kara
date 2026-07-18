@@ -49,6 +49,9 @@ import ast.{
     IfExpr,
     WhileExpr,
     ReturnExpr,
+    StructLitExpr,
+    StructLitField,
+    FieldAccessExpr,
     Pattern,
     BindingPattern,
 };
@@ -110,6 +113,17 @@ struct Emitter {
     sig_par_cnt: Vec[i64],
     // The CURRENT fn's return kind (drives the `return` arm's ret type).
     cur_ret: i64,
+    // Struct table (Slice 12) — POD structs (i64/bool fields) as first-class
+    // LLVM aggregates. Kind scheme: `10 + index`. Field names/kinds are
+    // FLATTENED (`st_field_*[st_off[i] .. +st_cnt[i]]`). The LLVM aggregate
+    // type text is REBUILT on demand (`ty_text`) — returning a stored
+    // `Vec[String]` element from a method double-freed under AOT
+    // (run-vs-build; see the Slice 12 checklist note).
+    st_names: Vec[String],
+    st_field_names: Vec[String],
+    st_field_kinds: Vec[i64],
+    st_off: Vec[i64],
+    st_cnt: Vec[i64],
 }
 
 // Emit a whole program as LLVM IR text. Walks the items, emits `main`'s body
@@ -134,6 +148,11 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         sig_par_off: Vec.new(),
         sig_par_cnt: Vec.new(),
         cur_ret: -1,
+        st_names: Vec.new(),
+        st_field_names: Vec.new(),
+        st_field_kinds: Vec.new(),
+        st_off: Vec.new(),
+        st_cnt: Vec.new(),
     };
     e.collect_sigs(items);
     for it in items {
@@ -152,7 +171,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
                     span,
                 } = f;
                 let rk = match ret {
-                    Some(t) => kind_of_type(t),
+                    Some(t) => e.kind_of_ty(t),
                     None => 0 - 1,
                 };
                 e.emit_fn(name, params, rk, body);
@@ -160,7 +179,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_off, sig_par_cnt, cur_ret } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_off, sig_par_cnt, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -187,25 +206,45 @@ impl Emitter {
     // deep-copies; the `Option[TypeExpr]` is matched INLINE (never passed by
     // value to a helper — B-2026-07-11-37).
     fn collect_sigs(mut ref self, items: ref Vec[Item]) {
+        // Pass A — struct defs (Slice 12), BEFORE fn signatures so a param /
+        // return type can name any struct regardless of order. Indexed reads
+        // through the ref (`sd.fields[i].ty` — the proven idiom; whole-Vec
+        // field copies through a borrowed enum payload are B-2026-07-17-20).
+        for it in items {
+            match it {
+                Struct(sd) => {
+                    self.st_names.push(sd.name);
+                    let off = self.st_field_names.len();
+                    self.st_off.push(off);
+                    let cnt = sd.fields.len();
+                    let mut fi = 0;
+                    while fi < cnt {
+                        self.st_field_names.push(sd.fields[fi].name);
+                        let fk = self.kind_of_ty(sd.fields[fi].ty);
+                        self.st_field_kinds.push(fk);
+                        fi = fi + 1;
+                    }
+                    self.st_cnt.push(cnt);
+                }
+                _ => {}
+            }
+        }
         for it in items {
             match it {
                 Func(f) => {
                     self.sig_names.push(f.name);
                     let rk = match f.ret {
-                        Some(t) => kind_of_type(t),
+                        Some(t) => self.kind_of_ty(t),
                         None => 0 - 1,
                     };
                     self.sig_ret.push(rk);
                     let off = self.sig_par_kinds.len();
                     self.sig_par_off.push(off);
-                    // Indexed reads through the ref (`f.params[i].ty` — the
-                    // typechecker's proven `s.fields[fi].ty` idiom); copying
-                    // the whole params Vec (`let ps = f.params`) through the
-                    // borrow crashed the seed's AOT build (run-vs-build).
                     let cnt = f.params.len();
                     let mut pi2 = 0;
                     while pi2 < cnt {
-                        self.sig_par_kinds.push(kind_of_type(f.params[pi2].ty));
+                        let pk = self.kind_of_ty(f.params[pi2].ty);
+                        self.sig_par_kinds.push(pk);
                         pi2 = pi2 + 1;
                     }
                     self.sig_par_cnt.push(cnt);
@@ -213,6 +252,68 @@ impl Emitter {
                 _ => {}
             }
         }
+    }
+
+    // Map a DECLARED type to a value kind (Slice 10; struct-aware Slice 12):
+    // String → 2, bool → 1, a registered struct → 10+index, else 0.
+    fn kind_of_ty(ref self, t: TypeExpr) -> i64 {
+        match t {
+            PathTy(p) => {
+                let PathType { segments, generics, span } = p;
+                if segments.len() == 0 {
+                    return 0;
+                }
+                if segments[0] == "String" {
+                    return 2;
+                }
+                if segments[0] == "bool" {
+                    return 1;
+                }
+                let mut i = 0;
+                while i < self.st_names.len() {
+                    if self.st_names[i] == segments[0] {
+                        return 10 + i;
+                    }
+                    i = i + 1;
+                }
+                0
+            }
+            _ => 0,
+        }
+    }
+
+    // The LLVM type text for a value kind, struct-aware (Slice 12). The
+    // struct text is REBUILT from field kinds on each call — returning a
+    // stored Vec[String] element from a method is an AOT double-free.
+    fn ty_text(ref self, kind: i64) -> String {
+        if kind >= 10 {
+            let si = kind - 10;
+            let off = self.st_off[si];
+            let cnt = self.st_cnt[si];
+            let mut ty = "{ ".to_string();
+            let mut fi = 0;
+            while fi < cnt {
+                if fi > 0 {
+                    ty = ty + ", ";
+                }
+                ty = ty + kind_ty(self.st_field_kinds[off + fi]);
+                fi = fi + 1;
+            }
+            return ty + " }";
+        }
+        kind_ty(kind)
+    }
+
+    // Index of struct `name` in the struct table, -1 if unknown.
+    fn st_index(ref self, name: ref String) -> i64 {
+        let mut i = 0;
+        while i < self.st_names.len() {
+            if self.st_names[i] == name {
+                return i;
+            }
+            i = i + 1;
+        }
+        0 - 1
     }
 
     // Index of fn `name` in the signature table, -1 if unknown.
@@ -252,8 +353,8 @@ impl Emitter {
             // a String param arrives as an OWNED `{ ptr, i64 }` aggregate the
             // callee frees at its epilogue (args move in — the caller passes
             // an owned copy or transfers a temp).
-            let pk = kind_of_type(ty);
-            let pty = kind_ty(pk);
+            let pk = self.kind_of_ty(ty);
+            let pty = self.ty_text(pk);
             let idx = self.locals.len();
             self.locals.push(pn);
             self.locals_kind.push(pk);
@@ -284,7 +385,7 @@ impl Emitter {
         // epilogue) is MATERIALIZED into an owned copy the caller receives.
         let use_val = rk >= 0 and not is_main;
         let mut tv = "0".to_string();
-        if rk == 2 {
+        if rk == 2 or rk >= 10 {
             tv = "zeroinitializer".to_string();
         }
         match tail {
@@ -303,7 +404,7 @@ impl Emitter {
                             }
                         }
                     } else {
-                        if kind == 0 {
+                        if kind == rk {
                             tv = op;
                         }
                     }
@@ -331,8 +432,8 @@ impl Emitter {
                 + "  ret i32 0\n}\n";
         } else {
             let mut rty = "i64".to_string();
-            if rk == 2 {
-                rty = "{ ptr, i64 }".to_string();
+            if rk == 2 or rk >= 10 {
+                rty = self.ty_text(rk);
             }
             self.funcs = self.funcs
                 + "define "
@@ -413,7 +514,7 @@ impl Emitter {
                         self.locals.push(name);
                         self.locals_kind.push(vk);
                         self.locals_heap.push(vh);
-                        let ty = kind_ty(vk);
+                        let ty = self.ty_text(vk);
                         let slot = "%v" + idx.to_string();
                         self.body = self.body
                             + "  "
@@ -458,7 +559,7 @@ impl Emitter {
                                 self.emit_free_slot(idx);
                             }
                             self.locals_heap[idx] = vh;
-                            let ty = kind_ty(vk);
+                            let ty = self.ty_text(vk);
                             self.body = self.body
                                 + "  store "
                                 + ty
@@ -561,7 +662,7 @@ impl Emitter {
                         if ai > 0 {
                             alist = alist + ", ";
                         }
-                        alist = alist + kind_ty(pk) + " " + aop;
+                        alist = alist + self.ty_text(pk) + " " + aop;
                         ai = ai + 1;
                     }
                     if cname != "" {
@@ -580,6 +681,17 @@ impl Emitter {
                                 + alist
                                 + ")\n";
                             self.emit_free_val(r);
+                        } else if rk >= 10 {
+                            self.body = self.body
+                                + "  "
+                                + r.clone()
+                                + " = call "
+                                + self.ty_text(rk)
+                                + " @u_"
+                                + cname
+                                + "("
+                                + alist
+                                + ")\n";
                         } else {
                             self.body = self.body
                                 + "  "
@@ -625,8 +737,9 @@ impl Emitter {
                 if self.in_main {
                     self.body = self.body + "  ret i32 0\n";
                 } else {
-                    if self.cur_ret == 2 {
-                        self.body = self.body + "  ret { ptr, i64 } " + rv + "\n";
+                    if self.cur_ret == 2 or self.cur_ret >= 10 {
+                        self.body =
+                            self.body + "  ret " + self.ty_text(self.cur_ret) + " " + rv + "\n";
                     } else {
                         self.body = self.body + "  ret i64 " + rv + "\n";
                     }
@@ -1000,7 +1113,7 @@ impl Emitter {
                     return Val { op: "0".to_string(), kind: 0, heap: false };
                 }
                 let k = self.locals_kind[idx];
-                let ty = kind_ty(k);
+                let ty = self.ty_text(k);
                 let r = self.fresh();
                 self.body = self.body
                     + "  "
@@ -1128,7 +1241,7 @@ impl Emitter {
                     if ai > 0 {
                         alist = alist + ", ";
                     }
-                    alist = alist + kind_ty(pk) + " " + aop;
+                    alist = alist + self.ty_text(pk) + " " + aop;
                     ai = ai + 1;
                 }
                 if cname == "" {
@@ -1149,6 +1262,19 @@ impl Emitter {
                         + alist
                         + ")\n";
                     return Val { op: r, kind: 2, heap: true };
+                }
+                if rk >= 10 {
+                    self.body = self.body
+                        + "  "
+                        + r.clone()
+                        + " = call "
+                        + self.ty_text(rk)
+                        + " @u_"
+                        + cname
+                        + "("
+                        + alist
+                        + ")\n";
+                    return Val { op: r, kind: rk, heap: false };
                 }
                 self.body = self.body
                     + "  "
@@ -1213,6 +1339,102 @@ impl Emitter {
                 Val { op: r, kind: 0, heap: false }
             }
             Blk(b) => self.emit_block_value(b),
+            StructLit(sl) => {
+                // POD struct CONSTRUCTION (Slice 12): evaluate literal fields
+                // in LITERAL order (the seed's evaluation order), then chain
+                // insertvalue in DECLARED order via name matching.
+                // Literal fields evaluate in LITERAL order (the seed's
+                // order) via the consuming for+destructure loop — the emitter's
+                // proven pattern; the indexed-Expr-copy variant
+                // (`emit_value(fields[li].value)`) double-freed under AOT
+                // (run-vs-build, the indexed-enum-payload-copy class).
+                let StructLitExpr { name, fields, spread, span } = sl;
+                let si = self.st_index(name);
+                if si < 0 {
+                    return Val { op: "0".to_string(), kind: 0, heap: false };
+                }
+                let mut lit_names = Vec.new();
+                let mut lit_ops = Vec.new();
+                for lf in fields {
+                    let StructLitField { name: fname, value, shorthand, span: fsp } = lf;
+                    let v = self.emit_value(value);
+                    let Val { op, kind, heap } = v;
+                    lit_names.push(fname);
+                    lit_ops.push(op);
+                }
+                let off = self.st_off[si];
+                let cnt = self.st_cnt[si];
+                let sty = self.ty_text(10 + si);
+                let mut cur = "undef".to_string();
+                let mut fi = 0;
+                while fi < cnt {
+                    let want = self.st_field_names[off + fi];
+                    let mut fop = "0".to_string();
+                    let mut li = 0;
+                    while li < lit_names.len() {
+                        if lit_names[li] == want {
+                            fop = lit_ops[li];
+                        }
+                        li = li + 1;
+                    }
+                    let r = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + r.clone()
+                        + " = insertvalue "
+                        + sty.clone()
+                        + " "
+                        + cur
+                        + ", "
+                        + kind_ty(self.st_field_kinds[off + fi])
+                        + " "
+                        + fop
+                        + ", "
+                        + fi.to_string()
+                        + "\n";
+                    cur = r;
+                    fi = fi + 1;
+                }
+                Val { op: cur, kind: 10 + si, heap: false }
+            }
+            Field(fa) => {
+                // POD struct FIELD READ (Slice 12): extractvalue by declared
+                // index; the result carries the field's kind.
+                let FieldAccessExpr { object, field, span } = fa;
+                let v = self.emit_value(object);
+                let Val { op, kind, heap } = v;
+                if kind < 10 {
+                    return Val { op: "0".to_string(), kind: 0, heap: false };
+                }
+                let si = kind - 10;
+                let off = self.st_off[si];
+                let cnt = self.st_cnt[si];
+                let mut fi = 0;
+                let mut idx = 0 - 1;
+                let mut fk = 0;
+                while fi < cnt {
+                    if self.st_field_names[off + fi] == field {
+                        idx = fi;
+                        fk = self.st_field_kinds[off + fi];
+                    }
+                    fi = fi + 1;
+                }
+                if idx < 0 {
+                    return Val { op: "0".to_string(), kind: 0, heap: false };
+                }
+                let r = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + r.clone()
+                    + " = extractvalue "
+                    + self.ty_text(kind)
+                    + " "
+                    + op
+                    + ", "
+                    + idx.to_string()
+                    + "\n";
+                Val { op: r, kind: fk, heap: false }
+            }
             MethodCall(mc) => {
                 // `<expr>.to_string()` as a VALUE (Slice 11). An i64 formats
                 // into a fresh heap buffer via snprintf (`%lld` fits in 24
@@ -1384,27 +1606,6 @@ fn bin_ir(op: BinOp) -> BinIr {
         And => BinIr { kind: 2, text: "and".to_string() },
         Or => BinIr { kind: 2, text: "or".to_string() },
         _ => BinIr { kind: 0, text: "add".to_string() },
-    }
-}
-
-// Map a DECLARED type to a value kind (Slice 10): String → 2, bool → 1,
-// everything else (the int widths) → 0.
-fn kind_of_type(t: TypeExpr) -> i64 {
-    match t {
-        PathTy(p) => {
-            let PathType { segments, generics, span } = p;
-            if segments.len() == 0 {
-                return 0;
-            }
-            if segments[0] == "String" {
-                return 2;
-            }
-            if segments[0] == "bool" {
-                return 1;
-            }
-            0
-        }
-        _ => 0,
     }
 }
 
