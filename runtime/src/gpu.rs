@@ -31,19 +31,59 @@ struct GpuContext {
     queue: wgpu::Queue,
 }
 
-/// CG-6: pick the adapter, honoring `KARAC_GPU=<index>`.
+/// CG-6: pick the adapter, honoring `KARAC_GPU=<index>` and
+/// `KARAC_GPU_BACKEND=cpu`.
 ///
-/// Unset → wgpu's default `request_adapter` (the platform's preferred
-/// high-performance device), exactly as before. Set → the N-th adapter in
-/// `enumerate_adapters` order; a non-numeric value or an out-of-range index
-/// is a structured error LISTING every available adapter (index, name,
-/// backend, device type), so the fix is copy-paste visible. The error is
-/// returned (not aborted) so the once-cell caller can route it through the
-/// same fatal path as "no adapter"; unit tests exercise it in-process.
+/// `KARAC_GPU` unset → wgpu's default `request_adapter` (the platform's
+/// preferred high-performance device), exactly as before. Set → the N-th
+/// adapter in `enumerate_adapters` order; a non-numeric value or an
+/// out-of-range index is a structured error LISTING every available adapter
+/// (index, name, backend, device type), so the fix is copy-paste visible.
+///
+/// `KARAC_GPU_BACKEND=cpu` (the debug escape hatch, checked first) forces a
+/// SOFTWARE (`DeviceType::Cpu`) adapter — lavapipe/llvmpipe on Linux, WARP on
+/// Windows — for exercising the real GPU pipeline on a GPU-less host; no such
+/// adapter is a structured error naming the software-driver fix, and any value
+/// other than `cpu` is rejected outright (same UX as `KARAC_GPU`).
+///
+/// The error is returned (not aborted) so the once-cell caller can route it
+/// through the same fatal path as "no adapter"; unit tests exercise it
+/// in-process.
 fn select_adapter(
     instance: &wgpu::Instance,
     requested: Option<&str>,
+    backend: Option<&str>,
 ) -> Result<wgpu::Adapter, String> {
+    // `KARAC_GPU_BACKEND=cpu` — force a SOFTWARE (CPU) adapter: lavapipe/llvmpipe
+    // via wgpu's Vulkan backend on Linux, WARP on Windows. A debug escape hatch
+    // (CG-6 deferred leg) for exercising `gpu.dispatch` where no real GPU exists;
+    // the interpreter remains the kernel-*logic* hatch, this exercises the actual
+    // GPU pipeline. Only `cpu` is recognized. Takes precedence over `KARAC_GPU`
+    // (which indexes the raw enumerate order) — the two are alternative selectors.
+    if let Some(b) = backend {
+        if !b.eq_ignore_ascii_case("cpu") {
+            return Err(format!(
+                "KARAC_GPU_BACKEND only supports `cpu` (a software adapter for \
+                 GPU-less debugging), got `{b}`"
+            ));
+        }
+        let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+        if let Some(pos) = adapters
+            .iter()
+            .position(|a| a.get_info().device_type == wgpu::DeviceType::Cpu)
+        {
+            return Ok(adapters
+                .into_iter()
+                .nth(pos)
+                .expect("position checked above"));
+        }
+        return Err(format!(
+            "KARAC_GPU_BACKEND=cpu: no software (CPU) adapter is available. Install a \
+             software Vulkan implementation (Linux: `mesa-vulkan-drivers` / lavapipe; \
+             Windows: the built-in WARP). Available adapters:\n{}",
+            adapter_listing(&adapters)
+        ));
+    }
     let Some(raw) = requested else {
         return pollster::block_on(
             instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
@@ -51,34 +91,38 @@ fn select_adapter(
         .map_err(|_| "no GPU adapter is available on this host".to_string());
     };
     let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
-    let listing = || {
-        let mut msg = String::new();
-        if adapters.is_empty() {
-            msg.push_str("  (no adapters found)\n");
-        }
-        for (i, a) in adapters.iter().enumerate() {
-            let info = a.get_info();
-            msg.push_str(&format!(
-                "  KARAC_GPU={i}: {} [{:?}, {:?}]\n",
-                info.name, info.backend, info.device_type
-            ));
-        }
-        msg
-    };
     let Ok(idx) = raw.parse::<usize>() else {
         return Err(format!(
             "KARAC_GPU must be a device index, got `{raw}`. Available:\n{}",
-            listing()
+            adapter_listing(&adapters)
         ));
     };
     if idx >= adapters.len() {
         return Err(format!(
             "KARAC_GPU={idx} is out of range ({} adapter(s) available). Available:\n{}",
             adapters.len(),
-            listing()
+            adapter_listing(&adapters)
         ));
     }
     Ok(adapters.into_iter().nth(idx).expect("index checked above"))
+}
+
+/// Structured adapter listing (index, name, backend, device type) shared by the
+/// `KARAC_GPU` and `KARAC_GPU_BACKEND` selection errors — the fix is copy-paste
+/// visible.
+fn adapter_listing(adapters: &[wgpu::Adapter]) -> String {
+    let mut msg = String::new();
+    if adapters.is_empty() {
+        msg.push_str("  (no adapters found)\n");
+    }
+    for (i, a) in adapters.iter().enumerate() {
+        let info = a.get_info();
+        msg.push_str(&format!(
+            "  KARAC_GPU={i}: {} [{:?}, {:?}]\n",
+            info.name, info.backend, info.device_type
+        ));
+    }
+    msg
 }
 
 fn gpu_context() -> Option<&'static GpuContext> {
@@ -90,10 +134,12 @@ fn gpu_context() -> Option<&'static GpuContext> {
         // adapter — print the structured message and abort here, mirroring
         // the no-adapter posture (a `gpu.dispatch` has no CPU fallback).
         let requested = std::env::var("KARAC_GPU").ok();
-        let adapter = match select_adapter(&instance, requested.as_deref()) {
+        let backend = std::env::var("KARAC_GPU_BACKEND").ok();
+        let explicit = requested.is_some() || backend.is_some();
+        let adapter = match select_adapter(&instance, requested.as_deref(), backend.as_deref()) {
             Ok(a) => a,
             Err(msg) => {
-                if requested.is_some() {
+                if explicit {
                     crate::fatal::eprint_fmt(format_args!("runtime error: {msg}\n"));
                     std::process::exit(1);
                 }
@@ -378,12 +424,17 @@ pub unsafe extern "C" fn karac_runtime_gpu_dispatch_soa(
         .zip(strides.iter())
         .map(|(&p, &stride)| std::slice::from_raw_parts(p, n * stride))
         .collect();
-    // Scalar uniforms (GPU-LBM-2): each `uniform_size` bytes (f32 = 4).
-    let uniform_slice = std::slice::from_raw_parts(uniform_ptrs, n_uniforms);
-    let uniforms: Vec<&[u8]> = uniform_slice
-        .iter()
-        .map(|&p| std::slice::from_raw_parts(p, uniform_size))
-        .collect();
+    // Scalar uniforms (GPU-LBM-2): each `uniform_size` bytes (f32 = 4). Guard the
+    // empty case — codegen passes a null `uniform_ptrs` for a zero-uniform kernel,
+    // and `from_raw_parts(null, 0)` violates the aligned-non-null precondition.
+    let uniforms: Vec<&[u8]> = if n_uniforms == 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(uniform_ptrs, n_uniforms)
+            .iter()
+            .map(|&p| std::slice::from_raw_parts(p, uniform_size))
+            .collect()
+    };
 
     let Some(outputs) = pollster::block_on(dispatch_multi_bytes_async(wgsl, &inputs, &uniforms, n))
     else {
@@ -829,11 +880,17 @@ pub unsafe extern "C" fn karac_runtime_gpu_dispatch_resident(
         crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
         std::process::abort();
     };
-    let uniform_slice = std::slice::from_raw_parts(uniform_ptrs, n_uniforms);
-    let uniforms: Vec<&[u8]> = uniform_slice
-        .iter()
-        .map(|&p| std::slice::from_raw_parts(p, uniform_size))
-        .collect();
+    // Guard the empty case — codegen passes a null `uniform_ptrs` for a
+    // zero-uniform kernel, and `from_raw_parts(null, 0)` violates the
+    // aligned-non-null precondition (harmless in release, UB-flagged in debug).
+    let uniforms: Vec<&[u8]> = if n_uniforms == 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(uniform_ptrs, n_uniforms)
+            .iter()
+            .map(|&p| std::slice::from_raw_parts(p, uniform_size))
+            .collect()
+    };
 
     // Hold the registry lock across the (submit-only, non-blocking) dispatch: the
     // input buffers live in the registry and `wgpu::Buffer` is not clonable, so we
@@ -1001,19 +1058,45 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             return;
         }
         assert!(
-            select_adapter(&instance, Some("0")).is_ok(),
+            select_adapter(&instance, Some("0"), None).is_ok(),
             "index 0 must select the first adapter"
         );
-        let oor = select_adapter(&instance, Some("99")).unwrap_err();
+        let oor = select_adapter(&instance, Some("99"), None).unwrap_err();
         assert!(
             oor.contains("out of range") && oor.contains("KARAC_GPU=0:"),
             "out-of-range error must list available adapters; got: {oor}"
         );
-        let bad = select_adapter(&instance, Some("metal")).unwrap_err();
+        let bad = select_adapter(&instance, Some("metal"), None).unwrap_err();
         assert!(
             bad.contains("must be a device index") && bad.contains("KARAC_GPU=0:"),
             "non-numeric error must list available adapters; got: {bad}"
         );
+    }
+
+    #[test]
+    fn select_adapter_honors_backend_cpu() {
+        // CG-6 deferred leg: `KARAC_GPU_BACKEND=cpu` forces a software (CPU)
+        // adapter. On a host with a software Vulkan implementation (lavapipe)
+        // it selects the `DeviceType::Cpu` adapter; without one it must be a
+        // structured error (never a silent fallback to a real/absent GPU).
+        // A non-`cpu` value is rejected outright.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let unsupported = select_adapter(&instance, None, Some("vulkan")).unwrap_err();
+        assert!(
+            unsupported.contains("only supports `cpu`"),
+            "a non-cpu backend must be rejected; got: {unsupported}"
+        );
+        match select_adapter(&instance, None, Some("cpu")) {
+            Ok(a) => assert_eq!(
+                a.get_info().device_type,
+                wgpu::DeviceType::Cpu,
+                "KARAC_GPU_BACKEND=cpu must select a CPU adapter"
+            ),
+            Err(msg) => assert!(
+                msg.contains("no software (CPU) adapter") && msg.contains("lavapipe"),
+                "with no CPU adapter, the error must name the software-driver fix; got: {msg}"
+            ),
+        }
     }
 
     #[test]

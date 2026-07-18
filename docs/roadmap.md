@@ -893,6 +893,7 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
 
   - wgpu auto-selects the highest-performance available device (discrete GPU preferred over integrated).
   - Users with multiple GPUs can override via the `KARAC_GPU=<index>` environment variable (0-indexed, ordered by wgpu's device enumeration). No API or recompile needed.
+  - `KARAC_GPU_BACKEND=cpu` forces a **software** (CPU) adapter — lavapipe/llvmpipe on Linux, WARP on Windows — so a `gpu.dispatch` program can exercise the real GPU pipeline on a GPU-less host (a debug escape hatch, distinct from `karac run --interp`, which only reproduces the kernel *logic*). It is checked before `KARAC_GPU`; if no software adapter exists the program exits with a structured error naming the fix (`mesa-vulkan-drivers` on Linux), and any value other than `cpu` is rejected. No API or recompile needed.
   - If no compatible GPU device is found at runtime, the program exits with a structured error:
     ```
     error: no GPU device available
