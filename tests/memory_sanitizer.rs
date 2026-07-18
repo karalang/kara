@@ -29624,4 +29624,45 @@ fn main() {
             "descending_loop_bce_skip_in_bounds",
         );
     }
+
+    #[test]
+    fn asan_int_float_parse_fresh_temp_arg_no_leak() {
+        // `<int>.parse(s)` / `<int>.from_str_radix(s, r)` / `f64.parse(s)` read
+        // the String argument's (data, len) via a runtime extern but never freed
+        // it — a fresh-temp arg (`i64.parse("42".to_string())`, `i64.parse(x[i])`)
+        // had no other owner and leaked once per call, unbounded in a loop. The
+        // sibling arg-consuming String methods (contains/replace/split) already
+        // freed theirs; the numeric parse assoc-fns were the omission. Fixed by
+        // `free_fresh_owned_str_arg` after each parse extern. Self-gated on a
+        // fresh-temp expr + cap>0, so a moved owned-binding arg (reclaimed by the
+        // move machinery) and a rodata literal are untouched. 200× loop over int
+        // parse, radix parse, and a moved-binding arg.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        match i64.parse("42".to_string()) {
+            Some(n) => { total = total + n; },
+            None => {},
+        }
+        match i64.from_str_radix("ff".to_string(), 16) {
+            Some(n) => { total = total + n; },
+            None => {},
+        }
+        let s = "7".to_string();
+        match i64.parse(s) {
+            Some(n) => { total = total + n; },
+            None => {},
+        }
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["60800"],
+            "int_float_parse_fresh_temp_arg_no_leak",
+        );
+    }
 }

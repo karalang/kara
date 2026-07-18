@@ -836,6 +836,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
                 .unwrap();
 
+            // Free the fresh-owned String argument now that the runtime call has
+            // read its bytes — `<int>.parse("42".to_string())` / `.parse(x[i])`
+            // otherwise leaks the temp once per call (unbounded in a loop). The
+            // parse extern only reads `(data, len)` and never takes ownership, so
+            // freeing here is the sole reclaim. `free_fresh_owned_str_arg`
+            // self-gates on a fresh-temp expr + the cap>0 marker, so a borrowed
+            // identifier / rodata literal arg is untouched. Mirrors the
+            // `String.replace` / `contains` arg cleanup. B-2026-07-18-x.
+            self.free_fresh_owned_str_arg(&_args[0].value, s_val);
+
             // Branch on success: load the parsed value in the some
             // branch; the none branch holds no payload.
             let some_bb = self.context.append_basic_block(fn_val, "parse.some");
@@ -951,6 +961,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
                 .unwrap();
 
+            // Free the fresh-owned String argument after the radix-parse extern
+            // read it (same fresh-temp-arg reclaim as the `parse` arm above).
+            self.free_fresh_owned_str_arg(&_args[0].value, s_val);
+
             let some_bb = self.context.append_basic_block(fn_val, "radix.some");
             let none_bb = self.context.append_basic_block(fn_val, "radix.none");
             let merge_bb = self.context.append_basic_block(fn_val, "radix.merge");
@@ -1035,6 +1049,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     "fparse.ok.bool",
                 )
                 .unwrap();
+
+            // Free the fresh-owned String argument after the f64-parse extern
+            // read it (same fresh-temp-arg reclaim as the int `parse` arm).
+            self.free_fresh_owned_str_arg(&_args[0].value, s_val);
 
             let some_bb = self.context.append_basic_block(fn_val, "fparse.some");
             let none_bb = self.context.append_basic_block(fn_val, "fparse.none");
