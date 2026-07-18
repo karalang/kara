@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 149 | 1 |
+| miscompile | 149 | 0 |
 | leak | 84 | 0 |
 | codegen-gap | 61 | 0 |
 | double-free | 61 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 395 | 3 |
+| codegen | 395 | 2 |
 | typecheck | 65 | 0 |
 | interp | 53 | 0 |
 | ownership | 23 | 0 |
@@ -124,19 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **556 surfaced · 3 open · 549 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **556 surfaced · 2 open · 550 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-18-17 | 2026-07-18 | codegen | low | [PARTIALLY FIXED — Map/SortedMap builtin leg] The typechecker did NOT propagate a method parameter's (substituted) expected type into the ARGUMENT's own inference, so a type-inferred constructor argument (`Vec.new()`, `Map.new()`, `"".to_string()`) whose element/type param must come from the callee's signature was left as `?T` and rejected. FIXED for the flagship Map/SortedMap idiom (`m.get_or(k, Vec.new())` / `m.insert(k, Vec.new())`); STILL OPEN for the general user-generic-method arg case (`Box[Vec[i64]].replace(Vec.new())`). Free-function call args always inferred fine (expected-type-directed). | none |
 | B-2026-07-18-29 | 2026-07-18 | codegen | high | REBUILDING or RE-WRAPPING a match-bound shared-enum payload node double-frees under AOT (interp correct): both `MethodCall(MethodCallExpr { object, method, args, span })` from freshly-destructured parts AND the minimal `MethodCall(mc)` re-wrap of the UNTOUCHED bound payload crash the selfhost emitter generator with free(): double free. The `mc.method.clone()` peek + re-wrap combo also crashes; only full single-destructure + passing the PARTS to a helper (never reconstructing an Expr node) is clean. | — |
-| B-2026-07-18-30 | 2026-07-18 | codegen | medium | A `ref Atomic[T]` FUNCTION PARAMETER does not mutate the caller's atomic under codegen — `fn bump(c: ref Atomic[i64]) { c.fetch_add(1, SeqCst); }` called twice on a local `let c = Atomic.new(0)` prints interp 2 but JIT/AOT 0. check-clean, interp-correct, codegen wrong-output. DISTINCT from B-2026-07-18-28 (that was the par by-value capture): this reproduces with NO par block at all, so it is a general ref-Atomic argument-ABI miscompile, not a par-capture issue. | src/codegen/method_call.rs (resolve_atomic_storage / ref-Atomic arg passing) |
 
-### Fixed (549)
+### Fixed (550)
 
-<details><summary>549 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>550 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -689,6 +688,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **556 surfaced 
 | B-2026-07-18-26 | codegen+interp | low | The 2-arg `assert(cond, "msg")` form — accepted by the typechecker, run by the interpreter, and emitted by the COMPILER itself for tensor shape-check… | 8c2cfc4 |
 | B-2026-07-18-27 | effect | medium | Assigning a captured LOCAL `let mut` binding from inside a `par { }` branch is NOT caught by the concurrency-write checker, and produces DIVERGENT ru… | 3136b0f |
 | B-2026-07-18-28 | codegen | high | SILENT MISCOMPILE of the design-recommended Atomic-in-`par` escape hatch: a `par { }` block with 2+ branches that mutate a captured `Atomic[T]` write… | 3136b0f |
+| B-2026-07-18-30 | codegen | medium | A `ref Atomic[T]` FUNCTION PARAMETER does not mutate the caller's atomic under codegen — `fn bump(c: ref Atomic[i64]) { c.fetch_add(1, SeqCst); }` ca… | 6057527 |
 
 </details>
 
