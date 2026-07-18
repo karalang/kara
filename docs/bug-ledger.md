@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 145 | 0 |
 | leak | 83 | 0 |
-| codegen-gap | 60 | 0 |
+| codegen-gap | 61 | 1 |
 | double-free | 60 | 0 |
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
@@ -104,12 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 20 | 0 |
 | diagnostics | 11 | 0 |
 | use-after-free | 4 | 0 |
+| check-passes/codegen-defers consistency hole + misleading diagnostic | 1 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 383 | 0 |
+| codegen | 384 | 1 |
 | typecheck | 64 | 0 |
 | interp | 50 | 0 |
 | ownership | 23 | 0 |
@@ -121,13 +122,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 | parser | 3 | 0 |
 | effect | 1 | 0 |
+| codegen (f-string / Display of a whole tuple value) vs interpreter | 1 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **540 surfaced · 0 open · 536 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **542 surfaced · 2 open · 536 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (2)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-18-13 | 2026-07-18 | codegen | high | Kata #415 add_strings measures 13.4x equal-safety Rust TODAY (89.1B vs 6.25B instrs, ~178K instr per 38-digit addition) — catastrophically worse than the 1.19x recorded in the June triage that B-2026-07-18-8 quoted. Kata file unchanged since its first-bench commit, so either the June number measured a different lane or a compiler regression landed in the past month. UNATTRIBUTED. | docs/implementation_checklist/phase-10-targets.md § 'String char-append residual' (same entry — this row carries the #415 outlier) |
+| B-2026-07-18-14 | 2026-07-18 | codegen (f-string / Display of a whole tuple value) vs interpreter | low | Interpolating a WHOLE TUPLE value in an f-string / `println` (`f"{t}"` where `t: (i64, i64)` or `(i64, String)`) passes `karac check` and renders `(3, 7)` in the interpreter, but FAILS `karac build`/JIT with 'Display of a struct in an f-string is supported when the interpolated expression is a variable or field access … bind a struct literal or call result to a `let` first'. The hint is MISLEADING — `t` is already a let-bound variable, so following it does not help. Affects ALL tuple element types (scalar and heap). Field-index interpolation (`f"{t.0} {t.1}"`) works on every backend. | none |
 
 ### Fixed (536)
 
