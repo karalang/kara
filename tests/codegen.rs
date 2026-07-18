@@ -2509,6 +2509,40 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_enum_method_owned_self_payload_no_double_free() {
+        // B-2026-07-18-47: an enum METHOD with owned `self` matching its heap
+        // payload double-freed under AOT/JIT (interp correct) — `self` parses as
+        // SelfValue, which `suppress_destructured_enum_payload_cleanup` matched
+        // only as Identifier, so it never cap-zeroed the consumed payload in the
+        // source and `self`'s callee-owned enum-drop freed it AND the moved-out
+        // binding freed it again. The enum-payload analogue of B-2026-07-18-37;
+        // the free-fn `match e { … }` form already worked. Note it double-freed
+        // even when the arm returns a SCALAR derived from the payload (`s.len()`)
+        // — the payload binding itself is the second owner. Covers payload
+        // returned, payload consumed-to-scalar, and a Vec payload.
+        // Method names avoid the builtin Vec/String method namespace
+        // (`get`/`take`/`unwrap`/…), which a separate dispatch bug misroutes
+        // (B-2026-07-18-48).
+        if let Some(out) = run_program(
+            "enum E { V(String) }\n\
+             enum W { X(Vec[i64]) }\n\
+             impl E { fn extract(self) -> String { match self { E.V(s) => s } } }\n\
+             impl E { fn length(self) -> i64 { match self { E.V(s) => s.len() } } }\n\
+             impl W { fn firstval(self) -> i64 { match self { W.X(v) => v[0] } } }\n\
+             fn main() {\n\
+                 let e = E.V(\"hi\".to_string());\n\
+                 println(e.extract());\n\
+                 let e2 = E.V(\"abcd\".to_string());\n\
+                 println(e2.length());\n\
+                 let w = W.X([7, 8]);\n\
+                 println(w.firstval());\n\
+             }",
+        ) {
+            assert_eq!(out, "hi\n4\n7\n");
+        }
+    }
+
+    #[test]
     fn e2e_ref_atomic_param_aliases_caller_cell() {
         // B-2026-07-18-30: a `ref Atomic[T]` / `mut ref Atomic[T]` parameter's
         // alloca holds a POINTER to the caller's atomic storage, but

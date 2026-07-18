@@ -3309,8 +3309,18 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
+        // An owned `self` receiver (`impl E { fn get(self) { match self { E.V(s)
+        // => … } } }`) parses as `SelfValue`, not `Identifier("self")`. Without
+        // the `SelfValue` arm, a method matching its OWNED enum `self` never
+        // cap-zeroed the consumed payload in the source, so `self`'s callee-owned
+        // enum-drop (registered by `make_aggregate_param_callee_owned` at entry)
+        // freed the payload buffer AND the moved-out binding (or its downstream
+        // consumer) freed it again — a double-free (the free-fn `match e { … }`
+        // form already worked via the Identifier arm). The enum-payload analogue
+        // of B-2026-07-18-37 (self.field move-out). B-2026-07-18-47.
         let scrut_name = match &scrutinee.kind {
-            ExprKind::Identifier(n) => n,
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
             _ => return,
         };
         let slot = match self.variables.get(scrut_name) {

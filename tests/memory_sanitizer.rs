@@ -14563,6 +14563,32 @@ fn main() {
     }
 
     #[test]
+    fn asan_enum_method_owned_self_payload_no_double_free() {
+        // B-2026-07-18-47: an enum method with owned `self` matching its heap
+        // payload — SelfValue was missed by the payload-move-out suppression, so
+        // `self`'s enum-drop and the payload binding both freed the buffer.
+        // Covers payload returned and payload consumed-to-scalar (the latter
+        // double-freed even without moving the payload out).
+        // Method names avoid the builtin Vec/String method namespace
+        // (misrouted by a separate dispatch bug, B-2026-07-18-48).
+        assert_clean_asan_run(
+            r#"
+enum E { V(String) }
+impl E { fn extract(self) -> String { match self { E.V(s) => s } } }
+impl E { fn length(self) -> i64 { match self { E.V(s) => s.len() } } }
+fn main() {
+    let e = E.V("hi".to_string());
+    println(e.extract());
+    let e2 = E.V("abcd".to_string());
+    println(e2.length());
+}
+"#,
+            &["hi", "4"],
+            "enum_method_owned_self_payload",
+        );
+    }
+
+    #[test]
     fn asan_struct_param_field_returned_no_double_free() {
         // The moved-out field is RETURNED to the caller: the deep-copy is the
         // returned value (caller owns it), the param's original field is freed
