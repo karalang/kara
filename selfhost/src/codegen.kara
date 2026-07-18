@@ -56,6 +56,7 @@ import ast.{
     PathExpr,
     MatchExpr,
     MatchArm,
+    ForExpr,
     TupleVariantPattern,
     EnumDefNode,
     VariantNode,
@@ -136,6 +137,12 @@ struct Emitter {
     // names/payload-arity FLATTENED like the struct tables. The tag is the
     // DECLARATION index — internal to the emitted program, so seed tag parity
     // is not required (output parity only).
+    // Per-fn ENTRY-BLOCK alloca text (Slice 17): `let` slots are allocated +
+    // zero-initialized ONCE at fn entry, so a `let` inside a loop body reuses
+    // its slot across iterations — the let site frees the slot's previous
+    // value (free(null)-safe on the first pass) instead of leaking it, and
+    // repeated allocas no longer grow the stack per iteration.
+    entry_allocas: String,
     en_names: Vec[String],
     en_var_names: Vec[String],
     en_var_pl: Vec[i64],
@@ -170,6 +177,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         st_field_kinds: Vec.new(),
         st_off: Vec.new(),
         st_cnt: Vec.new(),
+        entry_allocas: "".to_string(),
         en_names: Vec.new(),
         en_var_names: Vec.new(),
         en_var_pl: Vec.new(),
@@ -201,7 +209,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_off, sig_par_cnt, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, en_names, en_var_names, en_var_pl, en_off, en_cnt } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_off, sig_par_cnt, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_off, en_cnt } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -214,6 +222,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
     out = out + "declare ptr @memcpy(ptr, ptr, i64)\n";
     out = out + "declare void @free(ptr)\n";
     out = out + "declare ptr @realloc(ptr, i64)\n";
+    out = out + "declare i32 @memcmp(ptr, ptr, i64)\n";
     out = out + "@.fmt_i = internal constant [5 x i8] c\"%lld\\00\"\n";
     out = out + "@.true = internal constant [5 x i8] c\"true\\00\"\n";
     out = out + "@.false = internal constant [6 x i8] c\"false\\00\"\n";
@@ -426,6 +435,7 @@ impl Emitter {
     // expression is its return value (default 0). Everything is i64.
     fn emit_fn(mut ref self, name: String, params: Vec[FnParamNode], rk: i64, b: Block) {
         self.body = "".to_string();
+        self.entry_allocas = "".to_string();
         self.locals = Vec.new();
         self.locals_kind = Vec.new();
         self.locals_heap = Vec.new();
@@ -477,6 +487,9 @@ impl Emitter {
         // epilogue) is MATERIALIZED into an owned copy the caller receives.
         let use_val = rk >= 0 and not is_main;
         let mut tv = "0".to_string();
+        if rk == 1 {
+            tv = "false".to_string();
+        }
         if rk == 2 or rk >= 10 {
             tv = "zeroinitializer".to_string();
         }
@@ -530,11 +543,12 @@ impl Emitter {
             self.funcs = self.funcs
                 + "define i32 @main() {\nentry:\n"
                 + pre
+                + self.entry_allocas.clone()
                 + self.body.clone()
                 + "  ret i32 0\n}\n";
         } else {
             let mut rty = "i64".to_string();
-            if rk == 2 or rk >= 10 {
+            if rk == 1 or rk == 2 or rk >= 10 {
                 rty = self.ty_text(rk);
             }
             self.funcs = self.funcs
@@ -546,6 +560,7 @@ impl Emitter {
                 + sig
                 + ") {\nentry:\n"
                 + pre
+                + self.entry_allocas.clone()
                 + self.body.clone()
                 + "  ret "
                 + rty
@@ -645,12 +660,33 @@ impl Emitter {
                         self.locals_heap.push(vh);
                         let ty = self.ty_text(vk);
                         let slot = "%v" + idx.to_string();
-                        self.body = self.body
+                        // Slot lives in the ENTRY block, zeroed once — a `let`
+                        // in a loop body re-executes into the same slot, so
+                        // free the previous value first (null-safe on pass 1).
+                        self.entry_allocas = self.entry_allocas
                             + "  "
                             + slot.clone()
                             + " = alloca "
                             + ty.clone()
                             + ", align 8\n";
+                        let mut zi = "zeroinitializer".to_string();
+                        if vk == 0 {
+                            zi = "0".to_string();
+                        }
+                        if vk == 1 {
+                            zi = "false".to_string();
+                        }
+                        self.entry_allocas = self.entry_allocas
+                            + "  store "
+                            + ty.clone()
+                            + " "
+                            + zi
+                            + ", ptr "
+                            + slot.clone()
+                            + ", align 8\n";
+                        if vh {
+                            self.emit_free_slot(idx);
+                        }
                         self.body = self.body
                             + "  store "
                             + ty
@@ -759,9 +795,16 @@ impl Emitter {
                                 self.emit_println_str(sv);
                             }
                             MethodCall(mc) => {
+                                // Destructure ONCE and dispatch on the parts
+                                // (Slice 17) — rebuilding or re-wrapping the
+                                // node both double-free under the seed's AOT.
                                 let MethodCallExpr { object, method, args: margs, span: msp } = mc;
                                 if method == "to_string" {
                                     let val = self.emit_value(object);
+                                    let Val { op, kind, heap } = val;
+                                    self.emit_println_val(op, kind, heap);
+                                } else {
+                                    let val = self.emit_method_value(object, method, margs);
                                     let Val { op, kind, heap } = val;
                                     self.emit_println_val(op, kind, heap);
                                 }
@@ -817,7 +860,16 @@ impl Emitter {
                             rk = self.sig_ret[si];
                         }
                         let r = self.fresh();
-                        if rk == 2 {
+                        if rk == 1 {
+                            self.body = self.body
+                                + "  "
+                                + r.clone()
+                                + " = call i1 @u_"
+                                + cname
+                                + "("
+                                + alist
+                                + ")\n";
+                        } else if rk == 2 {
                             self.body = self.body
                                 + "  "
                                 + r.clone()
@@ -1065,12 +1117,7 @@ impl Emitter {
                             + ", align 8\n";
                     }
                 } else {
-                    let dv = self.emit_value(MethodCall(MethodCallExpr {
-                        object: object,
-                        method: method,
-                        args: margs,
-                        span: msp,
-                    }));
+                    let dv = self.emit_method_value(object, method, margs);
                     let Val { op: dop, kind: dk, heap: dh } = dv;
                     if dk == 2 and dh {
                         self.emit_free_val(dop);
@@ -1119,7 +1166,7 @@ impl Emitter {
                 if self.in_main {
                     self.body = self.body + "  ret i32 0\n";
                 } else {
-                    if self.cur_ret == 2 or self.cur_ret >= 10 {
+                    if self.cur_ret == 1 or self.cur_ret == 2 or self.cur_ret >= 10 {
                         self.body =
                             self.body + "  ret " + self.ty_text(self.cur_ret) + " " + rv + "\n";
                     } else {
@@ -1163,6 +1210,116 @@ impl Emitter {
                 }
                 self.body = self.body + "  br label %" + lend.clone() + "\n";
                 self.body = self.body + lend + ":\n";
+            }
+            For(fe) => {
+                // `for b in <str>.bytes() { body }` (Slice 17): the lexer's
+                // byte-walk idiom. Loop i over [0, len): load the i8 at
+                // ptr+i, zext to i64, bind the loop var, emit the body. Only
+                // the `.bytes()` iterable is lowered this slice.
+                let ForExpr { label, var, iter, body: fbody, span } = fe;
+                let mut sval = Val { op: "0".to_string(), kind: 0, heap: false };
+                let mut is_bytes = false;
+                match iter {
+                    MethodCall(bmc) => {
+                        let MethodCallExpr { object, method, args: bargs, span: bsp } = bmc;
+                        if method == "bytes" {
+                            sval = self.emit_value(object);
+                            is_bytes = true;
+                        }
+                    }
+                    _ => {}
+                }
+                let Val { op: sop, kind: sk2, heap: sh2 } = sval;
+                if is_bytes and sk2 == 2 {
+                    let sp2 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + sp2.clone()
+                        + " = extractvalue { ptr, i64 } "
+                        + sop.clone()
+                        + ", 0\n";
+                    let sl = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + sl.clone()
+                        + " = extractvalue { ptr, i64 } "
+                        + sop.clone()
+                        + ", 1\n";
+                    // loop-var slot + index slot
+                    let vidx = self.locals.len();
+                    self.locals.push(var);
+                    self.locals_kind.push(0);
+                    self.locals_heap.push(false);
+                    self.body =
+                        self.body + "  %v" + vidx.to_string() + " = alloca i64, align 8\n";
+                    let islot = self.fresh();
+                    self.body = self.body + "  " + islot.clone() + " = alloca i64, align 8\n";
+                    self.body =
+                        self.body + "  store i64 0, ptr " + islot.clone() + ", align 8\n";
+                    let lid = self.nlbl;
+                    self.nlbl = self.nlbl + 1;
+                    let lh = "bfor" + lid.to_string();
+                    let lb = "bforb" + lid.to_string();
+                    let le = "bfore" + lid.to_string();
+                    self.body = self.body + "  br label %" + lh.clone() + "\n";
+                    self.body = self.body + lh.clone() + ":\n";
+                    let iv = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + iv.clone()
+                        + " = load i64, ptr "
+                        + islot.clone()
+                        + ", align 8\n";
+                    let c = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + c.clone()
+                        + " = icmp slt i64 "
+                        + iv.clone()
+                        + ", "
+                        + sl
+                        + "\n";
+                    self.body = self.body
+                        + "  br i1 "
+                        + c
+                        + ", label %"
+                        + lb.clone()
+                        + ", label %"
+                        + le.clone()
+                        + "\n";
+                    self.body = self.body + lb + ":\n";
+                    let bp = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + bp.clone()
+                        + " = getelementptr i8, ptr "
+                        + sp2
+                        + ", i64 "
+                        + iv.clone()
+                        + "\n";
+                    let b8 = self.fresh();
+                    self.body =
+                        self.body + "  " + b8.clone() + " = load i8, ptr " + bp + ", align 1\n";
+                    let b64 = self.fresh();
+                    self.body =
+                        self.body + "  " + b64.clone() + " = zext i8 " + b8 + " to i64\n";
+                    self.body = self.body
+                        + "  store i64 "
+                        + b64
+                        + ", ptr %v"
+                        + vidx.to_string()
+                        + ", align 8\n";
+                    self.emit_block(fbody);
+                    let nx = self.fresh();
+                    self.body = self.body + "  " + nx.clone() + " = add i64 " + iv + ", 1\n";
+                    self.body =
+                        self.body + "  store i64 " + nx + ", ptr " + islot + ", align 8\n";
+                    self.body = self.body + "  br label %" + lh + "\n";
+                    self.body = self.body + le + ":\n";
+                    if sh2 {
+                        self.emit_free_val(sop);
+                    }
+                }
             }
             While(w) => {
                 // `while cond { body }` (Slice 5): a loop header re-evaluates the
@@ -1511,6 +1668,66 @@ impl Emitter {
             return Val { op: r, kind: 0, heap: false };
         }
         Val { op: "0".to_string(), kind: 0, heap: false }
+    }
+
+    // String equality (Slice 17): i1 = (len_l == len_r) and memcmp == 0.
+    // Uses a select over the length check so the memcmp runs unconditionally
+    // (safe: both pointers are valid for their own lengths; when lengths
+    // differ the memcmp result is discarded).
+    fn emit_str_eq(mut ref self, lop: String, rop: String) -> Val {
+        let lp = self.fresh();
+        self.body =
+            self.body + "  " + lp.clone() + " = extractvalue { ptr, i64 } " + lop.clone() + ", 0\n";
+        let ll = self.fresh();
+        self.body = self.body + "  " + ll.clone() + " = extractvalue { ptr, i64 } " + lop + ", 1\n";
+        let rp = self.fresh();
+        self.body =
+            self.body + "  " + rp.clone() + " = extractvalue { ptr, i64 } " + rop.clone() + ", 0\n";
+        let rl = self.fresh();
+        self.body = self.body + "  " + rl.clone() + " = extractvalue { ptr, i64 } " + rop + ", 1\n";
+        let leq = self.fresh();
+        self.body = self.body
+            + "  "
+            + leq.clone()
+            + " = icmp eq i64 "
+            + ll.clone()
+            + ", "
+            + rl
+            + "\n";
+        // memcmp over min(len_l, len_r) = len_l when equal; use len_l gated by
+        // leq via select to 0 so differing-length compares read zero bytes.
+        let n = self.fresh();
+        self.body = self.body
+            + "  "
+            + n.clone()
+            + " = select i1 "
+            + leq.clone()
+            + ", i64 "
+            + ll
+            + ", i64 0\n";
+        let mc = self.fresh();
+        self.body = self.body
+            + "  "
+            + mc.clone()
+            + " = call i32 @memcmp(ptr "
+            + lp
+            + ", ptr "
+            + rp
+            + ", i64 "
+            + n
+            + ")\n";
+        let mz = self.fresh();
+        self.body = self.body + "  " + mz.clone() + " = icmp eq i32 " + mc + ", 0\n";
+        let r = self.fresh();
+        self.body = self.body
+            + "  "
+            + r.clone()
+            + " = and i1 "
+            + leq
+            + ", "
+            + mz
+            + "\n";
+        Val { op: r, kind: 1, heap: false }
     }
 
     // True iff struct `si` has any direct String field (Slice 15 — the
@@ -1887,6 +2104,28 @@ impl Emitter {
                 // on i64.
                 let bi = bin_ir(op);
                 let BinIr { kind, text } = bi;
+                if kind == 1 and lk == 2 and rk == 2 {
+                    // String ==/!= (Slice 17): length compare + memcmp. Other
+                    // string comparisons stay unsupported.
+                    if text == "eq" or text == "ne" {
+                        let r = self.emit_str_eq(lop.clone(), rop.clone());
+                        let Val { op: eop, kind: ek, heap: eh } = r;
+                        if lh {
+                            self.emit_free_val(lop);
+                        }
+                        if rh {
+                            self.emit_free_val(rop);
+                        }
+                        if text == "ne" {
+                            let n = self.fresh();
+                            self.body =
+                                self.body + "  " + n.clone() + " = xor i1 " + eop + ", true\n";
+                            return Val { op: n, kind: 1, heap: false };
+                        }
+                        return Val { op: eop, kind: 1, heap: false };
+                    }
+                    return Val { op: "false".to_string(), kind: 1, heap: false };
+                }
                 if kind == 0 and text == "add" and lk == 2 and rk == 2 {
                     // String CONCATENATION (Slice 8): malloc(l1+l2), memcpy
                     // both halves, build the fresh { ptr, i64 } aggregate.
@@ -2043,6 +2282,17 @@ impl Emitter {
                     rk = self.sig_ret[si];
                 }
                 let r = self.fresh();
+                if rk == 1 {
+                    self.body = self.body
+                        + "  "
+                        + r.clone()
+                        + " = call i1 @u_"
+                        + cname
+                        + "("
+                        + alist
+                        + ")\n";
+                    return Val { op: r, kind: 1, heap: false };
+                }
                 if rk == 2 {
                     self.body = self.body
                         + "  "
@@ -2335,13 +2585,28 @@ impl Emitter {
                 Val { op: r, kind: fk, heap: false }
             }
             MethodCall(mc) => {
-                // `<expr>.to_string()` as a VALUE (Slice 11). An i64 formats
-                // into a fresh heap buffer via snprintf (`%lld` fits in 24
-                // bytes incl. sign+NUL) — an OWNED string temp. A bool selects
-                // between the `@.true`/`@.false` globals — a BORROW (consumers
-                // materialize on binding, exactly like a literal). A string
-                // passes through. Other methods stay unsupported (0).
                 let MethodCallExpr { object, method, args: margs, span: msp } = mc;
+                self.emit_method_value(object, method, margs)
+            }
+            _ => Val { op: "0".to_string(), kind: 0, heap: false },
+        }
+    }
+
+    // Method-call VALUE dispatch (Slices 11/13/17), taking the DESTRUCTURED
+    // node parts — callers never rebuild a MethodCallExpr (reconstruction and
+    // re-wrapping a match payload both double-free under the seed's AOT).
+    // `<expr>.to_string()`: an i64 formats into a fresh heap buffer via
+    // snprintf — an OWNED temp; a bool selects the `@.true`/`@.false` globals
+    // — a BORROW; a string passes through. `Vec.new` / `len` / `substring`
+    // as documented at their arms. Other methods stay unsupported (0).
+    fn emit_method_value(
+        mut ref self,
+        object: Expr,
+        method: String,
+        margs: Vec[CallArg],
+    ) -> Val {
+        {
+            {
                 if method == "new" {
                     // `Vec.new()` (Slice 13): an empty {ptr,len,cap} — null
                     // buffer, zero len/cap. `realloc(null, n)` is malloc and
@@ -2384,6 +2649,93 @@ impl Emitter {
                         return Val { op: r, kind: 0, heap: false };
                     }
                     return Val { op: "0".to_string(), kind: 0, heap: false };
+                }
+                if method == "substring" {
+                    // `s.substring(a, b)` (Slice 17): a fresh OWNED copy of
+                    // bytes [a, b) — malloc(b-a) + memcpy from ptr+a. The
+                    // seed's token-text extraction primitive.
+                    let ov2 = self.emit_value(object);
+                    let Val { op: oop2, kind: ok2, heap: oh2 } = ov2;
+                    if ok2 != 2 {
+                        return Val { op: "0".to_string(), kind: 0, heap: false };
+                    }
+                    let mut a0v = "0".to_string();
+                    let mut a1v = "0".to_string();
+                    let mut mi = 0;
+                    for ma in margs {
+                        let CallArg { label, mut_marker, value, span: masp } = ma;
+                        let av = self.emit_value(value);
+                        let Val { op: aop, kind: ak, heap: ah } = av;
+                        if mi == 0 {
+                            a0v = aop;
+                        } else {
+                            a1v = aop;
+                        }
+                        mi = mi + 1;
+                    }
+                    let sp3 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + sp3.clone()
+                        + " = extractvalue { ptr, i64 } "
+                        + oop2.clone()
+                        + ", 0\n";
+                    let n = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + n.clone()
+                        + " = sub i64 "
+                        + a1v
+                        + ", "
+                        + a0v.clone()
+                        + "\n";
+                    let src2 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + src2.clone()
+                        + " = getelementptr i8, ptr "
+                        + sp3
+                        + ", i64 "
+                        + a0v
+                        + "\n";
+                    let buf = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + buf.clone()
+                        + " = call ptr @malloc(i64 "
+                        + n.clone()
+                        + ")\n";
+                    let m = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + m
+                        + " = call ptr @memcpy(ptr "
+                        + buf.clone()
+                        + ", ptr "
+                        + src2
+                        + ", i64 "
+                        + n.clone()
+                        + ")\n";
+                    let g0 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + g0.clone()
+                        + " = insertvalue { ptr, i64 } undef, ptr "
+                        + buf
+                        + ", 0\n";
+                    let g1 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + g1.clone()
+                        + " = insertvalue { ptr, i64 } "
+                        + g0
+                        + ", i64 "
+                        + n
+                        + ", 1\n";
+                    if oh2 {
+                        self.emit_free_val(oop2);
+                    }
+                    return Val { op: g1, kind: 2, heap: true };
                 }
                 if method != "to_string" {
                     return Val { op: "0".to_string(), kind: 0, heap: false };
@@ -2457,7 +2809,6 @@ impl Emitter {
                     + ", 1\n";
                 Val { op: a1, kind: 2, heap: true }
             }
-            _ => Val { op: "0".to_string(), kind: 0, heap: false },
         }
     }
 

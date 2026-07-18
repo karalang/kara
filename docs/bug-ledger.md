@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 148 | 1 |
 | leak | 84 | 0 |
 | codegen-gap | 61 | 0 |
-| double-free | 60 | 0 |
+| double-free | 61 | 1 |
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
 | run-vs-build | 32 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 393 | 2 |
+| codegen | 394 | 3 |
 | typecheck | 65 | 0 |
 | interp | 53 | 0 |
 | ownership | 23 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **554 surfaced · 3 open · 547 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **555 surfaced · 4 open · 547 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-18-17 | 2026-07-18 | codegen | low | [PARTIALLY FIXED — Map/SortedMap builtin leg] The typechecker did NOT propagate a method parameter's (substituted) expected type into the ARGUMENT's own inference, so a type-inferred constructor argument (`Vec.new()`, `Map.new()`, `"".to_string()`) whose element/type param must come from the callee's signature was left as `?T` and rejected. FIXED for the flagship Map/SortedMap idiom (`m.get_or(k, Vec.new())` / `m.insert(k, Vec.new())`); STILL OPEN for the general user-generic-method arg case (`Box[Vec[i64]].replace(Vec.new())`). Free-function call args always inferred fine (expected-type-directed). | none |
 | B-2026-07-18-27 | 2026-07-18 | effect | medium | Assigning a captured LOCAL `let mut` binding from inside a `par { }` branch is NOT caught by the concurrency-write checker, and produces DIVERGENT run-vs-build garbage. `fn main() { let mut a = 0; let mut b = 0; par { a = 10; b = 20; } print(a + b); }` passes `karac check` but yields interp=20 (only the last branch's env merges back: a=0,b=20) vs build=0 (no write-back: a=0,b=0) — neither is the naive 30, and the two backends disagree. The design's data-race-freedom guarantee (design.md line 104) and the par-write rule (design.md line 1329) intend such a write to be a COMPILE ERROR unless the binding is Atomic/Mutex/RwLock/Arc. | src/effectchecker/modbind_synth.rs |
 | B-2026-07-18-28 | 2026-07-18 | codegen | high | SILENT MISCOMPILE of the design-recommended Atomic-in-`par` escape hatch: a `par { }` block with 2+ branches that mutate a captured `Atomic[T]` writes back NONE of the mutations under codegen. `fn main() { let c = Atomic.new(0); par { c.fetch_add(1, MemoryOrdering.SeqCst); c.fetch_add(1, MemoryOrdering.SeqCst); } print(c.load(MemoryOrdering.SeqCst)); }` prints 2 under `karac run --interp` but 0 under `karac run` / `karac build`. design.md line 1329 explicitly directs programmers to wrap par-mutated state in `Atomic[T]`/`Mutex[T]` — so this is the SANCTIONED pattern producing a wrong answer, silently, with no diagnostic. | src/codegen/par_blocks.rs |
+| B-2026-07-18-29 | 2026-07-18 | codegen | high | REBUILDING or RE-WRAPPING a match-bound shared-enum payload node double-frees under AOT (interp correct): both `MethodCall(MethodCallExpr { object, method, args, span })` from freshly-destructured parts AND the minimal `MethodCall(mc)` re-wrap of the UNTOUCHED bound payload crash the selfhost emitter generator with free(): double free. The `mc.method.clone()` peek + re-wrap combo also crashes; only full single-destructure + passing the PARTS to a helper (never reconstructing an Expr node) is clean. | — |
 
 ### Fixed (547)
 

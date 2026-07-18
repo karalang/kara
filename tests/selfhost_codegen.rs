@@ -157,6 +157,19 @@ const CORPUS: &[&str] = &[
     "fn main() { let mut v: Vec[String] = Vec.new(); v.push(\"x\" + \"1\"); v.push(\"y\" + \"2\"); let mut i = 0; while i < v.len() { println(v[i]); i = i + 1; } }",
     "fn main() { let mut v: Vec[String] = Vec.new(); let mut i = 0; while i < 4 { v.push(\"n\" + i.to_string()); i = i + 1; } println(v[3]); println(v.len().to_string()) }",
     "fn main() { let mut v: Vec[String] = Vec.new(); v.push(\"keep\"); let s = v[0]; println(s + \"-copy\"); println(v[0]) }",
+    // Slice 17: for-over-bytes, string ==/!=, substring, bool-returning fns,
+    // entry-block let slots (a let in a loop body frees its previous value —
+    // the Slice-9 loop-let leak deferral, closed). All valgrind-gated.
+    "fn main() { let s = \"abcabc\"; let mut n = 0; for b in s.bytes() { if b == 97 { n = n + 1; } } println(n.to_string()) }",
+    "fn main() { println((\"hi\" == \"hi\").to_string()); println((\"hi\" == \"ho\").to_string()); println((\"a\" != \"b\").to_string()); println((\"ab\" == \"abc\").to_string()) }",
+    "fn main() { let s = \"hello world\"; println(s.substring(0, 5)); println(s.substring(6, 11)) }",
+    "fn is_vowel(b: u8) -> bool { b == 97 or b == 101 or b == 105 or b == 111 or b == 117 }\nfn main() { let s = \"banana\"; let mut n = 0; for b in s.bytes() { if is_vowel(b) { n = n + 1; } } println(n.to_string()) }",
+    "fn main() { let mut v: Vec[String] = Vec.new(); let w = \"split me up\"; let mut i = 0; let mut st = 0; for b in w.bytes() { if b == 32 { v.push(w.substring(st, i)); st = i + 1; } i = i + 1; } v.push(w.substring(st, i)); let mut j = 0; while j < v.len() { println(v[j]); j = j + 1; } }",
+    // THE TOKENIZER CAPSTONE: the first parser-shaped program compiled by the
+    // Kara-authored backend — byte classification via a bool-returning helper,
+    // token-text extraction via substring, accumulation into Vec[String],
+    // keyword recognition via string equality. Composes eight slices.
+    "fn is_alnum(b: u8) -> bool { (b >= 48 and b <= 57) or (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or b == 95 }\nfn main() { let src = \"let x1 = 42 + foo * 7\"; let mut toks: Vec[String] = Vec.new(); let mut i = 0; let mut start = 0 - 1; for b in src.bytes() { if is_alnum(b) { if start < 0 { start = i; } } else { if start >= 0 { toks.push(src.substring(start, i)); start = 0 - 1; } if b != 32 { toks.push(src.substring(i, i + 1)); } } i = i + 1; } if start >= 0 { toks.push(src.substring(start, i)); } let mut j = 0; while j < toks.len() { let t = toks[j]; if t == \"let\" { println(\"kw \" + t) } else { println(\"tok \" + t) } j = j + 1; } }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
