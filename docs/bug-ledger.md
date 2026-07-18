@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 85 | 0 |
 | double-free | 63 | 1 |
 | codegen-gap | 62 | 0 |
-| missing-feature | 47 | 0 |
+| missing-feature | 48 | 1 |
 | false-positive | 36 | 0 |
 | run-vs-build | 34 | 0 |
 | crash | 27 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 403 | 1 |
-| typecheck | 69 | 0 |
-| interp | 54 | 0 |
+| codegen | 404 | 2 |
+| typecheck | 70 | 1 |
+| interp | 55 | 1 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **566 surfaced · 1 open · 561 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **567 surfaced · 2 open · 561 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-18-38 | 2026-07-18 | codegen | medium | An owned HEAP param (or local) moved into a VEC/ARRAY LITERAL that is returned/bound DOUBLE-FREES under AOT (interp correct): `fn dup(x: String) -> Vec[String] { [x] }` -> `--interp` builds `["z"]`, `karac build`/JIT aborts `free(): double free`. Every OTHER move-out sink is clean — `fn f(x: String) -> String { x }` (direct return), `W { s: x }` (struct literal), `(x, 1)` (tuple), `Some(x)` (Option), and `Vec.new() + v.push(x)` all correctly transfer ownership; the array/vec LITERAL element position is the one sink that does not suppress the moved element source. | src/codegen/collections.rs |
+| B-2026-07-18-41 | 2026-07-18 | typecheck+interp+codegen | low | `Iterator.rev()` was unimplemented — `v.iter().rev()` rejected with `no method 'rev' on type 'Iterator'` in both backends. Now shipped for the typechecker + interpreter (`v.iter().rev()`, composing with adaptors on both sides and any terminal/for-loop); CODEGEN is DEFERRED with a loud `--interp` bail (status stays OPEN for the codegen leg). | src/codegen/method_call.rs |
 
 ### Fixed (561)
 
