@@ -566,10 +566,20 @@ impl Env {
     pub(crate) fn read_map_slot(&self, map_var: &str, key: &Value) -> Value {
         for scope in self.scopes.iter().rev() {
             if let Some(slot) = scope.get(map_var) {
-                if let Value::Map(pairs) = slot {
-                    if let Some((_, v)) = pairs.iter().find(|(k, _)| k == key) {
-                        return v.clone();
+                match slot {
+                    Value::Map(pairs) => {
+                        if let Some((_, v)) = pairs.iter().find(|(k, _)| k == key) {
+                            return v.clone();
+                        }
                     }
+                    // SortedMap slot (BTreeMap keyed by `OrdValue`) — the entry
+                    // chain's `MapSlotRef` resolves through here for a SortedMap too.
+                    Value::SortedMap(m) => {
+                        if let Some(v) = m.get(&super::value::OrdValue(key.clone())) {
+                            return v.clone();
+                        }
+                    }
+                    _ => {}
                 }
                 return Value::Unit;
             }
@@ -583,12 +593,19 @@ impl Env {
     pub(crate) fn write_map_slot(&mut self, map_var: &str, key: &Value, val: Value) {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(slot) = scope.get_mut(map_var) {
-                if let Value::Map(pairs) = slot {
-                    if let Some((_, v)) = pairs.iter_mut().find(|(k, _)| k == key) {
-                        *v = val;
-                    } else {
-                        pairs.push((key.clone(), val));
+                match slot {
+                    Value::Map(pairs) => {
+                        if let Some((_, v)) = pairs.iter_mut().find(|(k, _)| k == key) {
+                            *v = val;
+                        } else {
+                            pairs.push((key.clone(), val));
+                        }
                     }
+                    // SortedMap sibling: insert-or-overwrite by `OrdValue` key.
+                    Value::SortedMap(m) => {
+                        m.insert(super::value::OrdValue(key.clone()), val);
+                    }
+                    _ => {}
                 }
                 return;
             }

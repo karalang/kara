@@ -9528,6 +9528,43 @@ fn test_map_entry_and_modify_runs_when_occupied() {
 }
 
 #[test]
+fn test_sorted_map_entry_chain_counts_in_key_order() {
+    // SortedMap shares Map's entry chain (entry/and_modify/or_insert +
+    // or_insert_with). Counting words yields the same per-key totals as Map
+    // would; `keys()` iterates ascending, so the report is key-sorted.
+    let output = run("fn main() {\n\
+             let mut counts: SortedMap[String, i64] = SortedMap.new();\n\
+             let words = [\"banana\", \"apple\", \"banana\", \"cherry\", \"apple\", \"banana\"];\n\
+             let mut i = 0i64;\n\
+             while i < words.len() {\n\
+                 counts.entry(words[i].to_string()).and_modify(|c| { c += 1; }).or_insert(1);\n\
+                 i = i + 1;\n\
+             }\n\
+             for k in counts.keys() {\n\
+                 println(f\"{k}={counts.get_or(k.clone(), 0)}\");\n\
+             }\n\
+         }");
+    assert_eq!(output, "apple=2\nbanana=3\ncherry=1\n");
+}
+
+#[test]
+fn test_sorted_map_entry_or_insert_with_and_mut_ref_push() {
+    // or_insert / or_insert_with return a `mut ref V` slot; `.push` through it
+    // writes back into the SortedMap's BTreeMap slot (the read/write_map_slot
+    // choke points resolve a SortedMap slot by key).
+    let output = run("fn main() {\n\
+             let mut groups: SortedMap[String, Vec[i64]] = SortedMap.new();\n\
+             groups.entry(\"even\".to_string()).or_insert(Vec.new()).push(2);\n\
+             groups.entry(\"odd\".to_string()).or_insert_with(|| Vec.new()).push(1);\n\
+             groups.entry(\"even\".to_string()).or_insert(Vec.new()).push(4);\n\
+             for k in groups.keys() {\n\
+                 println(f\"{k}:{groups.get_or(k.clone(), Vec.new()).len()}\");\n\
+             }\n\
+         }");
+    assert_eq!(output, "even:2\nodd:1\n");
+}
+
+#[test]
 fn test_map_entry_and_modify_skips_when_vacant() {
     // Vacant — closure does not fire; map state is unchanged.
     let output = run("fn main() {\n\

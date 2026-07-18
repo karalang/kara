@@ -284,6 +284,26 @@ impl<'a> super::Interpreter<'a> {
                         slot_idx,
                     });
                 }
+                if let Value::SortedMap(_) = obj {
+                    // SortedMap shares Map's entry semantics; its BTreeMap storage
+                    // has no positional slot, so `slot_idx` stays `None` and the
+                    // chain steps below resolve the slot by KEY (mirrors codegen,
+                    // which reuses Map's KaracMap-backed entry chain).
+                    let key = args
+                        .first()
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    let map_var = if let ExprKind::Identifier(name) = &object.kind {
+                        Some(name.clone())
+                    } else {
+                        None
+                    };
+                    return Some(Value::Entry {
+                        map_var,
+                        key: Box::new(key),
+                        slot_idx: None,
+                    });
+                }
             }
             "or_insert" => {
                 if let Value::Entry { map_var, key, .. } = obj {
@@ -302,6 +322,7 @@ impl<'a> super::Interpreter<'a> {
                     // may be stale after an earlier chain step mutated the map.
                     let occupied = match map_var.as_deref().and_then(|n| self.env.get(n)) {
                         Some(Value::Map(pairs)) => pairs.iter().any(|(k, _)| *k == *key),
+                        Some(Value::SortedMap(m)) => m.contains_key(&OrdValue((*key).clone())),
                         _ => false,
                     };
                     if occupied {
@@ -329,26 +350,45 @@ impl<'a> super::Interpreter<'a> {
                     slot_idx,
                 } = obj
                 {
-                    if let (Some(name), Some(idx)) = (map_var.as_deref(), slot_idx) {
+                    if let Some(name) = map_var.as_deref() {
                         // Occupied — invoke closure with a SharedCell aliased
                         // to the slot value so `|v| { v += 1 }` mutates
                         // through. Read the cell back and write the result
-                        // into the Map slot.
+                        // into the slot. Map resolves the slot by `slot_idx`;
+                        // SortedMap (no positional slot) resolves it by KEY.
                         let f = args
                             .first()
                             .map(|a| self.eval_expr_inner(&a.value))
                             .unwrap_or(Value::Unit);
-                        if let Some(Value::Map(mut m)) = self.env.get(name) {
-                            if let Some((_, slot_v)) = m.get(idx) {
-                                let cell = Arc::new(Mutex::new(slot_v.clone()));
-                                let _ = self.invoke_function_value(
-                                    f,
-                                    vec![Value::SharedCell(cell.clone())],
-                                );
-                                let new_v = cell.lock().unwrap().clone();
-                                m[idx].1 = new_v;
-                                self.env.set(name, Value::Map(m));
+                        match self.env.get(name) {
+                            Some(Value::Map(mut m)) => {
+                                if let Some(idx) = slot_idx {
+                                    if let Some((_, slot_v)) = m.get(idx) {
+                                        let cell = Arc::new(Mutex::new(slot_v.clone()));
+                                        let _ = self.invoke_function_value(
+                                            f,
+                                            vec![Value::SharedCell(cell.clone())],
+                                        );
+                                        let new_v = cell.lock().unwrap().clone();
+                                        m[idx].1 = new_v;
+                                        self.env.set(name, Value::Map(m));
+                                    }
+                                }
                             }
+                            Some(Value::SortedMap(mut m)) => {
+                                let ok = OrdValue((*key).clone());
+                                if let Some(slot_v) = m.get(&ok) {
+                                    let cell = Arc::new(Mutex::new(slot_v.clone()));
+                                    let _ = self.invoke_function_value(
+                                        f,
+                                        vec![Value::SharedCell(cell.clone())],
+                                    );
+                                    let new_v = cell.lock().unwrap().clone();
+                                    m.insert(ok, new_v);
+                                    self.env.set(name, Value::SortedMap(m));
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     // Return self for chaining — vacant case is a no-op pass-

@@ -40700,6 +40700,40 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_sorted_map_entry_chain_key_ordered() {
+        // SortedMap reuses Map's KaracMap-backed entry chain (shared storage;
+        // ascending order applies only at iteration). The and_modify/or_insert
+        // count chain plus a trailing `or_insert(...).push(...)` mut-ref write
+        // all resolve through the same codegen as Map; `keys()` emits ascending.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut counts: SortedMap[String, i64] = SortedMap.new();
+    let words = ["pear", "fig", "pear", "apple", "fig", "pear"];
+    let mut i = 0i64;
+    while i < words.len() {
+        counts.entry(words[i].to_string()).and_modify(|c| { c += 1; }).or_insert(1);
+        i = i + 1;
+    }
+    let mut groups: SortedMap[i64, Vec[i64]] = SortedMap.new();
+    groups.entry(2_i64).or_insert(Vec.new()).push(20);
+    groups.entry(1_i64).or_insert_with(|| Vec.new()).push(10);
+    groups.entry(2_i64).or_insert(Vec.new()).push(40);
+    for k in counts.keys() {
+        println(f"{k}={counts.get_or(k.clone(), 0)}");
+    }
+    for g in groups.keys() {
+        println(f"g{g}={groups.get_or(g, Vec.new()).len()}");
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "apple=1\nfig=2\npear=3\ng1=1\ng2=2");
+        }
+    }
+
+    #[test]
     fn test_e2e_map_entry_or_insert_trailing_push() {
         // Canonical kata idiom from `design.md § Entry[K, V]`:
         // `bucket.entry(k).or_insert(Vec.new()).push(v)`.

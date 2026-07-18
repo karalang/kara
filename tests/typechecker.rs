@@ -774,6 +774,23 @@ fn test_entry_and_modify_returns_entry_for_chaining() {
 }
 
 #[test]
+fn test_sorted_map_entry_chain_typechecks() {
+    // SortedMap.entry(k) returns Entry[K, V] just like Map (shared storage;
+    // ordering only affects iteration), so the full and_modify/or_insert /
+    // or_insert_with chain typechecks against a SortedMap receiver.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut m: SortedMap[String, i64] = SortedMap.new();\n\
+             let _e: Entry[String, i64] = m.entry(\"a\".to_string()).and_modify(|_v| {});\n\
+             m.entry(\"b\".to_string()).and_modify(|v| { v += 1; }).or_insert(1);\n\
+             let mut g: SortedMap[i64, Vec[i64]] = SortedMap.new();\n\
+             g.entry(1).or_insert(Vec.new()).push(9);\n\
+             g.entry(2).or_insert_with(|| Vec.new()).push(8);\n\
+         }",
+    );
+}
+
+#[test]
 fn test_entry_and_modify_chain_with_or_insert() {
     // The canonical pattern: and_modify chained into or_insert returns
     // `mut ref V` from the final or_insert.

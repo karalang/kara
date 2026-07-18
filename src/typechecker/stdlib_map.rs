@@ -708,6 +708,30 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 vec_kv
             }
+            "entry" => {
+                // `entry(key: K) -> Entry[K, V]` — the same insert-or-modify view
+                // as `Map.entry` (SortedMap shares Map's `KaracMap` storage;
+                // `entry` mutates that storage, which is order-independent, so the
+                // ascending-iteration wrapper is unaffected). Drives the
+                // or_insert / or_insert_with / and_modify chain via
+                // `infer_entry_method`, exactly as the Map path does.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("SortedMap.entry() expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    self.check_map_slot_arg(&k, &args[0]);
+                }
+                Type::Named {
+                    name: "Entry".to_string(),
+                    args: vec![k.clone(), v.clone()],
+                }
+            }
             _ => self.require_known_method(
                 "SortedMap",
                 method,
@@ -716,6 +740,7 @@ impl<'a> super::TypeChecker<'a> {
                     "clear",
                     "contains_key",
                     "entries",
+                    "entry",
                     "floor",
                     "get",
                     "get_or",

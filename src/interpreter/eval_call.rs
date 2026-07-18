@@ -2138,16 +2138,30 @@ impl<'a> super::Interpreter<'a> {
         let Some(name) = map_var else {
             return Value::Unit;
         };
-        let Some(Value::Map(mut m)) = self.env.get(&name) else {
-            return Value::Unit;
-        };
-        if !m.iter().any(|(k, _)| *k == key) {
-            m.push((key.clone(), default));
-        }
-        self.env.set(&name, Value::Map(m));
-        Value::MapSlotRef {
-            map_var: name,
-            key: Box::new(key),
+        match self.env.get(&name) {
+            Some(Value::Map(mut m)) => {
+                if !m.iter().any(|(k, _)| *k == key) {
+                    m.push((key.clone(), default));
+                }
+                self.env.set(&name, Value::Map(m));
+                Value::MapSlotRef {
+                    map_var: name,
+                    key: Box::new(key),
+                }
+            }
+            // SortedMap sibling: insert-if-absent into the BTreeMap by key, then
+            // hand back the same `MapSlotRef` shape (its get/set choke points are
+            // taught to resolve a SortedMap slot by key). Mirrors the Map arm.
+            Some(Value::SortedMap(mut m)) => {
+                m.entry(super::value::OrdValue(key.clone()))
+                    .or_insert(default);
+                self.env.set(&name, Value::SortedMap(m));
+                Value::MapSlotRef {
+                    map_var: name,
+                    key: Box::new(key),
+                }
+            }
+            _ => Value::Unit,
         }
     }
 
