@@ -3301,6 +3301,18 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
         let key = (call_span.offset, call_span.length);
+        // An ITERATOR-chain terminal (`vec![…].iter().sum()`) records its
+        // element type in `iter_terminal_elem_types` at this span; a genuine
+        // Tensor reduction never does (a Tensor `.sum()` is typed by the tensor
+        // path, not the Iterator protocol). Since the parser collapses a chain's
+        // call spans onto one key, a Vec iter source now also carries a
+        // `temp_recv_elem_types` entry at this span (B-2026-07-18-39) — without
+        // this guard the tensor path would misread that Vec as a Tensor and fail
+        // on `.iter()`. Decline so the iterator-chain sum/min/max intercept
+        // (which handles the Vec source) gets it.
+        if self.iter_terminal_elem_types.contains_key(&key) {
+            return Ok(None);
+        }
         let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() else {
             return Ok(None);
         };

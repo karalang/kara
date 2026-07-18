@@ -498,6 +498,30 @@ fn main() {
     }
 
     #[test]
+    fn asan_iter_chain_over_temporary_vec_source() {
+        // B-2026-07-18-39 — an iterator chain over a TEMPORARY Vec source
+        // (`vec![…].iter()…`) materializes the literal into a fresh temp Vec that
+        // codegen must free after the loop drains it. A scalar-element source has
+        // only the buffer to free; a STRING-element source must also free each
+        // per-element String buffer. Both must be LSan-clean.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let n: i64 = vec![1, 2, 3, 4].iter().sum();
+    println(n);
+    let mut c = 0;
+    for s in vec!["alpha", "beta", "gamma"].iter() {
+        c = c + 1;
+    }
+    println(c);
+}
+"#,
+            &["10", "3"],
+            "asan_iter_chain_over_temporary_vec_source",
+        );
+    }
+
+    #[test]
     fn asan_autograd_tensor_valued_module() {
         // The full `std.autograd` tensor-valued surface end-to-end: leaf copies,
         // the fresh-local value/grad pushes, the `backward` accumulation, and the
@@ -14403,7 +14427,7 @@ fn main() { let n = build(); println(firstn(n)); }
 
     #[test]
     fn asan_self_field_move_out_tail_return_no_double_free() {
-        // B-2026-07-18-37: a by-value-`self` method returning a heap field as its
+        // B-2026-07-18-39: a by-value-`self` method returning a heap field as its
         // tail (`fn get(self) -> String { self.v }`) — `self.v` is
         // `FieldAccess { object: SelfValue }`, which the tail-return field-move-out
         // suppression missed (it only matched `Identifier`), so `self`'s

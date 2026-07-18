@@ -2399,7 +2399,7 @@ mod codegen_tests {
 
     #[test]
     fn e2e_self_field_move_out_tail_return_no_double_free() {
-        // B-2026-07-18-37: a by-value-`self` method returning a HEAP field
+        // B-2026-07-18-39: a by-value-`self` method returning a HEAP field
         // directly as the tail (`fn get(self) -> String { self.v }`) double-freed
         // under AOT — `self.v` parses as `FieldAccess { object: SelfValue, .. }`,
         // not `Identifier("self")`, so the tail-return field-move-out suppression
@@ -11381,6 +11381,41 @@ fn main() {
              }",
         ) {
             assert_eq!(out, "10 20 30\n1 0 0\n105 207 20 30\n1 2 3\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_iter_chain_over_temporary_vec_source() {
+        // B-2026-07-18-39 — an iterator chain whose SOURCE is a TEMPORARY Vec (a
+        // `vec![…]` literal or a call result, NOT a `let`-bound variable)
+        // silently miscompiled to 0/empty: the typechecker only recorded the
+        // fresh-temp element type for Call/MethodCall `.iter()` receivers, so a
+        // `PrefixCollectionLiteral` source left `temp_recv_elem_types` empty and
+        // codegen's `try_compile_for_vec_value` skipped the loop body. The `sum`/
+        // `min`/`max`/`prod` terminals additionally got mis-stolen by the tensor
+        // full-reduce path once the temp entry existed (both key on the collided
+        // chain span); an iterator terminal is now distinguished by its
+        // `iter_terminal_elem_types` entry so the tensor path declines. Every
+        // reduce terminal + the bare `for` loop must match the interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println(vec![1, 2, 3].iter().sum());\n\
+                 println(vec![1, 2, 3, 4].iter().product());\n\
+                 println(vec![1, 2, 3].iter().fold(0, |a, x| a + x));\n\
+                 println(vec![1, 2, 3, 4].iter().count());\n\
+                 match vec![1, 5, 3].iter().max() { Some(m) => println(m), None => println(-1) }\n\
+                 match vec![4, 1, 3].iter().min() { Some(m) => println(m), None => println(-1) }\n\
+                 println(vec![1, 2, 3].iter().map(|x| x * 2).sum());\n\
+                 println(vec![1, 2, 3, 4].iter().filter(|x| x % 2 == 0).sum());\n\
+                 println(vec![1, 2, 3].into_iter().sum());\n\
+                 let mut n = 0;\n\
+                 for x in vec![10, 20, 30].iter() { n = n + x; }\n\
+                 println(n);\n\
+             }",
+        ) {
+            // sum=6, product=24, fold=6, count=4, max=5, min=1,
+            // map(*2).sum=12, filter(even).sum=6, into_iter.sum=6, for-loop=60
+            assert_eq!(out, "6\n24\n6\n4\n5\n1\n12\n6\n6\n60\n");
         }
     }
 

@@ -1794,10 +1794,23 @@ impl<'a> super::TypeChecker<'a> {
         // stays scalar-only — a distinct follow-on. Other heap elements
         // (`Vec[T]`, user struct/enum, Map/Set) need element-drop threading
         // (`elem_agg_drop`) the helper doesn't carry — also follow-ons.
-        if matches!(
+        let recv_is_call = matches!(
             &object.kind,
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
-        ) {
+        );
+        // A fresh COLLECTION-LITERAL temp (`vec![1,2,3].iter()`, `[…].iter()`)
+        // is neither a Call nor a MethodCall, so the block below never recorded
+        // its element type — and codegen's temp-source for-loop / reduce-terminal
+        // path (`try_compile_for_vec_value`) then found no `temp_recv_elem_types`
+        // entry and SILENTLY skipped the loop body (output 0 vs the interpreter;
+        // B-2026-07-18-39). Accept a collection-literal receiver too, but ONLY
+        // for the `iter`/`into_iter` arm — the read-method arms (`get`/`first`/
+        // `last`/`contains`) keep their call-receiver-only behavior unchanged.
+        let recv_is_coll_lit = matches!(
+            &object.kind,
+            ExprKind::PrefixCollectionLiteral { .. } | ExprKind::ArrayLiteral(_)
+        );
+        if recv_is_call || recv_is_coll_lit {
             let elem = match &obj_ty {
                 Type::Named { name, args }
                     if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
@@ -1872,15 +1885,16 @@ impl<'a> super::TypeChecker<'a> {
                     &resolved,
                     Type::Named { name, args } if args.is_empty() && self.env.enums.contains_key(name)
                 );
-                let record = (is_scalar
-                    && matches!(
-                        method,
-                        "get" | "first" | "last" | "get_unchecked" | "contains"
-                    ))
-                    || (is_string && matches!(method, "get" | "first" | "last" | "contains"))
-                    || (is_pod_vec && matches!(method, "get" | "first" | "last"))
-                    || (is_user_struct && matches!(method, "get" | "first" | "last"))
-                    || (is_user_enum && matches!(method, "get" | "first" | "last"))
+                let record = (recv_is_call
+                    && ((is_scalar
+                        && matches!(
+                            method,
+                            "get" | "first" | "last" | "get_unchecked" | "contains"
+                        ))
+                        || (is_string && matches!(method, "get" | "first" | "last" | "contains"))
+                        || (is_pod_vec && matches!(method, "get" | "first" | "last"))
+                        || (is_user_struct && matches!(method, "get" | "first" | "last"))
+                        || (is_user_enum && matches!(method, "get" | "first" | "last"))))
                     // `for x in make_vec().iter()` / `.into_iter()` — a fresh-temp
                     // receiver iterated in a for-loop. The element type drives the
                     // same materialize-iterate-drop path as the read methods, but
