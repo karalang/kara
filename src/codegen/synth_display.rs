@@ -2260,4 +2260,50 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         Ok(Some(self.render_via_display_fn(disp, val_ptr)))
     }
+
+    /// B-2026-07-18-14: render a WHOLE anonymous-tuple value (`f"{t}"` /
+    /// `println(t)` where `t: (i64, i64)` / `(i64, String)`) via its
+    /// element-wise Display fn (`emit_tuple_display_fn`), matching the
+    /// interpreter's `(a, b)` format. Keys off the span-addressed
+    /// `display_tuple_types` table (forwarded from the typechecker's
+    /// `expr_types`), so a tuple variable and a tuple call-result are handled
+    /// uniformly. Non-place values (a call result) are spilled to an alloca so
+    /// the append-form Display fn has a pointer to load the aggregate from; a
+    /// variable already has a slot. Returns `None` when `e` is not tuple-typed
+    /// (caller falls through). Field-index interpolation (`f"{t.0}"`) never
+    /// reaches here — it lowers as an ordinary scalar/field part.
+    pub(super) fn try_compile_tuple_display(
+        &mut self,
+        e: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        let key = (e.span.offset, e.span.length);
+        let Some(tuple_te) = self.display_tuple_types.get(&key).cloned() else {
+            return Ok(None);
+        };
+        let TypeKind::Tuple(elems) = &tuple_te.kind else {
+            return Ok(None);
+        };
+        if elems.is_empty() {
+            return Ok(None);
+        }
+        let disp = self.emit_tuple_display_fn(elems);
+        // A variable already has a slot; spill a non-place value (call/method
+        // result) so the Display fn can GEP the aggregate through a pointer.
+        let val_ptr = if let ExprKind::Identifier(n) = &e.kind {
+            self.variables.get(n.as_str()).map(|s| s.ptr)
+        } else {
+            None
+        };
+        let val_ptr = match val_ptr {
+            Some(p) => p,
+            None => {
+                let val = self.compile_expr(e)?;
+                let fn_val = self.current_fn.unwrap();
+                let slot = self.create_entry_alloca(fn_val, "tuple.disp.tmp", val.get_type());
+                self.builder.build_store(slot, val).unwrap();
+                slot
+            }
+        };
+        Ok(Some(self.render_via_display_fn(disp, val_ptr)))
+    }
 }

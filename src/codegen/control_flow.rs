@@ -748,6 +748,16 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(zero.into());
         }
 
+        // Whole-tuple arm — `println(t)` where `t: (i64, i64)` — render via the
+        // element-wise tuple Display fn (`(a, b)`, matching the interpreter),
+        // then print + free the owning buffer. Precedes the struct-value error
+        // arms below, which would otherwise reject the anonymous tuple aggregate
+        // (B-2026-07-18-14).
+        if let Some((_acc, sval)) = self.try_compile_tuple_display(&args[0].value)? {
+            self.emit_print_and_free_string(sval, nl);
+            return Ok(zero.into());
+        }
+
         // User `impl Display` (a compiled `<Type>.to_string`) wins over every
         // built-in renderer below — render `println(x)` via the user method,
         // matching `f"{x}"` / `x.to_string()` and the interpreter. The owning

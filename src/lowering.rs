@@ -206,6 +206,24 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // Forward the full anonymous-tuple `TypeExpr` of every tuple-typed
+    // expression, keyed by span, so codegen can render a WHOLE tuple value in
+    // an f-string / `println` (`f"{t}"`, `println(pair)`) via
+    // `emit_tuple_display_fn` — matching the interpreter's `(a, b)` format
+    // (B-2026-07-18-14). Span-keyed so a tuple variable and a tuple call-result
+    // (`println(sorted.min())` → `Option[(K,V)]`'s payload) are handled
+    // uniformly. Empty tuples (unit) are excluded — they have their own
+    // rendering path.
+    program.display_tuple_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Tuple(elems) if !elems.is_empty() => {
+                Some(((k.0, k.1), TypeChecker::type_to_type_expr(ty)))
+            }
+            _ => None,
+        })
+        .collect();
     // Inner `T` of every `Secret[T]`-typed expression, keyed by span. A
     // `.ct_eq(...)` call's result is a plain `bool`, so — unlike a borrow
     // accessor — it leaves no entry in `ref_return_inner_types` for codegen to

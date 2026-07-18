@@ -2370,6 +2370,34 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_whole_tuple_display_matches_interpreter() {
+        // B-2026-07-18-14: interpolating / printing a WHOLE tuple value (`f"{t}"`,
+        // `println(t)`) passed `karac check` and rendered `(3, 7)` in the
+        // interpreter but FAILED codegen with the misleading "bind ... to a `let`
+        // first" struct-Display error — the last codegen-vs-interpreter Display
+        // divergence. Codegen now routes a tuple-typed interpolation/print
+        // operand through the element-wise `emit_tuple_display_fn` (`(a, b)`
+        // format). Covers scalar, String-element, mixed, nested, and call-result
+        // tuples, at both the f-string and println sites.
+        if let Some(out) = run_program(
+            "fn pair() -> (i64, i64) { (5, 6) }\n\
+             fn main() {\n\
+                 let t: (i64, i64) = (3, 7);\n\
+                 println(f\"{t}\");\n\
+                 println(t);\n\
+                 let s: (i64, String) = (1, \"hi\");\n\
+                 println(f\"s={s}\");\n\
+                 let n: (i64, (i64, i64)) = (1, (2, 3));\n\
+                 println(n);\n\
+                 println(pair());\n\
+                 println(f\"{t.0} {t.1}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "(3, 7)\n(3, 7)\ns=(1, hi)\n(1, (2, 3))\n(5, 6)\n3 7\n");
+        }
+    }
+
+    #[test]
     fn e2e_assert_two_arg_message_form_compiles_and_runs() {
         // B-2026-07-18-26: the 2-arg `assert(cond, "msg")` form (accepted by
         // the typechecker + interpreter, and emitted by the compiler for tensor

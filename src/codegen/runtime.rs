@@ -7293,6 +7293,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_int_value();
             return Ok((data, len));
         }
+        // Whole-tuple interpolation (`f"{t}"` where `t: (i64, i64)`) → render via
+        // the element-wise tuple Display fn, `(a, b)`-formatted to match the
+        // interpreter. Must precede the struct-value fallback / error arms below,
+        // which would otherwise mis-handle the anonymous tuple aggregate
+        // (B-2026-07-18-14). The rendered buffer is scope-tracked so it survives
+        // the outer f-string's memcpy and frees once at scope exit.
+        if let Some((acc, sval)) = self.try_compile_tuple_display(e)? {
+            let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
+            self.track_vec_var(acc, Some(u8_ty));
+            let s = sval.into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(s, 0, "fstr.tup.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(s, 1, "fstr.tup.len")
+                .unwrap()
+                .into_int_value();
+            return Ok((data, len));
+        }
         let is_char = self.expr_is_char(e);
         let val = self.compile_expr(e)?;
         if is_char {
