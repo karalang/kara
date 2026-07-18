@@ -65269,6 +65269,26 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_stats_on_slice() {
+        // B-2026-07-18-12: `Stats.*` on a `Slice[f64]` (`v.as_slice()`, the
+        // declared `ref Slice[f64]` param's canonical form). Codegen already read
+        // the slice correctly; this pins run==build parity now that the
+        // interpreter's arg extraction handles `Value::Slice` too (it previously
+        // read a slice as empty → sum -0 / mean panic — a run-vs-build divergence).
+        let out = run_program(
+            "fn main() {\n\
+                 let v: Vec[f64] = vec![3.0, 1.0, 4.0];\n\
+                 let sl: Slice[f64] = v.as_slice();\n\
+                 println(Stats.sum(sl));\n\
+                 println(Stats.mean(sl));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "8\n2.6666666666666665\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_stats_even_median_and_fresh_temp_arg() {
         // Even-count median averages the two middles; a fresh `vec![…]` temp
         // argument is read then freed (the owned-temp leak guard — see the

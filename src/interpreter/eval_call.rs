@@ -861,6 +861,22 @@ impl<'a> super::Interpreter<'a> {
                     let elems: Vec<Value> = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {
                             Value::Array(rc) => rc.read().unwrap().clone(),
+                            // A `Slice[T]` argument (`Stats.mean(v.as_slice())`,
+                            // or any borrowed sub-window) views `storage[start..
+                            // start+len]`. Without this arm a non-empty slice
+                            // fell to the `_ => vec![]` empty case, so every
+                            // `Stats.*` on a slice read ZERO elements — `sum` a
+                            // spurious 0/-0, `mean`/`median`/… a panic — while
+                            // codegen read the slice correctly (a run-vs-build
+                            // divergence, B-2026-07-18-12). The declared param
+                            // type is `ref Slice[f64]`, so a Slice arg is the
+                            // canonical form.
+                            Value::Slice {
+                                storage,
+                                start,
+                                len,
+                                ..
+                            } => storage.read().unwrap()[start..start + len].to_vec(),
                             _ => vec![],
                         }
                     } else {

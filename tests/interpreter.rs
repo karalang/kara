@@ -11693,6 +11693,23 @@ fn test_stats_mean() {
 }
 
 #[test]
+fn test_stats_on_slice() {
+    // B-2026-07-18-12: `Stats.*` on a `Slice[f64]` value (`v.as_slice()`, the
+    // declared `ref Slice[f64]` param's canonical form) read ZERO elements in
+    // the interpreter — the arg extraction only handled `Value::Array`, so a
+    // `Value::Slice` fell to the empty case (`sum` → -0, `mean` → panic) while
+    // codegen read the slice correctly. Now the interpreter views the slice's
+    // `storage[start..start+len]` range and matches `karac build`.
+    let output = run("fn main() {\n\
+             let v: Vec[f64] = vec![3.0, 1.0, 4.0];\n\
+             let sl: Slice[f64] = v.as_slice();\n\
+             println(Stats.sum(sl));\n\
+             println(Stats.mean(sl));\n\
+         }");
+    assert_eq!(output, "8\n2.6666666666666665\n");
+}
+
+#[test]
 fn test_stats_variance() {
     let output = run("fn main() { let xs = [2.0_f64, 4.0_f64, 4.0_f64, 4.0_f64, 5.0_f64, 5.0_f64, 7.0_f64, 9.0_f64]; println(Stats.variance(xs)); }");
     assert_eq!(output, "4\n");
