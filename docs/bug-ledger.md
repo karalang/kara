@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 146 | 0 |
+| miscompile | 147 | 0 |
 | leak | 84 | 0 |
 | codegen-gap | 61 | 1 |
 | double-free | 60 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 389 | 3 |
+| codegen | 390 | 3 |
 | typecheck | 64 | 0 |
 | interp | 52 | 1 |
 | ownership | 23 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **546 surfaced · 3 open · 539 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **547 surfaced · 3 open · 540 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -134,9 +134,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **546 surfaced 
 | B-2026-07-18-14 | 2026-07-18 | codegen+interp | low | Interpolating a WHOLE TUPLE value in an f-string / `println` (`f"{t}"` where `t: (i64, i64)` or `(i64, String)`) passes `karac check` and renders `(3, 7)` in the interpreter, but FAILS `karac build`/JIT with 'Display of a struct in an f-string is supported when the interpolated expression is a variable or field access … bind a struct literal or call result to a `let` first'. The hint is MISLEADING — `t` is already a let-bound variable, so following it does not help. Affects ALL tuple element types (scalar and heap). Field-index interpolation (`f"{t.0} {t.1}"`) works on every backend. | none |
 | B-2026-07-18-17 | 2026-07-18 | codegen | low | The typechecker does NOT propagate a method parameter's (substituted) expected type into the ARGUMENT's own inference, so a type-inferred constructor argument (`Vec.new()`, `Map.new()`, `"".to_string()`) whose element/type param must come from the callee's signature is left as `?T` and rejected: `m.get_or(k, Vec.new())` on `Map[String, Vec[i64]]` → `expected 'Vec<i64>', found 'Vec<?T0>'`. Expected-type propagation DOES work for free-function call arguments and let-bindings — only method-call arguments miss it. Common idiom (`map.get_or(k, Vec.new())`); workaround is to bind an annotated default first (`let d: Vec[i64] = Vec.new(); m.get_or(k, d)`). | none |
 
-### Fixed (539)
+### Fixed (540)
 
-<details><summary>539 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>540 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -679,6 +679,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **546 surfaced 
 | B-2026-07-18-15 | codegen | high | String accumulator built by `push(char)` in a counted loop was mis-lowered through the Vec TABULATE reduction path, overrunning the byte buffer by 3… | 90fe2ad |
 | B-2026-07-18-16 | codegen | medium | `<int>.parse(s)` / `<int>.from_str_radix(s, r)` / `f64.parse(s)` never freed their fresh-owned String ARGUMENT — a fresh-temp arg (`i64.parse("42".to… | 9ef97b4 |
 | B-2026-07-18-20 | codegen+interp | high | The whole `std.encoding` surface (`Base64`/`Hex` encode/decode, `Url` encode/decode) SILENTLY MISCOMPILED under `karac build` / `karac run` (JIT) | cb49f4f |
+| B-2026-07-18-21 | codegen | medium | Chained `arena.get(r).field` on a struct-element `Arena[T]` silently reads the `i64 0` placeholder instead of the stored field (AOT/JIT; interp corre… | 5c3f61f |
 
 </details>
 
