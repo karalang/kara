@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 149 | 0 |
 | leak | 84 | 0 |
+| codegen-gap | 62 | 0 |
 | double-free | 62 | 2 |
-| codegen-gap | 61 | 0 |
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
 | run-vs-build | 33 | 1 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 397 | 4 |
-| typecheck | 65 | 0 |
+| codegen | 398 | 4 |
+| typecheck | 66 | 0 |
 | interp | 53 | 0 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **558 surfaced · 4 open · 550 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **559 surfaced · 4 open · 551 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -135,9 +135,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **558 surfaced 
 | B-2026-07-18-31 | 2026-07-18 | codegen | high | A GENERIC function returning `Option[T]` from a Vec accessor (`v.first()` / `v.last()`), monomorphized with a HEAP `T` (`String`), DOUBLE-FREES under AOT (interp correct). `fn last[T](v: Vec[T]) -> Option[T] { v.last() }` called with `Vec[String]` -> `--interp` prints the element, `karac build`/JIT aborts `free(): double free detected in tcache 2`. Non-generic `Vec[String].last()` is CLEAN, and the same generic at `T = i64` is CLEAN — the defect is monomorphization of the Option[heap] payload's ownership/drop, not the accessor itself. | src/codegen/mono.rs |
 | B-2026-07-18-32 | 2026-07-18 | codegen | medium | A GENERIC function body that RECONSTRUCTS a struct with heap fields, monomorphized with a HEAP `T` (`String`), emits INVALID LLVM IR (interp correct). `fn swap[T](p: Pair[T]) -> Pair[T] { Pair { a: p.b, b: p.a } }` at `T = String` -> `--interp` swaps correctly, `karac build` fails 'Module verification failed: Invalid InsertValueInst operands!  %field = insertvalue { i64, i64 } undef, { ptr, i64, i64 } %b, 0'. The generic IDENTITY (`fn id[T](p: Pair[T]) -> Pair[T] { p }`) at `T = String` is CLEAN, and `swap` at `T = i64` is CLEAN — the defect is the struct-LITERAL construction inside a monomorph body using the generic BASE struct type (`{ i64, i64 }`) instead of the mono type (`{ {ptr,i64,i64} x2 }`). | src/codegen/types_lowering.rs |
 
-### Fixed (550)
+### Fixed (551)
 
-<details><summary>550 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>551 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -691,6 +691,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **558 surfaced 
 | B-2026-07-18-27 | effect | medium | Assigning a captured LOCAL `let mut` binding from inside a `par { }` branch is NOT caught by the concurrency-write checker, and produces DIVERGENT ru… | 3136b0f |
 | B-2026-07-18-28 | codegen | high | SILENT MISCOMPILE of the design-recommended Atomic-in-`par` escape hatch: a `par { }` block with 2+ branches that mutate a captured `Atomic[T]` write… | 3136b0f |
 | B-2026-07-18-30 | codegen | medium | A `ref Atomic[T]` FUNCTION PARAMETER does not mutate the caller's atomic under codegen — `fn bump(c: ref Atomic[i64]) { c.fetch_add(1, SeqCst); }` ca… | 6057527 |
+| B-2026-07-18-33 | typecheck+codegen | medium | `Option/Result.map` over a HEAP payload (String/Vec) now works under codegen, unblocked by fixing a chained-method span collision | 58a45ea,4b941dc |
 
 </details>
 
