@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 150 | 0 |
 | leak | 85 | 0 |
 | codegen-gap | 62 | 0 |
-| double-free | 61 | 0 |
+| double-free | 62 | 0 |
 | missing-feature | 47 | 0 |
 | false-positive | 36 | 0 |
 | run-vs-build | 33 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 399 | 0 |
+| codegen | 400 | 0 |
 | typecheck | 68 | 0 |
 | interp | 54 | 0 |
 | ownership | 23 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **562 surfaced · 0 open · 558 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **563 surfaced · 0 open · 559 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (558)
+### Fixed (559)
 
-<details><summary>558 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>559 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -694,6 +694,7 @@ _None — the ledger is fully drained._
 | B-2026-07-18-34 | codegen | high | A fresh owned/heap ARGUMENT temp passed to a predicate call inside a `while` CONDITION leaked one allocation PER ITERATION (unbounded) under AOT/JIT… | 7bcbd47 |
 | B-2026-07-18-35 | typecheck+interp | low | `SortedMap` lacked the `.entry()` API that `Map` has, so idiomatic ORDERED aggregation (`m.entry(k).and_modify(\|c\| c += 1).or_insert(1)`, `m.entry(k)… | 83ec9a5 |
 | B-2026-07-18-36 | codegen | medium | A CHAINED width-sensitive integer intrinsic (`x.leading_zeros().leading_zeros()`, also `rotate_left`/`count_ones` chains) miscompiled under codegen w… | a71708d |
+| B-2026-07-18-37 | codegen | high | A by-value-`self` method returning a HEAP field directly as its tail — `fn get(self) -> String { self.v }`, the canonical owned accessor — DOUBLE-FRE… | dbf8994 |
 
 </details>
 
