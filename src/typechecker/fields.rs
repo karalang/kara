@@ -13,7 +13,9 @@ use std::collections::{HashMap, HashSet};
 
 use super::const_eval::primitive_const_type;
 use super::env::StructInfo;
-use super::inference::{resolve_type_vars, substitute_type_params, unify_types};
+use super::inference::{
+    resolve_type_var_top, resolve_type_vars, substitute_type_params, unify_types,
+};
 use super::types::{SubstValue, Type, TypeVarId};
 use super::{
     extract_derived_traits, extract_must_use_message, find_struct_def,
@@ -592,6 +594,27 @@ impl<'a> super::TypeChecker<'a> {
         fields: &[FieldInit],
         span: &Span,
     ) -> Type {
+        self.infer_struct_literal_expected(path, fields, span, None)
+    }
+
+    /// Struct-literal inference, optionally seeded by the type-args of an
+    /// EXPECTED generic-struct type (`let b: Box[Vec[i64]] = Box { value:
+    /// Vec.new() }`). Without a seed, each struct type param becomes a fresh
+    /// metavar bound from the field values (the historical behavior). With a
+    /// seed whose arity matches the struct's generic params, each param is
+    /// pre-bound to the corresponding expected arg, so a field whose declared
+    /// type IS a type param (`value: T`) gets the concrete slot (`Vec[i64]`)
+    /// pushed into its value's `check_expr` — resolving a type-inferred
+    /// constructor argument (`Vec.new()` / `Map.new()` / `"".to_string()`)
+    /// that the field values alone leave as `?T` (B-2026-07-18-17). The
+    /// non-generic-struct path and the unseeded generic path are unchanged.
+    pub(super) fn infer_struct_literal_expected(
+        &mut self,
+        path: &[String],
+        fields: &[FieldInit],
+        span: &Span,
+        expected_type_args: Option<&[Type]>,
+    ) -> Type {
         let struct_name = path.last().cloned().unwrap_or_default();
 
         let struct_info = match self.env.structs.get(&struct_name) {
@@ -698,11 +721,26 @@ impl<'a> super::TypeChecker<'a> {
         // build an empty `param_subs` and behave exactly as before.
         let mut param_subs: HashMap<String, SubstValue> = HashMap::new();
         let mut id_to_name: HashMap<TypeVarId, String> = HashMap::new();
-        for p in &struct_info.generic_params {
-            let var = self.env.fresh_type_var();
-            if let Type::TypeVar(id) = var {
-                id_to_name.insert(id, p.clone());
-                param_subs.insert(p.clone(), SubstValue::Type(var));
+        // Seed the type params from the expected type's args when the caller
+        // supplied a matching-arity generic-struct expectation (B-2026-07-18-17):
+        // each param binds directly to its concrete expected arg, so the
+        // field-check below can push a concrete slot into a `value: T` field.
+        // Otherwise fall back to fresh metavars solved from the field values.
+        let seeded = expected_type_args
+            .filter(|a| a.len() == struct_info.generic_params.len() && !a.is_empty())
+            .is_some();
+        if seeded {
+            let args = expected_type_args.unwrap();
+            for (p, arg) in struct_info.generic_params.iter().zip(args.iter()) {
+                param_subs.insert(p.clone(), SubstValue::Type(arg.clone()));
+            }
+        } else {
+            for p in &struct_info.generic_params {
+                let var = self.env.fresh_type_var();
+                if let Type::TypeVar(id) = var {
+                    id_to_name.insert(id, p.clone());
+                    param_subs.insert(p.clone(), SubstValue::Type(var));
+                }
             }
         }
 
@@ -719,11 +757,32 @@ impl<'a> super::TypeChecker<'a> {
             if let Some((_, expected_ty, _)) =
                 struct_info.fields.iter().find(|(n, _, _)| n == &f.name)
             {
+                // Push the param-substituted field slot into the value's
+                // `check_expr` when it is CONCRETE — i.e. a seeded expected arg
+                // (`value: T` slot resolves to `Vec[i64]`, so `Vec.new()` infers
+                // its element) — otherwise the raw declared type. A slot that is
+                // still a bare metavar / type param (the unseeded solve-from-args
+                // path) must NOT be pushed: `check_expr` against an unresolved
+                // `?T` reports a spurious mismatch rather than binding, so keep
+                // the historical `check_expr` against the raw declared type there
+                // (the param binds via the post-check unify below).
+                let raw = expected_ty.clone();
+                let push_ty = if param_subs.is_empty() {
+                    raw.clone()
+                } else {
+                    let sub = substitute_type_params(&raw, &param_subs);
+                    let resolved = resolve_type_var_top(&sub, &self.env.substitutions);
+                    if matches!(resolved, Type::TypeVar(_) | Type::TypeParam(_)) {
+                        raw.clone()
+                    } else {
+                        resolved
+                    }
+                };
                 // `check_expr` returns the (compatible) EXPECTED type — for a
                 // generic field that is the bare `TypeParam`, not the value's
                 // concrete type — so read the value's recorded synthesized type
                 // back for the param-binding unify.
-                self.check_expr(&f.value, &expected_ty.clone());
+                self.check_expr(&f.value, &push_ty);
                 if !param_subs.is_empty() {
                     if let Some(actual) = self
                         .expr_types

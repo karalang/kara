@@ -717,6 +717,50 @@ fn test_map_constructor_default_arg_infers_from_concrete_value_slot() {
 }
 
 #[test]
+fn test_generic_struct_literal_field_infers_from_annotation() {
+    // B-2026-07-18-17 (general leg): a type-inferred constructor argument in a
+    // GENERIC struct literal field (`Box[T] { value: Vec.new() }`) must resolve
+    // its element from the LET-annotation's type arg (`Box[Vec[i64]]`) — the
+    // struct's `T` is seeded from the expected type so the field's `value: T`
+    // slot pushes `Vec[i64]` into `Vec.new()`. Previously the field values
+    // alone left it `Box[Vec[?T]]`, and a downstream generic method call
+    // (`b.replace(Vec.new())`) then failed. The non-generic-struct-field
+    // push-down (`Holder { items: Vec.new() }`) already worked; this pins the
+    // generic-struct analog.
+    typecheck_ok(
+        "struct Box[T] { value: T }\n\
+         fn main() {\n\
+             let b: Box[Vec[i64]] = Box { value: Vec.new() };\n\
+             let _n: i64 = b.value.len();\n\
+         }",
+    );
+    // End-to-end: the seeded element flows into a generic method whose param is
+    // the struct's type param, so a `Vec.new()` argument infers `Vec[i64]`.
+    typecheck_ok(
+        "struct Box[T] { value: T }\n\
+         impl[T] Box[T] {\n\
+             fn replace(mut ref self, v: T) -> T { let old = self.value; self.value = v; old }\n\
+         }\n\
+         fn main() {\n\
+             let mut b: Box[Vec[i64]] = Box { value: Vec.new() };\n\
+             let old = b.replace(Vec.new());\n\
+             let _n: i64 = old.len();\n\
+         }",
+    );
+    // Guard: the UNSEEDED path (no annotation — element solved purely from the
+    // field value) must still infer correctly and not regress.
+    typecheck_ok(
+        "struct Box[T] { value: T }\n\
+         fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(3);\n\
+             let b = Box { value: v };\n\
+             let _n: i64 = b.value.len();\n\
+         }",
+    );
+}
+
+#[test]
 fn test_entry_and_modify_returns_entry_for_chaining() {
     // `and_modify(f: Fn(mut ref V)) -> Entry[K, V]`. The bare and_modify
     // (without further chaining) returns Entry[K, V] so subsequent

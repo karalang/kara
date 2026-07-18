@@ -654,6 +654,39 @@ impl<'a> super::TypeChecker<'a> {
             return ty;
         }
 
+        // Generic struct literal at check position (B-2026-07-18-17): seed the
+        // struct's type params from the expected type's args so a field whose
+        // declared type is a struct type param (`Box[T] { value: Vec.new() }` at
+        // `Box[Vec[i64]]`) gets the concrete slot pushed into its value's check,
+        // resolving a type-inferred constructor arg the field values alone leave
+        // as `?T`. Gated to a PLAIN generic struct whose name and arity match the
+        // expectation and with no spread — enum-variant `StructLiteral` paths
+        // (whose head names an enum, not a struct) and shared/`par` structs
+        // (non-generic at v1) fall through to the unseeded inference below.
+        if let ExprKind::StructLiteral {
+            path,
+            fields,
+            spread: None,
+        } = &expr.kind
+        {
+            if let Type::Named { name, args } = expected {
+                let sname = path.last().map(String::as_str).unwrap_or("");
+                if name == sname
+                    && self.env.structs.get(sname).is_some_and(|si| {
+                        !si.is_shared
+                            && !si.is_par
+                            && !si.generic_params.is_empty()
+                            && si.generic_params.len() == args.len()
+                    })
+                {
+                    let ty =
+                        self.infer_struct_literal_expected(path, fields, &expr.span, Some(args));
+                    self.record_expr_type(&expr.span, &ty);
+                    return ty;
+                }
+            }
+        }
+
         let actual = self.infer_expr(expr);
         // Expected-type-driven generic resolution: when a generic call's
         // return type came back as `TypeParam(T)` (the solver had no arg
