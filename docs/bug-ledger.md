@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 148 | 1 |
 | leak | 84 | 0 |
-| codegen-gap | 61 | 1 |
+| codegen-gap | 61 | 0 |
 | double-free | 60 | 0 |
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 393 | 3 |
+| codegen | 393 | 2 |
 | typecheck | 65 | 0 |
 | interp | 53 | 0 |
 | ownership | 23 | 0 |
@@ -124,20 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **554 surfaced · 4 open · 546 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **554 surfaced · 3 open · 547 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-18-13 | 2026-07-18 | codegen | high | Kata #415 add_strings measures 13.4x equal-safety Rust TODAY (89.1B vs 6.25B instrs, ~178K instr per 38-digit addition) — catastrophically worse than the 1.19x recorded in the June triage that B-2026-07-18-8 quoted. Kata file unchanged since its first-bench commit, so either the June number measured a different lane or a compiler regression landed in the past month. UNATTRIBUTED. | docs/implementation_checklist/phase-10-targets.md § 'String char-append residual' (same entry — this row carries the #415 outlier) |
 | B-2026-07-18-17 | 2026-07-18 | codegen | low | [PARTIALLY FIXED — Map/SortedMap builtin leg] The typechecker did NOT propagate a method parameter's (substituted) expected type into the ARGUMENT's own inference, so a type-inferred constructor argument (`Vec.new()`, `Map.new()`, `"".to_string()`) whose element/type param must come from the callee's signature was left as `?T` and rejected. FIXED for the flagship Map/SortedMap idiom (`m.get_or(k, Vec.new())` / `m.insert(k, Vec.new())`); STILL OPEN for the general user-generic-method arg case (`Box[Vec[i64]].replace(Vec.new())`). Free-function call args always inferred fine (expected-type-directed). | none |
 | B-2026-07-18-27 | 2026-07-18 | effect | medium | Assigning a captured LOCAL `let mut` binding from inside a `par { }` branch is NOT caught by the concurrency-write checker, and produces DIVERGENT run-vs-build garbage. `fn main() { let mut a = 0; let mut b = 0; par { a = 10; b = 20; } print(a + b); }` passes `karac check` but yields interp=20 (only the last branch's env merges back: a=0,b=20) vs build=0 (no write-back: a=0,b=0) — neither is the naive 30, and the two backends disagree. The design's data-race-freedom guarantee (design.md line 104) and the par-write rule (design.md line 1329) intend such a write to be a COMPILE ERROR unless the binding is Atomic/Mutex/RwLock/Arc. | src/effectchecker/modbind_synth.rs |
 | B-2026-07-18-28 | 2026-07-18 | codegen | high | SILENT MISCOMPILE of the design-recommended Atomic-in-`par` escape hatch: a `par { }` block with 2+ branches that mutate a captured `Atomic[T]` writes back NONE of the mutations under codegen. `fn main() { let c = Atomic.new(0); par { c.fetch_add(1, MemoryOrdering.SeqCst); c.fetch_add(1, MemoryOrdering.SeqCst); } print(c.load(MemoryOrdering.SeqCst)); }` prints 2 under `karac run --interp` but 0 under `karac run` / `karac build`. design.md line 1329 explicitly directs programmers to wrap par-mutated state in `Atomic[T]`/`Mutex[T]` — so this is the SANCTIONED pattern producing a wrong answer, silently, with no diagnostic. | src/codegen/par_blocks.rs |
 
-### Fixed (546)
+### Fixed (547)
 
-<details><summary>546 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>547 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -677,6 +676,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **554 surfaced 
 | B-2026-07-18-10 | codegen | high | `Tensor.{from,zeros,ones,full}` in an ARGUMENT position laid its data out at the literal's DEFAULT element width (f64 for `-1.0`, i64 for `1`) rather… | 5fa16cb |
 | B-2026-07-18-11 | typecheck+codegen | medium | `OnceLock[T].get().unwrap_or(<value>)` fails the LLVM verifier and `.unwrap()` faults at run time (interp fine) — the `Option[ref T]` payload from a… | 162a13f |
 | B-2026-07-18-12 | interp | medium | `Stats.*` on a `Slice[T]` value (`Stats.mean(v.as_slice())`, the declared `ref Slice[f64]` param's canonical form) read ZERO elements in the tree-wal… | c3b28ef |
+| B-2026-07-18-13 | codegen | high | [RESOLVED — re-measured at parity] Kata #415 add_strings recorded 13.4x equal-safety Rust at filing (89.1B vs 6.25B instrs) | 90fe2ad (attributed, not bisected — B-2026-07-18-15, the String push/push_str accumulator mis-lowered through the Vec TABULATE path; same window + same shape as this kata's string-building loops) |
 | B-2026-07-18-14 | codegen+interp | low | Interpolating a WHOLE TUPLE value in an f-string / `println` (`f"{t}"` where `t: (i64, i64)` or `(i64, String)`) passes `karac check` and renders `(3… | f882072 |
 | B-2026-07-18-15 | codegen | high | String accumulator built by `push(char)` in a counted loop was mis-lowered through the Vec TABULATE reduction path, overrunning the byte buffer by 3… | 90fe2ad |
 | B-2026-07-18-16 | codegen | medium | `<int>.parse(s)` / `<int>.from_str_radix(s, r)` / `f64.parse(s)` never freed their fresh-owned String ARGUMENT — a fresh-temp arg (`i64.parse("42".to… | 9ef97b4 |
