@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 150 | 0 |
+| miscompile | 151 | 0 |
 | leak | 85 | 0 |
 | double-free | 63 | 1 |
 | codegen-gap | 62 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 401 | 1 |
-| typecheck | 68 | 0 |
+| codegen | 402 | 1 |
+| typecheck | 69 | 0 |
 | interp | 54 | 0 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **564 surfaced · 1 open · 559 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **565 surfaced · 1 open · 560 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **564 surfaced 
 |---|---|---|---|---|---|
 | B-2026-07-18-38 | 2026-07-18 | codegen | medium | An owned HEAP param (or local) moved into a VEC/ARRAY LITERAL that is returned/bound DOUBLE-FREES under AOT (interp correct): `fn dup(x: String) -> Vec[String] { [x] }` -> `--interp` builds `["z"]`, `karac build`/JIT aborts `free(): double free`. Every OTHER move-out sink is clean — `fn f(x: String) -> String { x }` (direct return), `W { s: x }` (struct literal), `(x, 1)` (tuple), `Some(x)` (Option), and `Vec.new() + v.push(x)` all correctly transfer ownership; the array/vec LITERAL element position is the one sink that does not suppress the moved element source. | src/codegen/collections.rs |
 
-### Fixed (559)
+### Fixed (560)
 
-<details><summary>559 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>560 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -697,6 +697,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **564 surfaced 
 | B-2026-07-18-35 | typecheck+interp | low | `SortedMap` lacked the `.entry()` API that `Map` has, so idiomatic ORDERED aggregation (`m.entry(k).and_modify(\|c\| c += 1).or_insert(1)`, `m.entry(k)… | 83ec9a5 |
 | B-2026-07-18-36 | codegen | medium | A CHAINED width-sensitive integer intrinsic (`x.leading_zeros().leading_zeros()`, also `rotate_left`/`count_ones` chains) miscompiled under codegen w… | a71708d |
 | B-2026-07-18-37 | codegen | high | A by-value-`self` method returning a HEAP field directly as its tail — `fn get(self) -> String { self.v }`, the canonical owned accessor — DOUBLE-FRE… | dbf8994 |
+| B-2026-07-18-39 | typecheck+codegen | high | An iterator chain whose SOURCE is a TEMPORARY Vec (a `vec![…]` literal or a call result, NOT a `let`-bound variable) SILENTLY miscompiled to 0/empty… | 8f70020 |
 
 </details>
 
