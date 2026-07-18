@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 151 | 0 |
 | leak | 85 | 0 |
-| double-free | 63 | 0 |
-| codegen-gap | 62 | 0 |
+| double-free | 64 | 0 |
+| codegen-gap | 63 | 1 |
 | missing-feature | 48 | 1 |
 | false-positive | 36 | 0 |
 | run-vs-build | 34 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 404 | 1 |
+| codegen | 406 | 2 |
 | typecheck | 70 | 1 |
 | interp | 55 | 1 |
 | ownership | 23 | 0 |
@@ -124,17 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **567 surfaced · 1 open · 562 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **569 surfaced · 2 open · 563 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-18-41 | 2026-07-18 | typecheck+interp+codegen | low | `Iterator.rev()` was unimplemented — `v.iter().rev()` rejected with `no method 'rev' on type 'Iterator'` in both backends. Now shipped for the typechecker + interpreter (`v.iter().rev()`, composing with adaptors on both sides and any terminal/for-loop); CODEGEN is DEFERRED with a loud `--interp` bail (status stays OPEN for the codegen leg). | src/codegen/method_call.rs |
+| B-2026-07-18-43 | 2026-07-18 | codegen | medium | A closure that captures a Vec and RETURNS it, then the result is INDEXED, fails codegen with `Index operator applied to non-array type` (interp correct): `fn f(v: Vec[i64]) -> i64 { let g = || v; g()[1] }` and the local-capture sibling `let v = [1,2,3]; let g = || v; g()[0]`. The closure-call result's element/Vec type is not tracked, so `g()[i]` doesn't recognize the return as a Vec. `g().len()` (non-index) on the same shape WORKS, so it is specifically the index-into-closure-call-result type inference that is missing. | src/codegen/closures.rs |
 
-### Fixed (562)
+### Fixed (563)
 
-<details><summary>562 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>563 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -700,6 +701,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **567 surfaced 
 | B-2026-07-18-38 | codegen | medium | An owned HEAP param (or local) moved into a VEC/ARRAY LITERAL that is returned/bound DOUBLE-FREES under AOT (interp correct): `fn dup(x: String) -> V… | 2d60d38 |
 | B-2026-07-18-39 | typecheck+codegen | high | An iterator chain whose SOURCE is a TEMPORARY Vec (a `vec![…]` literal or a call result, NOT a `let`-bound variable) SILENTLY miscompiled to 0/empty… | 8f70020 |
 | B-2026-07-18-40 | codegen | medium | Displaying `Option[ref String]` — the borrow-typed result of `Vec[String].get(i)` / `.first()` / `.last()` — failed under codegen with the deferred s… | 6c76b81 |
+| B-2026-07-18-42 | codegen | high | A closure that CAPTURES a whole heap String/Vec and RETURNS it double-frees under AOT/JIT (interp correct): `fn f(x: String) -> String { let g = \|\| x… | f96d2f2 |
 
 </details>
 
