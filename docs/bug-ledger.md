@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 149 | 0 |
 | leak | 85 | 0 |
 | codegen-gap | 62 | 0 |
-| double-free | 61 | 1 |
+| double-free | 61 | 0 |
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
 | run-vs-build | 33 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 398 | 1 |
+| codegen | 398 | 0 |
 | typecheck | 67 | 0 |
 | interp | 53 | 0 |
 | ownership | 23 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **560 surfaced · 1 open · 555 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **560 surfaced · 0 open · 556 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-18-29 | 2026-07-18 | codegen | high | REBUILDING or RE-WRAPPING a match-bound shared-enum payload node double-frees under AOT (interp correct): both `MethodCall(MethodCallExpr { object, method, args, span })` from freshly-destructured parts AND the minimal `MethodCall(mc)` re-wrap of the UNTOUCHED bound payload crash the selfhost emitter generator with free(): double free. The `mc.method.clone()` peek + re-wrap combo also crashes; only full single-destructure + passing the PARTS to a helper (never reconstructing an Expr node) is clean. | — |
+_None — the ledger is fully drained._
 
-### Fixed (555)
+### Fixed (556)
 
-<details><summary>555 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>556 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -688,6 +686,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **560 surfaced 
 | B-2026-07-18-26 | codegen+interp | low | The 2-arg `assert(cond, "msg")` form — accepted by the typechecker, run by the interpreter, and emitted by the COMPILER itself for tensor shape-check… | 8c2cfc4 |
 | B-2026-07-18-27 | effect | medium | Assigning a captured LOCAL `let mut` binding from inside a `par { }` branch is NOT caught by the concurrency-write checker, and produces DIVERGENT ru… | 3136b0f |
 | B-2026-07-18-28 | codegen | high | SILENT MISCOMPILE of the design-recommended Atomic-in-`par` escape hatch: a `par { }` block with 2+ branches that mutate a captured `Atomic[T]` write… | 3136b0f |
+| B-2026-07-18-29 | codegen | high | REBUILDING or RE-WRAPPING a match-bound shared-enum payload node double-frees under AOT (interp correct): both `MethodCall(MethodCallExpr { object, m… | ea5a844 |
 | B-2026-07-18-30 | codegen | medium | A `ref Atomic[T]` FUNCTION PARAMETER does not mutate the caller's atomic under codegen — `fn bump(c: ref Atomic[i64]) { c.fetch_add(1, SeqCst); }` ca… | 6057527 |
 | B-2026-07-18-31 | typecheck | high | A GENERIC function returning `Option[T]` from a Vec accessor (`v.first()` / `v.last()`), monomorphized with a HEAP `T` (`String`), DOUBLE-FREES under… | 056cbb3 |
 | B-2026-07-18-32 | codegen | medium | A GENERIC function body that RECONSTRUCTS a struct with heap fields, monomorphized with a HEAP `T` (`String`), emits INVALID LLVM IR (interp correct) | 62c5330 |
