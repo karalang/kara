@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 143 | 0 |
-| leak | 83 | 1 |
+| leak | 83 | 0 |
 | codegen-gap | 60 | 1 |
 | double-free | 60 | 0 |
 | missing-feature | 46 | 0 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 380 | 2 |
+| codegen | 380 | 1 |
 | typecheck | 63 | 0 |
 | interp | 49 | 0 |
 | ownership | 23 | 0 |
@@ -123,18 +123,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **536 surfaced · 2 open · 530 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **536 surfaced · 1 open · 531 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-18-6 | 2026-07-18 | codegen | medium | PRE-EXISTING on main (not from the B-2026-07-18-2 fix — reproduced with it stashed): tests/http_client_codegen.rs test_ir_http_error_drop_frees_message + test_ir_response_drop_frees_headers_handle are RED — the synthesized HttpError/Response drop fns no longer free the message String buffer / headers handle (the IR-shape assertion finds only a cap-zero GEP, no free). Likely fallout of the 3324eea exact-free-buf-hints drop-site rework window. | — |
 | B-2026-07-18-8 | 2026-07-18 | codegen | medium | String built one byte at a time (`out.push_str(s[d..d+1])` in a loop) emits ~1.15-1.56x more instructions than equal-safety Rust: push_str's per-append copy is a branchy variable-length inlined memcpy because the slice length reaches codegen as a RUNTIME value; Rust's &s[d..d+1] carries the const-foldable length 1 and collapses to a single store. | docs/implementation_checklist/phase-10-targets.md § 'String char-append residual'; data: Kara/SWEEP_TRACKER_v2.md § Equal-safety investigation + Kara/ovf_equal_safety_triage.tsv |
 
-### Fixed (530)
+### Fixed (531)
 
-<details><summary>530 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>531 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -667,6 +666,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **536 surfaced 
 | B-2026-07-18-3 | codegen | medium | Consuming a BOXED `Option` payload whose type is a heap-containing tuple (e.g | eab5026 |
 | B-2026-07-18-4 | codegen | medium | A STRUCT-VARIANT enum payload's Vec field bound DIRECTLY in a match arm over a borrowed ref-Vec element, then moved into a local (`enum It { Fu { par… | 8c9fb2b |
 | B-2026-07-18-5 | interp | low | gpu.upload / gpu.download ICE the interpreter with `unreachable!("variable 'gpu' not found")` — no interpreter arm exists for the resident-buffer API… | fcdf5202 |
+| B-2026-07-18-6 | codegen | medium | PRE-EXISTING on main (not from the B-2026-07-18-2 fix — reproduced with it stashed): tests/http_client_codegen.rs test_ir_http_error_drop_frees_messa… | fcdf520 |
 | B-2026-07-18-7 | codegen | high | Plain struct-variable REASSIGNMENT (`let mut p = P { x: 1, y: 2 }; p = P { x: 10, y: 20 }`) now emits a reference to `karac_runtime_gpu_free_soa`, so… | 13f9c2a |
 
 </details>
