@@ -1113,6 +1113,51 @@ fn test_vec_read_accessor_return_types_ok() {
 }
 
 #[test]
+fn test_generic_vec_accessor_owned_return_rejected() {
+    // B-2026-07-18-31 — a GENERIC fn returning an owned `Option[T]` directly
+    // from a borrow-typed Vec accessor (`v.first()` / `v.last()` / `v.get(i)`
+    // are `Option[ref T]`) must be REJECTED, exactly like the concrete
+    // `Vec[String]` / `Vec[i64]` twins already are. Before the fix, the
+    // permissive `TypeParam` wildcard in `types_compatible` equated `ref T`
+    // with `T`, so this typechecked and then miscompiled: codegen returned the
+    // element BORROW aliasing the owned container, which the container's
+    // scope-exit drop and the returned `Option` both freed (double-free under
+    // `karac run` / -O0, masked at -O2).
+    for accessor in ["v.first()", "v.last()", "v.get(0)"] {
+        let src = format!("fn head[T](v: Vec[T]) -> Option[T] {{ {accessor} }}\nfn main() {{}}");
+        let errors = typecheck_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("Option<T>") && e.message.contains("Option<ref T>")),
+            "expected `Option<T>` vs `Option<ref T>` mismatch for {accessor}, got {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn test_generic_vec_accessor_borrow_return_ok() {
+    // The well-typed shapes must still pass: returning the accessor's true
+    // `Option[ref T]` type, or reading the borrow through an inline `match`
+    // (the payload binds as `ref T`, never moved into an owned position). This
+    // is the precision guard for the B-2026-07-18-31 `ref T` ≠ `T` tightening —
+    // it must reject only the owned-return mismatch, not legitimate borrows.
+    typecheck_ok(
+        "fn head[T](v: Vec[T]) -> Option[ref T] { v.first() }\n\
+         fn tail[T](v: Vec[T]) -> Option[ref T] { v.last() }\n\
+         fn at[T](v: Vec[T], i: i64) -> Option[ref T] { v.get(i) }\n\
+         fn main() {}",
+    );
+    typecheck_ok(
+        "fn main() {\n\
+             let mut v: Vec[String] = Vec.new();\n\
+             v.push(\"a\");\n\
+             match v.last() { Some(s) => print(s), None => print(\"n\") }\n\
+         }",
+    );
+}
+
+#[test]
 fn test_vec_get_returns_option_not_poison() {
     // `v.get(i)` is `Option[T]`; assigning it to a bare `T` must error
     // (previously the `Error` poison let `let x: i64 = v.get(0)` pass).

@@ -1241,6 +1241,30 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
             },
         ) => a_origin == b_origin,
         (Type::Existential { .. }, _) | (_, Type::Existential { .. }) => false,
+        // A borrow of a type param (`ref T` / `mut ref T`) is NOT the owned
+        // type param it stands for — the permissive TypeParam wildcard below
+        // must not equate them. Without this, a generic `.first()` / `.last()`
+        // / `.get()` accessor (typed `Option[ref T]`, design.md Feature 4
+        // Part 3) satisfies a declared owned `Option[T]` return, so a generic
+        // `fn last[T](v: Vec[T]) -> Option[T] { v.last() }` typechecks — while
+        // its concrete `Option[ref String]` vs `Option[String]` twin is already
+        // correctly rejected (neither side is a TypeParam) — and then
+        // miscompiles: codegen returns the element BORROW aliasing the owned
+        // container, which the container's scope-exit drop and the returned
+        // `Option` both free (double-free, masked at -O2 but live under
+        // `karac run` / -O0). B-2026-07-18-31. Restricted to a param-WRAPPING
+        // borrow (`ref <param>`) so a genuinely-concrete `ref String` unifying
+        // with an unconstrained arg param (`fn f[U](x: U)`) is unaffected.
+        (Type::Ref(inner), Type::TypeParam(_)) | (Type::MutRef(inner), Type::TypeParam(_))
+            if matches!(inner.as_ref(), Type::TypeParam(_)) =>
+        {
+            false
+        }
+        (Type::TypeParam(_), Type::Ref(inner)) | (Type::TypeParam(_), Type::MutRef(inner))
+            if matches!(inner.as_ref(), Type::TypeParam(_)) =>
+        {
+            false
+        }
         // Unresolved type parameters and associated type projections are
         // treated as permissive — they appear when a generic enum constructor
         // leaves an argument unconstrained (e.g. `let x: Option[i64] = None`
