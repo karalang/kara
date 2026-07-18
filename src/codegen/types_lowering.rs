@@ -2501,9 +2501,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // println(n.val)` worked because `n` is an Identifier and
         // hits `shared_type_for_expr`'s arm, but the inline chain
         // `println(m.get(k).unwrap().val)` produced zeros.
-        if let ExprKind::MethodCall { method, .. } = &expr.kind {
+        if let ExprKind::MethodCall {
+            method,
+            args_close_span,
+            ..
+        } = &expr.kind
+        {
             if method == "unwrap" || method == "expect" {
-                let key = (expr.span.offset, expr.span.length);
+                let key = crate::token::method_call_key(&expr.span, args_close_span);
                 if let Some(te) = self.method_unwrap_inner_types.get(&key) {
                     if let TypeKind::Path(p) = &te.kind {
                         if let Some(seg) = p.segments.last() {

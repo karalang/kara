@@ -7912,11 +7912,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// receive-inc into each tail block; deferred to a future slice.
     pub(super) fn rhs_yields_fresh_ref(&self, expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::MethodCall { method, object, .. }
-                if matches!(method.as_str(), "unwrap" | "expect")
-                    && self
-                        .method_unwrap_inner_types
-                        .contains_key(&(expr.span.offset, expr.span.length)) =>
+            ExprKind::MethodCall {
+                method,
+                object,
+                args_close_span,
+                ..
+            } if matches!(method.as_str(), "unwrap" | "expect")
+                && self
+                    .method_unwrap_inner_types
+                    .contains_key(&crate::token::method_call_key(&expr.span, args_close_span)) =>
             {
                 // A borrowed-Option `.unwrap()` extracts an ALIAS of the
                 // receiver's payload, so the let-site must rc_inc to own it —
@@ -8179,7 +8183,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// for exactly these Vec/Slice accessors (Map.get is by-value `Option[V]`),
     /// so a leading `ref`/`mut ref` is both the discriminator and what we peel.
     fn borrowed_vec_get_unwrap_inner(&self, value: &Expr) -> Option<TypeExpr> {
-        let ExprKind::MethodCall { method, object, .. } = &value.kind else {
+        let ExprKind::MethodCall {
+            method,
+            object,
+            args_close_span,
+            ..
+        } = &value.kind
+        else {
             return None;
         };
         if !matches!(method.as_str(), "unwrap" | "expect") {
@@ -8196,7 +8206,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let te = self
             .method_unwrap_inner_types
-            .get(&(value.span.offset, value.span.length))?;
+            .get(&crate::token::method_call_key(&value.span, args_close_span))?;
         match &te.kind {
             TypeKind::Ref(i) | TypeKind::MutRef(i) => Some(i.as_ref().clone()),
             _ => None,

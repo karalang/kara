@@ -606,6 +606,14 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         args: &[CallArg],
         call_span: &crate::token::Span,
+        // The call's closing-paren span, used ONLY to disambiguate the
+        // method_unwrap_* side-table reads for CHAINED calls (parser sets
+        // `MethodCall.span == receiver.span`, so `call_span` collides across a
+        // chain). Synthetic callers pass `call_span` here — `method_call_key`
+        // then falls back to the receiver span, preserving prior behavior.
+        // Other side-tables still key on `call_span` (their inserts are
+        // unchanged); see the span-collision fix, Slice 1.
+        args_close_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Materialized iterator binding (B-2026-07-11-19): `let it =
         // <iter-chain>` recorded its chain instead of codegen'ing a runtime
@@ -615,7 +623,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the common no-materialized-iter program pays nothing.
         if !self.iter_let_bindings.is_empty() {
             if let Some(sub) = self.substitute_iter_let_receiver(object) {
-                return self.compile_method_call(&sub, method, args, call_span);
+                return self.compile_method_call(&sub, method, args, call_span, args_close_span);
             }
         }
 
@@ -2002,9 +2010,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "or_else"
                 | "filter"
         ) {
-            if let Some(value) =
-                self.try_compile_option_result_method(object, method, args, call_span)?
-            {
+            if let Some(value) = self.try_compile_option_result_method(
+                object,
+                method,
+                args,
+                call_span,
+                args_close_span,
+            )? {
                 return Ok(value);
             }
         }
@@ -5198,7 +5210,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             kind: ExprKind::Identifier(synth.clone()),
                             span: object.span.clone(),
                         };
-                        let result = self.compile_method_call(&synth_expr, method, args, call_span);
+                        let result = self.compile_method_call(
+                            &synth_expr,
+                            method,
+                            args,
+                            call_span,
+                            call_span,
+                        );
                         self.variables.remove(&synth);
                         self.var_type_names.remove(&synth);
                         return result;
@@ -5250,7 +5268,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         kind: ExprKind::Identifier(synth.clone()),
                         span: object.span.clone(),
                     };
-                    let result = self.compile_method_call(&synth_expr, method, args, call_span);
+                    let result =
+                        self.compile_method_call(&synth_expr, method, args, call_span, call_span);
                     self.variables.remove(&synth);
                     self.var_type_names.remove(&synth);
                     return result;
@@ -11306,7 +11325,7 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Identifier(synth.clone()),
             span: object.span.clone(),
         };
-        let result = self.compile_method_call(&synth_expr, method, args, call_span);
+        let result = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
 
         // Drop the dispatch-only registrations (the queued drop, if any,
         // references the alloca, not the name, so it stays armed).

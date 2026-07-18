@@ -257,7 +257,7 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Identifier(synth.clone()),
             span: inner.span.clone(),
         };
-        let result = self.compile_method_call(&synth_expr, method, args, call_span);
+        let result = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
 
         // Clean up synth registrations.  The LLVM IR is already emitted; this
         // is bookkeeping cleanup so subsequent compilations in the same
@@ -809,7 +809,7 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Identifier(synth.clone()),
             span: span.clone(),
         };
-        let result = self.compile_method_call(&synth_expr, method, args, call_span);
+        let result = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
 
         // Clean up synth registrations.
         self.variables.remove(&synth);
@@ -1140,7 +1140,7 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Identifier(synth.clone()),
             span: inner_object.span.clone(),
         };
-        let result = self.compile_method_call(&synth_expr, method, args, call_span);
+        let result = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
 
         self.variables.remove(&synth);
         self.vec_elem_types.remove(&synth);
@@ -1374,6 +1374,7 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         args: &[CallArg],
         call_span: &crate::token::Span,
+        args_close_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         // Pull the inner `T` from the typechecker-populated side-table.
         // Without it we don't know how to shape the payload reconstruction
@@ -1383,7 +1384,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // but routing them all through the same gate keeps the contract
         // uniform — the typechecker writes the entry for every variant
         // we care about.
-        let key = (call_span.offset, call_span.length);
+        // Key on the closing-paren span (falling back to the receiver span for
+        // synthetic callers) so a CHAINED `opt.map(f).unwrap_or(d)` — where map
+        // and unwrap_or share `call_span` — doesn't read the outer call's
+        // `method_unwrap_*` entry. Matches the typechecker's
+        // `SpanKey::for_method_call` insert. Span-collision fix, Slice 1.
+        let key = crate::token::method_call_key(call_span, args_close_span);
         let inner_te = match self.method_unwrap_inner_types.get(&key).cloned() {
             Some(te) => te,
             None => return Ok(None),

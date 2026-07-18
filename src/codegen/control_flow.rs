@@ -763,8 +763,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // matching `f"{x}"` / `x.to_string()` and the interpreter. The owning
         // String it returns is printed + freed. GAP-W4.
         if self.user_display_impl_type(&args[0].value).is_some() {
-            let sval =
-                self.compile_method_call(&args[0].value, "to_string", &[], &args[0].value.span)?;
+            let sval = self.compile_method_call(
+                &args[0].value,
+                "to_string",
+                &[],
+                &args[0].value.span,
+                &args[0].value.span,
+            )?;
             self.emit_print_and_free_string(sval, nl);
             return Ok(zero.into());
         }

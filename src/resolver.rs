@@ -33,6 +33,14 @@ impl SpanKey {
     pub fn from_span(span: &Span) -> Self {
         SpanKey(span.offset, span.length)
     }
+
+    /// Method-call side-table key that disambiguates chained calls — keys on
+    /// the closing-paren span when distinct, else the receiver span. See
+    /// [`crate::token::method_call_key`] for the full rationale.
+    pub fn for_method_call(recv: &Span, args_close: &Span) -> Self {
+        let (o, l) = crate::token::method_call_key(recv, args_close);
+        SpanKey(o, l)
+    }
 }
 
 // ── Symbols ──────────────────────────────────────────────────────

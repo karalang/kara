@@ -7188,7 +7188,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // scope exit (mirrors the payload-enum / collection arms). GAP-W4.
         if self.user_display_impl_type(e).is_some() {
             let sval = self
-                .compile_method_call(e, "to_string", &[], &e.span)?
+                .compile_method_call(e, "to_string", &[], &e.span, &e.span)?
                 .into_struct_value();
             let acc = self.create_entry_alloca(
                 self.current_fn.unwrap(),

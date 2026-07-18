@@ -2527,7 +2527,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // `make_impl_method_function`); resolve the receiver's
             // type name and look the qualified key up. Same -56 print
             // symptom as the free-fn arm, method shape (2026-06-06).
-            ExprKind::MethodCall { object, method, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args_close_span,
+                ..
+            } => {
                 // Option/Result value-unwrap family (`unwrap` / `expect` /
                 // `unwrap_or` / `unwrap_or_else` / `unwrap_or_default`) returns
                 // the payload type `T`, so the result's signedness IS the inner
@@ -2544,7 +2549,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ) {
                     if let Some(inner_te) = self
                         .method_unwrap_inner_types
-                        .get(&(expr.span.offset, expr.span.length))
+                        .get(&crate::token::method_call_key(&expr.span, args_close_span))
                     {
                         return super::tensor::type_expr_is_unsigned_int(inner_te);
                     }

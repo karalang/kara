@@ -11,6 +11,31 @@ pub struct Span {
     pub length: usize,
 }
 
+/// The `(offset, length)` key for a method-call side-table entry, chosen to
+/// disambiguate CHAINED method calls.
+///
+/// The parser sets `MethodCall.span = receiver.span`, so every call in a chain
+/// (`opt.map(f).unwrap_or(d)`, `s.to_string().to_uppercase()`) shares one span
+/// — a receiver-span key therefore collides, and the outer call's table entry
+/// clobbers the inner call's (the chained-method span-collision class; see the
+/// span-collision fix scope). The closing-paren span (`MethodCall.args_close_span`)
+/// is unique per call, so key on it when it is a real, distinct span. Synthetic
+/// `MethodCall`s built after parse (lowering / codegen) carry a placeholder
+/// `args_close_span` (zero-length, or a clone of the receiver span); for those
+/// we fall back to the receiver span, preserving the pre-fix behavior (they
+/// have no typechecker-populated entry to collide with anyway).
+///
+/// Producers (typechecker/lowering) and consumers (codegen) MUST both use this
+/// helper for the same table so insert and read agree on the key.
+pub fn method_call_key(recv: &Span, args_close: &Span) -> (usize, usize) {
+    if args_close.length > 0 && (args_close.offset, args_close.length) != (recv.offset, recv.length)
+    {
+        (args_close.offset, args_close.length)
+    } else {
+        (recv.offset, recv.length)
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum IntSuffix {
     I8,

@@ -2063,7 +2063,7 @@ impl<'a> super::TypeChecker<'a> {
                     let resolved = resolve_type_var_top(&inner_ty, &self.env.substitutions);
                     let te = Self::type_to_type_expr(&resolved);
                     self.method_unwrap_inner_types
-                        .insert(SpanKey::from_span(span), te);
+                        .insert(SpanKey::for_method_call(span, args_close_span), te);
                     // Surface a proper return type so the binding gets the
                     // right Type rather than falling through to the
                     // prelude-permissive `Type::Error`. Without this,
@@ -2588,7 +2588,7 @@ impl<'a> super::TypeChecker<'a> {
                 // to feed the mapper; the RESULT `R` is read off the mapper's
                 // compiled SSA value, so only the SOURCE `T` needs recording.
                 self.method_unwrap_inner_types.insert(
-                    SpanKey::from_span(span),
+                    SpanKey::for_method_call(span, args_close_span),
                     Self::type_to_type_expr(&t_resolved),
                 );
                 let result = if enum_name == "Option" {
@@ -2695,8 +2695,10 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 let record_src = |s: &mut Self, ty: &Type| {
                     let resolved = resolve_type_var_top(ty, &s.env.substitutions);
-                    s.method_unwrap_inner_types
-                        .insert(SpanKey::from_span(span), Self::type_to_type_expr(&resolved));
+                    s.method_unwrap_inner_types.insert(
+                        SpanKey::for_method_call(span, args_close_span),
+                        Self::type_to_type_expr(&resolved),
+                    );
                 };
                 let result = match method {
                     // `Result[T, E].ok() -> Option[T]` / `.err() -> Option[E]`.
@@ -2927,7 +2929,7 @@ impl<'a> super::TypeChecker<'a> {
                     resolve_type_var_top(&t_ty, &self.env.substitutions)
                 };
                 self.method_unwrap_inner_types.insert(
-                    SpanKey::from_span(span),
+                    SpanKey::for_method_call(span, args_close_span),
                     Self::type_to_type_expr(&recorded_payload),
                 );
                 // The RESULT forms of the absent-closure combinators pass the
@@ -2937,7 +2939,7 @@ impl<'a> super::TypeChecker<'a> {
                 if is_result && matches!(method, "unwrap_or_else" | "map_or_else" | "or_else") {
                     let e_resolved = resolve_type_var_top(&e_ty, &self.env.substitutions);
                     self.method_unwrap_err_types.insert(
-                        SpanKey::from_span(span),
+                        SpanKey::for_method_call(span, args_close_span),
                         Self::type_to_type_expr(&e_resolved),
                     );
                 }

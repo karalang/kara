@@ -1164,8 +1164,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 object,
                 method,
                 args,
+                args_close_span,
                 ..
-            } => self.compile_method_call(object, method, args, &expr.span),
+            } => self.compile_method_call(object, method, args, &expr.span, args_close_span),
             ExprKind::Index { object, index } => self.compile_index(object, index),
             ExprKind::Question(inner) => self.compile_question(inner, &expr.span),
             ExprKind::Path { segments, .. } => self.compile_path_expr(segments, &expr.span),
