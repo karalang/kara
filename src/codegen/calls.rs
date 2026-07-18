@@ -1388,6 +1388,29 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(te) => te,
             None => return Ok(None),
         };
+        // Normalize a `ref T` payload to `T`. Borrow-returning producers
+        // (`OnceLock[T].get() -> Option[ref T]`, and the `Vec.get`/`Map.get`
+        // family) physically PACK THE POINTEE VALUE into the Option payload
+        // words — `once.rs`'s `compile_once_get` loads `T` through the borrow
+        // before splitting, so the payload is identical to a plain
+        // `Option[T]`. But the typechecker is inconsistent about the recorded
+        // inner type: `Vec.get` records `T`, `OnceLock.get` records `ref T`.
+        // Left as `ref T`, `rebuild_value_from_payload_words` lowers it to a
+        // pointer and re-interprets the value word via `inttoptr` — the
+        // `unwrap_or` merge phi then mixes `ptr` (present) with a value
+        // default (`unwrap_or(0)`), which the LLVM verifier rejects outright,
+        // and `unwrap()` silently builds a bogus pointer that faults when
+        // dereferenced. Stripping the outer borrow here makes every
+        // Option/Result method reconstruct the value directly, matching both
+        // the physical payload and the interpreter's auto-deref (and it is a
+        // no-op for the already-`T` `Vec.get` path). A wide `T` is still
+        // deboxed by the `word_count > area` branch, exactly as before.
+        let inner_te = match &inner_te.kind {
+            crate::ast::TypeKind::Ref(inner) | crate::ast::TypeKind::MutRef(inner) => {
+                (**inner).clone()
+            }
+            _ => inner_te,
+        };
 
         let i64_t = self.context.i64_type();
 

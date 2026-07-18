@@ -4428,6 +4428,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_oncelock_get_unwrap_and_unwrap_or() {
+        // Regression (B-2026-07-17-16): `OnceLock[T].get()` returns
+        // `Option[ref T]`, and the typechecker recorded the payload as
+        // `ref i64` (unlike `Vec.get`, recorded as `i64`). Left as `ref T`,
+        // the Option-method payload reconstruction lowered it to a pointer
+        // and re-read the value word via `inttoptr`: `unwrap_or(0)` failed
+        // the LLVM verifier ("PHI node operands are not the same type"), and
+        // `unwrap()` built a bogus pointer that faulted at run time. The fix
+        // strips the outer borrow so reconstruction is over the value type
+        // (the payload is physically value-packed — `once.rs` loads `T`
+        // through the borrow before splitting). Present → the sealed value;
+        // absent (unset cell) → the default. interp == JIT == AOT.
+        let out = run_program(
+            r#"
+fn main() {
+    let c: OnceLock[i64] = OnceLock.new();
+    let _s = c.set(7);
+    println(c.get().unwrap());
+    println(c.get().unwrap_or(0));
+    let d: OnceLock[i64] = OnceLock.new();
+    println(d.get().unwrap_or(42));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7\n7\n42");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncecell_parallel_surface() {
         // `OnceCell[i64]` has the identical method surface + lowering as
         // `OnceLock` (shares the runtime primitive; single-task rides the lock
