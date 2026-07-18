@@ -52,6 +52,8 @@ import ast.{
     StructLitExpr,
     StructLitField,
     FieldAccessExpr,
+    IndexExpr,
+    PathExpr,
     Pattern,
     BindingPattern,
 };
@@ -191,6 +193,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
     out = out + "declare ptr @malloc(i64)\n";
     out = out + "declare ptr @memcpy(ptr, ptr, i64)\n";
     out = out + "declare void @free(ptr)\n";
+    out = out + "declare ptr @realloc(ptr, i64)\n";
     out = out + "@.fmt_i = internal constant [5 x i8] c\"%lld\\00\"\n";
     out = out + "@.true = internal constant [5 x i8] c\"true\\00\"\n";
     out = out + "@.false = internal constant [6 x i8] c\"false\\00\"\n";
@@ -705,6 +708,125 @@ impl Emitter {
                     }
                 }
             }
+            MethodCall(mcs) => {
+                // A method call in STATEMENT position (Slice 13). `v.push(x)`
+                // on a Vec[i64] local grows by exactly one element per push —
+                // `realloc(ptr, (len+1)*8)` (realloc(null,·) is malloc), store
+                // at [len], write back {ptr,len+1,len+1}. O(n) reallocs per
+                // vec — observationally identical to the seed's amortized
+                // doubling at corpus scale. Any other statement method call is
+                // evaluated for effect and a heap temp result freed.
+                let MethodCallExpr { object, method, args: margs, span: msp } = mcs;
+                if method == "push" {
+                    let mut slot = 0 - 1;
+                    match object {
+                        Ident(ie3) => {
+                            let IdentExpr { name: on, span: osp } = ie3;
+                            slot = self.local_slot(on);
+                        }
+                        _ => {}
+                    }
+                    if slot >= 0 and self.locals_kind[slot] == 3 {
+                        let mut ev = "0".to_string();
+                        for ma in margs {
+                            let CallArg { label, mut_marker, value, span: asp } = ma;
+                            let av = self.emit_value(value);
+                            let Val { op: aop, kind: ak, heap: ah } = av;
+                            ev = aop;
+                        }
+                        let sp = "%v" + slot.to_string();
+                        let ag = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + ag.clone()
+                            + " = load { ptr, i64, i64 }, ptr "
+                            + sp.clone()
+                            + ", align 8\n";
+                        let pr = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pr.clone()
+                            + " = extractvalue { ptr, i64, i64 } "
+                            + ag.clone()
+                            + ", 0\n";
+                        let ln = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + ln.clone()
+                            + " = extractvalue { ptr, i64, i64 } "
+                            + ag
+                            + ", 1\n";
+                        let n1 = self.fresh();
+                        self.body =
+                            self.body + "  " + n1.clone() + " = add i64 " + ln.clone() + ", 1\n";
+                        let by = self.fresh();
+                        self.body =
+                            self.body + "  " + by.clone() + " = mul i64 " + n1.clone() + ", 8\n";
+                        let np = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + np.clone()
+                            + " = call ptr @realloc(ptr "
+                            + pr
+                            + ", i64 "
+                            + by
+                            + ")\n";
+                        let ep = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + ep.clone()
+                            + " = getelementptr i64, ptr "
+                            + np.clone()
+                            + ", i64 "
+                            + ln
+                            + "\n";
+                        self.body =
+                            self.body + "  store i64 " + ev + ", ptr " + ep + ", align 8\n";
+                        let a0 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a0.clone()
+                            + " = insertvalue { ptr, i64, i64 } undef, ptr "
+                            + np
+                            + ", 0\n";
+                        let a1 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a1.clone()
+                            + " = insertvalue { ptr, i64, i64 } "
+                            + a0
+                            + ", i64 "
+                            + n1.clone()
+                            + ", 1\n";
+                        let a2 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a2.clone()
+                            + " = insertvalue { ptr, i64, i64 } "
+                            + a1
+                            + ", i64 "
+                            + n1
+                            + ", 2\n";
+                        self.body = self.body
+                            + "  store { ptr, i64, i64 } "
+                            + a2
+                            + ", ptr "
+                            + sp
+                            + ", align 8\n";
+                    }
+                } else {
+                    let dv = self.emit_value(MethodCall(MethodCallExpr {
+                        object: object,
+                        method: method,
+                        args: margs,
+                        span: msp,
+                    }));
+                    let Val { op: dop, kind: dk, heap: dh } = dv;
+                    if dk == 2 and dh {
+                        self.emit_free_val(dop);
+                    }
+                }
+            }
             Return(re) => {
                 // `return [expr]` (Slice 6): emit the value, `ret`, then OPEN A
                 // FRESH DEAD BLOCK — an LLVM block has exactly one terminator, so
@@ -969,17 +1091,26 @@ impl Emitter {
     }
 
     // Free the heap buffer OWNED by local slot `idx` (load the aggregate,
-    // extract the pointer, free) — reassignment's old value and the scope-exit
-    // epilogue (Slice 9).
+    // extract the buffer pointer — field 0 for both string {ptr,i64} and
+    // Vec {ptr,len,cap} — free) — reassignment's old value and the scope-exit
+    // epilogue (Slices 9 + 13). free(null) is a no-op, so an empty Vec (null
+    // ptr from `Vec.new()`) is safe.
     fn emit_free_slot(mut ref self, idx: i64) {
+        let k = self.locals_kind[idx];
+        let ty = kind_ty(k);
         let ag = self.fresh();
         self.body = self.body
             + "  "
             + ag.clone()
-            + " = load { ptr, i64 }, ptr %v"
+            + " = load "
+            + ty.clone()
+            + ", ptr %v"
             + idx.to_string()
             + ", align 8\n";
-        self.emit_free_val(ag);
+        let pr = self.fresh();
+        self.body =
+            self.body + "  " + pr.clone() + " = extractvalue " + ty + " " + ag + ", 0\n";
+        self.body = self.body + "  call void @free(ptr " + pr + ")\n";
     }
 
     // Kind-dispatched print of an emitted value + newline; frees an UNBOUND
@@ -1207,12 +1338,26 @@ impl Emitter {
                 // A user-function call in VALUE position (Slice 6).
                 let CallExpr { callee, args, span } = cn;
                 let mut cname = "".to_string();
+                let mut vec_new = false;
                 match callee {
                     Ident(ie) => {
                         let IdentExpr { name, span: isp } = ie;
                         cname = name;
                     }
+                    Path(pe) => {
+                        // `Vec.new()` parses as a CALL with a PATH callee
+                        // (Slice 13), not a MethodCall.
+                        let PathExpr { segments, span: psp } = pe;
+                        if segments.len() == 2 {
+                            if segments[0] == "Vec" and segments[1] == "new" {
+                                vec_new = true;
+                            }
+                        }
+                    }
                     _ => {}
+                }
+                if vec_new {
+                    return Val { op: "zeroinitializer".to_string(), kind: 3, heap: true };
                 }
                 let si = self.sig_index(cname);
                 let mut alist = "".to_string();
@@ -1338,6 +1483,39 @@ impl Emitter {
                     self.body + "  " + r.clone() + " = load i64, ptr " + slot + ", align 8\n";
                 Val { op: r, kind: 0, heap: false }
             }
+            Index(ix) => {
+                // `v[i]` (Slice 13, Vec[i64] elements): extract the buffer
+                // pointer, gep, load. In-bounds by corpus discipline — the
+                // seed's bounds-check panic is a deferred parity surface.
+                let IndexExpr { object, index, span } = ix;
+                let ov = self.emit_value(object);
+                let Val { op: oop, kind: ok, heap: oh } = ov;
+                let iv = self.emit_value(index);
+                let Val { op: iop2, kind: ik2, heap: ih2 } = iv;
+                if ok != 3 {
+                    return Val { op: "0".to_string(), kind: 0, heap: false };
+                }
+                let pr = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + pr.clone()
+                    + " = extractvalue { ptr, i64, i64 } "
+                    + oop
+                    + ", 0\n";
+                let ep = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + ep.clone()
+                    + " = getelementptr i64, ptr "
+                    + pr
+                    + ", i64 "
+                    + iop2
+                    + "\n";
+                let r = self.fresh();
+                self.body =
+                    self.body + "  " + r.clone() + " = load i64, ptr " + ep + ", align 8\n";
+                Val { op: r, kind: 0, heap: false }
+            }
             Blk(b) => self.emit_block_value(b),
             StructLit(sl) => {
                 // POD struct CONSTRUCTION (Slice 12): evaluate literal fields
@@ -1443,6 +1621,49 @@ impl Emitter {
                 // materialize on binding, exactly like a literal). A string
                 // passes through. Other methods stay unsupported (0).
                 let MethodCallExpr { object, method, args: margs, span: msp } = mc;
+                if method == "new" {
+                    // `Vec.new()` (Slice 13): an empty {ptr,len,cap} — null
+                    // buffer, zero len/cap. `realloc(null, n)` is malloc and
+                    // `free(null)` a no-op, so the empty Vec needs no special
+                    // casing anywhere downstream.
+                    let is_vec = match object {
+                        Ident(ie2) => {
+                            let IdentExpr { name: on, span: osp } = ie2;
+                            on == "Vec"
+                        }
+                        _ => false,
+                    };
+                    if is_vec {
+                        return Val { op: "zeroinitializer".to_string(), kind: 3, heap: true };
+                    }
+                    return Val { op: "0".to_string(), kind: 0, heap: false };
+                }
+                if method == "len" {
+                    // `v.len()` (Slice 13): extract the len field.
+                    let ov = self.emit_value(object);
+                    let Val { op: oop, kind: ok, heap: oh } = ov;
+                    if ok == 3 {
+                        let r = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + r.clone()
+                            + " = extractvalue { ptr, i64, i64 } "
+                            + oop
+                            + ", 1\n";
+                        return Val { op: r, kind: 0, heap: false };
+                    }
+                    if ok == 2 {
+                        let r = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + r.clone()
+                            + " = extractvalue { ptr, i64 } "
+                            + oop
+                            + ", 1\n";
+                        return Val { op: r, kind: 0, heap: false };
+                    }
+                    return Val { op: "0".to_string(), kind: 0, heap: false };
+                }
                 if method != "to_string" {
                     return Val { op: "0".to_string(), kind: 0, heap: false };
                 }
@@ -1609,13 +1830,17 @@ fn bin_ir(op: BinOp) -> BinIr {
     }
 }
 
-// The LLVM type text for a value kind (0 i64, 1 i1, 2 string aggregate).
+// The LLVM type text for a value kind (0 i64, 1 i1, 2 string aggregate,
+// 3 Vec[i64] {ptr,len,cap} — Slice 13).
 fn kind_ty(kind: i64) -> String {
     if kind == 1 {
         return "i1".to_string();
     }
     if kind == 2 {
         return "{ ptr, i64 }".to_string();
+    }
+    if kind == 3 {
+        return "{ ptr, i64, i64 }".to_string();
     }
     "i64".to_string()
 }

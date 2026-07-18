@@ -120,6 +120,14 @@ const CORPUS: &[&str] = &[
     // run+build while the Kara emitter was already correct); re-landed on the
     // 13f9c2a seed fix.
     "struct P { x: i64, y: i64 }\nfn main() { let mut p = P { x: 1, y: 2 }; p = P { x: 10, y: 20 }; println((p.x + p.y).to_string()) }",
+    // Slice 13: Vec[i64] — new/push/len/index/iteration; grow-by-one realloc
+    // (observationally identical to the seed's amortized doubling), buffer
+    // freed at scope exit (free(null)-safe for the empty vec).
+    "fn main() { let v = Vec.new(); println(v.len().to_string()) }",
+    "fn main() { let mut v = Vec.new(); v.push(10); v.push(20); v.push(30); println(v.len().to_string()); println(v[0].to_string()) }",
+    "fn main() { let mut v = Vec.new(); v.push(7); v.push(8); println((v[0] * v[1]).to_string()) }",
+    "fn main() { let mut v = Vec.new(); let mut i = 0; while i < 6 { v.push(i * i); i = i + 1; } let mut s = 0; let mut j = 0; while j < v.len() { s = s + v[j]; j = j + 1; } println(s.to_string()) }",
+    "fn main() { let mut a = Vec.new(); let mut b = Vec.new(); a.push(1); b.push(2); b.push(3); println((a.len() + b.len()).to_string()); println((a[0] + b[1]).to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
