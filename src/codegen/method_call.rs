@@ -320,6 +320,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return None,
             })
         }
+        // Prefer the RECEIVER's own resolved type over the span-keyed
+        // `method_callee_types` table. The parser aliases a chained call's
+        // `MethodCall.span` to its receiver's span, so every call in a chain
+        // (`x.leading_zeros().leading_zeros()`) shares ONE table key — the
+        // last insert wins, and an inner width-sensitive int method
+        // (`leading_zeros` / `rotate_left` / …) would read the OUTER call's
+        // receiver width and miscompile (interp != codegen; B-2026-07-18-36).
+        // `type_name_of_expr` resolves the receiver by name / layout, unaffected
+        // by the span aliasing, so it is authoritative when it answers; the
+        // table stays a fallback for receivers it can't name (a fresh temp /
+        // builtin-returning chain link), where the table's own last-insert value
+        // is the right one for that outer call.
+        if let Some(name) = self.type_name_of_expr(object) {
+            if let Some(k) = parse(&name) {
+                return k;
+            }
+        }
         if let Some(callee) = self
             .method_callee_types
             .get(&(call_span.offset, call_span.length))
@@ -330,11 +347,6 @@ impl<'ctx> super::Codegen<'ctx> {
                         return k;
                     }
                 }
-            }
-        }
-        if let Some(name) = self.type_name_of_expr(object) {
-            if let Some(k) = parse(&name) {
-                return k;
             }
         }
         if let ExprKind::Integer(_, Some(suf)) = &object.kind {

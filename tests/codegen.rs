@@ -8219,6 +8219,34 @@ fn main() {
         }
     }
 
+    /// B-2026-07-18-36 — a CHAINED width-sensitive int intrinsic
+    /// (`x.leading_zeros().leading_zeros()`). The parser aliases a chained
+    /// call's `MethodCall.span` to its receiver's span, so both calls collide
+    /// on one `method_callee_types` key; `receiver_int_kind` read the OUTER
+    /// call's recorded width (`u32`) for the INNER call and lowered
+    /// `1u8.leading_zeros()` as a 32-bit ctlz (→ 31, then the outer →27)
+    /// instead of the width-correct 8-bit (→7, outer →29). Fixed by preferring
+    /// the receiver's own resolved type over the span-keyed table. Oracle:
+    /// the interpreter (matched below by the `interp == codegen` invariant).
+    #[test]
+    fn e2e_chained_width_sensitive_int_intrinsic() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let x: u8 = 1;\n\
+                 println(x.leading_zeros());\n\
+                 println(x.leading_zeros().leading_zeros());\n\
+                 let y: u8 = 200;\n\
+                 println(y.rotate_left(1).count_ones());\n\
+                 let z: u16 = 1;\n\
+                 println(z.leading_zeros().leading_zeros());\n\
+             }",
+        ) {
+            // x=1u8: lz=7 (8-bit); 7u32.lz=29. y=200u8 rol 1 = 145 → 3 ones.
+            // z=1u16: lz=15; 15u32.lz=28.
+            assert_eq!(out, "7\n29\n3\n28\n");
+        }
+    }
+
     /// `count_zeros` / `reverse_bits` / `swap_bytes` lowered on the receiver's
     /// declared iN width (`llvm.ctpop`-complement / `llvm.bitreverse` /
     /// `llvm.bswap`, with `swap_bytes` identity on 8-bit). Must match the
