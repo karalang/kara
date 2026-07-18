@@ -500,7 +500,23 @@ fn run_compute(
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         // One invocation per element; @workgroup_size(64) in the shader.
-        pass.dispatch_workgroups((elem_count as u32).div_ceil(64), 1, 1);
+        // wgpu caps each dispatch dimension at 65535 workgroups, so any
+        // grid past 65535 × 64 = 4,194,240 elements spreads across a 2D
+        // dispatch: X FIXED at 65535 whenever a second row exists, so the
+        // kernels recover the flat index as `gid.y * (65535 * 64) + gid.x`
+        // with a fold-time constant (src/gpu_wgsl.rs::DISPATCH_X_SPAN — the
+        // two sites must agree). y == 1 degenerates to the old 1D form;
+        // last-row overshoot threads exit on the `>= arrayLength` guard.
+        let wg = (elem_count as u64).div_ceil(64);
+        let x = wg.min(65535) as u32;
+        let y = wg.div_ceil(65535);
+        if y > 65535 {
+            // 65535² workgroups × 64 ≈ 2.7e14 elements — unreachable for
+            // any real buffer, but fail loud rather than truncate.
+            crate::fatal::write_stderr(b"panic: gpu.dispatch grid exceeds the 2D dispatch limit\n");
+            std::process::abort();
+        }
+        pass.dispatch_workgroups(x, y as u32, 1);
     }
     queue.submit(Some(encoder.finish()));
     output_bufs
@@ -901,7 +917,7 @@ mod tests {
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+    let i = gid.y * 4194240u + gid.x;
     if (i >= arrayLength(&input)) { return; }
     output[i] = input[i] * 2.0;
 }
@@ -920,6 +936,37 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    #[test]
+    fn doubles_past_the_1d_dispatch_cap_via_2d_grid() {
+        // The 1D dispatch cap is 65535 workgroups × 64 = 4,194,240 elements —
+        // anything larger used to PANIC in wgpu validation ("dispatch group
+        // size ... must be ≤ 65535"). The 2D spread (x fixed at 65535, flat
+        // index recovered as `gid.y * 4194240 + gid.x`) must produce exact
+        // results past the cap. 5,308,416 = 2304² — the first LBM-shaped
+        // grid size that crashed. ~21 MiB of f32 in/out; graceful skip
+        // without a GPU adapter (headless CI).
+        let n: usize = 2304 * 2304;
+        let input: Vec<f32> = (0..n).map(|i| (i % 8192) as f32).collect();
+        let Some(output) = dispatch_f32_map(DOUBLE_WGSL, &input) else {
+            eprintln!("gpu-grid-2d: no GPU adapter available — skipping");
+            return;
+        };
+        assert_eq!(output.len(), input.len(), "output length mismatch");
+        // Spot-check the row boundaries the 2D recovery must get right:
+        // below/at/above the old cap, plus head and tail.
+        for &i in &[0usize, 1, 4_194_239, 4_194_240, 4_194_241, n - 2, n - 1] {
+            assert_eq!(
+                output[i],
+                input[i] * 2.0,
+                "element {i} wrong across the 2D dispatch boundary"
+            );
+        }
+        // And the whole buffer, cheaply.
+        let sum_in: f64 = input.iter().map(|&v| v as f64).sum();
+        let sum_out: f64 = output.iter().map(|&v| v as f64).sum();
+        assert_eq!(sum_out, sum_in * 2.0, "checksum mismatch past the cap");
+    }
+
     // CG-4 multi-buffer kernel: the Path-A Particle step over two coalesced
     // f32 field-arrays (pos, vel) — one `array<f32>` binding per layout group.
     // This is the WGSL the emitter will generate from
@@ -933,7 +980,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+    let i = gid.y * 4194240u + gid.x;
     if (i >= arrayLength(&gp_in)) { return; }
     let p_pos = gp_in[i];
     let p_vel = gv_in[i];
@@ -991,7 +1038,7 @@ struct G_ab { a: f32, b: f32 };
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+    let i = gid.y * 4194240u + gid.x;
     if (i >= arrayLength(&cg_in)) { return; }
     let a = ab_in[i].a;
     let b = ab_in[i].b;
@@ -1042,7 +1089,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+    let i = gid.y * 4194240u + gid.x;
     if (i >= arrayLength(&gp_in)) { return; }
     gp_out[i] = gp_in[i] * k_u[0];
 }
@@ -1175,7 +1222,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 @group(0) @binding(9) var<storage, read_write> e_out: array<f32>;
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+    let i = gid.y * 4194240u + gid.x;
     if (i >= arrayLength(&a_in)) { return; }
     a_out[i] = a_in[i] + 1.0;
     b_out[i] = b_in[i] + 2.0;
@@ -1259,7 +1306,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 @group(0) @binding(1) var<storage, read_write> a_out: array<f32>;
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+    let i = gid.y * 4194240u + gid.x;
     if (i >= arrayLength(&a_in)) { return; }
     if (i == 0u) { a_out[0] = a_in[0]; } else { a_out[i] = a_in[i - 1u]; }
 }

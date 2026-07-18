@@ -69,6 +69,18 @@ impl std::fmt::Display for WgslError {
 /// `dispatch_workgroups(ceil(n / N))` divisor in the runtime spine.
 const WORKGROUP_SIZE: u32 = 64;
 
+/// Threads per dispatch-grid X ROW: `65535 workgroups × WORKGROUP_SIZE`.
+/// wgpu caps each dispatch dimension at 65535 workgroups, so `run_compute`
+/// spreads larger element counts across a 2D grid with the X extent FIXED
+/// at 65535 whenever a second row exists; every kernel entry recovers the
+/// flat thread index as `gid.y * DISPATCH_X_SPAN + gid.x` — a fold-time
+/// constant, no uniform. For a single-row dispatch (`y == 1`, any x)
+/// `gid.y == 0` and the formula degenerates to `gid.x`, so the one entry
+/// line is correct at every size. Overshoot threads in the last row exit
+/// on the existing `>= arrayLength` guard. Runtime twin:
+/// `runtime/src/gpu.rs::run_compute` (the dispatch split must match).
+pub const DISPATCH_X_SPAN: u32 = 65535 * WORKGROUP_SIZE;
+
 /// Emit the WGSL compute shader for a slice-0 element-wise-map `#[gpu]`
 /// kernel. On success the returned string is a complete, standalone module
 /// with `@group(0) @binding(0)` = read `input: array<f32>`, `@binding(1)` =
@@ -118,7 +130,7 @@ pub fn emit_kernel(func: &Function, helpers: &[&Function]) -> Result<String, Wgs
          \n\
          @compute @workgroup_size({WORKGROUP_SIZE})\n\
          fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
          \x20   if (i >= arrayLength(&input)) {{ return; }}\n\
          \x20   output[i] = {body_wgsl};\n\
          }}\n"
@@ -873,7 +885,7 @@ pub fn emit_kernel_soa(
         "{helper_defs}{structs}{decls}\n\
          @compute @workgroup_size({WORKGROUP_SIZE})\n\
          fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
          \x20   if (i >= arrayLength(&{guard_group}_in)) {{ return; }}\n\
          {materialize}{let_decls}{stores}\
          }}\n"
@@ -1108,7 +1120,7 @@ fn emit_kernel_stencil(
         "{helper_defs}{structs}{decls}\n\
          @compute @workgroup_size({WORKGROUP_SIZE})\n\
          fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
-         \x20   let gi = gid.x;\n\
+         \x20   let gi = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
          \x20   if (gi >= arrayLength(&{first_group}_in)) {{ return; }}\n\
          \x20   let {idx_name} = i32(gi);\n\
          {let_decls}{stores}\
@@ -1805,7 +1817,7 @@ mod tests {
         assert!(wgsl.contains("@group(0) @binding(1) var<storage, read_write> output: array<f32>;"));
         assert!(wgsl.contains("@compute @workgroup_size(64)"));
         assert!(wgsl.contains("fn main(@builtin(global_invocation_id) gid: vec3<u32>)"));
-        assert!(wgsl.contains("let i = gid.x;"));
+        assert!(wgsl.contains("let i = gid.y * 4194240u + gid.x;"));
         assert!(wgsl.contains("if (i >= arrayLength(&input)) { return; }"));
         // The one kernel-specific line: `x` → `input[i]`, `2.0` preserved.
         assert!(
@@ -2172,7 +2184,10 @@ mod tests {
         );
         // The index parameter becomes the signed thread index; the guard/output
         // key off the unsigned `gi`.
-        assert!(wgsl.contains("let gi = gid.x;"), "{wgsl}");
+        assert!(
+            wgsl.contains("let gi = gid.y * 4194240u + gid.x;"),
+            "{wgsl}"
+        );
         assert!(wgsl.contains("let i = i32(gi);"), "{wgsl}");
         // No per-element materialize (a stencil indexes the buffer directly).
         assert!(!wgsl.contains("let g_a ="), "{wgsl}");
