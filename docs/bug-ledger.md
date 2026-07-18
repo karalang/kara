@@ -94,11 +94,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 149 | 0 |
 | leak | 84 | 0 |
+| double-free | 62 | 2 |
 | codegen-gap | 61 | 0 |
-| double-free | 61 | 1 |
 | missing-feature | 46 | 0 |
 | false-positive | 36 | 0 |
-| run-vs-build | 32 | 0 |
+| run-vs-build | 33 | 1 |
 | crash | 27 | 0 |
 | soundness | 22 | 0 |
 | perf | 21 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 395 | 2 |
+| codegen | 397 | 4 |
 | typecheck | 65 | 0 |
 | interp | 53 | 0 |
 | ownership | 23 | 0 |
@@ -124,14 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **556 surfaced · 2 open · 550 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **558 surfaced · 4 open · 550 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-18-17 | 2026-07-18 | codegen | low | [PARTIALLY FIXED — Map/SortedMap builtin leg] The typechecker did NOT propagate a method parameter's (substituted) expected type into the ARGUMENT's own inference, so a type-inferred constructor argument (`Vec.new()`, `Map.new()`, `"".to_string()`) whose element/type param must come from the callee's signature was left as `?T` and rejected. FIXED for the flagship Map/SortedMap idiom (`m.get_or(k, Vec.new())` / `m.insert(k, Vec.new())`); STILL OPEN for the general user-generic-method arg case (`Box[Vec[i64]].replace(Vec.new())`). Free-function call args always inferred fine (expected-type-directed). | none |
 | B-2026-07-18-29 | 2026-07-18 | codegen | high | REBUILDING or RE-WRAPPING a match-bound shared-enum payload node double-frees under AOT (interp correct): both `MethodCall(MethodCallExpr { object, method, args, span })` from freshly-destructured parts AND the minimal `MethodCall(mc)` re-wrap of the UNTOUCHED bound payload crash the selfhost emitter generator with free(): double free. The `mc.method.clone()` peek + re-wrap combo also crashes; only full single-destructure + passing the PARTS to a helper (never reconstructing an Expr node) is clean. | — |
+| B-2026-07-18-31 | 2026-07-18 | codegen | high | A GENERIC function returning `Option[T]` from a Vec accessor (`v.first()` / `v.last()`), monomorphized with a HEAP `T` (`String`), DOUBLE-FREES under AOT (interp correct). `fn last[T](v: Vec[T]) -> Option[T] { v.last() }` called with `Vec[String]` -> `--interp` prints the element, `karac build`/JIT aborts `free(): double free detected in tcache 2`. Non-generic `Vec[String].last()` is CLEAN, and the same generic at `T = i64` is CLEAN — the defect is monomorphization of the Option[heap] payload's ownership/drop, not the accessor itself. | src/codegen/mono.rs |
+| B-2026-07-18-32 | 2026-07-18 | codegen | medium | A GENERIC function body that RECONSTRUCTS a struct with heap fields, monomorphized with a HEAP `T` (`String`), emits INVALID LLVM IR (interp correct). `fn swap[T](p: Pair[T]) -> Pair[T] { Pair { a: p.b, b: p.a } }` at `T = String` -> `--interp` swaps correctly, `karac build` fails 'Module verification failed: Invalid InsertValueInst operands!  %field = insertvalue { i64, i64 } undef, { ptr, i64, i64 } %b, 0'. The generic IDENTITY (`fn id[T](p: Pair[T]) -> Pair[T] { p }`) at `T = String` is CLEAN, and `swap` at `T = i64` is CLEAN — the defect is the struct-LITERAL construction inside a monomorph body using the generic BASE struct type (`{ i64, i64 }`) instead of the mono type (`{ {ptr,i64,i64} x2 }`). | src/codegen/types_lowering.rs |
 
 ### Fixed (550)
 
