@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 145 | 0 |
+| miscompile | 146 | 0 |
 | leak | 83 | 0 |
 | codegen-gap | 61 | 1 |
 | double-free | 60 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 384 | 1 |
+| codegen | 385 | 1 |
 | typecheck | 64 | 0 |
 | interp | 50 | 0 |
 | ownership | 23 | 0 |
@@ -125,7 +125,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen (f-string / Display of a whole tuple value) vs interpreter | 1 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **542 surfaced · 2 open · 536 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **543 surfaced · 2 open · 537 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
@@ -134,9 +134,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **542 surfaced 
 | B-2026-07-18-13 | 2026-07-18 | codegen | high | Kata #415 add_strings measures 13.4x equal-safety Rust TODAY (89.1B vs 6.25B instrs, ~178K instr per 38-digit addition) — catastrophically worse than the 1.19x recorded in the June triage that B-2026-07-18-8 quoted. Kata file unchanged since its first-bench commit, so either the June number measured a different lane or a compiler regression landed in the past month. UNATTRIBUTED. | docs/implementation_checklist/phase-10-targets.md § 'String char-append residual' (same entry — this row carries the #415 outlier) |
 | B-2026-07-18-14 | 2026-07-18 | codegen (f-string / Display of a whole tuple value) vs interpreter | low | Interpolating a WHOLE TUPLE value in an f-string / `println` (`f"{t}"` where `t: (i64, i64)` or `(i64, String)`) passes `karac check` and renders `(3, 7)` in the interpreter, but FAILS `karac build`/JIT with 'Display of a struct in an f-string is supported when the interpolated expression is a variable or field access … bind a struct literal or call result to a `let` first'. The hint is MISLEADING — `t` is already a let-bound variable, so following it does not help. Affects ALL tuple element types (scalar and heap). Field-index interpolation (`f"{t.0} {t.1}"`) works on every backend. | none |
 
-### Fixed (536)
+### Fixed (537)
 
-<details><summary>536 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>537 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -676,6 +676,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **542 surfaced 
 | B-2026-07-18-10 | codegen | high | `Tensor.{from,zeros,ones,full}` in an ARGUMENT position laid its data out at the literal's DEFAULT element width (f64 for `-1.0`, i64 for `1`) rather… | 5fa16cb |
 | B-2026-07-18-11 | typecheck+codegen | medium | `OnceLock[T].get().unwrap_or(<value>)` fails the LLVM verifier and `.unwrap()` faults at run time (interp fine) — the `Option[ref T]` payload from a… | 162a13f |
 | B-2026-07-18-12 | interp | medium | `Stats.*` on a `Slice[T]` value (`Stats.mean(v.as_slice())`, the declared `ref Slice[f64]` param's canonical form) read ZERO elements in the tree-wal… | c3b28ef |
+| B-2026-07-18-15 | codegen | high | String accumulator built by `push(char)` in a counted loop was mis-lowered through the Vec TABULATE reduction path, overrunning the byte buffer by 3… | 90fe2ad |
 
 </details>
 
