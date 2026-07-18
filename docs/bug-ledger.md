@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 143 | 0 |
+| miscompile | 145 | 0 |
 | leak | 83 | 0 |
 | codegen-gap | 60 | 0 |
 | double-free | 60 | 0 |
@@ -109,7 +109,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 380 | 0 |
+| codegen | 382 | 0 |
 | typecheck | 63 | 0 |
 | interp | 49 | 0 |
 | ownership | 23 | 0 |
@@ -123,15 +123,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **536 surfaced · 0 open · 532 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **538 surfaced · 0 open · 534 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (532)
+### Fixed (534)
 
-<details><summary>532 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>534 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -667,6 +667,8 @@ _None — the ledger is fully drained._
 | B-2026-07-18-6 | codegen | medium | PRE-EXISTING on main (not from the B-2026-07-18-2 fix — reproduced with it stashed): tests/http_client_codegen.rs test_ir_http_error_drop_frees_messa… | fcdf520 |
 | B-2026-07-18-7 | codegen | high | Plain struct-variable REASSIGNMENT (`let mut p = P { x: 1, y: 2 }; p = P { x: 10, y: 20 }`) now emits a reference to `karac_runtime_gpu_free_soa`, so… | 13f9c2a |
 | B-2026-07-18-8 | codegen | medium | String built one byte at a time (`out.push_str(s[d..d+1])` in a loop) emits ~1.15-1.56x more instructions than equal-safety Rust: push_str's per-appe… | 07678e8 |
+| B-2026-07-18-9 | codegen | high | An ASSOCIATED-fn call (`Type.method(...)`) passing a FRESH-TEMP value to a `ref`/`mut ref` param passed the temp BY VALUE instead of spilling it to a… | 5fa16cb |
+| B-2026-07-18-10 | codegen | high | `Tensor.{from,zeros,ones,full}` in an ARGUMENT position laid its data out at the literal's DEFAULT element width (f64 for `-1.0`, i64 for `1`) rather… | 5fa16cb |
 
 </details>
 
