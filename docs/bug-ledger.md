@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 86 | 0 |
 | double-free | 67 | 0 |
 | codegen-gap | 63 | 0 |
-| missing-feature | 57 | 1 |
+| missing-feature | 58 | 1 |
 | false-positive | 37 | 0 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 419 | 0 |
+| codegen | 420 | 0 |
 | typecheck | 80 | 1 |
 | interp | 63 | 0 |
 | ownership | 24 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **588 surfaced · 1 open · 583 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **589 surfaced · 1 open · 584 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **588 surfaced 
 |---|---|---|---|---|---|
 | B-2026-07-19-8 | 2026-07-19 | typecheck | medium | `weak T` struct fields are DECLARATION-ONLY: the modifier parses, type-lowers to `Type::Weak`, and satisfies the ownership cycle checker (`struct Child { parent: weak Parent }` — test_weak_breaks_cycle passes), but there is NO way to construct, assign, or access a weak-field VALUE. design.md § Cycles specifies full Swift-like semantics ('the `weak` annotation breaks back-edges, returns `Option[T]` on access'), none of which is implemented: no `weak <expr>` downgrade expression (the `weak` keyword is only a TYPE-position token), no `.downgrade()`/`.weak()` method, no coercion from a strong `T`/`Option[T]`, and no codegen. A `weak T` field therefore can only ever be declared — a struct/shared-struct that has one cannot be constructed, making the feature unusable at runtime. | src/typechecker (weak-field value semantics), src/codegen |
 
-### Fixed (583)
+### Fixed (584)
 
-<details><summary>583 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>584 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -721,6 +721,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **588 surfaced 
 | B-2026-07-19-7 | typecheck+interp+codegen | low | `Iterator.last() -> Option[T]` and `Iterator.nth(n) -> Option[T]` were unimplemented (rejected `no method 'last'/'nth' on type 'Iterator'`) | 77cd44c |
 | B-2026-07-19-9 | typecheck+interp+codegen | low | `Vec[T].split_off(i) -> Vec[T]` was unimplemented | 293b6b5 |
 | B-2026-07-19-10 | typecheck+interp+codegen | low | `String.replacen(from, to, n) -> String` was unimplemented (only `replace` existed) | 9a21d56 |
+| B-2026-07-19-11 | codegen | low | `Iterator.rev()` codegen residual (B-2026-07-18-41) — a BARE range base `(a..b).rev()` / `(a..=b).rev()` was loud-deferred to `--interp` | 20bcdc5 |
 
 </details>
 
