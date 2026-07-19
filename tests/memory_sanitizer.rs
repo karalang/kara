@@ -375,6 +375,59 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_indexed_shared_option_field_store_no_crash_no_leak() {
+        // B-2026-07-19-6: `v[i].next = Some(v[j])` — a field store of an
+        // `Option[shared]` into a Vec-INDEXED shared-struct element (identifier
+        // root). Two codegen bugs on this path, both fixed:
+        //   (1) OFFSET — the store hardcoded `info.heap_type` + `(idx+1)`, but a
+        //       HEADERLESS shared struct allocates without the refcount word, so
+        //       the write landed 8 bytes PAST the element block (heap overflow →
+        //       SIGSEGV). Now routed through `shared_gep_layout`.
+        //   (2) RETAIN — the store was a raw `build_store` with no RC retain, so
+        //       the linked node was under-counted and both the field drop and the
+        //       Vec element drop freed it (double free). Now routed through
+        //       `emit_[niche_]option_shared_field_store` like the bare-identifier
+        //       branch.
+        // Build a 5-node linear list by index-store, walk it via a node handle,
+        // and drop — must print the value sum (20) and be ASAN/LSan-clean. (An
+        // ACYCLIC list frees fully; a `random`-style back-pointer would form an
+        // RC cycle, which reference counting leaks by construction — out of scope
+        // here.)
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, id: i64, mut next: Option[Node] }
+fn main() {
+    let mut v: Vec[Node] = Vec.new();
+    let mut i = 0i64;
+    while i < 5i64 {
+        v.push(Node { val: i * 2i64, id: i, next: None });
+        i = i + 1i64;
+    }
+    i = 0i64;
+    while i < 5i64 {
+        if i + 1i64 < 5i64 {
+            v[i].next = Some(v[i + 1i64]);
+        }
+        i = i + 1i64;
+    }
+    let mut h = 0i64;
+    let mut cur: Option[Node] = Some(v[0i64]);
+    let mut go = true;
+    while go {
+        match cur {
+            None => { go = false; }
+            Some(n) => { h = h + n.val; cur = n.next; }
+        }
+    }
+    println(h.to_string());
+}
+"#,
+            &["20"],
+            "asan_vec_indexed_shared_option_field_store_no_crash_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_tensor_ref_arg_assoc_call_no_crash() {
         // B-2026-07-18-9: a FRESH-TEMP tensor (`Tensor.from(...)`) passed as a
         // `ref Tensor` arg to an ASSOCIATED fn (`S.ins(...)`) that pushes

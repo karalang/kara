@@ -1057,20 +1057,84 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .into_pointer_value();
                                     if let Some(names) = self.struct_field_names.get(seg) {
                                         if let Some(idx) = names.iter().position(|n| n == field) {
+                                            // B-2026-07-19-?: use `shared_gep_layout`
+                                            // for the (gep_ty, base) instead of a
+                                            // hardcoded `info.heap_type` + `(idx+1)`.
+                                            // A HEADERLESS shared struct (Phase-D)
+                                            // allocates WITHOUT the leading refcount
+                                            // word, so `(idx+1)` on the header-
+                                            // including `heap_type` addressed one
+                                            // field too far — `v[i].next = Some(x)`
+                                            // wrote 8 bytes PAST the element block
+                                            // (heap overflow → SIGSEGV), while the
+                                            // read path already used the correct
+                                            // `shared_gep_layout` offset (so a
+                                            // subsequent read saw the stale field).
+                                            // The sibling non-identifier-rooted and
+                                            // bare-identifier branches already route
+                                            // through `shared_gep_layout`; this makes
+                                            // the third path consistent.
+                                            let (gep_ty, base) =
+                                                self.shared_gep_layout(seg, info.heap_type);
                                             let field_ptr = self
                                                 .builder
                                                 .build_struct_gep(
-                                                    info.heap_type,
+                                                    gep_ty,
                                                     heap_ptr,
-                                                    (idx + 1) as u32,
+                                                    idx as u32 + base,
                                                     &format!("sh_idx_{}_ptr", field),
                                                 )
                                                 .unwrap();
+                                            // An `Option[shared T]` field must go
+                                            // through the retain-aware store
+                                            // (retain new inner → store → release
+                                            // old) — the same dispatch the bare-
+                                            // identifier branch uses. A raw store
+                                            // drops the retain, so `v[i].next =
+                                            // Some(v[j])` left `v[j]` under-counted
+                                            // and both the field's drop and the
+                                            // Vec's element drop freed it (double
+                                            // free). Non-Option-shared fields fall
+                                            // through to the plain store below.
+                                            if let Some(field_te) = self
+                                                .struct_field_type_exprs
+                                                .get(seg)
+                                                .and_then(|v| v.get(idx))
+                                                .cloned()
+                                            {
+                                                if let Some((_, inner_info)) = self
+                                                    .option_inner_shared_type_for_type_expr(
+                                                        &field_te,
+                                                    )
+                                                {
+                                                    if self
+                                                        .niche_field_inner_heap_type(seg, idx)
+                                                        .is_some()
+                                                    {
+                                                        self.emit_niche_option_shared_field_store(
+                                                            field_ptr,
+                                                            new_val,
+                                                            inner_info.heap_type,
+                                                            rhs_is_fresh,
+                                                            field,
+                                                        );
+                                                    } else {
+                                                        self.emit_option_shared_field_store(
+                                                            field_ptr,
+                                                            new_val,
+                                                            inner_info.heap_type,
+                                                            rhs_is_fresh,
+                                                            field,
+                                                        );
+                                                    }
+                                                    return Ok(());
+                                                }
+                                            }
                                             // Field-store width coercion —
                                             // see `coerce_to_struct_field_ty`.
                                             let new_val = self.coerce_to_struct_field_ty(
-                                                info.heap_type,
-                                                (idx + 1) as u32,
+                                                gep_ty,
+                                                idx as u32 + base,
                                                 new_val,
                                             );
                                             self.builder.build_store(field_ptr, new_val).unwrap();
