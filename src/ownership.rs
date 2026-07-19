@@ -1845,6 +1845,31 @@ impl<'a> OwnershipChecker<'a> {
             // (a within-arm sequential consume+use is dominance-comparable and
             // surfaces here; the arm rename must not leak into the diagnostic).
             let binding = demangle_binding(&binding);
+            // Machine-applicable fix (B-2026-07-19-3): when the moved value has a
+            // `.clone()` method, insert it at the CONSUME site so the moved-away
+            // value is a fresh copy and the original stays live for the later use
+            // — `f(a); f(a)` becomes `f(a.clone()); f(a)`. This is exactly what
+            // codegen already does implicitly (the reuse is defensive-copied,
+            // which is why `karac build`/`run` treat this diagnostic as advisory
+            // and compile it), so the edit makes the source say what the compiler
+            // does and lets `karac fix` repair it in the Mend loop. Only emit the
+            // auto-fix for a type that DEFINITELY has `.clone()` — the built-in
+            // heap collections (`String`/`Vec`/`Map`/`Set`) and RC types
+            // (`shared struct`/`enum`, `Rc`/`Arc`). A plain move-only `struct`
+            // has NO `.clone()`, so a blind insertion there produces `no method
+            // 'clone'` (the migration-test regression that first caught this);
+            // for those the suggestion still steers toward `ref`/clone/restructure
+            // but there is no auto-fix. Multi-use chains (`f(a); g(a); h(a)`)
+            // surface one witness at a time, so an iterated `fix` resolves each
+            // pair.
+            let supports_clone = self.moved_type_supports_clone(&w.consume_span);
+            let replacement = supports_clone.then(|| {
+                Box::new(crate::resolver::TextEdit {
+                    offset: w.consume_span.offset + w.consume_span.length,
+                    length: 0,
+                    replacement: ".clone()".to_string(),
+                })
+            });
             self.errors.push(OwnershipError {
                 message: format!(
                     "value '{}' moved here, used again here (moved at line {}:{})",
@@ -1853,12 +1878,38 @@ impl<'a> OwnershipChecker<'a> {
                 span: w.other_use_span,
                 kind: OwnershipErrorKind::UseAfterMove,
                 suggestion: Some(format!(
-                    "consider cloning '{}' before the move, or restructure to avoid reuse",
-                    binding
+                    "clone '{}' at the move site (`{}.clone()`), declare the callee \
+                     parameter `ref` if it only reads, or restructure to avoid reuse",
+                    binding, binding
                 )),
-                replacement: None,
+                replacement,
                 consume_span: Some(w.consume_span),
             });
+        }
+    }
+
+    /// Whether the value at `span` has a `.clone()` method — the gate for the
+    /// UAM auto-fix (B-2026-07-19-3). Conservative: `true` only for types where
+    /// `.clone()` is guaranteed to resolve — `String`, the built-in heap
+    /// collections (`Vec`/`Map`/`Set`/`VecDeque`), and RC types (`shared
+    /// struct`/`enum`, `Rc`/`Arc`). A plain move-only user `struct`/`enum` (no
+    /// derived `Clone`) returns `false`, so no invalid `.clone()` insertion is
+    /// offered. An absent type record also returns `false` (no auto-fix, never a
+    /// wrong one).
+    fn moved_type_supports_clone(&self, span: &Span) -> bool {
+        const CLONE_COLLECTIONS: &[&str] = &["Vec", "Map", "Set", "VecDeque"];
+        match self
+            .typecheck_result
+            .expr_types
+            .get(&SpanKey::from_span(span))
+        {
+            Some(Type::Str) | Some(Type::Rc(_)) | Some(Type::Arc(_)) | Some(Type::Shared(_)) => {
+                true
+            }
+            Some(Type::Named { name, .. }) => {
+                CLONE_COLLECTIONS.contains(&name.as_str()) || self.is_shared_type(name)
+            }
+            _ => false,
         }
     }
 

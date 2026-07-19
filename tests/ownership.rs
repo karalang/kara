@@ -672,10 +672,11 @@ fn test_three_node_cycle_detected() {
 
 #[test]
 fn test_use_after_move_diagnostic_message() {
+    // A clone-able type (Vec) so the machine-applicable `.clone()` fix is offered
+    // (B-2026-07-19-3 gates the auto-fix on clone-availability).
     let errors = ownership_errors(
-        "struct Data { x: i64 }\n\
-         fn consume(d: Data) { }\n\
-         fn bad(d: Data) {\n\
+        "fn consume(d: Vec[i64]) { }\n\
+         fn bad(d: Vec[i64]) {\n\
              consume(d);\n\
              consume(d);\n\
          }",
@@ -684,9 +685,45 @@ fn test_use_after_move_diagnostic_message() {
     assert!(err.message.contains("moved here"));
     assert!(err.suggestion.is_some());
     assert!(
-        err.suggestion.as_ref().unwrap().contains("cloning"),
-        "Expected 'cloning' in suggestion, got: {:?}",
+        err.suggestion.as_ref().unwrap().contains("clone"),
+        "Expected 'clone' in suggestion, got: {:?}",
         err.suggestion
+    );
+    // B-2026-07-19-3: the UAM diagnostic is now machine-applicable — it carries a
+    // `.clone()` insertion at the move site so `karac fix` can repair it.
+    let edit = err
+        .replacement
+        .as_ref()
+        .expect("UAM error should carry a machine-applicable .clone() replacement");
+    assert_eq!(edit.replacement, ".clone()");
+    assert_eq!(
+        edit.length, 0,
+        "the fix is a pure insertion, not a replacement"
+    );
+}
+
+#[test]
+fn test_use_after_move_plain_struct_no_clone_autofix() {
+    // B-2026-07-19-3: a plain move-only struct has NO `.clone()`, so the UAM
+    // diagnostic must still fire (with a suggestion) but withhold the auto-fix —
+    // a blind `.clone()` insertion there would produce `no method 'clone'`.
+    let errors = ownership_errors(
+        "struct Data { x: i64 }\n\
+         fn consume(d: Data) { }\n\
+         fn bad(d: Data) {\n\
+             consume(d);\n\
+             consume(d);\n\
+         }",
+    );
+    let err = errors
+        .iter()
+        .find(|e| e.kind == OwnershipErrorKind::UseAfterMove)
+        .expect("expected a UseAfterMove error");
+    assert!(err.message.contains("moved here"));
+    assert!(err.suggestion.is_some(), "suggestion still guides the user");
+    assert!(
+        err.replacement.is_none(),
+        "a plain struct has no .clone(); no machine-applicable fix must be offered"
     );
 }
 

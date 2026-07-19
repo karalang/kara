@@ -735,7 +735,7 @@ fn kara_file_uam_message_unchanged_by_repl_slice() {
     assert!(
         uam.suggestion
             .as_deref()
-            .is_some_and(|s| s.contains("consider cloning")),
+            .is_some_and(|s| s.contains("clone")),
         "baseline UAM suggestion changed; got: {:?}",
         uam.suggestion,
     );
