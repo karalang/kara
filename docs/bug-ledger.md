@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 85 | 0 |
 | double-free | 67 | 0 |
 | codegen-gap | 63 | 0 |
-| missing-feature | 49 | 1 |
+| missing-feature | 49 | 0 |
 | false-positive | 36 | 0 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 411 | 1 |
-| typecheck | 72 | 1 |
-| interp | 56 | 1 |
+| codegen | 411 | 0 |
+| typecheck | 72 | 0 |
+| interp | 56 | 0 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **577 surfaced · 1 open · 572 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **577 surfaced · 0 open · 573 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-18-41 | 2026-07-18 | typecheck+interp+codegen | low | `Iterator.rev()` was unimplemented — `v.iter().rev()` rejected with `no method 'rev' on type 'Iterator'` in both backends. Now shipped for the typechecker + interpreter (`v.iter().rev()`, composing with adaptors on both sides and any terminal/for-loop); CODEGEN is DEFERRED with a loud `--interp` bail (status stays OPEN for the codegen leg). | src/codegen/method_call.rs |
+_None — the ledger is fully drained._
 
-### Fixed (572)
+### Fixed (573)
 
-<details><summary>572 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>573 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -700,6 +698,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **577 surfaced 
 | B-2026-07-18-38 | codegen | medium | An owned HEAP param (or local) moved into a VEC/ARRAY LITERAL that is returned/bound DOUBLE-FREES under AOT (interp correct): `fn dup(x: String) -> V… | 2d60d38 |
 | B-2026-07-18-39 | typecheck+codegen | high | An iterator chain whose SOURCE is a TEMPORARY Vec (a `vec![…]` literal or a call result, NOT a `let`-bound variable) SILENTLY miscompiled to 0/empty… | 8f70020 |
 | B-2026-07-18-40 | codegen | medium | Displaying `Option[ref String]` — the borrow-typed result of `Vec[String].get(i)` / `.first()` / `.last()` — failed under codegen with the deferred s… | 6c76b81 |
+| B-2026-07-18-41 | typecheck+interp+codegen | low | `Iterator.rev()` was unimplemented — `v.iter().rev()` rejected with `no method 'rev' on type 'Iterator'` in both backends | 9dcf1b8,c2a0f23 |
 | B-2026-07-18-42 | codegen | high | A closure that CAPTURES a whole heap String/Vec and RETURNS it double-frees under AOT/JIT (interp correct): `fn f(x: String) -> String { let g = \|\| x… | f96d2f2 |
 | B-2026-07-18-43 | codegen | medium | A closure that captures a Vec and RETURNS it, then the result is INDEXED, fails codegen with `Index operator applied to non-array type` (interp corre… | aa407f2 |
 | B-2026-07-18-44 | codegen | high | A GENERIC struct's owned by-value param/self whose HEAP FIELD is returned (moved out) double-frees under AOT/JIT (interp correct): `fn take[T](b: Box… | 3ea24dd |
