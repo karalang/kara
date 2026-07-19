@@ -893,6 +893,66 @@ impl<'a> super::Interpreter<'a> {
                     });
                 }
             }
+            "last" => {
+                // `last() -> Option[T]` — drain the iterator, return the LAST
+                // yielded element (or `None` for an empty source).
+                if matches!(obj, Value::Iterator { .. }) {
+                    let mut iter_val = obj;
+                    let mut last: Option<Value> = None;
+                    while let Some(item) = self.iterator_step(&mut iter_val) {
+                        last = Some(item);
+                    }
+                    return Some(match last {
+                        Some(v) => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![v]),
+                        },
+                        None => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "None".to_string(),
+                            data: EnumData::Unit,
+                        },
+                    });
+                }
+            }
+            "nth" => {
+                // `nth(n) -> Option[T]` — the n-th (0-based) yielded element, or
+                // `None` if the source has fewer than n+1 elements. A negative n
+                // never matches, so it yields `None`.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let n = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Int(n)) => n,
+                        _ => {
+                            return Some(self.record_runtime_error(
+                                "Iterator.nth() requires an integer argument".to_string(),
+                                span,
+                            ));
+                        }
+                    };
+                    let none = Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    };
+                    if n < 0 {
+                        return Some(none);
+                    }
+                    let mut iter_val = obj;
+                    let mut idx: i64 = 0;
+                    while let Some(item) = self.iterator_step(&mut iter_val) {
+                        if idx == n {
+                            return Some(Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "Some".to_string(),
+                                data: EnumData::Tuple(vec![item]),
+                            });
+                        }
+                        idx += 1;
+                    }
+                    return Some(none);
+                }
+            }
             _ => return None,
         }
         None

@@ -14977,6 +14977,29 @@ fn main() {
 }
 
 #[test]
+fn test_iter_last_and_nth_terminals() {
+    // `last() -> Option[T]` (last yielded element, or None) and
+    // `nth(n) -> Option[T]` (0-based n-th yielded element, or None). All element
+    // types in the interpreter (last on a String source shown).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    match v.iter().last() { Some(x) => println(x), None => println(-1) }
+    match v.iter().nth(1) { Some(x) => println(x), None => println(-1) }
+    match v.iter().nth(9) { Some(x) => println(x), None => println(-1) }
+    let s: Vec[String] = ["a", "b", "c"];
+    match s.iter().last() { Some(x) => println(x), None => println("none") }
+    let e: Vec[i64] = [];
+    match e.iter().last() { Some(x) => println(x), None => println(-1) }
+}
+"#,
+    );
+    // last=4; nth1=2; nth9=None->-1; string last="c"; empty last=None->-1
+    assert_eq!(output, "4\n2\n-1\nc\n-1\n");
+}
+
+#[test]
 fn test_string_receiver_parse_sugar() {
     // String-receiver `s.parse()` resolved against an expected `Option[T]`
     // annotation is sugar for the type-receiver `T.parse(s)` (lowering rewrite).

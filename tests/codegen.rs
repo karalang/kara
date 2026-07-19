@@ -12082,6 +12082,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_last_nth_terminals() {
+        // `<iter-chain>.last() -> Option[T]` (drain, keep last) and
+        // `.nth(n) -> Option[T]` (the n-th yielded element). Scalar desugar
+        // mirroring `find`. Covers last (basic / empty-None / filter / map) and
+        // nth (basic / out-of-bounds-None / index 0 / filter / range).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3];\n\
+                 match v.iter().last() { Some(x) => println(x), None => println(-1) }\n\
+                 let e: Vec[i64] = [];\n\
+                 match e.iter().last() { Some(x) => println(x), None => println(-1) }\n\
+                 match v.iter().filter(|x| x % 2 == 1).last() { Some(x) => println(x), None => println(-1) }\n\
+                 match v.iter().map(|x| x * 10).last() { Some(x) => println(x), None => println(-1) }\n\
+                 let w: Vec[i64] = [10, 20, 30, 40];\n\
+                 match w.iter().nth(2) { Some(x) => println(x), None => println(-1) }\n\
+                 match w.iter().nth(9) { Some(x) => println(x), None => println(-1) }\n\
+                 match w.iter().nth(0) { Some(x) => println(x), None => println(-1) }\n\
+                 match w.iter().filter(|x| x % 20 == 0).nth(1) { Some(x) => println(x), None => println(-1) }\n\
+                 match (0..10).nth(5) { Some(x) => println(x), None => println(-1) }\n\
+             }",
+        ) {
+            // last: 3; empty -1; odd[1,3] last=3; map[10,20,30] last=30;
+            // nth: w[2]=30; oob -1; w[0]=10; filter[20,40] nth1=40; range nth5=5
+            assert_eq!(out, "3\n-1\n3\n30\n30\n-1\n10\n40\n5\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_iter_chain_wildcard_closure_param() {
         // B-2026-07-11-19 — `|_|` wildcard closure params on the fused-chain
         // terminals. The interpreter already accepted them; codegen's collect /

@@ -5711,6 +5711,36 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
+        // `<iter-chain>.last() -> Option[T]` (no args) / `.nth(n) -> Option[T]`
+        // (one int arg) — element-returning terminals, scalar payloads only (heap
+        // defers loud, like `find`).
+        if ((method == "last" && args.is_empty()) || (method == "nth" && args.len() == 1))
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            {
+                let nth_arg = if method == "nth" {
+                    Some(args[0].value.clone())
+                } else {
+                    None
+                };
+                if let Some(v) =
+                    self.try_compile_iter_chain_last_nth(object, nth_arg.as_ref(), call_span)?
+                {
+                    return Ok(v);
+                }
+                return Err(format!(
+                    "`Iterator.{}()` is lowered under `karac build` only for a SCALAR \
+                     element over a fused map/filter chain; a heap element or an \
+                     unsupported chain shape is deferred — run it under the interpreter \
+                     (`karac run --interp`, or `KARAC_RUN_JIT=0`).",
+                    method
+                ));
+            }
+        }
+
         // `<iter-chain>.sum()` — the numeric-accumulation terminal on a fused
         // iterator chain (B-2026-07-11-19). Same iterator-chain receiver gate as
         // `fold`. Desugars to a `fold(<typed-zero>, |acc, x| acc + x)`, seeding
@@ -10715,6 +10745,221 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&findname))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// `<iter-chain>.last() -> Option[T]` (`nth_arg` = None) and
+    /// `<iter-chain>.nth(n) -> Option[T]` (`nth_arg` = Some(n)). Desugar like
+    /// `find` but store the element unconditionally (last, no break) or at the
+    /// n-th yield (nth, break). SCALAR payloads only (heap defers, like `find`).
+    fn try_compile_iter_chain_last_nth(
+        &mut self,
+        recv: &Expr,
+        nth_arg: Option<&Expr>,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some(elem_te) = self
+            .iter_terminal_elem_types
+            .get(&(call_span.offset, call_span.length))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if !super::vec_method::is_trivially_copyable_te(&elem_te) {
+            return Ok(None);
+        }
+        let (base, steps) = match Self::peel_fused_map_filter_chain(recv) {
+            Some(x) => x,
+            None if Self::for_loop_iterates_flat_map(recv) => (recv, Vec::new()),
+            None => return Ok(None),
+        };
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let sp = call_span.clone();
+        let resname = format!("__ln_{}", uid);
+        let idxname = format!("__lni_{}", uid);
+        let nbname = format!("__lnb_{}", uid);
+        let is_nth = nth_arg.is_some();
+        let elem_name = steps
+            .iter()
+            .find(|(_, p, _)| !p.is_empty())
+            .map(|(_, p, _)| p.clone())
+            .unwrap_or_else(|| format!("__lne_{}", uid));
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let some_of = |e: Expr| Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Identifier("Some".to_string()),
+                    span: sp.clone(),
+                }),
+                args: vec![CallArg {
+                    label: None,
+                    mut_marker: false,
+                    value: e,
+                    span: sp.clone(),
+                }],
+            },
+            span: sp.clone(),
+        };
+        let sink = |current: Expr| -> Vec<Stmt> {
+            let assign = Stmt {
+                kind: StmtKind::Assign {
+                    target: ident(&resname),
+                    value: some_of(current),
+                },
+                span: sp.clone(),
+            };
+            if !is_nth {
+                return vec![assign];
+            }
+            let decide = vec![
+                assign,
+                Stmt {
+                    kind: StmtKind::Expr(Expr {
+                        kind: ExprKind::Break {
+                            label: None,
+                            value: None,
+                        },
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                },
+            ];
+            vec![
+                Stmt {
+                    kind: StmtKind::Expr(Expr {
+                        kind: ExprKind::If {
+                            condition: Box::new(Expr {
+                                kind: ExprKind::Binary {
+                                    op: BinOp::Eq,
+                                    left: Box::new(ident(&idxname)),
+                                    right: Box::new(ident(&nbname)),
+                                },
+                                span: sp.clone(),
+                            }),
+                            then_block: Block {
+                                stmts: decide,
+                                final_expr: None,
+                                span: sp.clone(),
+                            },
+                            else_branch: None,
+                        },
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                },
+                Stmt {
+                    kind: StmtKind::Assign {
+                        target: ident(&idxname),
+                        value: Expr {
+                            kind: ExprKind::Binary {
+                                op: BinOp::Add,
+                                left: Box::new(ident(&idxname)),
+                                right: Box::new(Expr {
+                                    kind: ExprKind::Integer(1, None),
+                                    span: sp.clone(),
+                                }),
+                            },
+                            span: sp.clone(),
+                        },
+                    },
+                    span: sp.clone(),
+                },
+            ]
+        };
+        let sw_prefix = format!("__swln_{uid}_");
+        let for_body =
+            Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(elem_name),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(base.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: for_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let i64_te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["i64".to_string()],
+                generic_args: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let opt_te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Option".to_string()],
+                generic_args: Some(vec![GenericArg::Type(elem_te)]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let mut block_stmts = vec![Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(resname.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(opt_te),
+                value: ident("None"),
+            },
+            span: sp.clone(),
+        }];
+        if is_nth {
+            block_stmts.push(Stmt {
+                kind: StmtKind::Let {
+                    is_mut: false,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(nbname.clone()),
+                        span: sp.clone(),
+                    },
+                    ty: Some(i64_te.clone()),
+                    value: nth_arg.unwrap().clone(),
+                },
+                span: sp.clone(),
+            });
+            block_stmts.push(Stmt {
+                kind: StmtKind::Let {
+                    is_mut: true,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(idxname.clone()),
+                        span: sp.clone(),
+                    },
+                    ty: Some(i64_te),
+                    value: Expr {
+                        kind: ExprKind::Integer(0, None),
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            });
+        }
+        block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
+        block_stmts.push(for_loop);
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: block_stmts,
+                final_expr: Some(Box::new(ident(&resname))),
                 span: sp.clone(),
             }),
             span: sp.clone(),

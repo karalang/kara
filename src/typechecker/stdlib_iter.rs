@@ -401,6 +401,50 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![item.clone()],
                 }
             }
+            "last" => {
+                // `last() -> Option[T]` — drain the iterator and return the LAST
+                // yielded element, or `None` for an empty source. Records the
+                // element type (like `find`) for codegen's scalar-gated desugar.
+                if !args.is_empty() {
+                    self.type_error(
+                        "Iterator.last() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                self.iter_terminal_elem_types
+                    .insert(SpanKey::from_span(span), Self::type_to_type_expr(item));
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
+            "nth" => {
+                // `nth(n: i64) -> Option[T]` — the n-th (0-based) yielded element,
+                // or `None` if the source has fewer than n+1 elements. Records the
+                // element type for codegen's scalar-gated desugar.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("Iterator.nth() expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    self.check_expr(&args[0].value, &Type::Int(IntSize::I64));
+                }
+                self.iter_terminal_elem_types
+                    .insert(SpanKey::from_span(span), Self::type_to_type_expr(item));
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
             "enumerate" => {
                 // `enumerate() -> Iterator[(i64, T)]` — wraps each item
                 // into a tuple of (index, item).
@@ -942,10 +986,12 @@ impl<'a> super::TypeChecker<'a> {
                     "fold",
                     "for_each",
                     "inspect",
+                    "last",
                     "map",
                     "max",
                     "min",
                     "next",
+                    "nth",
                     "peek",
                     "peekable",
                     "position",
