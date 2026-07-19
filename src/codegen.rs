@@ -3346,6 +3346,14 @@ pub(super) struct Codegen<'ctx> {
     /// LLVM-type-only tracking can't distinguish `Vec[String]` from
     /// `Vec[Vec[T]]` (both store `vec_struct_type` as the element LLVM type).
     pub(crate) var_elem_type_exprs: HashMap<String, TypeExpr>,
+    /// Per closure BINDING (`let g = || v`): the `Vec[T]` / `VecDeque[T]`
+    /// `TypeExpr` the closure RETURNS, recorded at the let site (where the
+    /// captured source's element type is still visible). Lets an INLINE index of
+    /// a closure-call result (`g()[i]`) resolve the element type — the `Call`
+    /// and its wrapping `Index` share a span, so `expr_types` / `owned_temp_drops`
+    /// are clobbered, and a closure callee has no `fn_return_type_exprs` entry
+    /// (B-2026-07-18-43). Consulted by `inline_temp_vec_te`.
+    pub(crate) closure_ret_vec_te: HashMap<String, TypeExpr>,
     /// Per-`OnceLock[T]` / `OnceCell[T]` binding: the element `T` `TypeExpr`
     /// plus whether the receiver is a thread-safe `OnceLock` (`true`) or a
     /// single-task `OnceCell` (`false`). Populated by
@@ -6784,6 +6792,7 @@ impl<'ctx> Codegen<'ctx> {
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),
             var_elem_type_exprs: HashMap::new(),
+            closure_ret_vec_te: HashMap::new(),
             once_var_types: HashMap::new(),
             interner_vars: std::collections::HashSet::new(),
             arena_vars: HashMap::new(),

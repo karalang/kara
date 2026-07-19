@@ -2022,6 +2022,36 @@ impl<'ctx> super::Codegen<'ctx> {
     /// fresh-owned Vec temporary — a non-Vec return, a `ref`-returning
     /// callee (a borrow, returned as a `ptr`, must not be freed), or an
     /// unrecognized receiver — leaving the generic path to handle it.
+    /// B-2026-07-18-43: the `Vec[T]` `TypeExpr` a closure body RETURNS, when its
+    /// tail is a bare identifier naming a Vec/VecDeque visible in the enclosing
+    /// scope (`|| v` / `|| { …; v }`). Recorded at the closure's let site (where
+    /// the captured source's element type is still in `var_elem_type_exprs`) so
+    /// an inline index of the call result (`g()[i]`) can resolve its element
+    /// type. `None` for a non-Vec tail or a non-identifier/complex tail (those
+    /// keep the pre-existing behavior — bind-to-a-temp still works).
+    pub(super) fn closure_tail_vec_return_te(&self, body: &Expr) -> Option<TypeExpr> {
+        let leaf = match &body.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+                return b
+                    .final_expr
+                    .as_deref()
+                    .and_then(|e| self.closure_tail_vec_return_te(e));
+            }
+            _ => return None,
+        };
+        let elem_te = self.var_elem_type_exprs.get(leaf)?.clone();
+        let sp = body.span.clone();
+        Some(TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![GenericArg::Type(elem_te)]),
+                span: sp.clone(),
+            }),
+            span: sp,
+        })
+    }
+
     fn inline_temp_vec_te(&self, object: &Expr) -> Option<TypeExpr> {
         match &object.kind {
             // Free-function call: the declared return `TypeExpr`. A direct
@@ -2031,6 +2061,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ExprKind::Identifier(name) = &callee.kind else {
                     return None;
                 };
+                // B-2026-07-18-43: a CLOSURE-call result (`g()[i]` where
+                // `let g = || v`). A closure binding has no `fn_return_type_exprs`
+                // entry; its returned `Vec[T]` type was recorded at the let site
+                // (`closure_ret_vec_te`). Checked first so a closure binding that
+                // shadows a fn name resolves to the closure's return.
+                if let Some(te) = self.closure_ret_vec_te.get(name) {
+                    return Some(te.clone());
+                }
                 let te = self.fn_return_type_exprs.get(name)?;
                 if matches!(te.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
                     return None;

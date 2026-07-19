@@ -2606,6 +2606,33 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_inline_index_of_closure_vec_return() {
+        // B-2026-07-18-43: an INLINE index of a closure-call result that returns
+        // a Vec (`let g = || v; g()[i]`) failed codegen with "Index operator
+        // applied to non-array type" — a closure callee has no
+        // `fn_return_type_exprs` entry, and the `Call`/`Index` span collision
+        // clobbers the element type. Binding to a temp first (`let r = g();
+        // r[i]`) already worked. The closure's returned `Vec[T]` type is now
+        // recorded at its let site (`closure_ret_vec_te`) and consulted by
+        // `inline_temp_vec_te`. Covers a param capture, a local capture, a
+        // Vec[String] element, and a block-body closure.
+        if let Some(out) = run_program(
+            "fn fp(v: Vec[i64]) -> i64 { let g = || v; g()[1] }\n\
+             fn fl() -> i64 { let v = [10, 20, 30]; let g = || v; g()[2] }\n\
+             fn fs(v: Vec[String]) -> String { let g = || v; g()[0] }\n\
+             fn fb(v: Vec[i64]) -> i64 { let g = || { let n = 1; v }; g()[0] }\n\
+             fn main() {\n\
+                 println(fp([4, 5, 6]));\n\
+                 println(fl());\n\
+                 println(fs([\"a\".to_string(), \"b\".to_string()]));\n\
+                 println(fb([7, 8]));\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n30\na\n7\n");
+        }
+    }
+
+    #[test]
     fn e2e_ref_atomic_param_aliases_caller_cell() {
         // B-2026-07-18-30: a `ref Atomic[T]` / `mut ref Atomic[T]` parameter's
         // alloca holds a POINTER to the caller's atomic storage, but

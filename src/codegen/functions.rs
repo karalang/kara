@@ -1232,6 +1232,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // side-tables were simply missing from the list.
         self.vec_elem_types.clear();
         self.var_elem_type_exprs.clear();
+        self.closure_ret_vec_te.clear();
         // Name-keyed instantiated-generic-enum types (`Option[String]`, …) for
         // heap-payload `==`. Same per-function-reset rationale as the other
         // name-keyed tables above: a stale entry from one function's `a:

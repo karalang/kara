@@ -41,6 +41,7 @@ pub(super) struct SavedVarSideTables<'ctx> {
     dataframe_var_infos: std::collections::HashSet<String>,
     vec_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
     var_elem_type_exprs: HashMap<String, TypeExpr>,
+    closure_ret_vec_te: HashMap<String, TypeExpr>,
     enum_inst_var_types: HashMap<String, TypeExpr>,
     string_vars: std::collections::HashSet<String>,
     slice_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
@@ -533,6 +534,7 @@ impl<'ctx> super::Codegen<'ctx> {
             dataframe_var_infos: std::mem::take(&mut self.dataframe_var_infos),
             vec_elem_types: std::mem::take(&mut self.vec_elem_types),
             var_elem_type_exprs: std::mem::take(&mut self.var_elem_type_exprs),
+            closure_ret_vec_te: std::mem::take(&mut self.closure_ret_vec_te),
             enum_inst_var_types: std::mem::take(&mut self.enum_inst_var_types),
             string_vars: std::mem::take(&mut self.string_vars),
             slice_elem_types: std::mem::take(&mut self.slice_elem_types),
@@ -555,6 +557,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.dataframe_var_infos = saved.dataframe_var_infos;
         self.vec_elem_types = saved.vec_elem_types;
         self.var_elem_type_exprs = saved.var_elem_type_exprs;
+        self.closure_ret_vec_te = saved.closure_ret_vec_te;
         self.enum_inst_var_types = saved.enum_inst_var_types;
         self.string_vars = saved.string_vars;
         self.slice_elem_types = saved.slice_elem_types;

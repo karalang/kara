@@ -2158,6 +2158,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             },
                         );
                         self.closure_fn_types.insert(var_name.clone(), fn_type);
+                        // B-2026-07-18-43: record the closure's returned `Vec[T]`
+                        // type (a bare `|| v` / block tail naming a Vec visible in
+                        // this outer scope) so an inline index of the call result
+                        // (`g()[i]`) can resolve its element type — a closure
+                        // callee has no `fn_return_type_exprs` entry, and the
+                        // `Call`/`Index` span collision clobbers the type-tables.
+                        // `inline_temp_vec_te` consults `closure_ret_vec_te`. This
+                        // is the closure-literal binding path (returns at the end
+                        // of this block, before the generic pending-closure path).
+                        if let ExprKind::Closure { body, .. } = &value.kind {
+                            if let Some(vec_te) = self.closure_tail_vec_return_te(body) {
+                                self.closure_ret_vec_te.insert(var_name.clone(), vec_te);
+                            }
+                        }
                         // Slice 1 (B-2026-06-22-2): if the RHS is a call to a
                         // function that returns a heap-env closure, this binding
                         // now OWNS that reference-counted env. Register the
@@ -3872,6 +3886,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.closure_fn_types.insert(bound_name, fn_type);
                     }
                 }
+                // B-2026-07-18-43: if the RHS is a closure whose body returns a
+                // Vec/VecDeque (a bare `|| v` or a block tail naming one), record
+                // the returned `Vec[T]` `TypeExpr` under the binding name(s) so an
+                // INLINE index of the call result (`g()[i]`) can resolve its
+                // element type. The captured source's element type is still
+                // visible here (in the enclosing scope's `var_elem_type_exprs`),
+                // whereas at the index site the `Call`/`Index` span collision and
+                // the absence of a `fn_return_type_exprs` entry for a closure
+                // callee leave the type unknown. `inline_temp_vec_te` consults
+                // this table.
                 // Slice pattern let — `let [a, b, c] = arr;`. The
                 // value-based `bind_pattern` fall-through would no-op;
                 // route through the SliceSource helper so prefix/suffix
