@@ -13321,6 +13321,25 @@ fn test_vec_retain_predicate() {
 }
 
 #[test]
+fn test_vec_dedup_removes_consecutive_duplicates() {
+    // `Vec.dedup()` removes CONSECUTIVE duplicate elements (keeps the first of
+    // each run, Rust semantics), mutating in place. Non-adjacent duplicates are
+    // preserved. Works for scalar and String elements.
+    let output = run("fn main() {
+            let mut xs: Vec[i64] = [1, 1, 2, 3, 3, 3, 1];
+            xs.dedup();
+            println(xs.len());
+            for x in xs.iter() { println(x); }
+            let mut ss: Vec[String] = [\"a\", \"a\", \"bb\", \"a\"];
+            ss.dedup();
+            println(ss.len());
+            for s in ss.iter() { println(s); }
+        }");
+    // [1,2,3,1] (trailing non-adjacent 1 kept); ["a","bb","a"]
+    assert_eq!(output, "4\n1\n2\n3\n1\n3\na\nbb\na\n");
+}
+
+#[test]
 fn test_vec_sort_by_closure_descending() {
     let output = run(
         "fn main() {

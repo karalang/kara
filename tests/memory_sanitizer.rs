@@ -29183,6 +29183,44 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_dedup_drops_removed_heap_duplicates_no_leak() {
+        // `Vec[T].dedup()` — the AOT lowering must FREE each removed consecutive
+        // duplicate (distinct owned `String` buffers even when content-equal),
+        // must NOT double-free the kept run-leaders that compact forward, and
+        // `len = w` must exclude the stale byte-duplicate tail from the Vec's own
+        // scope-exit drop (a bug there is a double-free / SIGABRT, not a leak).
+        // Loop a heap `Vec[String]` with runs so any per-iteration strand
+        // accumulates into a visible LSan leak.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut v: Vec[String] = Vec.new();
+        v.push("aa".to_string());
+        v.push("aa".to_string());
+        v.push("bbbb".to_string());
+        v.push("bbbb".to_string());
+        v.push("bbbb".to_string());
+        v.push("c".to_string());
+        v.dedup();
+        let mut j: i64 = 0;
+        while j < v.len() {
+            acc = acc + v[j].len();
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["280"],
+            "vec_dedup_drops_removed_heap_duplicates_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_reassign_heap_field_and_map_set_var_no_leak_no_double_free() {
         // B-2026-07-15-25: reassigning a struct's heap-owning FIELD (`h.v = …`,
         // `h.s = …`, `h.m = …`) used to overwrite the slot with NO drop of the

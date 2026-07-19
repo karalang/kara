@@ -1197,6 +1197,34 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Unit);
                 }
             }
+            "dedup" => {
+                // dedup() — remove CONSECUTIVE duplicate elements, keeping the
+                // first of each run (Rust `Vec::dedup`). No predicate; adjacent
+                // equality via `value_compare == Equal`. Snapshot-then-write-back
+                // like retain (the per-Vec RwLock is non-reentrant on this
+                // thread, though no user closure re-enters here).
+                if !args.is_empty() {
+                    panic!("dedup expects no arguments, got {}", args.len());
+                }
+                if let Value::Array(ref rc) = obj {
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    let snapshot = rc.read().unwrap().clone();
+                    let mut kept: Vec<Value> = Vec::with_capacity(snapshot.len());
+                    for elem in snapshot {
+                        let dup = kept.last().is_some_and(|prev| {
+                            super::helpers::value_compare(prev, &elem) == std::cmp::Ordering::Equal
+                        });
+                        if !dup {
+                            kept.push(elem);
+                        }
+                    }
+                    *try_write_or_panic(rc, &label) = kept;
+                    return Some(Value::Unit);
+                }
+            }
             "sort_by" => {
                 // sort_by(|a, b| -> Ordering) — snapshot the vec so the user
                 // closure can re-enter the interpreter freely (std::sync::RwLock

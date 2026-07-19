@@ -4956,6 +4956,189 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(len_p, w_final).unwrap();
                 Ok(i64_t.const_zero().into())
             }
+            "dedup" => {
+                // `Vec[T].dedup()` — remove CONSECUTIVE duplicate elements,
+                // keeping the first of each run (Rust `Vec::dedup`). Same in-place
+                // compaction skeleton as `retain`, but the keep decision is
+                // "differs from the PREVIOUS KEPT element" (`data[w-1] != data[r]`)
+                // via `compile_binop(Eq)` (scalar icmp / String memcmp / struct
+                // field-eq — the same equality `contains` uses), and removed
+                // duplicates are freed through the element drop glue. Interp-parity
+                // with method_call_seq.rs's snapshot-dedup-writeback.
+                //
+                //   w = 0
+                //   for r in 0..len:
+                //       x = data[r]
+                //       dup = w != 0 && data[w-1] == x
+                //       if dup: drop_glue(data[r])          // free the duplicate
+                //       else:   data[w] = x; w += 1         // keep (move forward)
+                //   len = w
+                if !args.is_empty() {
+                    return Err(format!(
+                        "Vec.dedup expects no arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+                let fn_val = self.current_fn.unwrap();
+
+                let data_pp = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "dd.data.p")
+                    .unwrap();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "dd.len.p")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_pp, "dd.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_p, "dd.len")
+                    .unwrap()
+                    .into_int_value();
+
+                let zero = i64_t.const_zero();
+                let one = i64_t.const_int(1, false);
+                let r_slot = self.create_entry_alloca(fn_val, "dd.r", i64_t.into());
+                let w_slot = self.create_entry_alloca(fn_val, "dd.w", i64_t.into());
+                self.builder.build_store(r_slot, zero).unwrap();
+                self.builder.build_store(w_slot, zero).unwrap();
+
+                let cond_bb = self.context.append_basic_block(fn_val, "dd.cond");
+                let body_bb = self.context.append_basic_block(fn_val, "dd.body");
+                let cmp_bb = self.context.append_basic_block(fn_val, "dd.cmp");
+                let keep_bb = self.context.append_basic_block(fn_val, "dd.keep");
+                let drop_bb = self.context.append_basic_block(fn_val, "dd.drop");
+                let step_bb = self.context.append_basic_block(fn_val, "dd.step");
+                let done_bb = self.context.append_basic_block(fn_val, "dd.done");
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                // cond: r < len ?
+                self.builder.position_at_end(cond_bb);
+                let r_cur = self
+                    .builder
+                    .build_load(i64_t, r_slot, "dd.r.c")
+                    .unwrap()
+                    .into_int_value();
+                let in_range = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, r_cur, len, "dd.in")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_range, body_bb, done_bb)
+                    .unwrap();
+
+                // body: x = data[r]; the FIRST element (w==0) is always kept.
+                self.builder.position_at_end(body_bb);
+                let r_b = self
+                    .builder
+                    .build_load(i64_t, r_slot, "dd.r.b")
+                    .unwrap()
+                    .into_int_value();
+                let x_ptr = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(elem_ty, data, &[r_b], "dd.x.p")
+                        .unwrap()
+                };
+                let x_val = self.builder.build_load(elem_ty, x_ptr, "dd.x").unwrap();
+                let w_b = self
+                    .builder
+                    .build_load(i64_t, w_slot, "dd.w.b")
+                    .unwrap()
+                    .into_int_value();
+                let w_is_zero = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, w_b, zero, "dd.w0")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(w_is_zero, keep_bb, cmp_bb)
+                    .unwrap();
+
+                // cmp: prev = data[w-1]; dup = (prev == x).
+                self.builder.position_at_end(cmp_bb);
+                let w_m1 = self.builder.build_int_sub(w_b, one, "dd.wm1").unwrap();
+                let prev_ptr = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(elem_ty, data, &[w_m1], "dd.prev.p")
+                        .unwrap()
+                };
+                let prev_val = self
+                    .builder
+                    .build_load(elem_ty, prev_ptr, "dd.prev")
+                    .unwrap();
+                let eq = self
+                    .compile_binop(&crate::ast::BinOp::Eq, prev_val, x_val)?
+                    .into_int_value();
+                // `compile_binop` may emit its own blocks (String/struct eq);
+                // branch from the CURRENT insert point, not the assumed `cmp_bb`.
+                self.builder
+                    .build_conditional_branch(eq, drop_bb, keep_bb)
+                    .unwrap();
+
+                // keep: data[w] = x; w += 1.
+                self.builder.position_at_end(keep_bb);
+                let w_k = self
+                    .builder
+                    .build_load(i64_t, w_slot, "dd.w.k")
+                    .unwrap()
+                    .into_int_value();
+                let dst = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(elem_ty, data, &[w_k], "dd.dst")
+                        .unwrap()
+                };
+                self.builder.build_store(dst, x_val).unwrap();
+                let w_next = self.builder.build_int_add(w_k, one, "dd.w.next").unwrap();
+                self.builder.build_store(w_slot, w_next).unwrap();
+                self.builder.build_unconditional_branch(step_bb).unwrap();
+
+                // drop: free the removed duplicate heap element (skip POD).
+                self.builder.position_at_end(drop_bb);
+                if let Some(te) = &elem_te {
+                    if !is_trivially_copyable_te(te) {
+                        let elem_drop = self.emit_drop_fn_for_type_expr(te);
+                        let r_d = self
+                            .builder
+                            .build_load(i64_t, r_slot, "dd.r.d")
+                            .unwrap()
+                            .into_int_value();
+                        let ep = unsafe {
+                            self.builder
+                                .build_in_bounds_gep(elem_ty, data, &[r_d], "dd.drop.p")
+                                .unwrap()
+                        };
+                        self.builder
+                            .build_call(elem_drop, &[ep.into()], "")
+                            .unwrap();
+                    }
+                }
+                self.builder.build_unconditional_branch(step_bb).unwrap();
+
+                // step: r += 1
+                self.builder.position_at_end(step_bb);
+                let r_s = self
+                    .builder
+                    .build_load(i64_t, r_slot, "dd.r.s")
+                    .unwrap()
+                    .into_int_value();
+                let r_ns = self.builder.build_int_add(r_s, one, "dd.r.ns").unwrap();
+                self.builder.build_store(r_slot, r_ns).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                // done: len = w. Buffer + cap unchanged.
+                self.builder.position_at_end(done_bb);
+                let w_final = self
+                    .builder
+                    .build_load(i64_t, w_slot, "dd.w.final")
+                    .unwrap()
+                    .into_int_value();
+                self.builder.build_store(len_p, w_final).unwrap();
+                Ok(i64_t.const_zero().into())
+            }
             "sort_by" => {
                 if args.len() != 1 {
                     return Err(format!(

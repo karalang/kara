@@ -4394,6 +4394,31 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Unit;
             }
         }
+        if method == "dedup" {
+            let is_vec = match &obj_ty {
+                Type::Named { name, args } => {
+                    (name == "Vec" || name == "VecDeque") && args.len() == 1
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => matches!(
+                    inner.as_ref(),
+                    Type::Named { name, args } if (name == "Vec" || name == "VecDeque") && args.len() == 1
+                ),
+                _ => false,
+            };
+            if is_vec {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("Vec.dedup() takes no arguments, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                return Type::Unit;
+            }
+        }
         if matches!(
             method,
             "sort_by" | "sorted_by" | "sort_by_key" | "sorted_by_key"

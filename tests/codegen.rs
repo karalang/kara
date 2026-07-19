@@ -54917,6 +54917,39 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_dedup_scalar_and_heap() {
+        // `Vec[T].dedup()` — remove CONSECUTIVE duplicates, keeping the first of
+        // each run (Rust semantics). In-place compaction mirroring `retain`, with
+        // the keep decision = "differs from the previous kept element" via the
+        // element `Eq` and drop-glue on the removed duplicates. Covers a scalar
+        // Vec (runs collapse, non-adjacent dups preserved), a heap Vec[String]
+        // (removed dups freed — leak-clean in the sibling LSan test), all-equal,
+        // and no-dup pass-through.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = [1, 1, 2, 3, 3, 3, 1];\n\
+                 v.dedup();\n\
+                 println(v.len());\n\
+                 println(v[0]); println(v[2]); println(v[3]);\n\
+                 let mut s: Vec[String] = [\"a\", \"a\", \"bb\", \"bb\", \"a\"];\n\
+                 s.dedup();\n\
+                 println(s.len());\n\
+                 println(s[0]); println(s[1]); println(s[2]);\n\
+                 let mut e: Vec[i64] = [7, 7, 7];\n\
+                 e.dedup();\n\
+                 println(e.len());\n\
+                 let mut n: Vec[i64] = [1, 2, 3];\n\
+                 n.dedup();\n\
+                 println(n.len());\n\
+             }",
+        ) {
+            // scalar: [1,2,3,1] (len 4, non-adjacent trailing 1 kept);
+            // heap: [a, bb, a] (len 3); all-equal: len 1; no-dup: len 3.
+            assert_eq!(out, "4\n1\n3\n1\n3\na\nbb\na\n1\n3\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_reassign_heap_field_and_map_var() {
         // B-2026-07-15-25: reassigning a struct's heap field now drops the old
         // value before overwriting (no leak) and suppresses a moved-binding
