@@ -102,8 +102,9 @@ struct Emitter {
     // Parallel to `locals`: true iff the slot currently OWNS a heap buffer
     // (Slice 9) — freed on reassignment (old value) and at scope exit.
     // Compile-time approximation: seed-valid move discipline makes
-    // binder-frees-once exact; a mid-fn `return` skips the epilogue (leak,
-    // documented), as does a re-`let` inside a loop body.
+    // binder-frees-once exact; mid-fn `return`s run the same scope frees as
+    // the epilogue (Slice 22), and a loop-body re-`let` frees the prior copy
+    // at the let site (Slice 17).
     locals_heap: Vec[bool],
     // Monotonic basic-block label id (Slice 4: `if`/`else` control flow).
     nlbl: i64,
@@ -595,15 +596,9 @@ impl Emitter {
             None => {}
         }
         // Scope-exit epilogue (Slice 9): free every slot that still OWNS a
-        // heap buffer. Runs before the default ret; a mid-fn `return` skips
-        // it (documented leak).
-        let mut fi = 0;
-        while fi < self.locals_heap.len() {
-            if self.locals_heap[fi] {
-                self.emit_free_slot(fi);
-            }
-            fi = fi + 1;
-        }
+        // heap buffer. Runs before the default ret; mid-fn `return`s emit the
+        // same frees before their own ret (Slice 22).
+        self.emit_scope_frees();
         if is_main {
             self.funcs = self.funcs
                 + "define i32 @main() {\nentry:\n"
@@ -632,6 +627,23 @@ impl Emitter {
                 + " "
                 + tv
                 + "\n}\n";
+        }
+    }
+
+    // Free every slot that still OWNS a heap buffer — the fn-exit epilogue.
+    // Safe to run at ANY exit point (including a mid-fn `return` before later
+    // `let`s have executed): every slot is an entry-block alloca zero-
+    // initialized upfront, so an unexecuted let's slot holds zeroinit and its
+    // free is a no-op (free(null)). Slots registered after the exit point at
+    // WALK time aren't in locals_heap yet, but on that dynamic path they hold
+    // zeroinit anyway — nothing to free.
+    fn emit_scope_frees(mut ref self) {
+        let mut fi = 0;
+        while fi < self.locals_heap.len() {
+            if self.locals_heap[fi] {
+                self.emit_free_slot(fi);
+            }
+            fi = fi + 1;
         }
     }
 
@@ -1431,9 +1443,7 @@ impl Emitter {
                             rv = mop2;
                         } else if self.cur_ret == 2 and kind == 2 and not heap {
                             // A returned BORROW (param/local) becomes an owned
-                            // copy — this fn's epilogue frees the original.
-                            // (A mid-fn return still skips the epilogue —
-                            // documented leak.)
+                            // copy — the scope frees below release the original.
                             let mv = self.emit_materialize(op);
                             let Val { op: mop, kind: mk, heap: mh } = mv;
                             rv = mop;
@@ -1443,6 +1453,10 @@ impl Emitter {
                     }
                     None => {}
                 }
+                // Free owned slots BEFORE the ret (Slice 22) — the value above
+                // is either a non-heap bit-copy or a materialized owned copy,
+                // so releasing the fn's own storage here is drop-exact.
+                self.emit_scope_frees();
                 if self.in_main {
                     self.body = self.body + "  ret i32 0\n";
                 } else {

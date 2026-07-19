@@ -207,6 +207,19 @@ const CORPUS: &[&str] = &[
     "struct User { name: String, age: i64 }\nfn rename(u: mut ref User, n: String) { u.name = n + \"!\"; }\nfn main() { let mut u = User { name: \"ada\", age: 1 }; rename(mut u, \"kay\"); println(u.name) }",
     // A counter-struct threaded through helpers — compiler-shaped state.
     "struct Cnt { words: i64, syms: i64 }\nfn tally(c: mut ref Cnt, b: u8) { if (b >= 97 and b <= 122) { c.words = c.words + 1; } else { if b != 32 { c.syms = c.syms + 1; } } }\nfn main() { let src = \"ab + cd\"; let mut c = Cnt { words: 0, syms: 0 }; for b in src.bytes() { tally(mut c, b); } println(c.words.to_string() + \"/\" + c.syms.to_string()) }",
+    // Slice 23: MID-FN RETURN runs the scope-exit frees — every early-return
+    // path releases owned heap slots before its ret (was a documented leak).
+    // Each program holds owned String/struct locals alive across an early
+    // return; the leak_audit leg is the real assertion here.
+    "fn find(v: ref Vec[i64], t: i64) -> i64 { let tag = \"probe\".to_string(); let mut i = 0; while i < v.len() { if v[i] == t { return i; } i = i + 1; } return 0 - 1; }\nfn main() { let mut v: Vec[i64] = Vec.new(); v.push(4); v.push(9); v.push(7); println(find(v, 9).to_string()); println(find(v, 5).to_string()) }",
+    "fn shout(w: String, early: bool) -> String { let pad = \"..\".to_string(); if early { return w + \"!\"; } let out = pad + w; return out; }\nfn main() { println(shout(\"hey\".to_string(), true)); println(shout(\"ho\".to_string(), false)) }",
+    // Early-returned BORROWS (a local on one path, an owned param on the
+    // other): materialized into an owned copy, then the originals freed.
+    "fn pick(a: String, big: bool) -> String { let b = \"zed\".to_string(); if big { return b; } return a; }\nfn main() { println(pick(\"aa\".to_string(), true)); println(pick(\"bb\".to_string(), false)) }",
+    // Early-returned heap-struct borrows on both paths.
+    "struct Pair { tag: String, n: i64 }\nfn stamp(n: i64) -> Pair { let p = Pair { tag: \"id-\".to_string() + n.to_string(), n: n }; if n > 9 { return p; } let q = Pair { tag: \"small\".to_string(), n: n }; return q; }\nfn main() { let p1 = stamp(12); println(p1.tag); let p2 = stamp(3); println(p2.tag) }",
+    // Return from inside an enum-match arm with an owned local alive.
+    "enum Verdict { Pass, Fail(i64) }\nfn judge(v: Verdict) -> String { let label = \"case \".to_string(); match v { Fail(code) => { return label + \"failed-\" + code.to_string(); } Pass => {} } return label + \"ok\"; }\nfn main() { println(judge(Verdict.Fail(7))); println(judge(Verdict.Pass)) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
