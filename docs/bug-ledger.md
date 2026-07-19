@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 86 | 0 |
 | double-free | 67 | 0 |
 | codegen-gap | 63 | 0 |
-| missing-feature | 52 | 0 |
+| missing-feature | 53 | 0 |
 | false-positive | 37 | 0 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 415 | 0 |
-| typecheck | 75 | 0 |
-| interp | 59 | 0 |
+| typecheck | 76 | 0 |
+| interp | 60 | 0 |
 | ownership | 24 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -122,17 +122,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 | parser | 3 | 0 |
 | effect | 2 | 0 |
+| lowering | 1 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **582 surfaced · 0 open · 578 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **583 surfaced · 0 open · 579 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (578)
+### Fixed (579)
 
-<details><summary>578 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>579 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -714,6 +715,7 @@ _None — the ledger is fully drained._
 | B-2026-07-19-2 | typecheck+interp+codegen | low | `Iterator.position(pred) -> Option[i64]` was unimplemented (rejected `no method 'position' on type 'Iterator'`) | 6448f0d |
 | B-2026-07-19-3 | ownership | medium | `karac check` reports a hard `error[ownership]: value 'v' moved here, used again here` for a reused OWNED heap value (`f(v); f(v)` where `v: Vec`/`St… | 98be8da |
 | B-2026-07-19-4 | typecheck+interp+codegen | low | `Iterator.find(pred) -> Option[T]` was unimplemented (rejected `no method 'find' on type 'Iterator'`) | 2a48965 |
+| B-2026-07-19-5 | typecheck+lowering+interp | low | String-receiver `"42".parse()` (the Rust-familiar sugar) was rejected (`no method 'parse' on type 'String'`) — only the type-receiver `i64.parse(s) -… | 89366dd |
 
 </details>
 
