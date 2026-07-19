@@ -337,6 +337,38 @@ impl<'a> super::TypeChecker<'a> {
                 self.check_expr(&args[0].value, &pred_ty);
                 Type::Bool
             }
+            "position" => {
+                // `position(pred: Fn(T) -> bool) -> Option[i64]` — short-circuit
+                // terminal returning the 0-based index of the first yielded
+                // element the predicate holds for, or `None`. Same predicate
+                // signature as `filter`/`any`.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Iterator.position() expects 1 argument, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![Type::Int(IntSize::I64)],
+                    };
+                }
+                let pred_ty = Type::Function {
+                    params: vec![item.clone()],
+                    return_type: Box::new(Type::Bool),
+                };
+                self.check_expr(&args[0].value, &pred_ty);
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![Type::Int(IntSize::I64)],
+                }
+            }
             "enumerate" => {
                 // `enumerate() -> Iterator[(i64, T)]` — wraps each item
                 // into a tuple of (index, item).
@@ -883,6 +915,7 @@ impl<'a> super::TypeChecker<'a> {
                     "next",
                     "peek",
                     "peekable",
+                    "position",
                     "product",
                     "reduce",
                     "rev",

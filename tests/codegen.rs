@@ -12015,6 +12015,32 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_position_terminal() {
+        // `<iter-chain>.position(|x| pred) -> Option[i64]` — the 0-based index of
+        // the first YIELDED element the predicate holds for, or None. Desugars to
+        // a fused for-loop with a running index and a short-circuit break; the
+        // index counts POST-adaptor elements. Covers a hit, a miss (None), the
+        // first-element hit (index 0), filter/map adaptors before the terminal
+        // (index is over the ADAPTED sequence), a String source, and a range.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [10, 20, 30, 40];\n\
+                 match v.iter().position(|x| x == 30) { Some(i) => println(i), None => println(-1) }\n\
+                 match v.iter().position(|x| x == 99) { Some(i) => println(i), None => println(-1) }\n\
+                 match v.iter().position(|x| x == 10) { Some(i) => println(i), None => println(-1) }\n\
+                 match v.iter().filter(|x| x % 20 == 0).position(|x| x == 40) { Some(i) => println(i), None => println(-1) }\n\
+                 match v.iter().map(|x| x / 10).position(|x| x == 3) { Some(i) => println(i), None => println(-1) }\n\
+                 let s: Vec[String] = [\"a\", \"bb\", \"ccc\"];\n\
+                 match s.iter().position(|w| w.len() == 3) { Some(i) => println(i), None => println(-1) }\n\
+                 match (0..10).position(|x| x == 7) { Some(i) => println(i), None => println(-1) }\n\
+             }",
+        ) {
+            // 30@2; miss=-1; 10@0; filter[20,40] 40@1; map[1,2,3] 3@2; \"ccc\"@2; range 7@7
+            assert_eq!(out, "2\n-1\n0\n1\n2\n2\n7\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_iter_chain_wildcard_closure_param() {
         // B-2026-07-11-19 — `|_|` wildcard closure params on the fused-chain
         // terminals. The interpreter already accepted them; codegen's collect /

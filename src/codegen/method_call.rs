@@ -5654,6 +5654,28 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<iter-chain>.position(|x| pred) -> Option[i64]` — short-circuit index
+        // terminal. Same iterator-chain gate as `any`/`all`.
+        if method == "position"
+            && args.len() == 1
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                if params.len() == 1 {
+                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__pop") {
+                        if let Some(v) =
+                            self.try_compile_iter_chain_position(object, &param, body, call_span)?
+                        {
+                            return Ok(v);
+                        }
+                    }
+                }
+            }
+        }
+
         // `<iter-chain>.sum()` — the numeric-accumulation terminal on a fused
         // iterator chain (B-2026-07-11-19). Same iterator-chain receiver gate as
         // `fold`. Desugars to a `fold(<typed-zero>, |acc, x| acc + x)`, seeding
@@ -10259,6 +10281,226 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&resname))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// `<iter-chain>.position(|x| pred) -> Option[i64]` — the 0-based index of
+    /// the first YIELDED element the predicate holds for, or `None`. Desugars to
+    /// a fused for-loop with a running index and a short-circuit `break`:
+    ///
+    /// ```text
+    /// { let mut __pos: Option[i64] = None; let mut __idx: i64 = 0;
+    ///   for <elem> in <base> { <steps>
+    ///       if <pred> { __pos = Some(__idx); break; }
+    ///       __idx = __idx + 1; }
+    ///   __pos }
+    /// ```
+    ///
+    /// The index counts POST-adaptor elements (each sink invocation). `Ok(None)`
+    /// (loud deferral) for a chain shape the fused peel doesn't understand.
+    fn try_compile_iter_chain_position(
+        &mut self,
+        recv: &Expr,
+        param: &str,
+        pred: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let (base, steps) = match Self::peel_fused_map_filter_chain(recv) {
+            Some(x) => x,
+            None if Self::for_loop_iterates_flat_map(recv) => (recv, Vec::new()),
+            None => return Ok(None),
+        };
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let sp = call_span.clone();
+        let posname = format!("__pos_{}", uid);
+        let idxname = format!("__idx_{}", uid);
+        let elem_name = steps
+            .iter()
+            .find(|(_, p, _)| !p.is_empty())
+            .map(|(_, p, _)| p.clone())
+            .unwrap_or_else(|| param.to_string());
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        // `Some(<idx>)` — the ctor callee is a bare `Identifier`, the form the
+        // parser produces and codegen's enum-variant-call recognition expects.
+        let some_of = |e: Expr| Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Identifier("Some".to_string()),
+                    span: sp.clone(),
+                }),
+                args: vec![CallArg {
+                    label: None,
+                    mut_marker: false,
+                    value: e,
+                    span: sp.clone(),
+                }],
+            },
+            span: sp.clone(),
+        };
+        // Short-circuit sink: bind the pred param to the fully-adapted element
+        // (elide a redundant self-bind), then `if pred { __pos = Some(__idx);
+        // break }`, then `__idx += 1` (skipped on the break path).
+        let sink = |current: Expr| -> Vec<Stmt> {
+            let current_is_param = matches!(&current.kind, ExprKind::Identifier(n) if n == param);
+            let guard = if current_is_param {
+                pred.clone()
+            } else {
+                Expr {
+                    kind: ExprKind::Block(Block {
+                        stmts: vec![Stmt {
+                            kind: StmtKind::Let {
+                                is_mut: false,
+                                pattern: Pattern {
+                                    kind: PatternKind::Binding(param.to_string()),
+                                    span: sp.clone(),
+                                },
+                                ty: None,
+                                value: current,
+                            },
+                            span: sp.clone(),
+                        }],
+                        final_expr: Some(Box::new(pred.clone())),
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                }
+            };
+            let decide = vec![
+                Stmt {
+                    kind: StmtKind::Assign {
+                        target: ident(&posname),
+                        value: some_of(ident(&idxname)),
+                    },
+                    span: sp.clone(),
+                },
+                Stmt {
+                    kind: StmtKind::Expr(Expr {
+                        kind: ExprKind::Break {
+                            label: None,
+                            value: None,
+                        },
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                },
+            ];
+            vec![
+                Stmt {
+                    kind: StmtKind::Expr(Expr {
+                        kind: ExprKind::If {
+                            condition: Box::new(guard),
+                            then_block: Block {
+                                stmts: decide,
+                                final_expr: None,
+                                span: sp.clone(),
+                            },
+                            else_branch: None,
+                        },
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                },
+                Stmt {
+                    kind: StmtKind::Assign {
+                        target: ident(&idxname),
+                        value: Expr {
+                            kind: ExprKind::Binary {
+                                op: BinOp::Add,
+                                left: Box::new(ident(&idxname)),
+                                right: Box::new(Expr {
+                                    kind: ExprKind::Integer(1, None),
+                                    span: sp.clone(),
+                                }),
+                            },
+                            span: sp.clone(),
+                        },
+                    },
+                    span: sp.clone(),
+                },
+            ]
+        };
+        let sw_prefix = format!("__swp_{uid}_");
+        let for_body =
+            Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(elem_name),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(base.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: for_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let i64_te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["i64".to_string()],
+                generic_args: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let opt_i64_te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Option".to_string()],
+                generic_args: Some(vec![GenericArg::Type(i64_te.clone())]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let mut block_stmts = vec![
+            Stmt {
+                kind: StmtKind::Let {
+                    is_mut: true,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(posname.clone()),
+                        span: sp.clone(),
+                    },
+                    ty: Some(opt_i64_te),
+                    value: ident("None"),
+                },
+                span: sp.clone(),
+            },
+            Stmt {
+                kind: StmtKind::Let {
+                    is_mut: true,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(idxname.clone()),
+                        span: sp.clone(),
+                    },
+                    ty: Some(i64_te),
+                    value: Expr {
+                        kind: ExprKind::Integer(0, None),
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            },
+        ];
+        block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
+        block_stmts.push(for_loop);
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: block_stmts,
+                final_expr: Some(Box::new(ident(&posname))),
                 span: sp.clone(),
             }),
             span: sp.clone(),

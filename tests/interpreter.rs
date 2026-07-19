@@ -14938,6 +14938,24 @@ fn main() {
 }
 
 #[test]
+fn test_iter_position_returns_index_of_first_match() {
+    // `position(pred) -> Option[i64]` — 0-based index of the first yielded
+    // element matching the predicate (over the POST-adaptor sequence), or None.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30, 40];
+    match v.iter().position(|x| x == 30) { Some(i) => println(i), None => println(-1) }
+    match v.iter().position(|x| x == 99) { Some(i) => println(i), None => println(-1) }
+    match v.iter().filter(|x| x % 20 == 0).position(|x| x == 40) { Some(i) => println(i), None => println(-1) }
+}
+"#,
+    );
+    // 30@index 2; miss=-1; filtered [20,40] -> 40@index 1
+    assert_eq!(output, "2\n-1\n1\n");
+}
+
+#[test]
 fn test_iter_any_returns_false_when_no_match() {
     let output = run_no_errors(
         r#"

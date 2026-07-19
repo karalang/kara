@@ -818,6 +818,45 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Bool(!want_any));
                 }
             }
+            "position" => {
+                // `position(pred) -> Option[i64]` — the 0-based index of the
+                // first YIELDED element the predicate holds for, or `None`.
+                // Short-circuit like `any`; the index counts post-adaptor
+                // elements (each `iterator_step` yield).
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return Some(self.record_runtime_error(
+                            "Iterator.position() requires a closure argument".to_string(),
+                            span,
+                        ));
+                    };
+                    let pred = self.eval_iter_closure_arg(&arg.value);
+                    if !matches!(pred, Value::Function { .. }) {
+                        return Some(self.record_runtime_error(
+                            format!("Iterator.position() expects a closure; got {}", pred),
+                            span,
+                        ));
+                    }
+                    let mut iter_val = obj;
+                    let mut idx: i64 = 0;
+                    while let Some(item) = self.iterator_step(&mut iter_val) {
+                        let result = self.invoke_function_value(pred.clone(), vec![item]);
+                        if matches!(result, Value::Bool(true)) {
+                            return Some(Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "Some".to_string(),
+                                data: EnumData::Tuple(vec![Value::Int(idx)]),
+                            });
+                        }
+                        idx += 1;
+                    }
+                    return Some(Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    });
+                }
+            }
             _ => return None,
         }
         None
