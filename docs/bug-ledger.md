@@ -122,7 +122,6 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 | parser | 3 | 0 |
 | effect | 2 | 0 |
-| lowering | 1 | 0 |
 ## Current state
 
 _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **583 surfaced · 0 open · 579 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
@@ -715,7 +714,7 @@ _None — the ledger is fully drained._
 | B-2026-07-19-2 | typecheck+interp+codegen | low | `Iterator.position(pred) -> Option[i64]` was unimplemented (rejected `no method 'position' on type 'Iterator'`) | 6448f0d |
 | B-2026-07-19-3 | ownership | medium | `karac check` reports a hard `error[ownership]: value 'v' moved here, used again here` for a reused OWNED heap value (`f(v); f(v)` where `v: Vec`/`St… | 98be8da |
 | B-2026-07-19-4 | typecheck+interp+codegen | low | `Iterator.find(pred) -> Option[T]` was unimplemented (rejected `no method 'find' on type 'Iterator'`) | 2a48965 |
-| B-2026-07-19-5 | typecheck+lowering+interp | low | String-receiver `"42".parse()` (the Rust-familiar sugar) was rejected (`no method 'parse' on type 'String'`) — only the type-receiver `i64.parse(s) -… | 89366dd |
+| B-2026-07-19-5 | typecheck+interp | low | String-receiver `"42".parse()` (the Rust-familiar sugar) was rejected (`no method 'parse' on type 'String'`) — only the type-receiver `i64.parse(s) -… | 89366dd |
 
 </details>
 
