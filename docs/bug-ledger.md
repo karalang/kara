@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 86 | 0 |
 | double-free | 67 | 0 |
 | codegen-gap | 63 | 0 |
-| missing-feature | 55 | 1 |
+| missing-feature | 56 | 1 |
 | false-positive | 37 | 0 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 417 | 0 |
-| typecheck | 78 | 1 |
-| interp | 61 | 0 |
+| codegen | 418 | 0 |
+| typecheck | 79 | 1 |
+| interp | 62 | 0 |
 | ownership | 24 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **586 surfaced · 1 open · 581 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **587 surfaced · 1 open · 582 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **586 surfaced 
 |---|---|---|---|---|---|
 | B-2026-07-19-8 | 2026-07-19 | typecheck | medium | `weak T` struct fields are DECLARATION-ONLY: the modifier parses, type-lowers to `Type::Weak`, and satisfies the ownership cycle checker (`struct Child { parent: weak Parent }` — test_weak_breaks_cycle passes), but there is NO way to construct, assign, or access a weak-field VALUE. design.md § Cycles specifies full Swift-like semantics ('the `weak` annotation breaks back-edges, returns `Option[T]` on access'), none of which is implemented: no `weak <expr>` downgrade expression (the `weak` keyword is only a TYPE-position token), no `.downgrade()`/`.weak()` method, no coercion from a strong `T`/`Option[T]`, and no codegen. A `weak T` field therefore can only ever be declared — a struct/shared-struct that has one cannot be constructed, making the feature unusable at runtime. | src/typechecker (weak-field value semantics), src/codegen |
 
-### Fixed (581)
+### Fixed (582)
 
-<details><summary>581 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>582 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -719,6 +719,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **586 surfaced 
 | B-2026-07-19-5 | typecheck+interp | low | String-receiver `"42".parse()` (the Rust-familiar sugar) was rejected (`no method 'parse' on type 'String'`) — only the type-receiver `i64.parse(s) -… | 89366dd |
 | B-2026-07-19-6 | codegen | high | A field store of an `Option[shared]` into a Vec-INDEXED shared-struct element (identifier root — `v[i].next = Some(v[j])`, `nodes[i].field = X`) had… | 6f8f441 |
 | B-2026-07-19-7 | typecheck+interp+codegen | low | `Iterator.last() -> Option[T]` and `Iterator.nth(n) -> Option[T]` were unimplemented (rejected `no method 'last'/'nth' on type 'Iterator'`) | 77cd44c |
+| B-2026-07-19-9 | typecheck+interp+codegen | low | `Vec[T].split_off(i) -> Vec[T]` was unimplemented | 293b6b5 |
 
 </details>
 
