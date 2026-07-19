@@ -14581,6 +14581,42 @@ fn main() {
 }
 
 #[test]
+fn test_iter_rev_range_interpreter() {
+    // B-2026-07-18-41 range leg — `(a..b).rev()` / `(a..=b).rev()` descend over
+    // the same value set. Mirrored A/B by the codegen reverse-iterate range loop
+    // (tests/codegen.rs::e2e_iter_rev_range_reverse_iterate): for-loop
+    // (exclusive / inclusive / empty / nested), vec indexing in reverse, and the
+    // collect / fold / sum / count terminals.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    for i in (0..5).rev() { print(i); }
+    println("");
+    for i in (1..=4).rev() { print(i); }
+    println("");
+    for i in (5..5).rev() { print(i); }
+    println("E");
+    let v: Vec[i64] = [10, 20, 30, 40];
+    let mut s: i64 = 0;
+    for i in (0..4).rev() { s = s + v[i]; }
+    println(s);
+    let w: Vec[i64] = (0..3).rev().collect();
+    println(w.get(0));
+    println((0..4).rev().fold(0, |acc, x| acc * 10 + x));
+    println((0..4).rev().sum());
+    println((1..=3).rev().count());
+    for a in (0..2).rev() { for b in (0..2).rev() { print(f"{a}{b} "); } }
+    println("");
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "43210\n4321\nE\n100\nSome(2)\n3210\n6\n3\n11 10 01 00 \n"
+    );
+}
+
+#[test]
 fn test_iter_collect_after_filter_drops_rejected_elements() {
     // filter then collect — only elements that pass the predicate land
     // in the resulting Vec.

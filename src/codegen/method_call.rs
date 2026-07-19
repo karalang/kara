@@ -665,10 +665,13 @@ impl<'ctx> super::Codegen<'ctx> {
     ///     combined with `rev` is NOT a reverse-iterate (`take(2).rev()` keeps
     ///     the first two then flips; reverse-iterating would keep the LAST two)
     ///     so it stays deferred;
-    ///   * the base source is a BOUND `Vec` identifier's `.iter()`/`.into_iter()`.
-    ///     Only that base routes through the reverse-aware `compile_for_vec_var`,
-    ///     so restricting here guarantees the flag is CONSUMED — never a silent
-    ///     forward iteration over an unhandled base (range / temp / Set / chars).
+    ///   * the base source is EITHER a BOUND `Vec` identifier's
+    ///     `.iter()`/`.into_iter()` (routes through the reverse-aware
+    ///     `compile_for_vec_var`) OR a BARE range `(a..b)` / `(a..=b)` directly
+    ///     under the `.rev()` (routes through the descending `compile_for_range`).
+    ///     Both consume the `pending_reverse_iter` flag, so restricting here
+    ///     guarantees it is CONSUMED — never a silent forward iteration over an
+    ///     unhandled base (temp Vec / Set / chars / adaptor-over-range).
     pub(super) fn rev_chain_reverse_iterable(&self, expr: &Expr) -> bool {
         let mut seen_rev = false;
         let mut cur = expr;
@@ -688,6 +691,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         return false;
                     }
                     seen_rev = true;
+                    // Bare `(a..b).rev()` / `(a..=b).rev()` — the reversal is
+                    // directly over a range, serviced by the descending
+                    // `compile_for_range` loop (which consumes the signal). No
+                    // adaptor may sit between `rev` and the range: `map`/`filter`
+                    // over a range route through the fused-chain for-loop, NOT
+                    // `compile_for_range`, so they would leave the signal
+                    // unconsumed → the loud bail. Only the direct-range shape
+                    // qualifies here.
+                    if matches!(&object.kind, ExprKind::Range { .. }) {
+                        return true;
+                    }
                     cur = object;
                 }
                 "map" | "filter" | "inspect" if args.len() == 1 => {

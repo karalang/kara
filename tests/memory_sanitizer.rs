@@ -643,6 +643,50 @@ fn main() {
     }
 
     #[test]
+    fn asan_iter_rev_range_reverse_iterate() {
+        // B-2026-07-18-41 range leg — `(a..b).rev()` descends over the same
+        // index set. The descending loop allocates nothing itself, but the
+        // accounting stress is a reverse-order heap-index MOVE: reading
+        // `v[i]` (Vec[String]) in reverse and pushing it into an owning sink
+        // must clone the source element (else the container's element-drop and
+        // the sink's owner double-free it). The reversed `collect` produces an
+        // independent Vec whose buffers each free once. Looped so any
+        // per-iteration imbalance accumulates for LSan.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut iter: i64 = 0i64;
+    while iter < 3i64 {
+        let v: Vec[String] = [f"a{iter}", f"b{iter}", f"c{iter}"];
+        let mut d: Vec[String] = Vec.new();
+        for i in (0..3).rev() {
+            d.push(v[i]);
+        }
+        println(d.get(0));
+        // Source still owns its buffers.
+        println(v.get(0));
+        let r: Vec[String] = (0..2).rev().map(|x: i64| f"r{x}").collect();
+        println(r.get(0));
+        iter = iter + 1i64;
+    }
+}
+"#,
+            &[
+                "Some(c0)",
+                "Some(a0)",
+                "Some(r1)",
+                "Some(c1)",
+                "Some(a1)",
+                "Some(r1)",
+                "Some(c2)",
+                "Some(a2)",
+                "Some(r1)",
+            ],
+            "asan_iter_rev_range_reverse_iterate",
+        );
+    }
+
+    #[test]
     fn asan_autograd_tensor_valued_module() {
         // The full `std.autograd` tensor-valued surface end-to-end: leaf copies,
         // the fresh-local value/grad pushes, the `backward` accumulation, and the

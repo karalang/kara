@@ -1176,9 +1176,33 @@ impl<'ctx> super::Codegen<'ctx> {
             i64_t.const_int(1, false)
         };
 
-        // Allocate loop counter
+        // `for i in (a..b).rev()` / `(a..=b).rev()` — reverse iteration over the
+        // SAME value set, just descending (B-2026-07-18-41 residual). The rev
+        // guard in `compile_for` strips `.rev()`, sets this one-shot signal, and
+        // recurses on the bare range; consume+clear it here (nesting-safe, like
+        // `compile_for_vec_var`). Reversal only reorders `[start, end)` — every
+        // value is still visited — so the bounds-check-elision facts
+        // (`collect_asserted_bounds_from_for_range`, `start <= i < end`) below
+        // stay valid unchanged. `rev_chain_reverse_iterable` gates the signal to
+        // a BARE range (no `step_by`), so `reverse` is only ever paired with the
+        // default unit step.
+        let reverse = std::mem::take(&mut self.pending_reverse_iter);
+
+        // Allocate loop counter. Forward starts at `start`; reverse starts at
+        // the last value visited (`end - 1` exclusive, `end` inclusive).
+        let init_val = if reverse {
+            if inclusive {
+                end_val
+            } else {
+                self.builder
+                    .build_int_sub(end_val, i64_t.const_int(1, false), "rev.init")
+                    .unwrap()
+            }
+        } else {
+            start_val
+        };
         let counter = self.create_entry_alloca(fn_val, "for.i", i64_t.into());
-        self.builder.build_store(counter, start_val).unwrap();
+        self.builder.build_store(counter, init_val).unwrap();
 
         // Monotone-variable BCE preheader loads (control_flow_bce.rs §
         // monotone scan) — the loop var itself is covered by the
@@ -1209,14 +1233,18 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
             .unwrap()
             .into_int_value();
-        let pred = if inclusive {
-            IntPredicate::SLE
+        // Reverse descends until it passes `start` (`i >= start`); forward
+        // ascends until it reaches `end` (`i < end`, or `<= end` inclusive).
+        let (pred, bound) = if reverse {
+            (IntPredicate::SGE, start_val)
+        } else if inclusive {
+            (IntPredicate::SLE, end_val)
         } else {
-            IntPredicate::SLT
+            (IntPredicate::SLT, end_val)
         };
         let cond = self
             .builder
-            .build_int_compare(pred, cur, end_val, "for.cond")
+            .build_int_compare(pred, cur, bound, "for.cond")
             .unwrap();
         self.builder
             .build_conditional_branch(cond, body_bb, exit_bb)
@@ -1303,7 +1331,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // negative, where `+1` would unsigned-wrap. An explicit `step` or an
         // inclusive range (`..=end`, whose final `+1` can reach `end + 1`) stays
         // on the plain add — those cannot be proven wrap-free here.
-        let next = if step.is_none() && !inclusive {
+        let next = if reverse {
+            // Descending: `cur - step_val` (step is always the unit default in
+            // the reverse path — see the `reverse` gate above).
+            self.builder.build_int_sub(cur, step_val, "decr").unwrap()
+        } else if step.is_none() && !inclusive {
             self.builder
                 .build_int_nsw_add(cur, step_val, "incr")
                 .unwrap()

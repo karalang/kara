@@ -14359,18 +14359,63 @@ fn main() {
         }
     }
 
+    /// B-2026-07-18-41 range leg — the reverse-iterate lowering extended to a
+    /// BARE range base: `for i in (a..b).rev()` / `(a..=b).rev()` and the
+    /// terminals that lower to `compile_for_range` (`collect`/`fold`/`sum`/
+    /// `count`). The descending loop (`init = end-1`/`end`, `i >= start`,
+    /// decrement) visits the SAME value set as forward, so bounds-check elision
+    /// on `v[i]` stays valid; the one-shot `pending_reverse_iter` signal is
+    /// nesting-safe. Byte-identical to the interpreter
+    /// (`test_iter_rev_range_interpreter`); no allocation, so leak-free.
+    #[test]
+    fn e2e_iter_rev_range_reverse_iterate() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 for i in (0..5).rev() { print(i); }\n\
+                 println(\"\");\n\
+                 for i in (1..=4).rev() { print(i); }\n\
+                 println(\"\");\n\
+                 for i in (5..5).rev() { print(i); }\n\
+                 println(\"E\");\n\
+                 let v: Vec[i64] = [10, 20, 30, 40];\n\
+                 let mut s: i64 = 0;\n\
+                 for i in (0..4).rev() { s = s + v[i]; }\n\
+                 println(s);\n\
+                 let w: Vec[i64] = (0..3).rev().collect();\n\
+                 println(w.get(0));\n\
+                 println((0..4).rev().fold(0, |acc, x| acc * 10 + x));\n\
+                 println((0..4).rev().sum());\n\
+                 println((1..=3).rev().count());\n\
+                 for a in (0..2).rev() { for b in (0..2).rev() { print(f\"{a}{b} \"); } }\n\
+                 println(\"\");\n\
+             }",
+        ) {
+            // (0..5).rev)=43210; (1..=4).rev=4321; empty→E; vec-sum(all)=100;
+            // collect.get(0)=Some(2); fold rev[3,2,1,0]=3210; sum=6; count=3;
+            // nested rev: 11 10 01 00
+            assert_eq!(
+                out,
+                "43210\n4321\nE\n100\nSome(2)\n3210\n6\n3\n11 10 01 00 \n"
+            );
+        }
+    }
+
     #[test]
     fn e2e_iter_rev_deferred_loud_message() {
-        // The reverse-iterate lowering (above) covers a bound-Vec base with
-        // order-independent steps. Shapes OUTSIDE that — a TEMP/literal source, a
-        // RANGE base, or a POSITIONAL adaptor (`enumerate`/`take`) combined with
-        // `rev` (semantically NOT a plain reverse) — must still bail LOUD naming
+        // The reverse-iterate lowering covers a bound-Vec base with order-
+        // independent steps (above) and a BARE range base (for-loop + collect /
+        // fold / sum / count terminals, `e2e_iter_rev_range_reverse_iterate`).
+        // Shapes OUTSIDE those — a TEMP/literal source, or a POSITIONAL adaptor
+        // (`enumerate`/`take`/`step_by`) or `map` combined with `rev` over a
+        // range (semantically NOT a plain reverse, and routed through the fused
+        // chain rather than `compile_for_range`) — must still bail LOUD naming
         // rev + `--interp`, never silently skip or forward-iterate.
         for src in [
             "fn main() { let n: i64 = vec![1,2,3].iter().rev().sum(); println(n); }\n",
-            "fn main() { let w: Vec[i64] = (0..3).rev().collect(); println(w.get(0)); }\n",
             "fn main() { let v = vec![1,2,3]; for (i, x) in v.iter().enumerate().rev() { println(x); } }\n",
             "fn main() { let v = vec![1,2,3,4]; let w: Vec[i64] = v.iter().take(2).rev().collect(); println(w.get(0)); }\n",
+            "fn main() { for i in (0..10).step_by(2).rev() { println(i); } }\n",
+            "fn main() { for i in (0..5).map(|x: i64| x * 2).rev() { println(i); } }\n",
         ] {
             let err = ir_result(src).expect_err("unsupported rev chain must bail loud");
             assert!(
