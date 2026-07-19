@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 86 | 0 |
 | double-free | 67 | 0 |
 | codegen-gap | 63 | 0 |
-| missing-feature | 50 | 0 |
+| missing-feature | 51 | 0 |
 | false-positive | 36 | 0 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 413 | 0 |
-| typecheck | 73 | 0 |
-| interp | 57 | 0 |
+| codegen | 414 | 0 |
+| typecheck | 74 | 0 |
+| interp | 58 | 0 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **579 surfaced · 0 open · 575 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **580 surfaced · 0 open · 576 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (575)
+### Fixed (576)
 
-<details><summary>575 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>576 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -711,6 +711,7 @@ _None — the ledger is fully drained._
 | B-2026-07-18-50 | typecheck | medium | A GENERIC struct literal whose field type WRAPS the type param in a container (`items: Vec[T]`, `v: Option[T]`) did NOT infer `T` from a concrete ini… | c5c13a7 |
 | B-2026-07-18-51 | typecheck | medium | A GENERIC struct literal that binds the SAME type param from CONFLICTING field values was silently ACCEPTED — `Two[T] { a: 1, b: "s".to_string() }` (… | c5c13a7 |
 | B-2026-07-19-1 | typecheck+interp+codegen | low | `Vec[T].dedup()` was unimplemented — `v.dedup()` rejected `no method 'dedup' on type 'Vec'` in both backends (`dedup` was already in ast.rs's mutatin… | f5156fb |
+| B-2026-07-19-2 | typecheck+interp+codegen | low | `Iterator.position(pred) -> Option[i64]` was unimplemented (rejected `no method 'position' on type 'Iterator'`) | 6448f0d |
 
 </details>
 
