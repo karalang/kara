@@ -66,6 +66,51 @@ impl Attribute {
     }
 }
 
+/// The CPU features enabled by every `#[target_feature(...)]` attribute in
+/// `attrs`, as bare feature names (no `+`/`-` prefix), de-duplicated in first-
+/// seen order. Recognizes the design's `#[target_feature(enable = "avx2,bmi2")]`
+/// form (design.md § Multiversioning, floor/ceiling composition) and the
+/// checklist's positional `#[target_feature("avx2")]` shorthand; a feature
+/// string may be a comma-separated list. Empty when no such attribute is
+/// present. Consumed by codegen (emits the LLVM per-function `target-features`
+/// string attribute) and by the parser's placement validation.
+pub fn target_feature_enables(attrs: &[Attribute]) -> Vec<String> {
+    use crate::ast::ExprKind;
+    let mut out: Vec<String> = Vec::new();
+    let push_list = |s: &str, out: &mut Vec<String>| {
+        for feat in s.split(',') {
+            let f = feat.trim();
+            if !f.is_empty() && !out.iter().any(|e| e == f) {
+                out.push(f.to_string());
+            }
+        }
+    };
+    for attr in attrs {
+        if !attr.is_bare("target_feature") {
+            continue;
+        }
+        // `#[target_feature("avx2")]` — the string rides `string_value`.
+        if let Some(s) = &attr.string_value {
+            push_list(s, &mut out);
+        }
+        // `#[target_feature(enable = "avx2")]` / positional `#[target_feature("avx2")]`.
+        for arg in &attr.args {
+            let is_enable = arg.name.as_deref() == Some("enable") || arg.name.is_none();
+            if !is_enable {
+                continue;
+            }
+            if let Some(Expr {
+                kind: ExprKind::StringLit(s),
+                ..
+            }) = &arg.value
+            {
+                push_list(s, &mut out);
+            }
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone)]
 pub struct AttrArg {
     /// `Some(name)` for `name = value` / `name: value` style. `None`

@@ -176,6 +176,13 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     "cold",
     "likely",
     "unlikely",
+    // `#[target_feature(enable = "avx2")]` — widen one function's CPU-feature
+    // set above the module baseline (design.md § Multiversioning, floor/ceiling
+    // composition). Placement (`unsafe fn` requirement + non-empty feature list)
+    // is validated in the parser scan; codegen lowers it to the LLVM per-function
+    // `target-features` string attribute. The `#[multiversion(...)]` sugar over
+    // it is a later slice.
+    "target_feature",
 ];
 
 /// Phase-8 stdlib-floor § Compiler queries channel sub-item 5.

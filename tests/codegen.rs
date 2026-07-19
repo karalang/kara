@@ -4444,6 +4444,30 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_target_feature_emits_function_attribute() {
+        // Phase-11 `#[target_feature(enable = "...")]` (design.md § Multiversioning,
+        // floor/ceiling composition): the attribute lowers to a per-function LLVM
+        // `target-features` string attribute widening this function above the
+        // module baseline. A comma-list yields `+`-prefixed features. The function
+        // must be `unsafe fn` (validated in the parser); a plain function without
+        // the attribute gets no such per-function attribute.
+        let ir = ir_for(
+            "#[target_feature(enable = \"avx2,bmi2\")]\n\
+             unsafe fn hot(a: i64, b: i64) -> i64 { a + b }\n\
+             fn cold_fn(a: i64) -> i64 { a }\n\
+             fn main() { let _ = unsafe { hot(1, 2) }; let _ = cold_fn(3); }",
+        );
+        assert!(
+            ir.contains("+avx2") && ir.contains("+bmi2"),
+            "expected `#[target_feature]` → `+avx2,+bmi2` in a target-features attribute; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("\"target-features\""),
+            "expected an LLVM `target-features` function attribute; IR:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_e2e_ptr_const_mut_place_shapes_roundtrip() {
         // `ptr.const(place)` / `ptr.mut(place)` over the full place grammar the
         // typechecker's place-validator accepts — field access, a nested field

@@ -377,6 +377,7 @@ impl super::Parser {
         let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
         let profile_compat = self.scan_profile_attr(&attributes);
+        self.validate_target_feature_attr(&attributes, is_unsafe);
 
         Some(Function {
             span: self.span_from(&start),
@@ -587,6 +588,40 @@ impl super::Parser {
     ///   Every other `#[cold]` + inline combination is legal.
     ///
     /// See design.md § Codegen Hint Attributes.
+    /// Validate `#[target_feature(enable = "...")]` placement (design.md §
+    /// Multiversioning, floor/ceiling composition). A target-feature function
+    /// widens its CPU-feature set above the module baseline for its own body, so
+    /// calling it on hardware lacking the feature is undefined behavior — v1
+    /// therefore requires the function be `unsafe fn` (the caller asserts the
+    /// target supports it; the `#[multiversion]` sugar will later provide the
+    /// safe, runtime-dispatched form that relaxes this). Also rejects an
+    /// empty/malformed feature list. Non-fatal — parsing continues.
+    fn validate_target_feature_attr(&mut self, attributes: &[Attribute], is_unsafe: bool) {
+        let Some(tf) = attributes.iter().find(|a| a.is_bare("target_feature")) else {
+            return;
+        };
+        let span = tf.span.clone();
+        if crate::ast::target_feature_enables(attributes).is_empty() {
+            self.errors.push(super::ParseError {
+                message: "error[E_TARGET_FEATURE_EMPTY]: `#[target_feature(...)]` needs at least \
+                          one feature — e.g. `#[target_feature(enable = \"avx2\")]`"
+                    .to_string(),
+                span,
+            });
+            return;
+        }
+        if !is_unsafe {
+            self.errors.push(super::ParseError {
+                message: "error[E_TARGET_FEATURE_REQUIRES_UNSAFE]: a `#[target_feature]` function \
+                          widens its CPU-feature set above the baseline, so calling it on hardware \
+                          without the feature is undefined — mark it `unsafe fn` (the caller \
+                          asserts the target supports it)"
+                    .to_string(),
+                span,
+            });
+        }
+    }
+
     pub(crate) fn scan_codegen_hint_attrs(
         &mut self,
         attributes: &[Attribute],

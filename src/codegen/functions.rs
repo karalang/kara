@@ -1101,6 +1101,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.context.create_enum_attribute(kind, 0),
             );
         }
+        // `#[target_feature(enable = "avx2")]` — widen THIS function's
+        // CPU-feature set above the module baseline (design.md § Multiversioning,
+        // floor/ceiling composition). LLVM applies a per-function
+        // `target-features` string attribute additively over the target
+        // machine's baseline features, so emitting just the `+`-prefixed enables
+        // is the widen-above-floor semantics (it never narrows the floor for the
+        // rest of the program). Placement — the `unsafe fn` requirement + a
+        // non-empty list — is validated in the parser scan.
+        let tf = crate::ast::target_feature_enables(&func.attributes);
+        if !tf.is_empty() {
+            let feature_str = tf
+                .iter()
+                .map(|f| format!("+{f}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            fn_val.add_attribute(
+                inkwell::attributes::AttributeLoc::Function,
+                self.context
+                    .create_string_attribute("target-features", &feature_str),
+            );
+        }
     }
 
     pub(super) fn compile_function(&mut self, func: &Function) -> Result<(), String> {

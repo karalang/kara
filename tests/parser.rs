@@ -11770,6 +11770,45 @@ fn cold_and_inline_always_conflict() {
 }
 
 #[test]
+fn target_feature_on_non_unsafe_fn_errors() {
+    // `#[target_feature]` widens the CPU-feature floor for one function, so it is
+    // UB to call on hardware lacking the feature — v1 requires `unsafe fn`.
+    let (_, errors) =
+        parse_with_errors("#[target_feature(enable = \"avx2\")]\nfn hot(a: i64) -> i64 { a }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_TARGET_FEATURE_REQUIRES_UNSAFE")),
+        "expected E_TARGET_FEATURE_REQUIRES_UNSAFE; got: {errors:?}",
+    );
+}
+
+#[test]
+fn target_feature_empty_errors() {
+    let (_, errors) = parse_with_errors("#[target_feature()]\nunsafe fn hot(a: i64) -> i64 { a }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_TARGET_FEATURE_EMPTY")),
+        "expected E_TARGET_FEATURE_EMPTY; got: {errors:?}",
+    );
+}
+
+#[test]
+fn target_feature_on_unsafe_fn_ok() {
+    // The valid shape — `unsafe fn` + a non-empty enable list — parses cleanly.
+    let (_, errors) = parse_with_errors(
+        "#[target_feature(enable = \"avx2,bmi2\")]\nunsafe fn hot(a: i64) -> i64 { a }",
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("E_TARGET_FEATURE")),
+        "valid #[target_feature] on unsafe fn should not error; got: {errors:?}",
+    );
+}
+
+#[test]
 fn inline_with_bogus_arg_is_malformed() {
     let (_, errors) = parse_with_errors("#[inline(sideways)]\nfn f() {}");
     assert!(
