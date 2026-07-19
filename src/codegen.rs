@@ -1625,6 +1625,16 @@ pub(super) struct Codegen<'ctx> {
     /// registries pointing into the outer container's storage, dispatches the
     /// method through the existing identifier path, and cleans up after.
     pub(crate) indexed_elem_counter: u32,
+    /// One-shot signal from an `Iterator.rev()` chain lowering (B-2026-07-18-41
+    /// codegen leg): when set, the NEXT base-source for-loop (`compile_for_vec_var`
+    /// / range / temp-Vec) iterates in REVERSE order and clears the flag. Set by
+    /// the `compile_method_call` / `compile_for` rev guards after stripping the
+    /// `.rev()` node and just before re-dispatching the stripped chain; consumed
+    /// by the base iteration the terminal desugars to. Only ever set when the
+    /// chain is reverse-SAFE (order-independent map/filter/inspect steps over a
+    /// reverse-iterable Vec/array/range base), so the consuming arm is guaranteed
+    /// reverse-aware — never a silent forward iteration.
+    pub(crate) pending_reverse_iter: bool,
     /// Maps local variable names that hold closure fat-pointers to their LLVM function type.
     /// Required for indirect calls: `build_indirect_call` needs the callee's function type.
     pub(crate) closure_fn_types: HashMap<String, FunctionType<'ctx>>,
@@ -6578,6 +6588,7 @@ impl<'ctx> Codegen<'ctx> {
             pending_return_layout: None,
             closure_counter: 0,
             indexed_elem_counter: 0,
+            pending_reverse_iter: false,
             closure_fn_types: HashMap::new(),
             current_fn_heap_closure_spans: std::collections::HashSet::new(),
             result_shared_nonescaping_let_spans: std::collections::HashSet::new(),

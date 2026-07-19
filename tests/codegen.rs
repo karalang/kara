@@ -14203,14 +14203,54 @@ fn main() {
     /// (`v.iter().map(f).rev()`), and the `for x in v.iter().rev()` loop — never
     /// a silent empty iteration (the for-loop's `_ =>` fall-through hazard).
     #[test]
+    fn e2e_iter_rev_bound_vec_reverse_iterate() {
+        // B-2026-07-18-41 codegen leg — the reverse-iterate lowering for a
+        // `.rev()` chain over a BOUND `Vec` identifier. Strips `.rev()`, sets a
+        // one-shot signal, and re-dispatches; the base `compile_for_vec_var` then
+        // walks `len-1-i` (no allocation — leak-free). Composes with order-
+        // independent adaptors on BOTH sides and every terminal / the for-loop.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3, 4];\n\
+                 for x in v.iter().rev() { println(x); }\n\
+                 let a: Vec[i64] = v.iter().rev().collect();\n\
+                 println(a.get(0));\n\
+                 println(v.iter().rev().fold(0, |acc, x| acc * 10 + x));\n\
+                 let s: i64 = v.iter().rev().sum();\n\
+                 println(s);\n\
+                 println(v.iter().rev().count());\n\
+                 let b: Vec[i64] = v.iter().map(|x| x * 10).rev().collect();\n\
+                 println(b.get(0));\n\
+                 let c: Vec[i64] = v.iter().rev().filter(|x| x % 2 == 0).collect();\n\
+                 println(c.get(0));\n\
+                 let sv: Vec[String] = [\"a\", \"b\", \"c\"];\n\
+                 for w in sv.iter().rev() { println(w); }\n\
+             }",
+        ) {
+            // for: 4 3 2 1; a.get(0)=Some(4); fold=4321; sum=10; count=4;
+            // b (map*10 then rev).get(0)=Some(40);
+            // c (rev [4,3,2,1] then even).get(0)=Some(4); string for: c b a
+            assert_eq!(
+                out,
+                "4\n3\n2\n1\nSome(4)\n4321\n10\n4\nSome(40)\nSome(4)\nc\nb\na\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_iter_rev_deferred_loud_message() {
+        // The reverse-iterate lowering (above) covers a bound-Vec base with
+        // order-independent steps. Shapes OUTSIDE that — a TEMP/literal source, a
+        // RANGE base, or a POSITIONAL adaptor (`enumerate`/`take`) combined with
+        // `rev` (semantically NOT a plain reverse) — must still bail LOUD naming
+        // rev + `--interp`, never silently skip or forward-iterate.
         for src in [
             "fn main() { let n: i64 = vec![1,2,3].iter().rev().sum(); println(n); }\n",
-            "fn main() { let v = vec![1,2,3]; let w: Vec[i64] = v.iter().rev().collect(); println(w.get(0)); }\n",
-            "fn main() { let v = vec![1,2,3]; for x in v.iter().rev() { println(x); } }\n",
-            "fn main() { let v = vec![1,2,3]; let w: Vec[i64] = v.iter().map(|x| x*2).rev().collect(); println(w.get(0)); }\n",
+            "fn main() { let w: Vec[i64] = (0..3).rev().collect(); println(w.get(0)); }\n",
+            "fn main() { let v = vec![1,2,3]; for (i, x) in v.iter().enumerate().rev() { println(x); } }\n",
+            "fn main() { let v = vec![1,2,3,4]; let w: Vec[i64] = v.iter().take(2).rev().collect(); println(w.get(0)); }\n",
         ] {
-            let err = ir_result(src).expect_err("rev chain must bail loud, not silently skip");
+            let err = ir_result(src).expect_err("unsupported rev chain must bail loud");
             assert!(
                 err.contains("Iterator.rev()") && err.contains("--interp"),
                 "expected rev loud-bail message, got: {err}"

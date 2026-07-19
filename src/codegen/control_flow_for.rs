@@ -95,17 +95,28 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // `for x in <iter-chain>.rev()` — reverse iteration is deferred in
-        // codegen (interpreter-only, B-2026-07-18-41). Bail LOUD here: the
-        // `.rev()` iterable would otherwise fall through to the silent `_ =>`
-        // arm below (body never runs — output empty vs the interpreter's
-        // reversed sequence). Mirrors the `compile_method_call` guard for
-        // terminal/adaptor rev chains.
+        // `for x in <iter-chain>.rev()` — reverse-iterate (B-2026-07-18-41): if
+        // the chain is reverse-SAFE (order-independent steps over a bound-Vec
+        // base), strip `.rev()`, set the one-shot reverse signal, and recurse on
+        // the stripped iterable — the base `compile_for_vec_var` then iterates
+        // `len-1-i`. Otherwise bail LOUD (never the silent `_ =>` fall-through,
+        // which would drop the body → empty output vs the interpreter).
         if Self::chain_receiver_contains_rev(iterable) {
+            if self.rev_chain_reverse_iterable(iterable) {
+                let stripped = Self::strip_rev_node(iterable);
+                let saved = self.pending_reverse_iter;
+                self.pending_reverse_iter = true;
+                let r = self.compile_for(label, pattern, &stripped, body);
+                let consumed = !self.pending_reverse_iter;
+                self.pending_reverse_iter = saved;
+                if consumed {
+                    return r;
+                }
+            }
             return Err(
                 "`Iterator.rev()` is not yet supported under `karac build`/`karac run` \
-                 (codegen); it works under the tree-walk interpreter. Re-run with \
-                 `--interp` (or `KARAC_RUN_JIT=0`)."
+                 (codegen) for this chain shape; it works under the tree-walk \
+                 interpreter. Re-run with `--interp` (or `KARAC_RUN_JIT=0`)."
                     .to_string(),
             );
         }
@@ -1538,6 +1549,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_ty = self.vec_struct_type();
         let elem_ty = self.vec_elem_type_for_var(var_name);
         let vec_ptr = self.get_data_ptr(var_name).unwrap();
+        // `Iterator.rev()` (B-2026-07-18-41): consume the one-shot reverse signal.
+        // Loop control stays `0..len`; only the ELEMENT INDEX is mirrored to
+        // `len-1-i`, so all the per-iteration cleanup/binding machinery is
+        // untouched. Cleared here so a nested loop in the body isn't affected.
+        let reverse = std::mem::take(&mut self.pending_reverse_iter);
 
         // Load len and data pointer.
         let len_ptr = self
@@ -1598,16 +1614,28 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(cond, body_bb, exit_bb)
             .unwrap();
 
-        // Body: load data[i], bind, execute
+        // Body: load data[idx], bind, execute — `idx = i` forward, `len-1-i`
+        // reversed (`rev()`; loop still counts `0..len`).
         self.builder.position_at_end(body_bb);
         let cur = self
             .builder
             .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
             .unwrap()
             .into_int_value();
+        let idx = if reverse {
+            let len_m1 = self
+                .builder
+                .build_int_sub(len, i64_t.const_int(1, false), "for.v.rev.lm1")
+                .unwrap();
+            self.builder
+                .build_int_sub(len_m1, cur, "for.v.rev.idx")
+                .unwrap()
+        } else {
+            cur
+        };
         let elem_ptr = unsafe {
             self.builder
-                .build_gep(elem_ty, data, &[cur], "for.v.elem.ptr")
+                .build_gep(elem_ty, data, &[idx], "for.v.elem.ptr")
                 .unwrap()
         };
         let elem_val = self

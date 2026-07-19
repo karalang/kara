@@ -555,6 +555,41 @@ fn main() {
     }
 
     #[test]
+    fn asan_iter_rev_bound_vec_reverse_iterate() {
+        // B-2026-07-18-41 codegen leg — the reverse-iterate `.rev()` lowering
+        // walks the SAME Vec storage at mirrored indices (`len-1-i`); no new
+        // allocation, so it is leak-free by construction. The String-element case
+        // is the accounting stress: each element is borrowed/cloned in reverse
+        // order and the reversed `collect` produces an independent Vec whose
+        // buffers must each free exactly once, with the source Vec still owning
+        // its own. Must be LSan/UAF-clean.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let v: Vec[String] = ["alpha", "beta", "gamma", "delta"];
+    for s in v.iter().rev() {
+        println(s);
+    }
+    let r: Vec[String] = v.iter().rev().collect();
+    println(r.get(0));
+    println(v.get(0));
+    println(v.iter().rev().count());
+}
+"#,
+            &[
+                "delta",
+                "gamma",
+                "beta",
+                "alpha",
+                "Some(delta)",
+                "Some(alpha)",
+                "4",
+            ],
+            "asan_iter_rev_bound_vec_reverse_iterate",
+        );
+    }
+
+    #[test]
     fn asan_autograd_tensor_valued_module() {
         // The full `std.autograd` tensor-valued surface end-to-end: leaf copies,
         // the fresh-local value/grad pushes, the `backward` accumulation, and the

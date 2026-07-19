@@ -625,6 +625,86 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Rebuild `expr`'s receiver spine with the (single) `.rev()` node removed —
+    /// splicing its receiver in place (`v.iter().rev().map(f)` → `v.iter().map(f)`),
+    /// preserving every surviving node's original span. The stripped chain is
+    /// re-dispatched with `pending_reverse_iter` set so its base loop reverses.
+    pub(super) fn strip_rev_node(expr: &Expr) -> Expr {
+        match &expr.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if method == "rev" && args.is_empty() => (**object).clone(),
+            ExprKind::MethodCall {
+                object,
+                method,
+                turbofish,
+                args,
+                args_close_span,
+            } => Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(Self::strip_rev_node(object)),
+                    method: method.clone(),
+                    turbofish: turbofish.clone(),
+                    args: args.clone(),
+                    args_close_span: args_close_span.clone(),
+                },
+                span: expr.span.clone(),
+            },
+            _ => expr.clone(),
+        }
+    }
+
+    /// Is `expr` an `Iterator.rev()` chain that the REVERSE-ITERATE lowering can
+    /// service correctly and safely (B-2026-07-18-41 codegen leg)? Requirements:
+    ///   * EXACTLY one `.rev()` on the receiver spine;
+    ///   * every OTHER adaptor is order-INDEPENDENT (`map`/`filter`/`inspect`) —
+    ///     a positional adaptor (`enumerate`/`take`/`skip`/`step_by`/`*_while`)
+    ///     combined with `rev` is NOT a reverse-iterate (`take(2).rev()` keeps
+    ///     the first two then flips; reverse-iterating would keep the LAST two)
+    ///     so it stays deferred;
+    ///   * the base source is a BOUND `Vec` identifier's `.iter()`/`.into_iter()`.
+    ///     Only that base routes through the reverse-aware `compile_for_vec_var`,
+    ///     so restricting here guarantees the flag is CONSUMED — never a silent
+    ///     forward iteration over an unhandled base (range / temp / Set / chars).
+    pub(super) fn rev_chain_reverse_iterable(&self, expr: &Expr) -> bool {
+        let mut seen_rev = false;
+        let mut cur = expr;
+        loop {
+            let ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } = &cur.kind
+            else {
+                return false;
+            };
+            match method.as_str() {
+                "rev" if args.is_empty() => {
+                    if seen_rev {
+                        return false;
+                    }
+                    seen_rev = true;
+                    cur = object;
+                }
+                "map" | "filter" | "inspect" if args.len() == 1 => {
+                    cur = object;
+                }
+                "iter" | "into_iter" if args.is_empty() => {
+                    return seen_rev
+                        && matches!(
+                            &object.kind,
+                            ExprKind::Identifier(n) if self.vec_elem_types.contains_key(n.as_str())
+                        );
+                }
+                _ => return false,
+            }
+        }
+    }
+
     pub(super) fn compile_method_call(
         &mut self,
         object: &Expr,
@@ -674,11 +754,38 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`v.iter().rev().collect()`, `v.iter().map(f).rev().sum()`). Only the
         // receiver spine is walked (a `.rev()` inside a closure arg is a separate
         // scope). B-2026-07-18-41 (typecheck+interp shipped; codegen deferred).
-        if (method == "rev" && args.is_empty()) || Self::chain_receiver_contains_rev(object) {
+        // A terminal/adaptor OVER a rev chain (`v.iter().rev().sum()`,
+        // `v.iter().map(f).rev().collect()`): if the chain is reverse-iterate
+        // SAFE (order-independent steps over a bound-Vec base), strip the
+        // `.rev()`, set the one-shot reverse signal, and re-dispatch the stripped
+        // chain — its base for-loop then iterates `len-1-i` (B-2026-07-18-41).
+        // Otherwise (positional adaptor + rev, non-Vec base, or a BARE `.rev()`
+        // that has no downstream terminal to iterate) bail LOUD to `--interp`.
+        if method != "rev" && Self::chain_receiver_contains_rev(object) {
+            if self.rev_chain_reverse_iterable(object) {
+                let stripped = Self::strip_rev_node(object);
+                let saved = self.pending_reverse_iter;
+                self.pending_reverse_iter = true;
+                let r =
+                    self.compile_method_call(&stripped, method, args, call_span, args_close_span);
+                let consumed = !self.pending_reverse_iter;
+                self.pending_reverse_iter = saved;
+                if consumed {
+                    return r;
+                }
+            }
             return Err(
                 "`Iterator.rev()` is not yet supported under `karac build`/`karac run` \
-                 (codegen); it works under the tree-walk interpreter. Re-run with \
-                 `--interp` (or `KARAC_RUN_JIT=0`)."
+                 (codegen) for this chain shape; it works under the tree-walk \
+                 interpreter. Re-run with `--interp` (or `KARAC_RUN_JIT=0`)."
+                    .to_string(),
+            );
+        }
+        if method == "rev" && args.is_empty() {
+            return Err(
+                "`Iterator.rev()` is not yet supported under `karac build`/`karac run` \
+                 (codegen) as a bare iterator value; chain a terminal (`.collect()` \
+                 / `.sum()` / a `for` loop) or re-run with `--interp`."
                     .to_string(),
             );
         }
