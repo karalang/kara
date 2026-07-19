@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 86 | 0 |
 | double-free | 67 | 0 |
 | codegen-gap | 63 | 0 |
-| missing-feature | 51 | 0 |
+| missing-feature | 52 | 0 |
 | false-positive | 37 | 1 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 414 | 0 |
-| typecheck | 74 | 0 |
-| interp | 58 | 0 |
+| codegen | 415 | 0 |
+| typecheck | 75 | 0 |
+| interp | 59 | 0 |
 | ownership | 24 | 1 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **581 surfaced · 1 open · 576 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **582 surfaced · 1 open · 577 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **581 surfaced 
 |---|---|---|---|---|---|
 | B-2026-07-19-3 | 2026-07-19 | ownership | medium | `karac check` hard-rejects a reused OWNED heap-typed function argument (`f(v); f(v)` where `v: Vec[i64]`/`String`) with `error[ownership]: value 'v' moved here, used again here`, but `karac build` AND `karac run` both ACCEPT the same program, compile it, and run it correctly + memory-safely (valgrind-clean: no leak, no double-free, no UAF). The two front-ends disagree on validity: `check` enforces linear move semantics for a bare-`T` owned param, while codegen resolves the reuse via a defensive copy / caller-retain (the RC-fallback path) and produces the right answer. Because the Mend loop gates on `karac check`, natural code that passes an owned value to two functions fails check even though it builds and runs — and `karac fix` offers NO machine fix for it, so it also dents the Mend machine-fix rate. | src/ownership.rs (move checker) |
 
-### Fixed (576)
+### Fixed (577)
 
-<details><summary>576 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>577 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -714,6 +714,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **581 surfaced 
 | B-2026-07-18-51 | typecheck | medium | A GENERIC struct literal that binds the SAME type param from CONFLICTING field values was silently ACCEPTED — `Two[T] { a: 1, b: "s".to_string() }` (… | c5c13a7 |
 | B-2026-07-19-1 | typecheck+interp+codegen | low | `Vec[T].dedup()` was unimplemented — `v.dedup()` rejected `no method 'dedup' on type 'Vec'` in both backends (`dedup` was already in ast.rs's mutatin… | f5156fb |
 | B-2026-07-19-2 | typecheck+interp+codegen | low | `Iterator.position(pred) -> Option[i64]` was unimplemented (rejected `no method 'position' on type 'Iterator'`) | 6448f0d |
+| B-2026-07-19-4 | typecheck+interp+codegen | low | `Iterator.find(pred) -> Option[T]` was unimplemented (rejected `no method 'find' on type 'Iterator'`) | 2a48965 |
 
 </details>
 
