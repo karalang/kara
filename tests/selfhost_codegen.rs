@@ -230,6 +230,18 @@ const CORPUS: &[&str] = &[
     "enum Tok { Plus, Num(i64), Ident(String) }\nfn classify(w: String) -> Tok { if w == \"+\" { return Tok.Plus; } if w == \"42\" { return Tok.Num(42); } return Tok.Ident(w); }\nfn name_of(t: ref Tok) -> String { match t { Ident(name) => { return \"<\".to_string() + name + \">\"; } Num(n) => { return \"#\".to_string() + n.to_string(); } Plus => {} } return \"+\".to_string(); }\nfn main() { let mut t = classify(\"foo\".to_string()); println(name_of(t)); let u = t; println(name_of(u)); t = classify(\"42\".to_string()); println(name_of(t)); t = classify(\"+\".to_string()); println(name_of(t)); let mut i = 0; while i < 3 { let w = classify(\"loop\".to_string()); println(name_of(w)); i = i + 1; } }",
     // Statement-position match printing a borrowed String payload.
     "enum Msg { Quit, Say(String) }\nfn main() { let m = Msg.Say(\"hello\".to_string() + \" there\"); match m { Say(text) => { println(text); } Quit => { println(\"quit\"); } } match Msg.Quit { Say(text) => { println(text); } Quit => { println(\"bye\"); } } }",
+    // Slice 25: VEC RETURNS + OWNED-VEC PARAMS — Vec[i64]/Vec[String]/
+    // Vec[<struct>] cross fn boundaries. A returned borrow deep-copies
+    // (elements included); owned vec args move in (caller deep-copies a
+    // borrow, callee frees at epilogue); a discarded vec result is freed.
+    "fn nums(n: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); let mut i = 0; while i < n { v.push(i * 10); i = i + 1; } return v; }\nfn main() { let ns = nums(4); let mut t = 0; let mut i = 0; while i < ns.len() { t = t + ns[i]; i = i + 1; } println(t.to_string()) }",
+    "fn words() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(\"alpha\".to_string()); v.push(\"beta\".to_string()); return v; }\nfn join(v: ref Vec[String]) -> String { let mut s = \"\".to_string(); let mut i = 0; while i < v.len() { s = s + v[i] + \"|\"; i = i + 1; } return s; }\nfn main() { let ws = words(); println(ws[0]); println(join(ws)); println(ws[1]) }",
+    // An owned Vec[String] param: the arg moves in, the callee frees it.
+    "fn words() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(\"alpha\".to_string()); v.push(\"beta\".to_string()); return v; }\nfn total_len(v: Vec[String]) -> i64 { let mut n = 0; let mut i = 0; while i < v.len() { let w = v[i]; n = n + w.len(); i = i + 1; } return n; }\nfn main() { println(total_len(words()).to_string()); let ws = words(); println(total_len(ws).to_string()) }",
+    // Vec[<struct with String>] return + rebind (deep copy) + discard.
+    "struct Tk { kind: i64, text: String }\nfn toks() -> Vec[Tk] { let mut v: Vec[Tk] = Vec.new(); v.push(Tk { kind: 1, text: \"x1\".to_string() }); v.push(Tk { kind: 3, text: \"=\".to_string() }); return v; }\nfn main() { let ts = toks(); println(ts[0].text); println(ts[1].kind.to_string()); toks(); let ts2 = ts; println(ts2[1].text) }",
+    // A mid-fn vec return path (borrow materialized before the scope frees).
+    "fn firstn(cap: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); let mut i = 0; while i < 10 { if i == cap { return v; } v.push(i); i = i + 1; } return v; }\nfn main() { let v = firstn(3); println(v.len().to_string()); println((v[0] + v[1] + v[2]).to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
