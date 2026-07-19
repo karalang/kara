@@ -2633,6 +2633,41 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_generic_struct_vec_field_move_out_no_double_free() {
+        // B-2026-07-18-45: the whole-`Vec`-typed-T residual of B-2026-07-18-44 —
+        // a generic struct whose type param is bound to a whole collection
+        // (`get[T](b: Box[T])` at T=Vec[i64]) and whose field is returned
+        // double-freed under AOT/JIT. `infer_type_args` can't recover the element
+        // (Box[Vec[i64]] shares Box[String]'s erased LLVM shape), so the mono
+        // subst dropped it and the entry-copy couldn't deep-copy the Vec field.
+        // Fixed by unifying the declared `Box[T]` against the arg's recorded
+        // concrete instantiation to bind T's element-aware TypeExpr. Covers
+        // free-fn and method, T=Vec[i64] and T=Vec[String], a two-field struct,
+        // and two distinct instantiations (Vec + String) in one program.
+        if let Some(out) = run_program(
+            "struct Box[T] { v: T }\n\
+             struct Box2[T] { v: T, n: i64 }\n\
+             fn get[T](b: Box[T]) -> T { b.v }\n\
+             fn get2[T](b: Box2[T]) -> T { b.v }\n\
+             impl[T] Box[T] { fn take(self) -> T { self.v } }\n\
+             fn main() {\n\
+                 let a = Box { v: [1, 2, 3] };\n\
+                 println(get(a).len());\n\
+                 let m = Box { v: [4, 5] };\n\
+                 println(m.take().len());\n\
+                 let s = Box { v: [\"x\".to_string(), \"y\".to_string()] };\n\
+                 println(get(s).len());\n\
+                 let b2 = Box2 { v: [9, 8], n: 1 };\n\
+                 println(get2(b2).len());\n\
+                 let str_box = Box { v: \"hi\".to_string() };\n\
+                 println(get(str_box));\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n2\n2\n2\nhi\n");
+        }
+    }
+
+    #[test]
     fn e2e_ref_atomic_param_aliases_caller_cell() {
         // B-2026-07-18-30: a `ref Atomic[T]` / `mut ref Atomic[T]` parameter's
         // alloca holds a POINTER to the caller's atomic storage, but

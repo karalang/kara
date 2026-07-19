@@ -14641,6 +14641,33 @@ fn main() {
     }
 
     #[test]
+    fn asan_generic_struct_vec_field_move_out_no_double_free() {
+        // B-2026-07-18-45: a generic struct with a whole-Vec-typed param field
+        // returned (`get[T](b: Box[T]) -> T { b.v }` at T=Vec[i64]). The mono
+        // entry-copy now deep-copies the Vec field (its element type is unified
+        // from the arg's concrete instantiation), so the returned value owns an
+        // independent buffer. Verify no double-free / leak for Vec[i64] and
+        // Vec[String] fields, free-fn and method forms.
+        assert_clean_asan_run(
+            r#"
+struct Box[T] { v: T }
+fn get[T](b: Box[T]) -> T { b.v }
+impl[T] Box[T] { fn take(self) -> T { self.v } }
+fn main() {
+    let a = Box { v: [1, 2, 3] };
+    println(get(a).len());
+    let m = Box { v: [4, 5] };
+    println(m.take().len());
+    let s = Box { v: ["x".to_string(), "y".to_string()] };
+    println(get(s).len());
+}
+"#,
+            &["3", "2", "2"],
+            "generic_struct_vec_field_move_out",
+        );
+    }
+
+    #[test]
     fn asan_struct_param_field_returned_no_double_free() {
         // The moved-out field is RETURNED to the caller: the deep-copy is the
         // returned value (caller owns it), the param's original field is freed

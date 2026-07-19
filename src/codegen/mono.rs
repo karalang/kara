@@ -356,6 +356,100 @@ impl<'ctx> super::Codegen<'ctx> {
         out
     }
 
+    /// B-2026-07-18-45: bind a generic type param nested inside a user
+    /// generic-STRUCT param (`get[T](b: Box[T])`) to its concrete element-aware
+    /// `TypeExpr` when the arg is bound to a whole collection (`b: Box[Vec[i64]]`).
+    /// `infer_type_args` can't recover the element (`Box[Vec[i64]]` and
+    /// `Box[String]` share the erased `{ {ptr,len,cap} }` LLVM shape), and
+    /// `resolve_collection_param_substs` only handles a param that IS a bare `T`.
+    /// Unify the DECLARED struct arg (`Box[T]`) against the arg identifier's
+    /// recorded concrete instantiation (`enum_inst_var_types["b"] = Box[Vec[i64]]`,
+    /// set at the let/param binding), and for each position where the declared
+    /// arg is a bare type param of `func` and the concrete arg is a heap
+    /// collection (`Vec`/`VecDeque`/`String`), record the element-aware
+    /// `subst_type_exprs` (+ head-name `subst_names`). Without this the mono
+    /// entry-copy (`deep_copy_struct_heap_fields_in_place_mono`) sees a bare
+    /// `Vec` with no element, skips the field copy, and the struct's Vec field
+    /// aliases the caller's buffer — both free it (double-free). `or_insert` so a
+    /// binding the typechecker already recorded is never overwritten. Reads live
+    /// var side-tables, so it MUST run before `take_var_side_tables`.
+    fn resolve_generic_struct_param_substs(
+        &self,
+        func: &Function,
+        args: &[CallArg],
+        subst_names: &mut HashMap<String, String>,
+        subst_type_exprs: &mut HashMap<String, TypeExpr>,
+    ) {
+        let Some(gp) = &func.generic_params else {
+            return;
+        };
+        let is_param = |n: &str| gp.params.iter().any(|p| !p.is_const && p.name == n);
+        for (param, arg) in func.params.iter().zip(args.iter()) {
+            let peeled = match &param.ty.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                _ => &param.ty,
+            };
+            let TypeKind::Path(decl_path) = &peeled.kind else {
+                continue;
+            };
+            let struct_name = decl_path.segments.last().map(|s| s.as_str()).unwrap_or("");
+            // A user generic struct with declared params AND generic args written
+            // here (`Box[T]`, `Pair[A, B]`) — not a bare `T` (handled elsewhere).
+            if self
+                .struct_generic_params
+                .get(struct_name)
+                .is_none_or(|p| p.is_empty())
+            {
+                continue;
+            }
+            let Some(decl_args) = decl_path.generic_args.as_ref() else {
+                continue;
+            };
+            let ExprKind::Identifier(arg_name) = &arg.value.kind else {
+                continue;
+            };
+            let Some(inst) = self.enum_inst_var_types.get(arg_name.as_str()) else {
+                continue;
+            };
+            let TypeKind::Path(inst_path) = &inst.kind else {
+                continue;
+            };
+            if inst_path.segments.last().map(|s| s.as_str()) != Some(struct_name) {
+                continue;
+            }
+            let Some(inst_args) = inst_path.generic_args.as_ref() else {
+                continue;
+            };
+            for (d, c) in decl_args.iter().zip(inst_args.iter()) {
+                let (GenericArg::Type(dte), GenericArg::Type(cte)) = (d, c) else {
+                    continue;
+                };
+                let TypeKind::Path(dp) = &dte.kind else {
+                    continue;
+                };
+                if !(dp.segments.len() == 1
+                    && dp.generic_args.is_none()
+                    && is_param(&dp.segments[0]))
+                {
+                    continue;
+                }
+                let pname = &dp.segments[0];
+                let chead = match &cte.kind {
+                    TypeKind::Path(cp) => cp.segments.last().map(|s| s.as_str()).unwrap_or(""),
+                    _ => "",
+                };
+                if matches!(chead, "Vec" | "VecDeque" | "String") {
+                    subst_names
+                        .entry(pname.clone())
+                        .or_insert_with(|| chead.to_string());
+                    subst_type_exprs
+                        .entry(pname.clone())
+                        .or_insert_with(|| cte.clone());
+                }
+            }
+        }
+    }
+
     /// Element-aware mangle token for a generic param whose concrete binding is a
     /// builtin collection, mirroring the typechecker's `type_to_mono_mangle_token`
     /// (`String`, `Vec_i64`, `Vec_String`, `VecDeque_i64`, …). Built from the
@@ -777,8 +871,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // element-aware `TypeExpr` (`Vec`/`VecDeque` — leg B). Reads the
         // caller's LIVE var side-tables, so it MUST run before the mangle (which
         // needs the head + token) AND before `take_var_side_tables` clears them.
-        let subst_type_exprs =
+        let mut subst_type_exprs =
             self.resolve_collection_param_substs(&generic_fn, args, &mut subst_names);
+        // B-2026-07-18-45: a generic-STRUCT param whose type param is bound to a
+        // whole collection (`get[T](b: Box[T])` called with `b: Box[Vec[i64]]`).
+        // `infer_type_args` can't recover `T`'s element (Box[Vec[i64]] and
+        // Box[String] share the erased `{ {ptr,len,cap} }` LLVM shape), and the
+        // collection-param resolver above only handles a param that IS a bare
+        // `T` — not one nested inside a user struct. Unify the declared
+        // `Box[T]` against the arg's recorded concrete instantiation
+        // (`enum_inst_var_types`) to bind `T -> Vec[i64]` in the element-aware
+        // subst, so the mono entry-copy can deep-copy the Vec field (else it
+        // aliases the caller's buffer and both free it — a double-free).
+        self.resolve_generic_struct_param_substs(
+            &generic_fn,
+            args,
+            &mut subst_names,
+            &mut subst_type_exprs,
+        );
 
         // Per-layout-monomorphization axis — forward layout-flow inference
         // (`docs/spikes/per-layout-monomorphization.md`). The layout half of
