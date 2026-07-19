@@ -96,11 +96,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 85 | 0 |
 | double-free | 67 | 0 |
 | codegen-gap | 63 | 0 |
-| missing-feature | 48 | 1 |
+| missing-feature | 49 | 1 |
 | false-positive | 36 | 0 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
-| soundness | 23 | 0 |
+| soundness | 24 | 0 |
 | perf | 21 | 0 |
 | diagnostics | 12 | 0 |
 | use-after-free | 4 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 411 | 1 |
-| typecheck | 70 | 1 |
+| typecheck | 72 | 1 |
 | interp | 56 | 1 |
 | ownership | 23 | 0 |
 | other | 18 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **575 surfaced · 1 open · 570 fixed** (2026-05-20 → 2026-07-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **577 surfaced · 1 open · 572 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **575 surfaced 
 |---|---|---|---|---|---|
 | B-2026-07-18-41 | 2026-07-18 | typecheck+interp+codegen | low | `Iterator.rev()` was unimplemented — `v.iter().rev()` rejected with `no method 'rev' on type 'Iterator'` in both backends. Now shipped for the typechecker + interpreter (`v.iter().rev()`, composing with adaptors on both sides and any terminal/for-loop); CODEGEN is DEFERRED with a loud `--interp` bail (status stays OPEN for the codegen leg). | src/codegen/method_call.rs |
 
-### Fixed (570)
+### Fixed (572)
 
-<details><summary>570 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>572 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -708,6 +708,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **575 surfaced 
 | B-2026-07-18-47 | codegen | high | An enum METHOD with owned `self` that MATCHES its heap payload double-frees under AOT/JIT (interp correct): `impl E { fn take(self) -> String { match… | 6b23dcb |
 | B-2026-07-18-48 | codegen | medium | A USER method whose name collides with a builtin Vec/String method (`get`/`take`/`unwrap`/…), called on a NON-IDENTIFIER receiver (a struct/enum LITE… | d402c8f |
 | B-2026-07-18-49 | interp | medium | A user method literally named `unwrap` on a user enum/struct is mis-resolved to the builtin Option/Result `unwrap` by the INTERPRETER (prints the val… | 4c9c450 |
+| B-2026-07-18-50 | typecheck | medium | A GENERIC struct literal whose field type WRAPS the type param in a container (`items: Vec[T]`, `v: Option[T]`) did NOT infer `T` from a concrete ini… | c5c13a7 |
+| B-2026-07-18-51 | typecheck | medium | A GENERIC struct literal that binds the SAME type param from CONFLICTING field values was silently ACCEPTED — `Two[T] { a: 1, b: "s".to_string() }` (… | c5c13a7 |
 
 </details>
 
