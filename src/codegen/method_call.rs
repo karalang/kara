@@ -625,6 +625,22 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// True iff `.flatten()` appears anywhere on `expr`'s receiver spine (a
+    /// `.flatten()` inside a closure arg is a separate scope). Used to bail
+    /// codegen loudly for any chain that includes the deferred `flatten` adaptor
+    /// (typecheck + interp shipped; codegen deferred). Without this, a
+    /// `for x in xs.iter().flatten()` loop hits the silent `_ =>` fall-through in
+    /// `compile_for` and iterates ZERO times — empty output vs the interpreter's
+    /// flattened sequence.
+    pub(super) fn chain_receiver_contains_flatten(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::MethodCall { object, method, .. } => {
+                method == "flatten" || Self::chain_receiver_contains_flatten(object)
+            }
+            _ => false,
+        }
+    }
+
     /// Rebuild `expr`'s receiver spine with the (single) `.rev()` node removed —
     /// splicing its receiver in place (`v.iter().rev().map(f)` → `v.iter().map(f)`),
     /// preserving every surviving node's original span. The stripped chain is
@@ -2223,6 +2239,27 @@ impl<'ctx> super::Codegen<'ctx> {
             )? {
                 return Ok(value);
             }
+        }
+
+        // `<iter-chain>.flatten()` — reverse-iterate's sibling deferral. The
+        // interpreter flattens eagerly; codegen does not yet lower it. Bail LOUD
+        // (naming flatten + `--interp`) as soon as `flatten` appears on the
+        // receiver spine — whether this call IS `.flatten()` or a terminal/
+        // adaptor OVER a flatten chain (`.flatten().collect()`,
+        // `.flatten().map(f).sum()`) — never a silent skip / confusing generic
+        // "no handler" error. Placed AFTER the Option/Result combinator dispatch
+        // above: `Option[Option[T]].flatten()` / `Result[..].flatten()` are
+        // handled there and return, so any `.flatten()` reaching here is an
+        // ITERATOR flatten (a non-Option/Result receiver made that dispatch fall
+        // through). The `for x in <chain>.flatten()` loop is guarded separately
+        // in `compile_for` (before its silent `_ =>` fall-through).
+        if method == "flatten" || Self::chain_receiver_contains_flatten(object) {
+            return Err(
+                "`Iterator.flatten()` is not yet supported under `karac build`/`karac run` \
+                 (codegen); it works under the tree-walk interpreter. Re-run with \
+                 `--interp` (or `KARAC_RUN_JIT=0`)."
+                    .to_string(),
+            );
         }
 
         // Slice MR (2026-05-09): indexed-receiver method dispatch. When the

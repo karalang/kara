@@ -121,6 +121,19 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
+        // `for x in <iter-chain>.flatten()` — codegen defers flatten (typecheck +
+        // interp shipped). Bail LOUD before the silent `_ =>` fall-through, which
+        // would drop the loop body → empty output vs the interpreter's flattened
+        // sequence.
+        if Self::chain_receiver_contains_flatten(iterable) {
+            return Err(
+                "`Iterator.flatten()` is not yet supported under `karac build`/`karac run` \
+                 (codegen); it works under the tree-walk interpreter. Re-run with \
+                 `--interp` (or `KARAC_RUN_JIT=0`)."
+                    .to_string(),
+            );
+        }
+
         // `for x in coll.iter()` / `for x in coll.into_iter()` —
         // codegen iterates the underlying storage directly via the
         // existing `compile_for_*_var` paths (no `Value::Iterator`

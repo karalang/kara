@@ -14449,6 +14449,28 @@ fn main() {
         }
     }
 
+    /// `Iterator.flatten()` is interpreter-only (typecheck + interp shipped;
+    /// codegen deferred). Codegen must bail LOUD (naming flatten + `--interp`)
+    /// for every chain shape that includes it — the `for x in xs.iter().flatten()`
+    /// loop (else the `_ =>` fall-through SILENTLY skips the body → empty output),
+    /// the `.flatten().collect()` terminal, and an adaptor/terminal OVER flatten —
+    /// never a silent empty iteration.
+    #[test]
+    fn e2e_iter_flatten_deferred_loud_message() {
+        for src in [
+            "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; for x in v.iter().flatten() { println(x); } }\n",
+            "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; let f: Vec[i64] = v.iter().flatten().collect(); println(f.get(0)); }\n",
+            "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; let n: i64 = v.iter().flatten().sum(); println(n); }\n",
+            "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; let n: i64 = v.iter().flatten().map(|x| x * 2).sum(); println(n); }\n",
+        ] {
+            let err = ir_result(src).expect_err("unsupported flatten chain must bail loud");
+            assert!(
+                err.contains("Iterator.flatten()") && err.contains("--interp"),
+                "expected flatten loud-bail message, got: {err}"
+            );
+        }
+    }
+
     /// Positive guard: the `for (i, x)` enumerate DESTRUCTURE path (the handled
     /// case) must keep compiling and producing the right answer — the
     /// B-2026-07-14-7 loud-bail must not regress it.

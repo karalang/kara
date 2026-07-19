@@ -14581,6 +14581,42 @@ fn main() {
 }
 
 #[test]
+fn test_iter_flatten_interpreter() {
+    // `Iterator.flatten()` — an iterator of iterables yields the inner elements
+    // in order (≡ `flat_map(|x| x)`). Eager (drain-flatten-replay, like `rev`),
+    // so it composes with adaptors/terminals on both sides. Empty inner
+    // collections contribute nothing. Codegen defers flatten to `--interp`
+    // (tests/codegen.rs::e2e_iter_flatten_deferred_loud_message).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let nested: Vec[Vec[i64]] = [[1, 2], [3, 4], [5]];
+    let flat: Vec[i64] = nested.iter().flatten().collect();
+    println(flat.get(0));
+    println(flat.get(4));
+    for x in nested.iter().flatten() { print(x); }
+    println("");
+    // String elements
+    let words: Vec[Vec[String]] = [["a", "b"], ["c"]];
+    for w in words.iter().flatten() { print(w); }
+    println("");
+    // empty inners interspersed
+    let e: Vec[Vec[i64]] = [[], [1], [], [2, 3], []];
+    let f: Vec[i64] = e.iter().flatten().collect();
+    println(f.len());
+    // compose downstream: flatten then map / filter+sum / count
+    println(nested.iter().flatten().map(|x| x * 2).collect().get(2));
+    println(nested.iter().flatten().filter(|x| x % 2 == 1).sum());
+    println(nested.iter().flatten().count());
+}
+"#,
+    );
+    // flat.get(0)=Some(1); flat.get(4)=Some(5); for=12345; strings=abc;
+    // empty-inners len=3; map*2 .get(2)=Some(6); odd sum 1+3+5=9; count=5
+    assert_eq!(output, "Some(1)\nSome(5)\n12345\nabc\n3\nSome(6)\n9\n5\n");
+}
+
+#[test]
 fn test_iter_rev_range_interpreter() {
     // B-2026-07-18-41 range leg — `(a..b).rev()` / `(a..=b).rev()` descend over
     // the same value set. Mirrored A/B by the codegen reverse-iterate range loop

@@ -602,6 +602,57 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![new_item],
                 }
             }
+            "flatten" => {
+                // `flatten() -> Iterator[U]` — the receiver is an
+                // `Iterator[Inner]` whose element `Inner` is itself iterable
+                // (`Vec[U]` / `Iterator[U]` / an array / slice, possibly behind a
+                // borrow from `.iter()`); flatten yields the inner elements in
+                // order. Equivalent to `flat_map(|x| x)`; the element type is the
+                // inner iterable's element (`element_type_of`, which peels the
+                // borrow and preserves the borrow-aware element form so it types
+                // exactly like the nested `for inner in outer { for x in inner }`
+                // loop it is sugar for). A non-iterable element is a TypeMismatch.
+                if !args.is_empty() {
+                    self.type_error(
+                        format!(
+                            "Iterator.flatten() takes no arguments, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                let mut inner = item;
+                while let Type::Ref(b) | Type::MutRef(b) = inner {
+                    inner = b;
+                }
+                let is_iterable = matches!(inner, Type::Array { .. } | Type::Slice { .. })
+                    || matches!(inner, Type::Named { name, .. }
+                        if matches!(name.as_str(), "Vec" | "Iterator"));
+                let new_item = if is_iterable {
+                    self.element_type_of(item)
+                } else if *inner == Type::Error {
+                    Type::Error
+                } else {
+                    self.type_error(
+                        format!(
+                            "Iterator.flatten() requires an iterator of iterables, \
+                             but the element type is '{}'",
+                            type_display(item)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    Type::Error
+                };
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![new_item],
+                }
+            }
             "step_by" => {
                 // `step_by(n: i64) -> Iterator[T]` — element type
                 // passes through. Argument is checked against i64;
@@ -983,6 +1034,7 @@ impl<'a> super::TypeChecker<'a> {
                     "filter",
                     "find",
                     "flat_map",
+                    "flatten",
                     "fold",
                     "for_each",
                     "inspect",

@@ -39,6 +39,39 @@ impl<'a> super::Interpreter<'a> {
         v
     }
 
+    /// Expand one inner iterable value (an element of a `flatten()` receiver)
+    /// into its elements in order. Handles the collection/iterator shapes the
+    /// typechecker admits as flattenable: an owned `Vec`/array (`Value::Array`),
+    /// a `Slice` view, and a nested `Value::Iterator` (drained). Any other value
+    /// is a runtime type error (the typechecker rejects non-iterable elements,
+    /// so this is a defensive backstop).
+    fn flatten_one_inner(&mut self, v: Value) -> Result<Vec<Value>, String> {
+        match v {
+            Value::Array(rc) => Ok(rc.read().unwrap().clone()),
+            Value::Slice {
+                storage,
+                start,
+                len,
+                ..
+            } => {
+                let g = storage.read().unwrap();
+                Ok(g[start..start + len].to_vec())
+            }
+            Value::Iterator { .. } => {
+                let mut inner = v;
+                let mut items = Vec::new();
+                while let Some(x) = self.iterator_step(&mut inner) {
+                    items.push(x);
+                }
+                Ok(items)
+            }
+            other => Err(format!(
+                "Iterator.flatten() expects iterable elements; got {}",
+                other
+            )),
+        }
+    }
+
     pub(super) fn try_eval_iterator_method(
         &mut self,
         method: &str,
@@ -200,6 +233,32 @@ impl<'a> super::Interpreter<'a> {
                         out.push(v);
                     }
                     out.reverse();
+                    return Some(Value::Iterator {
+                        source: IteratorSource::Eager {
+                            items: out,
+                            cursor: 0,
+                        },
+                        steps: Vec::new(),
+                    });
+                }
+            }
+            "flatten" => {
+                // Eager flatten (mirrors `rev`): the receiver is an iterator of
+                // iterables. Drain the outer (firing every upstream adaptor
+                // closure), expand each inner iterable into its elements in
+                // order, and return a fresh EAGER iterator so any downstream
+                // adaptor/terminal/for-loop runs over the flattened sequence.
+                // Equivalent to `flat_map(|x| x)`. (Codegen handles the common
+                // for-loop / collect shapes; other shapes defer to `--interp`.)
+                if matches!(obj, Value::Iterator { .. }) {
+                    let mut iter_val = obj;
+                    let mut out = Vec::new();
+                    while let Some(inner) = self.iterator_step(&mut iter_val) {
+                        match self.flatten_one_inner(inner) {
+                            Ok(mut items) => out.append(&mut items),
+                            Err(msg) => return Some(self.record_runtime_error(msg, span)),
+                        }
+                    }
                     return Some(Value::Iterator {
                         source: IteratorSource::Eager {
                             items: out,
