@@ -29274,6 +29274,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_split_off_moves_heap_tail_no_leak_no_double_free() {
+        // `Vec[T].split_off(i)` MOVES the [i, len) tail into a fresh Vec (byte-copy
+        // of each String `{ptr,len,cap}`). `self.len = i` must exclude the moved
+        // tail from self's scope-exit drop, and the returned Vec must own+free it
+        // exactly once — a bug is a double-free (SIGABRT) or a per-iteration leak.
+        // Loop a heap `Vec[String]`, split, and drop BOTH halves each iteration.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut v: Vec[String] = Vec.new();
+        v.push("alpha".to_string());
+        v.push("beta".to_string());
+        v.push("gamma".to_string());
+        v.push("delta".to_string());
+        let t: Vec[String] = v.split_off(2);
+        let mut j: i64 = 0;
+        while j < v.len() { acc = acc + v[j].len(); j = j + 1; }
+        let mut k: i64 = 0;
+        while k < t.len() { acc = acc + t[k].len(); k = k + 1; }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["760"],
+            "vec_split_off_moves_heap_tail_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_reassign_heap_field_and_map_set_var_no_leak_no_double_free() {
         // B-2026-07-15-25: reassigning a struct's heap-owning FIELD (`h.v = …`,
         // `h.s = …`, `h.m = …`) used to overwrite the slot with NO drop of the

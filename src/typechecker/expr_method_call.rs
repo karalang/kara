@@ -4419,6 +4419,47 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Unit;
             }
         }
+        if method == "split_off" {
+            let vec_elem: Option<Type> = match &obj_ty {
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                {
+                    Some(args[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args }
+                        if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                    {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = vec_elem {
+                // `split_off(i: i64) -> Vec[T]` — split at index i; self keeps
+                // [0, i), the returned Vec owns [i, len).
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Vec.split_off() expects 1 argument (index), found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    self.check_expr(&args[0].value, &Type::Int(IntSize::I64));
+                }
+                return Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![elem],
+                };
+            }
+        }
         if matches!(
             method,
             "sort_by" | "sorted_by" | "sort_by_key" | "sorted_by_key"

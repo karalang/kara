@@ -1225,6 +1225,37 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Unit);
                 }
             }
+            "split_off" => {
+                // split_off(i) -> Vec[T] — split at index i; self keeps [0, i),
+                // the returned Vec owns [i, len). i is clamped to [0, len].
+                if args.len() != 1 {
+                    panic!("split_off expects 1 argument (index), got {}", args.len());
+                }
+                let idx_val = self.eval_expr_inner(&args[0].value);
+                if self.pending_cf.is_some() {
+                    return Some(Value::Unit);
+                }
+                let i = match idx_val {
+                    Value::Int(n) => n,
+                    v => {
+                        return Some(self.record_runtime_error(
+                            format!("split_off index must be an integer, got {}", v),
+                            span,
+                        ));
+                    }
+                };
+                if let Value::Array(ref rc) = obj {
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    let mut head = rc.read().unwrap().clone();
+                    let at = i.clamp(0, head.len() as i64) as usize;
+                    let tail = head.split_off(at);
+                    *try_write_or_panic(rc, &label) = head;
+                    return Some(Value::array_of(tail));
+                }
+            }
             "sort_by" => {
                 // sort_by(|a, b| -> Ordering) — snapshot the vec so the user
                 // closure can re-enter the interpreter freely (std::sync::RwLock

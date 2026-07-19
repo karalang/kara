@@ -55077,6 +55077,44 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_split_off_scalar_and_heap() {
+        // `Vec[T].split_off(i) -> Vec[T]` — self keeps [0, i), the returned Vec
+        // owns [i, len). Tail elements MOVE into a fresh buffer (byte-copy of
+        // each `{ptr,len,cap}` for heap); `self.len = i` excludes them from
+        // self's drop so each frees once (leak-clean in the sibling LSan test).
+        // Covers a scalar split, index clamping (0 / len / out-of-bounds), a heap
+        // Vec[String] (both halves usable), and consuming both halves.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = [1, 2, 3, 4, 5];\n\
+                 let t: Vec[i64] = v.split_off(2);\n\
+                 println(v.len()); println(t.len());\n\
+                 println(v[1]); println(t[0]); println(t[2]);\n\
+                 let mut z: Vec[i64] = [1, 2, 3];\n\
+                 let za: Vec[i64] = z.split_off(0);\n\
+                 println(z.len()); println(za.len());\n\
+                 let mut e: Vec[i64] = [1, 2, 3];\n\
+                 let eo: Vec[i64] = e.split_off(10);\n\
+                 println(e.len()); println(eo.len());\n\
+                 let mut s: Vec[String] = [\"a\", \"b\", \"c\", \"d\"];\n\
+                 let st: Vec[String] = s.split_off(2);\n\
+                 println(s[0]); println(st[0]); println(st[1]);\n\
+                 let mut n: Vec[i64] = [1, 2, 3, 4];\n\
+                 let nt: Vec[i64] = n.split_off(2);\n\
+                 let mut sum: i64 = 0;\n\
+                 for x in n { sum = sum + x; }\n\
+                 for y in nt { sum = sum + y; }\n\
+                 println(sum);\n\
+             }",
+        ) {
+            // split@2: v=[1,2] t=[3,4,5]; v[1]=2 t[0]=3 t[2]=5;
+            // @0: z=[] za=[1,2,3]; @10(clamp): e=[1,2,3] eo=[]; strings s=[a,b] st=[c,d];
+            // sum both halves = 10
+            assert_eq!(out, "2\n3\n2\n3\n5\n0\n3\n3\n0\na\nc\nd\n10\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_reassign_heap_field_and_map_var() {
         // B-2026-07-15-25: reassigning a struct's heap field now drops the old
         // value before overwriting (no leak) and suppresses a moved-binding

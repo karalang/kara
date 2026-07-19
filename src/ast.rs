@@ -1122,6 +1122,7 @@ pub fn is_mutating_collection_method(method: &str) -> bool {
             | "extend"
             | "retain"
             | "dedup"
+            | "split_off"
             | "resize"
             | "append"
             | "fill"

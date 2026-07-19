@@ -5718,6 +5718,101 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(len_p, n).unwrap();
                 Ok(i64_t.const_zero().into())
             }
+            "split_off" => {
+                // `Vec[T].split_off(i) -> Vec[T]` — split at index i: self keeps
+                // [0, i), the returned Vec OWNS [i, len). The tail elements MOVE
+                // (byte-copy of each `{ptr,len,cap}` for heap types) into a fresh
+                // buffer; `self.len = i` excludes them from self's scope-exit
+                // drop, so each element frees exactly once (no drop-glue). i is
+                // clamped to [0, len].
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Vec.split_off expects 1 argument (index), got {}",
+                        args.len()
+                    ));
+                }
+                let i_raw = self.compile_expr(&args[0].value)?.into_int_value();
+                let data_pp = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "so.data.p")
+                    .unwrap();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "so.len.p")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_pp, "so.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_p, "so.len")
+                    .unwrap()
+                    .into_int_value();
+                // Clamp i into [0, len] (signed).
+                let zero = i64_t.const_zero();
+                let is_neg = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, i_raw, zero, "so.neg")
+                    .unwrap();
+                let i0 = self
+                    .builder
+                    .build_select(is_neg, zero, i_raw, "so.i0")
+                    .unwrap()
+                    .into_int_value();
+                let gt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, i0, len, "so.gt")
+                    .unwrap();
+                let i = self
+                    .builder
+                    .build_select(gt, len, i0, "so.i")
+                    .unwrap()
+                    .into_int_value();
+                let tail_count = self.builder.build_int_sub(len, i, "so.tail").unwrap();
+                let elem_size = elem_ty.size_of().unwrap();
+                let tail_bytes = self
+                    .builder
+                    .build_int_mul(tail_count, elem_size, "so.bytes")
+                    .unwrap();
+                // Fresh buffer for the tail; byte-copy [i, len).
+                let new_buf = self
+                    .builder
+                    .build_call(self.malloc_fn, &[tail_bytes.into()], "so.buf")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let tail_src = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(elem_ty, data, &[i], "so.src")
+                        .unwrap()
+                };
+                self.builder
+                    .build_memcpy(new_buf, 1, tail_src, 1, tail_bytes)
+                    .unwrap();
+                // self keeps [0, i).
+                self.builder.build_store(len_p, i).unwrap();
+                // Build the returned Vec `{ new_buf, tail_count, tail_count }`.
+                let mut agg = vec_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, new_buf, 0, "so.r.data")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, tail_count, 1, "so.r.len")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, tail_count, 2, "so.r.cap")
+                    .unwrap()
+                    .into_struct_value();
+                Ok(agg.into())
+            }
             "sort_by_key" => {
                 if args.len() != 1 {
                     return Err(format!(

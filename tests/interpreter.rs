@@ -13340,6 +13340,26 @@ fn test_vec_dedup_removes_consecutive_duplicates() {
 }
 
 #[test]
+fn test_vec_split_off_splits_at_index() {
+    // `Vec.split_off(i) -> Vec[T]` — self keeps [0, i), the returned Vec owns
+    // [i, len). Index clamps to [0, len].
+    let output = run("fn main() {
+            let mut v: Vec[i64] = [1, 2, 3, 4, 5];
+            let t: Vec[i64] = v.split_off(2);
+            println(v.len());
+            println(t.len());
+            for x in v.iter() { println(x); }
+            for y in t.iter() { println(y); }
+            let mut s: Vec[String] = [\"a\", \"b\", \"c\"];
+            let st: Vec[String] = s.split_off(1);
+            println(s.get(0));
+            println(st.get(1));
+        }");
+    // v=[1,2] (len 2), t=[3,4,5] (len 3); strings s=[a], st=[b,c] -> st[1]=c
+    assert_eq!(output, "2\n3\n1\n2\n3\n4\n5\nSome(a)\nSome(c)\n");
+}
+
+#[test]
 fn test_vec_sort_by_closure_descending() {
     let output = run(
         "fn main() {
