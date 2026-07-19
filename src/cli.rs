@@ -7195,12 +7195,26 @@ fn cmd_build_project(
     // manifest tier read from the project's own manifest (already
     // loaded) instead of a file-relative walk-up. Installed before
     // codegen runs; `help` was handled above, pre-discovery.
+    // `[release] cpu-baseline` (arch-portable, lowest tier) maps to a concrete
+    // native override in DIFFERENT channels per arch: a target-CPU on x86-64
+    // (`x86-64-vN`), an architecture-version target-FEATURE on aarch64
+    // (`+v8.Na`). Resolved here (native arch = the karac binary's arch for a
+    // native build) so the two chains below can fall back to it. wasm and other
+    // targets get `(None, None)` — a CPU baseline is meaningless there.
+    #[cfg(feature = "llvm")]
+    let (baseline_cpu, baseline_features) = mf
+        .release_cpu_baseline
+        .as_deref()
+        .filter(|_| !crate::target::active_target_is_wasm())
+        .map(|b| crate::manifest::cpu_baseline_native_override(b, std::env::consts::ARCH))
+        .unwrap_or((None, None));
     #[cfg(feature = "llvm")]
     apply_target_cpu_override(
         target_cpu
             .map(str::to_string)
             .or_else(read_target_cpu_env)
-            .or_else(|| mf.release_target_cpu.clone()),
+            .or_else(|| mf.release_target_cpu.clone())
+            .or(baseline_cpu),
     );
     // Feature-string override — the independent sibling chain.
     #[cfg(feature = "llvm")]
@@ -7208,7 +7222,8 @@ fn cmd_build_project(
         target_features
             .map(str::to_string)
             .or_else(read_target_features_env)
-            .or_else(|| mf.release_target_features.clone()),
+            .or_else(|| mf.release_target_features.clone())
+            .or(baseline_features),
     );
     #[cfg(not(feature = "llvm"))]
     let _ = (target_cpu, target_features, out_path);

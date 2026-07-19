@@ -843,6 +843,7 @@ mod tests {
             lints: manifest::ManifestLints::default(),
             release_target_cpu: None,
             release_target_features: None,
+            release_cpu_baseline: None,
             toolchain_wasm_tools: None,
             wasm_pool_size: None,
             wasm_fallback: None,

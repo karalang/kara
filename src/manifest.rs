@@ -470,6 +470,21 @@ pub struct Manifest {
     /// registry) is validated at build time, not here — same containment
     /// rationale as `release_target_cpu` above. `None` when absent.
     pub release_target_features: Option<String>,
+    /// `[release] cpu-baseline = "v1" | "v2" | "v3" | "v4"` — the
+    /// arch-portable CPU baseline knob (design.md § Multiversioning >
+    /// `cpu-baseline`). A single target-agnostic level whose feature
+    /// implications are per-architecture ([`cpu_baseline_native_override`]
+    /// maps `v3` → `x86-64-v3` on x86-64 / `+v8.4a` on aarch64, etc.). It
+    /// is the LOWEST tier of the CPU chain — below `release_target_cpu` on
+    /// x86-64 (which names a concrete CPU) and below `release_target_features`
+    /// on aarch64 (where the level lowers to an architecture-version feature).
+    /// The value is validated to be one of `v1`..`v4` HERE (a closed set that
+    /// needs no LLVM access, unlike a raw CPU name); the mapped result rides
+    /// the existing build-time CPU/feature validation. `None` when absent —
+    /// which keeps the current per-target default (no silent baseline flip;
+    /// the design's `v3` default is a separate, deploy-set-narrowing decision
+    /// tracked in the checklist).
+    pub release_cpu_baseline: Option<String>,
     /// `[toolchain] wasm-tools = "<version>"` — exact-version pin for the
     /// external `wasm-tools` binary that `--bindings component` shells out
     /// to for embedded-WIT componentization (design.md § Component Model
@@ -986,7 +1001,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let build_registry_proxy = parse_build_registry_proxy(path, &table)?;
     let build_registry = parse_build_registry(path, &table)?;
     let lints = parse_lints_table(path, &table, &mut warnings)?;
-    let (release_target_cpu, release_target_features) =
+    let (release_target_cpu, release_target_features, release_cpu_baseline) =
         parse_release_table(path, &table, &mut warnings)?;
     let toolchain_wasm_tools = parse_toolchain_table(path, &table, &mut warnings)?;
     let (wasm_pool_size, wasm_fallback, wasm_max_memory_pages) =
@@ -1022,6 +1037,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         lints,
         release_target_cpu,
         release_target_features,
+        release_cpu_baseline,
         toolchain_wasm_tools,
         wasm_pool_size,
         wasm_fallback,
@@ -1312,13 +1328,17 @@ fn parse_link_string_array(
 /// (reserved for later release-profile knobs); a wrong-typed or empty
 /// value for a known key hard-errors so a typo can't silently drop the
 /// override. Absent table → `(None, None)`.
+/// Parsed `[release]` codegen-config triple: `(target-cpu, target-features,
+/// cpu-baseline)` — each `None` when its key is absent.
+type ReleaseTableConfig = (Option<String>, Option<String>, Option<String>);
+
 fn parse_release_table(
     path: &Path,
     table: &toml::Table,
     warnings: &mut Vec<ManifestWarning>,
-) -> Result<(Option<String>, Option<String>), ManifestError> {
+) -> Result<ReleaseTableConfig, ManifestError> {
     let Some(value) = table.get("release") else {
-        return Ok((None, None));
+        return Ok((None, None, None));
     };
     let release_table = value
         .as_table()
@@ -1329,8 +1349,21 @@ fn parse_release_table(
         })?;
     let mut target_cpu = None;
     let mut target_features = None;
+    let mut cpu_baseline = None;
     for (key, val) in release_table {
         match key.as_str() {
+            "cpu-baseline" => match val {
+                toml::Value::String(s) if matches!(s.trim(), "v1" | "v2" | "v3" | "v4") => {
+                    cpu_baseline = Some(s.trim().to_string());
+                }
+                _ => {
+                    return Err(ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "release.cpu-baseline".to_string(),
+                        expected: "one of the strings \"v1\", \"v2\", \"v3\", \"v4\"",
+                    });
+                }
+            },
             "target-cpu" => match val {
                 toml::Value::String(s) if !s.trim().is_empty() => {
                     target_cpu = Some(s.trim().to_string());
@@ -1364,7 +1397,56 @@ fn parse_release_table(
             }),
         }
     }
-    Ok((target_cpu, target_features))
+    Ok((target_cpu, target_features, cpu_baseline))
+}
+
+/// Map the arch-portable `cpu-baseline` level (`v1`..`v4`) to the concrete
+/// codegen override for a native architecture, per the table in design.md
+/// § Multiversioning > `cpu-baseline`. The level is target-agnostic at the
+/// surface; its implications are per-arch, and — crucially — land in DIFFERENT
+/// override channels:
+///
+/// * **x86-64:** a concrete LLVM **target-CPU** name (`x86-64` / `x86-64-v2`
+///   / `x86-64-v3` / `x86-64-v4` — real LLVM CPU names since LLVM 12), returned
+///   as the first element.
+/// * **aarch64:** an architecture-version **target-FEATURE** (`+v8.2a` /
+///   `+v8.4a` / `+v8.6a`; `v1` = the `armv8-a`/NEON baseline, no extra feature),
+///   returned as the second element — there is no `armv8.Na` *CPU* name, the
+///   arch version is a feature flag on top of `generic`.
+///
+/// Returns `(cpu, features)` — exactly one is `Some` on a supported native arch,
+/// both `None` on any other target (e.g. wasm, where a CPU baseline is
+/// meaningless). Pure data (no LLVM), so it lives in the manifest layer and is
+/// unit-tested directly; `arch` is the codegen target architecture
+/// (`std::env::consts::ARCH` of the host for a native build).
+pub fn cpu_baseline_native_override(
+    baseline: &str,
+    arch: &str,
+) -> (Option<String>, Option<String>) {
+    match arch {
+        "x86_64" => {
+            let cpu = match baseline {
+                "v1" => "x86-64",
+                "v2" => "x86-64-v2",
+                "v3" => "x86-64-v3",
+                "v4" => "x86-64-v4",
+                _ => return (None, None),
+            };
+            (Some(cpu.to_string()), None)
+        }
+        "aarch64" => {
+            let feat = match baseline {
+                // armv8-a / NEON is the aarch64 floor; no arch-version feature.
+                "v1" => return (None, None),
+                "v2" => "+v8.2a",
+                "v3" => "+v8.4a",
+                "v4" => "+v8.6a",
+                _ => return (None, None),
+            };
+            (None, Some(feat.to_string()))
+        }
+        _ => (None, None),
+    }
 }
 
 /// Parse the `[toolchain]` table when present. Recognised keys at v1:
@@ -3855,6 +3937,76 @@ name = "hello"
                 other => panic!("expected InvalidFieldType on `release.target-cpu`, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn release_cpu_baseline_parses() {
+        for lvl in ["v1", "v2", "v3", "v4"] {
+            let src =
+                format!("[package]\nname = \"hello\"\n\n[release]\ncpu-baseline = \"{lvl}\"\n");
+            let m = parse_manifest(&p(), &src).unwrap();
+            assert_eq!(m.release_cpu_baseline.as_deref(), Some(lvl));
+            assert!(m.warnings.is_empty(), "level {lvl} warned unexpectedly");
+        }
+        // Absent → None.
+        let m = parse_manifest(&p(), "[package]\nname = \"hello\"\n").unwrap();
+        assert!(m.release_cpu_baseline.is_none());
+    }
+
+    #[test]
+    fn release_cpu_baseline_invalid_is_hard_error() {
+        // Outside the closed v1..v4 set (or wrong type) must hard-error, not
+        // silently drop the baseline — same posture as `target-cpu`.
+        for src in [
+            "[package]\nname = \"hello\"\n\n[release]\ncpu-baseline = \"v5\"\n",
+            "[package]\nname = \"hello\"\n\n[release]\ncpu-baseline = \"x86-64-v3\"\n",
+            "[package]\nname = \"hello\"\n\n[release]\ncpu-baseline = 3\n",
+        ] {
+            let err = parse_manifest(&p(), src).unwrap_err();
+            match err {
+                ManifestError::InvalidFieldType { key, .. } => {
+                    assert_eq!(key, "release.cpu-baseline")
+                }
+                other => {
+                    panic!("expected InvalidFieldType on `release.cpu-baseline`, got {other:?}")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cpu_baseline_native_override_maps_per_arch() {
+        // design.md § Multiversioning > cpu-baseline table. x86-64 → target-CPU
+        // name; aarch64 → architecture-version target-FEATURE (v1 is the
+        // armv8-a/NEON floor, so no extra feature).
+        assert_eq!(
+            cpu_baseline_native_override("v1", "x86_64"),
+            (Some("x86-64".to_string()), None)
+        );
+        assert_eq!(
+            cpu_baseline_native_override("v3", "x86_64"),
+            (Some("x86-64-v3".to_string()), None)
+        );
+        assert_eq!(
+            cpu_baseline_native_override("v4", "x86_64"),
+            (Some("x86-64-v4".to_string()), None)
+        );
+        assert_eq!(cpu_baseline_native_override("v1", "aarch64"), (None, None));
+        assert_eq!(
+            cpu_baseline_native_override("v2", "aarch64"),
+            (None, Some("+v8.2a".to_string()))
+        );
+        assert_eq!(
+            cpu_baseline_native_override("v3", "aarch64"),
+            (None, Some("+v8.4a".to_string()))
+        );
+        assert_eq!(
+            cpu_baseline_native_override("v4", "aarch64"),
+            (None, Some("+v8.6a".to_string()))
+        );
+        // Unknown arch (e.g. wasm32) or unknown level → no override.
+        assert_eq!(cpu_baseline_native_override("v3", "wasm32"), (None, None));
+        assert_eq!(cpu_baseline_native_override("v9", "x86_64"), (None, None));
     }
 
     #[test]
