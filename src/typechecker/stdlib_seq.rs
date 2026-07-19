@@ -599,6 +599,52 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
+            "replacen" => {
+                // replacen(from: String, to: String, n: i64) -> String: the
+                // first `n` non-overlapping occurrences of `from` replaced with
+                // `to` (Rust `str::replacen`). Allocating String→String. The
+                // first two arguments are String/str-like, the third an integer
+                // count. Codegen routes through `karac_string_replacen`.
+                if args.len() != 3 {
+                    self.type_error(
+                        format!(
+                            "'replacen' expects 3 arguments (from, to, n), found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_ty = self.infer_expr(&arg.value);
+                        if i < 2 {
+                            if !is_str_like(&arg_ty) && arg_ty != Type::Error {
+                                self.type_error(
+                                    format!(
+                                        "'replacen' expects String arguments, found '{}'",
+                                        type_display(&arg_ty)
+                                    ),
+                                    arg.value.span.clone(),
+                                    TypeErrorKind::TypeMismatch,
+                                );
+                            }
+                        } else if !matches!(arg_ty, Type::Int(_) | Type::UInt(_) | Type::Error) {
+                            self.type_error(
+                                format!(
+                                    "'replacen' expects an integer count, found '{}'",
+                                    type_display(&arg_ty)
+                                ),
+                                arg.value.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                }
+                Type::Str
+            }
             "strip_prefix" | "strip_suffix" => {
                 // strip_prefix(p: String) -> Option[String] / strip_suffix(s) →
                 // Option[String] (Rust `str::strip_{prefix,suffix}`, but owning

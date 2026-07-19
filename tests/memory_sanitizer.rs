@@ -3587,6 +3587,41 @@ fn main() {
     }
 
     #[test]
+    fn asan_string_replacen_heap_no_leak() {
+        // Phase 8 § String — `replacen(from, to, n) -> String` ALLOCATES a
+        // fresh owned result buffer (`karac_string_replacen` →
+        // `alloc_string_result`). The memory contract mirrors `replace`: the
+        // result String drops once, the receiver drops once, and FRESH-OWNED
+        // f-string `from`/`to` arguments are freed by `free_fresh_owned_str_arg`
+        // (else they leak once per call, unbounded in the loop). Looped so any
+        // per-iteration imbalance accumulates for LSan.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let s: String = f"a-{i}-b-{i}-c-{i}-d";
+        // Fresh-owned f-string args exercise the arg-free path.
+        println(s.replacen(f"-{i}-", "|", 2));
+        // Negative count clamps to 0 (replace nothing); receiver untouched.
+        println(s.replacen(f"-{i}-", "|", -1i64));
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "a|b|c-0-d",
+                "a-0-b-0-c-0-d",
+                "a|b|c-1-d",
+                "a-1-b-1-c-1-d",
+                "a|b|c-2-d",
+                "a-2-b-2-c-2-d",
+            ],
+            "asan_string_replacen_heap_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_std_mem_take_heap_no_leak_no_double_free() {
         // roadmap Phase 8 § std.mem — `take[T: Default](dest: mut ref T) -> T`
         // over a heap-owning type. `take` monomorphizes `replace(dest,

@@ -12761,6 +12761,29 @@ fn test_string_trim_replace_case_interpreter() {
 }
 
 #[test]
+fn test_string_replacen_interpreter() {
+    // `String.replacen(from, to, n)` — replace at most the first `n`
+    // occurrences (Rust `str::replacen`). A negative count clamps to 0
+    // (replace nothing), the documented contract shared with codegen.
+    // Mirrored A/B by tests/codegen.rs::e2e_string_replacen_codegen.
+    let output = run(r#"fn main() {
+            println("a-b-c-d".replacen("-", "_", 2));
+            println("x.x.x".replacen(".", "!", 10));
+            println("aaaa".replacen("a", "bb", 3));
+            println("1,2,3".replacen(",", ";", 0));
+            println("1,2,3".replacen(",", ";", -1));
+            let s: String = "one two two two";
+            println(s.replacen("two", "2", 2));
+            // Receiver untouched (fresh owned copy).
+            println(s);
+        }"#);
+    assert_eq!(
+        output,
+        "a_b_c-d\nx!x!x\nbbbbbba\n1,2,3\n1,2,3\none 2 2 two\none two two two\n"
+    );
+}
+
+#[test]
 fn test_string_trim_start_end_interpreter() {
     // `trim_start` / `trim_end` strip only the leading / trailing Unicode
     // whitespace (Rust `str::trim_{start,end}`), returning a fresh owned copy.

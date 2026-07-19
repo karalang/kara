@@ -12073,6 +12073,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             | "to_uppercase"
                             | "sorted"
                             | "replace"
+                            | "replacen"
                             | "to_string"
                             | "repeat"
                             | "split"

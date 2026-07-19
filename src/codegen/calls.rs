@@ -1388,6 +1388,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "to_string"
                     | "repeat"
                     | "replace"
+                    | "replacen"
             ),
             ExprKind::Block(b) | ExprKind::Seq(b) => b
                 .final_expr

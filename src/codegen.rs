@@ -3557,6 +3557,9 @@ pub(super) struct Codegen<'ctx> {
     /// `karac_string_replace(data, len, from, from_len, to, to_len, *mut out_len)
     /// -> ptr` — every `from` replaced with `to` (Rust `str::replace`).
     pub(crate) karac_string_replace_fn: FunctionValue<'ctx>,
+    /// `karac_string_replacen(data, len, from, from_len, to, to_len, n, *mut out_len)
+    /// -> ptr` — first `n` `from` replaced with `to` (Rust `str::replacen`).
+    pub(crate) karac_string_replacen_fn: FunctionValue<'ctx>,
     /// Per-type clone function cache. Keyed on the canonical mangled type
     /// name (`display_mangle_te`). Each emitted fn has signature
     /// `void karac_clone_<typename>(*const T src, *mut T dst)` — caller
@@ -6441,6 +6444,18 @@ impl<'ctx> Codegen<'ctx> {
             string_replace_ty,
             Some(Linkage::External),
         );
+        // karac_string_replacen(data, len, from, from_len, to, to_len, n, out_len) -> ptr
+        let string_replacen_ty = ptr_type.fn_type(
+            &[
+                ptr_md, i64_ty, ptr_md, i64_ty, ptr_md, i64_ty, i64_ty, ptr_md,
+            ],
+            false,
+        );
+        let karac_string_replacen_fn = module.add_function(
+            "karac_string_replacen",
+            string_replacen_ty,
+            Some(Linkage::External),
+        );
         // karac_string_strip_{prefix,suffix}(data, len, p, p_len, out_len,
         // out_matched: *mut i32) -> ptr. Fetched by name at the use site
         // (vec_method.rs) — no cached field. `out_matched` distinguishes a
@@ -6850,6 +6865,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_string_trim_end_fn,
             karac_string_sorted_fn,
             karac_string_replace_fn,
+            karac_string_replacen_fn,
             clone_fn_cache: HashMap::new(),
             try_clone_fn_cache: HashMap::new(),
             drop_fn_cache: HashMap::new(),

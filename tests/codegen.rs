@@ -13343,6 +13343,33 @@ fn main() {
         }
     }
 
+    /// `String.replacen(from, to, n)` via `karac_string_replacen` (Rust
+    /// `str::replacen`) — replace at most the first `n` occurrences. A negative
+    /// count clamps to 0 (replace nothing), the documented codegen/runtime
+    /// contract. Byte-identical to the interpreter
+    /// (`test_string_replacen_interpreter`); leak-freedom gated in
+    /// `tests/memory_sanitizer.rs`.
+    #[test]
+    fn e2e_string_replacen_codegen() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println(\"a-b-c-d\".replacen(\"-\", \"_\", 2));\n\
+                 println(\"x.x.x\".replacen(\".\", \"!\", 10));\n\
+                 println(\"aaaa\".replacen(\"a\", \"bb\", 3));\n\
+                 println(\"1,2,3\".replacen(\",\", \";\", 0));\n\
+                 println(\"1,2,3\".replacen(\",\", \";\", -1));\n\
+                 let s: String = \"one two two two\";\n\
+                 println(s.replacen(\"two\", \"2\", 2));\n\
+                 println(s);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "a_b_c-d\nx!x!x\nbbbbbba\n1,2,3\n1,2,3\none 2 2 two\none two two two\n"
+            );
+        }
+    }
+
     /// `String.trim_start()` / `.trim_end()` via `karac_string_trim_{start,end}`
     /// — strip only leading / trailing whitespace, byte-identical to the
     /// interpreter (`test_string_trim_start_end_interpreter`). Leak-freedom is

@@ -410,6 +410,26 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
+            "replacen" => {
+                // `String.replacen(from, to, n) -> String` (typed in
+                // stdlib_seq.rs): the first `n` non-overlapping `from` replaced
+                // with `to`, Rust `str::replacen`. A negative count is clamped
+                // to 0, matching the runtime/codegen contract.
+                if let Value::String(s) = &obj {
+                    if let [from_a, to_a, n_a] = args {
+                        let from_v = self.eval_expr_inner(&from_a.value);
+                        let to_v = self.eval_expr_inner(&to_a.value);
+                        let n_v = self.eval_expr_inner(&n_a.value);
+                        if let (Value::String(from), Value::String(to), Value::Int(n)) =
+                            (from_v, to_v, n_v)
+                        {
+                            let count = if n < 0 { 0 } else { n as usize };
+                            return Some(Value::String(s.replacen(&from, &to, count)));
+                        }
+                    }
+                }
+                return None;
+            }
             "as_slice" | "as_slice_mut" => {
                 // Slice 3 — produce a Value::Slice that shares the
                 // source's `Arc<RwLock<Vec<Value>>>` storage. Mutation

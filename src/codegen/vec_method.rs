@@ -1663,6 +1663,55 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.free_fresh_owned_str_arg(&args[1].value, to_val.into());
                 Ok(result)
             }
+            // `String.replacen(from, to, n) -> String` via
+            // `karac_string_replacen` (Rust `str::replacen`). Same shape as
+            // `replace` plus a trailing `i64` count; the runtime clamps a
+            // negative count to 0.
+            "replacen" => {
+                if args.len() != 3 {
+                    return Err("String.replacen requires (from, to, n) arguments".to_string());
+                }
+                let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "rpn");
+                let from_val = self.compile_expr(&args[0].value)?.into_struct_value();
+                let from_data = self
+                    .builder
+                    .build_extract_value(from_val, 0, "rpn.from.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let from_len = self
+                    .builder
+                    .build_extract_value(from_val, 1, "rpn.from.len")
+                    .unwrap()
+                    .into_int_value();
+                let to_val = self.compile_expr(&args[1].value)?.into_struct_value();
+                let to_data = self
+                    .builder
+                    .build_extract_value(to_val, 0, "rpn.to.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let to_len = self
+                    .builder
+                    .build_extract_value(to_val, 1, "rpn.to.len")
+                    .unwrap()
+                    .into_int_value();
+                let n_val = self.compile_expr(&args[2].value)?.into_int_value();
+                let result = self.build_string_xform_result(
+                    self.karac_string_replacen_fn,
+                    vec![
+                        recv_data.into(),
+                        recv_len.into(),
+                        from_data.into(),
+                        from_len.into(),
+                        to_data.into(),
+                        to_len.into(),
+                        n_val.into(),
+                    ],
+                    "str.replacen",
+                );
+                self.free_fresh_owned_str_arg(&args[0].value, from_val.into());
+                self.free_fresh_owned_str_arg(&args[1].value, to_val.into());
+                Ok(result)
+            }
             // `String.strip_{prefix,suffix}(p) -> Option[String]` via
             // `karac_string_strip_{prefix,suffix}`, which allocates the owned
             // remainder copy and writes a `matched` flag through an out-slot.

@@ -356,6 +356,34 @@ pub unsafe extern "C" fn karac_string_replace(
     alloc_string_result(replaced.as_bytes(), out_len)
 }
 
+/// `String.replacen(from, to, n)` — replace at most the first `n`
+/// non-overlapping occurrences of `from` with `to` (Rust `str::replacen`).
+/// A negative `n` is clamped to `0` (replace nothing), matching the codegen
+/// contract that a `usize`-shaped count is never fed a wrapped value.
+/// Returns a fresh owned buffer.
+///
+/// # Safety
+/// `data`/`from`/`to` are Kāra String bodies (their `*_len` byte counts);
+/// `out_len` must be writable. See [`alloc_string_result`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_replacen(
+    data: *const u8,
+    len: i64,
+    from: *const u8,
+    from_len: i64,
+    to: *const u8,
+    to_len: i64,
+    n: i64,
+    out_len: *mut i64,
+) -> *mut u8 {
+    let haystack = str_from_raw(data, len);
+    let from_s = str_from_raw(from, from_len);
+    let to_s = str_from_raw(to, to_len);
+    let count = if n < 0 { 0 } else { n as usize };
+    let replaced = haystack.replacen(from_s, to_s, count);
+    alloc_string_result(replaced.as_bytes(), out_len)
+}
+
 /// `Vec[String].join(sep)` / `.concat()` — concatenate the vector's string
 /// elements with `sep` between every adjacent pair (`concat` passes an empty
 /// `sep`). `parts` is the Vec's data buffer: `count` contiguous
