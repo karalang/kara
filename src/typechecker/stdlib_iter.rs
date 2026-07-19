@@ -369,6 +369,38 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Int(IntSize::I64)],
                 }
             }
+            "find" => {
+                // `find(pred: Fn(T) -> bool) -> Option[T]` — short-circuit
+                // terminal returning the first yielded element the predicate
+                // holds for, or `None`. Records the element `TypeExpr` span-keyed
+                // (same table as `sum`/`reduce`) so codegen can annotate its
+                // `Option[T]` result and gate to scalar payloads.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("Iterator.find() expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![item.clone()],
+                    };
+                }
+                let pred_ty = Type::Function {
+                    params: vec![item.clone()],
+                    return_type: Box::new(Type::Bool),
+                };
+                self.check_expr(&args[0].value, &pred_ty);
+                self.iter_terminal_elem_types
+                    .insert(SpanKey::from_span(span), Self::type_to_type_expr(item));
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
             "enumerate" => {
                 // `enumerate() -> Iterator[(i64, T)]` — wraps each item
                 // into a tuple of (index, item).
@@ -905,6 +937,7 @@ impl<'a> super::TypeChecker<'a> {
                     "cycle",
                     "enumerate",
                     "filter",
+                    "find",
                     "flat_map",
                     "fold",
                     "for_each",

@@ -857,6 +857,42 @@ impl<'a> super::Interpreter<'a> {
                     });
                 }
             }
+            "find" => {
+                // `find(pred) -> Option[T]` — the first YIELDED element the
+                // predicate holds for, or `None`. Short-circuit like `position`;
+                // the matched element is returned by value in the `Some` payload.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return Some(self.record_runtime_error(
+                            "Iterator.find() requires a closure argument".to_string(),
+                            span,
+                        ));
+                    };
+                    let pred = self.eval_iter_closure_arg(&arg.value);
+                    if !matches!(pred, Value::Function { .. }) {
+                        return Some(self.record_runtime_error(
+                            format!("Iterator.find() expects a closure; got {}", pred),
+                            span,
+                        ));
+                    }
+                    let mut iter_val = obj;
+                    while let Some(item) = self.iterator_step(&mut iter_val) {
+                        let keep = self.invoke_function_value(pred.clone(), vec![item.clone()]);
+                        if matches!(keep, Value::Bool(true)) {
+                            return Some(Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "Some".to_string(),
+                                data: EnumData::Tuple(vec![item]),
+                            });
+                        }
+                    }
+                    return Some(Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    });
+                }
+            }
             _ => return None,
         }
         None

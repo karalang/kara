@@ -12041,6 +12041,47 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_find_terminal_scalar() {
+        // `<iter-chain>.find(|x| pred) -> Option[T]` — the first YIELDED element
+        // the predicate holds for, or None. Desugars like `position` but stores
+        // the ELEMENT. SCALAR payloads only (a heap `Some(elem)` would alias the
+        // borrowed source; deferred loud — see below). Covers hit / miss / first
+        // / filter+find / map+find / range.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = [10, 20, 30, 40];\n\
+                 match v.iter().find(|x| x > 15) { Some(e) => println(e), None => println(-1) }\n\
+                 match v.iter().find(|x| x > 99) { Some(e) => println(e), None => println(-1) }\n\
+                 match v.iter().find(|x| x > 0) { Some(e) => println(e), None => println(-1) }\n\
+                 match v.iter().filter(|x| x % 20 == 0).find(|x| x > 25) { Some(e) => println(e), None => println(-1) }\n\
+                 match v.iter().map(|x| x / 10).find(|x| x > 2) { Some(e) => println(e), None => println(-1) }\n\
+                 match (0..10).find(|x| x > 5) { Some(e) => println(e), None => println(-1) }\n\
+             }",
+        ) {
+            // 20 (>15); -1 (miss); 10 (first>0); filter[20,40] first>25=40; map[1,2,3,4] first>2=3; range 6
+            assert_eq!(out, "20\n-1\n10\n40\n3\n6\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_iter_chain_find_heap_element_deferred_loud() {
+        // A HEAP-element `find` (`Some(elem)` would alias the borrowed source
+        // buffer — the reduce/max deferral) must bail LOUD naming find + pointing
+        // at `--interp`, never a generic "no handler" or a silent skip.
+        let err = ir_result(
+            "fn main() {\n\
+                 let v: Vec[String] = [\"a\", \"bb\", \"ccc\"];\n\
+                 match v.iter().find(|s| s.len() == 2) { Some(e) => println(e), None => println(\"none\") }\n\
+             }\n",
+        )
+        .expect_err("heap-element find must bail loud");
+        assert!(
+            err.contains("Iterator.find()") && err.contains("--interp"),
+            "expected find heap-deferral message, got: {err}"
+        );
+    }
+
+    #[test]
     fn test_e2e_iter_chain_wildcard_closure_param() {
         // B-2026-07-11-19 — `|_|` wildcard closure params on the fused-chain
         // terminals. The interpreter already accepted them; codegen's collect /

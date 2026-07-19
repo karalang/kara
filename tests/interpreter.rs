@@ -14956,6 +14956,27 @@ fn main() {
 }
 
 #[test]
+fn test_iter_find_returns_first_matching_element() {
+    // `find(pred) -> Option[T]` — the first yielded element matching the
+    // predicate (over the POST-adaptor sequence), or None. Element returned by
+    // value; works for scalar and String (heap) elements in the interpreter.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30, 40];
+    match v.iter().find(|x| x > 25) { Some(e) => println(e), None => println(-1) }
+    match v.iter().find(|x| x > 99) { Some(e) => println(e), None => println(-1) }
+    match v.iter().filter(|x| x % 20 == 0).find(|x| x > 25) { Some(e) => println(e), None => println(-1) }
+    let s: Vec[String] = ["a", "bb", "ccc"];
+    match s.iter().find(|w| w.len() == 2) { Some(e) => println(e), None => println("none") }
+}
+"#,
+    );
+    // >25 -> 30; miss -> -1; filter[20,40] first>25 -> 40; String len==2 -> "bb"
+    assert_eq!(output, "30\n-1\n40\nbb\n");
+}
+
+#[test]
 fn test_iter_any_returns_false_when_no_match() {
     let output = run_no_errors(
         r#"

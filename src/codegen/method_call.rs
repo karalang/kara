@@ -5676,6 +5676,41 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<iter-chain>.find(|x| pred) -> Option[T]` — short-circuit element
+        // terminal. Same iterator-chain gate; scalar payloads only (a heap
+        // element `Some(elem)` would alias the borrowed source buffer — the
+        // reduce/max heap deferral applies), else `Ok(None)` -> loud `--interp`.
+        if method == "find"
+            && args.len() == 1
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                if params.len() == 1 {
+                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__fip") {
+                        if let Some(v) =
+                            self.try_compile_iter_chain_find(object, &param, body, call_span)?
+                        {
+                            return Ok(v);
+                        }
+                    }
+                }
+            }
+            // Declined (a HEAP element — `Some(elem)` would alias the borrowed
+            // source buffer — or an unpeelable chain shape). Bail LOUD with a
+            // `--interp` pointer rather than the generic "no handler" dispatch
+            // error; the interpreter runs every element type correctly.
+            return Err(
+                "`Iterator.find()` is lowered under `karac build` only for a SCALAR \
+                 element over a fused map/filter chain; a heap element (String / Vec / \
+                 struct) or an unsupported chain shape is deferred — run it under the \
+                 interpreter (`karac run --interp`, or `KARAC_RUN_JIT=0`)."
+                    .to_string(),
+            );
+        }
+
         // `<iter-chain>.sum()` — the numeric-accumulation terminal on a fused
         // iterator chain (B-2026-07-11-19). Same iterator-chain receiver gate as
         // `fold`. Desugars to a `fold(<typed-zero>, |acc, x| acc + x)`, seeding
@@ -10501,6 +10536,185 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&posname))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// `<iter-chain>.find(|x| pred) -> Option[T]` — the first YIELDED element the
+    /// predicate holds for, or `None`. Desugars like `position` but stores the
+    /// ELEMENT (not its index):
+    ///
+    /// ```text
+    /// { let mut __find: Option[T] = None;
+    ///   for <elem> in <base> { <steps>
+    ///       let <param> = <adapted-elem>;
+    ///       if <pred> { __find = Some(<param>); break; } }
+    ///   __find }
+    /// ```
+    ///
+    /// SCALAR payloads only (gated via `iter_terminal_elem_types` +
+    /// `is_trivially_copyable_te`): a heap element `Some(elem)` would alias the
+    /// borrowed source buffer and double-free (the reduce/max heap deferral).
+    /// `Ok(None)` (loud `--interp` deferral) for a heap element or an
+    /// unrecorded / unpeelable chain.
+    fn try_compile_iter_chain_find(
+        &mut self,
+        recv: &Expr,
+        param: &str,
+        pred: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some(elem_te) = self
+            .iter_terminal_elem_types
+            .get(&(call_span.offset, call_span.length))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if !super::vec_method::is_trivially_copyable_te(&elem_te) {
+            return Ok(None);
+        }
+        let (base, steps) = match Self::peel_fused_map_filter_chain(recv) {
+            Some(x) => x,
+            None if Self::for_loop_iterates_flat_map(recv) => (recv, Vec::new()),
+            None => return Ok(None),
+        };
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let sp = call_span.clone();
+        let findname = format!("__find_{}", uid);
+        let elem_name = steps
+            .iter()
+            .find(|(_, p, _)| !p.is_empty())
+            .map(|(_, p, _)| p.clone())
+            .unwrap_or_else(|| param.to_string());
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let some_of = |e: Expr| Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Identifier("Some".to_string()),
+                    span: sp.clone(),
+                }),
+                args: vec![CallArg {
+                    label: None,
+                    mut_marker: false,
+                    value: e,
+                    span: sp.clone(),
+                }],
+            },
+            span: sp.clone(),
+        };
+        // Sink: bind `param` to the fully-adapted element (so both the pred and
+        // the `Some(param)` payload reference it), then `if pred { __find =
+        // Some(param); break }`.
+        let sink = |current: Expr| -> Vec<Stmt> {
+            let current_is_param = matches!(&current.kind, ExprKind::Identifier(n) if n == param);
+            let mut out = Vec::new();
+            if !current_is_param {
+                out.push(Stmt {
+                    kind: StmtKind::Let {
+                        is_mut: false,
+                        pattern: Pattern {
+                            kind: PatternKind::Binding(param.to_string()),
+                            span: sp.clone(),
+                        },
+                        ty: None,
+                        value: current,
+                    },
+                    span: sp.clone(),
+                });
+            }
+            let decide = vec![
+                Stmt {
+                    kind: StmtKind::Assign {
+                        target: ident(&findname),
+                        value: some_of(ident(param)),
+                    },
+                    span: sp.clone(),
+                },
+                Stmt {
+                    kind: StmtKind::Expr(Expr {
+                        kind: ExprKind::Break {
+                            label: None,
+                            value: None,
+                        },
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                },
+            ];
+            out.push(Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::If {
+                        condition: Box::new(pred.clone()),
+                        then_block: Block {
+                            stmts: decide,
+                            final_expr: None,
+                            span: sp.clone(),
+                        },
+                        else_branch: None,
+                    },
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            });
+            out
+        };
+        let sw_prefix = format!("__swf_{uid}_");
+        let for_body =
+            Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(elem_name),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(base.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: for_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let opt_te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Option".to_string()],
+                generic_args: Some(vec![GenericArg::Type(elem_te)]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let mut block_stmts = vec![Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(findname.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(opt_te),
+                value: ident("None"),
+            },
+            span: sp.clone(),
+        }];
+        block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
+        block_stmts.push(for_loop);
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: block_stmts,
+                final_expr: Some(Box::new(ident(&findname))),
                 span: sp.clone(),
             }),
             span: sp.clone(),
