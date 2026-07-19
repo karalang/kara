@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 86 | 0 |
 | double-free | 67 | 0 |
 | codegen-gap | 63 | 0 |
-| missing-feature | 54 | 0 |
+| missing-feature | 55 | 1 |
 | false-positive | 37 | 0 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 417 | 0 |
-| typecheck | 77 | 0 |
+| typecheck | 78 | 1 |
 | interp | 61 | 0 |
 | ownership | 24 | 0 |
 | other | 18 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **585 surfaced · 0 open · 581 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **586 surfaced · 1 open · 581 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-19-8 | 2026-07-19 | typecheck | medium | `weak T` struct fields are DECLARATION-ONLY: the modifier parses, type-lowers to `Type::Weak`, and satisfies the ownership cycle checker (`struct Child { parent: weak Parent }` — test_weak_breaks_cycle passes), but there is NO way to construct, assign, or access a weak-field VALUE. design.md § Cycles specifies full Swift-like semantics ('the `weak` annotation breaks back-edges, returns `Option[T]` on access'), none of which is implemented: no `weak <expr>` downgrade expression (the `weak` keyword is only a TYPE-position token), no `.downgrade()`/`.weak()` method, no coercion from a strong `T`/`Option[T]`, and no codegen. A `weak T` field therefore can only ever be declared — a struct/shared-struct that has one cannot be constructed, making the feature unusable at runtime. | src/typechecker (weak-field value semantics), src/codegen |
 
 ### Fixed (581)
 
