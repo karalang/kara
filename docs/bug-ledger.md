@@ -720,7 +720,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **588 surfaced 
 | B-2026-07-19-6 | codegen | high | A field store of an `Option[shared]` into a Vec-INDEXED shared-struct element (identifier root — `v[i].next = Some(v[j])`, `nodes[i].field = X`) had… | 6f8f441 |
 | B-2026-07-19-7 | typecheck+interp+codegen | low | `Iterator.last() -> Option[T]` and `Iterator.nth(n) -> Option[T]` were unimplemented (rejected `no method 'last'/'nth' on type 'Iterator'`) | 77cd44c |
 | B-2026-07-19-9 | typecheck+interp+codegen | low | `Vec[T].split_off(i) -> Vec[T]` was unimplemented | 293b6b5 |
-| B-2026-07-19-10 | typecheck+interp+codegen | low | `String.replacen(from, to, n) -> String` was unimplemented (only `replace` existed) | 9a88cf9 |
+| B-2026-07-19-10 | typecheck+interp+codegen | low | `String.replacen(from, to, n) -> String` was unimplemented (only `replace` existed) | 9a21d56 |
 
 </details>
 
