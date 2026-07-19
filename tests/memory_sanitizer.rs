@@ -672,15 +672,8 @@ fn main() {
 }
 "#,
             &[
-                "Some(c0)",
-                "Some(a0)",
-                "Some(r1)",
-                "Some(c1)",
-                "Some(a1)",
-                "Some(r1)",
-                "Some(c2)",
-                "Some(a2)",
-                "Some(r1)",
+                "Some(c0)", "Some(a0)", "Some(r1)", "Some(c1)", "Some(a1)", "Some(r1)", "Some(c2)",
+                "Some(a2)", "Some(r1)",
             ],
             "asan_iter_rev_range_reverse_iterate",
         );
