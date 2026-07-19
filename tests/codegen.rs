@@ -69796,6 +69796,71 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_autograd_grad_value_and_grad() {
+        // Phase-11 std.autograd higher-order API (`Tape.grad` / `Tape.value_and_grad`,
+        // the JAX-style entry point): pass a closure `Fn(Var) -> Var`, get back the
+        // derivative (and value) with no tape bookkeeping. Exact oracles:
+        //   value_and_grad(x²+3x, 2) = (10, 7)      [f'=2x+3]
+        //   grad(x²+x, 2) = 5                        [f'=2x+1]
+        //   grad(x³, 2) = 12                         [f'=3x²]
+        //   grad(sigmoid, 0) = 0.25;  grad(tanh, 0) = 1
+        //   grad(relu, 3) = 1;  grad(relu, -1) = 0
+        if let Some(out) = run_program(
+            r#"
+import std.autograd.{Tape, Var};
+fn main() {
+    let vg = Tape.value_and_grad(|x| x.mul(x).add(x.add(x).add(x)), 2.0);
+    println(vg.0);
+    println(vg.1);
+    println(Tape.grad(|x| x.mul(x).add(x), 2.0));
+    println(Tape.grad(|x| x.mul(x).mul(x), 2.0));
+    println(Tape.grad(|x| x.sigmoid(), 0.0));
+    println(Tape.grad(|x| x.tanh(), 0.0));
+    println(Tape.grad(|x| x.relu(), 3.0));
+    println(Tape.grad(|x| x.relu(), 0.0 - 1.0));
+}
+"#,
+        ) {
+            assert_eq!(out, "10\n7\n5\n12\n0.25\n1\n1\n0\n");
+        }
+    }
+
+    #[test]
+    fn e2e_closure_struct_return_via_fn_param() {
+        // B-2026-07-19: a closure passed to a `Fn(..) -> S` param whose body
+        // returns an aggregate via a METHOD CALL (`|q| q.twice()`) or produces a
+        // tuple mis-declared its LLVM return type as `i64` (the structural
+        // heuristic can't see a method's returned surface type), so codegen died
+        // with "Function return type does not match operand type of return inst".
+        // Struct-literal bodies already worked; this generalizes the fix to any
+        // aggregate return. Unblocks std.autograd's `Tape.grad` closures
+        // (`|x| x.mul(x)` returns Var). Covers: method-call struct return,
+        // struct-literal return (regression), and a tuple return.
+        if let Some(out) = run_program(
+            r#"
+struct P { a: i64, b: i64 }
+impl P { fn twice(ref self) -> P { P { a: self.a * 2, b: self.b * 2 } } }
+fn ap(f: Fn(P) -> P, p: P) -> P { f(p) }
+fn ap_lit(f: Fn(P) -> P, p: P) -> P { f(p) }
+fn ap_tup(f: Fn(i64) -> (i64, i64), x: i64) -> (i64, i64) { f(x) }
+fn main() {
+    let r = ap(|q| q.twice(), P { a: 5, b: 6 });
+    println(r.a);
+    println(r.b);
+    let s = ap_lit(|q| P { a: q.a + 1, b: q.b + 2 }, P { a: 10, b: 20 });
+    println(s.a);
+    println(s.b);
+    let t = ap_tup(|n| (n + 1, n * 2), 5);
+    println(t.0);
+    println(t.1);
+}
+"#,
+        ) {
+            assert_eq!(out, "10\n12\n11\n22\n6\n10\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_embeddings_cosine_similarity_matrix() {
         // `std.embeddings.cosine_similarity_matrix` (phase-11): the Q×N
         // bulk-scoring path — a `[Q, D]` query block vs a `[N, D]` corpus →

@@ -18741,6 +18741,31 @@ fn main() {
 }
 
 #[test]
+fn test_autograd_grad_value_and_grad() {
+    // std.autograd (phase-11) higher-order API `Tape.grad` / `Tape.value_and_grad`
+    // — interpreter parity with tests/codegen.rs::test_e2e_autograd_grad_value_and_grad.
+    // A closure `Fn(Var) -> Var` is differentiated with no user tape bookkeeping.
+    //   value_and_grad(x²+3x, 2) = (10, 7); grad(x²+x, 2) = 5; grad(x³, 2) = 12;
+    //   grad(sigmoid, 0) = 0.25; grad(relu, 3) = 1; grad(relu, -1) = 0.
+    let out = run_no_errors(
+        r#"
+import std.autograd.{Tape, Var};
+fn main() {
+    let vg = Tape.value_and_grad(|x| x.mul(x).add(x.add(x).add(x)), 2.0);
+    println(vg.0);
+    println(vg.1);
+    println(Tape.grad(|x| x.mul(x).add(x), 2.0));
+    println(Tape.grad(|x| x.mul(x).mul(x), 2.0));
+    println(Tape.grad(|x| x.sigmoid(), 0.0));
+    println(Tape.grad(|x| x.relu(), 3.0));
+    println(Tape.grad(|x| x.relu(), 0.0 - 1.0));
+}
+"#,
+    );
+    assert_eq!(out, "10\n7\n5\n12\n0.25\n1\n0\n");
+}
+
+#[test]
 fn test_autograd_reverse_mode_tensor_valued() {
     // std.autograd (phase-11) tensor-valued surface — interpreter parity with
     // tests/codegen.rs::test_e2e_autograd_tensor_valued. Element-wise

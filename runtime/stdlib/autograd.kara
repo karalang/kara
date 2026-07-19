@@ -105,6 +105,43 @@ impl Tape {
         self.pb.push(b);
         idx
     }
+
+    /// Compute both the value and the gradient of a scalar function `f` at `x` in
+    /// a single reverse-mode pass — the ergonomic entry point to `std.autograd`
+    /// (the analog of JAX's `value_and_grad`). `f` is any closure `Fn(Var) -> Var`
+    /// that builds a computation over its input `Var` and returns the output.
+    ///
+    /// A fresh tape is created, `x` becomes the leaf input, `f` runs the forward
+    /// pass (recording each op onto the tape), then `backward()` propagates from
+    /// the output and the leaf's accumulated gradient is read back. Returns
+    /// `(f(x), df/dx)`. The caller writes no tape bookkeeping — that is the whole
+    /// point of this wrapper over the `Tape`/`Var` primitives. An associated
+    /// function (not a receiver method): it owns the tape for the whole pass.
+    ///
+    /// Example: `Tape.value_and_grad(|x| x.mul(x), 3.0)` -> `(9.0, 6.0)`.
+    #[must_use = "value_and_grad returns the computed (value, gradient) pair"]
+    pub fn value_and_grad(f: Fn(Var) -> Var, x: f64) -> (f64, f64) {
+        let tape = Tape.new();
+        let xv = Var.leaf(tape, x);
+        // The leaf is the first node recorded, so read its id before `f` consumes
+        // `xv`. `tape` is a `shared` handle — passing it to `Var.leaf` bumps its
+        // refcount, so it stays live here for the readback handle.
+        let leaf_idx = xv.idx;
+        let out = f(xv);
+        out.backward();
+        let leaf = Var { tape: tape, idx: leaf_idx };
+        (out.value(), leaf.grad())
+    }
+
+    /// The gradient `df/dx` of a scalar function `f` at `x` (reverse-mode) — the
+    /// value-discarding sibling of `value_and_grad` (the analog of JAX's `grad`).
+    ///
+    /// Example: `Tape.grad(|x| x.mul(x).add(x), 2.0)` -> `5.0` (d/dx of x²+x at 2).
+    #[must_use = "grad returns the computed derivative"]
+    pub fn grad(f: Fn(Var) -> Var, x: f64) -> f64 {
+        let vg = Tape.value_and_grad(f, x);
+        vg.1
+    }
 }
 
 impl Var {

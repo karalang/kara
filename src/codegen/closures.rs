@@ -2832,15 +2832,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // Return type: the structural heuristic `infer_closure_return_type` is
         // correct and usage-specific for most bodies (e.g. an `a.cmp(b)`
         // Ordering result that `sort_by` extracts a tag from), so it is the
-        // default. But it CANNOT resolve a method-call body whose receiver's
+        // default. But it CANNOT resolve a method-call body whose returned
         // SURFACE type it can't recover from LLVM types alone — `|s|
-        // s.to_uppercase()` returns a String, yet String and Vec share one LLVM
-        // type, so the heuristic falls back to `i64` and the body's
-        // `{ptr,i64,i64}` return mismatches the declared `i64` (heap-returning
-        // `.map()` mapper). Narrowly override ONLY that case: the
-        // typechecker-recorded `Fn(T) -> R` says the return is a String/Vec
-        // (`vec_struct`) but the heuristic gave up to `i64`. Every other shape
-        // keeps the heuristic. Heap-payload map codegen (B-2026-07-12-11).
+        // s.to_uppercase()` returns a String (String/Vec share one LLVM type),
+        // and `|x| x.mul(x)` / `|q| q.twice()` return a user struct/tuple — so
+        // the heuristic falls back to `i64` and the body's aggregate return
+        // mismatches the declared `i64` (LLVM "return type does not match operand
+        // type"). Override when the typechecker-recorded `Fn(T) -> R` says the
+        // return is an AGGREGATE (`vec_struct` / user struct / tuple) but the
+        // heuristic gave up to the scalar `i64`: trust the recorded type. A
+        // fieldless enum return (`a.cmp(b)` Ordering→i64-tag) lowers to an int,
+        // not a struct, so it stays on the heuristic — no regression.
+        // Heap-payload map codegen (B-2026-07-12-11); struct/tuple returns
+        // (B-2026-07-19, autograd `Tape.grad` closures).
         let heuristic_rt = self.infer_closure_return_type(body, &closure_param_types);
         let return_ty = match inferred_fn_te.as_ref() {
             Some(TypeExpr {
@@ -2852,8 +2856,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 ..
             }) => {
                 let recorded = self.llvm_type_for_type_expr(rt);
-                if recorded == self.vec_struct_type().into()
-                    && heuristic_rt == self.context.i64_type().into()
+                if heuristic_rt == self.context.i64_type().into()
+                    && matches!(recorded, BasicTypeEnum::StructType(_))
                 {
                     recorded
                 } else {
