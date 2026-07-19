@@ -81,6 +81,9 @@ pub mod tls;
 pub mod tracing;
 #[cfg(any(all(target_family = "wasm", feature = "wasm-threads"), test))]
 pub mod wasm_threads_scheduler;
+// Weak-reference control-block primitives (`weak T`, B-2026-07-19-8, slice 1).
+// Target-independent, non-atomic; no cfg gate — every archive carries it.
+mod weak;
 // Heap unification with wasi-libc `malloc` — wasm archive only; see the
 // module doc for why cross-boundary frees require it.
 #[cfg(all(target_family = "wasm", target_os = "wasi"))]
@@ -185,6 +188,17 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         string_split_ffi::karac_runtime_string_split,
         string_split_ffi::karac_runtime_string_split_whitespace,
         karac_runtime_string_to_cstring,
+    );
+    // Weak-reference control-block primitives (`runtime/src/weak.rs`, slice 1
+    // of `weak T` support, B-2026-07-19-8). Codegen (slice 3/4) emits these at
+    // `weak`-field store (downgrade), read (upgrade), scope-exit (drop), and the
+    // strong-release tail of a weak-capable box; the JIT resolves them from the
+    // process, so all four must be preserved. Same keep-list class as alloc/regex.
+    keep!(
+        weak::karac_weak_downgrade,
+        weak::karac_weak_drop,
+        weak::karac_weak_upgrade,
+        weak::karac_weak_box_strong_zero_release,
     );
     // Task detach (`scheduler.rs`, native `net` scheduler) — codegen emits it for
     // a discarded `spawn(...)` whose `TaskHandle` is never joined (B-2026-06-17-2).
