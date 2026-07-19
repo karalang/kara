@@ -1485,6 +1485,47 @@ impl<'ctx> super::Codegen<'ctx> {
     /// store was emitted; Ok(false) falls back to the generic path
     /// (which is count-correct for every shape, so the fallback is
     /// always safe).
+    /// Weak-field store fast path: `node.weak_field = <expr>` where the target
+    /// field is `weak T`. Intercepted BEFORE the generic value compile so the
+    /// RHS `Some(...)` / bare handle never runs the strong-retaining sink logic —
+    /// a weak store is a DOWNGRADE (weak += 1 on the target, weak -= 1 on the
+    /// old occupant), never a strong retain/transfer. Falls through (`Ok(false)`)
+    /// on any non-weak-field target. `docs/spikes/weak-refs.md` (B-2026-07-19-8).
+    fn try_emit_weak_field_store(&mut self, target: &Expr, value: &Expr) -> Result<bool, String> {
+        let ExprKind::FieldAccess { object, field } = &target.kind else {
+            return Ok(false);
+        };
+        let Some((type_name, info)) = self.shared_type_for_expr(object) else {
+            return Ok(false);
+        };
+        if info.is_enum {
+            return Ok(false);
+        }
+        let Some(idx) = self
+            .struct_field_names
+            .get(&type_name)
+            .and_then(|ns| ns.iter().position(|n| n == field))
+        else {
+            return Ok(false);
+        };
+        if !self.struct_field_is_weak(&type_name, idx) {
+            return Ok(false);
+        }
+        // The object's box pointer (via `compile_expr` so a `ref self` receiver
+        // gets its double-load — mirrors the shared-field-store read path).
+        let ptr = self.compile_expr(object)?.into_pointer_value();
+        let (gep_ty, base) = self.shared_gep_layout(&type_name, info.heap_type);
+        let field_ptr = self
+            .builder
+            .build_struct_gep(gep_ty, ptr, idx as u32 + base, &format!("weak_{field}_ptr"))
+            .unwrap();
+        // Compute the new target box pointer WITHOUT a strong retain, then run
+        // the weak setter (downgrade new, store, weak-drop old).
+        let new_box = self.weak_field_new_box_ptr(value)?;
+        self.emit_weak_field_store(field_ptr, new_box);
+        Ok(true)
+    }
+
     fn try_emit_b2_link_store(&mut self, target: &Expr, value: &Expr) -> Result<bool, String> {
         let ExprKind::FieldAccess { object, field } = &target.kind else {
             return Ok(false);
@@ -5371,6 +5412,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `Some(...)` constructor (which incs shared payloads)
                 // never runs. Falls through on any shape mismatch.
                 if self.try_emit_b2_link_store(target, value)? {
+                    return Ok(());
+                }
+                // Weak-field store (`node.random = other` / `= None`) — downgrade,
+                // not a strong retain. Intercepted before the generic compile.
+                if self.try_emit_weak_field_store(target, value)? {
                     return Ok(());
                 }
                 // `*m.entry(k).or_insert(d) = v` — store through the entry slot

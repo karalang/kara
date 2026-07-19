@@ -2073,7 +2073,27 @@ impl<'a> Interpreter<'a> {
                         // (no explicit init in the literal) are
                         // handled by the `weak_overrides` drain below.
                         let weak = match &v {
+                            // A bare strong handle downgrades directly.
                             Value::SharedStruct(arc) => Arc::downgrade(arc),
+                            // `weak` field construction accepts `Option[T]` too
+                            // (`docs/spikes/weak-refs.md`): `None` → an empty weak
+                            // slot; `Some(shared)` → downgrade the inner handle.
+                            Value::EnumVariant {
+                                enum_name,
+                                variant,
+                                data,
+                            } if enum_name == "Option" => match (variant.as_str(), data) {
+                                ("None", _) => std::sync::Weak::new(),
+                                ("Some", EnumData::Tuple(vs))
+                                    if matches!(vs.first(), Some(Value::SharedStruct(_))) =>
+                                {
+                                    match vs.first() {
+                                        Some(Value::SharedStruct(arc)) => Arc::downgrade(arc),
+                                        _ => std::sync::Weak::new(),
+                                    }
+                                }
+                                _ => std::sync::Weak::new(),
+                            },
                             _ => {
                                 self.runtime_errors.push(RuntimeError {
                                     message: format!(
@@ -2279,6 +2299,19 @@ impl<'a> Interpreter<'a> {
             // case but record a runtime error as defense-in-depth.
             let weak = match &val {
                 Value::SharedStruct(arc) => Arc::downgrade(arc),
+                // `weak` assignment accepts `Option[T]` (`docs/spikes/weak-refs.md`):
+                // `None` clears the slot; `Some(shared)` downgrades the inner.
+                Value::EnumVariant {
+                    enum_name,
+                    variant,
+                    data,
+                } if enum_name == "Option" => match (variant.as_str(), data) {
+                    ("Some", EnumData::Tuple(vs)) => match vs.first() {
+                        Some(Value::SharedStruct(arc)) => Arc::downgrade(arc),
+                        _ => std::sync::Weak::new(),
+                    },
+                    _ => std::sync::Weak::new(),
+                },
                 _ => {
                     self.record_runtime_error(
                         format!(

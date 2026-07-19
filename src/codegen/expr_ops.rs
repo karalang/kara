@@ -404,6 +404,44 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(loaded) = self.try_compile_union_field_read(object, field) {
             return Ok(loaded);
         }
+        // Weak-field READ (`node.random`) — an UPGRADE. Load the weak slot,
+        // `karac_weak_upgrade` it (strong += 1 → a new strong ref when the
+        // target is still alive, null otherwise), and return the resulting
+        // pointer AS the niche `Option[T]` value (null = None, non-null = Some).
+        // The surrounding `Option[shared T]` machinery (match, drop) then owns
+        // that strong ref. Intercepted before the generic struct-field read.
+        // `docs/spikes/weak-refs.md` (B-2026-07-19-8).
+        if let Some((type_name, info)) = self.shared_type_for_expr(object) {
+            if !info.is_enum {
+                if let Some(idx) = self
+                    .struct_field_names
+                    .get(&type_name)
+                    .and_then(|ns| ns.iter().position(|n| n == field))
+                {
+                    if self.struct_field_is_weak(&type_name, idx) {
+                        let ptr = self.compile_expr(object)?.into_pointer_value();
+                        let (gep_ty, base) = self.shared_gep_layout(&type_name, info.heap_type);
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                gep_ty,
+                                ptr,
+                                idx as u32 + base,
+                                &format!("weak_{field}_read"),
+                            )
+                            .unwrap();
+                        // Upgrade (weak → strong-if-alive) then materialize the
+                        // conventional 4-word `Option[shared T]` value the match /
+                        // let / cleanup machinery expects (null = None, non-null =
+                        // Some, payload in w0). Identical shape to a niche
+                        // `Option[shared]` field read, so all downstream Option
+                        // handling works unchanged.
+                        let upgraded = self.emit_weak_field_upgrade(field_ptr);
+                        return Ok(self.niche_ptr_to_option_value(upgraded, field));
+                    }
+                }
+            }
+        }
         // Indexed-shared-struct receiver: `nodes[i].field` where
         // `nodes: Vec[Shared(N)]`. Mirror of `compile_field_store`'s
         // Index branch — load the heap pointer at `nodes[i]`, GEP into
@@ -976,6 +1014,54 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(elem_ptr, new_val).unwrap();
         self.emit_heap_closure_env_dec(old_fat);
         Ok(true)
+    }
+
+    /// True when user field `field_idx` of shared struct `struct_name` is a
+    /// `weak T` field (physically a single nullable box pointer, read as
+    /// `Option[T]`). Drives the weak store/read/drop codegen paths.
+    /// `docs/spikes/weak-refs.md` (B-2026-07-19-8).
+    pub(super) fn struct_field_is_weak(&self, struct_name: &str, field_idx: usize) -> bool {
+        self.struct_field_type_exprs
+            .get(struct_name)
+            .and_then(|tes| tes.get(field_idx))
+            .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
+    }
+
+    /// Compute the target box pointer for a `weak T` field STORE, WITHOUT any
+    /// strong retain (a weak ref never contributes to the strong count). A
+    /// `None` literal yields a null pointer (store `None`); `Some(inner)` peels
+    /// to the inner strong handle; any other expression is compiled and packed
+    /// to its raw box pointer. The caller runs `karac_weak_downgrade` on the
+    /// result. `docs/spikes/weak-refs.md` (B-2026-07-19-8).
+    pub(super) fn weak_field_new_box_ptr(
+        &mut self,
+        value: &Expr,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        match &value.kind {
+            ExprKind::Identifier(n) if n == "None" => Ok(ptr_ty.const_null()),
+            ExprKind::Path { segments, .. }
+                if segments.last().map(|s| s.as_str()) == Some("None") =>
+            {
+                Ok(ptr_ty.const_null())
+            }
+            ExprKind::Call { callee, args }
+                if args.len() == 1
+                    && matches!(&callee.kind, ExprKind::Identifier(c) if c == "Some") =>
+            {
+                // `Some(inner)`: downgrade the inner strong handle directly —
+                // never build the wrapping Option (which would strong-move the
+                // inner into it).
+                self.weak_field_new_box_ptr(&args[0].value)
+            }
+            _ => {
+                // Bare strong handle (identifier / field access / call). Its
+                // compiled value is the box pointer; `option_value_to_niche_ptr`
+                // passes a pointer through unchanged and unpacks a niche Option.
+                let val = self.compile_expr(value)?;
+                Ok(self.option_value_to_niche_ptr(val))
+            }
+        }
     }
 
     pub(super) fn compile_field_store(

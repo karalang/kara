@@ -33791,3 +33791,38 @@ fn gpu_upload_still_rejects_non_f32_struct_without_layout() {
         "expected E_GPU_UPLOAD_BUFFER for a non-f32 struct; got: {errs:?}"
     );
 }
+
+#[test]
+fn weak_field_read_types_as_option_and_store_coerces() {
+    // B-2026-07-19-8: a `weak T` field READS as `Option[T]` (the upgrade),
+    // and a STORE coerces a bare strong `T`, `Some(T)`, or `None` (the
+    // downgrade). All three store forms + the match-on-read must typecheck.
+    typecheck_ok(
+        "shared struct Node { mut val: i64, mut random: weak Node }\n\
+         fn main() {\n\
+         \x20   let a: Node = Node { val: 1i64, random: None };\n\
+         \x20   let b: Node = Node { val: 2i64, random: None };\n\
+         \x20   b.random = a;\n\
+         \x20   b.random = Some(a);\n\
+         \x20   b.random = None;\n\
+         \x20   let o: Option[Node] = b.random;\n\
+         \x20   match b.random { Some(r) => { print(r.val); } None => { print(0i64); } }\n\
+         }\n",
+    );
+}
+
+#[test]
+fn weak_field_store_rejects_unrelated_type() {
+    // A `weak Node` field must reject a store of an unrelated value type.
+    let errs = typecheck_errors(
+        "shared struct Node { mut val: i64, mut random: weak Node }\n\
+         fn main() {\n\
+         \x20   let b: Node = Node { val: 2i64, random: None };\n\
+         \x20   b.random = 5i64;\n\
+         }\n",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("weak")),
+        "expected a weak-store type error; got: {errs:?}"
+    );
+}

@@ -270,6 +270,136 @@ impl<'ctx> super::Codegen<'ctx> {
             .any(|i| i.heap_type == heap_type && i.has_weak_header)
     }
 
+    /// Get-or-declare a `void*(void*)` or `void(void*)` weak-primitive runtime
+    /// symbol. The `weak T` codegen (store/read/drop) declares these on demand;
+    /// the archive / JIT runner supply the bodies (`runtime/src/weak.rs`, kept
+    /// alive via `__preserve_no_mangle_symbols`). `returns_ptr` picks the
+    /// signature: `downgrade`/`upgrade` return the box pointer, `drop` is void.
+    pub(super) fn weak_runtime_fn(&self, name: &str, returns_ptr: bool) -> FunctionValue<'ctx> {
+        self.module.get_function(name).unwrap_or_else(|| {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let fn_ty = if returns_ptr {
+                ptr_ty.fn_type(&[ptr_ty.into()], false)
+            } else {
+                self.context.void_type().fn_type(&[ptr_ty.into()], false)
+            };
+            self.module
+                .add_function(name, fn_ty, Some(inkwell::module::Linkage::External))
+        })
+    }
+
+    /// Store a `weak T` field: `field_ptr` is the single nullable weak slot,
+    /// `new_box` the target's box pointer (null = store `None`). Downgrades the
+    /// NEW target first (`karac_weak_downgrade`, weak += 1 — null-safe no-op),
+    /// stores it, then weak-drops the OLD occupant (`karac_weak_drop`, weak -= 1,
+    /// freeing the box iff strong == 0 && weak == 0). Downgrade-before-drop is
+    /// the ARC-setter rule (safe under self-assignment / aliasing). No STRONG
+    /// retain — a weak ref never contributes to the strong count, which is the
+    /// whole point (`docs/spikes/weak-refs.md`, B-2026-07-19-8).
+    pub(super) fn emit_weak_field_store(
+        &self,
+        field_ptr: PointerValue<'ctx>,
+        new_box: PointerValue<'ctx>,
+    ) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let downgrade = self.weak_runtime_fn("karac_weak_downgrade", true);
+        let drop_fn = self.weak_runtime_fn("karac_weak_drop", false);
+        // Downgrade the new target (weak += 1), get back the (same) pointer.
+        let bumped = self
+            .builder
+            .build_call(downgrade, &[new_box.into()], "weak.downgrade")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        // Load the old occupant before the store clobbers the slot.
+        let old = self
+            .builder
+            .build_load(ptr_ty, field_ptr, "weak.old")
+            .unwrap()
+            .into_pointer_value();
+        self.builder.build_store(field_ptr, bumped).unwrap();
+        // Weak-drop the old occupant (null-safe).
+        self.builder.build_call(drop_fn, &[old.into()], "").unwrap();
+    }
+
+    /// Initialize a fresh `weak T` field (constructor site — the slot has no
+    /// prior occupant to weak-drop). Downgrades the target (weak += 1) and
+    /// stores it; `new_box` null stores `None`. The construction sibling of
+    /// `emit_weak_field_store`.
+    pub(super) fn emit_weak_field_init(
+        &self,
+        field_ptr: PointerValue<'ctx>,
+        new_box: PointerValue<'ctx>,
+    ) {
+        let downgrade = self.weak_runtime_fn("karac_weak_downgrade", true);
+        let bumped = self
+            .builder
+            .build_call(downgrade, &[new_box.into()], "weak.downgrade")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_store(field_ptr, bumped).unwrap();
+    }
+
+    /// Read a `weak T` field as a nullable box pointer for the niche
+    /// `Option[T]` unpack (null = `None`, non-null = `Some`). Liveness-checks
+    /// the target: a slot pointing at a box whose `strong == 0` (the target was
+    /// dropped; only the control header survives for outstanding weak refs)
+    /// reads `None` — never a dangling `Some` over freed payload.
+    ///
+    /// This is a BORROW read (no strong retain): the returned pointer is handed
+    /// to the standard `Option[shared T]` machinery, whose Some-binding does its
+    /// own balanced alias-acquire / scope-exit release. Doing the retain here
+    /// too would double-count (a leak). The target box lives as long as this
+    /// weak slot holds it (weak >= 1), so reading `strong` is always safe.
+    /// (`docs/spikes/weak-refs.md`, B-2026-07-19-8.)
+    pub(super) fn emit_weak_field_upgrade(
+        &self,
+        field_ptr: PointerValue<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.expect("weak read inside a function");
+        let slot = self
+            .builder
+            .build_load(ptr_ty, field_ptr, "weak.slot")
+            .unwrap()
+            .into_pointer_value();
+        let is_null = self.builder.build_is_null(slot, "weak.slot.null").unwrap();
+        let live_bb = self.context.append_basic_block(fn_val, "weak.live.check");
+        let join_bb = self.context.append_basic_block(fn_val, "weak.read.join");
+        let entry_bb = self.builder.get_insert_block().unwrap();
+        self.builder
+            .build_conditional_branch(is_null, join_bb, live_bb)
+            .unwrap();
+        // Non-null slot: load the target's strong count (field 0 of its
+        // `{ strong, weak, … }` box) and keep the pointer only if strong > 0.
+        self.builder.position_at_end(live_bb);
+        let strong = self
+            .builder
+            .build_load(i64_t, slot, "weak.strong")
+            .unwrap()
+            .into_int_value();
+        let alive = self
+            .builder
+            .build_int_compare(IntPredicate::SGT, strong, i64_t.const_zero(), "weak.alive")
+            .unwrap();
+        let live_ptr = self
+            .builder
+            .build_select(alive, slot, ptr_ty.const_null(), "weak.live.ptr")
+            .unwrap()
+            .into_pointer_value();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        let live_end_bb = self.builder.get_insert_block().unwrap();
+        // Join: null (dead / empty) or the live pointer.
+        self.builder.position_at_end(join_bb);
+        let phi = self.builder.build_phi(ptr_ty, "weak.read.ptr").unwrap();
+        phi.add_incoming(&[(&ptr_ty.const_null(), entry_bb), (&live_ptr, live_end_bb)]);
+        phi.as_basic_value().into_pointer_value()
+    }
+
     /// Free a shared-struct box at `strong == 0`, choosing the weak-aware
     /// release for a two-word `{ strong, weak, … }` box. A conventional box is
     /// `free`d directly; a weak-headered box instead routes through

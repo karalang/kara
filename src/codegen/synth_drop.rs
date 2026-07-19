@@ -2465,6 +2465,11 @@ impl<'ctx> super::Codegen<'ctx> {
             /// single `ptr` (null = None, non-null = Some), not the 4-i64
             /// Option enum. Drop path collapses to one null-check + dec.
             OptionSharedNiche(super::state::SharedTypeInfo<'ctx>),
+            /// `weak T` field: a single nullable box pointer. Drop is a
+            /// `karac_weak_drop` (weak -= 1, freeing the box iff both counts
+            /// hit zero) — NEVER the strong recursive dec (a weak ref does not
+            /// own the target). `docs/spikes/weak-refs.md` (B-2026-07-19-8).
+            WeakField,
             #[allow(dead_code)]
             _Phantom(&'a ()),
         }
@@ -2473,6 +2478,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .enumerate()
             .map(|(i, te)| {
                 let head_name = field_kinds.get(i).and_then(|n| n.as_deref());
+                // `weak T` field — a single nullable box pointer, weak-dropped.
+                if matches!(te.kind, TypeKind::Weak(_)) {
+                    return SharedFieldKind::WeakField;
+                }
                 // Option[shared T]?
                 if let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(te) {
                     if self.niche_field_inner_heap_type(struct_name, i).is_some() {
@@ -2501,6 +2510,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let any_walkable = kinds
             .iter()
             .any(|k| !matches!(k, SharedFieldKind::None | SharedFieldKind::_Phantom(_)));
+        // A `weak` field needs its `karac_weak_drop` even when the struct has
+        // no other heap fields, so it counts toward `any_walkable` above (the
+        // `!None` test already includes `WeakField`).
         // A user `impl Drop for <SharedType>` must fire at refcount→0,
         // before field cleanup and the heap free — RAII parity with the
         // value-type path's `emit_user_drop_wrapper`. Gate on the
@@ -2655,6 +2667,31 @@ impl<'ctx> super::Codegen<'ctx> {
             let heap_field_idx = field_idx as u32 + field_base;
             match kind {
                 SharedFieldKind::None | SharedFieldKind::_Phantom(_) => {}
+                SharedFieldKind::WeakField => {
+                    // `weak T` field: load the weak slot and `karac_weak_drop`
+                    // it (weak -= 1; frees the target box iff strong == 0 &&
+                    // weak == 0). NEVER a strong dec — a weak ref does not own
+                    // the target, so it must not trigger the target's payload
+                    // drop. Null-safe (a `None` slot is a no-op).
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            heap_type,
+                            p_arg,
+                            heap_field_idx,
+                            &format!("rcdrop.weak{field_idx}.p"),
+                        )
+                        .unwrap();
+                    let slot = self
+                        .builder
+                        .build_load(ptr_ty, field_ptr, &format!("rcdrop.weak{field_idx}.ptr"))
+                        .unwrap()
+                        .into_pointer_value();
+                    let weak_drop = self.weak_runtime_fn("karac_weak_drop", false);
+                    self.builder
+                        .build_call(weak_drop, &[slot.into()], "")
+                        .unwrap();
+                }
                 SharedFieldKind::RecurseShared(inner_info) => {
                     // Load the field's inner pointer and recursively
                     // dec its refcount. The inner heap layout's drop

@@ -2111,6 +2111,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             continue;
                         }
                     }
+                    // Weak field (`random: weak Node`): a single nullable box
+                    // pointer. Store the downgrade of the target (weak += 1), or
+                    // null for `None`. Bypasses the normal Option compile (which
+                    // would build a 4-word value into the 1-word weak slot — the
+                    // width guard below) and the strong-retain sink logic (a weak
+                    // ref never bumps the strong count). `docs/spikes/weak-refs.md`.
+                    if self.struct_field_is_weak(name, idx) {
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                gep_ty,
+                                ptr,
+                                idx as u32 + base,
+                                &format!("field_{}", field_init.name),
+                            )
+                            .unwrap();
+                        let new_box = self.weak_field_new_box_ptr(&field_init.value)?;
+                        self.emit_weak_field_init(field_ptr, new_box);
+                        continue;
+                    }
                     let val = self.compile_expr(&field_init.value)?;
                     // Owned String/Vec PARAM captured into a field
                     // (`Node { name: s }` where `s: String` is a param):

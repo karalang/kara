@@ -447,6 +447,13 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Ref(_) | TypeKind::MutRef(_) => {
                 self.context.ptr_type(AddressSpace::default()).into()
             }
+            // A `weak T` field is physically a single nullable box pointer
+            // (null = no live target). The strong count lives in the target's
+            // own control header; the weak slot just holds the address, exactly
+            // like the niche `Option[shared T]` single-ptr layout. Read via
+            // `karac_weak_upgrade` → `Option[T]`; stored via `karac_weak_downgrade`
+            // (`docs/spikes/weak-refs.md`, B-2026-07-19-8).
+            TypeKind::Weak(_) => self.context.ptr_type(AddressSpace::default()).into(),
             // Raw pointers (`*const T` / `*mut T`) are genuine LLVM `ptr`
             // values. Until `CStr.as_ptr` landed (the first safe
             // pointer-producer — design.md § C-String Literals), no Kāra
@@ -2868,6 +2875,23 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         te: &TypeExpr,
     ) -> Option<(String, SharedTypeInfo<'ctx>)> {
+        // A `weak T` field READS as `Option[shared T]` (the upgrade result), so
+        // downstream Option[shared] machinery — match-scrutinee classification,
+        // `let opt = node.weak` binding, cleanup registration — recognizes it
+        // through this same resolver. The value itself is produced by the weak
+        // READ interceptor (which injects `karac_weak_upgrade`); the STORE and
+        // DROP are intercepted BEFORE any Option[shared] path, so treating the
+        // field as Option[shared] here is read-only. `docs/spikes/weak-refs.md`.
+        if let TypeKind::Weak(inner) = &te.kind {
+            if let TypeKind::Path(ip) = &inner.kind {
+                if let Some(inner_name) = ip.segments.last() {
+                    if let Some(info) = self.shared_types.get(inner_name.as_str()) {
+                        return Some((inner_name.clone(), info.clone()));
+                    }
+                }
+            }
+            return None;
+        }
         let p = match &te.kind {
             TypeKind::Path(p) => p,
             _ => return None,

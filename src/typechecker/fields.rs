@@ -261,7 +261,23 @@ impl<'a> super::TypeChecker<'a> {
                     // to `f64`, not the struct's bare param `T` (which then
                     // reads as `T` in arithmetic and lays out as the default
                     // i64 in codegen — B-2026-07-03-23).
-                    return self.field_type_with_receiver_args(&obj_ty, &struct_info, ftype);
+                    let resolved = self.field_type_with_receiver_args(&obj_ty, &struct_info, ftype);
+                    // Weak-field READ is an UPGRADE: `node.random` on a `weak T`
+                    // field yields `Option[T]` — `Some(v)` while a strong ref to
+                    // the target still exists, `None` once it's gone (design.md
+                    // § Cycles, Swift-like; `docs/spikes/weak-refs.md`). A store
+                    // LHS (`node.random = …`, captured as `is_lhs`) keeps the raw
+                    // `weak T` place type so the assignment path coerces the RHS
+                    // (the downgrade); only a read upgrades.
+                    if !is_lhs {
+                        if let Type::Weak(inner) = &resolved {
+                            return Type::Named {
+                                name: "Option".to_string(),
+                                args: vec![(**inner).clone()],
+                            };
+                        }
+                    }
+                    return resolved;
                 }
             }
             let available: Vec<&str> = struct_info

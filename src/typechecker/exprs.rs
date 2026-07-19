@@ -129,6 +129,27 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Whether a weak-store referent and the field's declared inner type name
+    /// the SAME shared type. A strong handle surfaces as either `Type::Shared(n)`
+    /// (a pattern/constructor-bound handle) or `Type::Named { name: n, .. }` (a
+    /// let-bound value), and the field's inner is likewise one of those, so a
+    /// plain `==` / `types_compatible` misses the `Shared("Node")` vs
+    /// `Named{"Node"}` cross-form. Compare the extracted base names.
+    fn weak_referent_names_match(&self, referent: &Type, inner: &Type) -> bool {
+        fn base_name(t: &Type) -> Option<&str> {
+            match t {
+                Type::Shared(n) => Some(n.as_str()),
+                Type::Named { name, .. } => Some(name.as_str()),
+                Type::Rc(i) | Type::Arc(i) | Type::Ref(i) | Type::MutRef(i) => base_name(i),
+                _ => None,
+            }
+        }
+        match (base_name(referent), base_name(inner)) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         // B-2026-07-02-7: an UNSUFFIXED integer literal (bare or negated) at
         // a narrow-int-typed position must fit that type's range — `let x:
@@ -197,6 +218,44 @@ impl<'a> super::TypeChecker<'a> {
                 self.record_expr_type(&expr.span, &result);
                 return result;
             }
+        }
+        // Weak-field STORE coercion (the downgrade). A `weak T` field slot
+        // accepts a bare strong `T` / `shared T`, an `Option[T]`, or `None` —
+        // codegen lowers all of them to the single nullable weak pointer via
+        // `karac_weak_downgrade` (`docs/spikes/weak-refs.md`, B-2026-07-19-8).
+        // Intercept before the generic `types_compatible` path, which would
+        // reject `Node` / `Option[Node]` against the raw `weak Node` slot.
+        if let Type::Weak(inner) = expected {
+            let actual = self.infer_expr(expr);
+            // The value the weak slot references, after peeling an `Option`
+            // wrapper (`Some(x)` / `None` / `Option[T]`): the inner strong type.
+            let referent = match &actual {
+                Type::Named { name, args } if name == "Option" && args.len() == 1 => &args[0],
+                other => other,
+            };
+            let ok = matches!(actual, Type::Error | Type::Never)
+                // `None` leaves the referent unbound (`Option[?]`) — accept it.
+                || matches!(referent, Type::TypeVar(_) | Type::TypeParam(_) | Type::Error)
+                || super::types::types_compatible(referent, inner)
+                || self.weak_referent_names_match(referent, inner);
+            if !ok {
+                self.type_error(
+                    format!(
+                        "cannot store value of type '{}' into a `weak {}` field; \
+                         expected `{}`, `Option[{}]`, or `None`",
+                        type_display(&actual),
+                        type_display(inner),
+                        type_display(inner),
+                        type_display(inner),
+                    ),
+                    expr.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                self.record_expr_type(&expr.span, &Type::Error);
+                return Type::Error;
+            }
+            self.record_expr_type(&expr.span, expected);
+            return expected.clone();
         }
         // Built-in collection constructors at check-mode: `Vec.new()` /
         // `VecDeque.new()` / `Set.new()` / `SortedSet.new()` / `Map.new()`

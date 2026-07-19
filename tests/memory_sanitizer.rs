@@ -428,6 +428,59 @@ fn main() {
     }
 
     #[test]
+    fn asan_weak_field_cycle_freed_no_leak() {
+        // B-2026-07-19-8: `weak T` fields. A reference CYCLE that plain RC cannot
+        // collect (a.random -> b, b.random -> a) is freed clean because the weak
+        // back-edges don't contribute to the strong count. Reads upgrade to
+        // `Option[T]` (`Some` while the target is strong-alive). Must print both
+        // values (b.val=20 via a.random, a.val=10 via b.random) and be LSan-clean —
+        // the whole point of weak refs.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { mut val: i64, mut random: weak Node }
+fn main() {
+    let a: Node = Node { val: 10i64, random: None };
+    let b: Node = Node { val: 20i64, random: None };
+    a.random = b;
+    b.random = a;
+    match a.random { Some(r) => { println(r.val.to_string()); } None => { println("none"); } }
+    match b.random { Some(r) => { println(r.val.to_string()); } None => { println("none"); } }
+}
+"#,
+            &["20", "10"],
+            "asan_weak_field_cycle_freed_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_weak_field_dead_target_reads_none_no_uaf() {
+        // B-2026-07-19-8: reading a `weak` field whose target's last STRONG ref
+        // has been dropped must yield `None` — never a dangling `Some` over freed
+        // payload. `victim` is downgraded into `holder.random` inside a helper,
+        // then its strong ref dies at the helper's return; the later read sees
+        // strong == 0 and reads `None`. LSan-clean + no invalid reads.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { mut val: i64, mut random: weak Node }
+fn make_and_drop(holder: Node) {
+    let victim: Node = Node { val: 99i64, random: None };
+    holder.random = victim;
+}
+fn main() {
+    let holder: Node = Node { val: 1i64, random: None };
+    make_and_drop(holder);
+    match holder.random {
+        Some(r) => { println(r.val.to_string()); }
+        None => { println("none"); }
+    }
+}
+"#,
+            &["none"],
+            "asan_weak_field_dead_target_reads_none_no_uaf",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_tensor_ref_arg_assoc_call_no_crash() {
         // B-2026-07-18-9: a FRESH-TEMP tensor (`Tensor.from(...)`) passed as a
         // `ref Tensor` arg to an ASSOCIATED fn (`S.ins(...)`) that pushes
