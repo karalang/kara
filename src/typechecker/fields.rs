@@ -774,6 +774,26 @@ impl<'a> super::TypeChecker<'a> {
                     let resolved = resolve_type_var_top(&sub, &self.env.substitutions);
                     if matches!(resolved, Type::TypeVar(_) | Type::TypeParam(_)) {
                         raw.clone()
+                    } else if !seeded && super::types::contains_type_param(&raw) {
+                        // B-2026-07-18-50 — UNSEEDED generic solve: a field whose
+                        // declared type WRAPS the struct's type param in a
+                        // container (`items: Vec[T]`, `v: Option[T]`) substitutes
+                        // to a metavar-laden slot (`Vec[?T0]`). The top-level
+                        // check above only catches a BARE param at the root
+                        // (`value: T` -> `?T0`); a param nested one level down
+                        // still resolves to `Vec` at the top, so the metavar slot
+                        // was pushed — and `check_expr` reports a spurious
+                        // `expected Vec<?T0>, found Vec<String>` mismatch instead
+                        // of binding. Push the RAW declared type (`Vec[T]`): its
+                        // bare `TypeParam` is checked permissively (the wildcard)
+                        // and the value's concrete synthesized type is recorded,
+                        // which the post-check `unify_types` below then binds into
+                        // the param. This extends the direct-param fallback to a
+                        // container-wrapped param. The SEEDED path (concrete
+                        // expected args, B-2026-07-18-17) keeps pushing its
+                        // concrete slot so `Vec.new()` element inference still
+                        // fires.
+                        raw.clone()
                     } else {
                         resolved
                     }
@@ -790,12 +810,64 @@ impl<'a> super::TypeChecker<'a> {
                         .cloned()
                     {
                         let slot = substitute_type_params(expected_ty, &param_subs);
-                        unify_types(
+                        let unified = unify_types(
                             &slot,
                             &actual,
                             &mut self.env.substitutions,
                             &mut self.env.const_substitutions,
                         );
+                        // B-2026-07-18-51 — a field value that CONFLICTS with the
+                        // type param already bound by an earlier field
+                        // (`Two[T] { a: 1, b: "s" }` — `a` pins `T = i64`, then
+                        // `b` is a `String`) fails to unify. The solver
+                        // historically DISCARDED this result and kept the greedy
+                        // first binding, silently accepting the ill-typed literal
+                        // (a `String` stored in an `i64`-typed `T` slot — a
+                        // miscompile). Emit the mismatch instead. `unify_types`
+                        // routes numeric-vs-numeric through `types_compatible`
+                        // (`(Int, Int) => true`), so widening
+                        // (`Two { a: 1i32, b: 2 }`) still unifies and does NOT
+                        // error — only a genuine cross-kind conflict returns
+                        // false. Both sides are deep-resolved and the check is
+                        // skipped when either is still `Error` / `Never` /
+                        // partially-unbound (already diagnosed, diverging, or not
+                        // yet solvable) to avoid cascades and premature errors.
+                        if !unified {
+                            let empty_cn = HashMap::new();
+                            let rslot = resolve_type_vars(
+                                &slot,
+                                &self.env.substitutions,
+                                &id_to_name,
+                                &self.env.const_substitutions,
+                                &empty_cn,
+                            );
+                            let ract = resolve_type_vars(
+                                &actual,
+                                &self.env.substitutions,
+                                &id_to_name,
+                                &self.env.const_substitutions,
+                                &empty_cn,
+                            );
+                            let benign = matches!(rslot, Type::Error | Type::Never)
+                                || matches!(ract, Type::Error | Type::Never)
+                                || super::types::contains_type_param(&rslot)
+                                || super::types::contains_type_param(&ract);
+                            if !benign {
+                                self.type_error(
+                                    format!(
+                                        "field '{}' has type '{}', but the type \
+                                         parameter was already bound to '{}' by an \
+                                         earlier field of '{}'",
+                                        f.name,
+                                        super::types::type_display(&ract),
+                                        super::types::type_display(&rslot),
+                                        struct_name,
+                                    ),
+                                    f.span.clone(),
+                                    TypeErrorKind::TypeMismatch,
+                                );
+                            }
+                        }
                     }
                 }
             } else {

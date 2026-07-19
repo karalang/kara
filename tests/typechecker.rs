@@ -761,6 +761,81 @@ fn test_generic_struct_literal_field_infers_from_annotation() {
 }
 
 #[test]
+fn test_generic_struct_literal_infers_param_from_container_field() {
+    // B-2026-07-18-50 — UNSEEDED generic struct-literal solve for a field whose
+    // declared type WRAPS the type param in a container (`items: Vec[T]`,
+    // `v: Option[T]`). The concrete initializer must solve `T` from the field
+    // value, exactly as a direct `value: T` field already does. Previously the
+    // substituted metavar slot (`Vec[?T0]`) was pushed into `check_expr`, which
+    // reported a spurious `expected Vec<?T0>, found Vec<String>` mismatch
+    // instead of binding — so a `Bag[T] { items: [..] }` without an annotation
+    // was rejected.
+    typecheck_ok(
+        "struct Bag[T] { items: Vec[T] }\n\
+         fn main() {\n\
+             let b = Bag { items: [\"hi\".to_string(), \"yo\".to_string()] };\n\
+             let _n: i64 = b.items.len();\n\
+         }",
+    );
+    typecheck_ok(
+        "struct Bag[T] { items: Vec[T] }\n\
+         fn main() {\n\
+             let b = Bag { items: [1, 2, 3] };\n\
+             let _n: i64 = b.items.len();\n\
+         }",
+    );
+    typecheck_ok(
+        "struct Boxed[T] { v: Option[T] }\n\
+         fn main() {\n\
+             let b = Boxed { v: Some(\"x\".to_string()) };\n\
+             match b.v { Some(_s) => {}, None => {} }\n\
+         }",
+    );
+    // The direct-`T` field (already worked) must not regress, and the seeded
+    // path (`let b: Bag[String] = ...`, B-2026-07-18-17) stays fine.
+    typecheck_ok(
+        "struct One[T] { x: T }\n\
+         fn main() { let o = One { x: 5 }; let _n: i64 = o.x; }",
+    );
+    typecheck_ok(
+        "struct Bag[T] { items: Vec[T] }\n\
+         fn main() { let b: Bag[String] = Bag { items: [\"hi\".to_string()] }; let _n: i64 = b.items.len(); }",
+    );
+}
+
+#[test]
+fn test_generic_struct_literal_rejects_conflicting_param_bindings() {
+    // B-2026-07-18-51 — a field value that conflicts with the type param bound
+    // by an earlier field must be REJECTED. The solver historically discarded
+    // the failed post-check unify and kept the greedy first binding, silently
+    // accepting the ill-typed literal (a `String` stored in an `i64`-typed `T`
+    // slot — a miscompile).
+    for src in [
+        "struct Two[T] { a: T, b: T }\n\
+         fn main() { let _x = Two { a: 1, b: \"s\".to_string() }; }",
+        "struct Bag[T] { items: Vec[T], tag: T }\n\
+         fn main() { let _b = Bag { items: [1, 2], tag: \"x\".to_string() }; }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+            "expected a TypeMismatch for a conflicting generic-struct field binding, got {errors:?}"
+        );
+    }
+    // Numeric widening across generic fields must NOT be flagged — `unify_types`
+    // routes `(Int, Int)` through `types_compatible`, so the param stays
+    // solvable and no conflict is reported.
+    typecheck_ok(
+        "struct Two[T] { a: T, b: T }\n\
+         fn main() { let _x = Two { a: 1i32, b: 2 }; }",
+    );
+    typecheck_ok(
+        "struct Two[T] { a: T, b: T }\n\
+         fn main() { let _x = Two { a: 1, b: 2 }; }",
+    );
+}
+
+#[test]
 fn test_entry_and_modify_returns_entry_for_chaining() {
     // `and_modify(f: Fn(mut ref V)) -> Entry[K, V]`. The bare and_modify
     // (without further chaining) returns Entry[K, V] so subsequent
