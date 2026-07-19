@@ -809,6 +809,48 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_string_var_reassign_loop_no_leak() {
+        // B-2026-07-18-52: a whole-`Vec[String]` VARIABLE reassignment
+        // (`cur = nxt`, the BFS double-buffer / worklist idiom) freed only the
+        // OLD Vec's OUTER buffer and stranded every element String — the
+        // move-overwrite eager-free (`emit_owned_vec_element_release_on_overwrite`)
+        // handled `Vec[shared]` elements (B-2026-07-12-30) but bailed for a
+        // value `String`/`Vec` element, falling to the outer-buffer-only free.
+        // 4 overwrites here → 4 stranded generations (each 2 heap Strings)
+        // pre-fix; LSan-clean after. Surfaced by kata #126 Word Ladder II
+        // (`cur = nxt` over the level frontier). Strings are heap-forced via a
+        // char-push builder so the leak is real (a literal is cap-0 rodata).
+        assert_clean_asan_run(
+            r#"
+fn mkstr(c: char, n: i64) -> String {
+    let mut s = "";
+    let mut i = 0i64;
+    while i < n {
+        s.push(c);
+        i = i + 1i64;
+    }
+    s
+}
+fn main() {
+    let mut cur: Vec[String] = Vec.new();
+    cur.push(mkstr('a', 6i64));
+    let mut r = 0i64;
+    while r < 4i64 {
+        let mut nxt: Vec[String] = Vec.new();
+        nxt.push(mkstr('b', 6i64));
+        nxt.push(mkstr('c', 6i64));
+        cur = nxt;
+        r = r + 1i64;
+    }
+    println(cur.len().to_string());
+}
+"#,
+            &["2"],
+            "asan_vec_string_var_reassign_loop_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_autograd_gradient_descent_training() {
         // The end-to-end training loop — the strongest leak test in the autograd
         // set: it builds and drops a FRESH tape every iteration (each owning its

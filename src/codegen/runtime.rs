@@ -3341,20 +3341,37 @@ impl<'ctx> super::Codegen<'ctx> {
         slot_ptr: PointerValue<'ctx>,
         elem_te: &crate::ast::TypeExpr,
     ) -> bool {
-        let Some(agg_drop) = self.vec_elem_agg_drop_for_type_expr(elem_te) else {
+        let agg_drop = self.vec_elem_agg_drop_for_type_expr(elem_te);
+        let elem_llvm = self.llvm_type_for_type_expr(elem_te);
+        // A heap-owning VALUE element — a `String` or a nested `Vec` — drains
+        // through the recursive inline `elem_ty` (vec-struct) walk, the SAME
+        // `FreeVecBuffer` action the scope-exit cleanup registers for a
+        // `Vec[String]` / `Vec[Vec[_]]` binding. `vec_elem_agg_drop_for_type_expr`
+        // returns `None` for these (it only covers named struct/enum elements),
+        // so before B-2026-07-18-52 the caller fell through to
+        // `emit_free_vec_buffer_if_owned` (OUTER buffer only) and a `cur = nxt`
+        // move-overwrite of a `Vec[String]` stranded every element String — the
+        // BFS double-buffer / worklist idiom (surfaced by kata #126 Word Ladder
+        // II). Draining here is safe against a live per-element alias for the
+        // SAME reason the scope-exit drain is: an index-read of a non-Copy
+        // element CLONES (`let x = v[i]` owns an independent buffer), so the
+        // overwritten generation's elements have no other owner. Scalar /
+        // inline-tuple elements keep the cheaper outer-buffer-only free.
+        let elem_is_heap_value =
+            self.is_string_type_expr(elem_te) || self.llvm_ty_is_vec_struct(elem_llvm);
+        if agg_drop.is_none() && !elem_is_heap_value {
             return false;
-        };
+        }
         let fn_val = match self.current_fn {
             Some(f) => f,
             None => return false,
         };
-        let elem_llvm = self.llvm_type_for_type_expr(elem_te);
         let action = crate::codegen::state::CleanupAction::FreeVecBuffer {
             vec_alloca: slot_ptr,
             elem_ty: Some(elem_llvm),
             elem_is_tensor: false,
             elem_map_drop: None,
-            elem_agg_drop: Some(agg_drop),
+            elem_agg_drop: agg_drop,
         };
         let vec_ty = self.vec_struct_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
