@@ -453,6 +453,57 @@ fn main() {
     }
 
     #[test]
+    fn asan_weak_field_indexed_deep_copy_no_leak() {
+        // B-2026-07-19-8 + the indexed-read drift it surfaced (same class as
+        // B-2026-07-19-6, read side): a `Vec[Node]` deep-copy where `Node` has a
+        // `weak` field. Indexed reads (`orig[i].val`) and indexed weak store/read
+        // (`copies[i].random = copies[r.id]`) must route through `shared_gep_layout`
+        // (base 2 for the weak-headered box) — a hardcoded `idx + 1` read the weak
+        // count as the value. Deep-copies a 3-node list with random back-edges and
+        // prints `val|random_val`; run == build, LSan-clean.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, id: i64, mut next: Option[Node], mut random: weak Node }
+fn deep_copy(orig: Vec[Node]) -> Vec[Node] {
+    let n: i64 = orig.len();
+    let mut copies: Vec[Node] = Vec.new();
+    let mut i: i64 = 0i64;
+    while i < n {
+        copies.push(Node { val: orig[i].val, id: orig[i].id, next: None, random: None });
+        i = i + 1i64;
+    }
+    i = 0i64;
+    while i < n {
+        if i + 1i64 < n { copies[i].next = Some(copies[i + 1i64]); }
+        match orig[i].random { Some(r) => { copies[i].random = copies[r.id]; } None => {} }
+        i = i + 1i64;
+    }
+    return copies;
+}
+fn main() {
+    let mut orig: Vec[Node] = Vec.new();
+    orig.push(Node { val: 7i64, id: 0i64, next: None, random: None });
+    orig.push(Node { val: 13i64, id: 1i64, next: None, random: None });
+    orig.push(Node { val: 11i64, id: 2i64, next: None, random: None });
+    orig[0i64].next = Some(orig[1i64]);
+    orig[1i64].next = Some(orig[2i64]);
+    orig[1i64].random = orig[0i64];
+    orig[2i64].random = orig[1i64];
+    let copies: Vec[Node] = deep_copy(orig);
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let rv: i64 = match copies[i].random { Some(r) => r.val, None => 0i64 - 1i64 };
+        println(copies[i].val.to_string() + "|" + rv.to_string());
+        i = i + 1i64;
+    }
+}
+"#,
+            &["7|-1", "13|7", "11|13"],
+            "asan_weak_field_indexed_deep_copy_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_weak_field_dead_target_reads_none_no_uaf() {
         // B-2026-07-19-8: reading a `weak` field whose target's last STRONG ref
         // has been dropped must yield `None` — never a dangling `Some` over freed

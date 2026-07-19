@@ -1495,12 +1495,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::FieldAccess { object, field } = &target.kind else {
             return Ok(false);
         };
-        let Some((type_name, info)) = self.shared_type_for_expr(object) else {
+        let Some((type_name, info)) = self.weak_receiver_type(object) else {
             return Ok(false);
         };
-        if info.is_enum {
-            return Ok(false);
-        }
         let Some(idx) = self
             .struct_field_names
             .get(&type_name)
@@ -1511,9 +1508,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.struct_field_is_weak(&type_name, idx) {
             return Ok(false);
         }
-        // The object's box pointer (via `compile_expr` so a `ref self` receiver
-        // gets its double-load — mirrors the shared-field-store read path).
-        let ptr = self.compile_expr(object)?.into_pointer_value();
+        let ptr = self.weak_receiver_box_ptr(object)?;
         let (gep_ty, base) = self.shared_gep_layout(&type_name, info.heap_type);
         let field_ptr = self
             .builder

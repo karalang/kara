@@ -411,34 +411,35 @@ impl<'ctx> super::Codegen<'ctx> {
         // The surrounding `Option[shared T]` machinery (match, drop) then owns
         // that strong ref. Intercepted before the generic struct-field read.
         // `docs/spikes/weak-refs.md` (B-2026-07-19-8).
-        if let Some((type_name, info)) = self.shared_type_for_expr(object) {
-            if !info.is_enum {
-                if let Some(idx) = self
-                    .struct_field_names
-                    .get(&type_name)
-                    .and_then(|ns| ns.iter().position(|n| n == field))
-                {
-                    if self.struct_field_is_weak(&type_name, idx) {
-                        let ptr = self.compile_expr(object)?.into_pointer_value();
-                        let (gep_ty, base) = self.shared_gep_layout(&type_name, info.heap_type);
-                        let field_ptr = self
-                            .builder
-                            .build_struct_gep(
-                                gep_ty,
-                                ptr,
-                                idx as u32 + base,
-                                &format!("weak_{field}_read"),
-                            )
-                            .unwrap();
-                        // Upgrade (weak → strong-if-alive) then materialize the
-                        // conventional 4-word `Option[shared T]` value the match /
-                        // let / cleanup machinery expects (null = None, non-null =
-                        // Some, payload in w0). Identical shape to a niche
-                        // `Option[shared]` field read, so all downstream Option
-                        // handling works unchanged.
-                        let upgraded = self.emit_weak_field_upgrade(field_ptr);
-                        return Ok(self.niche_ptr_to_option_value(upgraded, field));
-                    }
+        // Handles both a bare/`self` receiver (`node.random`) and a Vec/Slice-
+        // indexed one (`nodes[i].random`). Runs before the generic
+        // indexed-shared-struct read branch below so an indexed weak field is
+        // upgraded, not read raw.
+        if let Some((type_name, info)) = self.weak_receiver_type(object) {
+            if let Some(idx) = self
+                .struct_field_names
+                .get(&type_name)
+                .and_then(|ns| ns.iter().position(|n| n == field))
+            {
+                if self.struct_field_is_weak(&type_name, idx) {
+                    let ptr = self.weak_receiver_box_ptr(object)?;
+                    let (gep_ty, base) = self.shared_gep_layout(&type_name, info.heap_type);
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            gep_ty,
+                            ptr,
+                            idx as u32 + base,
+                            &format!("weak_{field}_read"),
+                        )
+                        .unwrap();
+                    // Liveness-check + materialize the conventional 4-word
+                    // `Option[shared T]` value the match / let / cleanup machinery
+                    // expects (null = None, non-null = Some, payload in w0).
+                    // Identical shape to a niche `Option[shared]` field read, so
+                    // all downstream Option handling works unchanged.
+                    let upgraded = self.emit_weak_field_upgrade(field_ptr);
+                    return Ok(self.niche_ptr_to_option_value(upgraded, field));
                 }
             }
         }
@@ -480,12 +481,25 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .into_pointer_value();
                                     if let Some(names) = self.struct_field_names.get(seg) {
                                         if let Some(idx) = names.iter().position(|n| n == field) {
+                                            // Route the heap-field offset through
+                                            // `shared_gep_layout` (base 1 headed,
+                                            // 0 headerless, 2 weak-headered) rather
+                                            // than a hardcoded `idx + 1`: a
+                                            // weak-targeted type carries the extra
+                                            // `{ strong, weak }` word, so `idx + 1`
+                                            // read one word early (the weak count as
+                                            // `val`). Same drift class as the store
+                                            // side (B-2026-07-19-6); the funnel keeps
+                                            // read and store in lockstep.
+                                            let (gep_ty, base) =
+                                                self.shared_gep_layout(seg, info.heap_type);
+                                            let heap_idx = idx as u32 + base;
                                             let field_ptr = self
                                                 .builder
                                                 .build_struct_gep(
-                                                    info.heap_type,
+                                                    gep_ty,
                                                     heap_ptr,
-                                                    (idx + 1) as u32,
+                                                    heap_idx,
                                                     &format!("sh_idx_{}", field),
                                                 )
                                                 .unwrap();
@@ -495,10 +509,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                                     self.niche_load_option_field(field_ptr, field)
                                                 );
                                             }
-                                            let field_ty = info
-                                                .heap_type
-                                                .get_field_type_at_index((idx + 1) as u32)
-                                                .unwrap();
+                                            let field_ty =
+                                                gep_ty.get_field_type_at_index(heap_idx).unwrap();
                                             return Ok(self
                                                 .builder
                                                 .build_load(field_ty, field_ptr, field)
@@ -1025,6 +1037,69 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(struct_name)
             .and_then(|tes| tes.get(field_idx))
             .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
+    }
+
+    /// Cheap (no-codegen) resolution of a shared-struct receiver's
+    /// `(type_name, info)` for the `weak`-field interceptors — a bare/`self`
+    /// receiver (`node.weak`) via `shared_type_for_expr`, or a Vec/Slice-indexed
+    /// one (`nodes[i].weak`) via the element type-expr side table. Used to test
+    /// `struct_field_is_weak` BEFORE compiling the receiver, so a non-weak field
+    /// never double-compiles a side-effecting index. `docs/spikes/weak-refs.md`.
+    pub(super) fn weak_receiver_type(
+        &self,
+        object: &Expr,
+    ) -> Option<(String, super::state::SharedTypeInfo<'ctx>)> {
+        if let ExprKind::Index { object: inner, .. } = &object.kind {
+            if let ExprKind::Identifier(outer) = &inner.kind {
+                let elem_te = self.var_elem_type_exprs.get(outer.as_str())?;
+                if let TypeKind::Path(p) = &elem_te.kind {
+                    let seg = p.segments.first()?;
+                    let info = self.shared_types.get(seg.as_str())?;
+                    if !info.is_enum {
+                        return Some((seg.clone(), info.clone()));
+                    }
+                }
+            }
+            return None;
+        }
+        let (type_name, info) = self.shared_type_for_expr(object)?;
+        if info.is_enum {
+            return None;
+        }
+        Some((type_name, info))
+    }
+
+    /// Compile a shared-struct receiver to its heap box pointer, for the
+    /// `weak`-field store/read interceptors — the bare/`self` receiver compiles
+    /// to the box pointer directly; the Vec/Slice-indexed receiver loads it out
+    /// of the element slot. Call ONLY after `weak_receiver_type` +
+    /// `struct_field_is_weak` confirm the target is a weak field, so the
+    /// receiver (and any side-effecting index) is compiled exactly once.
+    pub(super) fn weak_receiver_box_ptr(
+        &mut self,
+        object: &Expr,
+    ) -> Result<PointerValue<'ctx>, String> {
+        if let ExprKind::Index {
+            object: inner,
+            index,
+        } = &object.kind
+        {
+            if let ExprKind::Identifier(outer) = &inner.kind {
+                let outer = outer.clone();
+                let (elem_ptr, _) = if self.vec_elem_types.contains_key(outer.as_str()) {
+                    self.lower_indexed_elem_ptr_vec(&outer, index)?
+                } else {
+                    self.lower_indexed_elem_ptr_slice(&outer, index)?
+                };
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                return Ok(self
+                    .builder
+                    .build_load(ptr_ty, elem_ptr, "weak.idx.box")
+                    .unwrap()
+                    .into_pointer_value());
+            }
+        }
+        Ok(self.compile_expr(object)?.into_pointer_value())
     }
 
     /// Compute the target box pointer for a `weak T` field STORE, WITHOUT any
