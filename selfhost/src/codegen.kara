@@ -57,6 +57,7 @@ import ast.{
     MatchExpr,
     MatchArm,
     ForExpr,
+    WrapType,
     TupleVariantPattern,
     EnumDefNode,
     VariantNode,
@@ -117,6 +118,7 @@ struct Emitter {
     // Return kind: -1 unit, 0 i64, 2 string (bool returns unsupported).
     sig_ret: Vec[i64],
     sig_par_kinds: Vec[i64],
+    sig_par_ref: Vec[bool],
     sig_par_off: Vec[i64],
     sig_par_cnt: Vec[i64],
     // The CURRENT fn's return kind (drives the `return` arm's ret type).
@@ -169,6 +171,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         sig_names: Vec.new(),
         sig_ret: Vec.new(),
         sig_par_kinds: Vec.new(),
+        sig_par_ref: Vec.new(),
         sig_par_off: Vec.new(),
         sig_par_cnt: Vec.new(),
         cur_ret: -1,
@@ -209,7 +212,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_off, sig_par_cnt, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_off, en_cnt } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_off, sig_par_cnt, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_off, en_cnt } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -291,8 +294,10 @@ impl Emitter {
                     let cnt = f.params.len();
                     let mut pi2 = 0;
                     while pi2 < cnt {
-                        let pk = self.kind_of_ty(f.params[pi2].ty);
+                        let rk2 = self.peel_ref(f.params[pi2].ty);
+                        let RefKind { kind: pk, is_ref: pr } = rk2;
                         self.sig_par_kinds.push(pk);
+                        self.sig_par_ref.push(pr);
                         pi2 = pi2 + 1;
                     }
                     self.sig_par_cnt.push(cnt);
@@ -351,6 +356,25 @@ impl Emitter {
                 0
             }
             _ => 0,
+        }
+    }
+
+    // Peel a `ref T` parameter type to (inner kind, is_ref) — Slice 19. A
+    // ref param passes the same aggregate BY VALUE as a BORROW: the caller
+    // skips materialization, the callee skips the epilogue free.
+    fn peel_ref(ref self, t: TypeExpr) -> RefKind {
+        match t {
+            RefTy(w) => {
+                let WrapType { inner, span } = w;
+                RefKind {
+                    kind: self.kind_of_ty(inner),
+                    is_ref: true,
+                }
+            }
+            other => RefKind {
+                kind: self.kind_of_ty(other),
+                is_ref: false,
+            },
         }
     }
 
@@ -458,14 +482,19 @@ impl Emitter {
             // a String param arrives as an OWNED `{ ptr, i64 }` aggregate the
             // callee frees at its epilogue (args move in — the caller passes
             // an owned copy or transfers a temp).
-            let pk = self.kind_of_ty(ty);
+            let rk3 = self.peel_ref(ty);
+            let RefKind { kind: pk, is_ref: pref } = rk3;
             let pty = self.ty_text(pk);
             let idx = self.locals.len();
             self.locals.push(pn);
             self.locals_kind.push(pk);
-            let mut owns = pk == 2;
+            // A `ref` param is a BORROW (Slice 19): the callee never frees it.
+            let mut owns = pk == 2 or pk == 3 or pk == 4 or pk >= 2000;
             if pk >= 10 and pk < 1000 {
                 owns = self.st_has_heap(pk - 10);
+            }
+            if pref {
+                owns = false;
             }
             self.locals_heap.push(owns);
             if pi > 0 {
@@ -835,18 +864,21 @@ impl Emitter {
                         let v = self.emit_value(value);
                         let Val { op, kind, heap } = v;
                         let mut pk = 0;
+                        let mut pref = false;
                         if si >= 0 {
                             if ai < self.sig_par_cnt[si] {
                                 pk = self.sig_par_kinds[self.sig_par_off[si] + ai];
+                                pref = self.sig_par_ref[self.sig_par_off[si] + ai];
                             }
                         }
                         let mut aop = op;
-                        if pk == 2 and kind == 2 and not heap {
+                        // A `ref` param takes the borrow bit-copy directly (Slice 19).
+                        if pk == 2 and not pref and kind == 2 and not heap {
                             let mv = self.emit_materialize(aop.clone());
                             let Val { op: mop, kind: mk, heap: mh } = mv;
                             aop = mop;
                         }
-                        if pk >= 10 and pk < 1000 and kind == pk and not heap {
+                        if pk >= 10 and pk < 1000 and not pref and kind == pk and not heap {
                             // A borrowed heap-bearing struct arg moves in as a
                             // deep copy (Slice 15); a temp transfers.
                             if self.st_has_heap(pk - 10) {
@@ -2313,17 +2345,75 @@ impl Emitter {
             }
             Binary(b) => {
                 let BinaryExpr { op, left, right, span } = b;
+                // ONE match on `op` (BinOp is not Copy) yields both the class
+                // and the instruction text: comparison → `icmp <cc>` on i64 →
+                // i1; logical → SHORT-CIRCUIT `and`/`or` (Slice 19 — the right
+                // operand is evaluated inside a branch: the old non-short-
+                // circuit lowering read `toks[p]` past the end in the parser's
+                // `p < len and toks[p] == …` guard, an OOB read valgrind
+                // caught); else arithmetic on i64.
+                let bi = bin_ir(op);
+                let BinIr { kind, text } = bi;
+                if kind == 2 {
+                    let lv2 = self.emit_value(left);
+                    let Val { op: lop2, kind: lk2, heap: lh2 } = lv2;
+                    let slot = self.fresh();
+                    self.body = self.body + "  " + slot.clone() + " = alloca i1, align 1\n";
+                    self.body = self.body
+                        + "  store i1 "
+                        + lop2.clone()
+                        + ", ptr "
+                        + slot.clone()
+                        + ", align 1\n";
+                    let lid = self.nlbl;
+                    self.nlbl = self.nlbl + 1;
+                    let lrhs = "sc" + lid.to_string();
+                    let lend = "scend" + lid.to_string();
+                    if text == "and" {
+                        // and: evaluate rhs only when lhs is TRUE.
+                        self.body = self.body
+                            + "  br i1 "
+                            + lop2
+                            + ", label %"
+                            + lrhs.clone()
+                            + ", label %"
+                            + lend.clone()
+                            + "\n";
+                    } else {
+                        // or: evaluate rhs only when lhs is FALSE.
+                        self.body = self.body
+                            + "  br i1 "
+                            + lop2
+                            + ", label %"
+                            + lend.clone()
+                            + ", label %"
+                            + lrhs.clone()
+                            + "\n";
+                    }
+                    self.body = self.body + lrhs + ":\n";
+                    let rv2 = self.emit_value(right);
+                    let Val { op: rop2, kind: rk2, heap: rh2 } = rv2;
+                    self.body = self.body
+                        + "  store i1 "
+                        + rop2
+                        + ", ptr "
+                        + slot.clone()
+                        + ", align 1\n";
+                    self.body = self.body + "  br label %" + lend.clone() + "\n";
+                    self.body = self.body + lend + ":\n";
+                    let r2 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + r2.clone()
+                        + " = load i1, ptr "
+                        + slot
+                        + ", align 1\n";
+                    return Val { op: r2, kind: 1, heap: false };
+                }
                 let lv = self.emit_value(left);
                 let rv = self.emit_value(right);
                 let Val { op: lop, kind: lk, heap: lh } = lv;
                 let Val { op: rop, kind: rk, heap: rh } = rv;
-                // ONE match on `op` (BinOp is not Copy) yields both the class
-                // and the instruction text: comparison → `icmp <cc>` on i64 → i1;
-                // logical → `and`/`or` on i1 (non-short-circuit — output-
-                // equivalent for the side-effect-free corpus); else arithmetic
-                // on i64.
-                let bi = bin_ir(op);
-                let BinIr { kind, text } = bi;
                 if kind == 1 and lk == 2 and rk == 2 {
                     // String ==/!= (Slice 17): length compare + memcmp. Other
                     // string comparisons stay unsupported.
@@ -2377,19 +2467,7 @@ impl Emitter {
                         + "\n";
                     return Val { op: r, kind: 1, heap: false };
                 }
-                if kind == 2 {
-                    self.body = self.body
-                        + "  "
-                        + r.clone()
-                        + " = "
-                        + text
-                        + " i1 "
-                        + lop
-                        + ", "
-                        + rop
-                        + "\n";
-                    return Val { op: r, kind: 1, heap: false };
-                }
+
                 self.body =
                     self.body + "  " + r.clone() + " = " + text + " i64 " + lop + ", " + rop + "\n";
                 Val { op: r, kind: 0, heap: false }
@@ -2468,18 +2546,21 @@ impl Emitter {
                     // in; the binder keeps and later frees its own buffer), a
                     // heap temp transfers ownership directly.
                     let mut pk = 0;
+                    let mut pref = false;
                     if si >= 0 {
                         if ai < self.sig_par_cnt[si] {
                             pk = self.sig_par_kinds[self.sig_par_off[si] + ai];
+                            pref = self.sig_par_ref[self.sig_par_off[si] + ai];
                         }
                     }
                     let mut aop = op;
-                    if pk == 2 and kind == 2 and not heap {
+                    // A `ref` param takes the borrow bit-copy directly (Slice 19).
+                    if pk == 2 and not pref and kind == 2 and not heap {
                         let mv = self.emit_materialize(aop.clone());
                         let Val { op: mop, kind: mk, heap: mh } = mv;
                         aop = mop;
                     }
-                    if pk >= 10 and pk < 1000 and kind == pk and not heap {
+                    if pk >= 10 and pk < 1000 and not pref and kind == pk and not heap {
                         // A borrowed heap-bearing struct arg moves in as a
                         // deep copy (Slice 15); a temp transfers.
                         if self.st_has_heap(pk - 10) {
@@ -3170,6 +3251,13 @@ fn kind_ty(kind: i64) -> String {
         return "{ ptr, i64, i64 }".to_string();
     }
     "i64".to_string()
+}
+
+// A peeled parameter type (Slice 19): the value kind plus whether the
+// declared type was a `ref` borrow.
+struct RefKind {
+    kind: i64,
+    is_ref: bool,
 }
 
 // An interned string global: its symbol name and byte length.

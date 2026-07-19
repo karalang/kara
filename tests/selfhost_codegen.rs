@@ -179,6 +179,17 @@ const CORPUS: &[&str] = &[
     // extracted via substring, accumulated into Vec[Token] — the tokenizer
     // capstone upgraded to parser-shaped DATA, not just strings.
     "struct Token { kind: i64, text: String }\nfn is_digit(b: u8) -> bool { b >= 48 and b <= 57 }\nfn is_alpha(b: u8) -> bool { (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or b == 95 }\nfn main() { let src = \"x1 = 42 + foo7\"; let mut toks: Vec[Token] = Vec.new(); let mut i = 0; let mut start = 0 - 1; let mut num = false; for b in src.bytes() { if is_alpha(b) or is_digit(b) { if start < 0 { start = i; num = is_digit(b); } } else { if start >= 0 { if num { toks.push(Token { kind: 2, text: src.substring(start, i) }); } else { toks.push(Token { kind: 1, text: src.substring(start, i) }); } start = 0 - 1; } if b != 32 { toks.push(Token { kind: 3, text: src.substring(i, i + 1) }); } } i = i + 1; } if start >= 0 { if num { toks.push(Token { kind: 2, text: src.substring(start, i) }); } else { toks.push(Token { kind: 1, text: src.substring(start, i) }); } } let mut j = 0; while j < toks.len() { let t = toks[j]; println(t.kind.to_string() + \" \" + t.text); j = j + 1; } }",
+    // Slice 19: `ref Vec` params (borrow ABI — bit-copy pass, no caller
+    // materialization, no callee free) + SHORT-CIRCUIT and/or (the old
+    // non-short-circuit lowering read past the end in `p < len and toks[p]`
+    // guards — an OOB read valgrind caught in the parser capstone).
+    "fn total(xs: ref Vec[i64]) -> i64 { let mut s = 0; let mut i = 0; while i < xs.len() { s = s + xs[i]; i = i + 1; } s }\nfn main() { let mut v: Vec[i64] = Vec.new(); v.push(3); v.push(4); v.push(5); println(total(v).to_string()); println(v.len().to_string()) }",
+    "fn first_word(ws: ref Vec[String]) -> String { ws[0] }\nfn main() { let mut v: Vec[String] = Vec.new(); v.push(\"lead\"); v.push(\"tail\"); println(first_word(v)); println(v[1]) }",
+    "fn main() { let mut v: Vec[i64] = Vec.new(); v.push(9); let mut p = 0; while p < v.len() and v[p] > 0 { p = p + 1; } println(p.to_string()) }",
+    // THE PARSER CAPSTONE: recursive-descent expression evaluation with
+    // precedence over a token stream — parse fns take (ref Vec[i64], pos) and
+    // return R{v,p} structs; ops encoded negative. "2+3*4-6/2" = 11.
+    "struct R { v: i64, p: i64 }\nfn parse_primary(toks: ref Vec[i64], pos: i64) -> R { R { v: toks[pos], p: pos + 1 } }\nfn parse_term(toks: ref Vec[i64], pos: i64) -> R { let r0 = parse_primary(toks, pos); let mut v = r0.v; let mut p = r0.p; while p < toks.len() and (toks[p] == 0 - 42 or toks[p] == 0 - 47) { let op = toks[p]; let rhs = parse_primary(toks, p + 1); if op == 0 - 42 { v = v * rhs.v; } else { v = v / rhs.v; } p = rhs.p; } R { v: v, p: p } }\nfn parse_expr(toks: ref Vec[i64], pos: i64) -> R { let r0 = parse_term(toks, pos); let mut v = r0.v; let mut p = r0.p; while p < toks.len() and (toks[p] == 0 - 43 or toks[p] == 0 - 45) { let op = toks[p]; let rhs = parse_term(toks, p + 1); if op == 0 - 43 { v = v + rhs.v; } else { v = v - rhs.v; } p = rhs.p; } R { v: v, p: p } }\nfn main() { let mut toks: Vec[i64] = Vec.new(); toks.push(2); toks.push(0 - 43); toks.push(3); toks.push(0 - 42); toks.push(4); toks.push(0 - 45); toks.push(6); toks.push(0 - 47); toks.push(2); let r = parse_expr(toks, 0); println(r.v.to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
