@@ -119,6 +119,7 @@ struct Emitter {
     sig_ret: Vec[i64],
     sig_par_kinds: Vec[i64],
     sig_par_ref: Vec[bool],
+    sig_par_mut: Vec[bool],
     sig_par_off: Vec[i64],
     sig_par_cnt: Vec[i64],
     // The CURRENT fn's return kind (drives the `return` arm's ret type).
@@ -172,6 +173,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         sig_ret: Vec.new(),
         sig_par_kinds: Vec.new(),
         sig_par_ref: Vec.new(),
+        sig_par_mut: Vec.new(),
         sig_par_off: Vec.new(),
         sig_par_cnt: Vec.new(),
         cur_ret: -1,
@@ -212,7 +214,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_off, sig_par_cnt, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_off, en_cnt } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_off, en_cnt } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -295,9 +297,10 @@ impl Emitter {
                     let mut pi2 = 0;
                     while pi2 < cnt {
                         let rk2 = self.peel_ref(f.params[pi2].ty);
-                        let RefKind { kind: pk, is_ref: pr } = rk2;
+                        let RefKind { kind: pk, is_ref: pr, is_mut: pm } = rk2;
                         self.sig_par_kinds.push(pk);
                         self.sig_par_ref.push(pr);
+                        self.sig_par_mut.push(pm);
                         pi2 = pi2 + 1;
                     }
                     self.sig_par_cnt.push(cnt);
@@ -369,11 +372,23 @@ impl Emitter {
                 RefKind {
                     kind: self.kind_of_ty(inner),
                     is_ref: true,
+                    is_mut: false,
+                }
+            }
+            MutRefTy(w) => {
+                // `mut ref T` (Slice 20): a true BY-REFERENCE param — the
+                // callee receives a POINTER to the caller's slot.
+                let WrapType { inner, span } = w;
+                RefKind {
+                    kind: self.kind_of_ty(inner),
+                    is_ref: true,
+                    is_mut: true,
                 }
             }
             other => RefKind {
                 kind: self.kind_of_ty(other),
                 is_ref: false,
+                is_mut: false,
             },
         }
     }
@@ -483,7 +498,7 @@ impl Emitter {
             // callee frees at its epilogue (args move in — the caller passes
             // an owned copy or transfers a temp).
             let rk3 = self.peel_ref(ty);
-            let RefKind { kind: pk, is_ref: pref } = rk3;
+            let RefKind { kind: pk, is_ref: pref, is_mut: pmut } = rk3;
             let pty = self.ty_text(pk);
             let idx = self.locals.len();
             self.locals.push(pn);
@@ -500,16 +515,30 @@ impl Emitter {
             if pi > 0 {
                 sig = sig + ", ";
             }
-            sig = sig + pty.clone() + " %a" + pi.to_string();
-            pre = pre + "  %v" + idx.to_string() + " = alloca " + pty.clone() + ", align 8\n";
-            pre = pre
-                + "  store "
-                + pty
-                + " %a"
-                + pi.to_string()
-                + ", ptr %v"
-                + idx.to_string()
-                + ", align 8\n";
+            if pmut {
+                // `mut ref` (Slice 20): the param IS a pointer to the caller's
+                // slot. A no-op GEP gives it the canonical `%v<idx>` slot name
+                // so every existing slot-addressing site works unchanged —
+                // loads/stores/pushes through it hit the caller's storage.
+                sig = sig + "ptr %a" + pi.to_string();
+                pre = pre
+                    + "  %v"
+                    + idx.to_string()
+                    + " = getelementptr i8, ptr %a"
+                    + pi.to_string()
+                    + ", i64 0\n";
+            } else {
+                sig = sig + pty.clone() + " %a" + pi.to_string();
+                pre = pre + "  %v" + idx.to_string() + " = alloca " + pty.clone() + ", align 8\n";
+                pre = pre
+                    + "  store "
+                    + pty
+                    + " %a"
+                    + pi.to_string()
+                    + ", ptr %v"
+                    + idx.to_string()
+                    + ", align 8\n";
+            }
             pi = pi + 1;
         }
         let Block { stmts, tail, span: bsp } = b;
@@ -861,6 +890,30 @@ impl Emitter {
                     let mut ai = 0;
                     for a in args {
                         let CallArg { label, mut_marker, value, span: asp } = a;
+                        // `mut ref` params (Slice 20): the arg must be a local
+                        // place — pass its SLOT POINTER, no evaluation.
+                        let mut amut = false;
+                        if si >= 0 {
+                            if ai < self.sig_par_cnt[si] {
+                                amut = self.sig_par_mut[self.sig_par_off[si] + ai];
+                            }
+                        }
+                        if amut {
+                            let mut aslot = 0 - 1;
+                            match value {
+                                Ident(mie) => {
+                                    let IdentExpr { name: mn, span: msp2 } = mie;
+                                    aslot = self.local_slot(mn);
+                                }
+                                _ => {}
+                            }
+                            if ai > 0 {
+                                alist = alist + ", ";
+                            }
+                            alist = alist + "ptr %v" + aslot.to_string();
+                            ai = ai + 1;
+                            continue;
+                        }
                         let v = self.emit_value(value);
                         let Val { op, kind, heap } = v;
                         let mut pk = 0;
@@ -3258,6 +3311,7 @@ fn kind_ty(kind: i64) -> String {
 struct RefKind {
     kind: i64,
     is_ref: bool,
+    is_mut: bool,
 }
 
 // An interned string global: its symbol name and byte length.

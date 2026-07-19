@@ -190,6 +190,14 @@ const CORPUS: &[&str] = &[
     // precedence over a token stream — parse fns take (ref Vec[i64], pos) and
     // return R{v,p} structs; ops encoded negative. "2+3*4-6/2" = 11.
     "struct R { v: i64, p: i64 }\nfn parse_primary(toks: ref Vec[i64], pos: i64) -> R { R { v: toks[pos], p: pos + 1 } }\nfn parse_term(toks: ref Vec[i64], pos: i64) -> R { let r0 = parse_primary(toks, pos); let mut v = r0.v; let mut p = r0.p; while p < toks.len() and (toks[p] == 0 - 42 or toks[p] == 0 - 47) { let op = toks[p]; let rhs = parse_primary(toks, p + 1); if op == 0 - 42 { v = v * rhs.v; } else { v = v / rhs.v; } p = rhs.p; } R { v: v, p: p } }\nfn parse_expr(toks: ref Vec[i64], pos: i64) -> R { let r0 = parse_term(toks, pos); let mut v = r0.v; let mut p = r0.p; while p < toks.len() and (toks[p] == 0 - 43 or toks[p] == 0 - 45) { let op = toks[p]; let rhs = parse_term(toks, p + 1); if op == 0 - 43 { v = v + rhs.v; } else { v = v - rhs.v; } p = rhs.p; } R { v: v, p: p } }\nfn main() { let mut toks: Vec[i64] = Vec.new(); toks.push(2); toks.push(0 - 43); toks.push(3); toks.push(0 - 42); toks.push(4); toks.push(0 - 45); toks.push(6); toks.push(0 - 47); toks.push(2); let r = parse_expr(toks, 0); println(r.v.to_string()) }",
+    // Slice 20: `mut ref` params — true by-reference (the callee receives a
+    // pointer to the caller's slot, aliased to the canonical %v name via a
+    // no-op GEP); call sites pass the slot pointer for `mut`-marked args.
+    "fn bump(n: mut ref i64) { n = n + 7; }\nfn main() { let mut c = 10; bump(mut c); bump(mut c); println(c.to_string()) }",
+    "fn add_tok(v: mut ref Vec[i64], x: i64) { v.push(x * 2) }\nfn main() { let mut v: Vec[i64] = Vec.new(); add_tok(mut v, 3); add_tok(mut v, 5); println(v.len().to_string()); println((v[0] + v[1]).to_string()) }",
+    "fn add_word(v: mut ref Vec[String], w: String) { v.push(w + \"!\") }\nfn main() { let mut v: Vec[String] = Vec.new(); add_word(mut v, \"hey\"); add_word(mut v, \"ho\"); println(v[0]); println(v[1]) }",
+    // Tokenizer helper shape: mut-ref token sink + ref source string.
+    "fn emit_tok(toks: mut ref Vec[String], src: ref String, a: i64, b: i64) { toks.push(src.substring(a, b)) }\nfn main() { let src = \"ab cd\"; let mut toks: Vec[String] = Vec.new(); emit_tok(mut toks, src, 0, 2); emit_tok(mut toks, src, 3, 5); println(toks[0]); println(toks[1]); println(src) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
