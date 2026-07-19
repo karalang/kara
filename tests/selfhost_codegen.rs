@@ -220,6 +220,16 @@ const CORPUS: &[&str] = &[
     "struct Pair { tag: String, n: i64 }\nfn stamp(n: i64) -> Pair { let p = Pair { tag: \"id-\".to_string() + n.to_string(), n: n }; if n > 9 { return p; } let q = Pair { tag: \"small\".to_string(), n: n }; return q; }\nfn main() { let p1 = stamp(12); println(p1.tag); let p2 = stamp(3); println(p2.tag) }",
     // Return from inside an enum-match arm with an owned local alive.
     "enum Verdict { Pass, Fail(i64) }\nfn judge(v: Verdict) -> String { let label = \"case \".to_string(); match v { Fail(code) => { return label + \"failed-\" + code.to_string(); } Pass => {} } return label + \"ok\"; }\nfn main() { println(judge(Verdict.Fail(7))); println(judge(Verdict.Pass)) }",
+    // Slice 24: STRING-PAYLOAD ENUM VARIANTS (the Token.Identifier shape).
+    // A str-enum widens to { tag, i64, { ptr, i64 } } and OWNS its String
+    // payload: tag-conditional copy on borrow-bind, tag-conditional free on
+    // drop; a match binds the payload as a borrow. Valgrind-gated throughout.
+    "enum Tok { Plus, Num(i64), Ident(String) }\nfn show(t: Tok) -> String { match t { Ident(name) => { return \"id:\".to_string() + name; } Num(n) => { return \"num:\".to_string() + n.to_string(); } Plus => {} } return \"plus\".to_string(); }\nfn main() { let a = Tok.Ident(\"foo\".to_string()); println(show(a)); println(show(Tok.Num(42))); println(show(Tok.Plus)) }",
+    // Enum-returning fns (borrow + temp returns), ref-enum params, rebind
+    // (deep copy), reassignment (old payload freed), loop construction.
+    "enum Tok { Plus, Num(i64), Ident(String) }\nfn classify(w: String) -> Tok { if w == \"+\" { return Tok.Plus; } if w == \"42\" { return Tok.Num(42); } return Tok.Ident(w); }\nfn name_of(t: ref Tok) -> String { match t { Ident(name) => { return \"<\".to_string() + name + \">\"; } Num(n) => { return \"#\".to_string() + n.to_string(); } Plus => {} } return \"+\".to_string(); }\nfn main() { let mut t = classify(\"foo\".to_string()); println(name_of(t)); let u = t; println(name_of(u)); t = classify(\"42\".to_string()); println(name_of(t)); t = classify(\"+\".to_string()); println(name_of(t)); let mut i = 0; while i < 3 { let w = classify(\"loop\".to_string()); println(name_of(w)); i = i + 1; } }",
+    // Statement-position match printing a borrowed String payload.
+    "enum Msg { Quit, Say(String) }\nfn main() { let m = Msg.Say(\"hello\".to_string() + \" there\"); match m { Say(text) => { println(text); } Quit => { println(\"quit\"); } } match Msg.Quit { Say(text) => { println(text); } Quit => { println(\"bye\"); } } }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
