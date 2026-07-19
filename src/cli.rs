@@ -5686,6 +5686,32 @@ fn emit_wasm_threads_artifact(
     }
 }
 
+/// Resolve the arch-portable `cpu-baseline` level to its concrete native
+/// `(target-cpu, target-features)` override, applying the design default `v3`
+/// when no explicit level is declared. Native non-wasm only — wasm gets no CPU
+/// baseline (`(None, None)`). The mapped value is the LOWEST tier of the CPU /
+/// feature chains, so an explicit `--target-cpu` / `KARAC_TARGET_CPU` /
+/// `[release] target-cpu` (or `[release] cpu-baseline`) always wins.
+///
+/// **Deploy-baseline commitment (design.md § Multiversioning > `cpu-baseline`,
+/// default `"v3"`):** a default `karac build` now targets `x86-64-v3` on x86-64
+/// (Haswell+, ~2013 — excludes pre-Haswell) and `+v8.4a` on aarch64 (Apple M1+,
+/// Graviton 3+). This narrows the deploy set for sharper codegen — the design's
+/// single-binary-distribution posture. Pre-baseline hardware opts down with
+/// `[release] cpu-baseline = "v1" | "v2"` (or an explicit `--target-cpu`). The
+/// codegen / asan / abi test harnesses drive `compile_to_object*` directly (not
+/// this CLI path), so they stay on the per-target `generic` default and the
+/// heavy CI legs are unaffected; the CLI-spawned build tests run on x86 (v3) and
+/// `macos-latest` (Apple M1+, ≥ v8.4), both at or above the baseline.
+#[cfg(feature = "llvm")]
+fn resolve_native_cpu_baseline(explicit: Option<&str>) -> (Option<String>, Option<String>) {
+    if crate::target::active_target_is_wasm() {
+        return (None, None);
+    }
+    let level = explicit.unwrap_or("v3");
+    crate::manifest::cpu_baseline_native_override(level, std::env::consts::ARCH)
+}
+
 /// Act on the resolved `--target-cpu` value (phase-10; design.md § CPU
 /// Baseline Targeting). `None` — the common case — keeps the per-target
 /// default table. The literal `help` prints LLVM's supported-CPU
@@ -6201,22 +6227,37 @@ fn cmd_build(
         // `resolve_build_target` — `help` and validation are
         // per-active-target — and before any pipeline pass, failing
         // fast on a typo'd name.
+        // Arch-portable `cpu-baseline` (walk-up-discovered manifest), with the
+        // design's `v3` default applied when no explicit level — the LOWEST tier
+        // of both chains. Same resolution as the project-build path.
+        let (baseline_cpu, baseline_features) = resolve_native_cpu_baseline(
+            manifest_release_field_for(filename, output, |m| m.release_cpu_baseline.clone())
+                .as_deref(),
+        );
         apply_target_cpu_override(
             target_cpu
                 .map(str::to_string)
                 .or_else(read_target_cpu_env)
                 .or_else(|| {
                     manifest_release_field_for(filename, output, |m| m.release_target_cpu.clone())
-                }),
+                })
+                .or(baseline_cpu),
         );
         // Feature-string override — the sibling chain, resolved
         // independently (a flag-supplied CPU does not suppress a
         // manifest-supplied feature list, and vice versa).
-        apply_target_features_override(target_features.map(str::to_string).or_else(|| {
-            read_target_features_env().or_else(|| {
-                manifest_release_field_for(filename, output, |m| m.release_target_features.clone())
-            })
-        }));
+        apply_target_features_override(
+            target_features
+                .map(str::to_string)
+                .or_else(|| {
+                    read_target_features_env().or_else(|| {
+                        manifest_release_field_for(filename, output, |m| {
+                            m.release_target_features.clone()
+                        })
+                    })
+                })
+                .or(baseline_features),
+        );
         let is_wasm = build_target == "wasm_wasi" || build_target == "wasm_browser";
         // Library-artifact producer mode (additive-interop Slice 2;
         // design.md § Exported C ABI) is native-only. A wasm build already
@@ -7198,16 +7239,10 @@ fn cmd_build_project(
     // `[release] cpu-baseline` (arch-portable, lowest tier) maps to a concrete
     // native override in DIFFERENT channels per arch: a target-CPU on x86-64
     // (`x86-64-vN`), an architecture-version target-FEATURE on aarch64
-    // (`+v8.Na`). Resolved here (native arch = the karac binary's arch for a
-    // native build) so the two chains below can fall back to it. wasm and other
-    // targets get `(None, None)` — a CPU baseline is meaningless there.
+    // (`+v8.Na`). The absent-key default is `v3` (design.md § Multiversioning).
     #[cfg(feature = "llvm")]
-    let (baseline_cpu, baseline_features) = mf
-        .release_cpu_baseline
-        .as_deref()
-        .filter(|_| !crate::target::active_target_is_wasm())
-        .map(|b| crate::manifest::cpu_baseline_native_override(b, std::env::consts::ARCH))
-        .unwrap_or((None, None));
+    let (baseline_cpu, baseline_features) =
+        resolve_native_cpu_baseline(mf.release_cpu_baseline.as_deref());
     #[cfg(feature = "llvm")]
     apply_target_cpu_override(
         target_cpu
