@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 67 | 0 |
 | codegen-gap | 63 | 0 |
 | missing-feature | 51 | 0 |
-| false-positive | 36 | 0 |
+| false-positive | 37 | 1 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
 | soundness | 24 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 414 | 0 |
 | typecheck | 74 | 0 |
 | interp | 58 | 0 |
-| ownership | 23 | 0 |
+| ownership | 24 | 1 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
 | runtime | 13 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **580 surfaced · 0 open · 576 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **581 surfaced · 1 open · 576 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-19-3 | 2026-07-19 | ownership | medium | `karac check` hard-rejects a reused OWNED heap-typed function argument (`f(v); f(v)` where `v: Vec[i64]`/`String`) with `error[ownership]: value 'v' moved here, used again here`, but `karac build` AND `karac run` both ACCEPT the same program, compile it, and run it correctly + memory-safely (valgrind-clean: no leak, no double-free, no UAF). The two front-ends disagree on validity: `check` enforces linear move semantics for a bare-`T` owned param, while codegen resolves the reuse via a defensive copy / caller-retain (the RC-fallback path) and produces the right answer. Because the Mend loop gates on `karac check`, natural code that passes an owned value to two functions fails check even though it builds and runs — and `karac fix` offers NO machine fix for it, so it also dents the Mend machine-fix rate. | src/ownership.rs (move checker) |
 
 ### Fixed (576)
 
