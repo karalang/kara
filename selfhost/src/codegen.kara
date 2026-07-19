@@ -768,6 +768,80 @@ impl Emitter {
                 // `name = <int-expr>`: evaluate, store into the existing slot.
                 let AssignStmt { target, value, span } = asn;
                 match target {
+                    Field(fa2) => {
+                        // FIELD assignment `p.x = v` (Slice 21): GEP the
+                        // struct slot's field and store — works identically
+                        // through a `mut ref` struct param (the aliased slot
+                        // pointer). A String field frees its OLD buffer after
+                        // the RHS evaluates and materializes a borrowed RHS in.
+                        let FieldAccessExpr { object: fobj, field: fname2, span: fsp2 } = fa2;
+                        let mut sidx = 0 - 1;
+                        match fobj {
+                            Ident(fie) => {
+                                let IdentExpr { name: fon, span: fosp } = fie;
+                                sidx = self.local_slot(fon);
+                            }
+                            _ => {}
+                        }
+                        if sidx >= 0 {
+                            let sk3 = self.locals_kind[sidx];
+                            if sk3 >= 10 and sk3 < 1000 {
+                                let esi = sk3 - 10;
+                                let off = self.st_off[esi];
+                                let cnt = self.st_cnt[esi];
+                                let mut fi2 = 0;
+                                let mut fidx = 0 - 1;
+                                let mut fkind = 0;
+                                while fi2 < cnt {
+                                    if self.st_field_names[off + fi2] == fname2 {
+                                        fidx = fi2;
+                                        fkind = self.st_field_kinds[off + fi2];
+                                    }
+                                    fi2 = fi2 + 1;
+                                }
+                                if fidx >= 0 {
+                                    let v2 = self.emit_value(value);
+                                    let Val { op: fv0, kind: fvk, heap: fvh } = v2;
+                                    let mut fv = fv0;
+                                    if fkind == 2 and fvk == 2 and not fvh {
+                                        let mv = self.emit_materialize(fv.clone());
+                                        let Val { op: mop, kind: mk, heap: mh } = mv;
+                                        fv = mop;
+                                    }
+                                    let sty = self.ty_text(sk3);
+                                    let fp = self.fresh();
+                                    self.body = self.body
+                                        + "  "
+                                        + fp.clone()
+                                        + " = getelementptr "
+                                        + sty
+                                        + ", ptr %v"
+                                        + sidx.to_string()
+                                        + ", i32 0, i32 "
+                                        + fidx.to_string()
+                                        + "\n";
+                                    if fkind == 2 {
+                                        let oldv = self.fresh();
+                                        self.body = self.body
+                                            + "  "
+                                            + oldv.clone()
+                                            + " = load { ptr, i64 }, ptr "
+                                            + fp.clone()
+                                            + ", align 8\n";
+                                        self.emit_free_val(oldv);
+                                    }
+                                    self.body = self.body
+                                        + "  store "
+                                        + kind_ty(fkind)
+                                        + " "
+                                        + fv
+                                        + ", ptr "
+                                        + fp
+                                        + ", align 8\n";
+                                }
+                            }
+                        }
+                    }
                     Ident(ie) => {
                         let IdentExpr { name, span: isp } = ie;
                         let idx = self.local_slot(name);

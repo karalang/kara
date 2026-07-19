@@ -198,6 +198,15 @@ const CORPUS: &[&str] = &[
     "fn add_word(v: mut ref Vec[String], w: String) { v.push(w + \"!\") }\nfn main() { let mut v: Vec[String] = Vec.new(); add_word(mut v, \"hey\"); add_word(mut v, \"ho\"); println(v[0]); println(v[1]) }",
     // Tokenizer helper shape: mut-ref token sink + ref source string.
     "fn emit_tok(toks: mut ref Vec[String], src: ref String, a: i64, b: i64) { toks.push(src.substring(a, b)) }\nfn main() { let src = \"ab cd\"; let mut toks: Vec[String] = Vec.new(); emit_tok(mut toks, src, 0, 2); emit_tok(mut toks, src, 3, 5); println(toks[0]); println(toks[1]); println(src) }",
+    // Slice 21: FIELD ASSIGNMENT — GEP the struct slot's field and store;
+    // a String field frees its old buffer first; composes with mut-ref
+    // struct params (the aliased slot pointer). Valgrind-gated.
+    "struct User { name: String, age: i64 }\nfn main() { let mut u = User { name: \"ada\", age: 36 }; u.age = 40; println(u.age.to_string()); println(u.name) }",
+    "struct User { name: String, age: i64 }\nfn main() { let mut u = User { name: \"ada\", age: 36 }; u.name = \"grace\"; println(u.name); println(u.age.to_string()) }",
+    "struct User { name: String, age: i64 }\nfn birthday(u: mut ref User) { u.age = u.age + 1; }\nfn main() { let mut u = User { name: \"bo\", age: 9 }; birthday(mut u); birthday(mut u); println(u.age.to_string()) }",
+    "struct User { name: String, age: i64 }\nfn rename(u: mut ref User, n: String) { u.name = n + \"!\"; }\nfn main() { let mut u = User { name: \"ada\", age: 1 }; rename(mut u, \"kay\"); println(u.name) }",
+    // A counter-struct threaded through helpers — compiler-shaped state.
+    "struct Cnt { words: i64, syms: i64 }\nfn tally(c: mut ref Cnt, b: u8) { if (b >= 97 and b <= 122) { c.words = c.words + 1; } else { if b != 32 { c.syms = c.syms + 1; } } }\nfn main() { let src = \"ab + cd\"; let mut c = Cnt { words: 0, syms: 0 }; for b in src.bytes() { tally(mut c, b); } println(c.words.to_string() + \"/\" + c.syms.to_string()) }",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
