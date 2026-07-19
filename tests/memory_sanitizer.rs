@@ -680,6 +680,46 @@ fn main() {
     }
 
     #[test]
+    fn asan_iter_flatten_for_loop_heap_no_leak() {
+        // B-2026-07-19-12 slice 2 — the `for w in xs.iter().flatten()`
+        // nested-loop codegen over heap String elements. The outer loop borrows
+        // each inner Vec, the inner loop borrows each String; the accounting
+        // stress is a flatten-order heap MOVE: cloning each borrowed element
+        // into an owning sink (`d.push(w.clone())`) must free exactly once, and
+        // the source Vec-of-Vecs must still own all its buffers at the end.
+        // Looped so any per-iteration imbalance accumulates for LSan.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut iter: i64 = 0i64;
+    while iter < 3i64 {
+        let nested: Vec[Vec[String]] = [[f"a{iter}", f"b{iter}"], [], [f"c{iter}"]];
+        let mut d: Vec[String] = Vec.new();
+        for w in nested.iter().flatten() {
+            d.push(w.clone());
+        }
+        println(d.get(0));
+        println(d.get(2));
+        // Source still owns its buffers (outer Vec length + a re-flatten).
+        println(nested.len());
+        let mut n2: i64 = 0i64;
+        for w2 in nested.iter().flatten() {
+            n2 = n2 + 1i64;
+        }
+        println(n2);
+        iter = iter + 1i64;
+    }
+}
+"#,
+            &[
+                "Some(a0)", "Some(c0)", "3", "3", "Some(a1)", "Some(c1)", "3", "3", "Some(a2)",
+                "Some(c2)", "3", "3",
+            ],
+            "asan_iter_flatten_for_loop_heap_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_autograd_tensor_valued_module() {
         // The full `std.autograd` tensor-valued surface end-to-end: leaf copies,
         // the fresh-local value/grad pushes, the `backward` accumulation, and the

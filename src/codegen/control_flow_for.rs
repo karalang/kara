@@ -121,15 +121,35 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
-        // `for x in <iter-chain>.flatten()` — codegen defers flatten (typecheck +
-        // interp shipped). Bail LOUD before the silent `_ =>` fall-through, which
-        // would drop the loop body → empty output vs the interpreter's flattened
-        // sequence.
+        // `for x in <recv>.flatten()` — nested-loop desugar (B-2026-07-19-12
+        // slice 2): outer loop binds each inner iterable, inner loop yields its
+        // elements. Only when `flatten` is the OUTERMOST call on the iterable;
+        // fails closed to the loud defer below for a receiver shape it can't
+        // prove.
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &iterable.kind
+        {
+            if method == "flatten" && args.is_empty() {
+                if let Some(v) =
+                    self.try_compile_for_flatten(label, pattern, object, body, &iterable.span)?
+                {
+                    return Ok(v);
+                }
+            }
+        }
+        // Any remaining flatten on the receiver spine (flatten not outermost, or
+        // the desugar bailed) — bail LOUD before the silent `_ =>` fall-through,
+        // which would drop the loop body → empty output vs the interpreter's
+        // flattened sequence.
         if Self::chain_receiver_contains_flatten(iterable) {
             return Err(
                 "`Iterator.flatten()` is not yet supported under `karac build`/`karac run` \
-                 (codegen); it works under the tree-walk interpreter. Re-run with \
-                 `--interp` (or `KARAC_RUN_JIT=0`)."
+                 (codegen) for this chain shape; it works under the tree-walk \
+                 interpreter. Re-run with `--interp` (or `KARAC_RUN_JIT=0`)."
                     .to_string(),
             );
         }
@@ -3936,6 +3956,90 @@ impl<'ctx> super::Codegen<'ctx> {
                 label: Some(outer_label),
                 pattern: Pattern {
                     kind: PatternKind::Binding(p),
+                    span: span.clone(),
+                },
+                iterable: Box::new(recv.clone()),
+                attributes: Vec::new(),
+                body: Block {
+                    stmts: vec![Stmt {
+                        kind: StmtKind::Expr(inner_for),
+                        span: span.clone(),
+                    }],
+                    final_expr: None,
+                    span: span.clone(),
+                },
+            },
+            span: span.clone(),
+        };
+        Ok(Some(self.compile_expr(&outer_for)?))
+    }
+
+    /// Lower `for <pat> in <recv>.flatten() { <body> }` (B-2026-07-19-12 slice 2)
+    /// into a nested loop — flatten is `flat_map` with an identity inner, so the
+    /// outer loop binds each inner iterable and the inner loop yields its
+    /// elements:
+    ///
+    /// ```text
+    /// for __flt in <recv> {          // recv: Iterator[Inner]
+    ///     for <pat> in __flt {       // __flt: the inner iterable
+    ///         <body>
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Label / break / continue handling mirrors `try_compile_for_flat_map`: a
+    /// user label lands on the OUTER loop (`break <label>` exits the whole flat
+    /// sequence); a labeled `continue <label>` (next flat element) is renamed to
+    /// the inner loop. Fails closed (`None`) — to the loud flatten defer — when
+    /// the receiver isn't a shape `compile_for` provably iterates.
+    pub(super) fn try_compile_for_flatten(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        recv: &Expr,
+        body: &Block,
+        span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // The outer loop iterates `recv` directly; reuse the flat_map
+        // inner-iterable whitelist to gate the shapes we can prove.
+        if !Self::flat_map_inner_iterable_ok(recv) {
+            return Ok(None);
+        }
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let inner_var = format!("__flt_{uid}");
+
+        let outer_label = label
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("__fll_{uid}"));
+        let inner_label = format!("__fli_{uid}");
+        let mut user_body = body.clone();
+        rewrite_loop_ctl_block(
+            &mut user_body,
+            &LoopCtlRewrite {
+                retarget_unlabeled_break: Some(outer_label.clone()),
+                rename_labeled_continue: label.map(|l| (l.to_string(), inner_label.clone())),
+            },
+        );
+
+        let inner_for = Expr {
+            kind: ExprKind::For {
+                label: label.map(|_| inner_label),
+                pattern: pattern.clone(),
+                iterable: Box::new(Expr {
+                    kind: ExprKind::Identifier(inner_var.clone()),
+                    span: span.clone(),
+                }),
+                attributes: Vec::new(),
+                body: user_body,
+            },
+            span: span.clone(),
+        };
+        let outer_for = Expr {
+            kind: ExprKind::For {
+                label: Some(outer_label),
+                pattern: Pattern {
+                    kind: PatternKind::Binding(inner_var),
                     span: span.clone(),
                 },
                 iterable: Box::new(recv.clone()),

@@ -14449,16 +14449,47 @@ fn main() {
         }
     }
 
-    /// `Iterator.flatten()` is interpreter-only (typecheck + interp shipped;
-    /// codegen deferred). Codegen must bail LOUD (naming flatten + `--interp`)
-    /// for every chain shape that includes it — the `for x in xs.iter().flatten()`
-    /// loop (else the `_ =>` fall-through SILENTLY skips the body → empty output),
-    /// the `.flatten().collect()` terminal, and an adaptor/terminal OVER flatten —
-    /// never a silent empty iteration.
+    /// B-2026-07-19-12 slice 2 — the `for x in <recv>.flatten()` nested-loop
+    /// codegen (outer loop binds each inner iterable, inner loop yields its
+    /// elements; ≡ `flat_map(|x| x)`). Break/continue thread through correctly
+    /// (unlabeled break exits the whole flat sequence). Byte-identical to the
+    /// interpreter (`test_iter_flatten_interpreter`); leak-freedom for heap
+    /// elements is gated in `tests/memory_sanitizer.rs`.
+    #[test]
+    fn e2e_iter_flatten_for_loop() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let n: Vec[Vec[i64]] = [[1, 2, 3], [4, 5], [6]];\n\
+                 for x in n.iter().flatten() { print(x); }\n\
+                 println(\"\");\n\
+                 let words: Vec[Vec[String]] = [[\"a\", \"b\"], [\"c\"], [\"d\", \"e\"]];\n\
+                 for w in words.iter().flatten() { print(w); }\n\
+                 println(\"\");\n\
+                 let e: Vec[Vec[i64]] = [[], [1], [], [2, 3], []];\n\
+                 let mut sum: i64 = 0;\n\
+                 for x in e.iter().flatten() { sum = sum + x; }\n\
+                 println(sum);\n\
+                 let mut first_big: i64 = -1;\n\
+                 for x in n.iter().flatten() { if x >= 4 { first_big = x; break; } }\n\
+                 println(first_big);\n\
+                 let mut odds: i64 = 0;\n\
+                 for x in n.iter().flatten() { if x % 2 == 0 { continue; } odds = odds + x; }\n\
+                 println(odds);\n\
+             }",
+        ) {
+            // flat 123456; strings abcde; empty-inners sum 1+2+3=6; break at 4;
+            // odds 1+3+5=9
+            assert_eq!(out, "123456\nabcde\n6\n4\n9\n");
+        }
+    }
+
+    /// `Iterator.flatten()` TERMINAL shapes are interpreter-only (slice 2 lowered
+    /// only the for-loop). Codegen must bail LOUD (naming flatten + `--interp`)
+    /// for `.flatten().collect()` / `.sum()` and any adaptor/terminal OVER
+    /// flatten — never a silent empty iteration or a confusing generic error.
     #[test]
     fn e2e_iter_flatten_deferred_loud_message() {
         for src in [
-            "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; for x in v.iter().flatten() { println(x); } }\n",
             "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; let f: Vec[i64] = v.iter().flatten().collect(); println(f.get(0)); }\n",
             "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; let n: i64 = v.iter().flatten().sum(); println(n); }\n",
             "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; let n: i64 = v.iter().flatten().map(|x| x * 2).sum(); println(n); }\n",
