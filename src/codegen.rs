@@ -3022,6 +3022,16 @@ pub(super) struct Codegen<'ctx> {
     /// borrowed-param exit decs and call-site arg incs are skipped, and
     /// the arg-sanctioned adopted families activate.
     pub(crate) headerless_types: HashSet<String>,
+    /// Whole-program set of shared types that are the target of any `weak T`
+    /// field. Computed in `build_struct_types` by scanning every struct field
+    /// for `TypeKind::Weak(inner)`. Members are force-headed (excluded from
+    /// `headerless_types` at reconcile) and get the two-word `{ strong, weak,
+    /// fields… }` control box; `shared_gep_layout` returns base 2 for them and
+    /// the box free routes through `karac_weak_box_strong_zero_release`. Empty
+    /// for all code today (`weak` fields are declaration-only until the codegen
+    /// store/read slices), so this whole layout path is inert. See
+    /// `docs/spikes/weak-refs.md` (B-2026-07-19-8).
+    pub(crate) weak_targeted_types: HashSet<String>,
     /// Phase C2b: adopted families that used the sanctioned-arg channel
     /// — active ONLY when their member type is in `headerless_types`
     /// (otherwise the binding falls back to full RC and the ordinary
@@ -6766,6 +6776,7 @@ impl<'ctx> Codegen<'ctx> {
             headerless_type_candidates: HashMap::new(),
             headerless_reshaper_dummies: HashMap::new(),
             headerless_types: HashSet::new(),
+            weak_targeted_types: HashSet::new(),
             conditional_adopted_roots: HashMap::new(),
             borrowed_param_skips: HashMap::new(),
             rc_elide_ref_params: HashMap::new(),
@@ -7326,7 +7337,18 @@ impl<'ctx> Codegen<'ctx> {
         type_name: &str,
         heap_type: inkwell::types::StructType<'ctx>,
     ) -> (inkwell::types::StructType<'ctx>, u32) {
-        if self.headerless_here(type_name) {
+        // Weak-targeted types carry a two-word `{ strong, weak, fields… }`
+        // control header, so user field 0 is at heap index 2. Checked FIRST:
+        // such a type is force-headed (never headerless), and this is the one
+        // place the base shift is expressed. Everything that routes field GEPs
+        // through this funnel picks it up for free. (`docs/spikes/weak-refs.md`.)
+        if self
+            .shared_types
+            .get(type_name)
+            .is_some_and(|i| i.has_weak_header)
+        {
+            (heap_type, 2)
+        } else if self.headerless_here(type_name) {
             let fields: Vec<inkwell::types::BasicTypeEnum<'ctx>> =
                 heap_type.get_field_types().into_iter().skip(1).collect();
             (self.context.struct_type(&fields, false), 0)
@@ -7659,6 +7681,14 @@ impl<'ctx> Codegen<'ctx> {
                 continue;
             }
             if self.niche_field_inner_heap_type(&t, link_idx).is_none() {
+                continue;
+            }
+            // Force-headed: a `weak`-targeted type MUST keep its `{ strong, weak
+            // }` control header (a headerless node has no count word to answer
+            // "is the target alive?"), so it can never be headerless. The
+            // whole-program weak-target set is computed in `build_struct_types`,
+            // which runs before this reconcile. (`docs/spikes/weak-refs.md`.)
+            if self.weak_targeted_types.contains(&t) {
                 continue;
             }
             self.headerless_types.insert(t);

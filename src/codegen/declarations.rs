@@ -155,6 +155,22 @@ fn niche_inner_name_if_eligible(
     }
 }
 
+/// The target type name of a `weak T` field, if `ty` is a `weak <Named>`.
+/// A `weak T` field decl lowers to `TypeKind::Weak(inner)`; the inner is the
+/// referent type (a shared struct/enum name). Returns `None` for any non-weak
+/// field or a weak field whose inner isn't a plain named path (defensive — the
+/// typechecker restricts `weak` to shared-type targets in a later slice). Feeds
+/// the whole-program `weak_targeted_types` set (`docs/spikes/weak-refs.md`).
+fn weak_target_name(ty: &TypeExpr) -> Option<String> {
+    let TypeKind::Weak(inner) = &ty.kind else {
+        return None;
+    };
+    match &inner.kind {
+        TypeKind::Path(p) => p.segments.last().cloned(),
+        _ => None,
+    }
+}
+
 /// Body-splitting statement classification used by `emit_state_machine_poll_fns`.
 ///
 /// Slice 8h queued only arg-less void free-fn names per arm; slice 8j
@@ -418,6 +434,26 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .collect();
 
+        // Whole-program `weak`-target set: any shared type named by a `weak T`
+        // field (in ANY struct) is force-headed with a two-word `{ strong, weak
+        // }` control box (`docs/spikes/weak-refs.md`, B-2026-07-19-8). Scanning
+        // every struct's fields here — before the per-type heap-layout loop —
+        // lets a self-referential or forward-referenced target (`shared struct
+        // Node { random: weak Node }`) be recognised regardless of declaration
+        // order, exactly like the niche name-set above. Empty for all code today
+        // (`weak` fields are declaration-only until the store/read slices), so
+        // the two-word path never fires and the existing LSan suite proves the
+        // gate is off.
+        for it in &program.items {
+            if let Item::StructDef(s) = it {
+                for f in &s.fields {
+                    if let Some(target) = weak_target_name(&f.ty) {
+                        self.weak_targeted_types.insert(target);
+                    }
+                }
+            }
+        }
+
         // #36: build struct LLVM types in DEPENDENCY order, not source order. A
         // struct embedded BY VALUE in another (`BinaryExpr { left: Expr }`)
         // needs the embedded struct's type built first; source order fails for a
@@ -515,8 +551,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `shared`-only optimization at v1; widening it to `par`
                 // is a Slice D follow-up, and conventional layout is
                 // always correct.
+                // Weak-targeted types carry a TWO-word control header
+                // `{ i64 strong, i64 weak, fields… }` (the Rust Rc/Weak block);
+                // every other shared type keeps the conventional single
+                // `{ i64 strong, fields… }`. The strong count stays at field 0
+                // either way, so retain/release GEPs are unchanged; only the
+                // user-field base shifts (handled by `shared_gep_layout`).
+                // Non-par only: the two-word header + `karac_weak_*` primitives
+                // are NON-atomic. Atomic weak siblings for `par` (Arc) types are
+                // a deferred slice, so a `par struct` never gets the weak header
+                // here (a `weak <par T>` target is rejected upstream until then);
+                // this keeps the atomic `emit_arc_dec` free path untouched.
+                let has_weak_header = !s.is_par && self.weak_targeted_types.contains(&s.name);
                 let mut heap_fields: Vec<BasicTypeEnum<'ctx>> =
-                    vec![self.context.i64_type().into()]; // refcount
+                    vec![self.context.i64_type().into()]; // strong refcount
+                if has_weak_header {
+                    heap_fields.push(self.context.i64_type().into()); // weak count
+                }
                 heap_fields.extend_from_slice(&field_types);
                 let heap_type = self.named_shared_heap_type(&s.name, &heap_fields);
 
@@ -528,6 +579,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         is_enum: false,
                         niche_option_fields,
                         is_par: s.is_par,
+                        has_weak_header,
                     },
                 );
             } else {
@@ -3324,6 +3376,14 @@ impl<'ctx> super::Codegen<'ctx> {
                             // Option fields only; leave empty for enums.
                             niche_option_fields: Vec::new(),
                             is_par: e.is_par,
+                            // Shared ENUMS use the fixed `field_word_offsets`
+                            // GEP path (not `shared_gep_layout`), so the two-word
+                            // weak header — which shifts the tag/payload offsets —
+                            // isn't wired for them yet. `weak <Enum>` targets are
+                            // restricted upstream (typechecker slice) until a
+                            // dedicated enum-layout slice lands; keep the flag off
+                            // so the conventional `{ rc, tag, … }` layout holds.
+                            has_weak_header: false,
                         },
                     );
                 }

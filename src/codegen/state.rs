@@ -137,6 +137,21 @@ pub(crate) struct SharedTypeInfo<'ctx> {
     /// when the field's type isn't yet registered at struct-declaration time.
     /// `None` entries mean conventional layout for that field.
     pub(crate) niche_option_fields: Vec<Option<String>>,
+    /// True when this shared type is the target of any `weak T` field
+    /// somewhere in the program (whole-program decision). Such a type is
+    /// force-**headed** (opts out of the headerless niche) and its heap box
+    /// carries a TWO-word control header `{ i64 strong, i64 weak, fields… }`
+    /// instead of the conventional single `{ i64 strong, fields… }` — the
+    /// Rust `Rc`/`Weak` two-count block (`docs/spikes/weak-refs.md`,
+    /// B-2026-07-19-8). The strong count stays at field 0 (so `emit_rc_inc`/
+    /// `emit_rc_dec` are unchanged); the weak count sits at field 1, and user
+    /// field 0 shifts to heap index 2. `shared_gep_layout` returns base 2 for
+    /// such a type. The box free at `strong == 0` routes through
+    /// `karac_weak_box_strong_zero_release` (weak-aware) instead of `free`.
+    /// `false` for every type today — `weak` fields are declaration-only until
+    /// the codegen store/read slices, so this path is inert for all existing
+    /// code (the existing shared-struct + LSan suite proves the gate is off).
+    pub(crate) has_weak_header: bool,
 }
 
 /// Phase-B2 build-side elision role for one cluster-local binding

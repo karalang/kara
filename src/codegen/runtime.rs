@@ -236,7 +236,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
-        // Store refcount = 1 at field 0.
+        // Store strong refcount = 1 at field 0.
         let rc_ptr = self
             .builder
             .build_struct_gep(heap_type, ptr, 0, "rc_ptr")
@@ -244,7 +244,68 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_store(rc_ptr, self.context.i64_type().const_int(1, false))
             .unwrap();
+        // Weak-headered box `{ strong, weak, fields… }`: the strong set holds one
+        // implicit weak, so the fresh box starts weak = 1 (matching the runtime
+        // primitives' invariant; `docs/spikes/weak-refs.md`). Field 1 is the weak
+        // count. Non-weak boxes have no such field and skip this.
+        if self.heap_type_is_weak_headered(heap_type) {
+            let weak_ptr = self
+                .builder
+                .build_struct_gep(heap_type, ptr, 1, "weak_ptr")
+                .unwrap();
+            self.builder
+                .build_store(weak_ptr, self.context.i64_type().const_int(1, false))
+                .unwrap();
+        }
         ptr
+    }
+
+    /// Reverse lookup: does the box `heap_type` belong to a `weak`-targeted
+    /// shared type (two-word `{ strong, weak, fields… }` control header)?
+    /// Iterates `shared_types` (small map; same O(n) reverse scan `emit_rc_dec`
+    /// uses). `false` for every type today — inert until the store/read slices.
+    pub(super) fn heap_type_is_weak_headered(&self, heap_type: StructType<'ctx>) -> bool {
+        self.shared_types
+            .values()
+            .any(|i| i.heap_type == heap_type && i.has_weak_header)
+    }
+
+    /// Free a shared-struct box at `strong == 0`, choosing the weak-aware
+    /// release for a two-word `{ strong, weak, … }` box. A conventional box is
+    /// `free`d directly; a weak-headered box instead routes through
+    /// `karac_weak_box_strong_zero_release`, which drops the implicit weak the
+    /// strong set held and frees the box ONLY when no outstanding weak ref
+    /// remains — so a live `weak` ref keeps the 16-byte control header alive for
+    /// its `upgrade` nil-check (`docs/spikes/weak-refs.md`, B-2026-07-19-8). The
+    /// caller must already have run the recursive payload drop (the header
+    /// outlives the payload). Inert for all code today (no weak-headered type).
+    pub(super) fn emit_shared_box_free(
+        &self,
+        heap_type: StructType<'ctx>,
+        ptr: PointerValue<'ctx>,
+    ) {
+        if self.heap_type_is_weak_headered(heap_type) {
+            let release_fn = self
+                .module
+                .get_function("karac_weak_box_strong_zero_release")
+                .unwrap_or_else(|| {
+                    let void_ty = self.context.void_type();
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    let fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+                    self.module.add_function(
+                        "karac_weak_box_strong_zero_release",
+                        fn_ty,
+                        Some(inkwell::module::Linkage::External),
+                    )
+                });
+            self.builder
+                .build_call(release_fn, &[ptr.into()], "")
+                .unwrap();
+        } else {
+            self.builder
+                .build_call(self.free_fn, &[ptr.into()], "")
+                .unwrap();
+        }
     }
 
     /// Shared-ownership inc-on-copy (B-2026-06-22-2): when a heap-env closure
@@ -515,9 +576,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_call(value_drop_fn, &[ptr.into()], "")
                     .unwrap();
             }
-            self.builder
-                .build_call(self.free_fn, &[ptr.into()], "")
-                .unwrap();
+            // Weak-aware box free (inert for non-weak types): a weak-headered
+            // box keeps its control header alive for outstanding weak refs.
+            self.emit_shared_box_free(heap_type, ptr);
         }
         self.builder.build_unconditional_branch(done_bb).unwrap();
 

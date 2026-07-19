@@ -2638,10 +2638,21 @@ impl<'ctx> super::Codegen<'ctx> {
             return Some(drop_fn);
         }
 
+        // User field 0's heap base within the full `heap_type` (which this walk
+        // always GEPs against, rc word included): 1 for a conventional
+        // `{ strong, fields… }` box, 2 for a weak-headered `{ strong, weak,
+        // fields… }` box. Computed directly from the weak-header flag rather
+        // than via `shared_gep_layout` — that funnel returns a base-0 TWIN
+        // struct for the headerless niche, which this `heap_type`-based walk
+        // must NOT mix in. (Headerless types never reach this recursive drop
+        // synth; a weak-targeted type is force-headed, so base 2 against
+        // `heap_type` is exact.) `docs/spikes/weak-refs.md`.
+        let field_base: u32 = if info.has_weak_header { 2 } else { 1 };
         for (field_idx, kind) in kinds.iter().enumerate() {
-            // Heap layout: refcount at idx 0, then user fields. So
-            // user field `field_idx` lives at heap index `field_idx + 1`.
-            let heap_field_idx = (field_idx + 1) as u32;
+            // Heap layout: control header at idx 0 (strong) [+ 1 (weak) when
+            // weak-headered], then user fields. User field `field_idx` lives at
+            // heap index `field_idx + field_base`.
+            let heap_field_idx = field_idx as u32 + field_base;
             match kind {
                 SharedFieldKind::None | SharedFieldKind::_Phantom(_) => {}
                 SharedFieldKind::RecurseShared(inner_info) => {
@@ -3101,10 +3112,11 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // Finally, free the heap allocation itself.
-        self.builder
-            .build_call(self.free_fn, &[p_arg.into()], "")
-            .unwrap();
+        // Finally, free the heap allocation itself. Weak-aware: a weak-headered
+        // box routes through `karac_weak_box_strong_zero_release` so an
+        // outstanding weak ref keeps the control header alive (the payload walk
+        // above already dropped the owned fields). Conventional boxes `free`.
+        self.emit_shared_box_free(heap_type, p_arg);
         self.builder.build_return(None).unwrap();
 
         if let Some(bb) = saved_bb {
