@@ -14615,6 +14615,32 @@ fn main() {
     }
 
     #[test]
+    fn asan_closure_captures_heap_struct_returned_clean() {
+        // B-2026-07-18-46: a stack-env closure capturing a heap-bearing struct/
+        // enum and returning it now deep-clones at the tail, so the returned
+        // value owns independent buffers while the frame's owner drop frees the
+        // source. Verify no double-free / leak (a missing clone double-frees; an
+        // over-clone leaks) across a struct, a Vec-field struct, and an enum.
+        assert_clean_asan_run(
+            r#"
+struct W { s: String }
+struct Wv { v: Vec[i64] }
+enum E { A(String) }
+fn f(w: W) -> W { let g = || w; g() }
+fn fv(w: Wv) -> Wv { let g = || w; g() }
+fn fe(e: E) -> E { let g = || e; g() }
+fn main() {
+    println(f(W { s: "one".to_string() }).s);
+    println(fv(Wv { v: [1, 2, 3] }).v.len());
+    match fe(E.A("four".to_string())) { E.A(s) => println(s) }
+}
+"#,
+            &["one", "3", "four"],
+            "closure_captures_heap_struct_returned",
+        );
+    }
+
+    #[test]
     fn asan_struct_param_field_returned_no_double_free() {
         // The moved-out field is RETURNED to the caller: the deep-copy is the
         // returned value (caller owns it), the param's original field is freed

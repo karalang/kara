@@ -2571,6 +2571,41 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_closure_captures_heap_struct_returned_no_double_free() {
+        // B-2026-07-18-46: a (stack-env) closure capturing a whole heap-bearing
+        // STRUCT/ENUM and returning it printed garbage under AOT/JIT — the env's
+        // bit-copy shallow-aliased the source struct's field buffers (freed by
+        // the frame's owner drop), so the returned struct handed back dangling
+        // pointers. The Vec/String sibling was B-2026-07-18-42; a struct capture
+        // isn't in `vec_elem_types`, so it needs the type-aware
+        // `emit_clone_fn_for_type_expr` deep clone at the tail instead of the
+        // flat Vec/String defensive copy. Covers a single- and two-heap-field
+        // struct, a struct with a Vec field, and an enum payload. (An ESCAPING
+        // heap-env struct capture stays the documented
+        // E_ESCAPING_CLOSURE_HEAP_CAPTURE_NOT_YET deferral, B-2026-06-22-2.)
+        if let Some(out) = run_program(
+            "struct W { s: String }\n\
+             struct W2 { a: String, b: String }\n\
+             struct Wv { v: Vec[i64] }\n\
+             enum E { A(String) }\n\
+             fn f(w: W) -> W { let g = || w; g() }\n\
+             fn f2(w: W2) -> W2 { let g = || w; g() }\n\
+             fn fv(w: Wv) -> Wv { let g = || w; g() }\n\
+             fn fe(e: E) -> E { let g = || e; g() }\n\
+             fn main() {\n\
+                 println(f(W { s: \"one\".to_string() }).s);\n\
+                 let r = f2(W2 { a: \"two\".to_string(), b: \"three\".to_string() });\n\
+                 println(r.a);\n\
+                 println(r.b);\n\
+                 println(fv(Wv { v: [1, 2, 3] }).v.len());\n\
+                 match fe(E.A(\"four\".to_string())) { E.A(s) => println(s) }\n\
+             }",
+        ) {
+            assert_eq!(out, "one\ntwo\nthree\n3\nfour\n");
+        }
+    }
+
+    #[test]
     fn e2e_ref_atomic_param_aliases_caller_cell() {
         // B-2026-07-18-30: a `ref Atomic[T]` / `mut ref Atomic[T]` parameter's
         // alloca holds a POINTER to the caller's atomic storage, but

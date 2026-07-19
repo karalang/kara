@@ -3003,6 +3003,20 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load::<BasicTypeEnum<'ctx>>(env_struct_ty.into(), env_ptr, "__env")
             .unwrap();
 
+        // B-2026-07-18-46: captured whole heap-bearing STRUCT/ENUM vars (a
+        // struct with a String/Vec field, etc.) — the Vec/String sibling of the
+        // B-2026-07-18-42 borrow-alias marking. A struct capture is bit-copied
+        // into the env, shallow-aliasing the source struct's field buffers
+        // (which the frame's owner drop / the RC env-drop still frees), so a body
+        // that RETURNS the captured struct must hand back an INDEPENDENT deep
+        // clone. `for_loop_borrow_vars` (used for Vec/String) drives the flat
+        // `emit_vecstr_defensive_copy`, which no-ops on a struct value, so this
+        // needs the type-aware `emit_clone_fn_for_type_expr` instead — tracked
+        // here and applied at the tail return below. (Records the capture's
+        // concrete struct/enum type name.)
+        let mut heap_struct_captures: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
         if let Some(layout) = path_layout.as_ref() {
             // Per-path unpack: one env slot per captured CapturePath.
             // For whole-root entries the slot holds the root value as-is;
@@ -3065,6 +3079,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !is_heap_env && self.vec_elem_types.contains_key(root_name) {
                     self.for_loop_borrow_vars.insert(root_name.clone());
                 }
+                // B-2026-07-18-46: a whole heap-bearing STRUCT/ENUM capture (not
+                // a Vec/String — those took the borrow-alias path above) records
+                // its concrete type for the type-aware deep clone at the tail.
+                if let Some((n, tn)) = self.captured_heap_agg_type(root_name) {
+                    heap_struct_captures.insert(n, tn);
+                }
             }
         } else if !free_vars.is_empty() {
             for (i, var_name) in free_vars.iter().enumerate() {
@@ -3114,6 +3134,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // deep-copy. (mutref captures already `continue`d above.)
                 if self.vec_elem_types.contains_key(var_name) {
                     self.for_loop_borrow_vars.insert(var_name.clone());
+                }
+                // B-2026-07-18-46: a whole heap-bearing STRUCT/ENUM capture — the
+                // aggregate sibling of the Vec/String borrow-alias above.
+                if let Some((n, tn)) = self.captured_heap_agg_type(var_name) {
+                    heap_struct_captures.insert(n, tn);
                 }
             }
         }
@@ -3247,6 +3272,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // names one of this closure's `owned_vecstr_params`, so the
                 // common fresh-result tail (`|s| wrap(wrap(s))`) is untouched.
                 result = self.deepcopy_owned_param_branch_tail(t, result);
+                // B-2026-07-18-46: a captured heap-bearing STRUCT/ENUM returned
+                // whole (`|| w`) — the aggregate sibling of the Vec/String
+                // deep-copy above. The bit-copied capture shallow-aliases the
+                // source struct's field buffers (freed by the frame's owner drop
+                // / the RC env-drop), so hand back a type-aware deep clone. A
+                // no-op unless the tail names one of this closure's tracked
+                // heap-struct captures. Recurses through block tails like the
+                // Vec/String helper.
+                result = self.deepcopy_captured_heap_agg_tail(t, result, &heap_struct_captures);
             }
             // Drain the closure's own cleanup frame before returning, so its
             // f-string / heap-local cleanups are emitted in THIS fn
@@ -3436,6 +3470,100 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pending_closure_fn_type = Some(fn_type);
 
         Ok(fat.into())
+    }
+
+    /// B-2026-07-18-46: classify a closure capture as a whole heap-bearing
+    /// STRUCT/ENUM (a value struct/enum that owns a String/Vec below it), which
+    /// must be deep-cloned when returned from the body. Returns
+    /// `Some((name, type_name))` for such a capture; `None` for a Vec/String
+    /// capture (handled by the `for_loop_borrow_vars` flat-copy path,
+    /// B-2026-07-18-42), a shared (RC) aggregate (refcount machinery), a POD
+    /// aggregate (nothing to deep-copy), or an unknown/unnamed capture.
+    fn captured_heap_agg_type(&self, name: &str) -> Option<(String, String)> {
+        // Vec/String captures take the flat borrow-alias path.
+        if self.vec_elem_types.contains_key(name) {
+            return None;
+        }
+        let tn = self.var_type_names.get(name)?.clone();
+        // Shared (RC) aggregates are co-owned via refcount, not deep-cloned.
+        if self.shared_types.contains_key(&tn) {
+            return None;
+        }
+        if !(self.struct_types.contains_key(&tn) || self.enum_layouts.contains_key(&tn)) {
+            return None;
+        }
+        let te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![tn.clone()],
+                generic_args: None,
+                span: Span::default(),
+            }),
+            span: Span::default(),
+        };
+        // Only a heap-BEARING aggregate needs the clone; a POD struct/enum is a
+        // bit-copy either way.
+        if !self.type_expr_has_drop_heap(&te) {
+            return None;
+        }
+        Some((name.to_string(), tn))
+    }
+
+    /// B-2026-07-18-46: deep-clone a captured heap-bearing struct/enum returned
+    /// as a closure body's tail (`|| w` / `|| { …; w }`). The env's bit-copy
+    /// shallow-aliases the source struct's field buffers, which the frame's owner
+    /// drop (stack-env) or the RC env-drop (heap-env) still frees — so the
+    /// returned value must own INDEPENDENT buffers. Emits a type-aware
+    /// `karac_clone_<T>` (the `#[derive(Clone)]` analog the struct/enum drop
+    /// mirrors). Recurses through block/unsafe tails to the leaf identifier, like
+    /// `deepcopy_owned_param_branch_tail`. No-op unless the tail leaf is a
+    /// tracked heap-struct capture.
+    fn deepcopy_captured_heap_agg_tail(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+        captures: &HashMap<String, String>,
+    ) -> BasicValueEnum<'ctx> {
+        let tn = match &tail.kind {
+            ExprKind::Identifier(n) => match captures.get(n) {
+                Some(t) => t.clone(),
+                None => return val,
+            },
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+                return match b.final_expr.as_deref() {
+                    Some(inner) => self.deepcopy_captured_heap_agg_tail(inner, val, captures),
+                    None => val,
+                };
+            }
+            _ => return val,
+        };
+        let Some(fn_val) = self.current_fn else {
+            return val;
+        };
+        let te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![tn],
+                generic_args: None,
+                span: Span::default(),
+            }),
+            span: Span::default(),
+        };
+        let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+        // `emit_clone_fn_*` / `create_entry_alloca` may move the builder —
+        // re-anchor to the tail block before emitting the copy.
+        let cur = self.builder.get_insert_block();
+        let val_ty = val.get_type();
+        let src = self.create_entry_alloca(fn_val, "cap.agg.clone.src", val_ty);
+        let dst = self.create_entry_alloca(fn_val, "cap.agg.clone.dst", val_ty);
+        if let Some(bb) = cur {
+            self.builder.position_at_end(bb);
+        }
+        self.builder.build_store(src, val).unwrap();
+        self.builder
+            .build_call(clone_fn, &[src.into(), dst.into()], "cap.agg.clone")
+            .unwrap();
+        self.builder
+            .build_load(val_ty, dst, "cap.agg.cloned")
+            .unwrap()
     }
 
     /// Slice 2 (B-2026-06-22-2): synthesize the per-closure env-drop fn that
