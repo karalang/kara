@@ -1192,7 +1192,8 @@ impl<'a> Lowerer<'a> {
                 ..
             } => self
                 .rewrite_into_call(object, method, args, &expr.span)
-                .or_else(|| self.rewrite_try_into_call(object, method, args, &expr.span)),
+                .or_else(|| self.rewrite_try_into_call(object, method, args, &expr.span))
+                .or_else(|| self.rewrite_parse_call(object, method, args, &expr.span)),
             ExprKind::Call { callee, args } => self
                 .rewrite_path_call_to_method_call(callee, args, &expr.span)
                 .or_else(|| self.rewrite_bare_assoc_fn_call(callee, args, &expr.span))
@@ -1406,6 +1407,34 @@ impl<'a> Lowerer<'a> {
         }
         Some(call_path(
             vec![target.clone(), "from".to_string()],
+            vec![object.clone()],
+        ))
+    }
+
+    /// Rewrite a string-receiver `s.parse()` to the existing type-receiver
+    /// `T.parse(s)` when the typechecker recorded a target numeric type in
+    /// `parse_conversions` (from an expected `Option[T]`). Purely the
+    /// Rust-familiar sugar — the rewritten call reuses the `<int>.parse` /
+    /// `f64.parse` interpreter + codegen paths verbatim.
+    fn rewrite_parse_call(
+        &self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<ExprKind> {
+        if method != "parse" || !args.is_empty() {
+            return None;
+        }
+        let target = self.tc.parse_conversions.get(&SpanKey::from_span(span))?;
+        // Rewrite to the PATH-call form `T.parse(s)` — `Call(Path([T, parse]))`.
+        // A path callee has no *receiver* for the ownership checker's MethodCall
+        // consume path to fire on (a synthetic `Identifier("i64")` receiver would
+        // be spuriously consumed — the String receiver's recorded self-mode
+        // firing on the rewritten type receiver). Codegen already services this
+        // form; the interpreter's `<numeric>.parse` path rule is added alongside.
+        Some(call_path(
+            vec![target.clone(), "parse".to_string()],
             vec![object.clone()],
         ))
     }

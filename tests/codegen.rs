@@ -52634,6 +52634,38 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_string_receiver_parse_sugar() {
+        // String-receiver `s.parse()` (the Rust-familiar sugar) resolved against
+        // an expected `Option[T]`: the typechecker records the target from the
+        // annotation and lowering rewrites to the existing `T.parse(s)`, so both
+        // backends reuse the type-receiver parse verbatim. Covers a `let`
+        // annotation, a variable receiver, i64 / f64 / u32 targets, a bad input
+        // (None), a fn-return position, and an argument position.
+        let output = run_program(
+            "fn to_opt(s: String) -> Option[i64] { s.parse() }\n\
+             fn takes(o: Option[i64]) -> i64 { match o { Some(v) => v, None => -1 } }\n\
+             fn main() {\n\
+                 let a: Option[i64] = \"42\".parse();\n\
+                 match a { Some(n) => println(n), None => println(-1) }\n\
+                 let b: Option[i64] = \"nope\".parse();\n\
+                 match b { Some(n) => println(n), None => println(-1) }\n\
+                 let f: Option[f64] = \"3.5\".parse();\n\
+                 match f { Some(x) => println(x), None => println(-1.0) }\n\
+                 let u: Option[u32] = \"7\".parse();\n\
+                 match u { Some(x) => println(x), None => println(0) }\n\
+                 let s: String = \"99\";\n\
+                 let v: Option[i64] = s.parse();\n\
+                 match v { Some(n) => println(n), None => println(-1) }\n\
+                 match to_opt(\"123\") { Some(n) => println(n), None => println(-1) }\n\
+                 println(takes(\"55\".parse()));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        // 42; None->-1; 3.5; 7; 99; return-pos 123; arg-pos 55
+        assert_eq!(output, "42\n-1\n3.5\n7\n99\n123\n55\n");
+    }
+
+    #[test]
     fn test_e2e_parse_option_payload_method_dispatch() {
         // #11 (phase-12): an UNANNOTATED builtin-parse result must carry its
         // `Option[<int>]` element type so the match-bound `Some(v)` payload is

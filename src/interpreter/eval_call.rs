@@ -291,6 +291,52 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `<numeric>.parse(s) -> Option[T]` in PATH-call form — the lowering
+        // rewrite of the string-receiver `s.parse()` sugar (B-2026-07-19-5).
+        // Mirrors the method-call parse in method_call.rs (int types produce
+        // `Value::Int`, `f64` produces `Value::Float`); the method form
+        // (`i64.parse(s)`) stays there, this handles the rewritten path form.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && segments[1] == "parse" {
+                let ty = segments[0].as_str();
+                let is_int = matches!(
+                    ty,
+                    "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                );
+                let is_f64 = ty == "f64";
+                if is_int || is_f64 {
+                    let none = || Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    };
+                    if let Some(arg) = args.first() {
+                        if let Value::String(s) = self.eval_expr_inner(&arg.value) {
+                            if is_int {
+                                return match s.trim().parse::<i64>() {
+                                    Ok(n) => Value::EnumVariant {
+                                        enum_name: "Option".to_string(),
+                                        variant: "Some".to_string(),
+                                        data: EnumData::Tuple(vec![Value::Int(n)]),
+                                    },
+                                    Err(_) => none(),
+                                };
+                            }
+                            return match s.trim().parse::<f64>() {
+                                Ok(v) => Value::EnumVariant {
+                                    enum_name: "Option".to_string(),
+                                    variant: "Some".to_string(),
+                                    data: EnumData::Tuple(vec![Value::Float(v)]),
+                                },
+                                Err(_) => none(),
+                            };
+                        }
+                    }
+                    return none();
+                }
+            }
+        }
+
         // Built-in path-qualified functions (e.g. process.exit, Ordering.Relaxed, F64.from)
         if let ExprKind::Path { segments, .. } = &callee.kind {
             let path_str = segments.join(".");

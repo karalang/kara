@@ -14977,6 +14977,25 @@ fn main() {
 }
 
 #[test]
+fn test_string_receiver_parse_sugar() {
+    // String-receiver `s.parse()` resolved against an expected `Option[T]`
+    // annotation is sugar for the type-receiver `T.parse(s)` (lowering rewrite).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let a: Option[i64] = "42".parse();
+    match a { Some(n) => println(n), None => println(-1) }
+    let b: Option[i64] = "bad".parse();
+    match b { Some(n) => println(n), None => println(-1) }
+    let f: Option[f64] = "2.5".parse();
+    match f { Some(x) => println(x), None => println(-1.0) }
+}
+"#,
+    );
+    assert_eq!(output, "42\n-1\n2.5\n");
+}
+
+#[test]
 fn test_iter_any_returns_false_when_no_match() {
     let output = run_no_errors(
         r#"

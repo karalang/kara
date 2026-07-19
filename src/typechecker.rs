@@ -1125,6 +1125,11 @@ pub struct TypeCheckResult {
     /// the target type's name (the `T` inside the Result). Lowering rewrites
     /// these to `Target.try_from(x)` — same desugar architecture as `into`.
     pub try_into_conversions: HashMap<SpanKey, String>,
+    /// For each STRING-receiver `s.parse()` resolved against an expected
+    /// `Option[T]` (T a numeric primitive), the target type's name. Lowering
+    /// rewrites these to `T.parse(s)` — the existing type-receiver parse — so no
+    /// new interp/codegen surface is needed. Same desugar architecture as `into`.
+    pub parse_conversions: HashMap<SpanKey, String>,
     /// Enum names that derive `Display(snake_case)`. The interpreter uses
     /// this to convert variant names to `lower_snake_case` in `to_string()`.
     pub display_snake_case_enums: HashSet<String>,
@@ -1552,6 +1557,10 @@ pub struct TypeChecker<'a> {
     /// `x.try_into()` conversions (span of the MethodCall → target type name,
     /// where target is the `T` extracted from `Result[T, E]`).
     pub(super) try_into_conversions: HashMap<SpanKey, String>,
+    /// String-receiver `s.parse()` conversions (span of the MethodCall → target
+    /// numeric type name from the expected `Option[T]`). Lowering rewrites to
+    /// `T.parse(s)`.
+    pub(super) parse_conversions: HashMap<SpanKey, String>,
     /// Enum names that derive `Display(snake_case)`. Populated during
     /// `env_add_enum`; transferred to `TypeCheckResult`.
     pub(super) display_snake_case_enums: HashSet<String>,
@@ -1836,6 +1845,7 @@ impl<'a> TypeChecker<'a> {
             question_conversions: HashMap::new(),
             question_ok_payload_types: HashMap::new(),
             into_conversions: HashMap::new(),
+            parse_conversions: HashMap::new(),
             try_into_conversions: HashMap::new(),
             display_snake_case_enums: HashSet::new(),
             method_callee_types: HashMap::new(),
@@ -2029,6 +2039,7 @@ impl<'a> TypeChecker<'a> {
             trait_impls,
             drop_method_keys,
             into_conversions: self.into_conversions,
+            parse_conversions: self.parse_conversions,
             try_into_conversions: self.try_into_conversions,
             display_snake_case_enums: self.display_snake_case_enums,
             method_callee_types: self.method_callee_types,

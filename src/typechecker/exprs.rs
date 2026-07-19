@@ -501,6 +501,9 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(coerced) = self.try_apply_tryinto_coercion(expr, expected) {
             return coerced;
         }
+        if let Some(coerced) = self.try_apply_parse_coercion(expr, expected) {
+            return coerced;
+        }
         // Closure pushdown: when expected is `Type::Function { params, return }`
         // (or `Type::OnceFunction { ... }`, item 131 sub-step 3) and `expr` is
         // a closure literal, seed each closure param's type from the expected
@@ -2252,6 +2255,61 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// Recognize `x.try_into()` at an expected `Result[Target, _]` position.
+    /// String-receiver `s.parse()` against an expected `Option[T]` (T a numeric
+    /// primitive with a type-receiver `.parse`): record the target `T` in
+    /// `parse_conversions` and return `Option[T]`. Lowering rewrites the call to
+    /// the existing `T.parse(s)`, so no new interp/codegen surface is needed —
+    /// this is purely the Rust-familiar string-receiver sugar for the annotated
+    /// position (`let n: Option[i64] = s.parse()`, a `-> Option[i64]` return, an
+    /// `Option[i64]` argument). Returns `None` (caller falls through to the
+    /// normal "no method 'parse' on String" path) for any other shape — the
+    /// unannotated / `.unwrap()`-chained forms use `i64.parse(s)` directly.
+    fn try_apply_parse_coercion(&mut self, expr: &Expr, expected: &Type) -> Option<Type> {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        else {
+            return None;
+        };
+        if method != "parse" || !args.is_empty() {
+            return None;
+        }
+        // Expected must be `Option[T]` with T a numeric primitive the
+        // type-receiver `.parse` supports (i8..i64 / u8..u64 / usize / f64;
+        // isize and f32 are not wired on the type-receiver side, so exclude them
+        // here to keep the sugar and the underlying method in lockstep).
+        let Type::Named { name, args: targs } = expected else {
+            return None;
+        };
+        if name != "Option" || targs.len() != 1 {
+            return None;
+        }
+        let t_name = match &targs[0] {
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) => type_display(&targs[0]),
+            _ => return None,
+        };
+        if !matches!(
+            t_name.as_str(),
+            "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "f64"
+        ) {
+            return None;
+        }
+        // Receiver must be a `String` / `str`.
+        let recv_ty = self.infer_expr(object);
+        let is_string = matches!(&recv_ty, Type::Str)
+            || matches!(&recv_ty, Type::Named { name, args } if name == "String" && args.is_empty());
+        if !is_string {
+            return None;
+        }
+        self.parse_conversions
+            .insert(SpanKey::from_span(&expr.span), t_name);
+        self.record_expr_type(&expr.span, expected);
+        Some(expected.clone())
+    }
+
     /// Mirrors `try_apply_into_coercion` with one twist: the target type is
     /// `Result.args[0]`, not the bare expected type. On a hit (matching
     /// `impl TryFrom[S] for Target`), records the rewrite span in
