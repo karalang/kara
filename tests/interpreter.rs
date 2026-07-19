@@ -3216,6 +3216,47 @@ fn test_option_some_unwrap() {
 }
 
 #[test]
+fn test_user_enum_method_shadowing_builtin_name() {
+    // B-2026-07-18-49: a USER enum/struct defining a method whose name collides
+    // with an Option/Result builtin (`unwrap`/`expect`/`unwrap_err`) must
+    // dispatch to the user impl, not the builtin. The Option/Result arms fell
+    // through to `other => other.clone()` for a non-Option/Result receiver,
+    // silently returning the receiver's Display instead of the user body — a
+    // build-vs-interp divergence (codegen called the user method). Genuine
+    // Option/Result unwrap must still use the builtin.
+    assert_eq!(
+        run("enum E { A(String) }\n\
+             impl E { fn unwrap(self) -> String { match self { E.A(s) => s } } }\n\
+             fn main() { let e = E.A(\"hi\".to_string()); println(e.unwrap()); }"),
+        "hi\n"
+    );
+    // A user struct with a colliding `unwrap` name.
+    assert_eq!(
+        run("struct R { v: String }\n\
+             impl R { fn unwrap(self) -> String { self.v } }\n\
+             fn main() { let r = R { v: \"q\".to_string() }; println(r.unwrap()); }"),
+        "q\n"
+    );
+    // A user enum with a colliding `expect` name (extra arg).
+    assert_eq!(
+        run("enum E { A(i64) }\n\
+             impl E { fn expect(self, m: String) -> i64 { match self { E.A(n) => n } } }\n\
+             fn main() { let e = E.A(9); println(e.expect(\"x\".to_string())); }"),
+        "9\n"
+    );
+    // Genuine Option/Result builtins are unaffected.
+    assert_eq!(
+        run("fn main() {\n\
+                 let o: Option[i64] = Some(42);\n\
+                 println(o.unwrap());\n\
+                 let r: Result[i64, String] = Err(\"bad\".to_string());\n\
+                 println(r.unwrap_err());\n\
+             }"),
+        "42\nbad\n"
+    );
+}
+
+#[test]
 fn test_option_result_unwrap_or() {
     // B-2026-06-11-10: `unwrap_or(default)` — eager fallback. Present
     // (Some/Ok) yields the payload, absent (None/Err) the default. Interp

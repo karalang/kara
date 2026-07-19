@@ -19,6 +19,31 @@ impl<'a> super::Interpreter<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Option<Value> {
+        // B-2026-07-18-49: a USER struct/enum (not Option/Result) that defines
+        // its own method of this name must dispatch to that user impl — NOT be
+        // captured by the Option/Result builtin arms below, several of which
+        // (`unwrap`/`expect`/`unwrap_err`/`expect_err`) fall through to
+        // `other => other.clone()` and silently return the receiver (its
+        // Display) instead of invoking the user body. That made
+        // `impl E { fn unwrap(self) -> String { … } }` (and the struct twin)
+        // diverge: interp returned the receiver Display while codegen called the
+        // user method. Bailing here lets the caller fall through to the user-impl
+        // dispatch. Option/Result have no env-registered `Option.unwrap` /
+        // `Result.unwrap`, so they are unaffected; the aggregate-shape + name
+        // gate keeps the common path (genuine Option/Result, POD receivers) free
+        // of the lookup.
+        if matches!(
+            obj,
+            Value::EnumVariant { .. } | Value::Struct { .. } | Value::SharedStruct(_)
+        ) {
+            let tn = self.value_type_name(obj);
+            if tn != "Option"
+                && tn != "Result"
+                && self.env.get(&format!("{}.{}", tn, method)).is_some()
+            {
+                return None;
+            }
+        }
         match method {
             "unwrap" => {
                 return Some(match obj {
