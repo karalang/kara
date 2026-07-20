@@ -27,6 +27,8 @@ import ast.{
     Item,
     FnDefNode,
     FnParamNode,
+    ImplBlockNode,
+    SelfMode,
     PatInt,
     TypeExpr,
     PathType,
@@ -124,6 +126,12 @@ struct Emitter {
     sig_par_mut: Vec[bool],
     sig_par_off: Vec[i64],
     sig_par_cnt: Vec[i64],
+    // Parallel to `sig_names` (Slice 27): the receiver mode (-1 free fn /
+    // 0 owned self / 1 ref self / 2 mut ref self) and the receiver's value
+    // kind (-1 for free fns). Method sig names are "<Type>.<method>" —
+    // dots can't appear in call idents, so free-fn lookups never collide.
+    sig_self_mode: Vec[i64],
+    sig_self_kind: Vec[i64],
     // The CURRENT fn's return kind (drives the `return` arm's ret type).
     cur_ret: i64,
     // Struct table (Slice 12) — POD structs (i64/bool fields) as first-class
@@ -178,6 +186,8 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         sig_par_mut: Vec.new(),
         sig_par_off: Vec.new(),
         sig_par_cnt: Vec.new(),
+        sig_self_mode: Vec.new(),
+        sig_self_kind: Vec.new(),
         cur_ret: -1,
         st_names: Vec.new(),
         st_field_names: Vec.new(),
@@ -211,12 +221,54 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
                     Some(t) => e.kind_of_ty(t),
                     None => 0 - 1,
                 };
-                e.emit_fn(name, params, rk, body);
+                e.emit_fn(name, params, rk, body, 0 - 1, 0 - 1);
+            }
+            Impl(ib) => {
+                // Inherent impl methods (Slice 27): each method emits as the
+                // mangled free fn `u_<Type>_m_<name>` with the receiver as
+                // arg 0 (mode-dependent — value or slot pointer).
+                let ImplBlockNode {
+                    generics: ig,
+                    trait_ty,
+                    target_ty,
+                    methods,
+                    attributes: iattrs,
+                    span: isp,
+                } = ib;
+                let tk = e.kind_of_ty(target_ty);
+                if tk >= 10 and tk < 1000 {
+                    let tn = e.st_names[tk - 10];
+                    for m in methods {
+                        let FnDefNode {
+                            is_pub,
+                            name,
+                            generics,
+                            self_mode,
+                            params,
+                            ret,
+                            body,
+                            attributes,
+                            doc,
+                            span,
+                        } = m;
+                        let rk = match ret {
+                            Some(t) => e.kind_of_ty(t),
+                            None => 0 - 1,
+                        };
+                        let sm = match self_mode {
+                            OwnedSelf => 0,
+                            RefSelf => 1,
+                            MutRefSelf => 2,
+                            NoSelf => 0 - 1,
+                        };
+                        e.emit_fn(tn.clone() + "_m_" + name, params, rk, body, tk, sm);
+                    }
+                }
             }
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_off, en_cnt } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_off, en_cnt } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -314,6 +366,54 @@ impl Emitter {
                         pi2 = pi2 + 1;
                     }
                     self.sig_par_cnt.push(cnt);
+                    self.sig_self_mode.push(0 - 1);
+                    self.sig_self_kind.push(0 - 1);
+                }
+                Impl(ib) => {
+                    // Inherent impl methods (Slice 27): each method signs in
+                    // as "<Type>.<name>" with its receiver mode + kind. All
+                    // reads are INDEXED through the borrowed payload (the
+                    // B-2026-07-17-20 discipline).
+                    let tk = self.kind_of_ty(ib.target_ty);
+                    if tk >= 10 and tk < 1000 {
+                        let tn = self.st_names[tk - 10];
+                        let mcnt = ib.methods.len();
+                        let mut mi = 0;
+                        while mi < mcnt {
+                            self.sig_names.push(tn.clone() + "." + ib.methods[mi].name);
+                            let mrk = match ib.methods[mi].ret {
+                                Some(t) => self.kind_of_ty(t),
+                                None => 0 - 1,
+                            };
+                            self.sig_ret.push(mrk);
+                            let off2 = self.sig_par_kinds.len();
+                            self.sig_par_off.push(off2);
+                            let pcnt = ib.methods[mi].params.len();
+                            let mut pj = 0;
+                            while pj < pcnt {
+                                let rk3 = self.peel_ref(ib.methods[mi].params[pj].ty);
+                                let RefKind { kind: pk2, is_ref: pr2, is_mut: pm2 } = rk3;
+                                self.sig_par_kinds.push(pk2);
+                                self.sig_par_ref.push(pr2);
+                                self.sig_par_mut.push(pm2);
+                                pj = pj + 1;
+                            }
+                            self.sig_par_cnt.push(pcnt);
+                            let sm = match ib.methods[mi].self_mode {
+                                OwnedSelf => 0,
+                                RefSelf => 1,
+                                MutRefSelf => 2,
+                                NoSelf => 0 - 1,
+                            };
+                            self.sig_self_mode.push(sm);
+                            if sm >= 0 {
+                                self.sig_self_kind.push(tk);
+                            } else {
+                                self.sig_self_kind.push(0 - 1);
+                            }
+                            mi = mi + 1;
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -437,6 +537,20 @@ impl Emitter {
         kind_ty(kind)
     }
 
+    // The emitted-symbol form of a sig name (Slice 27): a method/associated
+    // sig "Type.name" mangles its dot to "_m_"; a free-fn name passes through.
+    fn sym_of(ref self, cname: ref String) -> String {
+        let n = cname.len();
+        let mut i = 0;
+        while i < n {
+            if cname.substring(i, i + 1) == "." {
+                return cname.substring(0, i) + "_m_" + cname.substring(i + 1, n);
+            }
+            i = i + 1;
+        }
+        cname.clone()
+    }
+
     // Index of struct `name` in the struct table, -1 if unknown.
     fn st_index(ref self, name: ref String) -> i64 {
         let mut i = 0;
@@ -495,7 +609,15 @@ impl Emitter {
     // (always `ret i32 0`); a user fn becomes `define i64 @u_<name>` (the
     // `u_` prefix keeps user names clear of libc/runtime symbols) whose tail
     // expression is its return value (default 0). Everything is i64.
-    fn emit_fn(mut ref self, name: String, params: Vec[FnParamNode], rk: i64, b: Block) {
+    fn emit_fn(
+        mut ref self,
+        name: String,
+        params: Vec[FnParamNode],
+        rk: i64,
+        b: Block,
+        self_kind: i64,
+        self_mode: i64,
+    ) {
         self.body = "".to_string();
         self.entry_allocas = "".to_string();
         self.locals = Vec.new();
@@ -507,6 +629,41 @@ impl Emitter {
         let mut sig = "".to_string();
         let mut pre = "".to_string();
         let mut pi = 0;
+        if self_mode >= 0 {
+            // The RECEIVER (Slice 27) is arg 0, registered as the slot named
+            // "self" — the same three modes as ordinary params: owned self
+            // moves in (callee frees a heap-bearing receiver at epilogue),
+            // `ref self` is a borrow bit-copy, `mut ref self` is a pointer
+            // to the caller's slot aliased to the canonical %v name.
+            let sty2 = self.ty_text(self_kind);
+            let sidx = self.locals.len();
+            self.locals.push("self".to_string());
+            self.locals_kind.push(self_kind);
+            let mut sowns = false;
+            if self_mode == 0 {
+                if self_kind >= 10 and self_kind < 1000 {
+                    sowns = self.st_has_heap(self_kind - 10);
+                }
+            }
+            self.locals_heap.push(sowns);
+            if self_mode == 2 {
+                sig = "ptr %a0".to_string();
+                pre = pre
+                    + "  %v"
+                    + sidx.to_string()
+                    + " = getelementptr i8, ptr %a0, i64 0\n";
+            } else {
+                sig = sty2.clone() + " %a0";
+                pre = pre + "  %v" + sidx.to_string() + " = alloca " + sty2.clone() + ", align 8\n";
+                pre = pre
+                    + "  store "
+                    + sty2
+                    + " %a0, ptr %v"
+                    + sidx.to_string()
+                    + ", align 8\n";
+            }
+            pi = 1;
+        }
         for p in params {
             let FnParamNode { name: pn, ty, span } = p;
             // Typed params (Slice 10): the declared type picks the slot kind;
@@ -844,6 +1001,11 @@ impl Emitter {
                             Ident(fie) => {
                                 let IdentExpr { name: fon, span: fosp } = fie;
                                 sidx = self.local_slot(fon);
+                            }
+                            SelfVal(sn3) => {
+                                // `self.x = v` in a method body (Slice 27).
+                                let sname2 = "self".to_string();
+                                sidx = self.local_slot(sname2);
                             }
                             _ => {}
                         }
@@ -1507,6 +1669,13 @@ impl Emitter {
                     let Val { op: dop, kind: dk, heap: dh } = dv;
                     if dk == 2 and dh {
                         self.emit_free_val(dop);
+                    } else if dh and dk >= 10 and dk < 1000 {
+                        // Discarded heap results of user methods (Slice 27).
+                        self.emit_free_struct_val(dop, dk - 10);
+                    } else if dh and dk >= 1000 and dk < 2000 {
+                        self.emit_free_enum_val(dop, dk - 1000);
+                    } else if dh and (dk == 3 or dk == 4 or dk >= 2000) {
+                        self.emit_free_vec_val(dop, dk);
                     }
                 }
             }
@@ -3073,6 +3242,28 @@ impl Emitter {
                     Val { op: "false".to_string(), kind: 1, heap: false }
                 }
             }
+            SelfVal(sn) => {
+                // `self` in a method body (Slice 27): a BORROW load of the
+                // receiver slot — exactly an Ident read of the slot named
+                // "self" (mut-ref receivers alias through the no-op GEP).
+                let sname = "self".to_string();
+                let idx = self.local_slot(sname);
+                if idx < 0 {
+                    return Val { op: "0".to_string(), kind: 0, heap: false };
+                }
+                let k = self.locals_kind[idx];
+                let ty = self.ty_text(k);
+                let r = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + r.clone()
+                    + " = load "
+                    + ty
+                    + ", ptr %v"
+                    + idx.to_string()
+                    + ", align 8\n";
+                Val { op: r, kind: k, heap: false }
+            }
             Ident(ie) => {
                 // A local variable read (Slice 3; typed slots Slice 7): load
                 // from the slot with the slot's own type and kind.
@@ -3282,6 +3473,14 @@ impl Emitter {
                                 if ei2 >= 0 {
                                     enum_ei = ei2;
                                     enum_tag = self.en_variant_tag(ei2, segments[1]);
+                                } else {
+                                    // `Type.assoc(...)` (Slice 27): a NoSelf
+                                    // impl fn — sig key "<Type>.<name>", the
+                                    // symbol mangles via sym_of below.
+                                    let sti2 = self.st_index(segments[0]);
+                                    if sti2 >= 0 {
+                                        cname = segments[0] + "." + segments[1];
+                                    }
                                 }
                             }
                         }
@@ -3412,6 +3611,10 @@ impl Emitter {
                 if cname == "" {
                     return Val { op: "0".to_string(), kind: 0, heap: false };
                 }
+                // The emitted symbol (Slice 27): a dotted sig name ("Type.fn",
+                // an associated fn) mangles to u_Type_m_fn; free fns pass
+                // through as u_<name>.
+                let csym = "u_".to_string() + self.sym_of(cname);
                 let mut rk = 0;
                 if si >= 0 {
                     rk = self.sig_ret[si];
@@ -3421,8 +3624,8 @@ impl Emitter {
                     self.body = self.body
                         + "  "
                         + r.clone()
-                        + " = call i1 @u_"
-                        + cname
+                        + " = call i1 @"
+                        + csym
                         + "("
                         + alist
                         + ")\n";
@@ -3432,8 +3635,8 @@ impl Emitter {
                     self.body = self.body
                         + "  "
                         + r.clone()
-                        + " = call { ptr, i64 } @u_"
-                        + cname
+                        + " = call { ptr, i64 } @"
+                        + csym
                         + "("
                         + alist
                         + ")\n";
@@ -3445,8 +3648,8 @@ impl Emitter {
                         + r.clone()
                         + " = call "
                         + self.ty_text(rk)
-                        + " @u_"
-                        + cname
+                        + " @"
+                        + csym
                         + "("
                         + alist
                         + ")\n";
@@ -3466,8 +3669,8 @@ impl Emitter {
                 self.body = self.body
                     + "  "
                     + r.clone()
-                    + " = call i64 @u_"
-                    + cname
+                    + " = call i64 @"
+                    + csym
                     + "("
                     + alist
                     + ")\n";
@@ -3781,6 +3984,144 @@ impl Emitter {
         method: String,
         margs: Vec[CallArg],
     ) -> Val {
+        // USER METHOD DISPATCH (Slice 27). A name-only pre-scan (does ANY
+        // "<Type>.<method>" sig exist?) decides the path WITHOUT consuming
+        // `object` — matching the receiver first would move it away from the
+        // builtin paths below (the B-2026-07-18-29 no-rebuild discipline).
+        // Corpus discipline: user methods don't reuse builtin names
+        // (len/push/substring/bytes/to_string/new).
+        let mut is_user = false;
+        let mlen = method.len();
+        let mut si2 = 0;
+        while si2 < self.sig_names.len() {
+            let sn4 = self.sig_names[si2];
+            if sn4.len() > mlen + 1 {
+                let dot = sn4.substring(sn4.len() - mlen - 1, sn4.len() - mlen);
+                let tail = sn4.substring(sn4.len() - mlen, sn4.len());
+                if dot == "." and tail == method {
+                    is_user = true;
+                }
+            }
+            si2 = si2 + 1;
+        }
+        if is_user {
+            // Receiver must be a SLOT (an Ident local/param or `self`) — the
+            // three self modes all address the receiver through its slot.
+            let mut ridx = 0 - 1;
+            match object {
+                Ident(rie) => {
+                    let IdentExpr { name: rn, span: rsp } = rie;
+                    ridx = self.local_slot(rn);
+                }
+                SelfVal(rsn) => {
+                    let sname3 = "self".to_string();
+                    ridx = self.local_slot(sname3);
+                }
+                _ => {}
+            }
+            if ridx < 0 {
+                return Val { op: "0".to_string(), kind: 0, heap: false };
+            }
+            let rck = self.locals_kind[ridx];
+            if rck < 10 or rck >= 1000 {
+                return Val { op: "0".to_string(), kind: 0, heap: false };
+            }
+            let tn = self.st_names[rck - 10];
+            let key = tn.clone() + "." + method.clone();
+            let si = self.sig_index(key);
+            if si < 0 {
+                return Val { op: "0".to_string(), kind: 0, heap: false };
+            }
+            let smode = self.sig_self_mode[si];
+            let mut alist = "".to_string();
+            if smode == 2 {
+                // `mut ref self`: pass the receiver's slot pointer.
+                alist = "ptr %v" + ridx.to_string();
+            } else {
+                let sty3 = self.ty_text(rck);
+                let rv2 = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + rv2.clone()
+                    + " = load "
+                    + sty3.clone()
+                    + ", ptr %v"
+                    + ridx.to_string()
+                    + ", align 8\n";
+                let mut rop2 = rv2;
+                if smode == 0 and self.st_has_heap(rck - 10) {
+                    // Owned self MOVES IN: the borrow deep-copies (the
+                    // binder keeps + frees its own buffers).
+                    let mv = self.emit_materialize_struct(rop2.clone(), rck - 10);
+                    let Val { op: mop, kind: mk, heap: mh } = mv;
+                    rop2 = mop;
+                }
+                alist = sty3 + " " + rop2;
+            }
+            let mut ai = 1;
+            for ma in margs {
+                let CallArg { label, mut_marker, value, span: masp } = ma;
+                let av = self.emit_value(value);
+                let Val { op: aop0, kind: ak, heap: ah } = av;
+                let mut aop = aop0;
+                let mut pk = 0;
+                let mut pref = false;
+                if ai - 1 < self.sig_par_cnt[si] {
+                    pk = self.sig_par_kinds[self.sig_par_off[si] + (ai - 1)];
+                    pref = self.sig_par_ref[self.sig_par_off[si] + (ai - 1)];
+                }
+                if pk == 2 and not pref and ak == 2 and not ah {
+                    let mv = self.emit_materialize(aop.clone());
+                    let Val { op: mop, kind: mk, heap: mh } = mv;
+                    aop = mop;
+                }
+                if pk >= 10 and pk < 1000 and not pref and ak == pk and not ah {
+                    if self.st_has_heap(pk - 10) {
+                        let mv = self.emit_materialize_struct(aop.clone(), pk - 10);
+                        let Val { op: mop, kind: mk, heap: mh } = mv;
+                        aop = mop;
+                    }
+                }
+                if (pk == 3 or pk == 4 or pk >= 2000) and not pref and ak == pk and not ah {
+                    let mv = self.emit_materialize_vec(aop.clone(), pk);
+                    let Val { op: mop, kind: mk, heap: mh } = mv;
+                    aop = mop;
+                }
+                alist = alist + ", " + self.ty_text(pk) + " " + aop;
+                ai = ai + 1;
+            }
+            let rk = self.sig_ret[si];
+            let sym = "@u_" + tn + "_m_" + method;
+            let r = self.fresh();
+            let mut rty2 = "i64".to_string();
+            if rk == 1 or rk == 2 or rk == 3 or rk == 4 or rk >= 10 {
+                rty2 = self.ty_text(rk);
+            }
+            self.body = self.body
+                + "  "
+                + r.clone()
+                + " = call "
+                + rty2
+                + " "
+                + sym
+                + "("
+                + alist
+                + ")\n";
+            let mut rh = false;
+            if rk == 2 or rk == 3 or rk == 4 or rk >= 2000 {
+                rh = true;
+            }
+            if rk >= 10 and rk < 1000 {
+                rh = self.st_has_heap(rk - 10);
+            }
+            if rk >= 1000 and rk < 2000 {
+                rh = self.en_has_heap(rk - 1000);
+            }
+            if rk < 0 {
+                return Val { op: "0".to_string(), kind: 0, heap: false };
+            }
+            return Val { op: r, kind: rk, heap: rh };
+        }
         {
             {
                 if method == "new" {

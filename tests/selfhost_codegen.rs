@@ -257,6 +257,15 @@ const CORPUS: &[&str] = &[
     // Digit classification via string ordering — the lexer idiom that
     // exposed the silent gap in the first place.
     "fn is_digit_s(f: String) -> bool { return f >= \"0\" and f <= \"9\"; }\nfn main() { let s = \"a7\"; println(is_digit_s(s.substring(0, 1)).to_string()); println(is_digit_s(s.substring(1, 2)).to_string()) }",
+    // Slice 27: INHERENT IMPL METHODS on structs — all three receiver
+    // modes (owned / ref / mut ref self as arg 0 through the existing
+    // param machinery), self.field reads/writes, user-method dispatch,
+    // and Type.assoc() calls (sig key "Type.name", symbol u_Type_m_name).
+    "struct Counter { n: i64, tag: String }\nimpl Counter {\n    fn new(tag: String) -> Counter {\n        return Counter { n: 0, tag: tag };\n    }\n    fn bump(mut ref self, by: i64) {\n        self.n = self.n + by;\n    }\n    fn label(ref self) -> String {\n        return self.tag + \"=\" + self.n.to_string();\n    }\n    fn consume(self) -> i64 {\n        return self.n * 10;\n    }\n}\nfn main() {\n    let mut c = Counter.new(\"hits\".to_string());\n    c.bump(3);\n    c.bump(4);\n    println(c.label());\n    println(c.consume().to_string());\n}",
+    // The compiler-shaped capstone shape: a Scanner with mutable scan
+    // state and substring extraction through self fields — the real
+    // lexer.kara architecture.
+    "struct Scanner { src: String, pos: i64 }\nimpl Scanner {\n    fn new(src: String) -> Scanner {\n        return Scanner { src: src, pos: 0 };\n    }\n    fn done(ref self) -> bool {\n        return self.pos >= self.src.len();\n    }\n    fn advance(mut ref self, by: i64) {\n        self.pos = self.pos + by;\n    }\n    fn take(mut ref self, n: i64) -> String {\n        let w = self.src.substring(self.pos, self.pos + n);\n        self.pos = self.pos + n;\n        return w;\n    }\n    fn rest(ref self) -> String {\n        return self.src.substring(self.pos, self.src.len());\n    }\n}\nfn main() {\n    let mut s = Scanner.new(\"let x = 7\".to_string());\n    println(s.take(3));\n    s.advance(1);\n    println(s.take(1));\n    s.advance(1);\n    println(s.rest());\n    println(s.done().to_string());\n    s.advance(3);\n    println(s.done().to_string());\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
