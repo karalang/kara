@@ -724,7 +724,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **593 surfaced 
 | B-2026-07-19-9 | typecheck+interp+codegen | low | `Vec[T].split_off(i) -> Vec[T]` was unimplemented | 293b6b5 |
 | B-2026-07-19-10 | typecheck+interp+codegen | low | `String.replacen(from, to, n) -> String` was unimplemented (only `replace` existed) | 9a21d56 |
 | B-2026-07-19-11 | codegen | low | `Iterator.rev()` codegen residual (B-2026-07-18-41) — a BARE range base `(a..b).rev()` / `(a..=b).rev()` was loud-deferred to `--interp` | 20bcdc5 |
-| B-2026-07-19-12 | typecheck+interp+codegen | low | `Iterator.flatten()` was unimplemented — `xs.iter().flatten()` rejected with `no method 'flatten' on type 'Iterator'` | 0425a45,1f1e879 |
+| B-2026-07-19-12 | typecheck+interp+codegen | low | `Iterator.flatten()` was unimplemented — `xs.iter().flatten()` rejected with `no method 'flatten' on type 'Iterator'` | 0425a45,1f1e879,ffd6384 |
 | B-2026-07-19-13 | codegen | medium | Indexed-shared-struct field READ (`nodes[i].field`) hardcoded heap offset `idx + 1` instead of routing through `shared_gep_layout`, so it mis-read an… | 8f606de |
 
 </details>
