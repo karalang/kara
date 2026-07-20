@@ -1714,6 +1714,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // correctly. Monos are never `sret`/coroutine ramps, so the param-index
         // math needs no shift.
         self.emit_param_alias_attrs(fn_val, func);
+        // A generic `#[target_feature]` / `#[multiversion]` variant carries its
+        // `target-features` onto every specialization — the non-generic
+        // declaration path does this via `emit_codegen_hint_attrs`, but the mono
+        // path is separate, so re-emit here or a generic hot kernel would compile
+        // each instance against the bare module baseline (phase-11 multiversion
+        // generics follow-on).
+        self.apply_target_feature_attr(fn_val, func);
         Ok(fn_val)
     }
 

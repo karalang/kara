@@ -584,6 +584,27 @@ impl super::Parser {
                 };
                 let method =
                     self.parse_function(attrs, is_pub, is_private, is_unsafe, is_comptime)?;
+                // `#[multiversion]` dispatch on an impl item is supported only on
+                // a `self`-receiver method (the thunk forwards via
+                // `self.variant(...)`); an associated function (no `self`) has no
+                // receiver to forward and is out of scope at v1.1. The non-empty
+                // feature-list shape was already checked in `parse_function`.
+                if method.self_param.is_none() {
+                    if let Some(mv) = method.attributes.iter().find(|a| a.is_bare("multiversion")) {
+                        if !crate::ast::multiversion_feature_list(&method.attributes)
+                            .unwrap_or_default()
+                            .is_empty()
+                        {
+                            self.errors.push(super::ParseError {
+                                message: "error[E_MULTIVERSION_ON_ASSOC]: `#[multiversion]` on an \
+                                          impl item is supported only on a method with a `self` \
+                                          receiver, not an associated function"
+                                    .to_string(),
+                                span: mv.span.clone(),
+                            });
+                        }
+                    }
+                }
                 items.push(ImplItem::Method(Box::new(method)));
             }
         }

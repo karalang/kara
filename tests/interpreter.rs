@@ -18980,6 +18980,46 @@ fn main() {
 }
 
 #[test]
+fn test_multiversion_method_and_generic_dispatch() {
+    // `#[multiversion]` follow-on: `self`-receiver methods (ref / mut ref /
+    // owned) and generic free functions. Every variant computes the same result,
+    // so correct output proves the thunk dispatched. Interpreter parity with
+    // tests/codegen.rs::test_e2e_multiversion_method_and_generic_dispatch.
+    let out = run_no_errors(
+        r#"
+struct Acc { base: i64 }
+impl Acc {
+    #[multiversion(baseline, "avx2", "avx512f")]
+    fn dot(ref self, x: i64) -> i64 { self.base + x }
+
+    #[multiversion(baseline, "avx2")]
+    fn scale(mut ref self, k: i64) -> i64 {
+        self.base = self.base * k;
+        self.base
+    }
+
+    #[multiversion(baseline, "avx2")]
+    fn consume(self, y: i64) -> i64 { self.base + y }
+}
+
+#[multiversion(baseline, "avx2", "avx512f")]
+fn gadd[T: Add](a: T, b: T) -> T { a + b }
+
+fn main() {
+    let a = Acc { base: 100 };
+    println(a.dot(5));
+    let mut b = Acc { base: 3 };
+    println(b.scale(4));
+    let c = Acc { base: 7 };
+    println(c.consume(1));
+    println(gadd(20, 22));
+}
+"#,
+    );
+    assert_eq!(out, "105\n12\n8\n42\n");
+}
+
+#[test]
 fn test_autograd_reverse_mode_tensor_valued() {
     // std.autograd (phase-11) tensor-valued surface — interpreter parity with
     // tests/codegen.rs::test_e2e_autograd_tensor_valued. Element-wise

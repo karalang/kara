@@ -11806,14 +11806,14 @@ fn multiversion_empty_errors() {
 }
 
 #[test]
-fn multiversion_on_generic_fn_errors() {
+fn multiversion_on_generic_fn_ok() {
+    // Generic free functions are supported at v1.1 — the variants keep their
+    // generic params and carry `#[target_feature]` through monomorphization.
     let (_, errors) =
         parse_with_errors("#[multiversion(baseline, \"avx2\")]\nfn f[T](a: T) -> T { a }");
     assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("E_MULTIVERSION_ON_GENERIC")),
-        "expected E_MULTIVERSION_ON_GENERIC; got: {errors:?}",
+        !errors.iter().any(|e| e.message.contains("E_MULTIVERSION")),
+        "generic #[multiversion] free fn should not error; got: {errors:?}",
     );
 }
 
@@ -11825,6 +11825,42 @@ fn multiversion_on_free_fn_ok() {
     assert!(
         !errors.iter().any(|e| e.message.contains("E_MULTIVERSION")),
         "valid #[multiversion] on a free fn should not error; got: {errors:?}",
+    );
+}
+
+#[test]
+fn multiversion_on_self_method_ok() {
+    // `self`-receiver methods (any genericity) are supported at v1.1 — the thunk
+    // forwards through `self.variant(...)`.
+    let (_, errors) = parse_with_errors(
+        "struct S { v: i64 }\n\
+         impl S {\n\
+         #[multiversion(baseline, \"avx2\")]\n\
+         fn f(ref self, a: i64) -> i64 { self.v + a }\n\
+         }",
+    );
+    assert!(
+        !errors.iter().any(|e| e.message.contains("E_MULTIVERSION")),
+        "#[multiversion] on a self-receiver method should not error; got: {errors:?}",
+    );
+}
+
+#[test]
+fn multiversion_on_assoc_fn_errors() {
+    // An associated function (no `self`) in an impl has no receiver to forward,
+    // so the dispatch desugar can't reach its variants — rejected at v1.1.
+    let (_, errors) = parse_with_errors(
+        "struct S { v: i64 }\n\
+         impl S {\n\
+         #[multiversion(baseline, \"avx2\")]\n\
+         fn make(a: i64) -> S { S { v: a } }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_MULTIVERSION_ON_ASSOC")),
+        "expected E_MULTIVERSION_ON_ASSOC; got: {errors:?}",
     );
 }
 

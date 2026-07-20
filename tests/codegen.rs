@@ -4546,6 +4546,86 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_multiversion_method_and_generic_dispatch() {
+        // Phase-11 `#[multiversion]` follow-on: dispatch on `self`-receiver
+        // methods (all three receiver modes) and on generic free functions.
+        // Every variant computes the same result, so correct output proves the
+        // thunk dispatched to a working variant on the running host. `run` ==
+        // `build`; interpreter parity in
+        // tests/interpreter.rs::test_multiversion_method_and_generic_dispatch.
+        if let Some(out) = run_program(
+            r#"
+struct Acc { base: i64 }
+impl Acc {
+    #[multiversion(baseline, "avx2", "avx512f")]
+    fn dot(ref self, x: i64) -> i64 { self.base + x }
+
+    #[multiversion(baseline, "avx2")]
+    fn scale(mut ref self, k: i64) -> i64 {
+        self.base = self.base * k;
+        self.base
+    }
+
+    #[multiversion(baseline, "avx2")]
+    fn consume(self, y: i64) -> i64 { self.base + y }
+}
+
+#[multiversion(baseline, "avx2", "avx512f")]
+fn gadd[T: Add](a: T, b: T) -> T { a + b }
+
+fn main() {
+    let a = Acc { base: 100 };
+    println(a.dot(5));
+    let mut b = Acc { base: 3 };
+    println(b.scale(4));
+    let c = Acc { base: 7 };
+    println(c.consume(1));
+    println(gadd(20, 22));
+}
+"#,
+        ) {
+            assert_eq!(out, "105\n12\n8\n42\n");
+        }
+    }
+
+    #[test]
+    fn test_ir_multiversion_method_and_generic_target_features() {
+        // The method desugar synthesizes `$baseline` + `$<feat>` sibling methods
+        // (mangled with the impl target) each tagged `target-features`; the
+        // generic desugar's variants carry `target-features` through
+        // monomorphization (declare_mono_function re-emits the attribute). Both
+        // dispatch via `karac_cpu_supports`.
+        let ir = ir_for_desugared(
+            "struct Acc { base: i64 }\n\
+             impl Acc {\n\
+             #[multiversion(baseline, \"avx2\")]\n\
+             fn dot(ref self, x: i64) -> i64 { self.base + x }\n\
+             }\n\
+             #[multiversion(baseline, \"avx512f\")]\n\
+             fn gadd[T: Add](a: T, b: T) -> T { a + b }\n\
+             fn main() {\n\
+             let a = Acc { base: 1 };\n\
+             let _ = a.dot(2);\n\
+             let _ = gadd(3, 4);\n\
+             }",
+        );
+        // Method variant target-feature + generic-mono target-feature both present.
+        assert!(
+            ir.contains("+avx2"),
+            "expected the method variant's target-features (+avx2); IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("+avx512f"),
+            "expected the generic-mono variant's target-features (+avx512f) — \
+             declare_mono_function must re-emit the attribute; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("karac_cpu_supports"),
+            "expected the dispatch thunks to call karac_cpu_supports; IR:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_e2e_ptr_const_mut_place_shapes_roundtrip() {
         // `ptr.const(place)` / `ptr.mut(place)` over the full place grammar the
         // typechecker's place-validator accepts — field access, a nested field

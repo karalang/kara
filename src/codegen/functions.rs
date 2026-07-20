@@ -1101,14 +1101,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.context.create_enum_attribute(kind, 0),
             );
         }
-        // `#[target_feature(enable = "avx2")]` — widen THIS function's
-        // CPU-feature set above the module baseline (design.md § Multiversioning,
-        // floor/ceiling composition). LLVM applies a per-function
-        // `target-features` string attribute additively over the target
-        // machine's baseline features, so emitting just the `+`-prefixed enables
-        // is the widen-above-floor semantics (it never narrows the floor for the
-        // rest of the program). Placement — the `unsafe fn` requirement + a
-        // non-empty list — is validated in the parser scan.
+        self.apply_target_feature_attr(fn_val, func);
+    }
+
+    /// Emit the per-function `target-features` LLVM attribute for a
+    /// `#[target_feature(enable = "avx2")]`-tagged function — widening THIS
+    /// function's CPU-feature set above the module baseline (design.md §
+    /// Multiversioning, floor/ceiling composition). LLVM applies the
+    /// `target-features` string attribute additively over the target machine's
+    /// baseline features, so emitting just the `+`-prefixed enables is the
+    /// widen-above-floor semantics (it never narrows the floor for the rest of
+    /// the program). Placement — the `unsafe fn` requirement + a non-empty list
+    /// — is validated in the parser scan (and, for the `#[multiversion]` desugar
+    /// that synthesizes these variants, guaranteed by construction).
+    ///
+    /// Called from BOTH the non-generic declaration path (`emit_codegen_hint_attrs`
+    /// ← `declare_function`) and the monomorphization path
+    /// (`declare_mono_function`), so a generic `#[target_feature]` / generic
+    /// `#[multiversion]` variant carries the attribute onto every specialization
+    /// — without this the mono path would silently drop it and a generic hot
+    /// kernel would compile every instance against the bare module baseline.
+    pub(super) fn apply_target_feature_attr(&self, fn_val: FunctionValue<'ctx>, func: &Function) {
         let tf = crate::ast::target_feature_enables(&func.attributes);
         if !tf.is_empty() {
             let feature_str = tf

@@ -27,7 +27,18 @@ pub fn desugar_program(program: &mut Program) {
     desugar_multiversion_in_program(program);
 }
 
-/// Desugar `#[multiversion(baseline, "avx2", "avx512f")]` free functions into
+/// Where a `#[multiversion]` function lives — decides how the dispatch thunk
+/// names its variants at the call site.
+#[derive(Clone, Copy)]
+enum MvHost {
+    /// A module-level free function; variants are called `name$feat(args)`.
+    Free,
+    /// An impl method with a `self` receiver; variants are called
+    /// `self.name$feat(args)` (a method call re-forwarding the receiver).
+    SelfMethod,
+}
+
+/// Desugar `#[multiversion(baseline, "avx2", "avx512f")]` functions into
 /// runtime-dispatched multiversioned variants (design.md § Multiversioning >
 /// `cpu-baseline` and `#[multiversion]`). For `fn f(a, b) -> R { body }`:
 ///
@@ -41,88 +52,159 @@ pub fn desugar_program(program: &mut Program) {
 /// Reuses the shipped `#[target_feature]` codegen (per-function `target-features`
 /// attribute) and the `cpu.supports` intrinsic — no core-pipeline change; the
 /// synthesized variants and thunk are ordinary functions every later phase sees.
-/// Scope (enforced in the parser scan; defensively re-checked here): a
-/// non-generic free function with simple binding parameters.
+/// Scope (v1.1): **free functions AND `self`-receiver impl methods**, each
+/// generic or not (a generic variant carries its `#[target_feature]` through
+/// monomorphization — `declare_mono_function` re-emits the attribute). Params
+/// must be simple bindings so the thunk can forward them by name. Associated
+/// impl functions (no `self`) are rejected in the parser (`E_MULTIVERSION_ON_ASSOC`)
+/// and so never reach this pass carrying the attribute.
 fn desugar_multiversion_in_program(program: &mut Program) {
-    let mut synthesized: Vec<Item> = Vec::new();
+    let mut synthesized_free: Vec<Item> = Vec::new();
     for item in program.items.iter_mut() {
-        let Item::Function(f) = item else { continue };
-        let Some(features) = multiversion_feature_list(&f.attributes) else {
-            continue;
-        };
-        if features.is_empty()
-            || f.self_param.is_some()
-            || f.generic_params.is_some()
-            || !f
-                .params
-                .iter()
-                .all(|p| matches!(p.pattern.kind, PatternKind::Binding(_)))
-        {
-            // Malformed / out-of-scope (parser already reported it) — leave the
-            // fn untouched rather than synthesize a broken thunk.
-            continue;
+        match item {
+            Item::Function(f) => {
+                for v in desugar_multiversion_fn(f, MvHost::Free) {
+                    synthesized_free.push(Item::Function(v));
+                }
+            }
+            Item::ImplBlock(imp) => {
+                let mut synthesized_methods: Vec<ImplItem> = Vec::new();
+                for it in imp.items.iter_mut() {
+                    if let ImplItem::Method(m) = it {
+                        // Only `self`-receiver methods are in scope; a no-`self`
+                        // associated fn carrying `#[multiversion]` was rejected
+                        // at parse, so there is nothing to act on for it here.
+                        if m.self_param.is_some() {
+                            for v in desugar_multiversion_fn(m, MvHost::SelfMethod) {
+                                synthesized_methods.push(ImplItem::Method(Box::new(v)));
+                            }
+                        }
+                    }
+                }
+                imp.items.extend(synthesized_methods);
+            }
+            _ => {}
         }
-        let base = f.name.clone();
-        let sp = f.span.clone();
-        // Forward each param to the variant by name.
-        let fwd: Vec<CallArg> = f
+    }
+    program.items.extend(synthesized_free);
+}
+
+/// Rewrite one `#[multiversion]` function `f` in place into its dispatch thunk
+/// and return the freshly synthesized `$baseline` + per-feature variant clones
+/// for the caller to splice next to it (as free items or impl methods per
+/// `host`). Returns an empty vec — leaving `f` untouched — for a fn that does
+/// not carry the attribute or is a malformed/out-of-scope shape the parser
+/// already reported (empty feature list, non-binding params).
+fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
+    let Some(features) = multiversion_feature_list(&f.attributes) else {
+        return Vec::new();
+    };
+    if features.is_empty()
+        || !f
             .params
             .iter()
-            .map(|p| {
-                let PatternKind::Binding(n) = &p.pattern.kind else {
-                    unreachable!("guarded above")
-                };
-                CallArg {
-                    label: None,
-                    mut_marker: false,
-                    value: mv_ident(n, sp.clone()),
-                    span: sp.clone(),
-                }
-            })
-            .collect();
-
-        // Baseline clone: plain (safe), no multiversion attr.
-        let mut baseline_fn = f.clone();
-        baseline_fn.name = format!("{base}$baseline");
-        baseline_fn
-            .attributes
-            .retain(|a| !a.is_bare("multiversion"));
-        synthesized.push(Item::Function(baseline_fn));
-
-        // Per-feature clone: unsafe + `#[target_feature(enable = "<feat>")]`.
-        for feat in &features {
-            let mut vf = f.clone();
-            vf.name = format!("{base}${feat}");
-            vf.is_unsafe = true;
-            vf.attributes.retain(|a| !a.is_bare("multiversion"));
-            vf.attributes.push(mv_target_feature_attr(feat, sp.clone()));
-            synthesized.push(Item::Function(vf));
-        }
-
-        // Rewrite `f` into the dispatch thunk. Build the nested if-else from the
-        // inside out: innermost `else` = the baseline call; each feature (in
-        // listed order) wraps the accumulator, so the LAST-listed feature ends
-        // up outermost = checked first (list narrowest→widest per the design).
-        f.attributes.retain(|a| !a.is_bare("multiversion"));
-        let mut acc = mv_call(&format!("{base}$baseline"), &fwd, sp.clone());
-        for feat in &features {
-            let feat_call = mv_call(&format!("{base}${feat}"), &fwd, sp.clone());
-            let unsafe_call = Expr {
-                kind: ExprKind::Unsafe(mv_block(feat_call, sp.clone())),
-                span: sp.clone(),
-            };
-            acc = Expr {
-                kind: ExprKind::If {
-                    condition: Box::new(mv_cpu_supports(feat, sp.clone())),
-                    then_block: mv_block(unsafe_call, sp.clone()),
-                    else_branch: Some(Box::new(acc)),
-                },
-                span: sp.clone(),
-            };
-        }
-        f.body = mv_block(acc, sp.clone());
+            .all(|p| matches!(p.pattern.kind, PatternKind::Binding(_)))
+    {
+        return Vec::new();
     }
-    program.items.extend(synthesized);
+    let base = f.name.clone();
+    let sp = f.span.clone();
+    // Forward each (non-self) param to the variant by name. `self` is carried
+    // implicitly by the `self.name$feat(...)` receiver on the method path.
+    let fwd: Vec<CallArg> = f
+        .params
+        .iter()
+        .map(|p| {
+            let PatternKind::Binding(n) = &p.pattern.kind else {
+                unreachable!("guarded above")
+            };
+            CallArg {
+                label: None,
+                mut_marker: false,
+                value: mv_ident(n, sp.clone()),
+                span: sp.clone(),
+            }
+        })
+        .collect();
+
+    let mut synthesized: Vec<Function> = Vec::new();
+
+    // Baseline clone: plain (safe), no multiversion attr.
+    let mut baseline_fn = f.clone();
+    baseline_fn.name = format!("{base}$baseline");
+    baseline_fn
+        .attributes
+        .retain(|a| !a.is_bare("multiversion"));
+    baseline_fn
+        .attributes
+        .push(mv_allow_undocumented_unsafe_attr(sp.clone()));
+    synthesized.push(baseline_fn);
+
+    // Per-feature clone: unsafe + `#[target_feature(enable = "<feat>")]`.
+    for feat in &features {
+        let mut vf = f.clone();
+        vf.name = format!("{base}${feat}");
+        vf.is_unsafe = true;
+        vf.attributes.retain(|a| !a.is_bare("multiversion"));
+        vf.attributes.push(mv_target_feature_attr(feat, sp.clone()));
+        vf.attributes
+            .push(mv_allow_undocumented_unsafe_attr(sp.clone()));
+        synthesized.push(vf);
+    }
+
+    // Rewrite `f` into the dispatch thunk. Build the nested if-else from the
+    // inside out: innermost `else` = the baseline call; each feature (in
+    // listed order) wraps the accumulator, so the LAST-listed feature ends
+    // up outermost = checked first (list narrowest→widest per the design).
+    f.attributes.retain(|a| !a.is_bare("multiversion"));
+    f.attributes
+        .push(mv_allow_undocumented_unsafe_attr(sp.clone()));
+    let variant_call = |name: &str| -> Expr {
+        match host {
+            MvHost::Free => mv_call(name, &fwd, sp.clone()),
+            MvHost::SelfMethod => mv_self_method_call(name, &fwd, sp.clone()),
+        }
+    };
+    let mut acc = variant_call(&format!("{base}$baseline"));
+    for (i, feat) in features.iter().enumerate() {
+        let feat_call = variant_call(&format!("{base}${feat}"));
+        let unsafe_call = Expr {
+            kind: ExprKind::Unsafe(mv_block(feat_call, sp.clone())),
+            span: sp.clone(),
+        };
+        // Each `cpu.supports(...)` probe gets a DISTINCT span. In a generic body
+        // the ownership checker tracks the namespace receiver `cpu` as an ordinary
+        // binding, so two probes sharing one span collapse to "value `cpu` moved
+        // here, used again here" (a same-place-reused false positive). Perturbing
+        // the offset per feature keeps each `cpu` use a distinct program point —
+        // exactly what hand-written `cpu.supports` calls on separate source lines
+        // already are. No-op for the non-generic case (there `cpu` resolves to the
+        // namespace and is never tracked).
+        acc = Expr {
+            kind: ExprKind::If {
+                condition: Box::new(mv_cpu_supports(feat, mv_distinct_span(&sp, i))),
+                then_block: mv_block(unsafe_call, sp.clone()),
+                else_branch: Some(Box::new(acc)),
+            },
+            span: sp.clone(),
+        };
+    }
+    f.body = mv_block(acc, sp.clone());
+    synthesized
+}
+
+/// A copy of `base` with its `offset`/`column` bumped by `i` so successive
+/// synthesized nodes occupy distinct program points (see the ownership-checker
+/// note at the `#[multiversion]` dispatch-thunk construction). The perturbation
+/// stays within the original function's source range and never surfaces in a
+/// diagnostic for correct code.
+fn mv_distinct_span(base: &Span, i: usize) -> Span {
+    Span {
+        line: base.line,
+        column: base.column + i,
+        offset: base.offset + i,
+        length: base.length,
+    }
 }
 
 fn mv_ident(name: &str, span: Span) -> Expr {
@@ -137,6 +219,26 @@ fn mv_call(name: &str, args: &[CallArg], span: Span) -> Expr {
         kind: ExprKind::Call {
             callee: Box::new(mv_ident(name, span.clone())),
             args: args.to_vec(),
+        },
+        span,
+    }
+}
+
+/// `self.<method>(args)` — the receiver-forwarding call the method-path dispatch
+/// thunk uses to reach a sibling `$baseline` / `$<feat>` variant method. `self`
+/// (the thunk's own receiver, in whatever mode the method declared) is passed
+/// implicitly as the call's object; only the non-self params are forwarded.
+fn mv_self_method_call(method: &str, args: &[CallArg], span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::MethodCall {
+            object: Box::new(Expr {
+                kind: ExprKind::SelfValue,
+                span: span.clone(),
+            }),
+            method: method.to_string(),
+            turbofish: None,
+            args: args.to_vec(),
+            args_close_span: span.clone(),
         },
         span,
     }
@@ -168,6 +270,30 @@ fn mv_cpu_supports(feat: &str, span: Span) -> Expr {
             args_close_span: span.clone(),
         },
         span,
+    }
+}
+
+/// `#[allow(undocumented_unsafe)]` — suppresses the `undocumented_unsafe` lint
+/// on the compiler-synthesized multiversion family. The per-feature variants are
+/// `unsafe fn`s (form-3 doc lint) and the dispatch thunk wraps each variant call
+/// in a synthesized `unsafe { }` block (form-1 block lint); neither is
+/// user-authored, so a "missing `# Safety`" warning on them is un-actionable
+/// noise. Placed on every clone + the thunk. (A user's own `unsafe { }` inside a
+/// `#[multiversion]` body is thereby also un-linted — an accepted trade for a hot
+/// kernel whose whole point is the unsafe SIMD path.)
+fn mv_allow_undocumented_unsafe_attr(span: Span) -> Attribute {
+    Attribute {
+        span: span.clone(),
+        path: vec!["allow".to_string()],
+        args: vec![AttrArg {
+            name: None,
+            value: Some(Expr {
+                kind: ExprKind::Identifier("undocumented_unsafe".to_string()),
+                span: span.clone(),
+            }),
+            span: span.clone(),
+        }],
+        string_value: None,
     }
 }
 
