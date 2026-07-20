@@ -29599,6 +29599,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_partition_heap_string_no_leak() {
+        // B-2026-07-19-15 follow-on — `partition` over HEAP elements. Each pushed
+        // element is CLONED into its target Vec, so the two result Vecs own
+        // independent buffers and the BORROWED source keeps its own. The memory
+        // contract: every cloned String frees exactly once (via the for-loop
+        // consumers), the source Vec frees its own buffers exactly once at scope
+        // exit — a bug is a per-iteration leak (clone not freed) or a double-free
+        // (target Vec aliasing the source element). Looped for LSan.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let words: Vec[String] = ["apple".to_string(), "banana".to_string(), "avocado".to_string(), "cherry".to_string()];
+        let (a, other): (Vec[String], Vec[String]) = words.iter().partition(|w| w.starts_with("a"));
+        for w in a { acc = acc + w.len(); }
+        for w in other { acc = acc + w.len(); }
+        // Source survives and is used, so its buffers must still be live here.
+        acc = acc + words.len();
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            // per iter: a=[apple(5),avocado(7)]=12, other=[banana(6),cherry(6)]=12,
+            // + words.len()=4 → 28; ×40 = 1120
+            &["1120"],
+            "partition_heap_string_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_vec_dedup_drops_removed_heap_duplicates_no_leak() {
         // `Vec[T].dedup()` — the AOT lowering must FREE each removed consecutive
         // duplicate (distinct owned `String` buffers even when content-equal),

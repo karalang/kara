@@ -10920,10 +10920,10 @@ fn main() {
         // B-2026-07-19-14: `partition(pred: Fn(T) -> bool) -> (Vec[T], Vec[T])`
         // — the eager two-collection terminal. Desugars to two `Vec[T]` push
         // accumulators over the fused for-loop, returning a `(__pt, __pf)` tuple
-        // (the verified block-returns-tuple-of-owned-Vecs path). Trivially-
-        // copyable element only (a heap `T` defers loud to `--interp`). Covers a
-        // scalar split, composition with a leading `map`, a float split, and an
-        // empty (all-to-one-side) partition. Must match the interpreter.
+        // (the verified block-returns-tuple-of-owned-Vecs path). Covers a scalar
+        // split, composition with a leading `map`, a float split, and an empty
+        // (all-to-one-side) partition. Must match the interpreter. (Heap elements:
+        // `test_e2e_partition_heap_elements`.)
         if let Some(out) = run_program(
             "fn main() {\n\
                  let v = [1, 2, 3, 4, 5, 6];\n\
@@ -10948,6 +10948,35 @@ fn main() {
              }",
         ) {
             assert_eq!(out, "3:3\n12:9\n30:12\n2:1\n0:6\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_partition_heap_elements() {
+        // B-2026-07-19-15 follow-on — `partition` over HEAP elements (String).
+        // Each element pushed into a partition Vec is CLONED (`param.clone()`) so
+        // the owning target Vec doesn't alias the borrowed source element (a
+        // shallow push would double-free); the source Vec survives intact. Must
+        // match the interpreter; leak-freedom is gated in
+        // `tests/memory_sanitizer.rs::asan_partition_heap_string_no_leak`.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let words: Vec[String] = [\"apple\", \"banana\", \"avocado\", \"cherry\", \"apricot\"];\n\
+                 let (a, other): (Vec[String], Vec[String]) = words.iter().partition(|w| w.starts_with(\"a\"));\n\
+                 println(a.len());\n\
+                 println(a.get(0));\n\
+                 println(a.get(2));\n\
+                 println(other.len());\n\
+                 println(other.get(0));\n\
+                 // source survives\n\
+                 println(words.len());\n\
+                 println(words.get(0));\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "3\nSome(apple)\nSome(apricot)\n2\nSome(banana)\n5\nSome(apple)\n"
+            );
         }
     }
 

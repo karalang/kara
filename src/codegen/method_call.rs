@@ -5889,10 +5889,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             return Err(
-                "`Iterator.partition()` is lowered under `karac build` only for a SCALAR \
-                 element over a fused map/filter chain; a heap element (String / Vec / \
-                 struct) or an unsupported chain shape is deferred — run it under the \
-                 interpreter (`karac run --interp`, or `KARAC_RUN_JIT=0`)."
+                "`Iterator.partition()` is lowered under `karac build` for a scalar or heap \
+                 element over a fused map/filter chain; this chain shape is not yet \
+                 lowered — run it under the interpreter (`karac run --interp`, or \
+                 `KARAC_RUN_JIT=0`)."
                     .to_string(),
             );
         }
@@ -11398,9 +11398,14 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return Ok(None);
         };
-        if !super::vec_method::is_trivially_copyable_te(&elem_te) {
-            return Ok(None);
-        }
+        // A heap element `T` (String / Vec) is supported by CLONING the pushed
+        // element (`param.clone()`) so the owning target Vec doesn't alias the
+        // borrowed source element (a shallow push would double-free at scope
+        // exit). A trivially-copyable `T` pushes the bare `param` (the proven
+        // scalar path — no clone needed). Unlike find_map's owned-payload case,
+        // partition's element comes borrowed from the source, so the clone is
+        // what makes it sound.
+        let elem_is_heap = !super::vec_method::is_trivially_copyable_te(&elem_te);
         let (base, steps) = match Self::peel_fused_map_filter_chain(recv) {
             Some(x) => x,
             None if Self::for_loop_iterates_flat_map(recv) => (recv, Vec::new()),
@@ -11440,9 +11445,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 span: sp.clone(),
             }
         };
+        // The value pushed into whichever partition Vec: `param` for a scalar
+        // element (copy), `param.clone()` for a heap element (deep copy so the
+        // target Vec owns an independent buffer; the borrowed source keeps its own
+        // — no double-free).
+        let pushed = |param: &str| -> Expr {
+            if elem_is_heap {
+                Expr {
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(ident(param)),
+                        method: "clone".to_string(),
+                        turbofish: None,
+                        args: vec![],
+                        args_close_span: sp.clone(),
+                    },
+                    span: sp.clone(),
+                }
+            } else {
+                ident(param)
+            }
+        };
         // Sink: bind `param` to the fully-adapted element (so both the pred and
-        // the pushed value reference it), then `if pred { __pt.push(param) } else
-        // { __pf.push(param) }`.
+        // the pushed value reference it), then `if pred { __pt.push(param[.clone()])
+        // } else { __pf.push(param[.clone()]) }`.
         let sink = |current: Expr| -> Vec<Stmt> {
             let current_is_param = matches!(&current.kind, ExprKind::Identifier(n) if n == param);
             let mut out = Vec::new();
@@ -11465,13 +11490,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     kind: ExprKind::If {
                         condition: Box::new(pred.clone()),
                         then_block: Block {
-                            stmts: vec![push_to(&pt, ident(param))],
+                            stmts: vec![push_to(&pt, pushed(param))],
                             final_expr: None,
                             span: sp.clone(),
                         },
                         else_branch: Some(Box::new(Expr {
                             kind: ExprKind::Block(Block {
-                                stmts: vec![push_to(&pf, ident(param))],
+                                stmts: vec![push_to(&pf, pushed(param))],
                                 final_expr: None,
                                 span: sp.clone(),
                             }),
