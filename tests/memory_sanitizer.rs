@@ -29457,6 +29457,45 @@ fn main() {
     }
 
     #[test]
+    fn asan_filter_map_heap_collect_no_leak() {
+        // B-2026-07-19-14: `<filter_map-chain>.collect()` routes through the
+        // fused for-loop lowering that pushes into a fresh `Vec[String]`
+        // accumulator. Each iteration builds new heap `String` payloads (the
+        // uppercased words that pass the filter) AND discards the filtered-out
+        // elements' would-be payloads (the `None` arm produces nothing) — so a
+        // missing drop on either the collected buffer at scope exit, or the
+        // dropped source elements, or the per-iteration accumulator would
+        // accumulate into a visible LSan leak. Loop many times so any
+        // per-iteration strand is unmistakable. Also exercises the FOR-LOOP
+        // path (no collect) over the same chain in the second half.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let v: Vec[String] = ["hi".to_string(), "".to_string(), "yo".to_string(), "there".to_string()];
+        let w: Vec[String] = v.iter().filter_map(|s| if s.len() > 0 { Some(s.to_uppercase()) } else { None }).collect();
+        let mut j: i64 = 0;
+        while j < w.len() {
+            acc = acc + w[j].len();
+            j = j + 1;
+        }
+        let u: Vec[String] = ["a".to_string(), "".to_string(), "bb".to_string()];
+        for t in u.iter().filter_map(|s| if s.len() > 0 { Some(s.to_uppercase()) } else { None }) {
+            acc = acc + t.len();
+        }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["480"],
+            "filter_map_heap_collect_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_vec_dedup_drops_removed_heap_duplicates_no_leak() {
         // `Vec[T].dedup()` — the AOT lowering must FREE each removed consecutive
         // duplicate (distinct owned `String` buffers even when content-equal),

@@ -10564,6 +10564,49 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_filter_map_scalar_and_heap() {
+        // B-2026-07-19-14: `filter_map(f: Fn(T) -> Option[U])` is a fused
+        // map+filter step. The FOR-LOOP path lowers it through the shared fused
+        // chain (`match f(x) { Some(v) => <sink>, None => {} }`); the COLLECT
+        // path routes `<filter_map-chain>.collect()` through the working
+        // for-loop lowering via a `Vec.push` accumulator (the general collect
+        // engine's separate peel has no `filter_map`). Covers: scalar collect,
+        // scalar for-loop accumulation, a HEAP `U` (`String`) collected over an
+        // enum receiver (payload sizing driven by the synthetic `Some` binding's
+        // registered surface type), a HEAP for-loop, and composition with a
+        // trailing `map` and a leading `filter`. Must match the interpreter.
+        if let Some(out) = run_program(
+            "enum Tok { Word(String), Num(i64) }\n\
+             fn main() {\n\
+                 let a = [1, 2, 3, 4];\n\
+                 let sc: Vec[i64] = a.iter().filter_map(|x| if x > 2 { Some(x * 2) } else { None }).collect();\n\
+                 println(sc.len());\n\
+                 let mut s = 0;\n\
+                 for n in a.iter().filter_map(|x| if x > 2 { Some(x * 2) } else { None }) { s = s + n; }\n\
+                 println(s);\n\
+                 let t = [Tok.Word(\"hi\".to_string()), Tok.Num(3), Tok.Word(\"yo\".to_string())];\n\
+                 let w: Vec[String] = t.iter().filter_map(|k| match k { Tok.Word(z) => Some(z.to_uppercase()), Tok.Num(_) => None }).collect();\n\
+                 println(w.join(\",\"));\n\
+                 let hv = [\"hello\".to_string(), \"\".to_string(), \"world\".to_string()];\n\
+                 let mut out = \"\".to_string();\n\
+                 for hs in hv.iter().filter_map(|m| if m.len() > 0 { Some(m.to_uppercase()) } else { None }) { out.push_str(f\"{hs}|\"); }\n\
+                 println(out);\n\
+                 let c: Vec[i64] = a.iter().filter_map(|x| if x > 2 { Some(x * 2) } else { None }).map(|y| y + 4).collect();\n\
+                 let mut cs = 0;\n\
+                 for cn in c { cs = cs + cn; }\n\
+                 println(cs);\n\
+                 let b = [1, 2, 3, 4, 5, 6];\n\
+                 let d: Vec[i64] = b.iter().filter(|x| x % 2 == 0).filter_map(|x| if x > 2 { Some(x * 2) } else { None }).collect();\n\
+                 let mut ds = 0;\n\
+                 for dn in d { ds = ds + dn; }\n\
+                 println(ds);\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n14\nHI,YO\nHELLO|WORLD|\n22\n20\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_mut_ref_scalar_value_reads() {
         // B-2026-07-15-3: a `mut ref` scalar param reads as its value type in
         // an annotated let, an index expression, an argument, and a cast —

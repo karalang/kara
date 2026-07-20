@@ -204,8 +204,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // below lowers it without a per-element counter.
             let fusable_outer = args.len() == 1
                 && match method.as_str() {
-                    "map" | "filter" | "take_while" | "skip_while" | "inspect" | "take"
-                    | "skip" => true,
+                    "map" | "filter" | "filter_map" | "take_while" | "skip_while" | "inspect"
+                    | "take" | "skip" => true,
                     "step_by" => !matches!(&object.kind, ExprKind::Range { .. }),
                     _ => false,
                 };
@@ -747,13 +747,6 @@ impl<'ctx> super::Codegen<'ctx> {
                     const UNLOWERED_FOR_ADAPTORS: &[&str] = &[
                         "map",
                         "filter",
-                        // `filter_map` is typecheck+interp only for now — its
-                        // fused-chain codegen (a per-element Option match, with
-                        // the same heap-payload-binding-type plumbing `reduce`
-                        // defers) is a follow-up. Without this entry a for-loop
-                        // over it would fall to the silent "skip body" arm below
-                        // and run zero times (B-2026-07-19-14).
-                        "filter_map",
                         "enumerate",
                         "zip",
                         "skip",

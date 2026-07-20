@@ -52,6 +52,7 @@ fn atomic_alignment_for(ty: BasicTypeEnum<'_>) -> u32 {
 pub(super) enum FusedStepKind {
     Map,
     Filter,
+    FilterMap,
     TakeWhile,
     SkipWhile,
     Take,
@@ -5642,6 +5643,17 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<filter_map-chain>.collect()` — the general collect engine above has no
+        // `filter_map` in its separate `IterAdaptor` peel, so route it through the
+        // (working) fused-chain FOR-LOOP lowering via a `Vec.push` accumulator
+        // (B-2026-07-19-14). Gated to a chain that carries a `FilterMap` step, so
+        // it never shadows the engine's map/filter path.
+        if method == "collect" && args.is_empty() {
+            if let Some(v) = self.try_compile_filter_map_collect(object, call_span)? {
+                return Ok(v);
+            }
+        }
+
         // `<iter-chain>.fold(init, |acc, x| body)` — the sequential `fold`
         // terminal on a fused iterator chain (B-2026-07-11-17). Gated on an
         // iterator-chain receiver (a MethodCall — `Column`/`Tensor.fold` on a
@@ -8415,6 +8427,143 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(self.compile_expr(&block)?))
     }
 
+    /// Lower `<chain-with-filter_map>.collect()` by rewriting it to a for-loop
+    /// collect — `{ let mut __fmc: Vec[U] = Vec.new(); for <v> in <recv> {
+    /// __fmc.push(<v>); } __fmc }` — reusing the (working) fused-chain FOR-LOOP
+    /// lowering of `filter_map` (B-2026-07-19-14). The older collect engine
+    /// (`try_compile_iter_adaptor_collect_to_vec`) has no `filter_map` in its
+    /// separate `IterAdaptor` peel, so a `filter_map` chain bails there and
+    /// would otherwise hit the loud dispatch-fail; this rewrite catches exactly
+    /// those (gated to a chain the shared peel recognizes AND that carries a
+    /// `FilterMap` step, so it never shadows the old engine's map/filter path).
+    /// Mirrors the `zip→map` collect rewrite above. `Ok(None)` when the result
+    /// type isn't a recorded `Vec[U]` or the chain has no `filter_map`.
+    fn try_compile_filter_map_collect(
+        &mut self,
+        collect_recv: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Only for a chain the fused peel understands that actually contains a
+        // `filter_map` step — anything else is left to the existing engines.
+        let has_filter_map = match Self::peel_fused_map_filter_chain(collect_recv) {
+            Some((_, steps)) => steps
+                .iter()
+                .any(|(k, _, _)| matches!(k, FusedStepKind::FilterMap)),
+            None => false,
+        };
+        if !has_filter_map {
+            return Ok(None);
+        }
+        // Result element type U from the recorded `Vec[U]` at the collect span.
+        let vec_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        let u_elem = match &vec_te.kind {
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec") => {
+                match p.generic_args.as_ref().and_then(|ga| ga.first()) {
+                    Some(GenericArg::Type(t)) => t.clone(),
+                    _ => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let acc = format!("__fmc_{}", uid);
+        let elem = format!("__fmce_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let vec_u = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![GenericArg::Type(u_elem)]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        // `let mut __fmc: Vec[U] = Vec.new();`
+        let let_acc = Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(acc.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(vec_u),
+                value: Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(Expr {
+                            kind: ExprKind::Path {
+                                segments: vec!["Vec".to_string(), "new".to_string()],
+                                generic_args: None,
+                            },
+                            span: sp.clone(),
+                        }),
+                        args: vec![],
+                    },
+                    span: sp.clone(),
+                },
+            },
+            span: sp.clone(),
+        };
+        // `for <elem> in <recv> { __fmc.push(<elem>); }`
+        let push_stmt = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(ident(&acc)),
+                    method: "push".to_string(),
+                    turbofish: None,
+                    args: vec![CallArg {
+                        label: None,
+                        mut_marker: false,
+                        value: ident(&elem),
+                        span: sp.clone(),
+                    }],
+                    args_close_span: sp.clone(),
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(elem.clone()),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(collect_recv.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: vec![push_stmt],
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_acc, for_loop],
+                final_expr: Some(Box::new(ident(&acc))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
     /// Lower `A.chain(B).collect()` where EITHER side carries its own adaptors
     /// (`A.iter().map(f).chain(B).collect()`, `A.chain(B.iter().filter(g))`, …)
     /// by recursively collecting each side through the full pipeline and merging
@@ -8954,6 +9103,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let kind = match method.as_str() {
                 "map" => FusedStepKind::Map,
                 "filter" => FusedStepKind::Filter,
+                "filter_map" => FusedStepKind::FilterMap,
                 "take_while" => FusedStepKind::TakeWhile,
                 "skip_while" => FusedStepKind::SkipWhile,
                 "take" => FusedStepKind::Take,
@@ -9161,6 +9311,26 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Deterministic, collision-safe synthetic span for a `filter_map` step's
+    /// `Some(<payload>)` match-arm binding, derived from the closure body's
+    /// span. Placed in a high reserved offset region (well away from any real
+    /// source offset AND from `reduce`'s `usize::MAX - uid` region) so
+    /// `pattern_binding_types` keys don't collide; unique per `filter_map` step
+    /// because every step's closure body has a distinct source offset. Both the
+    /// `build_fused_chain_body` `FilterMap` arm (which stamps the binding with
+    /// this span) and the typechecker's `filter_map` arm (`stdlib_iter.rs`,
+    /// which registers the payload's surface type at it via
+    /// `record_pattern_binding_surface_types`) MUST derive the span the same
+    /// way — the formula is duplicated there and kept in lockstep by comment.
+    fn filter_map_bind_span(body_span: &crate::token::Span) -> crate::token::Span {
+        crate::token::Span {
+            line: body_span.line,
+            column: body_span.column,
+            offset: usize::MAX / 2 - body_span.offset,
+            length: 1,
+        }
+    }
+
     /// Thread the "current element" expression through a peeled fused chain
     /// (source order), emitting `if <pred> { … }` for a filter, a
     /// `let <param> = <current>`-bound body for a map, an
@@ -9260,6 +9430,70 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Map: the transformed value becomes the next stage's element.
                 let map_value = bind_or_use(body);
                 Self::build_fused_chain_body(steps, i + 1, map_value, sink, sw_prefix, sp)
+            }
+            FusedStepKind::FilterMap => {
+                // `filter_map(f: Fn(T) -> Option[U])` — apply `f` to the current
+                // element and `match` its `Option[U]`: a `Some(v)` feeds `v` to
+                // the rest of the chain, a `None` drops the element (map+filter
+                // fusion). Lowered as a synthesized `match`, reusing the proven
+                // Option-match codegen. The `Some(<fresh>)` payload binding gets
+                // a DETERMINISTIC unique span (`filter_map_bind_span`, derived
+                // from the closure body's span) whose surface payload type the
+                // typechecker's `filter_map` arm (`stdlib_iter.rs`) pre-registers
+                // in `pattern_binding_types` at the SAME span — so
+                // `reconstruct_payload_value` materializes a heap `U`
+                // (`String`/`Vec`) or a narrow / float scalar correctly instead
+                // of the raw-i64 default (the same span-registration trick
+                // `reduce` uses, B-2026-07-17-11).
+                let opt_expr = bind_or_use(body);
+                let fresh = format!("{sw_prefix}fm{i}");
+                let bind_span = Self::filter_map_bind_span(&body.span);
+                let then_stmts =
+                    Self::build_fused_chain_body(steps, i + 1, ident(&fresh), sink, sw_prefix, sp);
+                let block_of = |stmts: Vec<Stmt>| Expr {
+                    kind: ExprKind::Block(Block {
+                        stmts,
+                        final_expr: None,
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                };
+                let match_expr = Expr {
+                    kind: ExprKind::Match {
+                        scrutinee: Box::new(opt_expr),
+                        arms: vec![
+                            MatchArm {
+                                pattern: Pattern {
+                                    kind: PatternKind::TupleVariant {
+                                        path: vec!["Some".to_string()],
+                                        patterns: vec![Pattern {
+                                            kind: PatternKind::Binding(fresh.clone()),
+                                            span: bind_span,
+                                        }],
+                                    },
+                                    span: sp.clone(),
+                                },
+                                guard: None,
+                                body: block_of(then_stmts),
+                                span: sp.clone(),
+                            },
+                            MatchArm {
+                                pattern: Pattern {
+                                    kind: PatternKind::Binding("None".to_string()),
+                                    span: sp.clone(),
+                                },
+                                guard: None,
+                                body: block_of(Vec::new()),
+                                span: sp.clone(),
+                            },
+                        ],
+                    },
+                    span: sp.clone(),
+                };
+                vec![Stmt {
+                    kind: StmtKind::Expr(match_expr),
+                    span: sp.clone(),
+                }]
             }
             FusedStepKind::TakeWhile => {
                 // `if <pred> { <rest> } else { break }` — the first failing
@@ -9581,6 +9815,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 FusedStepKind::Map
                 | FusedStepKind::Filter
+                | FusedStepKind::FilterMap
                 | FusedStepKind::TakeWhile
                 | FusedStepKind::Inspect => {}
             }

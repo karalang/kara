@@ -149,6 +149,33 @@ impl<'a> super::TypeChecker<'a> {
                     },
                     _ => Type::Error,
                 };
+                // B-2026-07-19-14 codegen leg: the fused-chain codegen lowers a
+                // `filter_map` step to a synthesized `match f(x) { Some(<v>) =>
+                // …, None => {} }`, and stamps the `Some(<v>)` payload binding
+                // with a DETERMINISTIC span derived from the closure body's span
+                // (`method_call.rs::filter_map_bind_span`). Register the payload
+                // element `U`'s surface type at that same span here, so codegen's
+                // payload reconstruction materializes a heap `U` (`String`/`Vec`)
+                // or a narrow/float scalar correctly instead of the raw-i64
+                // default (the span-registration trick `reduce` uses,
+                // B-2026-07-17-11). Only for a closure literal — the only shape
+                // the fused peel accepts.
+                if let ExprKind::Closure { body: cbody, .. } = &args[0].value.kind {
+                    if !matches!(new_item, Type::Error) {
+                        // MUST match `method_call.rs::filter_map_bind_span`.
+                        let bind_span = Span {
+                            line: cbody.span.line,
+                            column: cbody.span.column,
+                            offset: usize::MAX / 2 - cbody.span.offset,
+                            length: 1,
+                        };
+                        let synth = Pattern {
+                            kind: PatternKind::Binding("__fm_payload".to_string()),
+                            span: bind_span,
+                        };
+                        self.record_pattern_binding_surface_types(&synth, &new_item);
+                    }
+                }
                 Type::Named {
                     name: "Iterator".to_string(),
                     args: vec![new_item],

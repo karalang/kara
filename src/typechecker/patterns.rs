@@ -463,7 +463,11 @@ impl<'a> super::TypeChecker<'a> {
     /// binding. A refinement records its *base*'s surface name (codegen
     /// dispatches a refined value as its base, phase-9 step 5a) —
     /// `local_scope` keeps the real refinement type for type-checking.
-    fn record_pattern_binding_surface_types(&mut self, pattern: &Pattern, expected: &Type) {
+    pub(super) fn record_pattern_binding_surface_types(
+        &mut self,
+        pattern: &Pattern,
+        expected: &Type,
+    ) {
         let expected = strip_refinement(expected);
         // Peel an immutable/exclusive borrow: a `ref T` / `mut ref T` payload
         // binding (e.g. `Some(w)` from `Vec.first()` / `Vec.get(i)`, now typed
