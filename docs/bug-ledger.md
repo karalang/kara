@@ -735,7 +735,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **603 surfaced 
 | B-2026-07-20-5 | codegen | low | `Iterator.partition()` codegen lowered only a trivially-copyable element and loud-deferred a HEAP element (String/Vec) to `--interp` (the documented… | ba6751f |
 | B-2026-07-20-6 | ownership | low | `karac check` reports a false `error[ownership]: value 'row' moved here, used again here` for an iter_axis ROW-VIEW reused across two CHAINED `row.zi… | 62d148c |
 | B-2026-07-20-7 | codegen | high | `Map[K, struct-with-heap-field].get().unwrap()` DOUBLE-FREES under codegen (JIT + AOT-O2/O0); interp correct | bd2bb92 |
-| B-2026-07-20-10 | codegen | high | Every WASM program that frees a heap buffer traps at runtime (`unreachable` via a `signature_mismatch:karac_free_buf` stub) | PENDING |
+| B-2026-07-20-10 | codegen | high | Every WASM program that frees a heap buffer traps at runtime (`unreachable` via a `signature_mismatch:karac_free_buf` stub) | a25a2a1 |
 
 </details>
 
