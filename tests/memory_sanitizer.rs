@@ -3194,6 +3194,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_index_store_into_tuple_element_vec_no_leak() {
+        // B-2026-07-20-3 companion: storing into a HEAP element of a
+        // tuple-element `Vec` (`t.1[i] = "..."`) must free the OVERWRITTEN
+        // element's buffer exactly once (no leak) and not double-free the tuple
+        // on scope exit. Rebuild the tuple every iteration and overwrite a
+        // `String` slot, amplifying any leak/double-free.
+        assert_clean_asan_run(
+            r#"
+fn make() -> (Vec[i64], Vec[String]) {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    let mut b: Vec[String] = Vec.new();
+    b.push("first");
+    b.push("second");
+    (a, b)
+}
+fn main() {
+    let mut acc: i64 = 0;
+    for _ in 0..50 {
+        let mut t = make();
+        t.1[0] = "overwritten";
+        acc = acc + t.1[0].len() + t.1[1].len();
+    }
+    println(acc);
+}
+"#,
+            // per iter: len("overwritten")=11 + len("second")=6 = 17; × 50 = 850
+            &["850"],
+            "asan_index_store_into_tuple_element_vec_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_iter_chain_any_all_short_circuit_no_leak() {
         // B-2026-07-11-19 — `any`/`all` short-circuit terminals over a chain whose
         // `map` produces HEAP Strings. When the predicate decides early the loop

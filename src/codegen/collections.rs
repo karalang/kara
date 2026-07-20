@@ -4514,6 +4514,56 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Tuple-element-rooted index store (`t.0[i] = v`) where the element is a
+        // `Vec`/`VecDeque`: the `TupleIndex` sibling of the `FieldAccess`
+        // store arm above (and the mirror of the read-side `TupleIndex` arm in
+        // `compile_index`). GEP into the tuple's inline element storage, mint a
+        // synth identifier bound to the element with the element `TypeExpr`
+        // recorded by the typechecker in `temp_recv_elem_types` (keyed by the
+        // TupleIndex span), and recurse so the identifier-keyed Vec store
+        // handles the write. Without this the store fell to the "must be a
+        // variable" gate below (B-2026-07-20-3; the interpreter had the same
+        // write gap, silently no-op'ing the store — fixed in the same slice).
+        if let ExprKind::TupleIndex {
+            object: tup,
+            index: tidx,
+        } = &object.kind
+        {
+            let key = (object.span.offset, object.span.length);
+            if let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() {
+                let vec_te = super::Codegen::vec_type_expr_from_element(&elem_te);
+                if let (Some(elem_ptr), Some(tuple_ty)) = (
+                    self.field_chain_place_ptr(object),
+                    self.place_chain_aggregate_llvm_type(tup),
+                ) {
+                    if let Some(elem_ll_ty) = tuple_ty.get_field_type_at_index(*tidx as u32) {
+                        let synth = format!("__tup_elem_{}", self.indexed_elem_counter);
+                        self.indexed_elem_counter += 1;
+                        self.variables.insert(
+                            synth.clone(),
+                            super::state::VarSlot {
+                                ptr: elem_ptr,
+                                ty: elem_ll_ty,
+                            },
+                        );
+                        self.register_var_from_type_expr(&synth, &vec_te);
+                        let synth_expr = Expr {
+                            kind: ExprKind::Identifier(synth.clone()),
+                            span: object.span.clone(),
+                        };
+                        let result =
+                            self.compile_index_store(&synth_expr, index, val, rhs_is_fresh);
+                        self.variables.remove(&synth);
+                        self.vec_elem_types.remove(&synth);
+                        self.slice_elem_types.remove(&synth);
+                        self.var_elem_type_exprs.remove(&synth);
+                        self.var_type_names.remove(&synth);
+                        return result;
+                    }
+                }
+            }
+        }
+
         let idx_raw = self.compile_expr(index)?;
         let idx_val = self.coerce_to_i64(idx_raw)?;
         let i64_t = self.context.i64_type();

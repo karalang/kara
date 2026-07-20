@@ -3051,6 +3051,35 @@ fn test_tuple_construction() {
     );
 }
 
+#[test]
+fn test_index_store_into_tuple_element_vec() {
+    // B-2026-07-20-3: `t.0[i] = v` (index store into a Vec that lives in a
+    // tuple element) was SILENTLY dropped by the interpreter — `set_index`'s
+    // target resolver had no `TupleIndex` arm, so the store no-op'd and the
+    // element kept its old value. Now the write lands (the Value::Array Arc
+    // aliases the tuple element's storage). Read-back confirms scalar and
+    // String stores both take.
+    assert_eq!(
+        run("fn make() -> (Vec[i64], Vec[String]) {\n\
+                 let mut a: Vec[i64] = Vec.new();\n\
+                 a.push(1); a.push(2); a.push(3);\n\
+                 let mut b: Vec[String] = Vec.new();\n\
+                 b.push(\"x\"); b.push(\"y\");\n\
+                 (a, b)\n\
+             }\n\
+             fn main() {\n\
+                 let mut t = make();\n\
+                 t.0[0] = 10;\n\
+                 t.0[2] = 30;\n\
+                 t.1[1] = \"zebra\";\n\
+                 println(t.0[0] + t.0[1] + t.0[2]);\n\
+                 println(t.1[0]);\n\
+                 println(t.1[1]);\n\
+             }"),
+        "42\nx\nzebra\n"
+    );
+}
+
 // ── Arrays ─────────────────────────────────────────────────────
 
 #[test]

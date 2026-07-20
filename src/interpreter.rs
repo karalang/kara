@@ -2444,6 +2444,14 @@ impl<'a> Interpreter<'a> {
             // surfaced by the kata-133-audit codegen fix's probe,
             // 2026-06-06.
             ExprKind::FieldAccess { .. } => (self.eval_expr_inner(object), "<field>".to_string()),
+            // Tuple-element-rooted store (`t.0[i] = v`): eval the tuple index —
+            // `Value::Array` clones the `Arc<RwLock<Vec<Value>>>`, so the write
+            // through the returned rc aliases the tuple element's storage, the
+            // same mechanism as the `FieldAccess` arm above. Previously the
+            // `_ => return` swallowed this shape SILENTLY (the store no-op'd:
+            // `t.0[1] = 99` left `t.0[1]` at its old value with no diagnostic —
+            // B-2026-07-20-3).
+            ExprKind::TupleIndex { .. } => (self.eval_expr_inner(object), "<tuple>".to_string()),
             _ => return,
         };
         let (target_value, label) = target;

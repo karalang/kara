@@ -2908,6 +2908,35 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_index_store_into_tuple_element_vec() {
+        // B-2026-07-20-3: index STORE into a Vec in a tuple element
+        // (`t.0[i] = v`) was rejected loud by codegen ("Index assignment
+        // target must be a variable") — and dropped SILENTLY by the
+        // interpreter. Now the store lands; the heap store also frees the
+        // overwritten `String` (checked leak-clean by the memsan sibling).
+        if let Some(out) = run_program(
+            "fn make() -> (Vec[i64], Vec[String]) {\n\
+                 let mut a: Vec[i64] = Vec.new();\n\
+                 a.push(1); a.push(2); a.push(3);\n\
+                 let mut b: Vec[String] = Vec.new();\n\
+                 b.push(\"x\"); b.push(\"y\");\n\
+                 (a, b)\n\
+             }\n\
+             fn main() {\n\
+                 let mut t = make();\n\
+                 t.0[0] = 10;\n\
+                 t.0[2] = 30;\n\
+                 t.1[1] = \"zebra\";\n\
+                 println(f\"{t.0[0] + t.0[1] + t.0[2]}\");\n\
+                 println(t.1[0]);\n\
+                 println(t.1[1]);\n\
+             }",
+        ) {
+            assert_eq!(out, "42\nx\nzebra\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_ref_eq_shared_identity() {
         // `ref_eq` (design.md § Equality Semantics): reference identity of two
         // `shared` handles → `icmp eq` on the heap pointers. `b = a` aliases the
