@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 86 | 0 |
 | double-free | 67 | 0 |
 | codegen-gap | 63 | 0 |
-| missing-feature | 59 | 0 |
+| missing-feature | 60 | 1 |
 | false-positive | 37 | 0 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 423 | 0 |
-| typecheck | 81 | 0 |
-| interp | 64 | 0 |
+| codegen | 424 | 1 |
+| typecheck | 82 | 1 |
+| interp | 65 | 1 |
 | ownership | 24 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **591 surfaced · 0 open · 587 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **592 surfaced · 1 open · 587 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-19-14 | 2026-07-19 | typecheck+interp+codegen | medium | Iterator predicate/Option-adaptor cluster UNIMPLEMENTED: `filter_map`, `find_map`, `partition` are rejected `no method '<name>' on type 'Iterator'` in all backends, while the sibling adaptors `flat_map` / `scan` / `position` / `find` / `last` are present. `v.iter().filter_map(|t| match t { ... => Some(..), _ => None })` (a common filter+map fusion over an enum) has no path — the user must fall back to a manual loop or `.filter(...).map(...).unwrap()`. | src/typechecker/stdlib_seq.rs |
 
 ### Fixed (587)
 
