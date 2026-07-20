@@ -79,6 +79,47 @@ impl std::fmt::Display for OwnershipMode {
     }
 }
 
+/// Collision-safe fallback for `method_arg_is_borrow_position` under the
+/// parser's `MethodCall.span == receiver.span` aliasing. In a method CHAIN
+/// (`a.zip_with(b, f).sum()`, `a.matmul(b).transpose()`) every call shares one
+/// span, so the outer call's `method_callee_types` entry clobbers the inner's
+/// and the span-keyed mode resolution names the WRONG method — the inner call's
+/// borrowing `other: ref Self` arg then falls to the consume default and a later
+/// reuse of that arg false-rejects as a use-after-move (B-2026-07-14-18 matmul,
+/// B-2026-07-20-6 zip_with).
+///
+/// When the span-resolved key names a different method than the call actually
+/// invokes, resolve the arg's borrow-ness by the call's method NAME instead:
+/// `method_param_modes` is keyed by the `"Type.method"` STRING (populated from
+/// the impl walk, not from spans), so it is immune to the collision. Return
+/// `true` only when every `*.{method}` entry that HAS a param at `arg_index`
+/// agrees it is a borrow (`Ref`/`MutRef`). An owned same-named arg forces the
+/// conservative `false` — and because this call's own method is always present
+/// in the string-keyed map, the fallback can never turn a genuine move into a
+/// borrow; it only rescues the unambiguous all-borrow case.
+pub(crate) fn arg_is_borrow_by_method_name(
+    method_param_modes: &std::collections::HashMap<String, Vec<OwnershipMode>>,
+    method: &str,
+    arg_index: usize,
+) -> bool {
+    let suffix = format!(".{method}");
+    let mut saw_borrow = false;
+    for (key, modes) in method_param_modes {
+        if !key.ends_with(&suffix) {
+            continue;
+        }
+        match modes.get(arg_index) {
+            Some(OwnershipMode::Ref | OwnershipMode::MutRef) => saw_borrow = true,
+            // An owned same-named arg → ambiguous; stay with the conservative
+            // consume default rather than risk under-consuming a real move.
+            Some(OwnershipMode::Own) => return false,
+            // Different arity (fewer params) — irrelevant to this arg position.
+            None => {}
+        }
+    }
+    saw_borrow
+}
+
 /// Per-binding capture mode for `par {}` block captures — phase-7
 /// codegen tracker line 227 (L227). Drives codegen's per-capture
 /// lowering in `emit_par_branch_fn`: `Copy` keeps the existing

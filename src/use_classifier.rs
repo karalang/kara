@@ -1047,13 +1047,30 @@ impl<'a> UseClassifier<'a> {
         if is_tensor_borrow_arg_method_call(method_call) {
             return true;
         }
-        let Some(key) = self.resolved_method_mode_key(method_call) else {
-            return false;
-        };
-        self.method_param_modes
-            .get(key)
-            .and_then(|modes| modes.get(arg_index))
-            .is_some_and(|m| matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef))
+        // Trust the span-resolved modes whenever they carry an entry for THIS
+        // arg position; only when the entry is missing (the chained-call span
+        // collision resolved the inner call to a sibling with fewer params —
+        // e.g. `.zip_with(x, f).sum()`) fall back to a collision-immune
+        // method-NAME lookup. A present entry preserves the prior behavior,
+        // correct when chained calls share the arg mode (`x.mul(x).add(..)`).
+        // (B-2026-07-14-18, B-2026-07-20-6 — see `arg_is_borrow_by_method_name`.)
+        if let Some(key) = self.resolved_method_mode_key(method_call) {
+            if let Some(m) = self
+                .method_param_modes
+                .get(key)
+                .and_then(|modes| modes.get(arg_index))
+            {
+                return matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef);
+            }
+        }
+        if let ExprKind::MethodCall { method, .. } = &method_call.kind {
+            return crate::ownership::arg_is_borrow_by_method_name(
+                self.method_param_modes,
+                method,
+                arg_index,
+            );
+        }
+        false
     }
 
     fn expr_is_copy(&self, expr: &Expr) -> bool {

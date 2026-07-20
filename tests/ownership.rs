@@ -8105,6 +8105,56 @@ fn test_borrow_return_chained_call_ok() {
 }
 
 #[test]
+fn test_chained_call_ref_arg_same_as_receiver_no_false_move() {
+    // B-2026-07-20-6: in a method CHAIN the parser aliases every call's span
+    // to the receiver's, so `method_callee_types` collides and the inner
+    // call's resolved key names the OUTER method (`total`, 0 params). Its
+    // borrowing `other: ref Bag` arg then dropped to the consume default and a
+    // second use of that arg false-rejected as a use-after-move. `combine`
+    // borrows both receiver and `other`, so passing `a` twice and reusing it
+    // is valid. `Bag` is non-Copy (String field) so it is genuinely
+    // move-tracked — the accept is the fix, not Copy semantics.
+    ownership_ok(
+        "struct Bag { tag: String, n: i64 }\n\
+         impl Bag {\n\
+        \x20   fn combine(ref self, other: ref Bag) -> Bag { Bag { tag: self.tag, n: self.n + other.n } }\n\
+        \x20   fn total(ref self) -> i64 { self.n }\n\
+         }\n\
+         fn run(a: Bag) -> i64 {\n\
+        \x20   let d = a.combine(a).total();\n\
+        \x20   let e = a.combine(a).total();\n\
+        \x20   d + e\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_chained_call_owned_arg_still_consumes() {
+    // Soundness guard for the B-2026-07-20-6 fix: the collision-safe
+    // method-name fallback must NOT turn a genuine move into a borrow. `stash`
+    // takes its argument by value (owned `Bag`), so passing `a` and then
+    // reusing it IS a use-after-move and must still be rejected — the fallback
+    // sees `Bag.stash`'s owned arg and stays with the consume default.
+    let errors = ownership_errors(
+        "struct Bag { tag: String, n: i64 }\n\
+         impl Bag {\n\
+        \x20   fn stash(ref self, other: Bag) -> i64 { self.n + other.n }\n\
+         }\n\
+         fn run(a: Bag, b: Bag) -> i64 {\n\
+        \x20   let d = b.stash(a).abs();\n\
+        \x20   let e = b.stash(a).abs();\n\
+        \x20   d + e\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, OwnershipErrorKind::UseAfterMove)),
+        "owned arg `a` consumed by `stash` must still be a use-after-move on reuse; got: {errors:?}"
+    );
+}
+
+#[test]
 fn test_borrow_return_chained_call_on_owned_local_dangles() {
     // The chained call's ref-position arg traces to an owned local that
     // drops at return — the returned borrow would dangle. Source-pinning

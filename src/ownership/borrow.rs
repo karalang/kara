@@ -105,13 +105,35 @@ impl<'a> super::OwnershipChecker<'a> {
         if is_relational_method_call(method_call) {
             return true;
         }
-        let Some(key) = self.resolved_method_mode_key(method_call) else {
-            return false;
-        };
-        self.method_param_modes
-            .get(key)
-            .and_then(|modes| modes.get(arg_index))
-            .is_some_and(|m| matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef))
+        // Trust the span-resolved modes whenever they actually carry an entry
+        // for THIS arg position. In a method chain the parser aliases every
+        // call's span to the receiver's, so `method_callee_types` collides and
+        // the inner call's key may name a SIBLING call; when that sibling has
+        // FEWER params (e.g. the 0-param `.sum()` after `.zip_with(x, f)`) the
+        // lookup returns None and the arg wrongly fell to the consume default —
+        // a use-after-move false positive on reuse. ONLY in that None case do we
+        // fall back to a method-NAME lookup (collision-immune). A present entry
+        // preserves the prior behavior, which is correct when the chained calls
+        // share the arg mode (`x.mul(x).add(..)` resolves the inner `mul` to the
+        // ref-arg `add`). (B-2026-07-14-18, B-2026-07-20-6 — see
+        // `arg_is_borrow_by_method_name`.)
+        if let Some(key) = self.resolved_method_mode_key(method_call) {
+            if let Some(m) = self
+                .method_param_modes
+                .get(key)
+                .and_then(|modes| modes.get(arg_index))
+            {
+                return matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef);
+            }
+        }
+        if let ExprKind::MethodCall { method, .. } = &method_call.kind {
+            return crate::ownership::arg_is_borrow_by_method_name(
+                &self.method_param_modes,
+                method,
+                arg_index,
+            );
+        }
+        false
     }
 
     /// Returns `Some(mutable)` if the formal at `arg_index` of `callee` is a
