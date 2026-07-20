@@ -2954,6 +2954,29 @@ fn ws_write_unmasked_frame<W: std::io::Write>(stream: &mut W, opcode: u8, payloa
     true
 }
 
+/// Reply to a decoder protocol violation with a Close frame carrying
+/// the RFC 6455 §7.4 status `code` (e.g. `1002` protocol error,
+/// `1007` invalid UTF-8, `1009` message too big), then return the
+/// `-1` error sentinel. §7.4.1 SHOULD: an endpoint that detects a
+/// violation replies with a Close frame rather than silently dropping
+/// the TCP connection. The write is best-effort (a broken pipe is
+/// already the failure we're reporting), so its result is discarded.
+fn ws_fail_close<W: std::io::Write>(stream: &mut W, code: u16) -> i64 {
+    let _ = ws_write_unmasked_frame(stream, 0x8, &code.to_be_bytes());
+    -1
+}
+
+/// RFC 6455 §7.4.1 close-code validity. Accepts the codes an endpoint
+/// may legitimately place on the wire: `1000..=1003`, `1007..=1014`
+/// (application/registry codes), and the `3000..=4999` registered /
+/// private-use range. Rejects `1004` (reserved), `1005` / `1006` /
+/// `1015` (MUST NOT appear in a Close frame — they are local-only
+/// sentinels), everything `< 1000`, the `1016..=2999` reserved band,
+/// and `>= 5000`.
+fn ws_close_code_valid(code: u16) -> bool {
+    matches!(code, 1000..=1003 | 1007..=1014 | 3000..=4999)
+}
+
 /// Encode a TEXT frame (FIN=1, opcode=0x1, MASK=0) and write it to
 /// `fd`. Server→client convention — frames are NOT masked. Payload
 /// length is encoded per RFC 6455 §5.2: 7-bit inline for `< 126`,
@@ -3323,7 +3346,10 @@ unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
             let len7 = (header2[1] & 0x7F) as u64;
 
             if rsv != 0 || !masked {
-                return -1;
+                // §5.2 (reserved bits set, no extension negotiated) and
+                // §5.1 (client→server frames MUST be masked) are protocol
+                // violations — reply Close 1002 rather than TCP-dropping.
+                return ws_fail_close(&mut *stream, 1002);
             }
 
             let payload_len: u64 = match len7 {
@@ -3338,6 +3364,14 @@ unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
                 127 => {
                     let mut buf = [0u8; 8];
                     match ws_read_exact_or_eof(&mut *stream, &mut buf) {
+                        // RFC 6455 §5.2: for the 64-bit extended length the
+                        // most-significant bit MUST be 0. (The `out_max_len`
+                        // bounds check below would already reject any such
+                        // oversize length, but the MSB-set case is a literal
+                        // §5.2 violation regardless of the buffer size.)
+                        Ok(true) if buf[0] & 0x80 != 0 => {
+                            return ws_fail_close(&mut *stream, 1002);
+                        }
                         Ok(true) => u64::from_be_bytes(buf),
                         _ => return -1,
                     }
@@ -3357,7 +3391,7 @@ unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
                 // fragments per §5.4, so we handle them without
                 // touching the reassembly state.
                 if !fin || payload_len > 125 {
-                    return -1;
+                    return ws_fail_close(&mut *stream, 1002);
                 }
                 let mut ctrl_payload = [0u8; 125];
                 let slice = &mut ctrl_payload[..payload_len as usize];
@@ -3369,8 +3403,36 @@ unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
                 }
                 match opcode {
                     0x8 => {
-                        let _ = ws_write_unmasked_frame(&mut *stream, 0x8, &[]);
-                        return 0;
+                        // RFC 6455 §5.5.1 close-frame conformance. Echo the
+                        // peer's status code (SHOULD), validate the inbound
+                        // close body, and reply Close 1002 on a malformed one.
+                        match payload_len {
+                            0 => {
+                                // No status code — reply with a bare Close.
+                                let _ = ws_write_unmasked_frame(&mut *stream, 0x8, &[]);
+                                return 0;
+                            }
+                            1 => {
+                                // A 1-byte close body is malformed: a status
+                                // code is either absent or a full 2 bytes.
+                                return ws_fail_close(&mut *stream, 1002);
+                            }
+                            _ => {
+                                let code = u16::from_be_bytes([slice[0], slice[1]]);
+                                // The reason (bytes after the 2-byte code) MUST
+                                // be valid UTF-8 (§5.5.1); a reserved/invalid
+                                // code (1004/1005/1006/1015, out-of-range) is a
+                                // protocol error.
+                                let reason_ok = std::str::from_utf8(&slice[2..]).is_ok();
+                                if !ws_close_code_valid(code) || !reason_ok {
+                                    return ws_fail_close(&mut *stream, 1002);
+                                }
+                                // Echo the peer's status code back (§5.5.1 SHOULD).
+                                let _ =
+                                    ws_write_unmasked_frame(&mut *stream, 0x8, &code.to_be_bytes());
+                                return 0;
+                            }
+                        }
                     }
                     0x9 => {
                         if !ws_write_unmasked_frame(&mut *stream, 0xA, slice) {
@@ -3381,7 +3443,8 @@ unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
                     0xA => {
                         continue;
                     }
-                    _ => return -1,
+                    // Reserved control opcodes (0xB..=0xF) — protocol violation.
+                    _ => return ws_fail_close(&mut *stream, 1002),
                 }
             }
 
@@ -3397,7 +3460,9 @@ unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
             //     frame is only legal mid-fragment.
             if in_fragment {
                 if opcode != 0x0 {
-                    return -1;
+                    // §5.4: mid-fragment, the next data frame MUST be a
+                    // continuation (opcode 0x0) — protocol violation.
+                    return ws_fail_close(&mut *stream, 1002);
                 }
             } else if opcode != accept_opcode {
                 return -1;
@@ -3408,7 +3473,9 @@ unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
             // u64 add (out_max_len is i64 but ≥ 0).
             let new_total = accumulated.saturating_add(payload_len);
             if new_total > out_max_len as u64 {
-                return -1;
+                // Reassembled message exceeds the caller's buffer —
+                // RFC 6455 §7.4.1 code 1009 "message too big".
+                return ws_fail_close(&mut *stream, 1009);
             }
 
             if payload_len > 0 {
@@ -3425,6 +3492,20 @@ unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
             accumulated = new_total;
 
             if fin {
+                // RFC 6455 §8.1: a text message's payload MUST be valid
+                // UTF-8; §8.2 mandates failing the connection with close
+                // code 1007 on a violation. Validate the fully-reassembled
+                // message — a fragment boundary may split a multi-byte
+                // codepoint, so per-frame validation would be wrong.
+                // `recv_binary` (accept_opcode 0x2) is exempt: binary is an
+                // opaque byte channel. An empty message is trivially valid
+                // (and lets us skip a null-`out_ptr` slice construction).
+                if accept_opcode == 0x1 && accumulated > 0 {
+                    let msg = std::slice::from_raw_parts(out_ptr, accumulated as usize);
+                    if std::str::from_utf8(msg).is_err() {
+                        return ws_fail_close(&mut *stream, 1007);
+                    }
+                }
                 return accumulated as i64;
             }
             in_fragment = true;
@@ -8814,6 +8895,204 @@ mod tests {
             super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
         };
         assert_eq!(n, -1);
+
+        close_fd(server_fd);
+    }
+
+    /// Read the server→client Close frame the FFI wrote and return its
+    /// 2-byte status code (0 if the reply carried no body). Asserts the
+    /// reply is a well-formed unmasked Close (`0x88`).
+    fn read_close_reply_code(client: &mut std::net::TcpStream) -> u16 {
+        use std::io::Read;
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut hdr = [0u8; 2];
+        let mut got = 0;
+        while got < 2 {
+            let m = client
+                .read(&mut hdr[got..])
+                .expect("read close reply header");
+            if m == 0 {
+                break;
+            }
+            got += m;
+        }
+        assert_eq!(hdr[0], 0x88, "reply should be an unmasked FIN Close frame");
+        let body_len = (hdr[1] & 0x7F) as usize;
+        if body_len == 0 {
+            return 0;
+        }
+        assert!(body_len >= 2, "close body with a status code is ≥ 2 bytes");
+        let mut body = vec![0u8; body_len];
+        let mut got = 0;
+        while got < body_len {
+            let m = client
+                .read(&mut body[got..])
+                .expect("read close reply body");
+            if m == 0 {
+                break;
+            }
+            got += m;
+        }
+        u16::from_be_bytes([body[0], body[1]])
+    }
+
+    #[test]
+    fn test_ws_recv_text_rejects_invalid_utf8_with_close_1007() {
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+
+        // RFC 6455 §8.1/§8.2: a text frame whose payload is not valid
+        // UTF-8 fails the connection with close code 1007. 0xFF 0xFE is
+        // never a valid UTF-8 sequence.
+        let frame = encode_masked_client_frame(0x1, &[0xFF, 0xFE]);
+        client.write_all(&frame).expect("write frame");
+
+        let mut out = [0u8; 64];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, -1, "invalid UTF-8 text is a protocol error");
+        assert_eq!(read_close_reply_code(&mut client), 1007);
+
+        close_fd(server_fd);
+    }
+
+    #[test]
+    fn test_ws_recv_binary_passes_through_invalid_utf8() {
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+
+        // `recv_binary` is an opaque byte channel — the §8.1 UTF-8
+        // requirement applies to TEXT frames only, so the same bytes
+        // that fail `recv_text` are returned verbatim here.
+        let payload = [0xFFu8, 0xFE, 0x00, 0x80];
+        let frame = encode_masked_client_frame(0x2, &payload);
+        client.write_all(&frame).expect("write frame");
+
+        let mut out = [0u8; 64];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_binary(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, payload.len() as i64);
+        assert_eq!(&out[..n as usize], &payload);
+
+        close_fd(server_fd);
+    }
+
+    #[test]
+    fn test_ws_recv_text_validates_utf8_across_fragment_boundary() {
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+
+        // "é" is U+00E9 = 0xC3 0xA9. Split the two-byte codepoint across
+        // a fragment boundary: fragment 1 carries 0xC3 (FIN=0, text),
+        // fragment 2 carries 0xA9 (FIN=1, continuation). Per-frame
+        // validation would reject each half; whole-message validation
+        // (the correct behavior) accepts the reassembled "é".
+        let frag1 = encode_masked_client_frame_with_fin(0x1, &[0xC3], false);
+        let frag2 = encode_masked_client_frame_with_fin(0x0, &[0xA9], true);
+        let mut frames = Vec::new();
+        frames.extend_from_slice(&frag1);
+        frames.extend_from_slice(&frag2);
+        client.write_all(&frames).expect("write frames");
+
+        let mut out = [0u8; 64];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, 2, "reassembled é is 2 bytes");
+        assert_eq!(&out[..2], &[0xC3, 0xA9]);
+
+        close_fd(server_fd);
+    }
+
+    #[test]
+    fn test_ws_recv_text_close_echoes_status_code() {
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+
+        // §5.5.1 SHOULD: reply Close echoes the peer's status code.
+        // 1000 (normal closure) = 0x03E8.
+        let mut body = vec![0x03u8, 0xE8];
+        body.extend_from_slice(b"bye");
+        let close = encode_masked_client_frame(0x8, &body);
+        client.write_all(&close).expect("write close");
+
+        let mut out = [0u8; 16];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, 0, "close surfaces as graceful EOF");
+        assert_eq!(read_close_reply_code(&mut client), 1000);
+
+        close_fd(server_fd);
+    }
+
+    #[test]
+    fn test_ws_recv_text_close_rejects_one_byte_body() {
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+
+        // §5.5.1: a 1-byte close body is malformed (a status code is
+        // either absent or a full 2 bytes) → reply Close 1002.
+        let close = encode_masked_client_frame(0x8, &[0x03]);
+        client.write_all(&close).expect("write close");
+
+        let mut out = [0u8; 16];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, -1);
+        assert_eq!(read_close_reply_code(&mut client), 1002);
+
+        close_fd(server_fd);
+    }
+
+    #[test]
+    fn test_ws_recv_text_close_rejects_reserved_status_code() {
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+
+        // 1005 (0x03ED) is a local-only sentinel that MUST NOT appear
+        // in a Close frame (§7.4.1) → reply Close 1002.
+        let close = encode_masked_client_frame(0x8, &[0x03, 0xED]);
+        client.write_all(&close).expect("write close");
+
+        let mut out = [0u8; 16];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, -1);
+        assert_eq!(read_close_reply_code(&mut client), 1002);
+
+        close_fd(server_fd);
+    }
+
+    #[test]
+    fn test_ws_recv_text_reserved_rsv_bit_replies_close_1002() {
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+
+        // §5.2: RSV1 set with no negotiated extension is a protocol
+        // violation → reply Close 1002 rather than TCP-dropping.
+        // 0xC1 = FIN=1, RSV1=1, opcode=0x1.
+        let payload = b"x";
+        let mask_key = [0xA5u8, 0x37, 0x91, 0x4C];
+        let mut frame = vec![0xC1u8, 0x80 | (payload.len() as u8)];
+        frame.extend_from_slice(&mask_key);
+        for (i, b) in payload.iter().enumerate() {
+            frame.push(b ^ mask_key[i % 4]);
+        }
+        client.write_all(&frame).expect("write frame");
+
+        let mut out = [0u8; 16];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, -1);
+        assert_eq!(read_close_reply_code(&mut client), 1002);
 
         close_fd(server_fd);
     }
