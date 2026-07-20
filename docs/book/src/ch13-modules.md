@@ -44,7 +44,7 @@ You only annotate the boundaries:
 
 ## Imports
 
-```kara
+```kara,ignore
 import db.connection.Connection;
 import auth.token.Token;
 

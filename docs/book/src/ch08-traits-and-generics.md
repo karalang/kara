@@ -56,7 +56,7 @@ Types that implement `Describable` must provide `name`, but get `description` fo
 Generics let you write code that works with any type. Kāra uses `[T]` syntax — not `<T>`:
 
 ```kara
-fn first[T](items: Vec[T]) -> Option[T] {
+fn first[T](items: ref Vec[T]) -> Option[ref T] {
     items.get(0)
 }
 ```
