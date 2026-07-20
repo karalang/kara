@@ -1954,6 +1954,36 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `for x in t.0.iter()` / a fused terminal over a tuple-element `Vec`
+        // (`t.0.iter().fold(..)`) — the `TupleIndex` sibling of the fresh-temp
+        // recording above. Codegen has a place-based tuple-iter lowering
+        // (`try_compile_for_tuple_index_iter`) that GEPs into the tuple to
+        // reach the element's `{ptr,len,cap}` storage, but it needs the
+        // element's full `TypeExpr` (the per-var tuple name registry is lossy —
+        // it drops the generic args and isn't populated for an inferred `let t
+        // = f()` binding). The parser sets the `.iter()` MethodCall span equal
+        // to its receiver (`t.0`) span, so recording the element type keyed by
+        // `span` lands it exactly where codegen reads it
+        // (`temp_recv_elem_types[tuple_index.span]`). WITHOUT this, a
+        // tuple-element `Vec` iterated in a for-loop (or any fused terminal that
+        // desugars to that for-loop — `fold`/`sum`/…) fell through codegen's
+        // for-loop dispatch and iterated ZERO times: a silent wrong-answer
+        // miscompile (the interpreter iterated the real elements). `Vec` /
+        // `VecDeque` receivers only — a `Slice` tuple element has a distinct
+        // `{ptr,len}` header the reconstruct-as-`Vec` helper doesn't model.
+        if matches!(&object.kind, ExprKind::TupleIndex { .. })
+            && matches!(method, "iter" | "into_iter")
+        {
+            if let Type::Named { name, args } = &obj_ty {
+                if (name == "Vec" || name == "VecDeque") && args.len() == 1 {
+                    let resolved = resolve_type_var_top(&args[0], &self.env.substitutions);
+                    let te = Self::type_to_type_expr(&resolved);
+                    self.temp_recv_elem_types
+                        .insert(SpanKey::from_span(span), te);
+                }
+            }
+        }
+
         // Sibling of the Vec block above for `Map`/`Set` fresh-temp receivers
         // (`make_map().get(k)`, `make_set().contains(x)`): record the receiver's
         // whole `Map[K,V]` / `Set[T]` type — codegen needs K+V to redispatch

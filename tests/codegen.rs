@@ -2840,6 +2840,49 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_iter_over_tuple_element_vec() {
+        // Regression: iterating a `Vec` that lives in a TUPLE element
+        // (`t.0.iter()`) silently iterated ZERO times under codegen while the
+        // interpreter iterated the real elements — a wrong-answer miscompile.
+        // The for-loop dispatch had a `FieldAccess` receiver arm but no
+        // `TupleIndex` sibling, so `t.0.iter()` fell through to the silent
+        // `_ =>` default; the same hole zeroed every fused terminal that
+        // desugars to that for-loop shape (`t.0.iter().fold(..)`). Covers a
+        // for-loop AND a fold, over both an inferred and an annotated tuple
+        // binding, for scalar and heap (`String`) elements.
+        if let Some(out) = run_program(
+            "fn make() -> (Vec[i64], Vec[i64]) {\n\
+                 let mut a: Vec[i64] = Vec.new();\n\
+                 a.push(10); a.push(20); a.push(30);\n\
+                 let mut b: Vec[i64] = Vec.new();\n\
+                 b.push(1);\n\
+                 (a, b)\n\
+             }\n\
+             fn strs() -> (Vec[String], i64) {\n\
+                 let mut a: Vec[String] = Vec.new();\n\
+                 a.push(\"alpha\"); a.push(\"beta\");\n\
+                 (a, 0)\n\
+             }\n\
+             fn main() {\n\
+                 let t = make();\n\
+                 let mut c = 0;\n\
+                 for x in t.0.iter() { c = c + 1; }\n\
+                 let s = t.0.iter().fold(0, |acc, x| acc + x);\n\
+                 println(f\"c={c} sum={s} len={t.0.len()}\");\n\
+                 let ta: (Vec[i64], Vec[i64]) = make();\n\
+                 let s2 = ta.1.iter().fold(0, |acc, x| acc + x);\n\
+                 println(f\"s2={s2}\");\n\
+                 let h = strs();\n\
+                 let mut chars = 0;\n\
+                 for w in h.0.iter() { chars = chars + w.len(); }\n\
+                 println(f\"chars={chars}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "c=3 sum=60 len=3\ns2=1\nchars=9\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_ref_eq_shared_identity() {
         // `ref_eq` (design.md § Equality Semantics): reference identity of two
         // `shared` handles → `icmp eq` on the heap pointers. `b = a` aliases the

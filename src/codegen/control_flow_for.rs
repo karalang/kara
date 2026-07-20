@@ -338,6 +338,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         return Ok(result);
                     }
                 }
+                // Tuple-element receiver (`t.0.iter()`) where the element is a
+                // `Vec[T]` / `Slice[T]`: synthesize a temp identifier pointing
+                // at the element's embedded `{ptr,len,cap}` storage and recurse
+                // — the `TupleIndex` sibling of the `FieldAccess` arm above.
+                // Without this the recursed `compile_for` sees a `TupleIndex`
+                // iterable and falls through to the silent `_ =>` arm (0-iter
+                // miscompile, also zeroing every fused terminal that desugars to
+                // this for-loop shape).
+                if matches!(object.kind, ExprKind::TupleIndex { .. }) {
+                    if let Some(result) =
+                        self.try_compile_for_tuple_index_iter(label, pattern, object, body)?
+                    {
+                        return Ok(result);
+                    }
+                }
                 return self.compile_for(label, pattern, object, body);
             }
             // `for c in <receiver>.chars()` — codegen iterators are
@@ -1113,6 +1128,91 @@ impl<'ctx> super::Codegen<'ctx> {
         self.set_elem_types.remove(&synth);
         self.set_elem_type_names.remove(&synth);
         self.set_elem_type_exprs.remove(&synth);
+        self.string_vars.remove(&synth);
+
+        result.map(Some)
+    }
+
+    /// `for x in t.0.iter()` — iterate a `Vec`/`Slice` that lives in a TUPLE
+    /// element. The `FieldAccess` peer is [`Self::try_compile_for_field_iter`]
+    /// (`obj.field.iter()`); this is the `TupleIndex` sibling. Without it, a
+    /// tuple-index `.iter()` source fell through the dispatcher's silent `_ =>`
+    /// arm (via the generic `compile_for(object)` recurse on the bare
+    /// `TupleIndex`, which the dispatch has no arm for) and iterated ZERO times
+    /// — a silent wrong-answer miscompile: the interpreter iterates the real
+    /// elements while the compiled loop's body never runs. Because the `fold`
+    /// / `sum` / other fused terminals desugar to exactly this `for <elem> in
+    /// <base>` shape, the same hole silently zeroed `t.0.iter().fold(..)` etc.
+    /// GEP to the element's inline `{ptr,len,cap}` storage
+    /// (`field_chain_place_ptr`, which walks a tuple-index hop), mint a synth
+    /// identifier aliasing it (a read-only view — no drop registered, exactly
+    /// like the field-iter path), and recurse. Returns `Ok(None)` (fall
+    /// through) for a non-Vec/Slice element or any shape that doesn't resolve,
+    /// so unrelated tuple-element for-loops are untouched.
+    pub(super) fn try_compile_for_tuple_index_iter(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        tuple_index: &Expr,
+        body: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        use super::state::VarSlot;
+        let ExprKind::TupleIndex { object, index } = &tuple_index.kind else {
+            return Ok(None);
+        };
+        let idx = *index as usize;
+        // The element type of the tuple's Vec comes from the typechecker's
+        // span-keyed `temp_recv_elem_types`, recorded against THIS tuple-index
+        // receiver's span for an `.iter()`/`.into_iter()` source (the
+        // TupleIndex sibling of the fresh-temp recording). The per-var
+        // name registry (`place_chain_tuple_tes`) is lossy — it drops the
+        // generic args (`Vec` not `Vec[i64]`) and isn't populated at all for
+        // an inferred `let t = f()` binding — so it can't drive the element
+        // width; the typechecker table is the authoritative full-fidelity
+        // source. No entry (unsupported element shape) → fall through.
+        let key = (tuple_index.span.offset, tuple_index.span.length);
+        let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() else {
+            return Ok(None);
+        };
+        let vec_te = super::Codegen::vec_type_expr_from_element(&elem_te);
+        // The place-pointer + LLVM-type resolution is purely structural (it
+        // GEPs into the tuple via its alloca'd struct type), so it works for
+        // BOTH an annotated and an inferred tuple binding — unlike the name
+        // registry, it needs no per-var type-name entry.
+        let Some(elem_ptr) = self.field_chain_place_ptr(tuple_index) else {
+            return Ok(None);
+        };
+        let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(object) else {
+            return Ok(None);
+        };
+        let Some(elem_ll_ty) = tuple_ty.get_field_type_at_index(idx as u32) else {
+            return Ok(None);
+        };
+
+        let synth = format!("__for_tuple_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            VarSlot {
+                ptr: elem_ptr,
+                ty: elem_ll_ty,
+            },
+        );
+        self.register_var_from_type_expr(&synth, &vec_te);
+
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: tuple_index.span.clone(),
+        };
+        let result = self.compile_for(label, pattern, &synth_expr, body);
+
+        // Clean up synth registrations so they don't leak across sibling
+        // for-loops at the same nesting depth (mirror the field-iter path).
+        self.variables.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.slice_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+        self.var_type_names.remove(&synth);
         self.string_vars.remove(&synth);
 
         result.map(Some)

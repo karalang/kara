@@ -3157,6 +3157,43 @@ fn main() {
     }
 
     #[test]
+    fn asan_iter_over_tuple_element_vec_no_leak() {
+        // Regression companion to codegen::e2e_iter_over_tuple_element_vec.
+        // Iterating a HEAP-element `Vec` that lives in a TUPLE element
+        // (`t.0.iter()`) drives a read-only alias of the tuple's inline
+        // storage — no per-element move, so no element is freed by the loop
+        // and the whole tuple's Vec is freed exactly once at scope exit.
+        // Rebuild the tuple every iteration to amplify any leak, iterating the
+        // `Vec[String]` element via both a for-loop and a fold-shaped chain.
+        assert_clean_asan_run(
+            r#"
+fn make() -> (Vec[String], i64) {
+    let mut a: Vec[String] = Vec.new();
+    a.push("alpha");
+    a.push("beta");
+    a.push("gamma");
+    (a, 0)
+}
+fn main() {
+    let mut total: i64 = 0;
+    for _ in 0..50 {
+        let t = make();
+        for w in t.0.iter() {
+            total = total + w.len();
+        }
+        let n = t.0.iter().fold(0, |acc, w| acc + 1);
+        total = total + n;
+    }
+    println(total);
+}
+"#,
+            // per iter: 5+4+5 (chars) + 3 (count) = 17; × 50 = 850
+            &["850"],
+            "asan_iter_over_tuple_element_vec_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_iter_chain_any_all_short_circuit_no_leak() {
         // B-2026-07-11-19 — `any`/`all` short-circuit terminals over a chain whose
         // `map` produces HEAP Strings. When the predicate decides early the loop
