@@ -4007,10 +4007,21 @@ impl<'ctx> Codegen<'ctx> {
             .void_type()
             .fn_type(&[BasicMetadataTypeEnum::from(ptr_type)], false);
         let free_fn = module.add_function("free", free_type, Some(Linkage::External));
+        // `void karac_free_buf(u8* data, size_t bytes_hint)` — the `bytes_hint`
+        // is a Rust `usize`, so it must be the target's pointer-width int
+        // (`size_t_type`: i32 on wasm32, i64 on 64-bit native). Hardcoding i64
+        // here matched native by accident but produced a `(i32-ptr, i64)`
+        // import against wasi-libc's `(i32, i32)` definition on wasm32 — wasm-ld
+        // can't reconcile that, so it emits a trapping `signature_mismatch:
+        // karac_free_buf` stub, and every wasm program that frees a heap buffer
+        // traps at runtime (`unreachable`). Native never sees it (usize=i64),
+        // which is why it survived until an in-browser heap-freeing program
+        // (Prism) exercised the path. Same fix the sibling size-taking externs
+        // (snprintf, alloc) already carry via `size_t_type`.
         let free_buf_type = context.void_type().fn_type(
             &[
                 BasicMetadataTypeEnum::from(ptr_type),
-                BasicMetadataTypeEnum::from(i64_type),
+                BasicMetadataTypeEnum::from(size_t_type),
             ],
             false,
         );

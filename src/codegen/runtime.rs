@@ -3588,12 +3588,31 @@ impl<'ctx> super::Codegen<'ctx> {
         elem_abi_size: u64,
     ) {
         let i64_t = self.context.i64_type();
-        let hint = if elem_abi_size == 0 {
-            i64_t.const_zero()
+        // `karac_free_buf`'s `bytes_hint` is a `usize` — the target pointer-width
+        // int (i32 on wasm32, i64 on 64-bit native), matching the declaration in
+        // `Codegen::new`. `cap` is an i64; on wasm32 the hint must be truncated to
+        // i32 or the `build_call` type-mismatches the i32 param (and, before the
+        // decl fix, the whole call mismatched wasi-libc → a trapping stub).
+        let size_is_32 = crate::target::active_target_is_wasm();
+        let size_ty = if size_is_32 {
+            self.context.i32_type()
         } else {
-            self.builder
+            i64_t
+        };
+        let hint = if elem_abi_size == 0 {
+            size_ty.const_zero()
+        } else {
+            let bytes = self
+                .builder
                 .build_int_mul(cap, i64_t.const_int(elem_abi_size, false), "freebuf.bytes")
-                .unwrap()
+                .unwrap();
+            if size_is_32 {
+                self.builder
+                    .build_int_truncate(bytes, size_ty, "freebuf.bytes.szt")
+                    .unwrap()
+            } else {
+                bytes
+            }
         };
         self.builder
             .build_call(self.free_buf_fn, &[data.into(), hint.into()], "")

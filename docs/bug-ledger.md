@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 60 | 0 |
 | false-positive | 38 | 0 |
 | run-vs-build | 36 | 0 |
-| crash | 27 | 0 |
+| crash | 28 | 0 |
 | soundness | 24 | 0 |
 | perf | 21 | 0 |
 | diagnostics | 12 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 433 | 2 |
+| codegen | 434 | 2 |
 | typecheck | 83 | 0 |
 | interp | 66 | 0 |
 | ownership | 25 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **602 surfaced · 2 open · 596 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **603 surfaced · 2 open · 597 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
@@ -133,9 +133,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **602 surfaced 
 | B-2026-07-20-8 | 2026-07-20 | codegen | low | `Vec[T].sorted_by(cmp: Fn(T,T)->Ordering)` / `String.sorted_by` (immutable CUSTOM-COMPARATOR sort returning a new Vec/String) is UNIMPLEMENTED in codegen — loud-bails `Vec/String method 'sorted_by' is not yet supported in codegen` under `karac build`/JIT; runs under `--interp`. The no-comparator sibling `Vec[T].sorted()` landed (B-2026-07-19-15, c6848c4); the comparator variant is the natural follow-on. | src/codegen/vec_method.rs (Vec method dispatch) + src/codegen/string_method.rs (String.sorted_by) |
 | B-2026-07-20-9 | 2026-07-20 | codegen | high | `Vec[struct-with-heap-field].get(i)/.first()/.last().unwrap()` field read is FLAKY under codegen (JIT + AOT): `let a = v.get(0).unwrap(); print(a.name)` where the Vec ELEMENT is a struct carrying a `String` field returns the CORRECT value on some runs and `0` (a zeroed/garbage read) on others — nondeterministic across identical runs, so a latent uninitialized-or-use-after-free read. Interp is always correct. Sibling of the Map double-free B-2026-07-20-7 (fixed bd2bb92) but a DISTINCT surface: the Vec accessors return `Option[ref elem]`, and the struct-element borrow-elision detector `is_borrowed_vec_get_unwrap_struct` does not fire for this shape (its `borrowed_vec_get_unwrap_inner` finds no recorded `ref` unwrap-inner type), so the value goes through the normal struct reconstruction which reads freed/uninit memory. | src/codegen/stmts.rs (is_borrowed_vec_get_unwrap_struct / borrowed_vec_get_unwrap_inner) + Vec.get/first/last value reconstruction |
 
-### Fixed (596)
+### Fixed (597)
 
-<details><summary>596 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>597 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -735,6 +735,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **602 surfaced 
 | B-2026-07-20-5 | codegen | low | `Iterator.partition()` codegen lowered only a trivially-copyable element and loud-deferred a HEAP element (String/Vec) to `--interp` (the documented… | ba6751f |
 | B-2026-07-20-6 | ownership | low | `karac check` reports a false `error[ownership]: value 'row' moved here, used again here` for an iter_axis ROW-VIEW reused across two CHAINED `row.zi… | 62d148c |
 | B-2026-07-20-7 | codegen | high | `Map[K, struct-with-heap-field].get().unwrap()` DOUBLE-FREES under codegen (JIT + AOT-O2/O0); interp correct | bd2bb92 |
+| B-2026-07-20-10 | codegen | high | Every WASM program that frees a heap buffer traps at runtime (`unreachable` via a `signature_mismatch:karac_free_buf` stub) | PENDING |
 
 </details>
 
