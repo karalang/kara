@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 154 | 0 |
+| miscompile | 155 | 0 |
 | leak | 86 | 0 |
 | double-free | 67 | 0 |
-| codegen-gap | 64 | 0 |
+| codegen-gap | 65 | 1 |
 | missing-feature | 60 | 0 |
 | false-positive | 37 | 0 |
 | run-vs-build | 36 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 425 | 0 |
-| typecheck | 82 | 0 |
+| codegen | 427 | 1 |
+| typecheck | 83 | 0 |
 | interp | 65 | 0 |
 | ownership | 24 | 0 |
 | other | 18 | 0 |
@@ -124,15 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **593 surfaced · 0 open · 589 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **595 surfaced · 1 open · 590 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-20-2 | 2026-07-20 | codegen | medium | Indexing a `Vec` that lives in a TUPLE element (`t.0[i]`) fails codegen LOUD — `error: codegen failed: Index operator applied to non-array type` (JIT + native) — while the tree-walk interpreter reads the element correctly. Fails closed with the `--interp` hint (not a silent miscompile), but a genuine run-vs-build gap: `t.0.len()` and now `t.0.iter()` (B-2026-07-20-1) work, so a program that reads `t.0.len()` then indexes `t.0[i]` in the same scope compiles the former and rejects the latter. | src/codegen/collections.rs |
 
-### Fixed (589)
+### Fixed (590)
 
-<details><summary>589 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>590 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -725,6 +727,7 @@ _None — the ledger is fully drained._
 | B-2026-07-19-13 | codegen | medium | Indexed-shared-struct field READ (`nodes[i].field`) hardcoded heap offset `idx + 1` instead of routing through `shared_gep_layout`, so it mis-read an… | 8f606de |
 | B-2026-07-19-14 | typecheck+interp+codegen | medium | Iterator predicate/Option-adaptor cluster UNIMPLEMENTED: `filter_map`, `find_map`, `partition` are rejected `no method '<name>' on type 'Iterator'` i… | 242c07c |
 | B-2026-07-19-15 | codegen | low | `Vec[T].sorted()` (immutable sort returning a NEW Vec) is UNIMPLEMENTED in codegen for every element type — it falls to the generic 'Vec/String metho… | c6848c4 |
+| B-2026-07-20-1 | typecheck+codegen | high | Iterating a `Vec` that lives in a TUPLE element (`t.0.iter()`, `t.0.iter().fold(..)`) silently iterated ZERO times under codegen (JIT + native) while… | eeee817 |
 
 </details>
 
