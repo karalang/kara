@@ -99,6 +99,61 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![item.clone()],
                 }
             }
+            "filter_map" => {
+                // `filter_map(f: Fn(T) -> Option[U]) -> Iterator[U]` — the
+                // closure returns `Option[U]`; each `Some(v)` yields `v` and
+                // each `None` is dropped (map+filter fusion). Same pushdown
+                // pattern as `flat_map`: push `Fn(T) -> TypeParam("__iter_-
+                // filtermap_U")` so the body's actual return type flows back,
+                // then pattern-match it for `Option[U]` and take `U` as the new
+                // Item. A non-Option return raises a TypeMismatch explicitly.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Iterator.filter_map() expects 1 argument, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Iterator".to_string(),
+                        args: vec![Type::Error],
+                    };
+                }
+                let f_ty = Type::Function {
+                    params: vec![item.clone()],
+                    return_type: Box::new(Type::TypeParam("__iter_filtermap_U".to_string())),
+                };
+                let actual_ty = self.check_expr(&args[0].value, &f_ty);
+                let new_item = match actual_ty {
+                    Type::Function { return_type, .. } => match *return_type {
+                        Type::Named {
+                            name,
+                            args: mut opt_args,
+                        } if name == "Option" && opt_args.len() == 1 => opt_args.remove(0),
+                        other => {
+                            self.type_error(
+                                format!(
+                                    "Iterator.filter_map() closure must return Option[U], found {:?}",
+                                    other
+                                ),
+                                span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            Type::Error
+                        }
+                    },
+                    _ => Type::Error,
+                };
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![new_item],
+                }
+            }
             "count" | "len" => {
                 // `count() -> i64` / `len() -> i64` — terminal. Drains the
                 // iterator and returns the element count. `len` is accepted as

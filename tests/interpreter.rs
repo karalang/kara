@@ -14393,6 +14393,41 @@ fn main() {
 }
 
 #[test]
+fn test_iter_filter_map_scalar() {
+    // `filter_map(f: Fn(T) -> Option[U])` — map+filter fusion: keep each
+    // `Some` payload, drop each `None` (B-2026-07-19-14). 1..5 → even*10 →
+    // 20,40.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    for n in v.iter().filter_map(|x| if x % 2 == 0 { Some(x * 10) } else { None }) {
+        println(n);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "20\n40\n");
+}
+
+#[test]
+fn test_iter_filter_map_heap_collect() {
+    // filter_map with a HEAP `U` (`String`) over an enum receiver, collected —
+    // the `Some` payloads are the uppercased words, the `Num` variants drop.
+    let output = run_no_errors(
+        r#"
+enum Tok { Word(String), Num(i64) }
+fn main() {
+    let v = [Tok.Word("hi".to_string()), Tok.Num(3), Tok.Word("yo".to_string())];
+    let words: Vec[String] = v.iter().filter_map(|t| match t { Tok.Word(s) => Some(s.to_uppercase()), Tok.Num(_) => None }).collect();
+    println(words.join(","));
+}
+"#,
+    );
+    assert_eq!(output, "HI,YO\n");
+}
+
+#[test]
 fn test_iter_filter_then_map_chain() {
     // Order matters — filter first, then map on filtered elements.
     // 1,2,3,4,5 → > 2 → 3,4,5 → +100 → 103,104,105.

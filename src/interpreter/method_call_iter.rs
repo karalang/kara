@@ -173,9 +173,10 @@ impl<'a> super::Interpreter<'a> {
                     return Some(result);
                 }
             }
-            "map" | "filter" => {
+            "map" | "filter" | "filter_map" => {
                 // Lazy adaptors — append a `MapStep(closure)` /
-                // `FilterStep(closure)` to the iterator's adaptor chain.
+                // `FilterStep(closure)` / `FilterMapStep(closure)` to the
+                // iterator's adaptor chain.
                 // The closure is evaluated to a Value::Function once at
                 // construction; per-element invocation happens at next()
                 // time via `iterator_step`. Per design.md § Iterator
@@ -201,6 +202,7 @@ impl<'a> super::Interpreter<'a> {
                     steps.push(match method {
                         "map" => IteratorStep::Map(closure),
                         "filter" => IteratorStep::Filter(closure),
+                        "filter_map" => IteratorStep::FilterMap(closure),
                         _ => unreachable!(),
                     });
                     return Some(Value::Iterator { source, steps });

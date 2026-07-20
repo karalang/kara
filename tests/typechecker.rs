@@ -1250,6 +1250,41 @@ fn test_generic_vec_accessor_borrow_return_ok() {
 }
 
 #[test]
+fn test_iter_filter_map_typechecks() {
+    // `filter_map(f: Fn(T) -> Option[U]) -> Iterator[U]` — the closure's
+    // `Option[U]` return type flows to the chain's new element `U`, so a
+    // downstream `collect()` types as `Vec[U]` (B-2026-07-19-14).
+    typecheck_ok(
+        "fn main() {\n\
+             let v = [1, 2, 3, 4];\n\
+             let _r: Vec[i64] = v.iter().filter_map(|x| if x % 2 == 0 { Some(x * 10) } else { None }).collect();\n\
+         }",
+    );
+    typecheck_ok(
+        "fn main() {\n\
+             let v = [\"aa\".to_string(), \"b\".to_string()];\n\
+             let _r: Vec[String] = v.iter().filter_map(|s| if s.len() == 2 { Some(s.to_uppercase()) } else { None }).collect();\n\
+         }",
+    );
+}
+
+#[test]
+fn test_iter_filter_map_non_option_closure_rejected() {
+    // The `filter_map` closure must return `Option[U]`; a non-Option return is
+    // a TypeMismatch (mirrors `flat_map`'s Iterator-return check).
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let v = [1, 2, 3];\n\
+             let _r: Vec[i64] = v.iter().filter_map(|x| x * 2).collect();\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch for a non-Option filter_map closure, got {errors:?}"
+    );
+}
+
+#[test]
 fn test_vec_get_returns_option_not_poison() {
     // `v.get(i)` is `Option[T]`; assigning it to a bare `T` must error
     // (previously the `Error` poison let `let x: i64 = v.get(0)` pass).

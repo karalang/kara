@@ -678,6 +678,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "cycle"
                 | "enumerate"
                 | "filter"
+                | "filter_map"
                 | "flat_map"
                 | "fold"
                 | "for_each"

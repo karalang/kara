@@ -50,6 +50,27 @@ impl<'a> super::Interpreter<'a> {
                             break;
                         }
                     }
+                    IteratorStep::FilterMap(f) => {
+                        // Apply `f: Fn(T) -> Option[U]` (consuming the item like
+                        // `Map`); a `Some(v)` yields `v` downstream, a `None`
+                        // drops the item (map+filter fusion). A non-Option
+                        // return is treated as `None` (the typechecker already
+                        // guarantees the closure returns `Option[U]`).
+                        let result = self.invoke_function_value(f.clone(), vec![item.clone()]);
+                        match result {
+                            Value::EnumVariant {
+                                variant,
+                                data: EnumData::Tuple(mut vals),
+                                ..
+                            } if variant == "Some" && vals.len() == 1 => {
+                                item = vals.remove(0);
+                            }
+                            _ => {
+                                keep = false;
+                                break;
+                            }
+                        }
+                    }
                     IteratorStep::Enumerate(idx) => {
                         item = Value::Tuple(vec![Value::Int(*idx as i64), item]);
                         *idx += 1;

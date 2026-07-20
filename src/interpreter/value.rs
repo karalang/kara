@@ -772,6 +772,11 @@ pub enum IteratorStep {
     /// `.filter(pred)` — yield only items where `pred(item)` is `true`.
     /// The Value is a `Value::Function` (closure returning `bool`).
     Filter(Value),
+    /// `.filter_map(f)` — apply `f: Fn(T) -> Option[U]` to each item;
+    /// yield the payload of each `Some`, drop each `None` (map+filter
+    /// fusion). The Value is a `Value::Function` (closure returning
+    /// `Option[U]`).
+    FilterMap(Value),
     /// `.enumerate()` — wrap each item into `(idx, item)`. The `usize`
     /// is the index of the *next* yielded item (incremented after wrap).
     Enumerate(usize),
