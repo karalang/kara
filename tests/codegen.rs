@@ -55849,6 +55849,44 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_get_unwrap_struct_heap_field_read() {
+        // B-2026-07-20-9: `let a = v.get(i)/.first()/.last().unwrap()` on a
+        // Vec whose element is a user STRUCT with a heap (`String`) field, then
+        // `a.name`. The binding's type was never recorded (`bind_pattern_types`
+        // doesn't peel the accessor's `Option[ref elem]`), so codegen fell to
+        // the LLVM-shape reverse-lookup — which picked the FIRST same-shape
+        // struct in HashMap iteration order. `Acct { name: String }` collides
+        // with the prelude's `Regex`/`RegexError` (all `{ptr,i64,i64}`), so the
+        // binding was mislabeled on a random subset of compiles and the field
+        // read compiled to a SILENT `i64 0` constant — output flipped between
+        // `alice` and `0` across byte-identical builds. Fixed three ways: the
+        // binding registers from the typechecker's span-keyed peeled element
+        // type (deterministic); the shape reverse-lookup only fires on a UNIQUE
+        // match; an unresolvable field read now fails LOUD instead of emitting
+        // `i64 0`. Covers get/first/last, a two-field struct, and two reads.
+        // (A single run of this test was flaky-green before the fix; with
+        // layers 2+3 a wrong label now fails loudly instead of passing wrong.)
+        let output = run_program(
+            "struct Acct { name: String, txns: i64 }\n\
+             fn main() {\n\
+                 let mut v: Vec[Acct] = Vec.new();\n\
+                 v.push(Acct { name: \"alice\".to_string(), txns: 2 });\n\
+                 v.push(Acct { name: \"bob\".to_string(), txns: 5 });\n\
+                 let a = v.get(0).unwrap();\n\
+                 println(f\"{a.name}:{a.txns}\");\n\
+                 let b = v.get(1).unwrap();\n\
+                 println(f\"{b.name}:{b.txns}\");\n\
+                 let f = v.first().unwrap();\n\
+                 println(f.name);\n\
+                 let l = v.last().unwrap();\n\
+                 println(l.name);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "alice:2\nbob:5\nalice\nbob\n");
+    }
+
+    #[test]
     fn test_e2e_inline_index_map_get_unwrap_vec_value() {
         // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
         // (`m.get(k).unwrap()[i]`) used to loud-bail "Index operator applied to

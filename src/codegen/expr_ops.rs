@@ -808,7 +808,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Ok(extracted);
             }
         }
-        Ok(self.context.i64_type().const_int(0, false).into())
+        // B-2026-07-20-9: this used to fall through to a SILENT `i64 0`
+        // constant — a miscompile factory (an unresolved field read compiled
+        // to a literal zero, and with the nondeterministic shape reverse-
+        // lookup above it even flipped across byte-identical builds). Any
+        // field access that reaches here has a receiver codegen can't type;
+        // fail LOUD with the standard `--interp` pointer instead of emitting
+        // wrong code.
+        Err(format!(
+            "codegen: cannot resolve field '{}' on this receiver (its type was \
+             not recorded for codegen); this is a compiler gap — run with \
+             `--interp` (or `KARAC_RUN_JIT=0`) and please report it",
+            field
+        ))
     }
 
     /// FFI union field read helper — phase 5 line 569 slice 4. Returns

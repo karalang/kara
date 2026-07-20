@@ -2775,6 +2775,33 @@ impl<'ctx> super::Codegen<'ctx> {
                             detected = true;
                         }
                     }
+                    // B-2026-07-20-9 (struct leg of the same asymmetry): `let a =
+                    // v.get(i)/.first()/.last().unwrap()` on a Vec/Slice whose
+                    // element is a USER STRUCT. With no recorded binding type,
+                    // the let path fell through to the LLVM-shape reverse-lookup
+                    // below (~line 3800), which picks the FIRST same-shape struct
+                    // in HashMap iteration order — `Acct { name: String }`
+                    // collides with the prelude's `Regex`/`RegexError` (all
+                    // `{ptr,i64,i64}`), so the binding was NONDETERMINISTICALLY
+                    // mislabeled per compile and the later `a.name` field read
+                    // fell to the silent i64-0 fallback (a flaky miscompile that
+                    // changed across byte-identical builds). Register the struct
+                    // name from the typechecker's span-keyed PEELED element type
+                    // — fully deterministic. The scope-exit drop stays suppressed
+                    // via `is_borrowed_vec_get_unwrap_struct` (borrow alias; the
+                    // container remains the sole owner).
+                    if !detected {
+                        if let Some(inner_te) = self.borrowed_vec_get_unwrap_inner(value) {
+                            if let TypeKind::Path(p) = &inner_te.kind {
+                                if let Some(name) = p.segments.last() {
+                                    if self.struct_types.contains_key(name.as_str()) {
+                                        self.record_var_type_name(var_name.clone(), name.clone());
+                                        detected = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // Infer `ref CStr` from a `let s = c"..."` RHS — the
                     // unannotated mirror of the `is_cstr_type_expr` arm
                     // above (same split as StringLit ↔ `: String`).
@@ -3784,16 +3811,39 @@ impl<'ctx> super::Codegen<'ctx> {
                             // and downstream `u.field` codegen can't
                             // route through the union-aware field-
                             // access path.
-                            if let Some((name, _)) =
-                                self.struct_types.iter().find(|(_, ty)| **ty == st)
-                            {
-                                let name = name.clone();
+                            // B-2026-07-20-9 hardening: only trust the shape
+                            // match when it is UNIQUE. With ≥2 same-shape
+                            // structs registered (e.g. a user `Acct { name:
+                            // String }` next to the prelude's `Regex` /
+                            // `RegexError`, all `{ptr,i64,i64}`), the pick is
+                            // HashMap-iteration order — nondeterministic per
+                            // compile, so the binding dispatched against a
+                            // random type on some builds. Skipping on ambiguity
+                            // is strictly better: deterministic-unregistered
+                            // (a stable, debuggable failure at the use site)
+                            // beats randomly-right.
+                            let mut same_shape = self
+                                .struct_types
+                                .iter()
+                                .filter(|(_, ty)| **ty == st)
+                                .map(|(n, _)| n.clone());
+                            let first_struct = same_shape.next();
+                            let struct_ambiguous = same_shape.next().is_some();
+                            drop(same_shape);
+                            if let (Some(name), false) = (first_struct.clone(), struct_ambiguous) {
                                 self.record_var_type_name(var_name.clone(), name);
-                            } else if let Some((name, _)) =
-                                self.union_types.iter().find(|(_, ty)| **ty == st)
-                            {
-                                let name = name.clone();
-                                self.record_var_type_name(var_name.clone(), name);
+                            } else if first_struct.is_none() {
+                                let mut same_union = self
+                                    .union_types
+                                    .iter()
+                                    .filter(|(_, ty)| **ty == st)
+                                    .map(|(n, _)| n.clone());
+                                let first_union = same_union.next();
+                                let union_ambiguous = same_union.next().is_some();
+                                drop(same_union);
+                                if let (Some(name), false) = (first_union, union_ambiguous) {
+                                    self.record_var_type_name(var_name.clone(), name);
+                                }
                             }
                         }
                     }

@@ -10003,6 +10003,40 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_get_unwrap_struct_heap_field_no_leak_no_double_free() {
+        // B-2026-07-20-9 memory leg: `let a = v.get(i).unwrap()` on a
+        // `Vec[struct{String,..}]` now registers the binding as its struct type
+        // (previously unlabeled/mislabeled), which makes the struct-drop
+        // registration reachable — the drop must stay SUPPRESSED
+        // (`is_borrowed_vec_get_unwrap_struct` borrow-elides the alias) so the
+        // binding's shallow-aliased String is freed exactly once by the
+        // container's per-element drain (a mis-registration would double-free;
+        // a lost drain would leak — LSan/ASAN catch both). Loop so any
+        // per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+struct Acct { name: String, txns: i64 }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut v: Vec[Acct] = Vec.new();
+        v.push(Acct { name: "alice".to_string(), txns: 2 });
+        v.push(Acct { name: "bobby".to_string(), txns: 3 });
+        let a = v.get(0).unwrap();
+        let b = v.last().unwrap();
+        acc = acc + a.name.len() + a.txns + b.name.len() + b.txns;
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["600"],
+            "vec_get_unwrap_struct_heap_field_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_letbound_map_get_moveout_no_double_free() {
         // B-2026-07-09-13: `let g = m.get(k); match g { Some(v) => <move v> }`.
         // `Map.get` returns an `Option[V]` whose String payload ALIASES the
