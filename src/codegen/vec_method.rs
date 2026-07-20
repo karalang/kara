@@ -1550,6 +1550,101 @@ impl<'ctx> super::Codegen<'ctx> {
                     "str.sorted",
                 ))
             }
+            // `Vec[T].sorted()` — immutable sort returning a NEW Vec, leaving the
+            // receiver unsorted (B-2026-07-19-15). Desugar to
+            // `{ let mut __srt: Vec[E] = <recv>.clone(); __srt.sort(); __srt }`,
+            // reusing the deep-clone (`emit_clone_fn_for_type_expr`, per-element
+            // heap-safe) and the in-place `sort` arm (all its element-type
+            // comparator thunks — int / String / float / tuple / nested-Vec —
+            // apply to the clone identically). An element type `sort()` can't
+            // order fails LOUD via `sort`'s own error, exactly as an in-place
+            // `.sort()` would. The clone is what makes it immutable; `sort()`
+            // mutates only the fresh binding.
+            "sorted" => {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "Vec.sorted expects 0 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let elem_te = self
+                    .var_elem_type_exprs
+                    .get(var_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        "Vec.sorted() in codegen requires a known element type".to_string()
+                    })?;
+                let uid = self.indexed_elem_counter;
+                self.indexed_elem_counter += 1;
+                // Synthetic span with a unique `usize::MAX`-based offset so no
+                // typechecker side-table (keyed on real spans) is ever hit by the
+                // desugar's nodes — the `let` carries an explicit annotation and
+                // `sort` reads `var_elem_type_exprs["__srt_N"]`, so no span lookup
+                // is needed anyway.
+                let sp = crate::token::Span {
+                    line: 0,
+                    column: 0,
+                    offset: usize::MAX - (uid as usize) - 1,
+                    length: 1,
+                };
+                let tmp = format!("__srt_{}", uid);
+                let ident = |n: &str| Expr {
+                    kind: ExprKind::Identifier(n.to_string()),
+                    span: sp.clone(),
+                };
+                let vec_te = TypeExpr {
+                    kind: TypeKind::Path(PathExpr {
+                        segments: vec!["Vec".to_string()],
+                        generic_args: Some(vec![GenericArg::Type(elem_te)]),
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                };
+                let clone_call = Expr {
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(ident(var_name)),
+                        method: "clone".to_string(),
+                        turbofish: None,
+                        args: vec![],
+                        args_close_span: sp.clone(),
+                    },
+                    span: sp.clone(),
+                };
+                let let_tmp = Stmt {
+                    kind: StmtKind::Let {
+                        is_mut: true,
+                        pattern: Pattern {
+                            kind: PatternKind::Binding(tmp.clone()),
+                            span: sp.clone(),
+                        },
+                        ty: Some(vec_te),
+                        value: clone_call,
+                    },
+                    span: sp.clone(),
+                };
+                let sort_call = Stmt {
+                    kind: StmtKind::Expr(Expr {
+                        kind: ExprKind::MethodCall {
+                            object: Box::new(ident(&tmp)),
+                            method: "sort".to_string(),
+                            turbofish: None,
+                            args: vec![],
+                            args_close_span: sp.clone(),
+                        },
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                };
+                let block = Expr {
+                    kind: ExprKind::Block(Block {
+                        stmts: vec![let_tmp, sort_call],
+                        final_expr: Some(Box::new(ident(&tmp))),
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                };
+                self.compile_expr(&block)
+            }
             // `Vec[String].join(sep) -> String` / `.concat() -> String` via
             // `karac_string_join` (B-2026-07-16-14). The receiver's
             // `{ptr, len, cap}` triple reads as (elements-buffer, count); the

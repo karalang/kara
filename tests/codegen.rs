@@ -57498,6 +57498,43 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sorted_immutable_returns_new_vec() {
+        // B-2026-07-19-15 — `Vec[T].sorted()` returns a NEW sorted Vec and
+        // leaves the receiver UNSORTED. Desugars to `{ let mut tmp = v.clone();
+        // tmp.sort(); tmp }`, so every element-type comparator the in-place
+        // `sort` supports applies: signed int, unsigned int (unsigned order —
+        // high-bit value sorts last, not first), String (byte-lexicographic),
+        // and float. Byte-identical to the interpreter.
+        let out = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = [3, 1, 2, 5, 4];
+    let s: Vec[i64] = v.sorted();
+    println(s.get(0)); println(s.get(4));
+    // receiver stays unsorted
+    println(v.get(0));
+    let u: Vec[u64] = [1u64 << 63, 5u64, 1u64 << 62];
+    let us: Vec[u64] = u.sorted();
+    println(f"{us[0]}");
+    let w: Vec[String] = ["banana", "apple", "cherry"];
+    let ws: Vec[String] = w.sorted();
+    println(ws.get(0));
+    println(w.get(0));
+    let f: Vec[f64] = [2.5, 1.1, 3.3];
+    let fs: Vec[f64] = f.sorted();
+    println(fs.get(0));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "Some(1)\nSome(5)\nSome(3)\n5\nSome(apple)\nSome(banana)\nSome(1.1)\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_reverse() {
         // `Vec.reverse()` must reverse in place in codegen (same silent-no-op
         // regression class as `sort`).

@@ -29528,6 +29528,40 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_sorted_heap_clone_no_leak_no_double_free() {
+        // B-2026-07-19-15 — `Vec[String].sorted()` deep-CLONES the receiver
+        // (each String buffer duplicated), sorts the clone, and returns it; the
+        // receiver stays intact. The clone's buffers and the receiver's buffers
+        // must EACH free exactly once — a bug is a per-iteration leak (clone not
+        // freed) or a double-free (clone aliasing the receiver's buffers).
+        // Loop a heap `Vec[String]`, sort a fresh clone, and use BOTH so both
+        // reach scope-exit drop each iteration.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let v: Vec[String] = ["delta".to_string(), "alpha".to_string(), "charlie".to_string(), "bravo".to_string()];
+        let s: Vec[String] = v.sorted();
+        // sorted clone: alpha, bravo, charlie, delta — use each
+        let mut j: i64 = 0;
+        while j < s.len() { acc = acc + s[j].len(); j = j + 1; }
+        // receiver survives, unsorted — use each
+        let mut k: i64 = 0;
+        while k < v.len() { acc = acc + v[k].len(); k = k + 1; }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            // per iter: (5+5+7+5) clone + (5+5+7+5) receiver = 44; ×40 = 1760
+            &["1760"],
+            "vec_sorted_heap_clone_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_reassign_heap_field_and_map_set_var_no_leak_no_double_free() {
         // B-2026-07-15-25: reassigning a struct's heap-owning FIELD (`h.v = …`,
         // `h.s = …`, `h.m = …`) used to overwrite the slot with NO drop of the
