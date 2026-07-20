@@ -14451,6 +14451,32 @@ fn main() {
 }
 
 #[test]
+fn test_iter_partition_scalar_and_heap() {
+    // `partition(pred: Fn(T) -> bool) -> (Vec[T], Vec[T])` — split the yielded
+    // elements into (matches, non-matches) (B-2026-07-19-14). Covers a scalar
+    // split, composition with a leading `map`, and a HEAP `String` split (which
+    // the codegen backend defers to interp).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5, 6];
+    let (evens, odds): (Vec[i64], Vec[i64]) = v.iter().partition(|x| x % 2 == 0);
+    println(f"{evens.len()}:{odds.len()}");
+    let mut es = 0;
+    for e in evens { es = es + e; }
+    let mut os = 0;
+    for o in odds { os = os + o; }
+    println(f"{es}:{os}");
+    let w = ["hi".to_string(), "there".to_string(), "yo".to_string(), "world".to_string()];
+    let (long, short): (Vec[String], Vec[String]) = w.iter().partition(|s| s.len() > 2);
+    println(f"{long.join(",")}|{short.join(",")}");
+}
+"#,
+    );
+    assert_eq!(output, "3:3\n12:9\nthere,world|hi,yo\n");
+}
+
+#[test]
 fn test_iter_filter_then_map_chain() {
     // Order matters — filter first, then map on filtered elements.
     // 1,2,3,4,5 → > 2 → 3,4,5 → +100 → 103,104,105.

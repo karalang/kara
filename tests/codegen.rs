@@ -10793,6 +10793,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_partition_scalar() {
+        // B-2026-07-19-14: `partition(pred: Fn(T) -> bool) -> (Vec[T], Vec[T])`
+        // — the eager two-collection terminal. Desugars to two `Vec[T]` push
+        // accumulators over the fused for-loop, returning a `(__pt, __pf)` tuple
+        // (the verified block-returns-tuple-of-owned-Vecs path). Trivially-
+        // copyable element only (a heap `T` defers loud to `--interp`). Covers a
+        // scalar split, composition with a leading `map`, a float split, and an
+        // empty (all-to-one-side) partition. Must match the interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v = [1, 2, 3, 4, 5, 6];\n\
+                 let (evens, odds): (Vec[i64], Vec[i64]) = v.iter().partition(|x| x % 2 == 0);\n\
+                 println(f\"{evens.len()}:{odds.len()}\");\n\
+                 let mut es = 0;\n\
+                 for e in evens { es = es + e; }\n\
+                 let mut os = 0;\n\
+                 for o in odds { os = os + o; }\n\
+                 println(f\"{es}:{os}\");\n\
+                 let (big, small): (Vec[i64], Vec[i64]) = v.iter().map(|x| x * 2).partition(|y| y > 6);\n\
+                 let mut bs = 0;\n\
+                 for b in big { bs = bs + b; }\n\
+                 let mut ss = 0;\n\
+                 for s in small { ss = ss + s; }\n\
+                 println(f\"{bs}:{ss}\");\n\
+                 let f: Vec[f64] = [1.5, 2.5, 3.5];\n\
+                 let (hi, lo): (Vec[f64], Vec[f64]) = f.iter().partition(|x| x > 2.0);\n\
+                 println(f\"{hi.len()}:{lo.len()}\");\n\
+                 let (none_big, all_small): (Vec[i64], Vec[i64]) = v.iter().partition(|x| x > 100);\n\
+                 println(f\"{none_big.len()}:{all_small.len()}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "3:3\n12:9\n30:12\n2:1\n0:6\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_mut_ref_scalar_value_reads() {
         // B-2026-07-15-3: a `mut ref` scalar param reads as its value type in
         // an annotated let, an index expression, an argument, and a cast —

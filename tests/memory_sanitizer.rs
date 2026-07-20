@@ -29496,6 +29496,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_partition_scalar_vecs_no_leak() {
+        // B-2026-07-19-14: `partition` lowers to two fresh `Vec[T]` push
+        // accumulators returned as a tuple. Even with a SCALAR element the two
+        // Vec BUFFERS are heap allocations that must be freed — via the for-loop
+        // consumers here (`for e in a` drops the moved Vec) AND, when a result is
+        // only read (`.len()`), by scope-exit drop of the destructured tuple
+        // halves. Loop many times so any per-iteration leaked buffer is an
+        // unmistakable LSan finding.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 50 {
+        let v = [1, 2, 3, 4, 5, 6, 7, 8];
+        let (evens, odds): (Vec[i64], Vec[i64]) = v.iter().partition(|x| x % 2 == 0);
+        for e in evens { acc = acc + e; }
+        for o in odds { acc = acc + o; }
+        // A partition whose halves are only measured (never iterated) — both
+        // Vec buffers must be freed at scope exit.
+        let (big, small): (Vec[i64], Vec[i64]) = v.iter().partition(|x| x > 4);
+        acc = acc + big.len() + small.len();
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["2200"],
+            "partition_scalar_vecs_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_vec_dedup_drops_removed_heap_duplicates_no_leak() {
         // `Vec[T].dedup()` — the AOT lowering must FREE each removed consecutive
         // duplicate (distinct owned `String` buffers even when content-equal),

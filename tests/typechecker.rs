@@ -1319,6 +1319,25 @@ fn test_iter_find_map_non_option_closure_rejected() {
 }
 
 #[test]
+fn test_iter_partition_typechecks() {
+    // `partition(pred: Fn(T) -> bool) -> (Vec[T], Vec[T])` — the eager
+    // two-collection terminal (B-2026-07-19-14). The destructured tuple binds
+    // both halves as `Vec[T]`.
+    typecheck_ok(
+        "fn main() {\n\
+             let v = [1, 2, 3, 4];\n\
+             let (_a, _b): (Vec[i64], Vec[i64]) = v.iter().partition(|x| x % 2 == 0);\n\
+         }",
+    );
+    typecheck_ok(
+        "fn main() {\n\
+             let v = [\"aa\".to_string(), \"b\".to_string()];\n\
+             let (_a, _b): (Vec[String], Vec[String]) = v.iter().partition(|s| s.len() == 2);\n\
+         }",
+    );
+}
+
+#[test]
 fn test_vec_get_returns_option_not_poison() {
     // `v.get(i)` is `Option[T]`; assigning it to a bare `T` must error
     // (previously the `Error` poison let `let x: i64 = v.get(0)` pass).

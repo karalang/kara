@@ -5865,6 +5865,38 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
+        // `<iter-chain>.partition(|x| pred) -> (Vec[T], Vec[T])` — eager terminal
+        // splitting the adapted elements into (matches, non-matches). Same
+        // iterator-chain gate as `find`; trivially-copyable element `T` only (a
+        // heap `T` — String / Vec — would need per-element clones into the target
+        // Vecs, deferred loud to `--interp`), else `Ok(None)`.
+        if method == "partition"
+            && args.len() == 1
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                if params.len() == 1 {
+                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__ptp") {
+                        if let Some(v) =
+                            self.try_compile_iter_chain_partition(object, &param, body, call_span)?
+                        {
+                            return Ok(v);
+                        }
+                    }
+                }
+            }
+            return Err(
+                "`Iterator.partition()` is lowered under `karac build` only for a SCALAR \
+                 element over a fused map/filter chain; a heap element (String / Vec / \
+                 struct) or an unsupported chain shape is deferred — run it under the \
+                 interpreter (`karac run --interp`, or `KARAC_RUN_JIT=0`)."
+                    .to_string(),
+            );
+        }
+
         // `<iter-chain>.last() -> Option[T]` (no args) / `.nth(n) -> Option[T]`
         // (one int arg) — element-returning terminals, scalar payloads only (heap
         // defers loud, like `find`).
@@ -11336,6 +11368,189 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&findname))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// `<iter-chain>.partition(|x| pred) -> (Vec[T], Vec[T])` — eager terminal
+    /// splitting the fused-chain elements into (matches, non-matches). Desugars
+    /// to `{ let mut __pt: Vec[T] = Vec.new(); let mut __pf: Vec[T] = Vec.new();
+    /// <prelude>; for <e> in <base> { <chain>; if <pred> { __pt.push(x) } else {
+    /// __pf.push(x) } } (__pt, __pf) }` — reusing the fused for-loop lowering and
+    /// the (verified) block-returns-a-tuple-of-owned-Vecs path. Trivially-
+    /// copyable element `T` only (`iter_terminal_elem_types` holds T); a heap `T`
+    /// returns `Ok(None)` -> the caller's loud `--interp` bail (each element
+    /// would need a clone into one target Vec).
+    fn try_compile_iter_chain_partition(
+        &mut self,
+        recv: &Expr,
+        param: &str,
+        pred: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some(elem_te) = self
+            .iter_terminal_elem_types
+            .get(&(call_span.offset, call_span.length))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if !super::vec_method::is_trivially_copyable_te(&elem_te) {
+            return Ok(None);
+        }
+        let (base, steps) = match Self::peel_fused_map_filter_chain(recv) {
+            Some(x) => x,
+            None if Self::for_loop_iterates_flat_map(recv) => (recv, Vec::new()),
+            None => return Ok(None),
+        };
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let sp = call_span.clone();
+        let pt = format!("__pt_{}", uid);
+        let pf = format!("__pf_{}", uid);
+        let elem_name = steps
+            .iter()
+            .find(|(_, p, _)| !p.is_empty())
+            .map(|(_, p, _)| p.clone())
+            .unwrap_or_else(|| param.to_string());
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let push_to = |vec_name: &str, val: Expr| -> Stmt {
+            Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(ident(vec_name)),
+                        method: "push".to_string(),
+                        turbofish: None,
+                        args: vec![CallArg {
+                            label: None,
+                            mut_marker: false,
+                            value: val,
+                            span: sp.clone(),
+                        }],
+                        args_close_span: sp.clone(),
+                    },
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            }
+        };
+        // Sink: bind `param` to the fully-adapted element (so both the pred and
+        // the pushed value reference it), then `if pred { __pt.push(param) } else
+        // { __pf.push(param) }`.
+        let sink = |current: Expr| -> Vec<Stmt> {
+            let current_is_param = matches!(&current.kind, ExprKind::Identifier(n) if n == param);
+            let mut out = Vec::new();
+            if !current_is_param {
+                out.push(Stmt {
+                    kind: StmtKind::Let {
+                        is_mut: false,
+                        pattern: Pattern {
+                            kind: PatternKind::Binding(param.to_string()),
+                            span: sp.clone(),
+                        },
+                        ty: None,
+                        value: current,
+                    },
+                    span: sp.clone(),
+                });
+            }
+            out.push(Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::If {
+                        condition: Box::new(pred.clone()),
+                        then_block: Block {
+                            stmts: vec![push_to(&pt, ident(param))],
+                            final_expr: None,
+                            span: sp.clone(),
+                        },
+                        else_branch: Some(Box::new(Expr {
+                            kind: ExprKind::Block(Block {
+                                stmts: vec![push_to(&pf, ident(param))],
+                                final_expr: None,
+                                span: sp.clone(),
+                            }),
+                            span: sp.clone(),
+                        })),
+                    },
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            });
+            out
+        };
+        let sw_prefix = format!("__swpt_{uid}_");
+        let for_body =
+            Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(elem_name),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(base.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: for_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let vec_te = |elem: TypeExpr| TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![GenericArg::Type(elem)]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let new_vec = || Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+        let let_vec = |name: &str, elem: TypeExpr| Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name.to_string()),
+                    span: sp.clone(),
+                },
+                ty: Some(vec_te(elem)),
+                value: new_vec(),
+            },
+            span: sp.clone(),
+        };
+        let mut block_stmts = vec![let_vec(&pt, elem_te.clone()), let_vec(&pf, elem_te.clone())];
+        block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
+        block_stmts.push(for_loop);
+        let tuple = Expr {
+            kind: ExprKind::Tuple(vec![ident(&pt), ident(&pf)]),
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: block_stmts,
+                final_expr: Some(Box::new(tuple)),
                 span: sp.clone(),
             }),
             span: sp.clone(),

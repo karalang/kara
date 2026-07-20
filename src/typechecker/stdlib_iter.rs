@@ -220,6 +220,47 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![item.clone()],
                 }
             }
+            "partition" => {
+                // `partition(pred: Fn(T) -> bool) -> (Vec[T], Vec[T])` — eager
+                // terminal splitting the yielded elements into (matches,
+                // non-matches). Same predicate signature as `filter`. Records the
+                // element `T` span-keyed (like `find`/`sum`) so codegen can build
+                // the two `Vec[T]` accumulators (B-2026-07-19-14).
+                let result_ty = || {
+                    Type::Tuple(vec![
+                        Type::Named {
+                            name: "Vec".to_string(),
+                            args: vec![item.clone()],
+                        },
+                        Type::Named {
+                            name: "Vec".to_string(),
+                            args: vec![item.clone()],
+                        },
+                    ])
+                };
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Iterator.partition() expects 1 argument, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return result_ty();
+                }
+                let pred_ty = Type::Function {
+                    params: vec![item.clone()],
+                    return_type: Box::new(Type::Bool),
+                };
+                self.check_expr(&args[0].value, &pred_ty);
+                self.iter_terminal_elem_types
+                    .insert(SpanKey::from_span(span), Self::type_to_type_expr(item));
+                result_ty()
+            }
             "fold" => {
                 // `fold(init: A, f: Fn(A, T) -> A) -> A` — terminal. A is
                 // inferred from `init` (concrete after infer_expr); both
@@ -1204,6 +1245,7 @@ impl<'a> super::TypeChecker<'a> {
                     "min",
                     "next",
                     "nth",
+                    "partition",
                     "peek",
                     "peekable",
                     "position",

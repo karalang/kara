@@ -688,6 +688,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "max"
                 | "min"
                 | "next"
+                | "partition"
                 | "peekable"
                 | "product"
                 | "reduce"

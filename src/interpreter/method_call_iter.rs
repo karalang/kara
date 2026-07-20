@@ -650,6 +650,40 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::array_of(out));
                 }
             }
+            "partition" => {
+                // `partition(pred) -> (Vec[T], Vec[T])` — split the yielded
+                // elements into (matches, non-matches) by the predicate.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return Some(self.record_runtime_error(
+                            "Iterator.partition() requires a closure argument".to_string(),
+                            span,
+                        ));
+                    };
+                    let pred = self.eval_iter_closure_arg(&arg.value);
+                    if !matches!(pred, Value::Function { .. }) {
+                        return Some(self.record_runtime_error(
+                            format!("Iterator.partition() expects a closure; got {}", pred),
+                            span,
+                        ));
+                    }
+                    let mut iter_val = obj;
+                    let mut trues = Vec::new();
+                    let mut falses = Vec::new();
+                    while let Some(item) = self.iterator_step(&mut iter_val) {
+                        let keep = self.invoke_function_value(pred.clone(), vec![item.clone()]);
+                        if matches!(keep, Value::Bool(true)) {
+                            trues.push(item);
+                        } else {
+                            falses.push(item);
+                        }
+                    }
+                    return Some(Value::Tuple(vec![
+                        Value::array_of(trues),
+                        Value::array_of(falses),
+                    ]));
+                }
+            }
             "fold" => {
                 // Terminal — `fold(init, f)`. Walk via repeated
                 // iterator_step pulls, threading the accumulator through
