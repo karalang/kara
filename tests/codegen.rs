@@ -2937,6 +2937,32 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_method_on_indexed_tuple_element_vec() {
+        // B-2026-07-20-4: calling a method on an indexed element of a
+        // tuple-element Vec (`t.0[i].len()`) failed codegen loud
+        // ("indexed-receiver method ... requires the indexed container to be a
+        // named variable") while the interpreter ran it. The indexed-receiver
+        // method dispatch now hoists a `TupleIndex` container to a synth Vec
+        // identifier (the sibling of its `FieldAccess` hoist).
+        if let Some(out) = run_program(
+            "fn make() -> (Vec[String], Vec[i64]) {\n\
+                 let mut a: Vec[String] = Vec.new();\n\
+                 a.push(\"alpha\"); a.push(\"beta\");\n\
+                 let mut b: Vec[i64] = Vec.new();\n\
+                 b.push(100);\n\
+                 (a, b)\n\
+             }\n\
+             fn main() {\n\
+                 let t = make();\n\
+                 println(t.0[0].len());\n\
+                 println(t.0[1].len());\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n4\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_ref_eq_shared_identity() {
         // `ref_eq` (design.md § Equality Semantics): reference identity of two
         // `shared` handles → `icmp eq` on the heap pointers. `b = a` aliases the

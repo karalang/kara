@@ -129,6 +129,49 @@ impl<'ctx> super::Codegen<'ctx> {
                 // existing non-identifier diagnostic fires below.
                 None => None,
             }
+        } else if let ExprKind::TupleIndex {
+            object: tup,
+            index: tidx,
+        } = &inner.kind
+        {
+            // Hoist a tuple-element Vec container — `t.0[i].method()` — to a
+            // synth Vec identifier, the `TupleIndex` sibling of the
+            // `FieldAccess` arm above. GEP into the tuple element's storage
+            // (structural, so inferred + annotated bindings both work); the
+            // element `TypeExpr` comes from the typechecker's
+            // `temp_recv_elem_types` (recorded for the `Index` receiver `t.0`).
+            // Without this the container-must-be-a-named-variable guard rejected
+            // it while the interpreter accepted it (B-2026-07-20-4). `Vec`/
+            // `VecDeque` elements only; any gap leaves `inner` as-is so the
+            // existing diagnostic fires.
+            let key = (inner.span.offset, inner.span.length);
+            let hoisted = self
+                .temp_recv_elem_types
+                .get(&key)
+                .cloned()
+                .and_then(|elem_te| {
+                    let vec_te = super::Codegen::vec_type_expr_from_element(&elem_te);
+                    let elem_ptr = self.field_chain_place_ptr(inner)?;
+                    let tuple_ty = self.place_chain_aggregate_llvm_type(tup)?;
+                    let elem_ll_ty = tuple_ty.get_field_type_at_index(*tidx as u32)?;
+                    let synth = format!("__tup_container_{}", self.indexed_elem_counter);
+                    self.indexed_elem_counter += 1;
+                    self.variables.insert(
+                        synth.clone(),
+                        VarSlot {
+                            ptr: elem_ptr,
+                            ty: elem_ll_ty,
+                        },
+                    );
+                    self.register_var_from_type_expr(&synth, &vec_te);
+                    let expr = Expr {
+                        kind: ExprKind::Identifier(synth.clone()),
+                        span: inner.span.clone(),
+                    };
+                    hoisted_container = Some(synth);
+                    Some(expr)
+                });
+            hoisted
         } else if let Some(vec_te) = self.map_get_unwrap_vec_value_te(inner) {
             // B-2026-07-15-27: hoist a `<map>.get(k).unwrap()` Vec-value BORROW
             // container — `m.get(k).unwrap()[i].method()` — to a synth Vec
