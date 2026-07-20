@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 156 | 0 |
 | leak | 86 | 0 |
+| codegen-gap | 67 | 0 |
 | double-free | 67 | 0 |
-| codegen-gap | 66 | 0 |
 | missing-feature | 60 | 0 |
 | false-positive | 37 | 0 |
 | run-vs-build | 36 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 429 | 0 |
+| codegen | 430 | 0 |
 | typecheck | 83 | 0 |
 | interp | 66 | 0 |
 | ownership | 24 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **597 surfaced · 0 open · 593 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **598 surfaced · 0 open · 594 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (593)
+### Fixed (594)
 
-<details><summary>593 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>594 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -729,6 +729,7 @@ _None — the ledger is fully drained._
 | B-2026-07-20-2 | codegen | medium | Indexing a `Vec` that lives in a TUPLE element (`t.0[i]`) fails codegen LOUD — `error: codegen failed: Index operator applied to non-array type` (JIT… | 8efca21 |
 | B-2026-07-20-3 | interp+codegen | high | Index-STORE into a `Vec` that lives in a TUPLE element (`t.0[i] = v`) is DROPPED by the tree-walk interpreter (SILENT — the store is a no-op: `let mu… | b7d2bc8 |
 | B-2026-07-20-4 | codegen | low | Calling a method on an indexed element of a tuple-element `Vec` (`t.0[i].len()`) fails codegen LOUD — "codegen: indexed-receiver method 'len' require… | 8cfa72a |
+| B-2026-07-20-5 | codegen | low | `Iterator.partition()` codegen lowered only a trivially-copyable element and loud-deferred a HEAP element (String/Vec) to `--interp` (the documented… | ba6751f |
 
 </details>
 
