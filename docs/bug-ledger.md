@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 155 | 0 |
+| miscompile | 156 | 1 |
 | leak | 86 | 0 |
 | double-free | 67 | 0 |
-| codegen-gap | 65 | 1 |
+| codegen-gap | 66 | 1 |
 | missing-feature | 60 | 0 |
 | false-positive | 37 | 0 |
 | run-vs-build | 36 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 427 | 1 |
+| codegen | 429 | 2 |
 | typecheck | 83 | 0 |
-| interp | 65 | 0 |
+| interp | 66 | 1 |
 | ownership | 24 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,17 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **595 surfaced · 1 open · 590 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **597 surfaced · 2 open · 591 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-20-2 | 2026-07-20 | codegen | medium | Indexing a `Vec` that lives in a TUPLE element (`t.0[i]`) fails codegen LOUD — `error: codegen failed: Index operator applied to non-array type` (JIT + native) — while the tree-walk interpreter reads the element correctly. Fails closed with the `--interp` hint (not a silent miscompile), but a genuine run-vs-build gap: `t.0.len()` and now `t.0.iter()` (B-2026-07-20-1) work, so a program that reads `t.0.len()` then indexes `t.0[i]` in the same scope compiles the former and rejects the latter. | src/codegen/collections.rs |
+| B-2026-07-20-3 | 2026-07-20 | interp+codegen | high | Index-STORE into a `Vec` that lives in a TUPLE element (`t.0[i] = v`) is DROPPED by the tree-walk interpreter (SILENT — the store is a no-op: `let mut t = make(); t.0[1] = 99; println(t.0[1])` prints the ORIGINAL 2, not 99) and REJECTED loud by codegen ("Index assignment target must be a variable"). Both backends are wrong: interp silently, codegen loud. A plain `a[i] = v` on a bare Vec binding stores correctly, so the gap is specific to a tuple-element lvalue root. | src/interpreter (index-store lvalue) + src/codegen/collections.rs |
+| B-2026-07-20-4 | 2026-07-20 | codegen | low | Calling a method on an indexed element of a tuple-element `Vec` (`t.0[i].len()`) fails codegen LOUD — "codegen: indexed-receiver method 'len' requires the indexed container to be a named variable in v1 (got non-identifier inner expression)" — while the interpreter runs it. Fails closed (no wrong answer); the indexed-receiver method path only accepts a named-variable container, not a `TupleIndex`-rooted one. | src/codegen (indexed-receiver method dispatch) |
 
-### Fixed (590)
+### Fixed (591)
 
-<details><summary>590 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>591 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -728,6 +729,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **595 surfaced 
 | B-2026-07-19-14 | typecheck+interp+codegen | medium | Iterator predicate/Option-adaptor cluster UNIMPLEMENTED: `filter_map`, `find_map`, `partition` are rejected `no method '<name>' on type 'Iterator'` i… | 242c07c |
 | B-2026-07-19-15 | codegen | low | `Vec[T].sorted()` (immutable sort returning a NEW Vec) is UNIMPLEMENTED in codegen for every element type — it falls to the generic 'Vec/String metho… | c6848c4 |
 | B-2026-07-20-1 | typecheck+codegen | high | Iterating a `Vec` that lives in a TUPLE element (`t.0.iter()`, `t.0.iter().fold(..)`) silently iterated ZERO times under codegen (JIT + native) while… | eeee817 |
+| B-2026-07-20-2 | codegen | medium | Indexing a `Vec` that lives in a TUPLE element (`t.0[i]`) fails codegen LOUD — `error: codegen failed: Index operator applied to non-array type` (JIT… | 8efca21 |
 
 </details>
 
