@@ -8951,3 +8951,69 @@ fn test_chained_zip_with_reduce_rowview_reuse_ok_b20_6() {
          }\n",
     );
 }
+
+#[test]
+fn test_chained_matmul_reduce_reuse_ok_b14_18() {
+    // B-2026-07-14-18 (matmul), generalized alongside B-2026-07-20-6: the
+    // chain span-collision no longer needs a per-method allowlist — the
+    // name-unanimity fallback reads `Tensor.matmul`'s `[Ref]` modes from
+    // `method_param_modes` by method-name segment, immune to the collided
+    // span. `b` is borrowed by both chained matmuls, so reuse is clean.
+    ownership_ok(
+        "fn f(a: ref Tensor[f32, [2, 2]], b: ref Tensor[f32, [2, 2]]) -> f32 {\n\
+        \x20   let t = a.matmul(b).sum();\n\
+        \x20   let u = a.matmul(b).sum();\n\
+        \x20   t + u\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_chained_consuming_arg_reuse_still_errors() {
+    // False-negative guard for the name-unanimity fallback: a user method
+    // whose arg is OWNED (`s: String`, consumed) called as a chain receiver
+    // must still flag the reused arg — unanimity over the registered
+    // `Sink.absorb` signature finds `Own`, so the consume default holds and
+    // the second `v` use is a genuine UseAfterMove.
+    let errors = ownership_errors(
+        "struct Sink { n: i64 }\n\
+         impl Sink {\n\
+        \x20   fn absorb(ref self, s: String) -> i64 { s.len() + self.n }\n\
+         }\n\
+         fn main() {\n\
+        \x20   let k = Sink { n: 1 };\n\
+        \x20   let v: String = \"hello\";\n\
+        \x20   let a = k.absorb(v).abs();\n\
+        \x20   let b = k.absorb(v).abs();\n\
+        \x20   println(a + b);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, OwnershipErrorKind::UseAfterMove)),
+        "consuming chained-method arg reused must remain a UseAfterMove; got {errors:?}"
+    );
+}
+
+#[test]
+fn test_chained_shared_var_method_reuse_ok() {
+    // The autograd chain idiom: `x.mul(x).add(y)` collides the inner `mul`'s
+    // span entry to `Var.add`, whose arg-0 mode (Ref) is trusted because the
+    // entry EXISTS at that position (`method_arg_is_borrow_position` falls to
+    // the name-based lookup only when the collided entry lacks the position).
+    // Guards that path against a unanimity-only regression: the `Mul` TRAIT
+    // declares `mul(self, rhs: Self)` (rhs consumed), so pure name-unanimity
+    // for `.mul` fails even though `Var.mul(other: ref Var)` borrows — a
+    // fallback that ignored the present collided entry would false-flag this.
+    ownership_ok(
+        "import std.autograd.{Tape, Var};\n\
+         fn main() {\n\
+        \x20   let t = Tape.new();\n\
+        \x20   let x = Var.leaf(t, 2.0);\n\
+        \x20   let three = Var.leaf(t, 3.0);\n\
+        \x20   let f = x.mul(x).add(three.mul(x));\n\
+        \x20   println(f.value());\n\
+         }\n",
+    );
+}
