@@ -720,6 +720,54 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// `cpu.supports("avx2") -> bool` — emit a call to the runtime
+    /// `karac_cpu_supports(feature_ptr, feature_len) -> i32`, returning an `i1`
+    /// bool (`result != 0`). The feature name is a string literal lowered to a
+    /// global constant's `{ptr, len}` (len = byte length, no NUL terminator). The
+    /// runtime wraps std's cached `is_*_feature_detected!`, so this is a cheap
+    /// probe; the `#[multiversion]` dispatch thunk desugars onto this intrinsic.
+    fn compile_cpu_supports(&mut self, args: &[CallArg]) -> Result<BasicValueEnum<'ctx>, String> {
+        let feat = match args.first().map(|a| &a.value.kind) {
+            Some(ExprKind::StringLit(s)) => s.clone(),
+            _ => {
+                return Err("cpu.supports expects a string-literal feature name, \
+                            e.g. `cpu.supports(\"avx2\")`"
+                    .to_string())
+            }
+        };
+        let i64_t = self.context.i64_type();
+        let feat_ptr = self
+            .builder
+            .build_global_string_ptr(&feat, "cpu.feat")
+            .map_err(|e| format!("cpu.supports feature-name constant failed: {e}"))?
+            .as_pointer_value();
+        let feat_len = i64_t.const_int(feat.len() as u64, false);
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let i32_t = self.context.i32_type();
+        let fn_ty = i32_t.fn_type(&[ptr_t.into(), i64_t.into()], false);
+        let f = self
+            .module
+            .get_function("karac_cpu_supports")
+            .unwrap_or_else(|| self.module.add_function("karac_cpu_supports", fn_ty, None));
+        let res = self
+            .builder
+            .build_call(f, &[feat_ptr.into(), feat_len.into()], "cpu.supports")
+            .map_err(|e| format!("cpu.supports call failed: {e}"))?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let is_supported = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                res,
+                i32_t.const_zero(),
+                "cpu.supp",
+            )
+            .map_err(|e| format!("cpu.supports compare failed: {e}"))?;
+        Ok(is_supported.into())
+    }
+
     pub(super) fn compile_method_call(
         &mut self,
         object: &Expr,
@@ -757,6 +805,19 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(&(call_span.offset, call_span.length))
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
+
+        // `cpu.supports("avx2") -> bool` — runtime CPU-feature probe (design.md §
+        // Multiversioning; the `#[multiversion]` dispatch primitive). Recognised
+        // as a namespace intrinsic only when no local binding shadows `cpu`
+        // (prelude-shadow rule, mirroring `ptr.const`). Emits a call to the
+        // runtime `karac_cpu_supports` with the literal feature name's `{ptr,len}`.
+        if method == "supports" {
+            if let ExprKind::Identifier(m) = &object.kind {
+                if m == "cpu" && !self.variables.contains_key("cpu") {
+                    return self.compile_cpu_supports(args);
+                }
+            }
+        }
 
         // `<iter-chain>.rev()` — reverse iteration. The interpreter implements it
         // (drain-reverse-replay); codegen defers it because the forward-only

@@ -36,6 +36,7 @@ mod alloc;
 mod bounded_channel;
 mod channel;
 mod clone;
+mod cpu;
 mod emutls;
 #[cfg(feature = "net")]
 pub mod event_loop;
@@ -146,6 +147,12 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_critical_section_acquire,
         karac_critical_section_release,
     );
+    // CPU feature detection (`runtime/src/cpu.rs`) — the `cpu.supports(name)`
+    // intrinsic + `#[multiversion]` dispatch primitive. Codegen emits calls to
+    // it; the JIT resolves it from the running `karac_jit_runner` via `dlsym`, so
+    // it must survive DCE — same keep-list class as the realloc/critical-section
+    // pairs (B-2026-07-12-22).
+    keep!(cpu::karac_cpu_supports);
     // Regex FFI (`runtime/src/regex.rs`, opt-in `regex` feature). Codegen emits
     // calls to the whole `karac_regex_*` surface for `Regex.compile`/`is_match`/
     // `find`/`find_all`/`replace_all`; the JIT resolves them from the running

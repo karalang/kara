@@ -328,6 +328,14 @@ impl SymbolTable {
         // by name); the typechecker + codegen + interpreter intercept
         // `critical_section.acquire` before it is treated as a value method.
         push(self, "critical_section", SymbolKind::Module);
+
+        // `cpu` is a built-in module hosting the runtime CPU-feature probe
+        // (`cpu.supports("avx2") -> bool`, design.md § Multiversioning; the
+        // `#[multiversion]` dispatch primitive). Registered like `ptr` / `gpu` /
+        // `critical_section` so the lowercase receiver resolves (a local binding
+        // still shadows it by name); the typechecker + codegen + interpreter
+        // intercept `cpu.supports` before it is treated as a value method.
+        push(self, "cpu", SymbolKind::Module);
     }
 
     pub fn push_scope(&mut self, kind: ScopeKind) -> ScopeId {

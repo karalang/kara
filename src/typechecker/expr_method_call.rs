@@ -968,6 +968,36 @@ impl<'a> super::TypeChecker<'a> {
         // is registered with `SymbolKind::Module` but local-scope wins
         // by name resolution, mirroring the spec's prelude-shadow rule.
         if let ExprKind::Identifier(mod_name) = &object.kind {
+            // `cpu.supports("avx2") -> bool` — the runtime CPU-feature probe
+            // (design.md § Multiversioning; the `#[multiversion]` dispatch
+            // primitive). One String feature-name argument. Recognised as a
+            // namespace intrinsic only when no local binding shadows `cpu`
+            // (same prelude-shadow rule as `ptr.const`).
+            if mod_name == "cpu" && self.local_scope.lookup("cpu").is_none() && method == "supports"
+            {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "'cpu.supports' expects 1 argument (a feature-name string), found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                } else {
+                    let at = self.infer_expr(&args[0].value);
+                    if !matches!(at, Type::Str) {
+                        self.type_error(
+                            "'cpu.supports' expects a String feature name — e.g. \
+                             `cpu.supports(\"avx2\")`"
+                                .to_string(),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                return Type::Bool;
+            }
             if mod_name == "ptr"
                 && self.local_scope.lookup("ptr").is_none()
                 && (method == "const" || method == "mut")

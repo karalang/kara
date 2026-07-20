@@ -18916,6 +18916,24 @@ fn main() {
 }
 
 #[test]
+fn test_cpu_supports_intrinsic() {
+    // `cpu.supports("...") -> bool` — interpreter twin of the codegen probe
+    // (parity with tests/codegen.rs::test_e2e_cpu_supports_intrinsic). Assert
+    // only host-independent facts: an unknown feature is false; a real feature
+    // yields a usable bool.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    println(cpu.supports("not-a-real-feature-xyz"));
+    let a = cpu.supports("avx2");
+    println(a == a);
+}
+"#,
+    );
+    assert_eq!(out, "false\ntrue\n");
+}
+
+#[test]
 fn test_autograd_reverse_mode_tensor_valued() {
     // std.autograd (phase-11) tensor-valued surface — interpreter parity with
     // tests/codegen.rs::test_e2e_autograd_tensor_valued. Element-wise

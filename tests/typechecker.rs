@@ -23651,6 +23651,26 @@ fn ptr_const_on_function_call_rejected() {
 }
 
 #[test]
+fn cpu_supports_returns_bool() {
+    // `cpu.supports("avx2") -> bool` — the runtime CPU-feature probe intrinsic
+    // (design.md § Multiversioning). Recognised as a namespace intrinsic; the
+    // result binds to a `bool`.
+    typecheck_ok(
+        "fn main() {\n    let b: bool = cpu.supports(\"avx2\");\n    if b { } else { }\n}",
+    );
+}
+
+#[test]
+fn cpu_supports_non_string_arg_rejected() {
+    let errs = typecheck_errors("fn main() {\n    let b = cpu.supports(42);\n}");
+    assert!(
+        errs.iter().any(|e| e.message.contains("cpu.supports")),
+        "expected a cpu.supports arg-type error, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn ptr_mut_on_shared_ref_root_rejected() {
     // Place is rooted at a `ref T` binding — structurally immutable;
     // `.mut` rejects with E_PTR_MUT_REQUIRES_MUTABLE_PLACE while

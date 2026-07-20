@@ -4468,6 +4468,29 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_cpu_supports_intrinsic() {
+        // Phase-11 `cpu.supports("...") -> bool` — the runtime CPU-feature probe
+        // (design.md § Multiversioning; the `#[multiversion]` dispatch primitive),
+        // lowered to a `karac_cpu_supports` runtime call. Assert only the
+        // host-independent facts: an unknown feature is always `false`, and a real
+        // feature name yields a usable bool (`a == a` is `true`). The exact
+        // support of a real feature is host-dependent, so it is not asserted.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    println(cpu.supports("not-a-real-feature-xyz"));
+    let a = cpu.supports("avx2");
+    println(a == a);
+    let b = cpu.supports("neon");
+    println(b or not b);
+}
+"#,
+        ) {
+            assert_eq!(out, "false\ntrue\ntrue\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_ptr_const_mut_place_shapes_roundtrip() {
         // `ptr.const(place)` / `ptr.mut(place)` over the full place grammar the
         // typechecker's place-validator accepts — field access, a nested field
