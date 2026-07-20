@@ -297,6 +297,27 @@ impl Emitter {
     // deep-copies; the `Option[TypeExpr]` is matched INLINE (never passed by
     // value to a helper — B-2026-07-11-37).
     fn collect_sigs(mut ref self, items: ref Vec[Item]) {
+        // SYNTHETIC Option enums (Slice 29) — registered FIRST, before any
+        // user enum, as ordinary entries in the en_ tables: Option$i =
+        // Option[i64] (Some payload kind 0), Option$s = Option[String]
+        // (Some payload kind 2, so en_has_heap widens the layout and the
+        // whole tag-conditional ownership machinery applies verbatim). The
+        // "$" names can never collide with user idents; tag 0 = None,
+        // tag 1 = Some — matching declaration order.
+        self.en_names.push("Option$i".to_string());
+        self.en_off.push(0);
+        self.en_var_names.push("None".to_string());
+        self.en_var_pl.push(0 - 1);
+        self.en_var_names.push("Some".to_string());
+        self.en_var_pl.push(0);
+        self.en_cnt.push(2);
+        self.en_names.push("Option$s".to_string());
+        self.en_off.push(2);
+        self.en_var_names.push("None".to_string());
+        self.en_var_pl.push(0 - 1);
+        self.en_var_names.push("Some".to_string());
+        self.en_var_pl.push(2);
+        self.en_cnt.push(2);
         // Pass A — struct defs (Slice 12), BEFORE fn signatures so a param /
         // return type can name any struct regardless of order. Indexed reads
         // through the ref (`sd.fields[i].ty` — the proven idiom; whole-Vec
@@ -434,6 +455,18 @@ impl Emitter {
                 }
                 if segments[0] == "bool" {
                     return 1;
+                }
+                if segments[0] == "Option" {
+                    // Option[i64] / Option[String] (Slice 29): the synthetic
+                    // enums registered first in collect_sigs — indexes 0/1
+                    // by construction.
+                    if generics.len() == 1 {
+                        let gk2 = self.kind_of_ty(generics[0]);
+                        if gk2 == 2 {
+                            return 1001;
+                        }
+                    }
+                    return 1000;
                 }
                 if segments[0] == "Vec" {
                     // Slice 16: Vec[String] (kind 4, {ptr,i64} elements) vs
@@ -934,6 +967,22 @@ impl Emitter {
                                     let dk = self.kind_of_ty(t);
                                     if dk == 4 or dk >= 2000 {
                                         vk2 = dk;
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+                        if vk == 0 - 9 {
+                            // `let x: Option[T] = None` (Slice 29): the
+                            // annotation supplies the concrete Option kind;
+                            // an unannotated bare-None let defaults to
+                            // Option[i64].
+                            vk2 = 1000;
+                            match ty {
+                                Some(t) => {
+                                    let dk2 = self.kind_of_ty(t);
+                                    if dk2 == 1000 or dk2 == 1001 {
+                                        vk2 = dk2;
                                     }
                                 }
                                 None => {}
@@ -3270,6 +3319,16 @@ impl Emitter {
                 let IdentExpr { name, span } = ie;
                 let idx = self.local_slot(name);
                 if idx < 0 {
+                    if name == "None" {
+                        // `None` (Slice 29): zeroinitializer (tag 0) under a
+                        // SENTINEL kind (-9, NEGATIVE so it passes none of
+                        // the range checks — a positive sentinel would trip
+                        // the >= 2000 vec legs) — the consuming context (let
+                        // annotation / return type / param kind) supplies the
+                        // concrete Option kind; zeroinit is valid for both
+                        // layouts.
+                        return Val { op: "zeroinitializer".to_string(), kind: 0 - 9, heap: false };
+                    }
                     return Val { op: "0".to_string(), kind: 0, heap: false };
                 }
                 let k = self.locals_kind[idx];
@@ -3489,6 +3548,65 @@ impl Emitter {
                 }
                 if vec_new {
                     return Val { op: "zeroinitializer".to_string(), kind: 3, heap: true };
+                }
+                if cname == "Some" {
+                    // `Some(x)` (Slice 29): construct the synthetic Option
+                    // enum picked by the payload's kind (0 → Option$i /
+                    // kind 1000, 2 → Option$s / kind 1001). Tag 1 = Some.
+                    let mut pv2 = "0".to_string();
+                    let mut pk3 = 0;
+                    let mut ph2 = false;
+                    for a in args {
+                        let CallArg { label, mut_marker, value, span: asp } = a;
+                        let av = self.emit_value(value);
+                        let Val { op: aop, kind: ak, heap: ah } = av;
+                        pv2 = aop;
+                        pk3 = ak;
+                        ph2 = ah;
+                    }
+                    if pk3 == 2 {
+                        let ety2 = self.ty_text(1001);
+                        let a0 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a0.clone()
+                            + " = insertvalue "
+                            + ety2.clone()
+                            + " zeroinitializer, i64 1, 0\n";
+                        let mut sv2 = pv2;
+                        if not ph2 {
+                            let mv = self.emit_materialize(sv2.clone());
+                            let Val { op: mop, kind: mk, heap: mh } = mv;
+                            sv2 = mop;
+                        }
+                        let a1 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a1.clone()
+                            + " = insertvalue "
+                            + ety2
+                            + " "
+                            + a0
+                            + ", { ptr, i64 } "
+                            + sv2
+                            + ", 2\n";
+                        return Val { op: a1, kind: 1001, heap: true };
+                    }
+                    let a0 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + a0.clone()
+                        + " = insertvalue { i64, i64 } zeroinitializer, i64 1, 0\n";
+                    let a1 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + a1.clone()
+                        + " = insertvalue { i64, i64 } "
+                        + a0
+                        + ", i64 "
+                        + pv2
+                        + ", 1\n";
+                    return Val { op: a1, kind: 1000, heap: false };
                 }
                 if enum_ei >= 0 and enum_tag >= 0 {
                     // Payload-carrying construction (Slice 14; String payloads
