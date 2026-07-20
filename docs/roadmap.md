@@ -871,7 +871,7 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
 
 **Goal:** Same language compiles to multiple targets.
 
-> **Status (2026-07-13) — most shipped Phase 10 work lives in the tracker; the checkboxes here have been reconciled but stay coarse.** Per `implementation_checklist/phase-10-targets.md` (≈59/65 done), these are **DONE**: TLS provider cross-compile to all v1 targets + CI gate, `std.web` / `std.wasi` gated effect modules, `host fn` (parse → typecheck → native lowering), WASM **strip-by-default** (482 KiB → 30 KiB browser hello), the dual / threaded WASM runtime archives + sequential cooperative scheduler, the **GPU compute-shader v1 ship gate** (MET on Metal 2026-07-10 — WGSL codegen, wgpu integration, `gpu.dispatch`, `GpuSafe` type checking, and `#[gpu]` effect enforcement all shipped), and **atomic RMW ops + hardware fences** (2026-06-04/05). The boxes that remain `[ ]` below are genuinely open: **GPU CUDA/NVPTX path**, **`KARAC_GPU` runtime selection**, and **multi-field GPU layout groups** (the `group physics { position, velocity }` example); **FPGA** is unstarted; **WebAssembly**'s core lowering is in but the event-loop-yield scheduler refinement is pending. Trust the tracker over the box state in this section.
+> **Status (2026-07-20) — most shipped Phase 10 work lives in the tracker; the checkboxes here have been reconciled but stay coarse.** Per `implementation_checklist/phase-10-targets.md` (≈88/93 done), these are **DONE**: TLS provider cross-compile to all v1 targets + CI gate, `std.web` / `std.wasi` gated effect modules, `host fn` (parse → typecheck → native lowering), WASM **strip-by-default** (482 KiB → 30 KiB browser hello), the dual / threaded WASM runtime archives + sequential cooperative scheduler, the **GPU compute-shader v1 ship gate** (MET on Metal 2026-07-10, also validated on Vulkan/lavapipe on Linux 2026-07-18 — WGSL codegen, wgpu integration, `gpu.dispatch`, `GpuSafe` type checking, `#[gpu]` effect enforcement, **multi-field layout groups → coalesced GPU buffers**, and **`KARAC_GPU` device-select + `KARAC_GPU_BACKEND=cpu` software adapter** all shipped), and **atomic RMW ops + hardware fences** (2026-06-04/05). The boxes that remain `[ ]` below are genuinely open: the **GPU CUDA/NVPTX opt-in path** (`--target cuda`); **FPGA** is unstarted; **WebAssembly**'s core lowering + threaded concurrency are in, but the sequential event-loop-yield scheduler refinement is deferred post-v1. Trust the tracker over the box state in this section.
 
 > **v66 graduation update (2026-05-11):** **GPU compute shaders pulled forward to v1 ship-readiness** as a P1 gate, no longer Phase 10. The implementation tasks below stay in Phase 10's tracker for sequencing (codegen work proceeds during the Phase 8–11 window) but the gate is v1 ship, not "post-v1 target completion." Multi-vendor coverage already satisfied by the existing wgpu-primary design (Metal on macOS, Vulkan on Linux, DX12 on Windows, WebGPU in browser; CUDA opt-in via `--target cuda`). See `deferred.md § Additional Compilation Targets (Phase 10)` for the v1 pull-forward note, and `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 5.2` for the decision rationale. WebAssembly and embedded targets stay at Phase 10 post-v1.
 
@@ -906,11 +906,11 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
   - [ ] WGSL codegen: lower `#[gpu]` function bodies to WGSL compute shaders
   - [x] wgpu integration: device initialization, buffer management, shader compilation, dispatch
   - [x] `gpu.dispatch` runtime call: pack arguments into GPU buffers, submit compute pass, read results back
-  - [ ] Layout groups → GPU buffers: `group physics { position, velocity }` maps to a single GPU buffer with coalesced access
+  - [x] Layout groups → GPU buffers: `group physics { position, velocity }` maps to a single GPU buffer with coalesced access
   - [x] `GpuSafe` type checking: reject heap types (`String`, `Vec[T]`, etc.) in `#[gpu]` call graphs (already specified in design.md)
   - [x] Effect enforcement: reject `allocates(Heap)`, `panics`, I/O effects in `#[gpu]` call graphs (via existing effect checker)
   - [ ] CUDA path: NVPTX codegen for `--target cuda` builds
-  - [ ] `KARAC_GPU` / `KARAC_GPU_BACKEND` environment variable handling
+  - [x] `KARAC_GPU` / `KARAC_GPU_BACKEND` environment variable handling
 - [ ] **FPGA bitstreams (future goal):** As described in design.md Feature 7; not yet designed in detail
 - [x] **Atomic RMW operations:** `swap`, `compare_exchange`, `fetch_add`, `fetch_and`, `fetch_or` on `Atomic[T]` — shipped (2026-06-04/05; v1 originally shipped `load`/`store` only)
 - [x] **Hardware fences:** `fence(Ordering)` (unsafe) / `compiler_fence(Ordering)` (safe) — hardware and compiler barriers
@@ -958,7 +958,7 @@ Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-inv
 - [ ] `DataFrame` — schema-bearing table of named columns.
 - [ ] Arrow IPC, Parquet, CSV readers/writers with effect annotations.
 - [ ] **`LazyDataFrame` — minimum-viable query optimizer (v66 graduation, 2026-05-11; lifted from v1.5).** `df.lazy()` returns `LazyDataFrame`; expression API (`col("name")`, `col("a") + col("b")`, `col("x").mean()`, `when().then().otherwise()`); operations (`filter`, `select`, `group_by(...).agg(...)`, `join`, `sort`, `limit`); `.collect() -> DataFrame` materializes; `.explain() -> String` prints optimized plan. Optimizer passes at v1: predicate pushdown, projection pushdown, constant folding, CSE. Target ~2-3K LOC. See `deferred.md § Lazy DataFrame Query Planner — Option A v1 Scope`. Full optimizer (join reordering, push-through-joins, etc.) at P2 — see `deferred.md § Lazy DataFrame Query Optimizer Expansion`.
-- [ ] **Statistical methods on `Column` / `DataFrame` (v66 graduation, 2026-05-11).** `Column[T: Numeric]`: `mean`, `std`, `var`, `median`, `quantile(q)`, `min`, `max`, `sum`. `Column[f64]`: above + `corr(other)`. `DataFrame.describe() -> DataFrame` (count/mean/std/min/25%/50%/75%/max per numeric column). Trait-dispatched the same way as `std.stats` so future `GpuColumn` / `GpuTensor` implements the same surface. See `deferred.md § Statistical Methods on Column / DataFrame`.
+- [x] **Statistical methods on `Column` / `DataFrame` (v66 graduation, 2026-05-11).** `Column[T: Numeric]`: `mean`, `std`, `var`, `median`, `quantile(q)`, `min`, `max`, `sum`. `Column[f64]`: above + `corr(other)`. `DataFrame.describe() -> DataFrame` (count/mean/std/min/25%/50%/75%/max per numeric column). Trait-dispatched the same way as `std.stats` so future `GpuColumn` / `GpuTensor` implements the same surface. See `deferred.md § Statistical Methods on Column / DataFrame`.
 
 **ML and AI-adjacent stdlib (v66 graduation, 2026-05-11).**
 - [x] **`std.embeddings` — cosine similarity, top-k, l2-normalize, batched dot (P1).** Surface complete (2026-07-13): scalar + batched + Q×N-matrix cosine similarity, `top_k`, `l2_normalize`, batched dot over `Tensor[f32, ...]` for RAG, semantic-search, recommendation workloads. See `deferred.md § std.embeddings`.
@@ -972,7 +972,7 @@ Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-inv
 
 > **Note (v64 lift, 2026-05-09):** `std.regex`, `std.http` (server + client), `std.websocket` (server + client), and `std.process` were lifted to [Phase 8 § Backend Platform](#backend-platform-v64-lifted) under the backend-first decision. Only `std.stats` (data-science specific) remains in this Phase 11 sub-section. Browser playground's WebSocket shim is now satisfied by the v1 `std.websocket` server which lives in Phase 8.
 
-- [ ] `std.stats` — mean, stddev, percentile, median, min/max, argmin/argmax, sort, argsort. Trait-dispatched via `Reduce` / `ElementwiseMap` / `ElementwiseOrd` so future `GpuTensor` implements the same surface.
+- [x] `std.stats` — mean, stddev, percentile, median, min/max, argmin/argmax, sort, argsort. Trait-dispatched via `Reduce` / `ElementwiseMap` / `ElementwiseOrd` so future `GpuTensor` implements the same surface.
 
 ### Security (`std.secret`)
 - [ ] `Secret[T]` — compiler-enforced wrapper that blocks `Debug`/`Display`/`Serialize`/`Deserialize`/`PartialEq`/`Eq`/`PartialOrd`/`Ord`/`Hash`/`Deref`/`Borrow`/`AsRef`/`Copy` impls on itself; `.expose()` / `.expose_mut()` are the only access paths; `.clone()` re-wraps
@@ -982,16 +982,16 @@ Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-inv
 - [x] `undocumented_unsafe` lint — warn (default-on) on `unsafe` blocks without a preceding `// Safety:` comment; same rule for `unsafe fn` via `# Safety` doc-comment section
 
 ### Embedded / Hardware Primitives
-- [ ] `volatile_read[T: Copy]` / `volatile_write[T: Copy]` — unsafe intrinsics for MMIO register access
-- [ ] `VolatileCell[T: Copy]` — stdlib wrapper for ergonomic register map definitions
+- [x] `volatile_read[T: Copy]` / `volatile_write[T: Copy]` — unsafe intrinsics for MMIO register access
+- [x] `VolatileCell[T: Copy]` — stdlib wrapper for ergonomic register map definitions
 - [ ] Inline assembly: `asm` keyword expression inside `unsafe`; operand forms (`in`, `out`, `inout`); options (`nomem`, `nostack`, `pure`, `volatile`)
 - [ ] `global_asm` — file-scope raw assembly for vector tables and bootstrap
-- [ ] `Atomic[T: Copy]` — `shared struct` for ISR-to-main signaling; v1 scope: `new`, `load(ord)`, `store(val, ord)` on `bool`/`u8`/`u16`/`u32`/`u64`/`usize`. Advanced RMW ops (`swap`, `compare_exchange`, `fetch_add`, `fetch_and`, `fetch_or`) and fences land alongside the embedded target work in Phase 10.
-- [ ] `Ordering` enum: `Relaxed`, `Acquire`, `Release`, `AcqRel`, `SeqCst` — C11/LLVM memory model
+- [x] `Atomic[T: Copy]` — `shared struct` for ISR-to-main signaling; v1 scope: `new`, `load(ord)`, `store(val, ord)` on `bool`/`u8`/`u16`/`u32`/`u64`/`usize`. Advanced RMW ops (`swap`, `compare_exchange`, `fetch_add`, `fetch_and`, `fetch_or`) and fences land alongside the embedded target work in Phase 10.
+- [x] `Ordering` enum: `Relaxed`, `Acquire`, `Release`, `AcqRel`, `SeqCst` — C11/LLVM memory model
 - [ ] `#[interrupt(NAME)]` — ISR attribute: interrupt calling convention, vector table placement, implicit `isr` profile restrictions
-- [ ] `CriticalSectionGuard` — RAII interrupt disable/re-enable; `#[must_use]`
-- [ ] Linker control: `#[link_section("name")]`, `#[no_mangle]`, `#[used]`
-- [ ] C calling convention variants: `extern "C"`, `"C-unwind"`, `"interrupt"` (implemented); `"stdcall"`, `"fastcall"`, `"win64"`, `"sysv64"` (reserved)
+- [x] `CriticalSectionGuard` — RAII interrupt disable/re-enable; `#[must_use]`
+- [x] Linker control: `#[link_section("name")]`, `#[no_mangle]`, `#[used]`
+- [x] C calling convention variants: `extern "C"`, `"C-unwind"`, `"interrupt"` (implemented); `"stdcall"`, `"fastcall"`, `"win64"`, `"sysv64"` (reserved)
 - [ ] `float_in_serialized_type` lint: warn when `#[derive(Serialize)]` or `#[derive(Deserialize)]` contains an `f32`/`f64` field — JSON has no NaN encoding, format consumers follow IEEE. Suppressible per-field with `#[allow(float_in_serialized_type)]`. (Lands alongside Serialize/Deserialize derives, post-v1.)
 
 ### Codegen Optimization (IR quality pass)
@@ -1291,5 +1291,5 @@ Notes:
 - Refinement types (Level 2) and contracts (Level 2.5) are committed — parsing complete (Phase 2), enforcement DONE in Phase 9.
 - v1 release = end of Phase 11. **Self-hosting (Phase 12) ships IN v1**, sequenced before Phase 11 (was: post-v1).
 - Phase 0 has no compiler dependency and can be done anytime.
-- ⚠ roadmap.md checkbox state was reconciled against the trackers on 2026-07-13, but stays COARSER than them: an item is `[x]` here only when its whole bucket is done, and many buckets that are interpreter-complete-but-codegen-pending (or done in one backend / one platform) are still shown `[ ]`. Current tracker counts: Phase 8 ≈234/298, Phase 10 ≈59/65, Phase 11 ≈68/88, Phase 12 ≈88/107 done (Phase 9 fully done). For granular / partial state, trust `implementation_checklist/` + git over the [x]/[ ] marks in this file.
+- ⚠ roadmap.md checkbox state was reconciled against the trackers on 2026-07-20, but stays COARSER than them: an item is `[x]` here only when its whole bucket is done, and many buckets that are interpreter-complete-but-codegen-pending (or done in one backend / one platform) are still shown `[ ]`. Current tracker counts: Phase 8 ≈238/298, Phase 10 ≈88/93, Phase 11 ≈83/102, Phase 12 ≈88/106 done (Phase 9 fully done). For granular / partial state, trust `implementation_checklist/` + git over the [x]/[ ] marks in this file.
 ```
