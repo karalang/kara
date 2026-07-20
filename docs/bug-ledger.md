@@ -723,7 +723,7 @@ _None — the ledger is fully drained._
 | B-2026-07-19-11 | codegen | low | `Iterator.rev()` codegen residual (B-2026-07-18-41) — a BARE range base `(a..b).rev()` / `(a..=b).rev()` was loud-deferred to `--interp` | 20bcdc5 |
 | B-2026-07-19-12 | typecheck+interp+codegen | low | `Iterator.flatten()` was unimplemented — `xs.iter().flatten()` rejected with `no method 'flatten' on type 'Iterator'` | 0425a45,1f1e879,ffd6384 |
 | B-2026-07-19-13 | codegen | medium | Indexed-shared-struct field READ (`nodes[i].field`) hardcoded heap offset `idx + 1` instead of routing through `shared_gep_layout`, so it mis-read an… | 8f606de |
-| B-2026-07-19-14 | typecheck+interp+codegen | medium | Iterator predicate/Option-adaptor cluster UNIMPLEMENTED: `filter_map`, `find_map`, `partition` are rejected `no method '<name>' on type 'Iterator'` i… | f0ed50a |
+| B-2026-07-19-14 | typecheck+interp+codegen | medium | Iterator predicate/Option-adaptor cluster UNIMPLEMENTED: `filter_map`, `find_map`, `partition` are rejected `no method '<name>' on type 'Iterator'` i… | 242c07c |
 | B-2026-07-19-15 | codegen | low | `Vec[T].sorted()` (immutable sort returning a NEW Vec) is UNIMPLEMENTED in codegen for every element type — it falls to the generic 'Vec/String metho… | c6848c4 |
 
 </details>
