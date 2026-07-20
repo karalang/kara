@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 156 | 0 |
 | leak | 86 | 0 |
-| codegen-gap | 67 | 0 |
-| double-free | 67 | 0 |
+| codegen-gap | 68 | 1 |
+| double-free | 68 | 1 |
 | missing-feature | 60 | 0 |
 | false-positive | 38 | 1 |
 | run-vs-build | 36 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 430 | 0 |
+| codegen | 432 | 2 |
 | typecheck | 83 | 0 |
 | interp | 66 | 0 |
 | ownership | 25 | 1 |
@@ -124,13 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **599 surfaced · 1 open · 594 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **601 surfaced · 3 open · 594 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-20-6 | 2026-07-20 | ownership | low | `karac check` reports a false `error[ownership]: value 'row' moved here, used again here` for an iter_axis ROW-VIEW reused across two CHAINED `row.zip_with(row, ..).sum()` calls, even though `zip_with`'s `other` param is `ref` (a borrow, not a move). The trigger is narrow: it needs ALL of (row-view base) + (chained method: `.sum()`/`.mean()`/`.prod()` appended to the `zip_with`) + (reuse across statements). Each leg alone is clean: a row-view reused in the LET-BOUND method form (`let p = row.zip_with(row, f); p.sum(); let p2 = row.zip_with(row, f); ..`) passes; a row-view used ONCE per iter in a chain passes; a ref-PARAM (not a row-view) reused in the chained form passes. `karac run --interp` computes the correct result; `karac build` additionally mis-lowers the chained-reuse temp (a distinct 'Index operator applied to non-array type' codegen error), so the let-bound method form is the working shape. | src/ownership.rs (move checker — method-chain temp-receiver arg classification) |
+| B-2026-07-20-7 | 2026-07-20 | codegen | high | `Map[K, struct-with-heap-field].get().unwrap()` DOUBLE-FREES under codegen (JIT + AOT-O2/O0); interp correct. `let a = m.get(k).unwrap(); print(a.name)` where the map VALUE is a struct carrying a `String` (or Vec) field aborts with `free(): double free detected in tcache 2`. The get materializes a SHALLOW copy of the struct value that shares the inner heap pointer, so the `a` binding's scope-exit drop and the Map's own drop free the same buffer twice. | src/codegen/maps.rs (Map.get value materialization) + src/codegen/control_flow_match.rs::reconstruct_payload_value |
+| B-2026-07-20-8 | 2026-07-20 | codegen | low | `Vec[T].sorted_by(cmp: Fn(T,T)->Ordering)` / `String.sorted_by` (immutable CUSTOM-COMPARATOR sort returning a new Vec/String) is UNIMPLEMENTED in codegen — loud-bails `Vec/String method 'sorted_by' is not yet supported in codegen` under `karac build`/JIT; runs under `--interp`. The no-comparator sibling `Vec[T].sorted()` landed (B-2026-07-19-15, c6848c4); the comparator variant is the natural follow-on. | src/codegen/vec_method.rs (Vec method dispatch) + src/codegen/string_method.rs (String.sorted_by) |
 
 ### Fixed (594)
 
