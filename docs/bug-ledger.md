@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 68 | 1 |
 | double-free | 68 | 1 |
 | missing-feature | 60 | 0 |
-| false-positive | 38 | 1 |
+| false-positive | 38 | 0 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
 | soundness | 24 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 432 | 2 |
 | typecheck | 83 | 0 |
 | interp | 66 | 0 |
-| ownership | 25 | 1 |
+| ownership | 25 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
 | runtime | 13 | 0 |
@@ -124,19 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **601 surfaced · 3 open · 594 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **601 surfaced · 2 open · 595 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-20-6 | 2026-07-20 | ownership | low | `karac check` reports a false `error[ownership]: value 'row' moved here, used again here` for an iter_axis ROW-VIEW reused across two CHAINED `row.zip_with(row, ..).sum()` calls, even though `zip_with`'s `other` param is `ref` (a borrow, not a move). The trigger is narrow: it needs ALL of (row-view base) + (chained method: `.sum()`/`.mean()`/`.prod()` appended to the `zip_with`) + (reuse across statements). Each leg alone is clean: a row-view reused in the LET-BOUND method form (`let p = row.zip_with(row, f); p.sum(); let p2 = row.zip_with(row, f); ..`) passes; a row-view used ONCE per iter in a chain passes; a ref-PARAM (not a row-view) reused in the chained form passes. `karac run --interp` computes the correct result; `karac build` additionally mis-lowers the chained-reuse temp (a distinct 'Index operator applied to non-array type' codegen error), so the let-bound method form is the working shape. | src/ownership.rs (move checker — method-chain temp-receiver arg classification) |
 | B-2026-07-20-7 | 2026-07-20 | codegen | high | `Map[K, struct-with-heap-field].get().unwrap()` DOUBLE-FREES under codegen (JIT + AOT-O2/O0); interp correct. `let a = m.get(k).unwrap(); print(a.name)` where the map VALUE is a struct carrying a `String` (or Vec) field aborts with `free(): double free detected in tcache 2`. The get materializes a SHALLOW copy of the struct value that shares the inner heap pointer, so the `a` binding's scope-exit drop and the Map's own drop free the same buffer twice. | src/codegen/maps.rs (Map.get value materialization) + src/codegen/control_flow_match.rs::reconstruct_payload_value |
 | B-2026-07-20-8 | 2026-07-20 | codegen | low | `Vec[T].sorted_by(cmp: Fn(T,T)->Ordering)` / `String.sorted_by` (immutable CUSTOM-COMPARATOR sort returning a new Vec/String) is UNIMPLEMENTED in codegen — loud-bails `Vec/String method 'sorted_by' is not yet supported in codegen` under `karac build`/JIT; runs under `--interp`. The no-comparator sibling `Vec[T].sorted()` landed (B-2026-07-19-15, c6848c4); the comparator variant is the natural follow-on. | src/codegen/vec_method.rs (Vec method dispatch) + src/codegen/string_method.rs (String.sorted_by) |
 
-### Fixed (594)
+### Fixed (595)
 
-<details><summary>594 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>595 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -734,6 +733,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **601 surfaced 
 | B-2026-07-20-3 | interp+codegen | high | Index-STORE into a `Vec` that lives in a TUPLE element (`t.0[i] = v`) is DROPPED by the tree-walk interpreter (SILENT — the store is a no-op: `let mu… | b7d2bc8 |
 | B-2026-07-20-4 | codegen | low | Calling a method on an indexed element of a tuple-element `Vec` (`t.0[i].len()`) fails codegen LOUD — "codegen: indexed-receiver method 'len' require… | 8cfa72a |
 | B-2026-07-20-5 | codegen | low | `Iterator.partition()` codegen lowered only a trivially-copyable element and loud-deferred a HEAP element (String/Vec) to `--interp` (the documented… | ba6751f |
+| B-2026-07-20-6 | ownership | low | `karac check` reports a false `error[ownership]: value 'row' moved here, used again here` for an iter_axis ROW-VIEW reused across two CHAINED `row.zi… | 62d148c |
 
 </details>
 
