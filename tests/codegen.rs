@@ -12193,6 +12193,55 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_f32_option_payload_pack_unpack() {
+        // B-2026-07-20-11 — `coerce_to_i64` packed an f32 into an enum
+        // payload word via a DIRECT f32→i64 bitcast (invalid IR: a float↔int
+        // bitcast requires equal widths), and three unpack sites
+        // (`or.pl.fc`, `pl.fc`, `pl.sub.fc`) did the i64→f32 inverse. Any
+        // f32-carrying enum payload failed module verification at build; the
+        // original trigger was a fused f32 `row.zip_with(row, f).sum()` over
+        // an `iter_axis` row-view (whose element is Option-wrapped). f32 now
+        // routes through its 32-bit pattern (bitcast↔i32 + zext/trunc), the
+        // packing the f64-vs-f32 unpack arms (`pat.f32.*`, `col.f32bits`)
+        // always expected. Covers: Option[f32], Option[struct{f32,f32}]
+        // (the pl.fc/pl.sub.fc field paths), Result[f32, String], an f32
+        // iter reduce, and the original fused row-view repro.
+        if let Some(out) = run_program(
+            "struct P { x: f32, y: f32 }\n\
+             fn pick(flag: bool) -> Option[f32] {\n\
+                 if flag { Some(2.5f32) } else { None }\n\
+             }\n\
+             fn wrap(flag: bool) -> Option[P] {\n\
+                 if flag { Some(P { x: 1.25f32, y: -3.5f32 }) } else { None }\n\
+             }\n\
+             fn halve(v: f32) -> Result[f32, String] {\n\
+                 if v > 0.0f32 { Ok(v / 2.0f32) } else { Err(\"neg\".to_string()) }\n\
+             }\n\
+             fn scan[N, D](corpus: ref Tensor[f32, [N, D]]) -> Vec[f32] {\n\
+                 let mut out: Vec[f32] = Vec.new();\n\
+                 for row in corpus.iter_axis(0) {\n\
+                     let d = row.zip_with(row, |x, y| x * y).sum();\n\
+                     out.push(d);\n\
+                 }\n\
+                 out\n\
+             }\n\
+             fn main() {\n\
+                 match pick(true) { Some(v) => println(v), None => println(-1.0f32) }\n\
+                 match wrap(true) { Some(p) => { println(p.x); println(p.y) }, None => println(-1.0f32) }\n\
+                 match halve(5.0f32) { Ok(v) => println(v), Err(e) => println(e) }\n\
+                 let vs: Vec[f32] = Vec[0.5f32, 1.5f32, 2.5f32];\n\
+                 match vs.iter().reduce(|a, x| a + x) { Some(s) => println(s), None => println(-1.0f32) }\n\
+                 let c: Tensor[f32, [2, 2]] = Tensor.from([[1.0f32, 2.0f32], [3.0f32, 4.0f32]]);\n\
+                 let r = scan(c);\n\
+                 match r.get(0) { Some(v) => println(v), None => println(-1.0f32) }\n\
+                 match r.get(1) { Some(v) => println(v), None => println(-1.0f32) }\n\
+             }",
+        ) {
+            assert_eq!(out, "2.5\n1.25\n-3.5\n2.5\n4.5\n5\n25\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_materialized_iterator_binding() {
         // B-2026-07-11-19 — a `let it = v.iter()` iterator binding used at a
         // terminal / adaptor / for-loop. Codegen has no runtime iterator value,

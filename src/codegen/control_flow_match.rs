@@ -3170,7 +3170,18 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                         BasicTypeEnum::FloatType(ft) => {
-                            self.builder.build_bit_cast(word, ft, "pl.fc").unwrap()
+                            // f64 bitcasts directly; f32 unpacks from the low
+                            // 32 bits (trunc + bitcast) — a direct i64→f32
+                            // bitcast is invalid IR (B-2026-07-20-11).
+                            if ft == self.context.f64_type() {
+                                self.builder.build_bit_cast(word, ft, "pl.fc").unwrap()
+                            } else {
+                                let lo = self
+                                    .builder
+                                    .build_int_truncate(word, self.context.i32_type(), "pl.f32.tr")
+                                    .unwrap();
+                                self.builder.build_bit_cast(lo, ft, "pl.f32.bc").unwrap()
+                            }
                         }
                         BasicTypeEnum::PointerType(_) => self
                             .builder
@@ -3267,7 +3278,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     BasicTypeEnum::FloatType(ft) => {
-                        self.builder.build_bit_cast(word, ft, "pl.sub.fc").unwrap()
+                        // Same f32 width rule as `pl.fc` above (B-2026-07-20-11).
+                        if ft == self.context.f64_type() {
+                            self.builder.build_bit_cast(word, ft, "pl.sub.fc").unwrap()
+                        } else {
+                            let lo = self
+                                .builder
+                                .build_int_truncate(word, self.context.i32_type(), "pl.sub.f32.tr")
+                                .unwrap();
+                            self.builder
+                                .build_bit_cast(lo, ft, "pl.sub.f32.bc")
+                                .unwrap()
+                        }
                     }
                     BasicTypeEnum::PointerType(_) => self
                         .builder

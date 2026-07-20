@@ -5394,11 +5394,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     Ok(self.builder.build_int_truncate(iv, i64_t, "trunc").unwrap())
                 }
             }
-            BasicValueEnum::FloatValue(fv) => Ok(self
-                .builder
-                .build_bit_cast(fv, i64_t, "fcast")
-                .unwrap()
-                .into_int_value()),
+            // f64 shares the word's 64-bit width — bitcast directly. f32 is
+            // 32 bits and a float↔int bitcast requires EQUAL widths
+            // (B-2026-07-20-11: the direct f32→i64 bitcast failed module
+            // verification), so route its bit pattern through i32 then
+            // zero-extend — the low-32-bits packing every unpack site
+            // already expects (`pat.f32.tr/bc`, `col.f32bits`).
+            BasicValueEnum::FloatValue(fv) => {
+                if fv.get_type() == self.context.f64_type() {
+                    Ok(self
+                        .builder
+                        .build_bit_cast(fv, i64_t, "fcast")
+                        .unwrap()
+                        .into_int_value())
+                } else {
+                    let bits = self
+                        .builder
+                        .build_bit_cast(fv, self.context.i32_type(), "f32cast")
+                        .unwrap()
+                        .into_int_value();
+                    Ok(self
+                        .builder
+                        .build_int_z_extend(bits, i64_t, "f32cast.zx")
+                        .unwrap())
+                }
+            }
             BasicValueEnum::PointerValue(pv) => {
                 Ok(self.builder.build_ptr_to_int(pv, i64_t, "ptoi").unwrap())
             }
