@@ -1285,6 +1285,40 @@ fn test_iter_filter_map_non_option_closure_rejected() {
 }
 
 #[test]
+fn test_iter_find_map_typechecks() {
+    // `find_map(f: Fn(T) -> Option[U]) -> Option[U]` — the closure's `Option[U]`
+    // return type becomes the terminal's result payload (B-2026-07-19-14).
+    typecheck_ok(
+        "fn main() {\n\
+             let v = [1, 2, 3, 4];\n\
+             let _r: Option[i64] = v.iter().find_map(|x| if x > 2 { Some(x * 10) } else { None });\n\
+         }",
+    );
+    typecheck_ok(
+        "fn main() {\n\
+             let v = [\"aa\".to_string(), \"b\".to_string()];\n\
+             let _r: Option[String] = v.iter().find_map(|s| if s.len() == 2 { Some(s.to_uppercase()) } else { None });\n\
+         }",
+    );
+}
+
+#[test]
+fn test_iter_find_map_non_option_closure_rejected() {
+    // The `find_map` closure must return `Option[U]`; a non-Option return is a
+    // TypeMismatch (mirrors `filter_map`).
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let v = [1, 2, 3];\n\
+             let _r: Option[i64] = v.iter().find_map(|x| x * 2);\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch for a non-Option find_map closure, got {errors:?}"
+    );
+}
+
+#[test]
 fn test_vec_get_returns_option_not_poison() {
     // `v.get(i)` is `Option[T]`; assigning it to a bare `T` must error
     // (previously the `Error` poison let `let x: i64 = v.get(0)` pass).

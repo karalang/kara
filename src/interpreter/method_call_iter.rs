@@ -954,6 +954,50 @@ impl<'a> super::Interpreter<'a> {
                     });
                 }
             }
+            "find_map" => {
+                // `find_map(f: Fn(T) -> Option[U]) -> Option[U]` — the first
+                // `Some(u)` the closure produces (map + find fusion), or `None`.
+                // Short-circuit: apply `f` to each yielded element and return its
+                // `Some` payload the moment one appears (correct for scalar AND
+                // heap `U`, since the payload is the closure's own produced value).
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return Some(self.record_runtime_error(
+                            "Iterator.find_map() requires a closure argument".to_string(),
+                            span,
+                        ));
+                    };
+                    let f = self.eval_iter_closure_arg(&arg.value);
+                    if !matches!(f, Value::Function { .. }) {
+                        return Some(self.record_runtime_error(
+                            format!("Iterator.find_map() expects a closure; got {}", f),
+                            span,
+                        ));
+                    }
+                    let mut iter_val = obj;
+                    while let Some(item) = self.iterator_step(&mut iter_val) {
+                        let mapped = self.invoke_function_value(f.clone(), vec![item]);
+                        if let Value::EnumVariant { variant, data, .. } = &mapped {
+                            if variant == "Some" {
+                                if let EnumData::Tuple(payload) = data {
+                                    if let Some(v) = payload.first() {
+                                        return Some(Value::EnumVariant {
+                                            enum_name: "Option".to_string(),
+                                            variant: "Some".to_string(),
+                                            data: EnumData::Tuple(vec![v.clone()]),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return Some(Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    });
+                }
+            }
             "last" => {
                 // `last() -> Option[T]` — drain the iterator, return the LAST
                 // yielded element (or `None` for an empty source).

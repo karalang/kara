@@ -14428,6 +14428,29 @@ fn main() {
 }
 
 #[test]
+fn test_iter_find_map_scalar_and_heap() {
+    // `find_map(f: Fn(T) -> Option[U]) -> Option[U]` — first `Some(u)` the
+    // closure produces, or `None` (B-2026-07-19-14). Covers a scalar payload,
+    // an empty (`None`) result, and a HEAP `String` payload produced by the
+    // closure (which the codegen backend defers to interp).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let a: Option[i64] = v.iter().find_map(|x| if x > 2 { Some(x * 2) } else { None });
+    match a { Some(n) => println(n), None => println(-1) }
+    let b: Option[i64] = v.iter().find_map(|x| if x > 100 { Some(x) } else { None });
+    match b { Some(n) => println(n), None => println(-1) }
+    let w = ["hi".to_string(), "there".to_string(), "yo".to_string()];
+    let c: Option[String] = w.iter().find_map(|s| if s.len() > 2 { Some(s.to_uppercase()) } else { None });
+    match c { Some(s) => println(s), None => println("none") }
+}
+"#,
+    );
+    assert_eq!(output, "6\n-1\nTHERE\n");
+}
+
+#[test]
 fn test_iter_filter_then_map_chain() {
     // Order matters — filter first, then map on filtered elements.
     // 1,2,3,4,5 → > 2 → 3,4,5 → +100 → 103,104,105.

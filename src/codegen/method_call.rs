@@ -5833,6 +5833,38 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
+        // `<iter-chain>.find_map(|x| <Option-expr>) -> Option[U]` — short-circuit
+        // map+find terminal: apply the closure to each adapted element and return
+        // the first `Some(u)` payload. Same iterator-chain gate as `find`;
+        // trivially-copyable payload `U` only (a heap `U` — String / Vec — defers
+        // loud to `--interp`, matching `find`'s scalar gate), else `Ok(None)`.
+        if method == "find_map"
+            && args.len() == 1
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                if params.len() == 1 {
+                    if let Some(param) = Self::closure_param_name(&params[0].pattern, "__fmp") {
+                        if let Some(v) =
+                            self.try_compile_iter_chain_find_map(object, &param, body, call_span)?
+                        {
+                            return Ok(v);
+                        }
+                    }
+                }
+            }
+            return Err(
+                "`Iterator.find_map()` is lowered under `karac build` only for a SCALAR \
+                 payload over a fused map/filter chain; a heap payload (String / Vec / \
+                 struct) or an unsupported chain shape is deferred — run it under the \
+                 interpreter (`karac run --interp`, or `KARAC_RUN_JIT=0`)."
+                    .to_string(),
+            );
+        }
+
         // `<iter-chain>.last() -> Option[T]` (no args) / `.nth(n) -> Option[T]`
         // (one int arg) — element-returning terminals, scalar payloads only (heap
         // defers loud, like `find`).
@@ -11069,6 +11101,219 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: TypeKind::Path(PathExpr {
                 segments: vec!["Option".to_string()],
                 generic_args: Some(vec![GenericArg::Type(elem_te)]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let mut block_stmts = vec![Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(findname.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(opt_te),
+                value: ident("None"),
+            },
+            span: sp.clone(),
+        }];
+        block_stmts.extend(Self::fused_chain_prelude(&steps, &sw_prefix, &sp));
+        block_stmts.push(for_loop);
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: block_stmts,
+                final_expr: Some(Box::new(ident(&findname))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// `<iter-chain>.find_map(|x| <Option-expr>) -> Option[U]` — the first
+    /// `Some(u)` the closure produces over the fused chain, or `None` (map+find
+    /// fusion). Desugars like `find`, but the sink is a synthesized
+    /// `match <closure-body> { Some(<v>) => { __fm = Some(<v>); break }, None =>
+    /// {} }` (reusing the proven Option-match codegen, exactly like the
+    /// `filter_map` FOR-LOOP step) instead of an `if <pred>`. The synthesized
+    /// `Some(<v>)` payload binding is stamped with `filter_map_bind_span` (the
+    /// closure body's span) whose surface payload type the typechecker's
+    /// `find_map` arm pre-registered in `pattern_binding_types` at the SAME span,
+    /// so `reconstruct_payload_value` sizes a narrow/float `U` correctly.
+    /// Trivially-copyable payload `U` only (`iter_terminal_elem_types` holds U);
+    /// a heap `U` returns `Ok(None)` -> the caller's loud `--interp` bail.
+    fn try_compile_iter_chain_find_map(
+        &mut self,
+        recv: &Expr,
+        param: &str,
+        body: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // `iter_terminal_elem_types` holds the *payload* type `U` for find_map
+        // (the typechecker registers `new_item` there, not the source element).
+        let Some(u_te) = self
+            .iter_terminal_elem_types
+            .get(&(call_span.offset, call_span.length))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if !super::vec_method::is_trivially_copyable_te(&u_te) {
+            return Ok(None);
+        }
+        let (base, steps) = match Self::peel_fused_map_filter_chain(recv) {
+            Some(x) => x,
+            None if Self::for_loop_iterates_flat_map(recv) => (recv, Vec::new()),
+            None => return Ok(None),
+        };
+        self.indexed_elem_counter += 1;
+        let uid = self.indexed_elem_counter;
+        let sp = call_span.clone();
+        let findname = format!("__findm_{}", uid);
+        let elem_name = steps
+            .iter()
+            .find(|(_, p, _)| !p.is_empty())
+            .map(|(_, p, _)| p.clone())
+            .unwrap_or_else(|| param.to_string());
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let some_of = |e: Expr| Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Identifier("Some".to_string()),
+                    span: sp.clone(),
+                }),
+                args: vec![CallArg {
+                    label: None,
+                    mut_marker: false,
+                    value: e,
+                    span: sp.clone(),
+                }],
+            },
+            span: sp.clone(),
+        };
+        // Sink: bind `param` to the fully-adapted element (so the closure body
+        // references it), then `match <body> { Some(<fresh>) => { __fm =
+        // Some(<fresh>); break }, None => {} }`.
+        let fresh = format!("__fmv_{uid}");
+        let bind_span = Self::filter_map_bind_span(&body.span);
+        let sink = |current: Expr| -> Vec<Stmt> {
+            let current_is_param = matches!(&current.kind, ExprKind::Identifier(n) if n == param);
+            let mut out = Vec::new();
+            if !current_is_param {
+                out.push(Stmt {
+                    kind: StmtKind::Let {
+                        is_mut: false,
+                        pattern: Pattern {
+                            kind: PatternKind::Binding(param.to_string()),
+                            span: sp.clone(),
+                        },
+                        ty: None,
+                        value: current,
+                    },
+                    span: sp.clone(),
+                });
+            }
+            let some_arm_body = Expr {
+                kind: ExprKind::Block(Block {
+                    stmts: vec![
+                        Stmt {
+                            kind: StmtKind::Assign {
+                                target: ident(&findname),
+                                value: some_of(ident(&fresh)),
+                            },
+                            span: sp.clone(),
+                        },
+                        Stmt {
+                            kind: StmtKind::Expr(Expr {
+                                kind: ExprKind::Break {
+                                    label: None,
+                                    value: None,
+                                },
+                                span: sp.clone(),
+                            }),
+                            span: sp.clone(),
+                        },
+                    ],
+                    final_expr: None,
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            };
+            let none_arm_body = Expr {
+                kind: ExprKind::Block(Block {
+                    stmts: Vec::new(),
+                    final_expr: None,
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            };
+            out.push(Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::Match {
+                        scrutinee: Box::new(body.clone()),
+                        arms: vec![
+                            MatchArm {
+                                pattern: Pattern {
+                                    kind: PatternKind::TupleVariant {
+                                        path: vec!["Some".to_string()],
+                                        patterns: vec![Pattern {
+                                            kind: PatternKind::Binding(fresh.clone()),
+                                            span: bind_span.clone(),
+                                        }],
+                                    },
+                                    span: sp.clone(),
+                                },
+                                guard: None,
+                                body: some_arm_body,
+                                span: sp.clone(),
+                            },
+                            MatchArm {
+                                pattern: Pattern {
+                                    kind: PatternKind::Binding("None".to_string()),
+                                    span: sp.clone(),
+                                },
+                                guard: None,
+                                body: none_arm_body,
+                                span: sp.clone(),
+                            },
+                        ],
+                    },
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            });
+            out
+        };
+        let sw_prefix = format!("__swfm_{uid}_");
+        let for_body =
+            Self::build_fused_chain_body(&steps, 0, ident(&elem_name), &sink, &sw_prefix, &sp);
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(elem_name),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(base.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: for_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let opt_te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Option".to_string()],
+                generic_args: Some(vec![GenericArg::Type(u_te)]),
                 span: sp.clone(),
             }),
             span: sp.clone(),

@@ -483,6 +483,82 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![item.clone()],
                 }
             }
+            "find_map" => {
+                // `find_map(f: Fn(T) -> Option[U]) -> Option[U]` — short-circuit
+                // terminal returning the first `Some(u)` the closure produces
+                // (map + find fusion), or `None`. Combines `filter_map`'s closure
+                // handling (`Fn(T) -> Option[U]`, extract U; non-Option =
+                // TypeMismatch) with `find`'s terminal shape. Records U
+                // span-keyed in `iter_terminal_elem_types` so codegen annotates
+                // the `Option[U]` result, AND registers U's surface type at the
+                // deterministic payload-binding span (`filter_map_bind_span`) so
+                // codegen's synthesized `Some(<v>)` payload is sized correctly —
+                // exactly as `filter_map` does (B-2026-07-19-14).
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Iterator.find_map() expects 1 argument, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![Type::Error],
+                    };
+                }
+                let f_ty = Type::Function {
+                    params: vec![item.clone()],
+                    return_type: Box::new(Type::TypeParam("__iter_findmap_U".to_string())),
+                };
+                let actual_ty = self.check_expr(&args[0].value, &f_ty);
+                let new_item = match actual_ty {
+                    Type::Function { return_type, .. } => match *return_type {
+                        Type::Named {
+                            name,
+                            args: mut opt_args,
+                        } if name == "Option" && opt_args.len() == 1 => opt_args.remove(0),
+                        other => {
+                            self.type_error(
+                                format!(
+                                    "Iterator.find_map() closure must return Option[U], found {:?}",
+                                    other
+                                ),
+                                span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            Type::Error
+                        }
+                    },
+                    _ => Type::Error,
+                };
+                if !matches!(new_item, Type::Error) {
+                    self.iter_terminal_elem_types
+                        .insert(SpanKey::from_span(span), Self::type_to_type_expr(&new_item));
+                    if let ExprKind::Closure { body: cbody, .. } = &args[0].value.kind {
+                        // MUST match `method_call.rs::filter_map_bind_span`.
+                        let bind_span = Span {
+                            line: cbody.span.line,
+                            column: cbody.span.column,
+                            offset: usize::MAX / 2 - cbody.span.offset,
+                            length: 1,
+                        };
+                        let synth = Pattern {
+                            kind: PatternKind::Binding("__fmm_payload".to_string()),
+                            span: bind_span,
+                        };
+                        self.record_pattern_binding_surface_types(&synth, &new_item);
+                    }
+                }
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![new_item],
+                }
+            }
             "last" => {
                 // `last() -> Option[T]` — drain the iterator and return the LAST
                 // yielded element, or `None` for an empty source. Records the
@@ -1114,7 +1190,9 @@ impl<'a> super::TypeChecker<'a> {
                     "cycle",
                     "enumerate",
                     "filter",
+                    "filter_map",
                     "find",
+                    "find_map",
                     "flat_map",
                     "flatten",
                     "fold",

@@ -10685,6 +10685,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_find_map_scalar() {
+        // B-2026-07-19-14: `find_map(f: Fn(T) -> Option[U]) -> Option[U]` — the
+        // short-circuit map+find terminal. Desugars like `find` but the sink is
+        // a synthesized `match f(x) { Some(v) => { __fm = Some(v); break }, None
+        // => {} }`, sizing the `Some(v)` payload via the same span-registration
+        // trick `filter_map` uses. Trivially-copyable payload only (a heap `U`
+        // defers loud to `--interp`, like `find`). Covers a scalar hit, a
+        // narrow-int payload (`u8`, must not be sized as i64), a float payload,
+        // a `None` (no match) result, and composition with a leading `filter`.
+        // Must match the interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let v = [1, 2, 3, 4, 5];\n\
+                 match v.iter().find_map(|x| if x > 2 { Some(x * 2) } else { None }) { Some(n) => println(n), None => println(-1) }\n\
+                 let w: Vec[u8] = [10u8, 20u8, 30u8, 40u8];\n\
+                 match w.iter().find_map(|x| if x > 25u8 { Some(x) } else { None }) { Some(n) => println(n), None => println(0u8) }\n\
+                 let f: Vec[f64] = [1.0, 2.0, 3.0];\n\
+                 match f.iter().find_map(|x| if x > 2.0 { Some(x + 2.0) } else { None }) { Some(n) => println(n), None => println(0.0) }\n\
+                 match v.iter().find_map(|x| if x > 100 { Some(x) } else { None }) { Some(n) => println(n), None => println(-1) }\n\
+                 let b = [1, 2, 3, 4, 5, 6];\n\
+                 match b.iter().filter(|x| x % 2 == 0).find_map(|x| if x > 2 { Some(x * 2) } else { None }) { Some(n) => println(n), None => println(-1) }\n\
+             }",
+        ) {
+            assert_eq!(out, "6\n30\n5\n-1\n8\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_mut_ref_scalar_value_reads() {
         // B-2026-07-15-3: a `mut ref` scalar param reads as its value type in
         // an annotated let, an index expression, an argument, and a cast —
