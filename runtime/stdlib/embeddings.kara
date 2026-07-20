@@ -82,26 +82,16 @@ pub fn cosine_similarity_batched[N, D](
     query: ref Tensor[f32, [D]],
     corpus: ref Tensor[f32, [N, D]],
 ) -> Vec[f32] with panics {
-    // The per-row body keeps the let-bound `zip_with(...)` method form rather
-    // than the fused chain (`query.zip_with(row, ..).sum()`): `row` is an
-    // iter_axis row-view reused across two combines, and the ownership checker
-    // flags a row-view reused as a ref arg of a *chained*-method call as
-    // UseAfterMove (the let-bound form borrows it cleanly) — B-2026-07-20-6.
-    // Delegating to the
-    // fused `dot`/`l2_norm` is also out — this module is deliberately
-    // self-contained (gated imports splice only the named fn, not its callees),
-    // so a cross-call would fail to resolve under `import std.embeddings.{...}`.
-    // Net: the batched inner loop does not fuse; the single-pair kernels
-    // (`dot`/`l2_norm`/`cosine_similarity`) and `dot_batched` do.
-    let pq = query.zip_with(query, |x, y| x * y);
-    let nq = pq.sum().sqrt();
+    // Chained `zip_with(...).sum()` so each combine fuses (product + reduction
+    // in one pass, no intermediate). Reusing the `row` row-view across the two
+    // chained combines is clean since B-2026-07-20-6 (zip_with's `other` is
+    // recognized as a borrow even as a chain receiver).
+    let nq = query.zip_with(query, |x, y| x * y).sum().sqrt();
     let rows = corpus.iter_axis(0);
     let mut out: Vec[f32] = Vec.new();
     for row in rows {
-        let pd = query.zip_with(row, |x, y| x * y);
-        let d = pd.sum();
-        let pr = row.zip_with(row, |x, y| x * y);
-        let nr = pr.sum().sqrt();
+        let d = query.zip_with(row, |x, y| x * y).sum();
+        let nr = row.zip_with(row, |x, y| x * y).sum().sqrt();
         out.push(d / (nq * nr));
     }
     out
@@ -126,19 +116,14 @@ pub fn cosine_similarity_matrix[Q, N, D](
     let crows = corpus.iter_axis(0);
     let mut i = 0;
     while i < q {
-        // Row-views (`qrow`/`crow`) reused across two combines — keep the
-        // let-bound `zip_with` method form (see the note in
-        // `cosine_similarity_batched` + the bug ledger).
+        // Chained fused combines; row-view reuse is clean since B-2026-07-20-6.
         let qrow = qrows[i];
-        let pqq = qrow.zip_with(qrow, |x, y| x * y);
-        let nq = pqq.sum().sqrt();
+        let nq = qrow.zip_with(qrow, |x, y| x * y).sum().sqrt();
         let mut j = 0;
         while j < n {
             let crow = crows[j];
-            let pd = qrow.zip_with(crow, |x, y| x * y);
-            let d = pd.sum();
-            let pr = crow.zip_with(crow, |x, y| x * y);
-            let nr = pr.sum().sqrt();
+            let d = qrow.zip_with(crow, |x, y| x * y).sum();
+            let nr = crow.zip_with(crow, |x, y| x * y).sum().sqrt();
             out[i, j] = d / (nq * nr);
             j = j + 1;
         }

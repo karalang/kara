@@ -1124,7 +1124,15 @@ fn is_tensor_borrow_arg_method_call(expr: &Expr) -> bool {
         &expr.kind,
         ExprKind::MethodCall { method, .. } if matches!(
             method.as_str(),
+            // `matmul` / `broadcast_*` borrow their tensor arg (B-2026-07-14-18).
             "matmul" | "broadcast_add" | "broadcast_sub" | "broadcast_mul" | "broadcast_div"
+            // `zip_with(other: ref Tensor|Column, f)` borrows `other` on every
+            // type that defines it (Tensor, Column, the `ElementwiseMap` trait).
+            // Same span-collision false-consume as the tensor binops when it is
+            // a CHAIN receiver — `a.zip_with(b, f).sum()` resolves the inner
+            // `zip_with` to `Tensor.sum` (0 params) → arg 0 → consume → `b`
+            // false-rejects as moved (B-2026-07-20-6). Name-match, span-immune.
+            | "zip_with"
         )
     )
 }

@@ -146,17 +146,20 @@ pass, no `vfmadd` — the mul and add stay separate packed ops, which is the mai
 win; FMA contraction is a possible further step, deliberately not taken to keep
 the divergence surface at just `reassoc`).
 
-**Stdlib kernels rewritten to the chained form** (`runtime/stdlib/embeddings
-.kara`) so they inherit the fusion: `dot`, `l2_norm`, `cosine_similarity`, and
-`dot_batched`'s per-row `query.zip_with(row, ..).sum()`. **Residual:**
-`cosine_similarity_batched` and `cosine_similarity_matrix` keep the let-bound
-`zip_with` method form — their per-row bodies reuse an iter_axis **row-view**
-across two combines, which trips an ownership false-positive on the chained form
-(B-2026-07-20-6), and delegating to `dot`/`l2_norm` is out because the module is
-deliberately self-contained (gated imports splice only the named fn). Their
-inner loops do not fuse until B-2026-07-20-6 is fixed. Guarded by
-`test_ir_chained_zip_reduce_fuses` (fusion fires: `fmr.*` blocks present),
-`test_ir_letbound_zip_reduce_does_not_fuse` (the let-bound form stays on the
-materialize path), and `test_e2e_chained_map_zip_reduce_parity` in
+**All stdlib embedding kernels rewritten to the chained form**
+(`runtime/stdlib/embeddings.kara`) so they inherit the fusion: `dot`, `l2_norm`,
+`cosine_similarity`, `dot_batched`, **and** `cosine_similarity_batched` /
+`cosine_similarity_matrix`. The batched/matrix inner loops reuse an iter_axis
+**row-view** across two combines, which first tripped an ownership false-positive
+on the chained form — a chain receiver's inner `zip_with` was mis-resolved to the
+outer `.sum()` (0 params) so its `ref other` arg fell to the consume default.
+That is now fixed (B-2026-07-20-6: `zip_with` added to the name-based borrow-arg
+allowlist, span-collision-immune, same mechanism as `matmul`/`broadcast_*` in
+B-2026-07-14-18), so the row-view reuse borrows cleanly and the inner loops fuse
+too (measured: the per-row loop body drops one alloc vs the let-bound form).
+Guarded by `test_ir_chained_zip_reduce_fuses` (fusion fires: `fmr.*` blocks
+present), `test_ir_letbound_zip_reduce_does_not_fuse` (the let-bound form stays
+on the materialize path), and `test_e2e_chained_map_zip_reduce_parity` in
 `tests/codegen.rs`; the four `test_e2e_embeddings_*` E2E tests cover the
-rewritten kernels.
+rewritten kernels; `test_chained_zip_with_reduce_*_b20_6` in `tests/ownership.rs`
+guard the ownership fix.

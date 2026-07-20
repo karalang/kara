@@ -8862,3 +8862,42 @@ fn test_map_get_or_borrows_key_consumes_default() {
         }",
     );
 }
+
+#[test]
+fn test_chained_zip_with_reduce_reuse_ok_b20_6() {
+    // B-2026-07-20-6: a binding reused across two CHAINED
+    // `x.zip_with(x, f).sum()` calls must not false-report UseAfterMove —
+    // `zip_with`'s `other` param is `ref` (a borrow), so `x` is read, not
+    // moved. The parser's `MethodCall.span == receiver.span` aliasing had
+    // resolved the inner `zip_with` (a chain receiver) to the outer `.sum()`
+    // (0 params) → arg 0 → consume default; the name-based borrow-arg check
+    // (`is_tensor_borrow_arg_method_call`) is immune to that collision.
+    // Owned-local receiver:
+    ownership_ok(
+        "fn f() -> f32 {\n\
+        \x20   let t: Tensor[f32, [2]] = Tensor.from([1.0f32, 2.0f32]);\n\
+        \x20   let d = t.zip_with(t, |x, y| x * y).sum();\n\
+        \x20   let e = t.zip_with(t, |x, y| x * y).sum();\n\
+        \x20   d + e\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_chained_zip_with_reduce_rowview_reuse_ok_b20_6() {
+    // The kernel shape that motivated B-2026-07-20-6: an iter_axis ROW-VIEW
+    // reused across the per-row dot + norm, both chained into `.sum()`. This
+    // is exactly `cosine_similarity_batched`'s inner loop.
+    ownership_ok(
+        "fn scan[N, D](corpus: ref Tensor[f32, [N, D]]) -> Vec[f32] {\n\
+        \x20   let rows = corpus.iter_axis(0);\n\
+        \x20   let mut out: Vec[f32] = Vec.new();\n\
+        \x20   for row in rows {\n\
+        \x20       let d = row.zip_with(row, |x, y| x * y).sum();\n\
+        \x20       let nr = row.zip_with(row, |x, y| x * y).sum();\n\
+        \x20       out.push(d + nr);\n\
+        \x20   }\n\
+        \x20   out\n\
+         }\n",
+    );
+}
