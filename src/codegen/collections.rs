@@ -1768,6 +1768,59 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Tuple-element-rooted indexing (`t.0[i]`) where the element is a
+        // `Vec`/`VecDeque`: the `TupleIndex` sibling of the `FieldAccess` arm
+        // above. GEP into the tuple's inline `{ptr,len,cap}` element storage
+        // (`field_chain_place_ptr` + `place_chain_aggregate_llvm_type` — pure
+        // structural walks, so this works for an inferred `let t = f()` binding
+        // as well as an annotated one), mint a synth identifier bound to the
+        // element with the element `TypeExpr` recorded by the typechecker in
+        // `temp_recv_elem_types` (keyed by the TupleIndex span; the per-var
+        // tuple name registry is lossy), and recurse so the identifier-keyed
+        // Vec index dispatch handles the load. Without this arm `t.0[i]` fell
+        // to the generic tail, which compiled `t.0` to a Vec VALUE in a temp
+        // and died on "Index operator applied to non-array type" while the
+        // interpreter read the element (B-2026-07-20-2). `Ok(None)`/absent
+        // registrations fall through unchanged.
+        if let ExprKind::TupleIndex {
+            object: tup,
+            index: tidx,
+        } = &object.kind
+        {
+            let key = (object.span.offset, object.span.length);
+            if let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() {
+                let vec_te = super::Codegen::vec_type_expr_from_element(&elem_te);
+                if let (Some(elem_ptr), Some(tuple_ty)) = (
+                    self.field_chain_place_ptr(object),
+                    self.place_chain_aggregate_llvm_type(tup),
+                ) {
+                    if let Some(elem_ll_ty) = tuple_ty.get_field_type_at_index(*tidx as u32) {
+                        let synth = format!("__tup_elem_{}", self.indexed_elem_counter);
+                        self.indexed_elem_counter += 1;
+                        self.variables.insert(
+                            synth.clone(),
+                            super::state::VarSlot {
+                                ptr: elem_ptr,
+                                ty: elem_ll_ty,
+                            },
+                        );
+                        self.register_var_from_type_expr(&synth, &vec_te);
+                        let synth_expr = Expr {
+                            kind: ExprKind::Identifier(synth.clone()),
+                            span: object.span.clone(),
+                        };
+                        let result = self.compile_index(&synth_expr, index);
+                        self.variables.remove(&synth);
+                        self.vec_elem_types.remove(&synth);
+                        self.slice_elem_types.remove(&synth);
+                        self.var_elem_type_exprs.remove(&synth);
+                        self.var_type_names.remove(&synth);
+                        return result;
+                    }
+                }
+            }
+        }
+
         // Tensor variable indexing: `t[i, j, k]` (the parser desugars to
         // a single tuple index). Routed before the Vec/Slice paths —
         // tensor bindings are single-pointer slots and dispatch through

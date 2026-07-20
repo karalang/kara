@@ -2883,6 +2883,31 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_index_into_tuple_element_vec() {
+        // B-2026-07-20-2: indexing a `Vec` in a TUPLE element (`t.0[i]`) failed
+        // codegen LOUD ("Index operator applied to non-array type") while the
+        // interpreter read the element. The index dispatch had a `FieldAccess`
+        // root arm but no `TupleIndex` sibling. Covers scalar and `String`
+        // element reads over an inferred tuple binding.
+        if let Some(out) = run_program(
+            "fn make() -> (Vec[i64], Vec[String]) {\n\
+                 let mut a: Vec[i64] = Vec.new();\n\
+                 a.push(10); a.push(20); a.push(30);\n\
+                 let mut b: Vec[String] = Vec.new();\n\
+                 b.push(\"x\"); b.push(\"yy\");\n\
+                 (a, b)\n\
+             }\n\
+             fn main() {\n\
+                 let t = make();\n\
+                 println(f\"{t.0[0]} {t.0[2]}\");\n\
+                 println(t.1[1]);\n\
+             }",
+        ) {
+            assert_eq!(out, "10 30\nyy\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_ref_eq_shared_identity() {
         // `ref_eq` (design.md § Equality Semantics): reference identity of two
         // `shared` handles → `icmp eq` on the heap pointers. `b = a` aliases the

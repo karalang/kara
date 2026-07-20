@@ -2769,6 +2769,28 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Index { object, index } => {
                 let obj_ty = self.infer_expr(object);
                 let idx_ty = self.infer_expr(index);
+                // `t.0[i]` — indexing a `Vec`/`VecDeque` that lives in a TUPLE
+                // element. Codegen resolves the element's storage pointer
+                // structurally (GEP into the tuple) but needs the element's
+                // full `TypeExpr` to load with the correct width; the per-var
+                // tuple name registry is lossy (drops generic args, unpopulated
+                // for a Call-RHS binding). Record it in the span-keyed
+                // `temp_recv_elem_types` table, keyed by the TupleIndex
+                // receiver's span, exactly where codegen's tuple-index arm
+                // reads it. WITHOUT this, `t.0[i]` failed codegen LOUD ("Index
+                // operator applied to non-array type") while the interpreter
+                // read the element — a run-vs-build gap (B-2026-07-20-2). Sibling
+                // of the `.iter()`-receiver recording in `infer_method_call`.
+                if matches!(&object.kind, ExprKind::TupleIndex { .. }) {
+                    if let Type::Named { name, args } = &obj_ty {
+                        if (name == "Vec" || name == "VecDeque") && args.len() == 1 {
+                            let resolved = resolve_type_var_top(&args[0], &self.env.substitutions);
+                            let te = Self::type_to_type_expr(&resolved);
+                            self.temp_recv_elem_types
+                                .insert(SpanKey::from_span(&object.span), te);
+                        }
+                    }
+                }
                 // Phase 11: Tensor multi-dim indexing — `t[i, j, k]`
                 // arrives as a tuple index (parser desugar per design.md
                 // § Numerical Types > Indexing). Arity must equal the
