@@ -68371,6 +68371,79 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_chained_zip_reduce_fuses() {
+        // `a.zip_with(b, |x,y| x*y).sum()` must FUSE the product + reduction
+        // into one accumulating loop (`emit_fused_map_reduce`, `fmr.*` blocks/
+        // slots) — the intermediate products tensor never materializes. The
+        // fused emitter's names prove it fired instead of the materialize path,
+        // and the fold still carries `reassoc` so the reduction vectorizes.
+        let ir = ir_for(
+            "fn d(a: ref Tensor[f32, [64]], b: ref Tensor[f32, [64]]) -> f32 \
+             { a.zip_with(b, |x, y| x * y).sum() }\n\
+             fn main() {\n\
+                 let a: Tensor[f32, [64]] = Tensor.ones([64]);\n\
+                 let b: Tensor[f32, [64]] = Tensor.ones([64]);\n\
+                 println(d(a, b));\n\
+             }\n",
+        );
+        assert!(
+            ir.contains("fmr."),
+            "chained `zip_with(...).sum()` must fuse (expect `fmr.*` blocks); IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("fadd reassoc"),
+            "the fused reduction must keep `fadd reassoc` for vectorization; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_letbound_zip_reduce_does_not_fuse() {
+        // The let-bound form (`let p = a.zip_with(b, f); p.sum()`) is an
+        // IDENTIFIER receiver — it materializes then reduces (no `fmr.*`).
+        // Guards that fusion is scoped to the chained temp-receiver form and
+        // never fires on a bound intermediate (the shape the batched embedding
+        // kernels rely on, B-2026-07-20-6).
+        let ir = ir_for(
+            "fn d(a: ref Tensor[f32, [64]], b: ref Tensor[f32, [64]]) -> f32 \
+             { let p = a.zip_with(b, |x, y| x * y); p.sum() }\n\
+             fn main() {\n\
+                 let a: Tensor[f32, [64]] = Tensor.ones([64]);\n\
+                 let b: Tensor[f32, [64]] = Tensor.ones([64]);\n\
+                 println(d(a, b));\n\
+             }\n",
+        );
+        assert!(
+            !ir.contains("fmr."),
+            "the let-bound form must NOT fuse (materialize path); IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_chained_map_zip_reduce_parity() {
+        // Fused chained `zip_with(...).sum()` AND `map(...).sum()` over exact
+        // values — byte-identical to the interpreter twin (and to the
+        // materialize path the fusion replaces). `dot` = 1·2+2·0+3·1+4·1 = 9;
+        // `map(*0.5).sum()` = (2+4+6+8)·0.5 = 10.
+        let out = run_program(
+            "fn dot(a: ref Tensor[f32, [4]], b: ref Tensor[f32, [4]]) -> f32 \
+             { a.zip_with(b, |x, y| x * y).sum() }\n\
+             fn main() {\n\
+                 let a: Tensor[f32, [4]] = Tensor.from([1.0, 2.0, 3.0, 4.0]);\n\
+                 let b: Tensor[f32, [4]] = Tensor.from([2.0, 0.0, 1.0, 1.0]);\n\
+                 println(dot(a, b));\n\
+                 let s: Tensor[f32, [4]] = Tensor.from([2.0, 4.0, 6.0, 8.0]);\n\
+                 println(s.map(|x| x * 0.5).sum());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "9\n10\n",
+                "fused chained map/zip reduce must match the interpreter twin",
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_tensor_axis_reduce() {
         // sum_axis / mean_axis → rank-1-lower tensor; rank-1 → scalar.
         let out = run_program(

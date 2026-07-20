@@ -123,3 +123,40 @@ by `test_ir_float_tensor_reduce_carries_reassoc` (the `reassoc` flag is emitted
 for float, absent for int) and `test_e2e_float_tensor_reduce_exact_value_bit_identical`
 (a 1024-wide vectorized reduction over exact values stays byte-identical to the
 interpreter twin) in `tests/codegen.rs`.
+
+### Follow-on — fusing the two-pass shape (point 3 above)
+
+The reassoc win vectorized the reduction but left the **wasted intermediate**
+(spike point 3): `a.zip_with(b, |x, y| x * y).sum()` still materialized a full
+`[D]` products tensor and read it back. That is now fused. Codegen recognizes a
+`<tensor>.zip_with(other, |a, b| ..).<reduce>()` / `<tensor>.map(|x| ..)
+.<reduce>()` chain (reduce ∈ `sum`/`mean`/`prod`) with an inline closure over a
+tensor-binding base and emits ONE accumulating loop
+(`emit_fused_map_reduce`, `src/codegen/kernel.rs`, hooked in
+`try_emit_fused_map_reduce`, `src/codegen/tensor.rs`) — the products never
+materialize. Corpus-wide, generalizes to user code, and needs no
+`Tensor→Slice` primitive (Option A's prerequisite gap). Empty policy, seed,
+`reassoc` tagging, and the `mean` divide all mirror `emit_reduce_fold`, so it is
+bit-identical to the materialize-then-reduce path it replaces.
+
+**Re-measurement** (`dot(ones, ones)` at D=1024, AOT): heap allocs for the
+`dot` body drop from **3 → 2** (the two inputs remain; the intermediate
+products tensor is gone), with the loop still packed (`vmulps` + `vaddps` in one
+pass, no `vfmadd` — the mul and add stay separate packed ops, which is the main
+win; FMA contraction is a possible further step, deliberately not taken to keep
+the divergence surface at just `reassoc`).
+
+**Stdlib kernels rewritten to the chained form** (`runtime/stdlib/embeddings
+.kara`) so they inherit the fusion: `dot`, `l2_norm`, `cosine_similarity`, and
+`dot_batched`'s per-row `query.zip_with(row, ..).sum()`. **Residual:**
+`cosine_similarity_batched` and `cosine_similarity_matrix` keep the let-bound
+`zip_with` method form — their per-row bodies reuse an iter_axis **row-view**
+across two combines, which trips an ownership false-positive on the chained form
+(B-2026-07-20-6), and delegating to `dot`/`l2_norm` is out because the module is
+deliberately self-contained (gated imports splice only the named fn). Their
+inner loops do not fuse until B-2026-07-20-6 is fixed. Guarded by
+`test_ir_chained_zip_reduce_fuses` (fusion fires: `fmr.*` blocks present),
+`test_ir_letbound_zip_reduce_does_not_fuse` (the let-bound form stays on the
+materialize path), and `test_e2e_chained_map_zip_reduce_parity` in
+`tests/codegen.rs`; the four `test_e2e_embeddings_*` E2E tests cover the
+rewritten kernels.

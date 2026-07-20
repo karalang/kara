@@ -323,6 +323,210 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Evaluate an inline `map`/`zip_with` closure on already-loaded scalar
+    /// operand(s), returning the body's scalar value. Binds param 0 to `a`
+    /// (typed `elem_a`) and, for a binary closure, param 1 to `b.0` (typed
+    /// `b.1`); compiles the body in place (captures resolve through the
+    /// enclosing scope); restores any shadowed outer bindings in reverse
+    /// order. This is the scalar twin of the `Closure` arms in
+    /// [`emit_elementwise_map`](Self::emit_elementwise_map) — used by
+    /// [`emit_fused_map_reduce`](Self::emit_fused_map_reduce) so a
+    /// `map(f).sum()` / `zip_with(f).sum()` chain folds in one pass without
+    /// the products ever materializing.
+    fn eval_inline_scalar_closure(
+        &mut self,
+        params: &[ClosureParam],
+        body: &Expr,
+        a: BasicValueEnum<'ctx>,
+        elem_a: BasicTypeEnum<'ctx>,
+        b: Option<(BasicValueEnum<'ctx>, BasicTypeEnum<'ctx>)>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "closure eval outside function".to_string())?;
+        let p0 = match &params[0].pattern.kind {
+            PatternKind::Binding(n) => n.clone(),
+            _ => "_fmr_p0".to_string(),
+        };
+        let saved0 = self.variables.get(&p0).copied();
+        let slot0 = self.create_entry_alloca(fn_val, &p0, elem_a);
+        self.builder.build_store(slot0, a).unwrap();
+        self.variables.insert(
+            p0.clone(),
+            VarSlot {
+                ptr: slot0,
+                ty: elem_a,
+            },
+        );
+
+        let mut restore1: Option<(String, Option<VarSlot<'ctx>>)> = None;
+        if let Some((bv, elem_b)) = b {
+            let p1 = match &params[1].pattern.kind {
+                PatternKind::Binding(n) => n.clone(),
+                _ => "_fmr_p1".to_string(),
+            };
+            let saved1 = self.variables.get(&p1).copied();
+            let slot1 = self.create_entry_alloca(fn_val, &p1, elem_b);
+            self.builder.build_store(slot1, bv).unwrap();
+            self.variables.insert(
+                p1.clone(),
+                VarSlot {
+                    ptr: slot1,
+                    ty: elem_b,
+                },
+            );
+            restore1 = Some((p1, saved1));
+        }
+
+        // Compile the body, THEN restore (restore even on error so the outer
+        // scope is never left with the loop's shadowing bindings leaked in).
+        let result = self.compile_expr(body);
+
+        if let Some((p1, saved1)) = restore1 {
+            match saved1 {
+                Some(s) => {
+                    self.variables.insert(p1, s);
+                }
+                None => {
+                    self.variables.remove(&p1);
+                }
+            }
+        }
+        match saved0 {
+            Some(s) => {
+                self.variables.insert(p0, s);
+            }
+            None => {
+                self.variables.remove(&p0);
+            }
+        }
+        result
+    }
+
+    /// Fused `<tensor>.zip_with(other, |a, b| ..).<reduce>()` /
+    /// `<tensor>.map(|x| ..).<reduce>()` — one accumulating pass that applies
+    /// the inline closure element-wise and folds the result WITHOUT
+    /// materializing the intermediate products tensor. `op` is `Sum`/`Prod`/
+    /// `Mean`; `lhs` is the base operand access; `other` is the `zip_with`
+    /// partner (`None` for `map`). `result_elem`/`result_unsigned` are the
+    /// closure's return type — the accumulator type (which may differ from the
+    /// operand type, e.g. `map(|x: f32| x.to_i64()).sum()`).
+    ///
+    /// The caller (`try_emit_fused_map_reduce`) guards emptiness first, exactly
+    /// like `compile_tensor_full_reduce` does before `emit_reduce_fold` — so
+    /// this assumes a non-empty `len` (the `Mean` divide relies on it). Seed
+    /// (`0` for sum/mean, `1` for prod), fold op, `reassoc` tagging, and the
+    /// `Mean` f64-promote-then-divide all mirror `emit_reduce_fold`, so the
+    /// fused result is bit-identical to the materialize-then-reduce path it
+    /// replaces (modulo the already-documented `reassoc` reduction reorder).
+    pub(super) fn emit_fused_map_reduce(
+        &mut self,
+        lhs: &ContainerAccess<'ctx>,
+        other: Option<&ContainerAccess<'ctx>>,
+        closure: (&[ClosureParam], &Expr),
+        result_elem: BasicTypeEnum<'ctx>,
+        result_unsigned: bool,
+        op: ReduceOp,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let (params, body) = closure;
+        let fold_op = match op {
+            ReduceOp::Sum | ReduceOp::Mean => BinOp::Add,
+            ReduceOp::Prod => BinOp::Mul,
+            other => {
+                return Err(format!(
+                "emit_fused_map_reduce: unsupported op {other:?} (fused family is Sum/Prod/Mean)"
+            ))
+            }
+        };
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "fused map-reduce outside function".to_string())?;
+
+        // Seed: `0` for sum/mean (additive identity), `1` for prod, typed as
+        // the accumulator (closure-return) element.
+        let seed: BasicValueEnum<'ctx> = match (op, result_elem) {
+            (ReduceOp::Prod, BasicTypeEnum::FloatType(ft)) => ft.const_float(1.0).into(),
+            (ReduceOp::Prod, BasicTypeEnum::IntType(it)) => it.const_int(1, false).into(),
+            (_, BasicTypeEnum::FloatType(ft)) => ft.const_zero().into(),
+            (_, BasicTypeEnum::IntType(it)) => it.const_zero().into(),
+            (_, other_t) => other_t.const_zero(),
+        };
+        let acc = self.builder.build_alloca(result_elem, "fmr.acc").unwrap();
+        self.builder.build_store(acc, seed).unwrap();
+        let i = self.builder.build_alloca(i64_t, "fmr.i").unwrap();
+        self.builder.build_store(i, i64_t.const_zero()).unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "fmr.head");
+        let body_bb = self.context.append_basic_block(fn_val, "fmr.body");
+        let exit = self.context.append_basic_block(fn_val, "fmr.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, i, "fmr.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, lhs.len, "fmr.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body_bb, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let a = self.access_load(lhs, iv);
+        let b_opt = other.map(|o| (self.access_load(o, iv), o.elem));
+        let r = self.eval_inline_scalar_closure(params, body, a, lhs.elem, b_opt)?;
+        let r = self.coerce_scalar_to_type(r, result_elem);
+        let cur = self
+            .builder
+            .build_load(result_elem, acc, "fmr.cur")
+            .unwrap();
+        let next = self.compile_binop_typed(&fold_op, cur, r, result_unsigned)?;
+        self.tag_reduce_reassoc(next);
+        self.builder.build_store(acc, next).unwrap();
+        let i2 = self
+            .builder
+            .build_int_add(iv, i64_t.const_int(1, false), "fmr.i2")
+            .unwrap();
+        self.builder.build_store(i, i2).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        let total = self
+            .builder
+            .build_load(result_elem, acc, "fmr.out")
+            .unwrap();
+        if matches!(op, ReduceOp::Mean) {
+            let f64_t = self.context.f64_type();
+            let sum_f = self.to_float(total)?;
+            // Promote a narrow f32 accumulator to f64 before the divide (an
+            // `f32` tensor sums in f32, but `mean` declares an f64 result) —
+            // identical to `emit_reduce_fold`'s mean path.
+            let sum_f = if sum_f.get_type() == self.context.f32_type() {
+                self.builder
+                    .build_float_ext(sum_f, f64_t, "fmr.sumf64")
+                    .unwrap()
+            } else {
+                sum_f
+            };
+            let nf = self
+                .builder
+                .build_unsigned_int_to_float(lhs.len, f64_t, "fmr.nf")
+                .unwrap();
+            Ok(self
+                .builder
+                .build_float_div(sum_f, nf, "fmr.mean")
+                .unwrap()
+                .into())
+        } else {
+            Ok(total)
+        }
+    }
+
     /// The shared `min`/`max` reduction over a **non-empty** contiguous access
     /// — the caller guards emptiness first (`Tensor` traps, `Stats` wraps the
     /// result in `Option` with a `None` arm for the empty case). Seeds `acc`

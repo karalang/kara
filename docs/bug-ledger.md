@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 67 | 0 |
 | double-free | 67 | 0 |
 | missing-feature | 60 | 0 |
-| false-positive | 37 | 0 |
+| false-positive | 38 | 1 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
 | soundness | 24 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 430 | 0 |
 | typecheck | 83 | 0 |
 | interp | 66 | 0 |
-| ownership | 24 | 0 |
+| ownership | 25 | 1 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
 | runtime | 13 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **598 surfaced · 0 open · 594 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **599 surfaced · 1 open · 594 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-20-6 | 2026-07-20 | ownership | low | `karac check` reports a false `error[ownership]: value 'row' moved here, used again here` for an iter_axis ROW-VIEW reused across two CHAINED `row.zip_with(row, ..).sum()` calls, even though `zip_with`'s `other` param is `ref` (a borrow, not a move). The trigger is narrow: it needs ALL of (row-view base) + (chained method: `.sum()`/`.mean()`/`.prod()` appended to the `zip_with`) + (reuse across statements). Each leg alone is clean: a row-view reused in the LET-BOUND method form (`let p = row.zip_with(row, f); p.sum(); let p2 = row.zip_with(row, f); ..`) passes; a row-view used ONCE per iter in a chain passes; a ref-PARAM (not a row-view) reused in the chained form passes. `karac run --interp` computes the correct result; `karac build` additionally mis-lowers the chained-reuse temp (a distinct 'Index operator applied to non-array type' codegen error), so the let-bound method form is the working shape. | src/ownership.rs (move checker — method-chain temp-receiver arg classification) |
 
 ### Fixed (594)
 

@@ -24,16 +24,15 @@
 /// Dot product of two same-width embedding vectors: `Σ aᵢ·bᵢ`.
 #[must_use = "the dot product is the whole result — discarding it wastes the traversal"]
 pub fn dot[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
-    let products = a.zip_with(b, |x, y| x * y);
-    products.sum()
+    // Chained `zip_with(...).sum()` so codegen fuses the product + reduction
+    // into one vectorized accumulating pass (no intermediate products tensor).
+    a.zip_with(b, |x, y| x * y).sum()
 }
 
 /// Euclidean (L2) norm of an embedding vector: `√(Σ aᵢ²)`.
 #[must_use = "the norm is the whole result — discarding it wastes the traversal"]
 pub fn l2_norm[D](a: ref Tensor[f32, [D]]) -> f32 {
-    let squares = a.zip_with(a, |x, y| x * y);
-    let ss = squares.sum();
-    ss.sqrt()
+    a.zip_with(a, |x, y| x * y).sum().sqrt()
 }
 
 /// Cosine similarity of two embedding vectors: `dot(a, b) / (‖a‖·‖b‖)`.
@@ -42,12 +41,9 @@ pub fn l2_norm[D](a: ref Tensor[f32, [D]]) -> f32 {
 /// across the two norms and the dot product without being consumed.
 #[must_use = "the similarity score is the whole result — discarding it wastes the computation"]
 pub fn cosine_similarity[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 with panics {
-    let pab = a.zip_with(b, |x, y| x * y);
-    let ab = pab.sum();
-    let paa = a.zip_with(a, |x, y| x * y);
-    let aa = paa.sum();
-    let pbb = b.zip_with(b, |x, y| x * y);
-    let bb = pbb.sum();
+    let ab = a.zip_with(b, |x, y| x * y).sum();
+    let aa = a.zip_with(a, |x, y| x * y).sum();
+    let bb = b.zip_with(b, |x, y| x * y).sum();
     ab / (aa.sqrt() * bb.sqrt())
 }
 
@@ -56,9 +52,7 @@ pub fn cosine_similarity[D](a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) ->
 /// returned unchanged (its norm is 0; dividing would produce NaNs).
 #[must_use = "l2_normalize returns a new unit vector; it does not mutate the input"]
 pub fn l2_normalize[D](v: ref Tensor[f32, [D]]) -> Tensor[f32, [D]] with panics {
-    let squares = v.zip_with(v, |x, y| x * y);
-    let ss = squares.sum();
-    let n = ss.sqrt();
+    let n = v.zip_with(v, |x, y| x * y).sum().sqrt();
     if n == 0.0f32 {
         v.map(|x| x)
     } else {
@@ -74,8 +68,7 @@ pub fn dot_batched[N, D](query: ref Tensor[f32, [D]], corpus: ref Tensor[f32, [N
     let rows = corpus.iter_axis(0);
     let mut out: Vec[f32] = Vec.new();
     for row in rows {
-        let products = query.zip_with(row, |x, y| x * y);
-        out.push(products.sum());
+        out.push(query.zip_with(row, |x, y| x * y).sum());
     }
     out
 }
@@ -89,6 +82,17 @@ pub fn cosine_similarity_batched[N, D](
     query: ref Tensor[f32, [D]],
     corpus: ref Tensor[f32, [N, D]],
 ) -> Vec[f32] with panics {
+    // The per-row body keeps the let-bound `zip_with(...)` method form rather
+    // than the fused chain (`query.zip_with(row, ..).sum()`): `row` is an
+    // iter_axis row-view reused across two combines, and the ownership checker
+    // flags a row-view reused as a ref arg of a *chained*-method call as
+    // UseAfterMove (the let-bound form borrows it cleanly) — B-2026-07-20-6.
+    // Delegating to the
+    // fused `dot`/`l2_norm` is also out — this module is deliberately
+    // self-contained (gated imports splice only the named fn, not its callees),
+    // so a cross-call would fail to resolve under `import std.embeddings.{...}`.
+    // Net: the batched inner loop does not fuse; the single-pair kernels
+    // (`dot`/`l2_norm`/`cosine_similarity`) and `dot_batched` do.
     let pq = query.zip_with(query, |x, y| x * y);
     let nq = pq.sum().sqrt();
     let rows = corpus.iter_axis(0);
@@ -122,6 +126,9 @@ pub fn cosine_similarity_matrix[Q, N, D](
     let crows = corpus.iter_axis(0);
     let mut i = 0;
     while i < q {
+        // Row-views (`qrow`/`crow`) reused across two combines — keep the
+        // let-bound `zip_with` method form (see the note in
+        // `cosine_similarity_batched` + the bug ledger).
         let qrow = qrows[i];
         let pqq = qrow.zip_with(qrow, |x, y| x * y);
         let nq = pqq.sum().sqrt();

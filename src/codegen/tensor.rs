@@ -3318,6 +3318,14 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let elem = self.llvm_type_for_type_expr(&elem_te);
         let elem_unsigned = type_expr_is_unsigned_int(&elem_te);
+        // Fusion: a `<base>.zip_with(other, |a,b| ..).<reduce>()` or
+        // `<base>.map(|x| ..).<reduce>()` chain folds in one accumulating pass
+        // with NO intermediate products tensor (`emit_fused_map_reduce`). Only
+        // fires for the recognized inline-closure shapes over a tensor-binding
+        // base; everything else falls through to the materialize path below.
+        if let Some(fused) = self.try_emit_fused_map_reduce(object, method, elem, elem_unsigned)? {
+            return Ok(Some(fused));
+        }
         let t_val = self.compile_expr(object)?;
         let t_ptr = t_val.into_pointer_value();
         let result = self.compile_tensor_full_reduce(method, elem, elem_unsigned, t_ptr)?;
@@ -3328,6 +3336,123 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_call(self.free_fn, &[t_ptr.into()], "")
                 .unwrap();
         }
+        Ok(Some(result))
+    }
+
+    /// If `object` is `<base>.zip_with(<other>, |a, b| ..)` or
+    /// `<base>.map(|x| ..)` with an INLINE closure literal and `<base>` is a
+    /// tensor binding (identifier / `self`), fuse it with this scalar
+    /// `sum`/`mean`/`prod` reduce into ONE accumulating loop — the products
+    /// never materialize ([`emit_fused_map_reduce`](Self::emit_fused_map_reduce)).
+    /// `result_elem`/`result_unsigned` are the intermediate (closure-return)
+    /// element type the caller already resolved from `temp_recv_elem_types`.
+    ///
+    /// Returns `Ok(None)` — falling back to the materialize-then-reduce path —
+    /// for any shape not recognized (non-inline closure, non-binding base,
+    /// `min`/`max`, wrong arity), so it can never regress a currently-compiling
+    /// program. The base is required to be a tensor *binding* so its element
+    /// type + data pointer resolve without recursively materializing a sub-chain
+    /// (a `map(...).map(...).sum()` inner map still materializes — only the
+    /// outermost `map`/`zip_with` fuses with the reduce).
+    fn try_emit_fused_map_reduce(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        result_elem: BasicTypeEnum<'ctx>,
+        result_unsigned: bool,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let op = match method {
+            "sum" => ReduceOp::Sum,
+            "mean" => ReduceOp::Mean,
+            "prod" => ReduceOp::Prod,
+            _ => return Ok(None),
+        };
+        let ExprKind::MethodCall {
+            object: base,
+            method: inner,
+            args,
+            ..
+        } = &object.kind
+        else {
+            return Ok(None);
+        };
+        let is_zip = inner == "zip_with";
+        let is_map = inner == "map";
+        if !is_zip && !is_map {
+            return Ok(None);
+        }
+        // Base must be a tensor binding so its element type + pointer resolve
+        // without recursively materializing a sub-chain.
+        let base_name = match &base.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return Ok(None),
+        };
+        let Some(info) = self.tensor_var_infos.get(base_name).cloned() else {
+            return Ok(None);
+        };
+        // The inline closure is the last arg; the zip partner is arg 0.
+        let arity = if is_zip { 2 } else { 1 };
+        if args.len() != arity {
+            return Ok(None);
+        }
+        let ExprKind::Closure { params, body, .. } = &args[arity - 1].value.kind else {
+            return Ok(None);
+        };
+        if params.len() != arity {
+            return Ok(None);
+        }
+
+        let base_ptr = self.tensor_ptr_for_var(base_name)?;
+        let rank = self.tensor_load_rank(base_ptr);
+        let count = self.tensor_count_runtime(base_ptr, rank);
+
+        // Empty policy: a Tensor scalar reduction traps on empty (matches
+        // `compile_tensor_full_reduce`'s unconditional guard), so guard BEFORE
+        // the fused loop; `emit_fused_map_reduce` then assumes non-empty.
+        let i64_t = self.context.i64_type();
+        let nonempty = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, count, i64_t.const_zero(), "fmr.ne")
+            .unwrap();
+        self.emit_tensor_guard(nonempty, "cannot reduce an empty tensor")?;
+
+        let base_data = self.tensor_data_ptr_dyn(base_ptr, rank, "fmr.base.d");
+        let lhs = ContainerAccess {
+            data: base_data,
+            len: count,
+            elem: info.elem,
+            unsigned: info.elem_unsigned,
+            bitmap: None,
+        };
+        // `zip_with`'s partner is another `Tensor[T, S]` of the SAME element
+        // type T (its signature forces it), so it shares `info.elem`. Compile it
+        // to a pointer and shape-guard against the base — the exact guard
+        // `compile_tensor_zip_with` emits for the materialize path.
+        let other_access = if is_zip {
+            let other_ptr = self.compile_expr(&args[0].value)?.into_pointer_value();
+            self.emit_tensor_shape_eq_guard(base_ptr, other_ptr)?;
+            let other_rank = self.tensor_load_rank(other_ptr);
+            let other_data = self.tensor_data_ptr_dyn(other_ptr, other_rank, "fmr.other.d");
+            Some(ContainerAccess {
+                data: other_data,
+                len: count,
+                elem: info.elem,
+                unsigned: info.elem_unsigned,
+                bitmap: None,
+            })
+        } else {
+            None
+        };
+
+        let result = self.emit_fused_map_reduce(
+            &lhs,
+            other_access.as_ref(),
+            (params, body),
+            result_elem,
+            result_unsigned,
+            op,
+        )?;
         Ok(Some(result))
     }
 
