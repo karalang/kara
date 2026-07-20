@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 86 | 0 |
 | double-free | 67 | 0 |
 | codegen-gap | 64 | 0 |
-| missing-feature | 60 | 1 |
+| missing-feature | 60 | 0 |
 | false-positive | 37 | 0 |
 | run-vs-build | 36 | 0 |
 | crash | 27 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 425 | 1 |
-| typecheck | 82 | 1 |
-| interp | 65 | 1 |
+| codegen | 425 | 0 |
+| typecheck | 82 | 0 |
+| interp | 65 | 0 |
 | ownership | 24 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **593 surfaced · 1 open · 588 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **593 surfaced · 0 open · 589 fixed** (2026-05-20 → 2026-07-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-19-14 | 2026-07-19 | typecheck+interp+codegen | medium | Iterator predicate/Option-adaptor cluster UNIMPLEMENTED: `filter_map`, `find_map`, `partition` are rejected `no method '<name>' on type 'Iterator'` in all backends, while the sibling adaptors `flat_map` / `scan` / `position` / `find` / `last` are present. `v.iter().filter_map(|t| match t { ... => Some(..), _ => None })` (a common filter+map fusion over an enum) has no path — the user must fall back to a manual loop or `.filter(...).map(...).unwrap()`. | src/typechecker/stdlib_seq.rs |
+_None — the ledger is fully drained._
 
-### Fixed (588)
+### Fixed (589)
 
-<details><summary>588 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>589 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -725,6 +723,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **593 surfaced 
 | B-2026-07-19-11 | codegen | low | `Iterator.rev()` codegen residual (B-2026-07-18-41) — a BARE range base `(a..b).rev()` / `(a..=b).rev()` was loud-deferred to `--interp` | 20bcdc5 |
 | B-2026-07-19-12 | typecheck+interp+codegen | low | `Iterator.flatten()` was unimplemented — `xs.iter().flatten()` rejected with `no method 'flatten' on type 'Iterator'` | 0425a45,1f1e879,ffd6384 |
 | B-2026-07-19-13 | codegen | medium | Indexed-shared-struct field READ (`nodes[i].field`) hardcoded heap offset `idx + 1` instead of routing through `shared_gep_layout`, so it mis-read an… | 8f606de |
+| B-2026-07-19-14 | typecheck+interp+codegen | medium | Iterator predicate/Option-adaptor cluster UNIMPLEMENTED: `filter_map`, `find_map`, `partition` are rejected `no method '<name>' on type 'Iterator'` i… | f0ed50a |
 | B-2026-07-19-15 | codegen | low | `Vec[T].sorted()` (immutable sort returning a NEW Vec) is UNIMPLEMENTED in codegen for every element type — it falls to the generic 'Vec/String metho… | c6848c4 |
 
 </details>
