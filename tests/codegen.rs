@@ -55818,6 +55818,37 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_map_get_unwrap_struct_heap_value() {
+        // B-2026-07-20-7: `let a = m.get(k).unwrap()` where the map VALUE is a
+        // user STRUCT that owns heap (a `String`/`Vec` field). Unlike the bare
+        // `String`/`Vec` value (B-2026-07-14-15), a struct value fell through the
+        // borrow-elision detector, so the shallow struct copy's scope-exit
+        // struct-drop AND the map's own value-drop freed the inner buffer twice
+        // → `free(): double free detected` (SIGABRT) under JIT/AOT while interp
+        // was correct. Now `is_nonshared_struct_value_map_get_unwrap` marks the
+        // binding borrow-elided (map stays sole owner). Covers a String-field
+        // struct (i64 and String keys), a two-field struct (String + i64), and
+        // two reads from one map. Sibling LSan test guards the memory safety.
+        let output = run_program(
+            "struct Acct { name: String, txns: i64 }\n\
+             fn main() {\n\
+                 let mut m: Map[String, Acct] = Map.new();\n\
+                 m.insert(\"a\".to_string(), Acct { name: \"alice\".to_string(), txns: 2 });\n\
+                 m.insert(\"b\".to_string(), Acct { name: \"bob\".to_string(), txns: 1 });\n\
+                 let a = m.get(\"a\").unwrap();\n\
+                 let b = m.get(\"b\").unwrap();\n\
+                 println(f\"{a.name}:{a.txns},{b.name}:{b.txns}\");\n\
+                 let mut mi: Map[i64, Acct] = Map.new();\n\
+                 mi.insert(7, Acct { name: \"carol\".to_string(), txns: 9 });\n\
+                 let c = mi.get(7).unwrap();\n\
+                 println(f\"{c.name}:{c.txns}\");\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "alice:2,bob:1\ncarol:9\n");
+    }
+
+    #[test]
     fn test_e2e_inline_index_map_get_unwrap_vec_value() {
         // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
         // (`m.get(k).unwrap()[i]`) used to loud-bail "Index operator applied to

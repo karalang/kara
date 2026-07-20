@@ -9969,6 +9969,40 @@ fn main() {
     }
 
     #[test]
+    fn asan_map_get_unwrap_struct_heap_value_no_double_free() {
+        // B-2026-07-20-7: `let a = m.get(k).unwrap()` on a Map whose VALUE is a
+        // user STRUCT owning a heap `String` field. The shallow struct copy the
+        // get materializes aliases the map's stored String; registering an owned
+        // scope-exit struct-drop on the binding freed that buffer a SECOND time
+        // against the map's own value-drop → double-free (`free(): double free
+        // detected`, caught by macOS ASAN) — and a mis-fired elision would leak
+        // the map's buffer (Linux LSan). Now `is_nonshared_struct_value_map_get_-
+        // unwrap` borrow-elides the binding (map stays sole owner). Rebuild +
+        // drop the map each iteration so any per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+struct Acct { name: String, txns: i64 }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut m: Map[String, Acct] = Map.new();
+        m.insert("a".to_string(), Acct { name: "alice".to_string(), txns: 2 });
+        m.insert("b".to_string(), Acct { name: "bobby".to_string(), txns: 3 });
+        let a = m.get("a").unwrap();
+        let b = m.get("b").unwrap();
+        acc = acc + a.name.len() + a.txns + b.name.len() + b.txns;
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["600"],
+            "map_get_unwrap_struct_heap_value_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_letbound_map_get_moveout_no_double_free() {
         // B-2026-07-09-13: `let g = m.get(k); match g { Some(v) => <move v> }`.
         // `Map.get` returns an `Option[V]` whose String payload ALIASES the

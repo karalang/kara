@@ -5007,7 +5007,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         // Suppress the drop for this borrow alias — the container
                         // stays the sole owner (the Vec/String-element sibling is
                         // `borrowed_vec_get_unwrap_heap_inner` → `borrow_elided`).
-                        let struct_borrow_elided = self.is_borrowed_vec_get_unwrap_struct(value);
+                        let struct_borrow_elided = self.is_borrowed_vec_get_unwrap_struct(value)
+                            || self.is_nonshared_struct_value_map_get_unwrap(value);
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             let alloca = slot.ptr;
                             // A shared struct's user `impl Drop` is fired by the
@@ -8318,5 +8319,74 @@ impl<'ctx> super::Codegen<'ctx> {
         // then produced a layout-sensitive crash in downstream code (a
         // 100-element struct sort read via `v.get(j).unwrap()`).
         self.struct_types.contains_key(name)
+    }
+
+    /// B-2026-07-20-7: `let a = m.get(k).unwrap()` on a Map whose VALUE is a
+    /// NON-shared USER STRUCT that owns heap (a `String`/`Vec`/... field). Even
+    /// though `Map.get` types as `Option[V]` BY VALUE (no `ref`, unlike the
+    /// Vec/Slice accessors), codegen materializes a SHALLOW struct copy whose
+    /// heap fields alias the map's stored buffers; registering an owned
+    /// scope-exit struct-drop on the binding frees them a SECOND time (the map's
+    /// own value-drop already frees them) → double-free (`free(): double free
+    /// detected`). Treat it as borrow-elided exactly like the two siblings —
+    /// the bare-`String`/`Vec` Map value (`is_nonshared_heap_value_map_get_unwrap`)
+    /// and the Vec-element struct (`is_borrowed_vec_get_unwrap_struct`): the
+    /// binding aliases the map's struct (field reads still resolve via
+    /// `var_type_names`) and takes NO struct-drop, so the map stays the sole
+    /// owner. The ownership checker ties the borrow's lifetime to the map (same
+    /// guarantee the bare-value sibling relies on), so the alias can't outlive
+    /// the map's buffer. Eliding a pure-value (heap-free) struct's drop is
+    /// harmless (it is a no-op), so — like the Vec sibling — gate only on
+    /// "non-shared user struct", not on the presence of a heap field.
+    pub(super) fn is_nonshared_struct_value_map_get_unwrap(&self, value: &Expr) -> bool {
+        let ExprKind::MethodCall { method, object, .. } = &value.kind else {
+            return false;
+        };
+        if !matches!(method.as_str(), "unwrap" | "expect") {
+            return false;
+        }
+        let ExprKind::MethodCall {
+            method: get_method,
+            object: map_recv,
+            ..
+        } = &object.kind
+        else {
+            return false;
+        };
+        if get_method != "get" {
+            return false;
+        }
+        let ExprKind::Identifier(map_var) = &map_recv.kind else {
+            return false;
+        };
+        // The receiver MUST be a Map var — `var_elem_type_exprs` is shared with
+        // Vec/Slice/Set (it stores the Vec ELEMENT type too), so gating on it
+        // alone would also match `v.get(i).unwrap()` on a `Vec[Struct]`, whose
+        // `.get` returns `Option[ref elem]` (a genuine borrow already handled by
+        // `is_borrowed_vec_get_unwrap_struct` / the normal reconstruction) and
+        // must NOT be re-elided here. `map_val_types` is the Map-only registry
+        // (SortedMap included; populated alongside `var_elem_type_exprs` at
+        // `register_container_var_types`), so it is the precise discriminator.
+        if !self.map_val_types.contains_key(map_var.as_str()) {
+            return false;
+        }
+        // `var_elem_type_exprs` records the Map var's VALUE type (same lookup the
+        // bare-value sibling `is_nonshared_heap_value_map_get_unwrap` uses).
+        let Some(te) = self.var_elem_type_exprs.get(map_var).cloned() else {
+            return false;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let Some(name) = p.segments.last() else {
+            return false;
+        };
+        // Shared structs are RC-managed (the get-read/drop is balanced by the
+        // RC machinery, not a raw buffer free), so the shallow-alias double-free
+        // does not apply — leave them to that path.
+        if self.shared_types.contains_key(name.as_str()) {
+            return false;
+        }
+        self.struct_types.contains_key(name.as_str())
     }
 }
