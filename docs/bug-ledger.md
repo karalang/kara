@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 157 | 0 |
 | leak | 86 | 0 |
-| codegen-gap | 69 | 2 |
+| codegen-gap | 69 | 1 |
 | double-free | 68 | 0 |
 | missing-feature | 60 | 0 |
 | false-positive | 38 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 435 | 2 |
+| codegen | 435 | 1 |
 | typecheck | 83 | 0 |
 | interp | 66 | 0 |
 | ownership | 25 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **604 surfaced · 2 open · 598 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **604 surfaced · 1 open · 599 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-20-8 | 2026-07-20 | codegen | low | `Vec[T].sorted_by(cmp: Fn(T,T)->Ordering)` / `String.sorted_by` (immutable CUSTOM-COMPARATOR sort returning a new Vec/String) is UNIMPLEMENTED in codegen — loud-bails `Vec/String method 'sorted_by' is not yet supported in codegen` under `karac build`/JIT; runs under `--interp`. The no-comparator sibling `Vec[T].sorted()` landed (B-2026-07-19-15, c6848c4); the comparator variant is the natural follow-on. | src/codegen/vec_method.rs (Vec method dispatch) + src/codegen/string_method.rs (String.sorted_by) |
-| B-2026-07-20-11 | 2026-07-20 | codegen | medium | `karac build` fails LLVM module verification with `Invalid bitcast: bitcast float %elem to i64` for a fused f32 map-reduce whose base is an `iter_axis` ROW-VIEW: `for row in t.iter_axis(0) { let d = row.zip_with(row, |x,y| x*y).sum(); }`. `karac run --interp` computes the correct result (run-vs-build divergence). Narrowed: a single fused f32 `a.zip_with(b, f).sum()` over PLAIN tensor args builds fine (M1); the i64 form builds fine (M2); reuse over plain args builds fine (M3); the trigger is the iter_axis row-view base feeding the fused f32 reduce (M4). The row-view path wraps elements in an Option (the emitted `%enum.fw` / `%or.pl.fc` payload words), and the synthesized Some(<f32>) payload reconstruction bitcasts a 32-bit float directly to/from a 64-bit payload word — invalid (bitcast requires equal bit width). | src/codegen/kernel.rs (emit_fused_map_reduce — f32 Option-payload reconstruction over an iter_axis row-view base) |
 
-### Fixed (598)
+### Fixed (599)
 
-<details><summary>598 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>599 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -737,6 +736,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **604 surfaced 
 | B-2026-07-20-7 | codegen | high | `Map[K, struct-with-heap-field].get().unwrap()` DOUBLE-FREES under codegen (JIT + AOT-O2/O0); interp correct | bd2bb92 |
 | B-2026-07-20-9 | codegen | high | `Vec[struct-with-heap-field].get(i)/.first()/.last().unwrap()` field read is FLAKY under codegen (JIT + AOT): `let a = v.get(0).unwrap(); print(a.nam… | b7b72eb |
 | B-2026-07-20-10 | codegen | high | Every WASM program that frees a heap buffer traps at runtime (`unreachable` via a `signature_mismatch:karac_free_buf` stub) | a25a2a1 |
+| B-2026-07-20-11 | codegen | medium | `karac build` fails LLVM module verification with `Invalid bitcast: bitcast float %elem to i64` for a fused f32 map-reduce whose base is an `iter_axi… | 5f5897b |
 
 </details>
 
