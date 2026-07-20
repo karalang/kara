@@ -3,6 +3,10 @@ target/
 
 # Binaries
 a.out
+# Stray `karac build` outputs accidentally committed from the repo root
+# (the AOT compiler emits `<stem>` into the cwd). Ignore the scratch ones
+# that have leaked in; the real fix is to build into a scratch dir.
+tup_vec
 
 # IDX
 .idx/
