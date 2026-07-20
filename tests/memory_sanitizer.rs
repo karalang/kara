@@ -811,13 +811,18 @@ fn main() {
             n2 = n2 + 1i64;
         }
         println(n2);
+        // Slice 3 — `.flatten().collect()` over heap elements ALLOCATES a fresh
+        // Vec whose String buffers (cloned from the borrowed source) must each
+        // free exactly once; the source survives.
+        let c: Vec[String] = nested.iter().flatten().collect();
+        println(c.get(0));
         iter = iter + 1i64;
     }
 }
 "#,
             &[
-                "Some(a0)", "Some(c0)", "3", "3", "Some(a1)", "Some(c1)", "3", "3", "Some(a2)",
-                "Some(c2)", "3", "3",
+                "Some(a0)", "Some(c0)", "3", "3", "Some(a0)", "Some(a1)", "Some(c1)", "3", "3",
+                "Some(a1)", "Some(a2)", "Some(c2)", "3", "3", "Some(a2)",
             ],
             "asan_iter_flatten_for_loop_heap_no_leak",
         );

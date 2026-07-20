@@ -14483,23 +14483,47 @@ fn main() {
         }
     }
 
-    /// `Iterator.flatten()` TERMINAL shapes are interpreter-only (slice 2 lowered
-    /// only the for-loop). Codegen must bail LOUD (naming flatten + `--interp`)
-    /// for `.flatten().collect()` / `.sum()` and any adaptor/terminal OVER
-    /// flatten — never a silent empty iteration or a confusing generic error.
+    /// B-2026-07-19-12 slice 3 — the fused TERMINALS over flatten
+    /// (`collect`/`sum`/`count`/`fold`, plus adaptor-then-terminal like
+    /// `flatten().map(f).collect()` / `flatten().filter(p).sum()`) now lower via
+    /// the flatten-aware structural base peel (`peel_base_is_structural_adaptor`)
+    /// and the dedicated `try_compile_flatten_collect`. Byte-identical to the
+    /// interpreter (`test_iter_flatten_interpreter`).
     #[test]
-    fn e2e_iter_flatten_deferred_loud_message() {
-        for src in [
-            "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; let f: Vec[i64] = v.iter().flatten().collect(); println(f.get(0)); }\n",
-            "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; let n: i64 = v.iter().flatten().sum(); println(n); }\n",
-            "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; let n: i64 = v.iter().flatten().map(|x| x * 2).sum(); println(n); }\n",
-        ] {
-            let err = ir_result(src).expect_err("unsupported flatten chain must bail loud");
-            assert!(
-                err.contains("Iterator.flatten()") && err.contains("--interp"),
-                "expected flatten loud-bail message, got: {err}"
-            );
+    fn e2e_iter_flatten_terminals() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let n: Vec[Vec[i64]] = [[1, 2], [3, 4], [5]];\n\
+                 let flat: Vec[i64] = n.iter().flatten().collect();\n\
+                 println(flat.get(0));\n\
+                 println(flat.get(4));\n\
+                 println(n.iter().flatten().sum());\n\
+                 println(n.iter().flatten().count());\n\
+                 println(n.iter().flatten().fold(0, |acc, x| acc * 10 + x));\n\
+                 let d: Vec[i64] = n.iter().flatten().map(|x| x * 2).collect();\n\
+                 println(d.get(2));\n\
+                 println(n.iter().flatten().filter(|x| x % 2 == 1).sum());\n\
+             }",
+        ) {
+            // collect .get(0)=Some(1) .get(4)=Some(5); sum 15; count 5;
+            // fold 12345; map*2 .get(2)=Some(6); odd-filter sum 1+3+5=9
+            assert_eq!(out, "Some(1)\nSome(5)\n15\n5\n12345\nSome(6)\n9\n");
         }
+    }
+
+    /// A BARE `Iterator.flatten()` VALUE — materialized into a `let` binding that
+    /// codegen compiles eagerly rather than inlining — has no codegen
+    /// representation and must bail LOUD (naming flatten + `--interp`), never a
+    /// silent skip. The driven shapes (for-loop, terminals) are covered above.
+    #[test]
+    fn e2e_iter_flatten_bare_value_deferred_loud() {
+        let src = "fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; \
+                   let it = v.iter().flatten(); for x in it { println(x); } }\n";
+        let err = ir_result(src).expect_err("bare flatten value must bail loud");
+        assert!(
+            err.contains("Iterator.flatten()") && err.contains("--interp"),
+            "expected flatten loud-bail message, got: {err}"
+        );
     }
 
     /// Positive guard: the `for (i, x)` enumerate DESTRUCTURE path (the handled

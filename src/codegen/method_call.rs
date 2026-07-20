@@ -625,22 +625,6 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// True iff `.flatten()` appears anywhere on `expr`'s receiver spine (a
-    /// `.flatten()` inside a closure arg is a separate scope). Used to bail
-    /// codegen loudly for any chain that includes the deferred `flatten` adaptor
-    /// (typecheck + interp shipped; codegen deferred). Without this, a
-    /// `for x in xs.iter().flatten()` loop hits the silent `_ =>` fall-through in
-    /// `compile_for` and iterates ZERO times — empty output vs the interpreter's
-    /// flattened sequence.
-    pub(super) fn chain_receiver_contains_flatten(expr: &Expr) -> bool {
-        match &expr.kind {
-            ExprKind::MethodCall { object, method, .. } => {
-                method == "flatten" || Self::chain_receiver_contains_flatten(object)
-            }
-            _ => false,
-        }
-    }
-
     /// Rebuild `expr`'s receiver spine with the (single) `.rev()` node removed —
     /// splicing its receiver in place (`v.iter().rev().map(f)` → `v.iter().map(f)`),
     /// preserving every surviving node's original span. The stripped chain is
@@ -2241,23 +2225,24 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // `<iter-chain>.flatten()` — reverse-iterate's sibling deferral. The
-        // interpreter flattens eagerly; codegen does not yet lower it. Bail LOUD
-        // (naming flatten + `--interp`) as soon as `flatten` appears on the
-        // receiver spine — whether this call IS `.flatten()` or a terminal/
-        // adaptor OVER a flatten chain (`.flatten().collect()`,
-        // `.flatten().map(f).sum()`) — never a silent skip / confusing generic
-        // "no handler" error. Placed AFTER the Option/Result combinator dispatch
-        // above: `Option[Option[T]].flatten()` / `Result[..].flatten()` are
-        // handled there and return, so any `.flatten()` reaching here is an
-        // ITERATOR flatten (a non-Option/Result receiver made that dispatch fall
-        // through). The `for x in <chain>.flatten()` loop is guarded separately
-        // in `compile_for` (before its silent `_ =>` fall-through).
-        if method == "flatten" || Self::chain_receiver_contains_flatten(object) {
+        // A BARE `Iterator.flatten()` VALUE — a materialized flatten iterator
+        // (`let it = xs.iter().flatten()`) with no terminal / for-loop to drive
+        // it — has no codegen representation (mirrors the bare-`.rev()` value
+        // bail). The DRIVEN shapes are lowered elsewhere: the fused TERMINALS
+        // (collect/sum/fold/count/…) treat a flatten receiver as a structural
+        // fused base via `peel_base_is_structural_adaptor` (slice 3), and the
+        // `for x in <recv>.flatten()` loop via `try_compile_for_flatten` (slice
+        // 2). Placed AFTER the Option/Result combinator dispatch above so
+        // `Option[Option[T]].flatten()` / `Result.flatten()` (handled there,
+        // returned) never reach here — any `.flatten()` that does is an ITERATOR
+        // flatten. Any still-unhandled driven shape (a flatten under a
+        // non-fused adaptor like `zip`) falls through to the generic loud
+        // "no handler" diagnostic below, never a silent skip.
+        if method == "flatten" && args.is_empty() {
             return Err(
-                "`Iterator.flatten()` is not yet supported under `karac build`/`karac run` \
-                 (codegen); it works under the tree-walk interpreter. Re-run with \
-                 `--interp` (or `KARAC_RUN_JIT=0`)."
+                "`Iterator.flatten()` as a bare iterator value is not yet supported under \
+                 `karac build`/`karac run` (codegen); chain a terminal (`.collect()` / \
+                 `.sum()` / a `for` loop) or re-run with `--interp`."
                     .to_string(),
             );
         }
@@ -5638,6 +5623,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`enumerate`, `zip`, …), a non-single-`Binding`-param closure, or a
         // missing output element type — so unsupported shapes fail loudly rather
         // than miscompile.
+        // `<recv>.flatten().collect()` (B-2026-07-19-12 slice 3) — a single
+        // accumulating loop over the flatten chain (routes through the flatten
+        // for-loop desugar). Intercepted before the general adaptor collect
+        // engine, which has its own base-peel that doesn't recognize a flatten
+        // base. Gated on a bare `flatten()` receiver on the proven whitelist;
+        // fails closed to the general engine / loud bail for richer shapes
+        // (e.g. `flatten().map(g).collect()`, still `--interp`).
+        if method == "collect" && args.is_empty() && Self::for_loop_iterates_flatten(object) {
+            if let Some(v) = self.try_compile_flatten_collect(object, call_span)? {
+                return Ok(v);
+            }
+        }
+
         if method == "collect" && args.is_empty() {
             if let Some(v) = self.try_compile_iter_adaptor_collect_to_vec(object, call_span)? {
                 return Ok(v);
@@ -9044,6 +9042,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         match method.as_str() {
             "flat_map" => Self::for_loop_iterates_flat_map(base),
+            "flatten" if args.is_empty() => Self::for_loop_iterates_flatten(base),
             "cycle" if args.is_empty() => Self::peel_fused_map_filter_chain(object).is_some(),
             "scan" if args.len() == 2 => {
                 let ExprKind::Closure { params, body, .. } = &args[1].value.kind else {
@@ -11399,6 +11398,127 @@ impl<'ctx> super::Codegen<'ctx> {
         let block = Expr {
             kind: ExprKind::Block(Block {
                 stmts: vec![let_vec, outer_loop],
+                final_expr: Some(Box::new(ident(&vec_name))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `<recv>.flatten().collect()` (B-2026-07-19-12 slice 3) into a single
+    /// accumulating loop over the flatten chain:
+    ///
+    /// ```text
+    /// { let mut __flc: Vec[E] = Vec.new();
+    ///   for __fli in <recv>.flatten() { __flc.push(__fli); }
+    ///   __flc }
+    /// ```
+    ///
+    /// The `for __fli in <recv>.flatten()` loop routes through the flatten
+    /// nested-loop desugar (`try_compile_for_flatten`, slice 2), so this reuses
+    /// all of that shape's coverage. `flatten_recv` is the `flatten()` MethodCall
+    /// (the collect receiver); the result element type comes from the
+    /// typechecker-recorded `owned_temp_drops` entry at the collect span. Returns
+    /// `Ok(None)` (→ the general collect engine / loud bail) when that type isn't
+    /// a recorded `Vec[E]`.
+    fn try_compile_flatten_collect(
+        &mut self,
+        flatten_recv: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let vec_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        if !matches!(
+            &vec_te.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec")
+        ) {
+            return Ok(None);
+        }
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let vec_name = format!("__flc_{}", uid);
+        let elem_var = format!("__fli_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+
+        let vec_new = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+        let let_vec = Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(vec_name.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(vec_te),
+                value: vec_new,
+            },
+            span: sp.clone(),
+        };
+        // `__flc.push(__fli)`
+        let push = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(ident(&vec_name)),
+                    method: "push".to_string(),
+                    turbofish: None,
+                    args: vec![CallArg {
+                        label: None,
+                        mut_marker: false,
+                        value: ident(&elem_var),
+                        span: sp.clone(),
+                    }],
+                    args_close_span: sp.clone(),
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        // `for __fli in <recv>.flatten() { __flc.push(__fli); }`
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(elem_var),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(flatten_recv.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: vec![push],
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_vec, for_loop],
                 final_expr: Some(Box::new(ident(&vec_name))),
                 span: sp.clone(),
             }),

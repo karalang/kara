@@ -141,18 +141,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
-        // Any remaining flatten on the receiver spine (flatten not outermost, or
-        // the desugar bailed) — bail LOUD before the silent `_ =>` fall-through,
-        // which would drop the loop body → empty output vs the interpreter's
-        // flattened sequence.
-        if Self::chain_receiver_contains_flatten(iterable) {
-            return Err(
-                "`Iterator.flatten()` is not yet supported under `karac build`/`karac run` \
-                 (codegen) for this chain shape; it works under the tree-walk \
-                 interpreter. Re-run with `--interp` (or `KARAC_RUN_JIT=0`)."
-                    .to_string(),
-            );
-        }
+        // A flatten NOT outermost (`for x in xs.iter().flatten().map(g)`) flows
+        // to the fused-adaptor dispatch below, which now peels flatten as a
+        // structural fused base (`peel_base_is_structural_adaptor`, slice 3). An
+        // outermost flatten that `try_compile_for_flatten` above DECLINED, and
+        // any flatten chain the fused path can't lower, are caught LOUD by the
+        // `UNLOWERED_FOR_ADAPTORS` backstop (which lists `flatten`) before the
+        // silent `_ =>` fall-through — never a silently-skipped body.
 
         // `for x in coll.iter()` / `for x in coll.into_iter()` —
         // codegen iterates the underlying storage directly via the
@@ -761,6 +756,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         "chain",
                         "step_by",
                         "flat_map",
+                        "flatten",
                         "chunks",
                         "chunk_by",
                         "windows",
@@ -3868,6 +3864,26 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         Self::flat_map_inner_iterable_ok(body)
             && Self::peel_fused_map_filter_chain(object).is_some()
+    }
+
+    /// True iff `e` is a `<recv>.flatten()` call whose shape the nested-loop
+    /// desugar (`try_compile_for_flatten`) accepts: a bare `flatten()` over a
+    /// receiver on the proven inner-iterable whitelist. Used by the fused
+    /// TERMINALS (fold/sum/count/reduce/for_each/any/all and the collect engine)
+    /// via `peel_base_is_structural_adaptor` to treat a flatten receiver as a
+    /// zero-step base — the synthesized `for <elem> in <e>` then routes through
+    /// the flatten desugar (B-2026-07-19-12 slice 3).
+    pub(super) fn for_loop_iterates_flatten(e: &Expr) -> bool {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &e.kind
+        else {
+            return false;
+        };
+        method == "flatten" && args.is_empty() && Self::flat_map_inner_iterable_ok(object)
     }
 
     /// Inner-iterable whitelist for the flat_map desugar: shapes `compile_for`
