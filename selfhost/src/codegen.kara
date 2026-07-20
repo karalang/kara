@@ -27,6 +27,7 @@ import ast.{
     Item,
     FnDefNode,
     FnParamNode,
+    PatInt,
     TypeExpr,
     PathType,
     Block,
@@ -1922,6 +1923,125 @@ impl Emitter {
         let MatchExpr { scrutinee, arms, span } = m;
         let sv = self.emit_value(scrutinee);
         let Val { op: sop, kind: sk, heap: sh } = sv;
+        if sk == 0 {
+            // INT-LITERAL MATCH (Slice 26 — was a SILENT arm-dropper): an
+            // icmp/branch chain per IntPat arm; a wildcard or binding pattern
+            // is a catch-all (the binding gets an i64 slot). Value position
+            // routes arm results through an i64 slot, like the enum path.
+            let mid = self.nlbl;
+            self.nlbl = self.nlbl + 1;
+            let lend = "endmatch" + mid.to_string();
+            let mut rslot = "".to_string();
+            if want_value {
+                rslot = self.fresh();
+                self.body = self.body + "  " + rslot.clone() + " = alloca i64, align 8\n";
+                self.body = self.body + "  store i64 0, ptr " + rslot.clone() + ", align 8\n";
+            }
+            let mut ai = 0;
+            for arm in arms {
+                let MatchArm { pattern, guard, body, span: asp } = arm;
+                let mut has_lit = false;
+                let mut lit = 0;
+                let mut bind_name = "".to_string();
+                let mut is_catch = false;
+                match pattern {
+                    IntPat(pi) => {
+                        let PatInt { value, suffix, span: psp } = pi;
+                        has_lit = true;
+                        lit = value;
+                    }
+                    BindingPat(bp) => {
+                        let BindingPattern { name: bn, span: bsp } = bp;
+                        bind_name = bn;
+                        is_catch = true;
+                    }
+                    WildcardPat(sn2) => {
+                        is_catch = true;
+                    }
+                    _ => {}
+                }
+                if has_lit {
+                    let lbody = "marm" + mid.to_string() + "_" + ai.to_string();
+                    let lnext = "mnext" + mid.to_string() + "_" + ai.to_string();
+                    let c = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + c.clone()
+                        + " = icmp eq i64 "
+                        + sop.clone()
+                        + ", "
+                        + lit.to_string()
+                        + "\n";
+                    self.body = self.body
+                        + "  br i1 "
+                        + c
+                        + ", label %"
+                        + lbody.clone()
+                        + ", label %"
+                        + lnext.clone()
+                        + "\n";
+                    self.body = self.body + lbody + ":\n";
+                    if want_value {
+                        let bv = self.emit_value(body);
+                        let Val { op: bop, kind: bk, heap: bh } = bv;
+                        self.body = self.body
+                            + "  store i64 "
+                            + bop
+                            + ", ptr "
+                            + rslot.clone()
+                            + ", align 8\n";
+                    } else {
+                        self.emit_expr(body);
+                    }
+                    self.body = self.body + "  br label %" + lend.clone() + "\n";
+                    self.body = self.body + lnext + ":\n";
+                } else {
+                    if is_catch {
+                        if bind_name != "" {
+                            let idx = self.locals.len();
+                            self.locals.push(bind_name);
+                            self.locals_kind.push(0);
+                            self.locals_heap.push(false);
+                            self.body = self.body
+                                + "  %v"
+                                + idx.to_string()
+                                + " = alloca i64, align 8\n";
+                            self.body = self.body
+                                + "  store i64 "
+                                + sop.clone()
+                                + ", ptr %v"
+                                + idx.to_string()
+                                + ", align 8\n";
+                        }
+                        if want_value {
+                            let bv = self.emit_value(body);
+                            let Val { op: bop, kind: bk, heap: bh } = bv;
+                            self.body = self.body
+                                + "  store i64 "
+                                + bop
+                                + ", ptr "
+                                + rslot.clone()
+                                + ", align 8\n";
+                        } else {
+                            self.emit_expr(body);
+                        }
+                        self.body = self.body + "  br label %" + lend.clone() + "\n";
+                        let ldead = "mdead" + mid.to_string() + "_" + ai.to_string();
+                        self.body = self.body + ldead + ":\n";
+                    }
+                }
+                ai = ai + 1;
+            }
+            self.body = self.body + "  br label %" + lend.clone() + "\n";
+            self.body = self.body + lend + ":\n";
+            if want_value {
+                let r = self.fresh();
+                self.body =
+                    self.body + "  " + r.clone() + " = load i64, ptr " + rslot + ", align 8\n";
+                return Val { op: r, kind: 0, heap: false };
+            }
+            return Val { op: "0".to_string(), kind: 0, heap: false };
+        }
         if sk < 1000 {
             return Val { op: "0".to_string(), kind: 0, heap: false };
         }
@@ -2123,6 +2243,71 @@ impl Emitter {
     // Uses a select over the length check so the memcmp runs unconditionally
     // (safe: both pointers are valid for their own lengths; when lengths
     // differ the memcmp result is discarded).
+    // Lexicographic three-way string compare (Slice 26): an i64 register
+    // that is <0 / 0 / >0. memcmp over min(len_l, len_r); when the common
+    // prefix ties, the length difference decides ("ab" < "abc").
+    fn emit_str_cmp3(mut ref self, lop: String, rop: String) -> String {
+        let lp = self.fresh();
+        self.body =
+            self.body + "  " + lp.clone() + " = extractvalue { ptr, i64 } " + lop.clone() + ", 0\n";
+        let ll = self.fresh();
+        self.body = self.body + "  " + ll.clone() + " = extractvalue { ptr, i64 } " + lop + ", 1\n";
+        let rp = self.fresh();
+        self.body =
+            self.body + "  " + rp.clone() + " = extractvalue { ptr, i64 } " + rop.clone() + ", 0\n";
+        let rl = self.fresh();
+        self.body = self.body + "  " + rl.clone() + " = extractvalue { ptr, i64 } " + rop + ", 1\n";
+        let lt = self.fresh();
+        self.body = self.body
+            + "  "
+            + lt.clone()
+            + " = icmp slt i64 "
+            + ll.clone()
+            + ", "
+            + rl.clone()
+            + "\n";
+        let mn = self.fresh();
+        self.body = self.body
+            + "  "
+            + mn.clone()
+            + " = select i1 "
+            + lt
+            + ", i64 "
+            + ll.clone()
+            + ", i64 "
+            + rl.clone()
+            + "\n";
+        let mc = self.fresh();
+        self.body = self.body
+            + "  "
+            + mc.clone()
+            + " = call i32 @memcmp(ptr "
+            + lp
+            + ", ptr "
+            + rp
+            + ", i64 "
+            + mn
+            + ")\n";
+        let mcx = self.fresh();
+        self.body = self.body + "  " + mcx.clone() + " = sext i32 " + mc.clone() + " to i64\n";
+        let mz = self.fresh();
+        self.body = self.body + "  " + mz.clone() + " = icmp eq i32 " + mc + ", 0\n";
+        let ld = self.fresh();
+        self.body = self.body + "  " + ld.clone() + " = sub i64 " + ll + ", " + rl + "\n";
+        let r = self.fresh();
+        self.body = self.body
+            + "  "
+            + r.clone()
+            + " = select i1 "
+            + mz
+            + ", i64 "
+            + ld
+            + ", i64 "
+            + mcx
+            + "\n";
+        r
+    }
+
     fn emit_str_eq(mut ref self, lop: String, rop: String) -> Val {
         let lp = self.fresh();
         self.body =
@@ -2998,8 +3183,7 @@ impl Emitter {
                 let Val { op: lop, kind: lk, heap: lh } = lv;
                 let Val { op: rop, kind: rk, heap: rh } = rv;
                 if kind == 1 and lk == 2 and rk == 2 {
-                    // String ==/!= (Slice 17): length compare + memcmp. Other
-                    // string comparisons stay unsupported.
+                    // String ==/!= (Slice 17): length compare + memcmp.
                     if text == "eq" or text == "ne" {
                         let r = self.emit_str_eq(lop.clone(), rop.clone());
                         let Val { op: eop, kind: ek, heap: eh } = r;
@@ -3017,7 +3201,26 @@ impl Emitter {
                         }
                         return Val { op: eop, kind: 1, heap: false };
                     }
-                    return Val { op: "false".to_string(), kind: 1, heap: false };
+                    // String ORDERING < <= > >= (Slice 26): lexicographic
+                    // byte compare — memcmp over min(len) three-way, length
+                    // difference breaks ties (was a SILENT constant-false).
+                    let c3 = self.emit_str_cmp3(lop.clone(), rop.clone());
+                    if lh {
+                        self.emit_free_val(lop);
+                    }
+                    if rh {
+                        self.emit_free_val(rop);
+                    }
+                    let r = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + r.clone()
+                        + " = icmp "
+                        + text
+                        + " i64 "
+                        + c3
+                        + ", 0\n";
+                    return Val { op: r, kind: 1, heap: false };
                 }
                 if kind == 0 and text == "add" and lk == 2 and rk == 2 {
                     // String CONCATENATION (Slice 8): malloc(l1+l2), memcpy
