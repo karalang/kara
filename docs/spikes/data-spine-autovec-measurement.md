@@ -91,3 +91,35 @@ Option C is higher-leverage and matches the existing exp/ln divergence
 precedent; Option A matches the literal "hand-write against `Vector[T, N]`"
 wording but needs new Tensor plumbing. Recommend C unless the reassociation
 divergence is unwanted, in which case A.
+
+## Resolution (shipped) — the minimal-C variant
+
+Landed the **lightest form of Option C**: rather than emitting
+`@llvm.vector.reduce.fadd` or a manual `Vector` accumulator, codegen now tags
+the *existing* scalar reduction fold (`fadd` for `sum`/`mean`, `fmul` for
+`prod`) with the `reassoc` fast-math flag (`tag_reduce_reassoc`,
+`src/codegen/kernel.rs`), applied at both fold emission sites (`emit_reduce_fold`
+and the validity-gated `emit_reduce_fold_gated`). That single permission is all
+LLVM's loop vectorizer needs to recognize the reduction and rewrite the scalar
+chain into packed adds + a horizontal sum — no new intrinsic, no Tensor
+`as_slice` plumbing, and it is **corpus-wide** (every f32/f64 `Tensor.sum` /
+`mean` / `prod`, `Column.sum` / `prod`, and `Stats.sum`, plus the `dot` /
+`cosine` kernels above, all inherit it).
+
+**Re-measurement** (same `dot(ones, ones)` binary, `<dot>` disassembly): the
+reduction went from `vaddps` 0 / `vaddss` 9 (the dead-end above) to **`vaddps` 9
+/ `vaddss` 2** (the 2 residual scalars are the horizontal-reduce tail +
+remainder). A `Tensor[f32, [1024]].sum()` over a `ref` param (const-fold
+defeated) shows the same 9 packed adds end-to-end. Correctness unchanged
+(`dot(ones,ones)` = 768; `Tensor[f32,[1024]].sum()` of ones = 1024).
+
+**Divergence scope, as predicted.** Only the interpreter-vs-`build` low-order
+bits of a *non-exact* float reduction move (the shipped-`v.exp()`/`v.ln()`
+class); the AOT binary is deterministic run-to-run (fixed lane count, fixed
+horizontal-sum tree — distinct from the `#[fp_reassoc]`-gated *parallel* float
+reduction, which is gated for cross-thread nondeterminism). Exactly-representable
+inputs (small integers held in f32) stay bit-identical across backends. Guarded
+by `test_ir_float_tensor_reduce_carries_reassoc` (the `reassoc` flag is emitted
+for float, absent for int) and `test_e2e_float_tensor_reduce_exact_value_bit_identical`
+(a 1024-wide vectorized reduction over exact values stays byte-identical to the
+interpreter twin) in `tests/codegen.rs`.

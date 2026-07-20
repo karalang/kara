@@ -185,6 +185,41 @@ impl<'ctx> super::Codegen<'ctx> {
     /// traps on empty) guards emptiness with its own message/mechanism
     /// *before* calling this — the `Mean` division here assumes a guarded
     /// non-empty `len`.
+    /// Tag a just-emitted float reduction accumulate (`fadd` for `sum`/`mean`,
+    /// `fmul` for `prod`) with `reassoc` so LLVM's loop vectorizer may vectorize
+    /// the reduction into packed adds + a horizontal sum — the f32/f64 reduction
+    /// win from the data-spine auto-vec measurement
+    /// (`docs/spikes/data-spine-autovec-measurement.md`). LLVM will NOT
+    /// reassociate float adds under the default pipeline (reassociation changes
+    /// rounding), so without this permission the reduction stays a scalar
+    /// `fadd`/`fmul` chain — measured as `vaddss` with zero `vaddps`.
+    ///
+    /// This reassociation is the SEQUENTIAL (single-threaded) reduction fold —
+    /// distinct from the `#[fp_reassoc]`-gated *parallel* float reduction
+    /// deferred in `ReductionOp`'s doc (`concurrency.rs`). That opt-in is gated
+    /// because per-thread combine order makes a multi-threaded float reduction
+    /// non-deterministic *run to run*; the SIMD reduction here is a fixed lane
+    /// count with a fixed horizontal-sum tree, so it stays deterministic run to
+    /// run — the only divergence is `karac build` (vectorized, reassociated) vs.
+    /// `karac run` (interpreter, ordered) in the low-order bits of a non-exact
+    /// float `sum` / `mean` / `prod`. That is a documented, deliberate
+    /// divergence in the same class as the shipped `v.exp()` / `v.ln()` SIMD
+    /// polynomials. Sums of exactly-representable values (e.g. small integers
+    /// held in f32) are order-independent and stay bit-identical across backends.
+    ///
+    /// No-op for a non-float fold: an integer accumulate carries the
+    /// defined-overflow trap and is not a fast-math instruction, so
+    /// `set_fast_math_flags` declines it — integer reductions are byte-identical
+    /// across backends, unchanged.
+    fn tag_reduce_reassoc(&self, folded: BasicValueEnum<'ctx>) {
+        let BasicValueEnum::FloatValue(fv) = folded else {
+            return;
+        };
+        if let Some(inst) = fv.as_instruction() {
+            let _ = inst.set_fast_math_flags(inkwell::values::FastMathFlags::AllowReassoc);
+        }
+    }
+
     pub(super) fn emit_reduce_fold(
         &mut self,
         access: &ContainerAccess<'ctx>,
@@ -244,6 +279,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(access.elem, acc, "kern.fold.cur")
             .unwrap();
         let next = self.compile_binop_typed(&fold_op, cur, x, access.unsigned)?;
+        self.tag_reduce_reassoc(next);
         self.builder.build_store(acc, next).unwrap();
         let i2 = self
             .builder
@@ -471,6 +507,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(access.elem, acc, "kern.gf.a")
             .unwrap();
         let a2 = self.compile_binop_typed(&fold_op, a, x, access.unsigned)?;
+        self.tag_reduce_reassoc(a2);
         self.builder.build_store(acc, a2).unwrap();
         let c = self
             .builder

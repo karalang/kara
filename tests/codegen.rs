@@ -68316,6 +68316,61 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_float_tensor_reduce_carries_reassoc() {
+        // The float reduction fold must be tagged `reassoc` so LLVM's loop
+        // vectorizer can turn the scalar `fadd` chain into packed adds + a
+        // horizontal sum (`tag_reduce_reassoc`, kernel.rs). Without the flag
+        // LLVM refuses to reassociate float adds and the reduction stays
+        // scalar. A `ref` param source keeps the reduction from const-folding.
+        let ir = ir_for(
+            "fn s(t: ref Tensor[f32, [64]]) -> f32 { t.sum() }\n\
+             fn main() { let t: Tensor[f32, [64]] = Tensor.ones([64]); println(s(t)); }\n",
+        );
+        assert!(
+            ir.contains("fadd reassoc"),
+            "float Tensor.sum fold must emit `fadd reassoc` to unlock vectorization; IR:\n{ir}"
+        );
+
+        // The integer twin must NOT carry a float reassoc flag: an i64 fold
+        // lowers to a defined-overflow-trapping integer `add`, which is
+        // order-independent already and byte-identical across backends.
+        let int_ir = ir_for(
+            "fn s(t: ref Tensor[i64, [64]]) -> i64 { t.sum() }\n\
+             fn main() { let t: Tensor[i64, [64]] = Tensor.ones([64]); println(s(t)); }\n",
+        );
+        assert!(
+            !int_ir.contains("fadd reassoc"),
+            "integer Tensor.sum must not carry a float reassoc flag; IR:\n{int_ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_float_tensor_reduce_exact_value_bit_identical() {
+        // A large float reduction that DOES vectorize (reassociated packed
+        // adds), over exactly-representable inputs. Reassociation reorders the
+        // adds but 1024 copies of 1.0 sum to 1024.0 in any order, so the AOT
+        // result stays bit-identical to the ordered interpreter twin — the
+        // "exactly-representable values stay bit-identical" guarantee in
+        // `tag_reduce_reassoc`'s doc.
+        let out = run_program(
+            "fn s(t: ref Tensor[f32, [1024]]) -> f32 { t.sum() }\n\
+             fn main() {\n\
+                 let t: Tensor[f32, [1024]] = Tensor.ones([1024]);\n\
+                 println(s(t));\n\
+                 let g: Tensor[f64, [1024]] = Tensor.ones([1024]);\n\
+                 println(g.mean());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "1024\n1\n",
+                "vectorized float reduction over exact values must stay bit-identical \
+                 to the interpreter twin",
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_tensor_axis_reduce() {
         // sum_axis / mean_axis → rank-1-lower tensor; rank-1 → scalar.
         let out = run_program(
