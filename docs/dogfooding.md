@@ -32,7 +32,7 @@ numbering used in `docs/roadmap.md` / `phase-6-runtime.md` ("Flagship Demo 1/2/3
 - [Demo planning](#demo-planning) — five pillars + practical filters
 - [Tier 1 — Must-Build](#tier-1--must-build-core-story-highest-impact) — Parallax, Mend, Slipstream
 - [Tier 2 — High-Value](#tier-2--high-value-compelling-story-focused-audience) — Cartographer, Husk, Weave, Tangle, Chronicle
-- [Tier 3 — Domain-Specific](#tier-3--domain-specific-strong-for-specific-audiences) — Relay, Forge, Iris, Plume, Fathom
+- [Tier 3 — Domain-Specific](#tier-3--domain-specific-strong-for-specific-audiences) — Relay, Forge, Iris, Plume, Fathom, Prism, Veil
 - [Build Sequence](#build-sequence)
 - [Reusable Scaffolding](#reusable-scaffolding)
 - [Adding a project](#adding-a-project) — the entry template
@@ -62,6 +62,8 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Iris** | One source → native + WASM, no port | ✅ shipped | one package · one `main` · two targets via platform-suffixed host module; six filters byte-identical native vs wasm (CDP-verified) — `examples/iris/` | 3 |
 | **Plume** | Parallel browser compute driven by event streams — no `async`/coloring | ✅ shipped | `animation_frames` + event-data `pointer_moves` channel + `put_pixels` blit — all built (`examples/plume/`) | 3 |
 | **Fathom** | Browser × multi-core pixel compute, one source | ✅ shipped (interactive) | `animation_frames` + `Vec.as_ptr` blit host fn + `Vector[f64,2]` SIMD-128 inner kernel (1.47× fewer instrs, byte-identical) + interactive pan/zoom (`events.wheel` zoom-toward-cursor + `pointer_moves` click-drag pan + `events.keydown` arrows/`+`-`-`/`R`, real-browser CDP-verified) — all built | 3 |
+| **Prism** | Web-convenient *and* fully-local image compute (Squoosh-class, zero upload); Kāra owns the pixel math, one source → also a native CLI | ⬜ planned | image-decode-in + encoded-download-out host fns + resize/resample kernel (Iris's deferred follow-ups) | 3 |
+| **Veil** | Privacy-first local redaction — the sensitive file never leaves the device; a no-install web app vs upload-first incumbents | ⬜ planned | Prism's image-in/out spine + blur/pixelate kernels + `Regex` PII detect | 3 |
 
 ---
 
@@ -1258,6 +1260,85 @@ Shares the entire spine with Plume.
 
 ---
 
+### Prism — Local Image Workbench
+
+**Primary capability:** Web-convenient *and* fully local — a Squoosh-class image
+tool that runs entirely in the browser with **zero upload**, where Kāra owns the
+pixel math and the *same* source also builds a native CLI.
+
+**What it is:** A no-install, open-a-tab image tool. Drag a real photo in →
+resize / **upscale** (quality resampling), crop, rotate, adjust
+(brightness/contrast/saturation/gamma), apply filters, convert format, and
+download — 100% client-side, the image never leaving the device. The browser
+does codec decode/encode (`createImageBitmap` / `canvas.toBlob`, so JPEG/PNG/WebP
+containers + a quality slider come free); **Kāra owns every pixel kernel**
+(resample, transform, adjust, filter), fanned across the Web Worker pool and
+SIMD-vectorized on the same spine as Fathom/Slipstream. It is the
+*productization of* **Iris**: Iris proved the one-source native+wasm filter spine
+on a *procedural* source; Prism adds the two host-FFI legs Iris explicitly
+deferred — real-photo load in, encoded download out — plus the resize/resample
+kernels, turning the proof into a tool people actually open and use.
+
+**What the demo shows:**
+1. Drop a real photo → it renders instantly, and the Network tab stays empty —
+   nothing was uploaded.
+2. Drag a resize/upscale slider → a Lanczos resample runs on the worker pool,
+   live, at multi-megapixel sizes without jank.
+3. Crop / rotate / adjust / filter, each a Kāra kernel, composable in a pipeline.
+4. Pick a format + quality → download; the output file-size readout updates live,
+   and EXIF/metadata is gone (falls out of the re-encode).
+5. The *same* resample/filter kernels ship as a native `karac` CLI
+   (`prism resize *.jpg --to 1600`) — one source, two targets, byte-identical
+   output (the Iris parity oracle, extended to resize).
+
+**Why it's compelling:** Everyone knows Squoosh. "We rebuilt a Squoosh-class
+tool in a brand-new language — it runs entirely in your browser with nothing
+uploaded, and the *same* code is a native CLI" is a one-sentence, instantly
+legible proof that Kāra plays in the real client-side-compute arena, occupying
+the corner almost no tool does: **web convenience + desktop-grade privacy at
+once.**
+
+**Effort:** Medium — gated on two new host fns (image-decode-in,
+encoded-download-out) + a resize/resample kernel; reuses the Iris/Fathom filter +
+worker-pool + `put_pixels` blit spine wholesale.
+
+---
+
+### Veil — Local Redactor
+
+**Primary capability:** Privacy-first *by construction* — the sensitive thing you
+are hiding never leaves the device, delivered as a no-install web app.
+
+**What it is:** A browser redaction tool. Drop a screenshot or photo, draw boxes
+over sensitive regions → blur / pixelate / solid-bar them, strip EXIF/metadata,
+and download — 100% local. An optional smart layer uses Kāra's `Regex` support to
+flag PII patterns (emails, phone numbers, card/SSN shapes) in known text regions
+and suggest a one-click redaction. The blur/pixelate kernels are pure Kāra pixel
+compute on the worker pool; the browser handles decode/encode. It shares Prism's
+image-in/out spine and inverts the usual redaction irony — every "redact online"
+incumbent makes you *upload the sensitive file first*.
+
+**What the demo shows:**
+1. Drop a screenshot with a visible API key / email → draw a box → it is
+   pixelated in place, and nothing was uploaded.
+2. Blur vs pixelate vs solid-bar, each a Kāra kernel, with live preview.
+3. A metadata panel shows EXIF/GPS present → one click strips it.
+4. (Smart layer) auto-detect: a `Regex` pass flags an email/phone in a text
+   region and offers a one-click redact.
+5. Download the clean image — provably local (empty Network tab), which *is* the
+   whole pitch.
+
+**Why it's compelling:** The story is sharp and self-evident — *"nobody should
+have to upload the thing they are trying to hide."* It is an instantly understood
+painkiller with a privacy hook that markets itself, and it proves the same
+client-side-compute wedge as Prism on a narrative even non-technical users grasp.
+
+**Effort:** Medium — reuses Prism's image-in/out host fns + worker-pool blit;
+adds blur/pixelate kernels (trivial pixel math) and, for the smart layer, the
+`Regex` PII patterns Kāra already supports.
+
+---
+
 ## Build Sequence
 
 All of these are V1-scope — the ordering is *when within the pre-launch runway*
@@ -1274,6 +1355,8 @@ the "Ready when" column notes the compiler capability each is gated on.
 | 6 | **Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |
 | 7 | **Slipstream** | Browser edition ✅ built 2026-06-19 (`examples/slipstream/`); native-SDL2 CPU path after Phase 11 (long-tail stdlib + FFI); f32 GPU LBM path BUILT + validated on Metal (GPU-LBM + GPU-SLIP clusters, 2026-07-11; f64→f32 decided GPU-LBM-1, not a blocker); GPU-GATE-1 (v1-P1 GPU gate) MET. Shipped example lacks a C/G toggle (kept out of the green f64 demo); open GPU frontier = GPU-SLIP-4b (persistent on-device buffers, perf) | Visually striking, instantly explainable. |
 | 8 | **Husk** | Hardware gaps from v8 (`#[repr]`, `#[interrupt]`, inline asm, `no_std`) | Systems credibility. Validates the `kernel` profile. |
+| 9 | **Prism** | Iris spine (done) + 2 host fns (real-photo decode-in, encoded download-out) + a resize/resample kernel | The *usable-product* layer of the front-end track — a Squoosh-class tool people open and try. Drives the real-file I/O host surface Iris deferred. |
+| 10 | **Veil** | Prism's image-in/out spine + `Regex` (done) | Sharpest privacy narrative, reuses Prism wholesale; adds blur/pixelate kernels + optional PII auto-detect. |
 
 **Parallax** and **Mend** together are the minimum viable showcase — they
 cover the two core theses (auto-concurrency, AI-first) with achievable effort,
