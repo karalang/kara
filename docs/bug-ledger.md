@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 157 | 0 |
+| miscompile | 158 | 1 |
 | leak | 86 | 0 |
 | codegen-gap | 69 | 1 |
 | double-free | 68 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 435 | 1 |
+| codegen | 436 | 2 |
 | typecheck | 83 | 0 |
 | interp | 66 | 0 |
 | ownership | 25 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **604 surfaced · 1 open · 599 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **605 surfaced · 2 open · 599 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-20-8 | 2026-07-20 | codegen | low | `Vec[T].sorted_by(cmp: Fn(T,T)->Ordering)` / `String.sorted_by` (immutable CUSTOM-COMPARATOR sort returning a new Vec/String) is UNIMPLEMENTED in codegen — loud-bails `Vec/String method 'sorted_by' is not yet supported in codegen` under `karac build`/JIT; runs under `--interp`. The no-comparator sibling `Vec[T].sorted()` landed (B-2026-07-19-15, c6848c4); the comparator variant is the natural follow-on. | src/codegen/vec_method.rs (Vec method dispatch) + src/codegen/string_method.rs (String.sorted_by) |
+| B-2026-07-20-12 | 2026-07-20 | codegen | medium | An f16 inside a COMPOUND enum payload (`Option[(f16, f16)]`) builds and runs but produces a WRONG VALUE under `karac build`: `match o { Some(p) => println(p.0 + p.1) }` prints 32512 (0x7F00 — a mis-sized bit pattern read back as f16) while `karac run --interp` prints the correct 4. SILENT wrong answer (worst failure class). PRE-EXISTING: bit-identical before and after the landed B-2026-07-20-11 f32 width-normalize fix (5f5897b), so the f16 compound payload routes AROUND the four fixed sites (it never failed verification, unlike f32) — the mis-sizing lives elsewhere in the f16 payload pack/unpack path. A bare `Option[f16]` is untested here; f32 and f64 compound payloads are correct (B-2026-07-20-11 tests). | src/codegen (f16/bf16 compound enum-payload pack/unpack) |
 
 ### Fixed (599)
 
