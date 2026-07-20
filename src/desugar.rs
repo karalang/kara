@@ -24,6 +24,167 @@ pub fn desugar_program(program: &mut Program) {
     propagate_codegen_hints(program);
     desugar_impl_trait_args_in_program(program);
     desugar_multi_assign_in_program(program);
+    desugar_multiversion_in_program(program);
+}
+
+/// Desugar `#[multiversion(baseline, "avx2", "avx512f")]` free functions into
+/// runtime-dispatched multiversioned variants (design.md § Multiversioning >
+/// `cpu-baseline` and `#[multiversion]`). For `fn f(a, b) -> R { body }`:
+///
+///   * each listed feature becomes an `unsafe` clone tagged
+///     `#[target_feature(enable = "<feat>")]`, named `f$<feat>`;
+///   * a plain (safe) `f$baseline` clone carries the un-widened body;
+///   * `f` itself is rewritten into a SAFE thunk that probes
+///     `cpu.supports("<feat>")` — last-listed (widest) first — and calls the
+///     matching variant in an `unsafe` block, falling back to `f$baseline`.
+///
+/// Reuses the shipped `#[target_feature]` codegen (per-function `target-features`
+/// attribute) and the `cpu.supports` intrinsic — no core-pipeline change; the
+/// synthesized variants and thunk are ordinary functions every later phase sees.
+/// Scope (enforced in the parser scan; defensively re-checked here): a
+/// non-generic free function with simple binding parameters.
+fn desugar_multiversion_in_program(program: &mut Program) {
+    let mut synthesized: Vec<Item> = Vec::new();
+    for item in program.items.iter_mut() {
+        let Item::Function(f) = item else { continue };
+        let Some(features) = multiversion_feature_list(&f.attributes) else {
+            continue;
+        };
+        if features.is_empty()
+            || f.self_param.is_some()
+            || f.generic_params.is_some()
+            || !f
+                .params
+                .iter()
+                .all(|p| matches!(p.pattern.kind, PatternKind::Binding(_)))
+        {
+            // Malformed / out-of-scope (parser already reported it) — leave the
+            // fn untouched rather than synthesize a broken thunk.
+            continue;
+        }
+        let base = f.name.clone();
+        let sp = f.span.clone();
+        // Forward each param to the variant by name.
+        let fwd: Vec<CallArg> = f
+            .params
+            .iter()
+            .map(|p| {
+                let PatternKind::Binding(n) = &p.pattern.kind else {
+                    unreachable!("guarded above")
+                };
+                CallArg {
+                    label: None,
+                    mut_marker: false,
+                    value: mv_ident(n, sp.clone()),
+                    span: sp.clone(),
+                }
+            })
+            .collect();
+
+        // Baseline clone: plain (safe), no multiversion attr.
+        let mut baseline_fn = f.clone();
+        baseline_fn.name = format!("{base}$baseline");
+        baseline_fn
+            .attributes
+            .retain(|a| !a.is_bare("multiversion"));
+        synthesized.push(Item::Function(baseline_fn));
+
+        // Per-feature clone: unsafe + `#[target_feature(enable = "<feat>")]`.
+        for feat in &features {
+            let mut vf = f.clone();
+            vf.name = format!("{base}${feat}");
+            vf.is_unsafe = true;
+            vf.attributes.retain(|a| !a.is_bare("multiversion"));
+            vf.attributes.push(mv_target_feature_attr(feat, sp.clone()));
+            synthesized.push(Item::Function(vf));
+        }
+
+        // Rewrite `f` into the dispatch thunk. Build the nested if-else from the
+        // inside out: innermost `else` = the baseline call; each feature (in
+        // listed order) wraps the accumulator, so the LAST-listed feature ends
+        // up outermost = checked first (list narrowest→widest per the design).
+        f.attributes.retain(|a| !a.is_bare("multiversion"));
+        let mut acc = mv_call(&format!("{base}$baseline"), &fwd, sp.clone());
+        for feat in &features {
+            let feat_call = mv_call(&format!("{base}${feat}"), &fwd, sp.clone());
+            let unsafe_call = Expr {
+                kind: ExprKind::Unsafe(mv_block(feat_call, sp.clone())),
+                span: sp.clone(),
+            };
+            acc = Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(mv_cpu_supports(feat, sp.clone())),
+                    then_block: mv_block(unsafe_call, sp.clone()),
+                    else_branch: Some(Box::new(acc)),
+                },
+                span: sp.clone(),
+            };
+        }
+        f.body = mv_block(acc, sp.clone());
+    }
+    program.items.extend(synthesized);
+}
+
+fn mv_ident(name: &str, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::Identifier(name.to_string()),
+        span,
+    }
+}
+
+fn mv_call(name: &str, args: &[CallArg], span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(mv_ident(name, span.clone())),
+            args: args.to_vec(),
+        },
+        span,
+    }
+}
+
+fn mv_block(tail: Expr, span: Span) -> Block {
+    Block {
+        stmts: Vec::new(),
+        final_expr: Some(Box::new(tail)),
+        span,
+    }
+}
+
+fn mv_cpu_supports(feat: &str, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::MethodCall {
+            object: Box::new(mv_ident("cpu", span.clone())),
+            method: "supports".to_string(),
+            turbofish: None,
+            args: vec![CallArg {
+                label: None,
+                mut_marker: false,
+                value: Expr {
+                    kind: ExprKind::StringLit(feat.to_string()),
+                    span: span.clone(),
+                },
+                span: span.clone(),
+            }],
+            args_close_span: span.clone(),
+        },
+        span,
+    }
+}
+
+fn mv_target_feature_attr(feat: &str, span: Span) -> Attribute {
+    Attribute {
+        span: span.clone(),
+        path: vec!["target_feature".to_string()],
+        args: vec![AttrArg {
+            name: Some("enable".to_string()),
+            value: Some(Expr {
+                kind: ExprKind::StringLit(feat.to_string()),
+                span: span.clone(),
+            }),
+            span: span.clone(),
+        }],
+        string_value: None,
+    }
 }
 
 /// Materialize trait **default method bodies** into every impl that does not

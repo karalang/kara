@@ -4491,6 +4491,61 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_multiversion_dispatches_correctly() {
+        // Phase-11 `#[multiversion(baseline, "avx2", "avx512f")]` (design.md §
+        // Multiversioning): the attribute desugars to per-feature
+        // `#[target_feature]` variant clones + a `cpu.supports` dispatch thunk.
+        // All variants compute the SAME result (only the instruction set differs),
+        // so a correct output proves the thunk dispatched to a working variant on
+        // the running host. `run` == `build`.
+        if let Some(out) = run_program(
+            r#"
+#[multiversion(baseline, "avx2", "avx512f")]
+fn addup(a: i64, b: i64) -> i64 { a + b }
+
+#[multiversion(baseline, "avx2")]
+fn scale(v: i64) -> i64 { v * 3 }
+
+fn main() {
+    println(addup(20, 22));
+    println(scale(14));
+}
+"#,
+        ) {
+            assert_eq!(out, "42\n42\n");
+        }
+    }
+
+    #[test]
+    fn test_ir_multiversion_emits_variants_and_dispatch() {
+        // The desugar synthesizes a `$baseline` clone + one `$<feat>` clone per
+        // feature (each tagged with a `target-features` attribute) and rewrites
+        // the public function into a thunk that calls `karac_cpu_supports`.
+        // Asserted on the unoptimized module IR (before variants inline away).
+        // `ir_for_desugared` runs `desugar_program` first — the multiversion
+        // rewrite is a pre-resolve desugar, so plain `ir_for` would miss it.
+        let ir = ir_for_desugared(
+            "#[multiversion(baseline, \"avx2\", \"avx512f\")]\n\
+             fn addup(a: i64, b: i64) -> i64 { a + b }\n\
+             fn main() { let _ = addup(1, 2); }",
+        );
+        assert!(
+            ir.contains("addup$baseline")
+                && ir.contains("addup$avx2")
+                && ir.contains("addup$avx512f"),
+            "expected baseline + per-feature variant functions; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("karac_cpu_supports"),
+            "expected the dispatch thunk to call karac_cpu_supports; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("+avx2") && ir.contains("+avx512f"),
+            "expected per-variant target-features attributes; IR:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_e2e_ptr_const_mut_place_shapes_roundtrip() {
         // `ptr.const(place)` / `ptr.mut(place)` over the full place grammar the
         // typechecker's place-validator accepts — field access, a nested field

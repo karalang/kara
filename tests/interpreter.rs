@@ -18934,6 +18934,29 @@ fn main() {
 }
 
 #[test]
+fn test_multiversion_dispatches_correctly() {
+    // `#[multiversion(...)]` desugars to per-feature variants + a cpu.supports
+    // dispatch thunk; every variant computes the same result, so a correct output
+    // proves the thunk dispatched. Interpreter parity with
+    // tests/codegen.rs::test_e2e_multiversion_dispatches_correctly.
+    let out = run_no_errors(
+        r#"
+#[multiversion(baseline, "avx2", "avx512f")]
+fn addup(a: i64, b: i64) -> i64 { a + b }
+
+#[multiversion(baseline, "avx2")]
+fn scale(v: i64) -> i64 { v * 3 }
+
+fn main() {
+    println(addup(20, 22));
+    println(scale(14));
+}
+"#,
+    );
+    assert_eq!(out, "42\n42\n");
+}
+
+#[test]
 fn test_autograd_reverse_mode_tensor_valued() {
     // std.autograd (phase-11) tensor-valued surface — interpreter parity with
     // tests/codegen.rs::test_e2e_autograd_tensor_valued. Element-wise

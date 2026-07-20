@@ -111,6 +111,39 @@ pub fn target_feature_enables(attrs: &[Attribute]) -> Vec<String> {
     out
 }
 
+/// The feature-name list of a `#[multiversion(baseline, "avx2", "avx512f")]`
+/// attribute (its string-literal args; the `baseline` marker identifier is
+/// ignored — a baseline variant is always synthesized). A feature string may be
+/// a comma-separated list. `None` when no `#[multiversion]` attribute is present;
+/// `Some(vec![])` when it is present but names no feature (a parser error). Order
+/// is preserved (the desugar dispatches last-listed-first = widest-first).
+pub fn multiversion_feature_list(attrs: &[Attribute]) -> Option<Vec<String>> {
+    use crate::ast::ExprKind;
+    let attr = attrs.iter().find(|a| a.is_bare("multiversion"))?;
+    let mut feats: Vec<String> = Vec::new();
+    let push = |s: &str, out: &mut Vec<String>| {
+        for f in s.split(',') {
+            let f = f.trim();
+            if !f.is_empty() && !out.iter().any(|e| e == f) {
+                out.push(f.to_string());
+            }
+        }
+    };
+    if let Some(s) = &attr.string_value {
+        push(s, &mut feats);
+    }
+    for arg in &attr.args {
+        if let Some(Expr {
+            kind: ExprKind::StringLit(s),
+            ..
+        }) = &arg.value
+        {
+            push(s, &mut feats);
+        }
+    }
+    Some(feats)
+}
+
 #[derive(Debug, Clone)]
 pub struct AttrArg {
     /// `Some(name)` for `name = value` / `name: value` style. `None`

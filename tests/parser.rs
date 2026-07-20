@@ -11795,6 +11795,40 @@ fn target_feature_empty_errors() {
 }
 
 #[test]
+fn multiversion_empty_errors() {
+    let (_, errors) = parse_with_errors("#[multiversion(baseline)]\nfn f(a: i64) -> i64 { a }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_MULTIVERSION_EMPTY")),
+        "expected E_MULTIVERSION_EMPTY; got: {errors:?}",
+    );
+}
+
+#[test]
+fn multiversion_on_generic_fn_errors() {
+    let (_, errors) =
+        parse_with_errors("#[multiversion(baseline, \"avx2\")]\nfn f[T](a: T) -> T { a }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_MULTIVERSION_ON_GENERIC")),
+        "expected E_MULTIVERSION_ON_GENERIC; got: {errors:?}",
+    );
+}
+
+#[test]
+fn multiversion_on_free_fn_ok() {
+    let (_, errors) = parse_with_errors(
+        "#[multiversion(baseline, \"avx2\", \"avx512f\")]\nfn f(a: i64) -> i64 { a }",
+    );
+    assert!(
+        !errors.iter().any(|e| e.message.contains("E_MULTIVERSION")),
+        "valid #[multiversion] on a free fn should not error; got: {errors:?}",
+    );
+}
+
+#[test]
 fn target_feature_on_unsafe_fn_ok() {
     // The valid shape — `unsafe fn` + a non-empty enable list — parses cleanly.
     let (_, errors) = parse_with_errors(

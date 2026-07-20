@@ -183,6 +183,11 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     // `target-features` string attribute. The `#[multiversion(...)]` sugar over
     // it is a later slice.
     "target_feature",
+    // `#[multiversion(baseline, "avx2", "avx512f")]` — sugar over per-feature
+    // `#[target_feature]` variants + a runtime `cpu.supports` dispatch thunk
+    // (design.md § Multiversioning). Desugared in `desugar.rs`; placement
+    // (non-empty feature list, free non-generic fn) is validated in the parser.
+    "multiversion",
 ];
 
 /// Phase-8 stdlib-floor § Compiler queries channel sub-item 5.

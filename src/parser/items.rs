@@ -378,6 +378,11 @@ impl super::Parser {
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
         let profile_compat = self.scan_profile_attr(&attributes);
         self.validate_target_feature_attr(&attributes, is_unsafe);
+        self.validate_multiversion_attr(
+            &attributes,
+            self_param.is_some(),
+            generic_params.is_some(),
+        );
 
         Some(Function {
             span: self.span_from(&start),
@@ -616,6 +621,50 @@ impl super::Parser {
                           widens its CPU-feature set above the baseline, so calling it on hardware \
                           without the feature is undefined — mark it `unsafe fn` (the caller \
                           asserts the target supports it)"
+                    .to_string(),
+                span,
+            });
+        }
+    }
+
+    /// Validate `#[multiversion(baseline, "avx2", "avx512f")]` placement
+    /// (design.md § Multiversioning). It desugars to per-feature
+    /// `#[target_feature]` variant clones + a `cpu.supports` dispatch thunk, so
+    /// v1 supports it only on a **non-generic free function** with a non-empty
+    /// feature list. Non-fatal — parsing continues.
+    fn validate_multiversion_attr(
+        &mut self,
+        attributes: &[Attribute],
+        has_self: bool,
+        has_generics: bool,
+    ) {
+        let Some(mv) = attributes.iter().find(|a| a.is_bare("multiversion")) else {
+            return;
+        };
+        let span = mv.span.clone();
+        if crate::ast::multiversion_feature_list(attributes)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            self.errors.push(super::ParseError {
+                message: "error[E_MULTIVERSION_EMPTY]: `#[multiversion(...)]` needs at least one \
+                          feature variant — e.g. `#[multiversion(baseline, \"avx2\")]`"
+                    .to_string(),
+                span,
+            });
+            return;
+        }
+        if has_self {
+            self.errors.push(super::ParseError {
+                message: "error[E_MULTIVERSION_ON_METHOD]: `#[multiversion]` is supported on free \
+                          functions only at v1, not methods (a `self` receiver)"
+                    .to_string(),
+                span,
+            });
+        } else if has_generics {
+            self.errors.push(super::ParseError {
+                message: "error[E_MULTIVERSION_ON_GENERIC]: `#[multiversion]` is supported on \
+                          non-generic functions only at v1"
                     .to_string(),
                 span,
             });
