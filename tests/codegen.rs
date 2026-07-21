@@ -56144,41 +56144,84 @@ fn main() {
     }
 
     #[test]
-    fn test_e2e_vec_get_unwrap_struct_heap_field_read() {
-        // B-2026-07-20-9: `let a = v.get(i)/.first()/.last().unwrap()` on a
-        // Vec whose element is a user STRUCT with a heap (`String`) field, then
-        // `a.name`. The binding's type was never recorded (`bind_pattern_types`
-        // doesn't peel the accessor's `Option[ref elem]`), so codegen fell to
-        // the LLVM-shape reverse-lookup — which picked the FIRST same-shape
-        // struct in HashMap iteration order. `Acct { name: String }` collides
-        // with the prelude's `Regex`/`RegexError` (all `{ptr,i64,i64}`), so the
-        // binding was mislabeled on a random subset of compiles and the field
-        // read compiled to a SILENT `i64 0` constant — output flipped between
-        // `alice` and `0` across byte-identical builds. Fixed three ways: the
-        // binding registers from the typechecker's span-keyed peeled element
-        // type (deterministic); the shape reverse-lookup only fires on a UNIQUE
-        // match; an unresolvable field read now fails LOUD instead of emitting
-        // `i64 0`. Covers get/first/last, a two-field struct, and two reads.
-        // (A single run of this test was flaky-green before the fix; with
-        // layers 2+3 a wrong label now fails loudly instead of passing wrong.)
+    fn test_e2e_ref_param_enum_field_payload_consume() {
+        // B-2026-07-21-5/-6: `match <refparam>.field { Ident(name) => <consume
+        // name> … }` — an enum field read through a `ref` param, with an arm
+        // that consumes the String payload (string `+` desugars to
+        // `String.add(..)`, so the binding counts as escaping). The owned-path
+        // move-out suppression GEP'd the ref param's 8-byte pointer SLOT as if
+        // it were the struct, storing three zero words out of bounds into
+        // adjacent stack slots — clobbering the payload binding (empty-string
+        // output) or corrupting locals into a double-free, flipping with
+        // opt-level/layout. Now `field_chain_place_ptr` bails on a borrowed
+        // root and an ESCAPING ref-chain match deep-clones the scrutinee
+        // (`clone_escaping_borrowed_ref_chain_enum`), so bindings own
+        // independent buffers and the caller's value stays intact — matching
+        // the interpreter. Covers: concat-consume via free fn (b6), identity
+        // return (strongest escape), `ref self` receiver, a no-bind arm hit at
+        // runtime, a deep two-hop chain, a read-only arm (stays on the
+        // zero-cost borrow path), and caller reuse after each call. Sibling
+        // LSan test guards the leak/double-free halves.
         let output = run_program(
-            "struct Acct { name: String, txns: i64 }\n\
+            "enum Tok { Plus, Ident(String) }\n\
+             struct SpTok { tok: Tok, n: i64 }\n\
+             struct Outer { sp: SpTok }\n\
+             impl SpTok {\n\
+                 fn label(ref self) -> String {\n\
+                     match self.tok {\n\
+                         Ident(name) => { return \"m:\".to_string() + name; }\n\
+                         Plus => { return \"m:+\".to_string(); }\n\
+                     }\n\
+                     return \"?\".to_string();\n\
+                 }\n\
+             }\n\
+             fn render(st: ref SpTok) -> String {\n\
+                 match st.tok {\n\
+                     Ident(name) => { return \"id:\".to_string() + name; }\n\
+                     Plus => { return \"+\".to_string(); }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn take_name(st: ref SpTok) -> String {\n\
+                 match st.tok {\n\
+                     Ident(name) => { return name; }\n\
+                     Plus => { return \"+\".to_string(); }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn deep(o: ref Outer) -> String {\n\
+                 match o.sp.tok {\n\
+                     Ident(name) => { return \"d:\".to_string() + name; }\n\
+                     Plus => { return \"d:+\".to_string(); }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn name_len(st: ref SpTok) -> i64 {\n\
+                 match st.tok {\n\
+                     Ident(name) => { return name.len(); }\n\
+                     Plus => { return 0; }\n\
+                 }\n\
+                 return -1;\n\
+             }\n\
              fn main() {\n\
-                 let mut v: Vec[Acct] = Vec.new();\n\
-                 v.push(Acct { name: \"alice\".to_string(), txns: 2 });\n\
-                 v.push(Acct { name: \"bob\".to_string(), txns: 5 });\n\
-                 let a = v.get(0).unwrap();\n\
-                 println(f\"{a.name}:{a.txns}\");\n\
-                 let b = v.get(1).unwrap();\n\
-                 println(f\"{b.name}:{b.txns}\");\n\
-                 let f = v.first().unwrap();\n\
-                 println(f.name);\n\
-                 let l = v.last().unwrap();\n\
-                 println(l.name);\n\
+                 let a = SpTok { tok: Tok.Ident(\"foo\".to_string()), n: 1 };\n\
+                 println(render(a));\n\
+                 println(render(a));\n\
+                 println(take_name(a));\n\
+                 println(a.label());\n\
+                 println(name_len(a));\n\
+                 let p = SpTok { tok: Tok.Plus, n: 2 };\n\
+                 println(render(p));\n\
+                 let o = Outer { sp: SpTok { tok: Tok.Ident(\"deep\".to_string()), n: 3 } };\n\
+                 println(deep(o));\n\
+                 let mut v: Vec[SpTok] = Vec.new();\n\
+                 v.push(SpTok { tok: Tok.Ident(\"vec\".to_string()), n: 4 });\n\
+                 let t = v[0];\n\
+                 println(render(t));\n\
              }",
         )
         .expect("compile + run failed");
-        assert_eq!(output, "alice:2\nbob:5\nalice\nbob\n");
+        assert_eq!(output, "id:foo\nid:foo\nfoo\nm:foo\n3\n+\nd:deep\nid:vec\n");
     }
 
     #[test]

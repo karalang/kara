@@ -10003,6 +10003,59 @@ fn main() {
     }
 
     #[test]
+    fn asan_ref_param_enum_field_payload_consume_no_leak_no_double_free() {
+        // B-2026-07-21-5/-6 memory leg: an ESCAPING `match <refparam>.field {
+        // Ident(name) => <consume name> }` now deep-clones the scrutinee
+        // (`clone_escaping_borrowed_ref_chain_enum`) instead of GEPing the ref
+        // param's pointer slot out of bounds (which corrupted adjacent stack
+        // slots into empty-string reads or double-frees, flipping with
+        // opt-level/layout). The clone rides the freshtemp enum drop-tracking:
+        // a consuming arm's binding frees the clone's payload exactly once, a
+        // no-bind arm's freshtemp drop frees the untouched clone (a lost track
+        // would LEAK — LSan), and the CALLER's value is never cap-zeroed
+        // through the borrow, so its own drop still frees its buffer exactly
+        // once (a stolen payload would DOUBLE-FREE — ASAN). Exercises the
+        // concat-consume, identity-return, no-bind-arm, and repeat-call
+        // shapes in a loop so any per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Plus, Ident(String) }
+struct SpTok { tok: Tok, n: i64 }
+fn render(st: ref SpTok) -> String {
+    match st.tok {
+        Ident(name) => { return "id:".to_string() + name; }
+        Plus => { return "+".to_string(); }
+    }
+    return "?".to_string();
+}
+fn take_name(st: ref SpTok) -> String {
+    match st.tok {
+        Ident(name) => { return name; }
+        Plus => { return "+".to_string(); }
+    }
+    return "?".to_string();
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = SpTok { tok: Tok.Ident("payload".to_string()), n: 1 };
+        acc = acc + render(a).len();
+        acc = acc + render(a).len();
+        acc = acc + take_name(a).len();
+        let p = SpTok { tok: Tok.Plus, n: 2 };
+        acc = acc + render(p).len();
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["1120"],
+            "ref_param_enum_field_payload_consume",
+        );
+    }
+
+    #[test]
     fn asan_vec_get_unwrap_struct_heap_field_no_leak_no_double_free() {
         // B-2026-07-20-9 memory leg: `let a = v.get(i).unwrap()` on a
         // `Vec[struct{String,..}]` now registers the binding as its struct type

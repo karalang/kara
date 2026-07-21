@@ -118,7 +118,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // fresh-temp drop-tracking below (identical to the FieldAccess-index case).
         let (scrut, did_clone_loop_elem) =
             self.clone_escaping_owned_agg_loop_var_enum(scrutinee, scrut, arms);
-        let did_clone_borrowed_index_field = did_clone_borrowed_index_field || did_clone_loop_elem;
+        // B-2026-07-21-5/-6: an ESCAPING match over `<refparam>.field` whose
+        // leaf is a heap-bearing user enum — the borrowed-chain sibling of the
+        // loop-element clone above (see its doc). Same `did_clone` contract.
+        let (scrut, did_clone_ref_chain) =
+            self.clone_escaping_borrowed_ref_chain_enum(scrutinee, scrut, arms);
+        let did_clone_borrowed_index_field =
+            did_clone_borrowed_index_field || did_clone_loop_elem || did_clone_ref_chain;
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
         // that leaves a heap payload field unbound leaks it. Materialize +
@@ -1197,6 +1203,94 @@ impl<'ctx> super::Codegen<'ctx> {
         (
             self.builder
                 .build_load(ll, slot, "loopelem.enum.cloned")
+                .unwrap(),
+            true,
+        )
+    }
+
+    /// B-2026-07-21-5/-6: `match <refparam>.field { Ident(name) => <consume
+    /// name> … }` — a field chain rooted at a `ref`/`mut ref` param (incl. a
+    /// `ref self` receiver) whose leaf is a heap-bearing non-shared user enum,
+    /// where an arm MOVES a payload binding out. The field read through the
+    /// borrow is a bit-copy alias of the CALLER's storage, and the owned-path
+    /// source suppression can't fire against a borrowed root
+    /// (`field_chain_place_ptr` bails there — zeroing the caller's value is
+    /// not the callee's to do, and GEPing the pointer slot was the original
+    /// out-of-bounds corruption). Deep-clone the scrutinee value instead so
+    /// each binding owns an INDEPENDENT buffer — the borrowed-chain sibling of
+    /// `clone_escaping_owned_agg_loop_var_enum`, with the same contract:
+    /// `did_clone = true` forces the clone through
+    /// `materialize_freshtemp_enum_scrutinee`, so a no-bind arm frees the
+    /// clone and a consuming arm's per-field suppression zeroes the CLONE's
+    /// moved-out caps. The caller's original is untouched (it frees its own
+    /// payload exactly once), matching interpreter semantics. Gated to the
+    /// ESCAPING case — a read-only match is classified as a borrow
+    /// (`scrutinee_is_readonly_borrowed_place`) and stays a zero-cost alias.
+    pub(super) fn clone_escaping_borrowed_ref_chain_enum(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        arms: &[MatchArm],
+    ) -> (BasicValueEnum<'ctx>, bool) {
+        if !matches!(
+            scrutinee.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            return (val, false);
+        }
+        // Strict place walk: FieldAccess/TupleIndex hops only, rooted DIRECTLY
+        // at the ref param. An `Index` hop anywhere in the chain means the
+        // source lives in a heap buffer the existing machinery already
+        // handles — `toks[j].tok` via the #18 element suppression
+        // (`vec_index_elem_ptr` resolves through the data pointer, not the
+        // pointer slot), `self.toks[i].tok` via the #38 index-field clone —
+        // and cloning here TOO would orphan the other copy into a leak
+        // (caught by the borrowed-index LSan trio when this walk used the
+        // Index-transparent `place_root_ident`).
+        let mut cur = scrutinee;
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n.as_str(),
+                ExprKind::SelfValue => break "self",
+                _ => return (val, false),
+            }
+        };
+        if !self.ref_params.contains_key(root) {
+            return (val, false);
+        }
+        if self.no_arm_payload_escapes(arms) {
+            return (val, false);
+        }
+        let Some(enum_name) = self.place_chain_type_name(scrutinee) else {
+            return (val, false);
+        };
+        let Some(layout) = self.enum_layouts.get(&enum_name).cloned() else {
+            return (val, false);
+        };
+        // Shared enums are RC-boxed (the rc-inc/dec machinery owns them);
+        // seeded Option/Result have all-`None` drop kinds and self-gate via
+        // `materialize_freshtemp_enum_scrutinee` returning None, so cloning
+        // them here would leak the clone — user value enums only.
+        if layout.is_shared
+            || !layout
+                .field_drop_kinds
+                .values()
+                .flatten()
+                .any(|k| k.is_heap_bearing())
+        {
+            return (val, false);
+        }
+        let fn_val = self.current_fn.unwrap();
+        let ll = val.get_type();
+        let slot = self.create_entry_alloca(fn_val, "refchain.enum.clone", ll);
+        self.builder.build_store(slot, val).unwrap();
+        self.deep_copy_enum_heap_payload_in_place(&enum_name, slot, &layout);
+        (
+            self.builder
+                .build_load(ll, slot, "refchain.enum.cloned")
                 .unwrap(),
             true,
         )
@@ -3530,8 +3624,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// field of a Vec element whose buffer the Vec's own drop now frees.
     pub(super) fn field_chain_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
         match &expr.kind {
-            ExprKind::Identifier(name) => self.variables.get(name.as_str()).map(|s| s.ptr),
-            ExprKind::SelfValue => self.variables.get("self").map(|s| s.ptr),
+            // A `ref`/`mut ref` param root (incl. a `ref self` receiver): the
+            // variable slot holds a POINTER to the caller's value, not the
+            // aggregate itself — GEPing the slot as if it were the struct
+            // writes past the 8-byte alloca into adjacent stack slots
+            // (B-2026-07-21-5/-6: the match move-out suppression zeroed a
+            // neighbouring String binding / corrupted locals). Bail instead of
+            // dereferencing: every suppression caller must NOT mutate storage
+            // the callee doesn't own (the borrowed source's owner drops it),
+            // and the remaining callers all treat `None` as "leave the status
+            // quo". A caller needing a real place pointer through a borrow
+            // loads the slot explicitly (`mem_place_ptr_and_value`'s ref-param
+            // arm is the model).
+            ExprKind::Identifier(name) => {
+                if self.ref_params.contains_key(name.as_str()) {
+                    return None;
+                }
+                self.variables.get(name.as_str()).map(|s| s.ptr)
+            }
+            ExprKind::SelfValue => {
+                if self.ref_params.contains_key("self") {
+                    return None;
+                }
+                self.variables.get("self").map(|s| s.ptr)
+            }
             // `vec[i]` root — the in-place element slot inside the Vec buffer, so
             // the suppression reaches an enum field of a Vec ELEMENT, not just a
             // local struct's field. Restricted to a plain (non-array-slot) Vec
