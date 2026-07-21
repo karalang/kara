@@ -24508,6 +24508,55 @@ fn test_lazyframe_constant_folding_preserves_errors() {
 }
 
 #[test]
+fn test_stdlib_wrapper_runtime_error_attributed_to_call_site() {
+    // B-2026-07-21-17: a runtime error raised inside a spliced gated-stdlib
+    // wrapper body (std.lazy's `lit`) carried the MODULE source's own
+    // line/col — the wrapper items are cloned from the module's separate
+    // parse — which the CLI then renders against the USER file's path
+    // (`lit(vec![1i64])` reported "at <user file>:19:5", line 19 of
+    // lazy.kara, in a 5-line program). The interpreter now attributes such
+    // errors to the OUTERMOST wrapper call site: a real user-file location,
+    // and where the faulting argument lives. Line 4 below is the `lit(v)`
+    // call; pre-fix the span was the wrapper body's module line (18+). A
+    // plain user-code error and an error AFTER a successful wrapper call
+    // keep their raise-site spans (the wrapper stack is popped on return).
+    let errors = runtime_errors(
+        "import std.lazy.{lit};\n\
+         fn main() {\n\
+             let v: Vec[i64] = vec![1i64];\n\
+             let _ = lit(v);\n\
+         }",
+    );
+    let e = errors
+        .iter()
+        .find(|e| e.message.contains("LazyExpr.lit expects a scalar literal"))
+        .expect("lit rejection error missing");
+    assert_eq!(
+        e.span.line, 4,
+        "error must point at the user call site, got line {} (span {:?})",
+        e.span.line, e.span
+    );
+    // Post-wrapper user error: attribution untouched (line 5, the v2[3]).
+    let errors = runtime_errors(
+        "import std.lazy.{lit};\n\
+         fn main() {\n\
+             let _ok = lit(5i64);\n\
+             let v2: Vec[i64] = vec![];\n\
+             let _ = v2[3];\n\
+         }",
+    );
+    let e = errors
+        .iter()
+        .find(|e| e.message.contains("out of bounds"))
+        .expect("oob error missing");
+    assert_eq!(
+        e.span.line, 5,
+        "post-wrapper user error must keep its raise-site line, got {} ({:?})",
+        e.span.line, e.span
+    );
+}
+
+#[test]
 fn test_lazyframe_with_columns_arithmetic_pipeline() {
     // Phase-11 LazyDataFrame slice 7: `with_columns` (the expression-
     // projection leg) + arithmetic expression nodes (add/sub/mul/div).

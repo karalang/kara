@@ -1635,11 +1635,29 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
 
+                // B-2026-07-21-17 — entering a spliced gated-stdlib
+                // wrapper's body: record THIS call's span (a user-file
+                // location) so a runtime error raised inside the body is
+                // attributed to it, not to the wrapper's own module-source
+                // line/col (which the CLI would render against the user
+                // file's path). `record_runtime_error` consults only the
+                // OUTERMOST frame, so nested wrapper→wrapper calls still
+                // attribute to the user-visible entry call.
+                let is_stdlib_wrapper = self.program.items.iter().any(|item| {
+                    matches!(item, crate::ast::Item::Function(f)
+                        if f.name == fn_name && f.stdlib_origin)
+                });
+                if is_stdlib_wrapper {
+                    self.stdlib_wrapper_call_spans.push(span.clone());
+                }
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
                     self.eval_body_growing(&body)
                 };
+                if is_stdlib_wrapper {
+                    self.stdlib_wrapper_call_spans.pop();
+                }
 
                 // `ensures` predicates run after the body, with `result`
                 // bound to the return value (skipped if the body itself

@@ -96,6 +96,15 @@ pub struct Interpreter<'a> {
     /// `record_runtime_error`; inspected by tests / CLI to surface program-level
     /// failures (div by zero, overflow, unwrap of None, index out of bounds, etc.).
     pub runtime_errors: Vec<RuntimeError>,
+    /// B-2026-07-21-17 — call-site spans of the ACTIVE spliced gated-stdlib
+    /// wrapper calls (`import std.lazy.{lit}` splices `lit`'s body from the
+    /// module's own parse, so spans inside it carry the MODULE source's
+    /// line/col, which the CLI renders against the USER file's path). A
+    /// runtime error raised while this stack is non-empty is attributed to
+    /// the OUTERMOST wrapper call site — a real location in the user's file
+    /// (the faulting argument lives there). Pushed/popped around the
+    /// `Value::Function` body eval in `eval_call` for `stdlib_origin` fns.
+    pub(crate) stdlib_wrapper_call_spans: Vec<Span>,
     /// Comptime user diagnostics emitted via `compiler.error(msg)`
     /// (substrate 3). Unlike `runtime_errors`, recording one does NOT set
     /// `pending_cf` — `compiler.error` is a non-halting diagnostic effect, so
@@ -591,6 +600,7 @@ impl<'a> Interpreter<'a> {
             // FIFO-deterministic).
             sequential_mode: cfg!(target_arch = "wasm32"),
             runtime_errors: Vec::new(),
+            stdlib_wrapper_call_spans: Vec::new(),
             comptime_user_errors: Vec::new(),
             comptime_splice_base: 1_000_000_000,
             wrap_all_closure_captures: false,
@@ -659,6 +669,17 @@ impl<'a> Interpreter<'a> {
     /// in `Value`-returning contexts; the pending `ControlFlow::RuntimeError`
     /// short-circuits subsequent evaluation.
     fn record_runtime_error(&mut self, message: impl Into<String>, span: &Span) -> Value {
+        // B-2026-07-21-17 — a raise inside a spliced gated-stdlib wrapper
+        // body carries the STDLIB MODULE's own line/col, which the CLI
+        // renders against the USER file's path (`lit(vec![..])` errored "at
+        // <user file>:19:5" — line 19 of lazy.kara). Attribute the error to
+        // the OUTERMOST wrapper call site instead: a real user-file
+        // location, and the faulting argument's home.
+        let span = self
+            .stdlib_wrapper_call_spans
+            .first()
+            .cloned()
+            .unwrap_or_else(|| span.clone());
         self.runtime_errors.push(RuntimeError {
             message: message.into(),
             span: span.clone(),
