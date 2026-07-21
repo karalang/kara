@@ -94,11 +94,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 158 | 0 |
 | leak | 86 | 0 |
-| codegen-gap | 70 | 1 |
+| codegen-gap | 70 | 0 |
 | double-free | 68 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 38 | 0 |
-| run-vs-build | 37 | 1 |
+| run-vs-build | 37 | 0 |
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
 | perf | 21 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 439 | 1 |
+| codegen | 440 | 0 |
 | typecheck | 83 | 0 |
-| interp | 67 | 1 |
+| interp | 67 | 0 |
 | ownership | 25 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,18 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **609 surfaced · 2 open · 603 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **609 surfaced · 0 open · 605 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-21-1 | 2026-07-21 | interp | medium | INTERP BUG (run-vs-build): user `impl Drop` destructors run at LAST USE in FIFO (declaration) order under the tree-walk interpreter, while codegen (JIT + AOT) runs them at SCOPE EXIT in LIFO order — the spec'd semantics (design.md § Drop: 'the compiler calls drop at scope exit'; 'Drop calls and defer blocks lower into the same LIFO stack'). Two divergences in one: TIMING (interp fires the destructor immediately after the binding's last use — before subsequent statements in the same scope) and ORDER (interp drops in declaration order, codegen in reverse-declaration order). Observable whenever a Drop body has side effects (logging, releasing a lock file, flushing). | src/interpreter (user impl Drop dispatch — drop timing + ordering) |
-| B-2026-07-21-2 | 2026-07-21 | codegen | low | `<chain>.next()` — e.g. the idiomatic first-char read `s.chars().next().unwrap()` — is UNIMPLEMENTED in codegen: loud-bails `no handler for method 'next' on non-identifier receiver` under `karac build`/JIT while `--interp` runs it. Known-deferral class (stateful `next()` has no codegen iterator value, cf. B-2026-07-11-19's materialized-iterator scope-out), but the CHAIN-RECEIVER form needs no state: `<chain>.next()` is just the first yielded element. | src/codegen/method_call.rs (method dispatch — `next` on a chained iterator receiver) |
+_None — the ledger is fully drained._
 
-### Fixed (603)
+### Fixed (605)
 
-<details><summary>603 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>605 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -742,6 +739,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **609 surfaced 
 | B-2026-07-20-12 | codegen | medium | An f16 inside a COMPOUND enum payload (`Option[(f16, f16)]`) builds and runs but produces a WRONG VALUE under `karac build`: `match o { Some(p) => pr… | 35d340f |
 | B-2026-07-20-13 | codegen | medium | wasm-threads has NO path for a request-driven EXPORTED fn to use the worker pool: `instantiate()` exports run on the caller's (browser main) thread b… | 7517adb |
 | B-2026-07-20-14 | codegen | medium | Auto-par return-slot rebind LOSES an unannotated struct binding's type identity: `let tx = make_taps(..)` (struct-of-Vecs, no annotation) fanned out… | 29a4a97 |
+| B-2026-07-21-1 | interp+codegen | medium | INTERP BUG (run-vs-build): user `impl Drop` destructors run at LAST USE in FIFO (declaration) order under the tree-walk interpreter, while codegen (J… | 7c4bf90 |
+| B-2026-07-21-2 | codegen | low | `<chain>.next()` — e.g | 5a9536b |
 
 </details>
 
