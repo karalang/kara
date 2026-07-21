@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 159 | 0 |
 | leak | 89 | 1 |
-| double-free | 75 | 0 |
+| double-free | 76 | 1 |
 | codegen-gap | 70 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 38 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 453 | 1 |
+| codegen | 454 | 2 |
 | typecheck | 83 | 0 |
 | interp | 67 | 0 |
 | ownership | 25 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **622 surfaced · 1 open · 617 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **623 surfaced · 2 open · 617 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-21-15 | 2026-07-21 | codegen | medium | a struct with a `Result[String, i64]`-class field leaks the live half's heap payload at the owning struct's scope-exit drop — `let a = Holder { res: Ok("rr".to_string()), n: 1 }; println(a.n.to_string());` leaks the 2-byte "rr" buffer (valgrind, AOT O0/O2). No match, no borrow, no call needed: the struct drop simply never frees a Result field's payload. The Option sibling is CLEAN (`Option[String]` field frees via the struct drop's OptionInline arm). | — |
+| B-2026-07-21-16 | 2026-07-21 | codegen | high | match/if-let/let-else DIRECTLY over an OWNED struct's `Option[String]` field with a payload binding double-frees under AOT — `match a.opt { Some(s) => println(s), None => {} }` (a an owned local `H2 { opt: Option[String], n: i64 }`) frees the payload once via the binding's arm-exit cleanup and AGAIN via the struct drop's OptionInline arm (valgrind Invalid free; output correct — frees run at scope exit). Even a PRINT-ONLY binding arm reproduces. Same class: `let x = a.opt;` or `x = a.opt;` (assign) followed by consuming x. The Result sibling shapes are currently clean only because the struct drop skips Result fields entirely (B-2026-07-21-15's leak). | — |
 
 ### Fixed (617)
 
