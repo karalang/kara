@@ -542,6 +542,10 @@ impl Emitter {
                         if gk >= 10 and gk < 1000 {
                             return 2000 + (gk - 10);
                         }
+                        if gk >= 1000 and gk < 2000 {
+                            // Vec[<enum>] (Slice 32): kind space 4000+ei.
+                            return 4000 + (gk - 1000);
+                        }
                     }
                     return 3;
                 }
@@ -1504,13 +1508,28 @@ impl Emitter {
                         _ => {}
                     }
                     if slot >= 0 and self.locals_kind[slot] >= 2000 {
-                        // `v.push(Token { .. })` on a Vec[<struct>] (Slice 18):
-                        // the vec owns the element — a fresh literal transfers
-                        // (its String fields are already owned); a borrowed
-                        // struct materializes its String fields in.
-                        let esi = self.locals_kind[slot] - 2000;
-                        let sty = self.ty_text(10 + esi);
-                        let stride = self.st_stride(esi);
+                        // `v.push(<elem>)` on a Vec[<struct>] (Slice 18) or
+                        // Vec[<enum>] (Slice 32): the vec owns the element —
+                        // a fresh value transfers, a borrow materializes its
+                        // heap in (tag-conditionally for enums). A
+                        // sentinel-kinded Some/Ok/Err arg stores as-is: its
+                        // widened layout matches the element type by design.
+                        let vk4 = self.locals_kind[slot];
+                        let mut sty = "".to_string();
+                        let mut stride = 8;
+                        let mut eei = 0 - 1;
+                        if vk4 >= 4000 {
+                            eei = vk4 - 4000;
+                            sty = self.ty_text(1000 + eei);
+                            stride = 16;
+                            if (eei >= 2 and eei <= 5) or self.en_has_heap(eei) {
+                                stride = 32;
+                            }
+                        } else {
+                            let esi0 = vk4 - 2000;
+                            sty = self.ty_text(10 + esi0);
+                            stride = self.st_stride(esi0);
+                        }
                         let mut ev = "zeroinitializer".to_string();
                         for ma in margs {
                             let CallArg { label, mut_marker, value, span: asp } = ma;
@@ -1518,6 +1537,14 @@ impl Emitter {
                             let Val { op: aop, kind: ak, heap: ah } = av;
                             if ak >= 10 and ak < 1000 and not ah and self.st_has_heap(ak - 10) {
                                 let mv = self.emit_materialize_struct(aop.clone(), ak - 10);
+                                let Val { op: mop, kind: mk, heap: mh } = mv;
+                                ev = mop;
+                            } else if ak >= 1000
+                                and ak < 2000
+                                and not ah
+                                and self.en_has_heap(ak - 1000)
+                            {
+                                let mv = self.emit_materialize_enum(aop.clone(), ak - 1000);
                                 let Val { op: mop, kind: mk, heap: mh } = mv;
                                 ev = mop;
                             } else {
@@ -2693,9 +2720,17 @@ impl Emitter {
             + ", 0\n";
         let mut elem_heap = k == 4;
         let mut esi = 0 - 1;
-        if k >= 2000 {
+        let mut eei = 0 - 1;
+        if k >= 2000 and k < 4000 {
             esi = k - 2000;
             if self.st_has_heap(esi) {
+                elem_heap = true;
+            }
+        }
+        if k >= 4000 {
+            // Vec[<enum>] (Slice 32): per-element tag-conditional frees.
+            eei = k - 4000;
+            if self.en_has_heap(eei) {
                 elem_heap = true;
             }
         }
@@ -2703,6 +2738,9 @@ impl Emitter {
             let mut ety = "{ ptr, i64 }".to_string();
             if esi >= 0 {
                 ety = self.ty_text(10 + esi);
+            }
+            if eei >= 0 {
+                ety = self.ty_text(1000 + eei);
             }
             let ln = self.fresh();
             self.body = self.body
@@ -2752,6 +2790,8 @@ impl Emitter {
             self.body = self.body + "  " + el.clone() + " = load " + ety + ", ptr " + ep + ", align 8\n";
             if esi >= 0 {
                 self.emit_free_struct_val(el, esi);
+            } else if eei >= 0 {
+                self.emit_free_enum_val(el, eei);
             } else {
                 self.emit_free_val(el);
             }
@@ -2773,15 +2813,27 @@ impl Emitter {
         let ty = self.ty_text(k);
         let mut stride = 8;
         let mut esi = 0 - 1;
+        let mut eei = 0 - 1;
         let mut elem_heap = false;
         if k == 4 {
             stride = 16;
             elem_heap = true;
         }
-        if k >= 2000 {
+        if k >= 2000 and k < 4000 {
             esi = k - 2000;
             stride = self.st_stride(esi);
             if self.st_has_heap(esi) {
+                elem_heap = true;
+            }
+        }
+        if k >= 4000 {
+            // Vec[<enum>] (Slice 32): 16B pure / 32B widened elements.
+            eei = k - 4000;
+            stride = 16;
+            if (eei >= 2 and eei <= 5) or self.en_has_heap(eei) {
+                stride = 32;
+            }
+            if self.en_has_heap(eei) {
                 elem_heap = true;
             }
         }
@@ -2825,6 +2877,9 @@ impl Emitter {
             let mut ety = "{ ptr, i64 }".to_string();
             if esi >= 0 {
                 ety = self.ty_text(10 + esi);
+            }
+            if eei >= 0 {
+                ety = self.ty_text(1000 + eei);
             }
             let lid = self.nlbl;
             self.nlbl = self.nlbl + 1;
@@ -2880,6 +2935,10 @@ impl Emitter {
             let mut mop2 = "".to_string();
             if esi >= 0 {
                 let mv = self.emit_materialize_struct(el, esi);
+                let Val { op: mo, kind: mk, heap: mh } = mv;
+                mop2 = mo;
+            } else if eei >= 0 {
+                let mv = self.emit_materialize_enum(el, eei);
                 let Val { op: mo, kind: mk, heap: mh } = mv;
                 mop2 = mo;
             } else {
@@ -4040,11 +4099,15 @@ impl Emitter {
                 let iv = self.emit_value(index);
                 let Val { op: iop2, kind: ik2, heap: ih2 } = iv;
                 if ok >= 2000 {
-                    // `v[i]` on a Vec[<struct>] (Slice 18): load the element
-                    // as a BORROW — the vec keeps ownership; a binding
-                    // deep-copies via the struct materialize path.
-                    let esi = ok - 2000;
-                    let sty = self.ty_text(10 + esi);
+                    // `v[i]` on a Vec[<struct>] (Slice 18) or Vec[<enum>]
+                    // (Slice 32): load the element as a BORROW — the vec
+                    // keeps ownership; a binding deep-copies via the
+                    // matching materialize path.
+                    let mut ek5 = 10 + (ok - 2000);
+                    if ok >= 4000 {
+                        ek5 = 1000 + (ok - 4000);
+                    }
+                    let sty = self.ty_text(ek5);
                     let prs = self.fresh();
                     self.body = self.body
                         + "  "
@@ -4072,7 +4135,7 @@ impl Emitter {
                         + ", ptr "
                         + eps
                         + ", align 8\n";
-                    return Val { op: rs, kind: 10 + esi, heap: false };
+                    return Val { op: rs, kind: ek5, heap: false };
                 }
                 if ok == 4 {
                     // `v[i]` on a Vec[String] (Slice 16): the element is a
