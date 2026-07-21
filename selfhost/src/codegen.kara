@@ -632,7 +632,9 @@ impl Emitter {
                 if fi > 0 {
                     ty = ty + ", ";
                 }
-                ty = ty + kind_ty(self.st_field_kinds[off + fi]);
+                // RECURSIVE (Slice 33): a nested struct/enum field renders
+                // its own aggregate type text.
+                ty = ty + self.ty_text(self.st_field_kinds[off + fi]);
                 fi = fi + 1;
             }
             return ty + " }";
@@ -3148,8 +3150,20 @@ impl Emitter {
         let cnt = self.st_cnt[si];
         let mut fi = 0;
         while fi < cnt {
-            if self.st_field_kinds[off + fi] == 2 {
+            let fk = self.st_field_kinds[off + fi];
+            if fk == 2 {
                 return true;
+            }
+            if fk >= 10 and fk < 1000 {
+                // Nested struct field (Slice 33): heap-ness is transitive.
+                if self.st_has_heap(fk - 10) {
+                    return true;
+                }
+            }
+            if fk >= 1000 and fk < 2000 {
+                if self.en_has_heap(fk - 1000) {
+                    return true;
+                }
             }
             fi = fi + 1;
         }
@@ -3165,8 +3179,18 @@ impl Emitter {
         let mut n = 0;
         let mut fi = 0;
         while fi < cnt {
-            if self.st_field_kinds[off + fi] == 2 {
+            let fk = self.st_field_kinds[off + fi];
+            if fk == 2 {
                 n = n + 16;
+            } else if fk >= 10 and fk < 1000 {
+                // Nested struct field (Slice 33): its own stride.
+                n = n + self.st_stride(fk - 10);
+            } else if fk >= 1000 and fk < 2000 {
+                let mut es = 16;
+                if (fk >= 1002 and fk <= 1005) or self.en_has_heap(fk - 1000) {
+                    es = 32;
+                }
+                n = n + es;
             } else {
                 n = n + 8;
             }
@@ -3185,7 +3209,16 @@ impl Emitter {
         let mut cur = op.clone();
         let mut fi = 0;
         while fi < cnt {
-            if self.st_field_kinds[off + fi] == 2 {
+            let fk = self.st_field_kinds[off + fi];
+            let mut deep = fk == 2;
+            if fk >= 10 and fk < 1000 {
+                // Nested struct field (Slice 33): recurse when heap-bearing.
+                deep = self.st_has_heap(fk - 10);
+            }
+            if fk >= 1000 and fk < 2000 {
+                deep = self.en_has_heap(fk - 1000);
+            }
+            if deep {
                 let f = self.fresh();
                 self.body = self.body
                     + "  "
@@ -3197,8 +3230,20 @@ impl Emitter {
                     + ", "
                     + fi.to_string()
                     + "\n";
-                let mv = self.emit_materialize(f);
-                let Val { op: mop, kind: mk, heap: mh } = mv;
+                let mut mop2 = "".to_string();
+                if fk == 2 {
+                    let mv = self.emit_materialize(f);
+                    let Val { op: mop, kind: mk, heap: mh } = mv;
+                    mop2 = mop;
+                } else if fk < 1000 {
+                    let mv = self.emit_materialize_struct(f, fk - 10);
+                    let Val { op: mop, kind: mk, heap: mh } = mv;
+                    mop2 = mop;
+                } else {
+                    let mv = self.emit_materialize_enum(f, fk - 1000);
+                    let Val { op: mop, kind: mk, heap: mh } = mv;
+                    mop2 = mop;
+                }
                 let r = self.fresh();
                 self.body = self.body
                     + "  "
@@ -3207,8 +3252,10 @@ impl Emitter {
                     + sty.clone()
                     + " "
                     + cur
-                    + ", { ptr, i64 } "
-                    + mop
+                    + ", "
+                    + self.ty_text(fk)
+                    + " "
+                    + mop2
                     + ", "
                     + fi.to_string()
                     + "\n";
@@ -3226,7 +3273,15 @@ impl Emitter {
         let cnt = self.st_cnt[si];
         let mut fi = 0;
         while fi < cnt {
-            if self.st_field_kinds[off + fi] == 2 {
+            let fk = self.st_field_kinds[off + fi];
+            let mut deep = fk == 2;
+            if fk >= 10 and fk < 1000 {
+                deep = self.st_has_heap(fk - 10);
+            }
+            if fk >= 1000 and fk < 2000 {
+                deep = self.en_has_heap(fk - 1000);
+            }
+            if deep {
                 let f = self.fresh();
                 self.body = self.body
                     + "  "
@@ -3238,7 +3293,14 @@ impl Emitter {
                     + ", "
                     + fi.to_string()
                     + "\n";
-                self.emit_free_val(f);
+                if fk == 2 {
+                    self.emit_free_val(f);
+                } else if fk < 1000 {
+                    // Nested struct field (Slice 33): recurse.
+                    self.emit_free_struct_val(f, fk - 10);
+                } else {
+                    self.emit_free_enum_val(f, fk - 1000);
+                }
             }
             fi = fi + 1;
         }
@@ -4219,6 +4281,24 @@ impl Emitter {
                         let Val { op: mop, kind: mk, heap: mh } = mv;
                         fop2 = mop;
                     }
+                    if kind >= 10 and kind < 1000 and not heap {
+                        // A borrowed nested-struct field value (Slice 33)
+                        // deep-copies in.
+                        if self.st_has_heap(kind - 10) {
+                            let mv = self.emit_materialize_struct(fop2.clone(), kind - 10);
+                            let Val { op: mop, kind: mk, heap: mh } = mv;
+                            fop2 = mop;
+                        }
+                    }
+                    if kind >= 1000 and kind < 2000 and not heap {
+                        // A borrowed enum field value (Slice 33):
+                        // tag-conditional deep copy.
+                        if self.en_has_heap(kind - 1000) {
+                            let mv = self.emit_materialize_enum(fop2.clone(), kind - 1000);
+                            let Val { op: mop, kind: mk, heap: mh } = mv;
+                            fop2 = mop;
+                        }
+                    }
                     lit_names.push(fname);
                     lit_ops.push(fop2);
                 }
@@ -4246,7 +4326,7 @@ impl Emitter {
                         + " "
                         + cur
                         + ", "
-                        + kind_ty(self.st_field_kinds[off + fi])
+                        + self.ty_text(self.st_field_kinds[off + fi])
                         + " "
                         + fop
                         + ", "
