@@ -125,6 +125,11 @@ impl<'ctx> super::Codegen<'ctx> {
             self.clone_escaping_borrowed_ref_chain_enum(scrutinee, scrut, arms);
         let did_clone_borrowed_index_field =
             did_clone_borrowed_index_field || did_clone_loop_elem || did_clone_ref_chain;
+        // B-2026-07-21-7: the STRUCT-leaf sibling — an ESCAPING struct-pattern
+        // match over `<refparam>.field`. The clone carries its own StructDrop;
+        // each arm's suppression below fires against the clone slot.
+        let (scrut, refchain_struct_clone) =
+            self.clone_escaping_borrowed_ref_chain_struct(scrutinee, scrut, arms);
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
         // that leaves a heap payload field unbound leaks it. Materialize +
@@ -506,6 +511,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the source slot so the scrutinee's struct drop skips the buffer
                 // the new binding now owns.
                 self.suppress_destructured_struct_pattern_cleanup(scrutinee, &arm.pattern);
+                // B-2026-07-21-7: ref-chain struct clone — the expr-based
+                // suppression above bails on the borrowed root, so fire the
+                // same per-field cap-zeroing against the CLONE slot instead
+                // (its StructDrop then frees only the fields this arm left
+                // unbound).
+                if let Some((clone_ptr, clone_name)) = &refchain_struct_clone {
+                    let (clone_ptr, clone_name) = (*clone_ptr, clone_name.clone());
+                    self.suppress_destructured_struct_pattern_cleanup_at(
+                        clone_ptr,
+                        &clone_name,
+                        &arm.pattern,
+                    );
+                }
                 // Shared-enum analog: a `match e { S(s) => s }` over a SHARED
                 // enum box (`scrut` = the RC box pointer) that MOVES a Vec/String
                 // payload out into a binding must zero that field's `cap` word IN
@@ -1293,6 +1311,108 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(ll, slot, "refchain.enum.cloned")
                 .unwrap(),
             true,
+        )
+    }
+
+    /// B-2026-07-21-7 — the STRUCT-leaf sibling of
+    /// [`Self::clone_escaping_borrowed_ref_chain_enum`]: `match
+    /// <refparam>.field { Pt { s, x } => <consume s> … }` where the leaf field
+    /// is a heap-bearing non-shared user STRUCT. The field read through the
+    /// borrow bit-copy-aliases the caller's struct; with an ESCAPING arm the
+    /// bindings get owned tracking, and the source suppression cannot fire
+    /// against a borrowed root (`field_chain_place_ptr` bails) — so binding
+    /// and caller both freed the same buffer (double-free; the "read-only"
+    /// `s.len() + x` shape hits it too, because the `iN.add` desugar makes the
+    /// scalar `x` a call arg the escape walk counts as a move). Deep-clone the
+    /// scrutinee value and register the clone's own `StructDrop`; each arm's
+    /// per-field suppression then fires against the CLONE
+    /// (`suppress_destructured_struct_pattern_cleanup_at`), so consumed fields
+    /// are owned by their bindings, unbound fields are freed by the clone
+    /// drop, and the caller's struct is untouched — interpreter semantics.
+    ///
+    /// Gates: pure FieldAccess/TupleIndex chain rooted DIRECTLY at a
+    /// `ref`/`mut ref` param (no `Index` hop — element sources are other
+    /// machinery's, mirroring the enum sibling); some arm escapes; every arm
+    /// is a `Struct` pattern of the leaf type or a wildcard (a whole-value
+    /// binding arm would alias the entire clone — status quo there); the
+    /// leaf's clone/drop family fully supports the shape
+    /// (`borrow_payload_clone_supported` — a partial clone is never emitted).
+    /// Returns the (possibly cloned) scrutinee value plus the clone slot +
+    /// struct name for the per-arm suppression.
+    pub(super) fn clone_escaping_borrowed_ref_chain_struct(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        arms: &[MatchArm],
+    ) -> (BasicValueEnum<'ctx>, Option<(PointerValue<'ctx>, String)>) {
+        if !matches!(
+            scrutinee.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            return (val, None);
+        }
+        let mut cur = scrutinee;
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n.as_str(),
+                ExprKind::SelfValue => break "self",
+                _ => return (val, None),
+            }
+        };
+        if !self.ref_params.contains_key(root) {
+            return (val, None);
+        }
+        if self.no_arm_payload_escapes(arms) {
+            return (val, None);
+        }
+        let Some(struct_name) = self.place_chain_type_name(scrutinee) else {
+            return (val, None);
+        };
+        if !self.struct_types.contains_key(struct_name.as_str())
+            || self.shared_types.contains_key(struct_name.as_str())
+            || self.enum_layouts.contains_key(struct_name.as_str())
+        {
+            return (val, None);
+        }
+        let all_arms_struct_or_wild = arms.iter().all(|a| match &a.pattern.kind {
+            PatternKind::Struct { path, .. } => {
+                path.last().map(|s| s.as_str()) == Some(struct_name.as_str())
+            }
+            PatternKind::Wildcard => true,
+            _ => false,
+        });
+        if !all_arms_struct_or_wild {
+            return (val, None);
+        }
+        let te = TypeExpr {
+            kind: TypeKind::Path(crate::ast::PathExpr {
+                segments: vec![struct_name.clone()],
+                generic_args: None,
+                span: scrutinee.span.clone(),
+            }),
+            span: scrutinee.span.clone(),
+        };
+        if !self.borrow_payload_clone_supported(&te) {
+            return (val, None);
+        }
+        let fn_val = self.current_fn.unwrap();
+        let ll = val.get_type();
+        let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+        let src = self.create_entry_alloca(fn_val, "refchain.struct.src", ll);
+        self.builder.build_store(src, val).unwrap();
+        let slot = self.create_entry_alloca(fn_val, "refchain.struct.clone", ll);
+        self.builder
+            .build_call(clone_fn, &[src.into(), slot.into()], "")
+            .unwrap();
+        self.track_struct_var(&struct_name, slot);
+        (
+            self.builder
+                .build_load(ll, slot, "refchain.struct.cloned")
+                .unwrap(),
+            Some((slot, struct_name)),
         )
     }
 
@@ -3541,25 +3661,49 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
-        let PatternKind::Struct { fields, .. } = &pattern.kind else {
+        // Pattern gate BEFORE the place walk — `field_chain_place_ptr` emits
+        // IR for a `vec[i]` root (element GEP + bounds check), which must not
+        // appear for arms this suppression can never apply to.
+        if !matches!(&pattern.kind, PatternKind::Struct { .. }) {
             return;
-        };
+        }
         let Some(struct_name) = self.place_chain_type_name(scrutinee) else {
             return;
         };
         if self.shared_types.contains_key(&struct_name) {
             return;
         }
-        let Some(field_type_names) = self.struct_field_type_names.get(&struct_name).cloned() else {
-            return;
-        };
-        let Some(field_names) = self.struct_field_names.get(&struct_name).cloned() else {
-            return;
-        };
-        let Some(&st) = self.struct_types.get(struct_name.as_str()) else {
-            return;
-        };
         let Some(base_ptr) = self.field_chain_place_ptr(scrutinee) else {
+            return;
+        };
+        self.suppress_destructured_struct_pattern_cleanup_at(base_ptr, &struct_name, pattern);
+    }
+
+    /// Core of [`Self::suppress_destructured_struct_pattern_cleanup`], keyed on
+    /// the source struct's pointer + name directly rather than resolving them
+    /// from the scrutinee place expression. The B-2026-07-21-7 ref-chain clone
+    /// path calls this with its clone alloca (the place walker bails on the
+    /// borrowed root by design), the #16 owned-place path via the resolving
+    /// wrapper above.
+    pub(super) fn suppress_destructured_struct_pattern_cleanup_at(
+        &mut self,
+        base_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+        pattern: &Pattern,
+    ) {
+        let PatternKind::Struct { fields, .. } = &pattern.kind else {
+            return;
+        };
+        if self.shared_types.contains_key(struct_name) {
+            return;
+        }
+        let Some(field_type_names) = self.struct_field_type_names.get(struct_name).cloned() else {
+            return;
+        };
+        let Some(field_names) = self.struct_field_names.get(struct_name).cloned() else {
+            return;
+        };
+        let Some(&st) = self.struct_types.get(struct_name) else {
             return;
         };
         let vec_ty = self.vec_struct_type();

@@ -10045,6 +10045,51 @@ fn main() {
     }
 
     #[test]
+    fn asan_ref_param_struct_field_struct_pattern_no_leak_no_double_free() {
+        // B-2026-07-21-7 memory leg: an ESCAPING struct-pattern match over
+        // `<refparam>.field` now deep-clones the scrutinee and rides a
+        // StructDrop on the clone slot, with each arm's per-field suppression
+        // firing against the CLONE. The double-free half: a consumed String
+        // field must be freed exactly once by its binding (not again by the
+        // caller's struct drop). The leak half: an UNBOUND String field
+        // (`b: _`) must be freed exactly once by the clone's StructDrop
+        // (a lost registration would leak one buffer per call — LSan).
+        // Loop so any per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+struct Pair { a: String, b: String, x: i64 }
+struct Holder { pair: Pair, n: i64 }
+fn take_a(h: ref Holder) -> String {
+    match h.pair {
+        Pair { a, b: _, x: _ } => { return a; }
+    }
+    return "?".to_string();
+}
+fn tag(h: ref Holder) -> String {
+    match h.pair {
+        Pair { a, b, x } => { return a + "/" + b + ":" + x.to_string(); }
+    }
+    return "?".to_string();
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let h = Holder { pair: Pair { a: "alpha".to_string(), b: "bravo".to_string(), x: 3 }, n: 1 };
+        acc = acc + take_a(h).len();
+        acc = acc + take_a(h).len();
+        acc = acc + tag(h).len();
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["920"],
+            "ref_param_struct_field_struct_pattern",
+        );
+    }
+
+    #[test]
     fn asan_ref_param_enum_field_payload_consume_no_leak_no_double_free() {
         // B-2026-07-21-5/-6 memory leg: an ESCAPING `match <refparam>.field {
         // Ident(name) => <consume name> }` now deep-clones the scrutinee

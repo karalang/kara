@@ -56382,6 +56382,73 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ref_param_struct_field_struct_pattern_consume() {
+        // B-2026-07-21-7: struct-PATTERN destructure of a struct-typed FIELD
+        // reached through a `ref` param, with a binding the escape walk counts
+        // as moved (string `+` desugars to `Call(String.add, ..)`; even the
+        // scalar `s.len() + x` shape counts, because `iN.add`'s args are
+        // conservative moves). The bound field bit-copy-aliased the CALLER's
+        // String and both the binding's scope-exit free and the caller's
+        // struct drop freed the same buffer — double-free abort under JIT and
+        // AOT-O0 (O2 happened to survive), interp correct. Now the ESCAPING
+        // ref-chain struct match deep-clones the scrutinee
+        // (`clone_escaping_borrowed_ref_chain_struct`), registers the clone's
+        // own StructDrop, and each arm's per-field suppression fires against
+        // the CLONE slot — bindings own independent buffers, unbound fields
+        // are freed by the clone drop, the caller's struct is untouched.
+        // Covers: concat consume, the scalar-escape "read-only" shape,
+        // identity move of the String field, an unbound second String field,
+        // a two-hop chain, and caller reuse after every call. Sibling LSan
+        // test guards the leak/double-free halves.
+        let output = run_program(
+            "struct Pt { s: String, x: i64 }\n\
+             struct Pair { a: String, b: String, x: i64 }\n\
+             struct Mid { p: Pt }\n\
+             struct Holder { inner: Pt, pair: Pair, mid: Mid, n: i64 }\n\
+             fn render(h: ref Holder) -> String {\n\
+                 match h.inner {\n\
+                     Pt { s, x } => { return \"p:\".to_string() + s + \":\" + x.to_string(); }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn peek(h: ref Holder) -> i64 {\n\
+                 match h.inner {\n\
+                     Pt { s, x } => { return s.len() + x; }\n\
+                 }\n\
+                 return -1;\n\
+             }\n\
+             fn take_a(h: ref Holder) -> String {\n\
+                 match h.pair {\n\
+                     Pair { a, b: _, x: _ } => { return a; }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn deep(h: ref Holder) -> String {\n\
+                 match h.mid.p {\n\
+                     Pt { s, x } => { return s + \":\" + x.to_string(); }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn main() {\n\
+                 let a = Holder {\n\
+                     inner: Pt { s: \"sp\".to_string(), x: 7 },\n\
+                     pair: Pair { a: \"left\".to_string(), b: \"right\".to_string(), x: 9 },\n\
+                     mid: Mid { p: Pt { s: \"dp\".to_string(), x: 2 } },\n\
+                     n: 1,\n\
+                 };\n\
+                 println(render(a));\n\
+                 println(render(a));\n\
+                 println(peek(a));\n\
+                 println(take_a(a));\n\
+                 println(take_a(a));\n\
+                 println(deep(a));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "p:sp:7\np:sp:7\n9\nleft\nleft\ndp:2\n");
+    }
+
+    #[test]
     fn test_e2e_inline_index_map_get_unwrap_vec_value() {
         // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
         // (`m.get(k).unwrap()[i]`) used to loud-bail "Index operator applied to
