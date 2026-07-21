@@ -739,7 +739,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **607 surfaced 
 | B-2026-07-20-9 | codegen | high | `Vec[struct-with-heap-field].get(i)/.first()/.last().unwrap()` field read is FLAKY under codegen (JIT + AOT): `let a = v.get(0).unwrap(); print(a.nam… | b7b72eb |
 | B-2026-07-20-10 | codegen | high | Every WASM program that frees a heap buffer traps at runtime (`unreachable` via a `signature_mismatch:karac_free_buf` stub) | a25a2a1 |
 | B-2026-07-20-11 | codegen | medium | `karac build` fails LLVM module verification with `Invalid bitcast: bitcast float %elem to i64` for a fused f32 map-reduce whose base is an `iter_axi… | 5f5897b |
-| B-2026-07-20-14 | codegen | medium | Auto-par return-slot rebind LOSES an unannotated struct binding's type identity: `let tx = make_taps(..)` (struct-of-Vecs, no annotation) fanned out… | cacf573 |
+| B-2026-07-20-14 | codegen | medium | Auto-par return-slot rebind LOSES an unannotated struct binding's type identity: `let tx = make_taps(..)` (struct-of-Vecs, no annotation) fanned out… | 29a4a97 |
 
 </details>
 
