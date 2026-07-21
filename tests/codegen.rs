@@ -58070,6 +58070,50 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sorted_by_immutable_comparator_sort() {
+        // B-2026-07-20-8 — `Vec[T].sorted_by(cmp: Fn(T,T)->Ordering)` returns a
+        // NEW Vec sorted by the user comparator, leaving the receiver unsorted.
+        // Desugars to `{ let mut tmp = v.clone(); tmp.sort_by(cmp); tmp }` (the
+        // comparator sibling of `sorted`), so both `sort_by` paths — the
+        // capture-free inline-closure mono fast path and the runtime callback
+        // thunk — apply to the clone. Covers a struct-field comparator, a
+        // DESCENDING scalar comparator, receiver immutability, heap `String`
+        // elements, and N=100 (crossing the mono/runtime N=64 threshold).
+        // Byte-identical to the interpreter. (`String.sorted_by` stays a LOUD
+        // interp-only bail — the runtime char-sort has no comparator variant.)
+        let out = run_program(
+            r#"
+struct P { id: i64, w: i64 }
+fn main() {
+    let mut v: Vec[P] = Vec.new();
+    v.push(P { id: 3, w: 30 });
+    v.push(P { id: 1, w: 10 });
+    v.push(P { id: 2, w: 20 });
+    let s = v.sorted_by(|a, b| a.w.cmp(b.w));
+    for p in s { println(p.id); }
+    let first = v.get(0).unwrap();
+    println(f"{first.id}:{first.w}");
+    let n = [4, 9, 1, 7];
+    let d = n.sorted_by(|a, b| b.cmp(a));
+    println(f"{d[0]}:{d[3]}:{n[0]}");
+    let w = ["pear".to_string(), "fig".to_string(), "apple".to_string()];
+    let ws = w.sorted_by(|a, b| a.cmp(b));
+    println(ws.get(0).unwrap());
+    println(w.get(0).unwrap());
+    let mut big: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 100 { big.push((i * 37) % 100); i = i + 1; }
+    let bs = big.sorted_by(|a, b| a.cmp(b));
+    println(f"{bs.get(0).unwrap()}:{bs.get(99).unwrap()}:{bs.len()}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1\n2\n3\n3:30\n9:1:4\napple\npear\n0:99:100\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_reverse() {
         // `Vec.reverse()` must reverse in place in codegen (same silent-no-op
         // regression class as `sort`).

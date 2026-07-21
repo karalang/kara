@@ -29805,6 +29805,41 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_sorted_by_heap_clone_no_leak_no_double_free() {
+        // B-2026-07-20-8 — `Vec[String].sorted_by(cmp)` is the comparator
+        // sibling of `sorted()`: deep-clone the receiver, `sort_by(cmp)` the
+        // clone (runtime callback thunk for String elements), return it; the
+        // receiver stays intact. Same invariant: the clone's buffers and the
+        // receiver's buffers each free exactly once (a bug is a per-iteration
+        // leak or a double-free). Loop, sort DESCENDING via the comparator so
+        // the result provably ran the user closure, and use both vectors.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let v: Vec[String] = ["delta".to_string(), "alpha".to_string(), "charlie".to_string(), "bravo".to_string()];
+        let s: Vec[String] = v.sorted_by(|a, b| b.cmp(a));
+        // descending clone: delta first — fold its head length in twice so a
+        // wrong order changes the oracle
+        acc = acc + s[0].len();
+        let mut j: i64 = 0;
+        while j < s.len() { acc = acc + s[j].len(); j = j + 1; }
+        let mut k: i64 = 0;
+        while k < v.len() { acc = acc + v[k].len(); k = k + 1; }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            // per iter: head "delta"(5) + clone 22 + receiver 22 = 49; ×40 = 1960
+            &["1960"],
+            "vec_sorted_by_heap_clone_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_reassign_heap_field_and_map_set_var_no_leak_no_double_free() {
         // B-2026-07-15-25: reassigning a struct's heap-owning FIELD (`h.v = …`,
         // `h.s = …`, `h.m = …`) used to overwrite the slot with NO drop of the

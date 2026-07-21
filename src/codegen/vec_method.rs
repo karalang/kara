@@ -1645,6 +1645,113 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 self.compile_expr(&block)
             }
+            // `String.sorted_by(cmp: Fn(Char, Char) -> Ordering)` — the
+            // char-sequence twin of `Vec.sorted_by` below. The runtime's
+            // `karac_string_sorted` helper has no comparator variant (a user
+            // comparator over `Char`s would need a per-char callback ABI), so
+            // this stays interp-only for now — bail LOUD with the standard
+            // pointer instead of the generic dispatch tail (B-2026-07-20-8,
+            // Vec leg landed; String leg deferred).
+            "sorted_by" if self.string_vars.contains(var_name) => Err(
+                "`String.sorted_by(cmp)` is not yet supported under `karac build` \
+                 (codegen); use `.sorted()` for ascending order, or re-run with \
+                 `--interp` (or `KARAC_RUN_JIT=0`)."
+                    .to_string(),
+            ),
+            // `Vec[T].sorted_by(cmp: Fn(T, T) -> Ordering)` — immutable
+            // comparator sort returning a NEW Vec, leaving the receiver
+            // unsorted (B-2026-07-20-8). Desugar to `{ let mut __srtb: Vec[E] =
+            // <recv>.clone(); __srtb.sort_by(<cmp>); __srtb }` — the comparator
+            // sibling of the `sorted` arm above, forwarding the user closure
+            // verbatim (its ORIGINAL span survives the desugar, so any
+            // span-keyed typechecker side-tables for the closure still
+            // resolve). Everything the in-place `sort_by` arm supports — the
+            // capture-free inline-closure mono fast path AND the runtime
+            // callback thunk — applies to the clone identically; an
+            // unsupported comparator shape fails LOUD via `sort_by`'s own
+            // error, exactly as the in-place form would.
+            "sorted_by" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Vec.sorted_by expects 1 argument (comparator closure), got {}",
+                        args.len()
+                    ));
+                }
+                let elem_te = self
+                    .var_elem_type_exprs
+                    .get(var_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        "Vec.sorted_by() in codegen requires a known element type".to_string()
+                    })?;
+                let uid = self.indexed_elem_counter;
+                self.indexed_elem_counter += 1;
+                // Synthetic span (unique `usize::MAX`-based offset) for the
+                // desugar's own nodes; see the `sorted` arm's rationale.
+                let sp = crate::token::Span {
+                    line: 0,
+                    column: 0,
+                    offset: usize::MAX - (uid as usize) - 1,
+                    length: 1,
+                };
+                let tmp = format!("__srtb_{}", uid);
+                let ident = |n: &str| Expr {
+                    kind: ExprKind::Identifier(n.to_string()),
+                    span: sp.clone(),
+                };
+                let vec_te = TypeExpr {
+                    kind: TypeKind::Path(PathExpr {
+                        segments: vec!["Vec".to_string()],
+                        generic_args: Some(vec![GenericArg::Type(elem_te)]),
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                };
+                let clone_call = Expr {
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(ident(var_name)),
+                        method: "clone".to_string(),
+                        turbofish: None,
+                        args: vec![],
+                        args_close_span: sp.clone(),
+                    },
+                    span: sp.clone(),
+                };
+                let let_tmp = Stmt {
+                    kind: StmtKind::Let {
+                        is_mut: true,
+                        pattern: Pattern {
+                            kind: PatternKind::Binding(tmp.clone()),
+                            span: sp.clone(),
+                        },
+                        ty: Some(vec_te),
+                        value: clone_call,
+                    },
+                    span: sp.clone(),
+                };
+                let sort_call = Stmt {
+                    kind: StmtKind::Expr(Expr {
+                        kind: ExprKind::MethodCall {
+                            object: Box::new(ident(&tmp)),
+                            method: "sort_by".to_string(),
+                            turbofish: None,
+                            args: vec![args[0].clone()],
+                            args_close_span: sp.clone(),
+                        },
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                };
+                let block = Expr {
+                    kind: ExprKind::Block(Block {
+                        stmts: vec![let_tmp, sort_call],
+                        final_expr: Some(Box::new(ident(&tmp))),
+                        span: sp.clone(),
+                    }),
+                    span: sp.clone(),
+                };
+                self.compile_expr(&block)
+            }
             // `Vec[String].join(sep) -> String` / `.concat() -> String` via
             // `karac_string_join` (B-2026-07-16-14). The receiver's
             // `{ptr, len, cap}` triple reads as (elements-buffer, count); the
