@@ -811,6 +811,145 @@ pub unsafe extern "C" fn karac_runtime_fs_write(
     };
 }
 
+// ── DataFrame CSV serialization (phase-11 CSV leg) ─────────────────
+
+/// RFC-4180-lite cell quoting — a cell containing a comma, double-quote,
+/// CR, or LF is wrapped in double quotes with embedded quotes doubled;
+/// anything else passes through. Byte-identical to the interpreter's
+/// `write_csv` quoting (`src/interpreter/method_call_dataframe.rs`).
+fn csv_quote(cell: &str) -> String {
+    if cell.contains(',') || cell.contains('"') || cell.contains('\n') || cell.contains('\r') {
+        format!("\"{}\"", cell.replace('"', "\"\""))
+    } else {
+        cell.to_string()
+    }
+}
+
+/// `df.write_csv(path) -> Result[Unit, IoError]` — serialize a compiled
+/// DataFrame to a CSV file (the codegen twin of the interpreter arm; the
+/// serialization rules — header of names in schema order, `Display`
+/// formatting per cell, NULL → empty cell, RFC-4180-lite quoting — are
+/// identical, and Rust's `{}` on i64/f64 IS the interpreter's `Display`,
+/// so output stays byte-identical across backends).
+///
+/// Walks codegen's fixed control-block layouts directly (the same ABI
+/// coupling as `KaracVec` / the fs helpers; layouts documented in
+/// `src/codegen/dataframe.rs` / `column.rs` headers and pinned by the
+/// E2E round-trip test):
+///
+/// - DataFrame control: `{ ptr entries, i64 len, i64 capacity }`
+/// - entry (stride 40): `{ ptr name_data, i64 name_len, ptr col_ctrl,
+///   i64 elem_size, i64 kind }` — kind: 0 = other (bool at size 1),
+///   1 = signed int, 2 = unsigned int, 3 = float, 4 = String
+/// - Column control: `{ ptr data, ptr null_bitmap, i64 len, i64 cap }`;
+///   validity bit `i` = `(bitmap[i/8] >> (i%8)) & 1`, 1 = valid
+/// - String element: the 24-byte `{ ptr, i64 len, i64 cap }` struct inline
+///   in the data buffer.
+///
+/// # Safety
+///
+/// `out` must point to a writable `KaracIoResult` slot; `df_ctrl` must be
+/// a live DataFrame control block laid out as above; `path_ptr`/`path_len`
+/// must describe a valid byte range.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_df_write_csv(
+    out: *mut KaracIoResult,
+    df_ctrl: *const u8,
+    path_ptr: *const u8,
+    path_len: i64,
+) {
+    let Some(path) = read_path(path_ptr, path_len) else {
+        *out = err(&std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "path is not valid UTF-8",
+        ));
+        return;
+    };
+    let entries = *(df_ctrl as *const *const u8);
+    let n_cols = *(df_ctrl.add(8) as *const i64);
+
+    struct Col {
+        name: String,
+        data: *const u8,
+        bitmap: *const u8,
+        len: i64,
+        elem_size: i64,
+        kind: i64,
+    }
+    let mut cols: Vec<Col> = Vec::with_capacity(n_cols.max(0) as usize);
+    for i in 0..n_cols.max(0) as usize {
+        let e = entries.add(i * 40);
+        let name_data = *(e as *const *const u8);
+        let name_len = *(e.add(8) as *const i64);
+        let col_ctrl = *(e.add(16) as *const *const u8);
+        let name = if name_data.is_null() || name_len <= 0 {
+            String::new()
+        } else {
+            String::from_utf8_lossy(std::slice::from_raw_parts(name_data, name_len as usize))
+                .into_owned()
+        };
+        cols.push(Col {
+            name,
+            data: *(col_ctrl as *const *const u8),
+            bitmap: *(col_ctrl.add(8) as *const *const u8),
+            len: *(col_ctrl.add(16) as *const i64),
+            elem_size: *(e.add(24) as *const i64),
+            kind: *(e.add(32) as *const i64),
+        });
+    }
+
+    let mut text = String::new();
+    let header: Vec<String> = cols.iter().map(|c| csv_quote(&c.name)).collect();
+    text.push_str(&header.join(","));
+    text.push('\n');
+    let height = cols.first().map_or(0, |c| c.len).max(0);
+    for row in 0..height as usize {
+        let mut cells: Vec<String> = Vec::with_capacity(cols.len());
+        for c in cols.iter() {
+            let valid = !c.bitmap.is_null() && (*c.bitmap.add(row / 8) >> (row % 8)) & 1 == 1;
+            if !valid {
+                cells.push(String::new());
+                continue;
+            }
+            let p = c.data.add(row * c.elem_size as usize);
+            let cell = match (c.kind, c.elem_size) {
+                (1, 1) => format!("{}", *(p as *const i8)),
+                (1, 2) => format!("{}", *(p as *const i16)),
+                (1, 4) => format!("{}", *(p as *const i32)),
+                (1, 8) => format!("{}", *(p as *const i64)),
+                (2, 1) => format!("{}", *p),
+                (2, 2) => format!("{}", *(p as *const u16)),
+                (2, 4) => format!("{}", *(p as *const u32)),
+                (2, 8) => format!("{}", *(p as *const u64)),
+                (3, 4) => format!("{}", *(p as *const f32)),
+                (3, 8) => format!("{}", *(p as *const f64)),
+                (0, 1) => (if *p != 0 { "true" } else { "false" }).to_string(),
+                (4, _) => {
+                    let sptr = *(p as *const *const u8);
+                    let slen = *(p.add(8) as *const i64);
+                    if sptr.is_null() || slen <= 0 {
+                        String::new()
+                    } else {
+                        String::from_utf8_lossy(std::slice::from_raw_parts(sptr, slen as usize))
+                            .into_owned()
+                    }
+                }
+                // Unknown kind/size combination — an empty cell rather than
+                // UB; new element classes must extend this table.
+                _ => String::new(),
+            };
+            cells.push(csv_quote(&cell));
+        }
+        text.push_str(&cells.join(","));
+        text.push('\n');
+    }
+
+    *out = match std::fs::write(&path, text) {
+        Ok(()) => ok(0),
+        Err(e) => err(&e),
+    };
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]

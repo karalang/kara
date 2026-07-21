@@ -526,26 +526,45 @@ mod codegen_tests {
     }
 
     #[test]
-    fn dataframe_write_csv_rejected_by_codegen_with_run_hint() {
-        // Phase-11 CSV leg slice 1 is interpreter-first: codegen must REJECT
-        // `df.write_csv(path)` with an actionable `karac run` pointer rather
-        // than silently skipping the write (silent run-vs-build divergence,
-        // the worst failure mode). The codegen twin is the follow-on slice.
-        let err = ir_result(
-            "fn main() with writes(FileSystem) {\n\
+    fn test_e2e_dataframe_write_csv_serializes_all_backends() {
+        // Phase-11 CSV leg — the codegen twin (karac_runtime_df_write_csv
+        // walks the DataFrame/Column control blocks; Rust `Display` IS the
+        // interpreter's cell formatting). Byte-identical across backends:
+        // header in schema order, println formatting, NULL → empty cell,
+        // RFC-4180 quoting. This test replaced the slice-1 loud-deferral
+        // assert when the twin landed.
+        let tmp = std::env::temp_dir().join("kara_e2e_df_write_csv.csv");
+        let _ = std::fs::remove_file(&tmp);
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            "fn main() with writes(FileSystem) reads(FileSystem) {{\n\
                  let mut df: DataFrame = DataFrame.new();\n\
-                 df.insert(\"a\", Column.from_vec([1i64]));\n\
-                 match df.write_csv(\"/tmp/kara_cg_write_csv.csv\") {\n\
-                     Ok(_) => println(\"ok\"),\n\
-                     Err(_) => println(\"err\"),\n\
-                 }\n\
-             }",
-        )
-        .expect_err("DataFrame.write_csv must be rejected by codegen in slice 1");
-        assert!(
-            err.contains("interpreter-only") && err.contains("karac run"),
-            "got: {err}"
+                 df.insert(\"age\", Column.from_vec([30i64, 25i64, 41i64]));\n\
+                 df.insert(\"score\", Column.from_vec([91.5, 78.25, 88.0]));\n\
+                 df.insert(\"name\", Column.from_vec([\"ada\", \"bob, jr.\", \"eve \\\"the\\\" grey\"]));\n\
+                 let nn: Vec[Option[i64]] = vec![Some(1i64), None, Some(3i64)];\n\
+                 df.insert(\"nullable\", Column.from_iter_nullable(nn));\n\
+                 match df.write_csv(\"{path}\") {{\n\
+                     Ok(_) => match fs.read_to_string(\"{path}\") {{\n\
+                         Ok(s) => print(s),\n\
+                         Err(_) => println(\"read-err\"),\n\
+                     }},\n\
+                     Err(_) => println(\"write-err\"),\n\
+                 }}\n\
+             }}"
         );
+        let out = run_program(&src);
+        let _ = std::fs::remove_file(&tmp);
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "age,score,name,nullable\n\
+                 30,91.5,ada,1\n\
+                 25,78.25,\"bob, jr.\",\n\
+                 41,88,\"eve \"\"the\"\" grey\",3\n",
+                "AOT write_csv must serialize byte-identically to the interpreter",
+            );
+        }
     }
 
     #[test]

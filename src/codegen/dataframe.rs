@@ -582,17 +582,35 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(Some(self.compile_dataframe_describe(src)?));
         }
         if method == "write_csv" {
-            // Phase-11 CSV leg slice 1 is interpreter-first (the established
-            // DataFrame pattern — dataframe.kara § write_csv). Loud, actionable
-            // deferral rather than a silent skip; the codegen twin (per-kind
-            // cell stringify over the entry `kind` tags + the
-            // `compile_fs_write_vals` core) is the follow-on slice.
-            return Err(
-                "DataFrame.write_csv is interpreter-only in this slice — run it with \
-                 `karac run` (tracker: phase-11-stdlib-longtail.md § Arrow IPC and \
-                 Parquet, CSV leg)"
-                    .to_string(),
-            );
+            // Phase-11 CSV leg — the codegen twin. The serialization itself
+            // lives in the runtime (`karac_runtime_df_write_csv` walks the
+            // fixed DataFrame/Column control-block layouts and formats with
+            // Rust `Display`, which IS the interpreter's cell formatting, so
+            // output stays byte-identical across backends); codegen only
+            // passes the control block + path and unpacks the Unit-Ok
+            // KaracIoResult, exactly like `fs.write`.
+            let control = self.dataframe_ptr_for_var(var)?;
+            let (path_ptr, path_len) = self.df_string_parts(&args[0].value)?;
+            let slot = self.alloca_io_result_slot()?;
+            let f = self
+                .module
+                .get_function("karac_runtime_df_write_csv")
+                .expect("karac_runtime_df_write_csv declared in Codegen::new");
+            self.builder
+                .build_call(
+                    f,
+                    &[
+                        slot.into(),
+                        control.into(),
+                        path_ptr.into(),
+                        path_len.into(),
+                    ],
+                    "df.write_csv.call",
+                )
+                .unwrap();
+            return Ok(Some(
+                self.lower_kara_io_result(slot, super::file::FileOkKind::Unit)?,
+            ));
         }
         if !matches!(
             method,

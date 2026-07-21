@@ -312,7 +312,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// result. Allocating in the entry block avoids stack-growth-in-a-
     /// loop pathology (mirrors the convention `create_entry_alloca`
     /// follows everywhere).
-    fn alloca_io_result_slot(&mut self) -> Result<inkwell::values::PointerValue<'ctx>, String> {
+    pub(super) fn alloca_io_result_slot(
+        &mut self,
+    ) -> Result<inkwell::values::PointerValue<'ctx>, String> {
         let fn_val = self
             .current_fn
             .ok_or_else(|| "File codegen called outside fn".to_string())?;

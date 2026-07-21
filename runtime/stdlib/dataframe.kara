@@ -129,9 +129,10 @@ impl DataFrame {
     // empty cell. RFC-4180-lite quoting: a String cell (or column name)
     // containing a comma, double-quote, or newline is wrapped in double
     // quotes with embedded quotes doubled — other cells are never quoted.
-    // Interpreter-first slice: `karac build` reports a loud deferral
-    // pointing at `karac run` until the codegen twin lands (tracker:
-    // phase-11-stdlib-longtail.md § Arrow IPC and Parquet, CSV leg).
+    // All three backends serialize byte-identically: the interpreter arm
+    // and the codegen twin (`karac_runtime_df_write_csv`) both format
+    // cells with Rust `Display` (tracker: phase-11-stdlib-longtail.md
+    // § Arrow IPC and Parquet, CSV leg).
     #[compiler_builtin]
     fn write_csv(ref self, path: String) -> Result[Unit, IoError] with writes(FileSystem) {
         Err(IoError.Other("placeholder"))

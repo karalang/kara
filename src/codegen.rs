@@ -4549,6 +4549,24 @@ impl<'ctx> Codegen<'ctx> {
             fs_write_type,
             Some(Linkage::External),
         );
+        // `df.write_csv(path)` — serialize a DataFrame control block to a
+        // CSV file in the runtime (walks the fixed entry/Column layouts;
+        // phase-11 CSV leg): (out, df_ctrl, path_ptr, path_len) -> void.
+        // Unit Ok payload, same KaracIoResult ABI as fs_write.
+        let df_write_csv_type = file_call_void_type.fn_type(
+            &[
+                ptr_type.into(),
+                ptr_type.into(),
+                ptr_type.into(),
+                i64_type.into(),
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_df_write_csv",
+            df_write_csv_type,
+            Some(Linkage::External),
+        );
         // Flush: (out, handle) -> void.
         let file_flush_type =
             file_call_void_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);

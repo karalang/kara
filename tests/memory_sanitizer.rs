@@ -20321,6 +20321,60 @@ fn main() {
         );
     }
 
+    /// `df.write_csv` heap lifecycle (phase-11 CSV leg): the serializer is
+    /// runtime-internal Rust (`karac_runtime_df_write_csv` walks the frame's
+    /// control blocks read-only and frees its own CSV buffer), so the only
+    /// Kāra-side allocations are the frame + the path/read-back Strings —
+    /// each freed exactly once. String columns exercise the per-slot
+    /// {ptr,len,cap} element reads (no cloning in the serializer). A missing
+    /// free leaks (Linux detect_leaks); a double free is caught everywhere.
+    #[test]
+    fn asan_dataframe_write_csv_no_leak() {
+        let label = "dataframe_write_csv";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let tmp = std::env::temp_dir().join("kara_asan_df_write_csv.csv");
+        let _ = std::fs::remove_file(&tmp);
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            r#"
+fn main() with writes(FileSystem) reads(FileSystem) {{
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("n", Column.from_vec([1, 2, 3]));
+    df.insert("s", Column.from_vec(["a,b", "plain", "q\"q"]));
+    let nn: Vec[Option[i64]] = vec![Some(7i64), None, Some(9i64)];
+    df.insert("opt", Column.from_iter_nullable(nn));
+    match df.write_csv("{path}") {{
+        Ok(_) => match fs.read_to_string("{path}") {{
+            Ok(s) => println(s.len()),
+            Err(_) => println(-1),
+        }},
+        Err(_) => println(-2),
+    }}
+}}
+"#
+        );
+        let result = run_under_asan(&src, label);
+        let _ = std::fs::remove_file(&tmp);
+        let Some((stdout, status)) = result else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check karac_runtime_df_write_csv reads + IoResult unpack",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim(),
+            "38",
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// DataFrame `column_names` / `select` heap lifecycle (phase-11 Arrow
     /// Q6 codegen, slice 2c): `column_names` mallocs a fresh `Vec[String]`
     /// whose elements are independent name copies (freed by the Vec's own
