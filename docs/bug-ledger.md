@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 37 | 0 |
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
-| perf | 21 | 0 |
+| perf | 22 | 1 |
 | diagnostics | 12 | 0 |
 | use-after-free | 4 | 0 |
 | other | 2 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 440 | 0 |
+| codegen | 441 | 1 |
 | typecheck | 83 | 0 |
 | interp | 67 | 0 |
 | ownership | 25 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **609 surfaced · 0 open · 605 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **610 surfaced · 1 open · 605 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-21-3 | 2026-07-21 | codegen | medium | Construction-heavy `Vector[f64,2]` patterns are a ~4.7x PESSIMIZATION on wasm: rewriting Prism's Lanczos tap loop from 4 scalar f64 accumulators to two lane-pair vectors (fresh `Vector[f64,2](a, b)` built per tap from u8/f64 loads + a `.splat` per tap) took the 3 MP threaded resize from 183 ms to 866 ms (sequential 516 -> 1146 ms), byte-identical output. The Fathom pattern (vectors LIVE across the loop, splats hoisted, rare lane extracts) wins 1.47x; the per-tap-construction shape loses badly — likely lane-insert/extract dominated or partially scalarized. | src/codegen (Vector[T,N] lowering on wasm) |
 
 ### Fixed (605)
 
