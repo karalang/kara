@@ -24066,3 +24066,115 @@ fn test_lazyframe_sort_errors() {
         "{errors:?}",
     );
 }
+
+#[test]
+fn test_lazyframe_group_by_agg_pipeline() {
+    // Phase-11 LazyDataFrame slice 4: the full design-sketch pipeline —
+    // filter → group_by(keys) → agg(count/sum/mean with alias_) → sort on
+    // a DERIVED column. Groups are first-occurrence-ordered; the output
+    // schema is keys then aggregates (alias_ wins, else <col>_<op>);
+    // downstream ops validate against the derived schema.
+    let out = run_no_errors(
+        "import std.lazy.{col};\n\
+         fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"city\", Column.from_vec([\"oslo\", \"rome\", \"oslo\", \"rome\", \"oslo\"]));\n\
+             df.insert(\"name\", Column.from_vec([\"a\", \"b\", \"c\", \"d\", \"e\"]));\n\
+             df.insert(\"pop\", Column.from_vec([10i64, 20i64, 30i64, 40i64, 50i64]));\n\
+             let plan = df.lazy()\n\
+                 .filter(col(\"pop\").gt(15))\n\
+                 .group_by(vec![col(\"city\")])\n\
+                 .agg(vec![col(\"name\").count().alias_(\"cnt\"), col(\"pop\").sum(), col(\"pop\").mean()])\n\
+                 .sort(vec![col(\"pop_sum\").desc()]);\n\
+             println(plan.explain());\n\
+             let out = plan.collect();\n\
+             println(out.width()); println(out.height());\n\
+             for n in out.column_names() { println(n); }\n\
+             let cities: Column[String] = out.column(\"city\");\n\
+             let sums: Column[i64] = out.column(\"pop_sum\");\n\
+             let means: Column[f64] = out.column(\"pop_mean\");\n\
+             match cities[0] { Some(v) => println(v), None => println(\"null\") }\n\
+             match sums[0] { Some(v) => println(v), None => println(-1i64) }\n\
+             match means[0] { Some(v) => println(v), None => println(-1.0) }\n\
+             match cities[1] { Some(v) => println(v), None => println(\"null\") }\n\
+             match sums[1] { Some(v) => println(v), None => println(-1i64) }\n\
+         }",
+    );
+    assert_eq!(
+        out,
+        "== logical plan ==\n\
+         SORT [pop_sum desc]\n\
+         \x20 GROUP BY [city] AGG [count(name) as cnt, sum(pop), mean(pop)]\n\
+         \x20   FILTER (pop > 15)\n\
+         \x20     SCAN [city, name, pop]\n\
+         == optimized ==\n\
+         SORT [pop_sum desc]\n\
+         \x20 GROUP BY [city] AGG [count(name) as cnt, sum(pop), mean(pop)]\n\
+         \x20   FILTER (pop > 15)\n\
+         \x20     SCAN cols=[city, name, pop]\n\
+         4\n2\ncity\ncnt\npop_sum\npop_mean\noslo\n80\n40\nrome\n60\n",
+        "group_by/agg must derive schema and sort on derived columns",
+    );
+}
+
+#[test]
+fn test_lazyframe_group_by_agg_nulls_and_errors() {
+    // count() counts NON-NULL only; sum over an all-null group is NULL;
+    // a non-aggregate agg entry and an aggregate in filter position are
+    // loud errors; a post-groupby ref to a pre-groupby column errors.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"k\", Column.from_vec([\"x\", \"x\", \"y\"]));\n\
+             let nn: Vec[Option[i64]] = vec![Some(1i64), None, None];\n\
+             df.insert(\"v\", Column.from_iter_nullable(nn));\n\
+             let out = df.lazy().group_by(vec![LazyExpr.col(\"k\")]).agg(vec![LazyExpr.col(\"v\").count(), LazyExpr.col(\"v\").sum()]).collect();\n\
+             let cnts: Column[i64] = out.column(\"v_count\");\n\
+             let sums: Column[i64] = out.column(\"v_sum\");\n\
+             match cnts[0] { Some(v) => println(v), None => println(-1i64) }\n\
+             match cnts[1] { Some(v) => println(v), None => println(-1i64) }\n\
+             match sums[1] { Some(v) => println(v), None => println(\"null-ok\") }\n\
+         }",
+    );
+    assert_eq!(out, "1\n0\nnull-ok\n");
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().group_by(vec![LazyExpr.col(\"a\")]).agg(vec![LazyExpr.col(\"a\")]).collect();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("must be an aggregate")),
+        "{errors:?}",
+    );
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().filter(LazyExpr.col(\"a\").sum().gt(0)).collect();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("only meaningful inside LazyGroupBy.agg")),
+        "{errors:?}",
+    );
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"k\", Column.from_vec([\"x\"]));\n\
+             df.insert(\"v\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().group_by(vec![LazyExpr.col(\"k\")]).agg(vec![LazyExpr.col(\"v\").sum()]).filter(LazyExpr.col(\"v\").gt(0)).collect();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no column named 'v' at this plan step")),
+        "{errors:?}",
+    );
+}

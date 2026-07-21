@@ -70,6 +70,12 @@ pub enum LazyOp {
     /// Stable multi-key sort (slice 3). Each key is an expression,
     /// optionally `Desc`-wrapped for descending; NULL keys sort last.
     Sort(Vec<Arc<LazyExprIR>>),
+    /// Group-by + aggregate (slice 4): first-occurrence group order;
+    /// output schema = key columns then one column per aggregate.
+    GroupBy {
+        keys: Vec<Arc<LazyExprIR>>,
+        aggs: Vec<Arc<LazyExprIR>>,
+    },
 }
 
 /// A lazy scalar expression tree (phase-11 LazyDataFrame slice 2) — the
@@ -98,6 +104,41 @@ pub enum LazyExprIR {
     /// Descending sort-key marker (`col("cnt").desc()`) — only
     /// meaningful as a `LazyFrame.sort` key; an error anywhere else.
     Desc(Box<LazyExprIR>),
+    /// An aggregate over a group (slice 4) — only meaningful inside
+    /// `LazyGroupBy.agg(..)`; an error in filter / sort position.
+    Agg {
+        op: LazyAggOp,
+        arg: Box<LazyExprIR>,
+    },
+    /// Output-column name override for an aggregate (`.alias("cnt")`).
+    Alias {
+        name: String,
+        expr: Box<LazyExprIR>,
+    },
+}
+
+/// The slice-4 aggregate vocabulary. `Count` counts NON-NULL values;
+/// `Sum`/`Mean` skip nulls (all-null group → NULL result, count → 0);
+/// `Min`/`Max` order numbers and Strings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LazyAggOp {
+    Count,
+    Sum,
+    Mean,
+    Min,
+    Max,
+}
+
+impl LazyAggOp {
+    pub fn name(&self) -> &'static str {
+        match self {
+            LazyAggOp::Count => "count",
+            LazyAggOp::Sum => "sum",
+            LazyAggOp::Mean => "mean",
+            LazyAggOp::Min => "min",
+            LazyAggOp::Max => "max",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -139,6 +180,8 @@ impl std::fmt::Display for LazyExprIR {
             LazyExprIR::Or(a, b) => write!(f, "({a} or {b})"),
             LazyExprIR::Not(x) => write!(f, "(not {x})"),
             LazyExprIR::Desc(x) => write!(f, "{x} desc"),
+            LazyExprIR::Agg { op, arg } => write!(f, "{}({arg})", op.name()),
+            LazyExprIR::Alias { name, expr } => write!(f, "{expr} as {name}"),
         }
     }
 }
@@ -287,6 +330,13 @@ pub enum Value {
     /// A lazy expression handle (`LazyExpr` surface value) — an immutable
     /// shared expression tree; builder methods wrap it in new nodes.
     LazyExpr(Arc<LazyExprIR>),
+    /// The `group_by(keys)` → `agg(aggs)` intermediate (slice 4):
+    /// the plan so far plus the pending grouping keys.
+    LazyGroupBy {
+        source: Arc<RwLock<Vec<(String, Value)>>>,
+        ops: Arc<Vec<LazyOp>>,
+        keys: Vec<Arc<LazyExprIR>>,
+    },
     Map(Vec<(Value, Value)>),
     Struct {
         name: String,
@@ -990,6 +1040,10 @@ impl std::fmt::Display for Value {
             }
             // The expression tree itself — small by construction.
             Value::LazyExpr(ir) => write!(f, "LazyExpr[{ir}]"),
+            // Pending grouping — key count only.
+            Value::LazyGroupBy { keys, .. } => {
+                write!(f, "LazyGroupBy[{} key(s)]", keys.len())
+            }
             Value::Tuple(vals) => {
                 write!(f, "(")?;
                 for (i, v) in vals.iter().enumerate() {
@@ -1336,6 +1390,7 @@ impl Value {
             Value::DataFrame { .. } => "DataFrame",
             Value::LazyFrame { .. } => "LazyFrame",
             Value::LazyExpr(_) => "LazyExpr",
+            Value::LazyGroupBy { .. } => "LazyGroupBy",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
             Value::Vector(_) => "Vector",

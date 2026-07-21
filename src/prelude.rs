@@ -302,6 +302,7 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // `runtime/stdlib/dataframe.kara` / `lazy.kara`.
     "LazyFrame",
     "LazyExpr",
+    "LazyGroupBy",
     // `Semaphore` application-layer backpressure primitive (phase-8 P1).
     // See `runtime/stdlib/semaphore.kara`.
     "Semaphore",

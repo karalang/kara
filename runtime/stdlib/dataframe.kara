@@ -242,6 +242,31 @@ impl LazyExpr {
     #[compiler_builtin]
     fn not_(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
 
+    // Aggregates (phase-11 slice 4) — only meaningful inside
+    // `LazyGroupBy.agg(..)`; a loud error in filter / sort position.
+    // v1 scope: the argument must be a bare `col(..)` reference.
+    // `count()` counts NON-NULL values; `sum`/`mean` skip nulls (an
+    // all-null group yields NULL; `count` yields 0); `min`/`max` work on
+    // numbers and Strings. Default output name is `<col>_<op>`
+    // (`score_sum`); `alias_(..)` overrides it.
+    #[compiler_builtin]
+    fn count(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn sum(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn mean(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn min(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn max(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+
+    // Name the output column of an aggregate: `col("name").count()
+    // .alias_("cnt")`. The design sketch spells this `.alias(..)`, but
+    // `alias` is a Kāra KEYWORD — the same trailing-underscore convention
+    // as `and_`/`or_`/`not_` applies.
+    #[compiler_builtin]
+    fn alias_(self, name: String) -> LazyExpr { LazyExpr { handle_id: 0 } }
+
     // Sort-direction marker: `sort(vec![col("cnt").desc()])`. ONLY
     // meaningful as a `LazyFrame.sort` key — using a desc-wrapped
     // expression in a filter is a runtime error at collect.
@@ -290,6 +315,18 @@ impl LazyFrame {
         LazyFrame { handle_id: 0 }
     }
 
+    // Group rows by key columns (phase-11 slice 4). Returns a
+    // `LazyGroupBy` whose ONLY method is `agg(..)` — the Polars shape
+    // from the design sketch: `.group_by(vec![col("city")])
+    // .agg(vec![col("name").count().alias_("cnt")])`. v1: each key must
+    // be a bare `col(..)`; NULL key slots group together. Group order is
+    // first-occurrence (deterministic). The output schema is the key
+    // columns followed by one column per aggregate.
+    #[compiler_builtin]
+    fn group_by(self, keys: Vec[LazyExpr]) -> LazyGroupBy {
+        LazyGroupBy { handle_id: 0 }
+    }
+
     // Run the optimized plan and materialize an eager `DataFrame`.
     // Selected columns are views of the source buffers when no limit
     // truncates them (the eager-`select` sharing semantics); a limit
@@ -306,5 +343,24 @@ impl LazyFrame {
     #[compiler_builtin]
     fn explain(ref self) -> String {
         ""
+    }
+}
+
+// `LazyGroupBy` — the intermediate between `group_by(keys)` and
+// `agg(aggs)` (phase-11 slice 4). Carries the pending keys; `agg`
+// completes the plan step and returns the LazyFrame. No other method is
+// meaningful on it.
+struct LazyGroupBy {
+    // Opaque — interpreter intercepts all construction and access.
+    handle_id: i64,
+}
+
+impl LazyGroupBy {
+    // Complete the grouping with aggregate expressions (each an
+    // `Agg`-wrapped `col(..)`, optionally `alias_`ed). Non-aggregate
+    // expressions here are a runtime error at collect.
+    #[compiler_builtin]
+    fn agg(self, aggs: Vec[LazyExpr]) -> LazyFrame {
+        LazyFrame { handle_id: 0 }
     }
 }

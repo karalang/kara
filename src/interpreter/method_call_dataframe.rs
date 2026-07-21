@@ -541,6 +541,42 @@ impl<'a> super::Interpreter<'a> {
                     ops: Arc::new(new_ops),
                 })
             }
+            "group_by" => {
+                let Value::Array(rc) = self.eval_expr_inner(&args.first()?.value) else {
+                    return Some(self.record_runtime_error(
+                        "LazyFrame.group_by expects a Vec[LazyExpr] of key columns",
+                        span,
+                    ));
+                };
+                let mut keys = Vec::new();
+                for v in rc.read().unwrap().iter() {
+                    match v {
+                        Value::LazyExpr(ir) => keys.push(Arc::clone(ir)),
+                        other => {
+                            return Some(self.record_runtime_error(
+                                format!(
+                                    "LazyFrame.group_by keys must be LazyExprs, got {}",
+                                    other.variant_name()
+                                ),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                if keys.is_empty() {
+                    return Some(
+                        self.record_runtime_error(
+                            "LazyFrame.group_by needs at least one key",
+                            span,
+                        ),
+                    );
+                }
+                Some(Value::LazyGroupBy {
+                    source: Arc::clone(source),
+                    ops: Arc::clone(ops),
+                    keys,
+                })
+            }
             "collect" => {
                 // Validate the whole plan first (stepwise visible-column
                 // tracking, incl. predicate column refs) — the fold is the
@@ -548,8 +584,11 @@ impl<'a> super::Interpreter<'a> {
                 if let Err(msg) = fold_lazy_plan(source, ops) {
                     return Some(self.record_runtime_error(msg, span));
                 }
-                let src = source.read().unwrap();
-                let height = src.first().map_or(0, |(_, c)| match c {
+                // Snapshot the source column list (handle clones — views).
+                // A GroupBy step REPLACES `cur` with the materialized group
+                // frame and resets the row pipeline.
+                let mut cur: Vec<(String, Value)> = source.read().unwrap().clone();
+                let mut height = cur.first().map_or(0, |(_, c)| match c {
                     Value::Column { valid, .. } => valid.read().unwrap().len(),
                     _ => 0,
                 });
@@ -569,11 +608,10 @@ impl<'a> super::Interpreter<'a> {
                             row_ops = true;
                             let mut kept = Vec::with_capacity(indices.len());
                             for &row in &indices {
-                                match eval_lazy_pred(ir, &src, row) {
+                                match eval_lazy_pred(ir, &cur, row) {
                                     Ok(true) => kept.push(row),
                                     Ok(false) => {}
                                     Err(msg) => {
-                                        drop(src);
                                         return Some(self.record_runtime_error(msg, span));
                                     }
                                 }
@@ -592,7 +630,7 @@ impl<'a> super::Interpreter<'a> {
                             for &row in &indices {
                                 let mut kvs = Vec::with_capacity(keys.len());
                                 for k in keys {
-                                    match eval_lazy_sort_key(k, &src, row) {
+                                    match eval_lazy_sort_key(k, &cur, row) {
                                         Ok(kv) => kvs.push(kv),
                                         Err(msg) => {
                                             err = Some(msg);
@@ -606,21 +644,37 @@ impl<'a> super::Interpreter<'a> {
                                 keyed.push((row, kvs));
                             }
                             if let Some(msg) = err {
-                                drop(src);
                                 return Some(self.record_runtime_error(msg, span));
                             }
                             keyed.sort_by(|(_, a), (_, b)| cmp_lazy_sort_keys(keys, a, b));
                             indices = keyed.into_iter().map(|(row, _)| row).collect();
                         }
+                        LazyOp::GroupBy { keys, aggs } => {
+                            match eval_lazy_group_by(keys, aggs, &cur, &indices) {
+                                Ok(grouped) => {
+                                    cur = grouped;
+                                    height = cur.first().map_or(0, |(_, c)| match c {
+                                        Value::Column { valid, .. } => valid.read().unwrap().len(),
+                                        _ => 0,
+                                    });
+                                    indices = (0..height).collect();
+                                    row_ops = false;
+                                    projection = None;
+                                }
+                                Err(msg) => {
+                                    return Some(self.record_runtime_error(msg, span));
+                                }
+                            }
+                        }
                     }
                 }
                 let names: Vec<String> = match &projection {
                     Some(cols) => cols.clone(),
-                    None => src.iter().map(|(n, _)| n.clone()).collect(),
+                    None => cur.iter().map(|(n, _)| n.clone()).collect(),
                 };
                 let mut out: Vec<(String, Value)> = Vec::with_capacity(names.len());
                 for name in names {
-                    let Some((_, col)) = src.iter().find(|(n, _)| n == &name) else {
+                    let Some((_, col)) = cur.iter().find(|(n, _)| n == &name) else {
                         return Some(self.record_runtime_error(
                             format!("LazyFrame.collect: no column named '{name}'"),
                             span,
@@ -667,6 +721,17 @@ impl<'a> super::Interpreter<'a> {
                             "SORT [{}]",
                             keys.iter()
                                 .map(|k| k.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        LazyOp::GroupBy { keys, aggs } => format!(
+                            "GROUP BY [{}] AGG [{}]",
+                            keys.iter()
+                                .map(|k| k.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            aggs.iter()
+                                .map(|a| a.to_string())
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         ),
@@ -755,8 +820,94 @@ impl<'a> super::Interpreter<'a> {
             "desc" => Some(Value::LazyExpr(Arc::new(LazyExprIR::Desc(Box::new(
                 ir.as_ref().clone(),
             ))))),
+            "count" | "sum" | "mean" | "min" | "max" => {
+                use crate::interpreter::value::LazyAggOp;
+                let op = match method {
+                    "count" => LazyAggOp::Count,
+                    "sum" => LazyAggOp::Sum,
+                    "mean" => LazyAggOp::Mean,
+                    "min" => LazyAggOp::Min,
+                    _ => LazyAggOp::Max,
+                };
+                Some(Value::LazyExpr(Arc::new(LazyExprIR::Agg {
+                    op,
+                    arg: Box::new(ir.as_ref().clone()),
+                })))
+            }
+            "alias_" => {
+                let name = match self.eval_expr_inner(&args.first()?.value) {
+                    Value::String(s) => s,
+                    other => {
+                        return Some(self.record_runtime_error(
+                            format!(
+                                "LazyExpr.alias_ expects a String name, got {}",
+                                other.variant_name()
+                            ),
+                            span,
+                        ));
+                    }
+                };
+                Some(Value::LazyExpr(Arc::new(LazyExprIR::Alias {
+                    name,
+                    expr: Box::new(ir.as_ref().clone()),
+                })))
+            }
             _ => None,
         }
+    }
+
+    /// `LazyGroupBy.agg(aggs)` (slice 4) — completes a pending grouping
+    /// into a `LazyOp::GroupBy` plan step and returns the LazyFrame.
+    /// Returns `None` for a non-LazyGroupBy receiver / unknown method.
+    pub(super) fn try_eval_lazygroupby_method(
+        &mut self,
+        method: &str,
+        obj: &Value,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Value> {
+        use crate::interpreter::value::LazyOp;
+        let Value::LazyGroupBy { source, ops, keys } = obj else {
+            return None;
+        };
+        if method != "agg" {
+            return None;
+        }
+        let Value::Array(rc) = self.eval_expr_inner(&args.first()?.value) else {
+            return Some(self.record_runtime_error(
+                "LazyGroupBy.agg expects a Vec[LazyExpr] of aggregates",
+                span,
+            ));
+        };
+        let mut aggs = Vec::new();
+        for v in rc.read().unwrap().iter() {
+            match v {
+                Value::LazyExpr(ir) => aggs.push(Arc::clone(ir)),
+                other => {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "LazyGroupBy.agg entries must be LazyExprs, got {}",
+                            other.variant_name()
+                        ),
+                        span,
+                    ));
+                }
+            }
+        }
+        if aggs.is_empty() {
+            return Some(
+                self.record_runtime_error("LazyGroupBy.agg needs at least one aggregate", span),
+            );
+        }
+        let mut new_ops = ops.as_ref().clone();
+        new_ops.push(LazyOp::GroupBy {
+            keys: keys.clone(),
+            aggs,
+        });
+        Some(Value::LazyFrame {
+            source: Arc::clone(source),
+            ops: Arc::new(new_ops),
+        })
     }
 }
 
@@ -828,6 +979,17 @@ fn eval_lazy_scalar(
         LazyExprIR::LitBool(b) => Some(LazyScalar::B(*b)),
         LazyExprIR::Desc(_) => {
             return Err("LazyExpr.desc() is only meaningful as a LazyFrame.sort key".to_string())
+        }
+        LazyExprIR::Agg { op, .. } => {
+            return Err(format!(
+                "LazyExpr.{}() is only meaningful inside LazyGroupBy.agg(..)",
+                op.name()
+            ))
+        }
+        LazyExprIR::Alias { .. } => {
+            return Err(
+                "LazyExpr.alias() is only meaningful inside LazyGroupBy.agg(..)".to_string(),
+            )
         }
         // Bool-valued sub-expressions evaluate through the predicate path.
         LazyExprIR::Cmp { .. } | LazyExprIR::And(..) | LazyExprIR::Or(..) | LazyExprIR::Not(..) => {
@@ -1002,6 +1164,266 @@ fn sort_key_type_tag(k: &LazySortKey) -> u8 {
     }
 }
 
+/// The output-column name of a group KEY expression — v1: a bare
+/// `col(..)`, optionally `alias`ed.
+fn lazy_group_key_name(k: &crate::interpreter::value::LazyExprIR) -> Result<String, String> {
+    use crate::interpreter::value::LazyExprIR;
+    match k {
+        LazyExprIR::Col(n) => Ok(n.clone()),
+        LazyExprIR::Alias { name, expr } => match expr.as_ref() {
+            LazyExprIR::Col(_) => Ok(name.clone()),
+            _ => Err("LazyFrame.group_by: each key must be a bare col(..) in v1".to_string()),
+        },
+        _ => Err("LazyFrame.group_by: each key must be a bare col(..) in v1".to_string()),
+    }
+}
+
+/// The output-column name of an aggregate expression: `alias` wins, else
+/// `<col>_<op>` (`score_sum`). Non-aggregate entries are an error.
+fn lazy_agg_output_name(a: &crate::interpreter::value::LazyExprIR) -> Result<String, String> {
+    use crate::interpreter::value::LazyExprIR;
+    match a {
+        LazyExprIR::Alias { name, expr } => match expr.as_ref() {
+            LazyExprIR::Agg { .. } => Ok(name.clone()),
+            _ => Err(
+                "LazyGroupBy.agg: each entry must be an aggregate (col(..).count() / \
+                 sum / mean / min / max), optionally aliased"
+                    .to_string(),
+            ),
+        },
+        LazyExprIR::Agg { op, arg } => match arg.as_ref() {
+            LazyExprIR::Col(c) => Ok(format!("{c}_{}", op.name())),
+            _ => Err(
+                "LazyGroupBy.agg: the aggregate argument must be a bare col(..) in v1".to_string(),
+            ),
+        },
+        _ => Err(
+            "LazyGroupBy.agg: each entry must be an aggregate (col(..).count() / sum / \
+             mean / min / max), optionally aliased"
+                .to_string(),
+        ),
+    }
+}
+
+/// Evaluate a GroupBy step: group the surviving rows by the evaluated
+/// key scalars (first-occurrence order; NULL keys group together), then
+/// compute each aggregate per group. Returns the materialized output
+/// columns: keys first, then one column per aggregate.
+fn eval_lazy_group_by(
+    keys: &[Arc<crate::interpreter::value::LazyExprIR>],
+    aggs: &[Arc<crate::interpreter::value::LazyExprIR>],
+    cur: &[(String, Value)],
+    indices: &[usize],
+) -> Result<Vec<(String, Value)>, String> {
+    use crate::interpreter::value::LazyExprIR;
+    // 1. Group rows by key tuples (rank+scalar reuses the sort-key
+    //    normalization so NULL/NaN keys group deterministically).
+    type GroupEntry = (Vec<(u8, LazySortKey)>, Vec<usize>);
+    let mut groups: Vec<GroupEntry> = Vec::new();
+    for &row in indices {
+        let mut kt = Vec::with_capacity(keys.len());
+        for k in keys {
+            kt.push(eval_lazy_sort_key(k, cur, row)?);
+        }
+        match groups.iter_mut().find(|(g, _)| sort_keys_equal(g, &kt)) {
+            Some((_, rows)) => rows.push(row),
+            None => groups.push((kt, vec![row])),
+        }
+    }
+    let n_groups = groups.len();
+    let mut out: Vec<(String, Value)> = Vec::new();
+    // 2. Key columns — the representative (first) row's stored cell.
+    for (ki, k) in keys.iter().enumerate() {
+        let name = lazy_group_key_name(k)?;
+        let mut data = Vec::with_capacity(n_groups);
+        let mut valid = Vec::with_capacity(n_groups);
+        for (kt, _) in &groups {
+            match &kt[ki] {
+                (2, _) => {
+                    data.push(Value::Unit);
+                    valid.push(false);
+                }
+                (_, LazySortKey::I(v)) => {
+                    data.push(Value::Int(*v));
+                    valid.push(true);
+                }
+                (_, LazySortKey::F(v)) => {
+                    data.push(Value::Float(*v));
+                    valid.push(true);
+                }
+                (_, LazySortKey::S(v)) => {
+                    data.push(Value::String(v.clone()));
+                    valid.push(true);
+                }
+                (_, LazySortKey::B(v)) => {
+                    data.push(Value::Bool(*v));
+                    valid.push(true);
+                }
+                (_, LazySortKey::Nan) => {
+                    data.push(Value::Float(f64::NAN));
+                    valid.push(true);
+                }
+                (_, LazySortKey::Null) => {
+                    data.push(Value::Unit);
+                    valid.push(false);
+                }
+            }
+        }
+        out.push((
+            name,
+            Value::Column {
+                data: Arc::new(RwLock::new(data)),
+                valid: Arc::new(RwLock::new(valid)),
+            },
+        ));
+    }
+    // 3. Aggregate columns.
+    for a in aggs {
+        let name = lazy_agg_output_name(a)?;
+        let (op, arg) = match a.as_ref() {
+            LazyExprIR::Alias { expr, .. } => match expr.as_ref() {
+                LazyExprIR::Agg { op, arg } => (*op, arg.as_ref()),
+                _ => unreachable!("validated by lazy_agg_output_name"),
+            },
+            LazyExprIR::Agg { op, arg } => (*op, arg.as_ref()),
+            _ => unreachable!("validated by lazy_agg_output_name"),
+        };
+        let mut data = Vec::with_capacity(n_groups);
+        let mut valid = Vec::with_capacity(n_groups);
+        for (_, rows) in &groups {
+            let (v, ok) = eval_lazy_agg(op, arg, cur, rows)?;
+            data.push(v);
+            valid.push(ok);
+        }
+        out.push((
+            name,
+            Value::Column {
+                data: Arc::new(RwLock::new(data)),
+                valid: Arc::new(RwLock::new(valid)),
+            },
+        ));
+    }
+    Ok(out)
+}
+
+/// Key-tuple equality on the (rank, scalar) normalization: NULLs equal
+/// NULLs, NaNs equal NaNs (grouping semantics, unlike IEEE comparison).
+fn sort_keys_equal(a: &[(u8, LazySortKey)], b: &[(u8, LazySortKey)]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b.iter()).all(|((ra, ka), (rb, kb))| {
+            ra == rb
+                && match (ka, kb) {
+                    (LazySortKey::I(x), LazySortKey::I(y)) => x == y,
+                    (LazySortKey::F(x), LazySortKey::F(y)) => x == y,
+                    (LazySortKey::I(x), LazySortKey::F(y)) => (*x as f64) == *y,
+                    (LazySortKey::F(x), LazySortKey::I(y)) => *x == (*y as f64),
+                    (LazySortKey::S(x), LazySortKey::S(y)) => x == y,
+                    (LazySortKey::B(x), LazySortKey::B(y)) => x == y,
+                    (LazySortKey::Nan, LazySortKey::Nan) => true,
+                    (LazySortKey::Null, LazySortKey::Null) => true,
+                    _ => false,
+                }
+        })
+}
+
+/// One aggregate over one group's rows. Returns `(value, valid)` —
+/// an all-null group yields `(Unit, false)` for sum/mean/min/max and
+/// `(Int(0), true)` for count.
+fn eval_lazy_agg(
+    op: crate::interpreter::value::LazyAggOp,
+    arg: &crate::interpreter::value::LazyExprIR,
+    cur: &[(String, Value)],
+    rows: &[usize],
+) -> Result<(Value, bool), String> {
+    use crate::interpreter::value::LazyAggOp;
+    let mut ints: Vec<i64> = Vec::new();
+    let mut floats: Vec<f64> = Vec::new();
+    let mut strs: Vec<String> = Vec::new();
+    let mut count: i64 = 0;
+    for &row in rows {
+        match eval_lazy_scalar(arg, cur, row)? {
+            None => {}
+            Some(LazyScalar::I(v)) => {
+                count += 1;
+                ints.push(v);
+            }
+            Some(LazyScalar::F(v)) => {
+                count += 1;
+                floats.push(v);
+            }
+            Some(LazyScalar::S(v)) => {
+                count += 1;
+                strs.push(v);
+            }
+            Some(LazyScalar::B(_)) => {
+                count += 1;
+            }
+        }
+    }
+    if matches!(op, LazyAggOp::Count) {
+        return Ok((Value::Int(count), true));
+    }
+    if !strs.is_empty() {
+        if !ints.is_empty() || !floats.is_empty() {
+            return Err("LazyGroupBy.agg: mixed String and numeric values".to_string());
+        }
+        return match op {
+            LazyAggOp::Min => Ok(strs
+                .into_iter()
+                .min()
+                .map_or((Value::Unit, false), |s| (Value::String(s), true))),
+            LazyAggOp::Max => Ok(strs
+                .into_iter()
+                .max()
+                .map_or((Value::Unit, false), |s| (Value::String(s), true))),
+            _ => Err(format!(
+                "LazyGroupBy.agg: {}() needs numeric values",
+                op.name()
+            )),
+        };
+    }
+    let all_int = floats.is_empty();
+    let mut vals: Vec<f64> = floats;
+    vals.extend(ints.iter().map(|&v| v as f64));
+    if vals.is_empty() {
+        return Ok((Value::Unit, false));
+    }
+    Ok(match op {
+        LazyAggOp::Sum => {
+            if all_int {
+                (Value::Int(ints.iter().sum()), true)
+            } else {
+                (Value::Float(vals.iter().sum()), true)
+            }
+        }
+        LazyAggOp::Mean => (
+            Value::Float(vals.iter().sum::<f64>() / vals.len() as f64),
+            true,
+        ),
+        LazyAggOp::Min => {
+            if all_int {
+                (Value::Int(*ints.iter().min().unwrap()), true)
+            } else {
+                (
+                    Value::Float(vals.iter().cloned().fold(f64::INFINITY, f64::min)),
+                    true,
+                )
+            }
+        }
+        LazyAggOp::Max => {
+            if all_int {
+                (Value::Int(*ints.iter().max().unwrap()), true)
+            } else {
+                (
+                    Value::Float(vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max)),
+                    true,
+                )
+            }
+        }
+        LazyAggOp::Count => unreachable!(),
+    })
+}
+
 /// The columns an expression references (for validation + scan-projection
 /// union in the optimizer).
 fn lazy_expr_cols(ir: &crate::interpreter::value::LazyExprIR, out: &mut Vec<String>) {
@@ -1021,6 +1443,8 @@ fn lazy_expr_cols(ir: &crate::interpreter::value::LazyExprIR, out: &mut Vec<Stri
             lazy_expr_cols(b, out);
         }
         LazyExprIR::Not(x) | LazyExprIR::Desc(x) => lazy_expr_cols(x, out),
+        LazyExprIR::Agg { arg, .. } => lazy_expr_cols(arg, out),
+        LazyExprIR::Alias { expr, .. } => lazy_expr_cols(expr, out),
         _ => {}
     }
 }
@@ -1055,6 +1479,9 @@ fn fold_lazy_plan(
     let mut projection: Option<Vec<String>> = None;
     let mut needed: Vec<String> = Vec::new();
     let mut steps: Vec<LazyOp> = Vec::new();
+    // After a GroupBy the schema is DERIVED — downstream column refs no
+    // longer touch the scan, so they stop feeding the scan projection.
+    let mut past_group_by = false;
     for op in ops.iter() {
         match op {
             LazyOp::Select(cols) => {
@@ -1081,7 +1508,7 @@ fn fold_lazy_plan(
                             "LazyFrame.filter: no column named '{c}' at this plan step"
                         ));
                     }
-                    if !needed.contains(c) {
+                    if !past_group_by && !needed.contains(c) {
                         needed.push(c.clone());
                     }
                 }
@@ -1107,18 +1534,68 @@ fn fold_lazy_plan(
                                 "LazyFrame.sort: no column named '{c}' at this plan step"
                             ));
                         }
-                        if !needed.contains(c) {
+                        if !past_group_by && !needed.contains(c) {
                             needed.push(c.clone());
                         }
                     }
                 }
                 steps.push(LazyOp::Sort(keys.clone()));
             }
+            LazyOp::GroupBy { keys, aggs } => {
+                let mut out_schema: Vec<String> = Vec::new();
+                for k in keys {
+                    let name = lazy_group_key_name(k)?;
+                    if !visible.contains(&name) {
+                        return Err(format!(
+                            "LazyFrame.group_by: no column named '{name}' at this plan step"
+                        ));
+                    }
+                    if !past_group_by && !needed.contains(&name) {
+                        needed.push(name.clone());
+                    }
+                    out_schema.push(name);
+                }
+                for a in aggs {
+                    let mut cols = Vec::new();
+                    lazy_expr_cols(a, &mut cols);
+                    for c in &cols {
+                        if !visible.contains(c) {
+                            return Err(format!(
+                                "LazyGroupBy.agg: no column named '{c}' at this plan step"
+                            ));
+                        }
+                        if !past_group_by && !needed.contains(c) {
+                            needed.push(c.clone());
+                        }
+                    }
+                    out_schema.push(lazy_agg_output_name(a)?);
+                }
+                visible = out_schema;
+                projection = None;
+                past_group_by = true;
+                steps.push(LazyOp::GroupBy {
+                    keys: keys.clone(),
+                    aggs: aggs.clone(),
+                });
+            }
         }
     }
     // Scan projection: union of predicate columns + the final projection,
-    // in SOURCE order. `None` when nothing narrows it.
-    let scan_cols = if projection.is_none() && needed.is_empty() {
+    // in SOURCE order. `None` when nothing narrows it. Past a GroupBy the
+    // projection names DERIVED columns, so only pre-groupby refs count.
+    let scan_cols = if past_group_by {
+        if needed.is_empty() {
+            None
+        } else {
+            Some(
+                source_order
+                    .iter()
+                    .filter(|n| needed.contains(n))
+                    .cloned()
+                    .collect(),
+            )
+        }
+    } else if projection.is_none() && needed.is_empty() {
         None
     } else {
         let mut wanted: Vec<String> = Vec::new();
@@ -1126,9 +1603,12 @@ fn fold_lazy_plan(
             wanted.extend(p.iter().cloned());
         }
         wanted.extend(needed.iter().cloned());
-        let has_filters = steps
-            .iter()
-            .any(|s| matches!(s, LazyOp::Filter(_) | LazyOp::Sort(_)));
+        let has_filters = steps.iter().any(|s| {
+            matches!(
+                s,
+                LazyOp::Filter(_) | LazyOp::Sort(_) | LazyOp::GroupBy { .. }
+            )
+        });
         if has_filters {
             // Union in source order (deterministic).
             Some(
@@ -1157,10 +1637,12 @@ fn fold_lazy_plan(
 /// slice-1 single-scan rendering for select/limit-only plans).
 fn render_optimized_plan(plan: &OptimizedLazyPlan) -> String {
     use crate::interpreter::value::LazyOp;
-    let has_filters = plan
-        .steps
-        .iter()
-        .any(|s| matches!(s, LazyOp::Filter(_) | LazyOp::Sort(_)));
+    let has_filters = plan.steps.iter().any(|s| {
+        matches!(
+            s,
+            LazyOp::Filter(_) | LazyOp::Sort(_) | LazyOp::GroupBy { .. }
+        )
+    });
     let mut scan = match &plan.scan_cols {
         Some(cols) => format!("SCAN cols=[{}]", cols.join(", ")),
         None => "SCAN cols=[*]".to_string(),
@@ -1180,6 +1662,17 @@ fn render_optimized_plan(plan: &OptimizedLazyPlan) -> String {
                 "SORT [{}]",
                 keys.iter()
                     .map(|k| k.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            LazyOp::GroupBy { keys, aggs } => format!(
+                "GROUP BY [{}] AGG [{}]",
+                keys.iter()
+                    .map(|k| k.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                aggs.iter()
+                    .map(|a| a.to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
             ),

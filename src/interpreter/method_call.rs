@@ -1507,6 +1507,11 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_lazyexpr_method(method, &obj, args, span) {
             return v;
         }
+        // LazyGroupBy.agg (slice 4) — a non-LazyGroupBy receiver falls
+        // through.
+        if let Some(v) = self.try_eval_lazygroupby_method(method, &obj, args, span) {
+            return v;
+        }
         if let Some(v) = self.try_eval_iterator_method(method, object, &obj, args, span) {
             return v;
         }
