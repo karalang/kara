@@ -94,11 +94,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 158 | 0 |
 | leak | 86 | 0 |
-| codegen-gap | 69 | 0 |
+| codegen-gap | 70 | 1 |
 | double-free | 68 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 38 | 0 |
-| run-vs-build | 36 | 0 |
+| run-vs-build | 37 | 1 |
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
 | perf | 21 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 438 | 0 |
+| codegen | 439 | 1 |
 | typecheck | 83 | 0 |
-| interp | 66 | 0 |
+| interp | 67 | 1 |
 | ownership | 25 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,11 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **607 surfaced · 0 open · 603 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **609 surfaced · 2 open · 603 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (2)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-21-1 | 2026-07-21 | interp | medium | INTERP BUG (run-vs-build): user `impl Drop` destructors run at LAST USE in FIFO (declaration) order under the tree-walk interpreter, while codegen (JIT + AOT) runs them at SCOPE EXIT in LIFO order — the spec'd semantics (design.md § Drop: 'the compiler calls drop at scope exit'; 'Drop calls and defer blocks lower into the same LIFO stack'). Two divergences in one: TIMING (interp fires the destructor immediately after the binding's last use — before subsequent statements in the same scope) and ORDER (interp drops in declaration order, codegen in reverse-declaration order). Observable whenever a Drop body has side effects (logging, releasing a lock file, flushing). | src/interpreter (user impl Drop dispatch — drop timing + ordering) |
+| B-2026-07-21-2 | 2026-07-21 | codegen | low | `<chain>.next()` — e.g. the idiomatic first-char read `s.chars().next().unwrap()` — is UNIMPLEMENTED in codegen: loud-bails `no handler for method 'next' on non-identifier receiver` under `karac build`/JIT while `--interp` runs it. Known-deferral class (stateful `next()` has no codegen iterator value, cf. B-2026-07-11-19's materialized-iterator scope-out), but the CHAIN-RECEIVER form needs no state: `<chain>.next()` is just the first yielded element. | src/codegen/method_call.rs (method dispatch — `next` on a chained iterator receiver) |
 
 ### Fixed (603)
 
