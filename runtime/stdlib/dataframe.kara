@@ -327,6 +327,21 @@ impl LazyFrame {
         LazyGroupBy { handle_id: 0 }
     }
 
+    // INNER join with another lazy plan on equal-named key columns
+    // (phase-11 slice 5 — the plan-becomes-a-tree step; LEFT/OUTER
+    // variants are follow-on). `on` names must exist on BOTH sides at
+    // this plan step (validated at collect). Output schema: every left
+    // column, then the right side's columns minus the keys — a non-key
+    // name collision takes a `_right` suffix (the Polars posture). Row
+    // order: left order, then the right side's match order (nested-loop,
+    // deterministic). NULL keys join NOTHING (SQL inner-join semantics).
+    // Pushdown does not yet cross a join (the scan reads every column) —
+    // that is the P2 optimizer-expansion entry.
+    #[compiler_builtin]
+    fn join(self, other: LazyFrame, on: Vec[String]) -> LazyFrame {
+        LazyFrame { handle_id: 0 }
+    }
+
     // Run the optimized plan and materialize an eager `DataFrame`.
     // Selected columns are views of the source buffers when no limit
     // truncates them (the eager-`select` sharing semantics); a limit

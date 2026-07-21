@@ -24178,3 +24178,185 @@ fn test_lazyframe_group_by_agg_nulls_and_errors() {
         "{errors:?}",
     );
 }
+
+#[test]
+fn test_lazyframe_join_inner_collision_suffix_and_explain() {
+    // Phase-11 LazyDataFrame slice 5: inner `join` — the plan becomes a
+    // tree (the right side is a nested sub-plan, rendered compactly on
+    // the JOIN line). Output schema = left columns, then right minus the
+    // keys with `_right` suffixed onto collisions. Unmatched rows on
+    // either side drop; left row order is preserved.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut people: DataFrame = DataFrame.new();\n\
+             people.insert(\"id\", Column.from_vec([1i64, 2i64, 3i64, 4i64]));\n\
+             people.insert(\"name\", Column.from_vec([\"ada\", \"bob\", \"cyd\", \"dee\"]));\n\
+             people.insert(\"city\", Column.from_vec([\"rome\", \"oslo\", \"rome\", \"lima\"]));\n\
+             let mut cities: DataFrame = DataFrame.new();\n\
+             cities.insert(\"city\", Column.from_vec([\"rome\", \"oslo\", \"kiev\"]));\n\
+             cities.insert(\"pop\", Column.from_vec([60i64, 80i64, 30i64]));\n\
+             cities.insert(\"name\", Column.from_vec([\"Roma\", \"Oslo\", \"Kyiv\"]));\n\
+             let plan = people.lazy().join(cities.lazy(), vec![\"city\"]);\n\
+             println(plan.explain());\n\
+             let out = plan.collect();\n\
+             println(out.width()); println(out.height());\n\
+             for n in out.column_names() { println(n); }\n\
+             let names: Column[String] = out.column(\"name\");\n\
+             let rn: Column[String] = out.column(\"name_right\");\n\
+             let pops: Column[i64] = out.column(\"pop\");\n\
+             for i in 0..out.height() {\n\
+                 match names[i] { Some(v) => println(v), None => println(\"null\") }\n\
+                 match rn[i] { Some(v) => println(v), None => println(\"null\") }\n\
+                 match pops[i] { Some(v) => println(v), None => println(-1i64) }\n\
+             }\n\
+         }",
+    );
+    assert_eq!(
+        out,
+        "== logical plan ==\n\
+         JOIN on=[city] right=(SCAN [city, pop, name])\n\
+         \x20 SCAN [id, name, city]\n\
+         == optimized ==\n\
+         JOIN on=[city] right=(SCAN cols=[*])\n\
+         \x20 SCAN cols=[*]\n\
+         5\n3\nid\nname\ncity\npop\nname_right\n\
+         ada\nRoma\n60\nbob\nOslo\n80\ncyd\nRoma\n60\n",
+        "inner join must suffix collisions, drop unmatched rows, keep left order",
+    );
+}
+
+#[test]
+fn test_lazyframe_join_pipeline_nulls_and_fanout() {
+    // Ops compose around a join: a right-side select narrows the right
+    // sub-plan's scan; filter/select after the join see the joined
+    // schema; a left select BEFORE the join renders as an explicit
+    // SELECT step under the JOIN (the fold applies it at the join
+    // boundary — the rendering must not pretend the scan keeps all
+    // columns). NULL keys join nothing; duplicate right matches fan out
+    // in left-row-then-right-match order.
+    let out = run_no_errors(
+        "import std.lazy.{col};\n\
+         fn main() {\n\
+             let mut people: DataFrame = DataFrame.new();\n\
+             people.insert(\"id\", Column.from_vec([1i64, 2i64, 3i64, 4i64]));\n\
+             people.insert(\"name\", Column.from_vec([\"ada\", \"bob\", \"cyd\", \"dee\"]));\n\
+             people.insert(\"city\", Column.from_vec([\"rome\", \"oslo\", \"rome\", \"lima\"]));\n\
+             let mut cities: DataFrame = DataFrame.new();\n\
+             cities.insert(\"city\", Column.from_vec([\"rome\", \"oslo\", \"kiev\"]));\n\
+             cities.insert(\"pop\", Column.from_vec([60i64, 80i64, 30i64]));\n\
+             cities.insert(\"name\", Column.from_vec([\"Roma\", \"Oslo\", \"Kyiv\"]));\n\
+             let plan = people.lazy()\n\
+                 .join(cities.lazy().select(vec![\"city\", \"pop\"]), vec![\"city\"])\n\
+                 .filter(col(\"pop\").gt(50))\n\
+                 .select(vec![\"name\", \"pop\"]);\n\
+             println(plan.explain());\n\
+             println(plan.collect().height());\n\
+             let pre = people.lazy().select(vec![\"name\", \"city\"]).join(cities.lazy(), vec![\"city\"]);\n\
+             println(pre.explain());\n\
+             println(pre.collect().width());\n\
+             let mut left: DataFrame = DataFrame.new();\n\
+             let lk: Vec[Option[i64]] = vec![Some(1i64), None, Some(3i64)];\n\
+             left.insert(\"k\", Column.from_iter_nullable(lk));\n\
+             let mut right: DataFrame = DataFrame.new();\n\
+             let rk: Vec[Option[i64]] = vec![Some(1i64), None];\n\
+             right.insert(\"k\", Column.from_iter_nullable(rk));\n\
+             right.insert(\"w\", Column.from_vec([100i64, 200i64]));\n\
+             let nj = left.lazy().join(right.lazy(), vec![\"k\"]).collect();\n\
+             println(nj.height());\n\
+             let ws: Column[i64] = nj.column(\"w\");\n\
+             match ws[0] { Some(v) => println(v), None => println(-1i64) }\n\
+             let mut dup: DataFrame = DataFrame.new();\n\
+             dup.insert(\"city\", Column.from_vec([\"rome\", \"rome\"]));\n\
+             dup.insert(\"tag\", Column.from_vec([\"a\", \"b\"]));\n\
+             let fan = people.lazy().select(vec![\"name\", \"city\"]).join(dup.lazy(), vec![\"city\"]).collect();\n\
+             println(fan.height());\n\
+             let n4: Column[String] = fan.column(\"name\");\n\
+             let t4: Column[String] = fan.column(\"tag\");\n\
+             for i in 0..fan.height() {\n\
+                 match n4[i] { Some(v) => println(v), None => println(\"null\") }\n\
+                 match t4[i] { Some(v) => println(v), None => println(\"null\") }\n\
+             }\n\
+         }",
+    );
+    assert_eq!(
+        out,
+        "== logical plan ==\n\
+         SELECT [name, pop]\n\
+         \x20 FILTER (pop > 50)\n\
+         \x20   JOIN on=[city] right=(SELECT [city, pop] <- SCAN [city, pop, name])\n\
+         \x20     SCAN [id, name, city]\n\
+         == optimized ==\n\
+         SELECT [name, pop]\n\
+         \x20 FILTER (pop > 50)\n\
+         \x20   JOIN on=[city] right=(SCAN cols=[city, pop])\n\
+         \x20     SCAN cols=[*]\n\
+         3\n\
+         == logical plan ==\n\
+         JOIN on=[city] right=(SCAN [city, pop, name])\n\
+         \x20 SELECT [name, city]\n\
+         \x20   SCAN [id, name, city]\n\
+         == optimized ==\n\
+         JOIN on=[city] right=(SCAN cols=[*])\n\
+         \x20 SELECT [name, city]\n\
+         \x20   SCAN cols=[*]\n\
+         4\n\
+         1\n100\n\
+         4\nada\na\nada\nb\ncyd\na\ncyd\nb\n",
+        "join must compose with select/filter, drop NULL keys, fan out duplicates",
+    );
+}
+
+#[test]
+fn test_lazyframe_join_errors() {
+    // Missing keys validate at collect (RIGHT side checked against the
+    // right sub-plan's FINAL schema; LEFT side against the columns
+    // visible at the join step); incompatible key types across the two
+    // sides are a loud error, not a silent empty join.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut l: DataFrame = DataFrame.new();\n\
+             l.insert(\"a\", Column.from_vec([1i64]));\n\
+             let mut r: DataFrame = DataFrame.new();\n\
+             r.insert(\"b\", Column.from_vec([1i64]));\n\
+             let bad = l.lazy().join(r.lazy(), vec![\"a\"]);\n\
+             println(\"built-ok\");\n\
+             println(bad.explain());\n\
+         }",
+    );
+    assert!(
+        out.contains("built-ok")
+            && out.contains("INVALID PLAN: LazyFrame.join: no column named 'a' on the RIGHT side"),
+        "got: {out}",
+    );
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut l: DataFrame = DataFrame.new();\n\
+             l.insert(\"a\", Column.from_vec([1i64]));\n\
+             let mut r: DataFrame = DataFrame.new();\n\
+             r.insert(\"b\", Column.from_vec([1i64]));\n\
+             let _ = l.lazy().join(r.lazy(), vec![\"b\"]).collect();\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("LazyFrame.join: no column named 'b' on the LEFT side")),
+        "{errors:?}",
+    );
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut l: DataFrame = DataFrame.new();\n\
+             l.insert(\"k\", Column.from_vec([1i64, 2i64]));\n\
+             let mut r: DataFrame = DataFrame.new();\n\
+             r.insert(\"k\", Column.from_vec([\"1\", \"2\"]));\n\
+             r.insert(\"w\", Column.from_vec([10i64, 20i64]));\n\
+             let _ = l.lazy().join(r.lazy(), vec![\"k\"]).collect();\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("LazyFrame.join: key 'k' has incompatible types on the two sides")),
+        "{errors:?}",
+    );
+}

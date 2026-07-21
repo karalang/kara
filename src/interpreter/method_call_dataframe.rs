@@ -577,133 +577,70 @@ impl<'a> super::Interpreter<'a> {
                     keys,
                 })
             }
-            "collect" => {
-                // Validate the whole plan first (stepwise visible-column
-                // tracking, incl. predicate column refs) — the fold is the
-                // single validation authority for collect AND explain.
-                if let Err(msg) = fold_lazy_plan(source, ops) {
-                    return Some(self.record_runtime_error(msg, span));
-                }
-                // Snapshot the source column list (handle clones — views).
-                // A GroupBy step REPLACES `cur` with the materialized group
-                // frame and resets the row pipeline.
-                let mut cur: Vec<(String, Value)> = source.read().unwrap().clone();
-                let mut height = cur.first().map_or(0, |(_, c)| match c {
-                    Value::Column { valid, .. } => valid.read().unwrap().len(),
-                    _ => 0,
-                });
-                // Row-index pipeline over the ops IN ORDER — correct by
-                // construction (the optimizer only feeds `explain`).
-                let mut indices: Vec<usize> = (0..height).collect();
-                let mut projection: Option<Vec<String>> = None;
-                let mut row_ops = false;
-                for op in ops.iter() {
-                    match op {
-                        LazyOp::Select(cols) => projection = Some(cols.clone()),
-                        LazyOp::Limit(n) => {
-                            row_ops = true;
-                            indices.truncate((*n).max(0) as usize);
-                        }
-                        LazyOp::Filter(ir) => {
-                            row_ops = true;
-                            let mut kept = Vec::with_capacity(indices.len());
-                            for &row in &indices {
-                                match eval_lazy_pred(ir, &cur, row) {
-                                    Ok(true) => kept.push(row),
-                                    Ok(false) => {}
-                                    Err(msg) => {
-                                        return Some(self.record_runtime_error(msg, span));
-                                    }
-                                }
-                            }
-                            indices = kept;
-                        }
-                        LazyOp::Sort(keys) => {
-                            row_ops = true;
-                            // Evaluate every key for every surviving row up
-                            // front, then a stable multi-key sort. NULL keys
-                            // last, NaN just before them (rank 0 = value,
-                            // 1 = NaN, 2 = NULL — deterministic total order).
-                            let mut err: Option<String> = None;
-                            let mut keyed: Vec<(usize, Vec<(u8, LazySortKey)>)> =
-                                Vec::with_capacity(indices.len());
-                            for &row in &indices {
-                                let mut kvs = Vec::with_capacity(keys.len());
-                                for k in keys {
-                                    match eval_lazy_sort_key(k, &cur, row) {
-                                        Ok(kv) => kvs.push(kv),
-                                        Err(msg) => {
-                                            err = Some(msg);
-                                            break;
-                                        }
-                                    }
-                                }
-                                if err.is_some() {
-                                    break;
-                                }
-                                keyed.push((row, kvs));
-                            }
-                            if let Some(msg) = err {
-                                return Some(self.record_runtime_error(msg, span));
-                            }
-                            keyed.sort_by(|(_, a), (_, b)| cmp_lazy_sort_keys(keys, a, b));
-                            indices = keyed.into_iter().map(|(row, _)| row).collect();
-                        }
-                        LazyOp::GroupBy { keys, aggs } => {
-                            match eval_lazy_group_by(keys, aggs, &cur, &indices) {
-                                Ok(grouped) => {
-                                    cur = grouped;
-                                    height = cur.first().map_or(0, |(_, c)| match c {
-                                        Value::Column { valid, .. } => valid.read().unwrap().len(),
-                                        _ => 0,
-                                    });
-                                    indices = (0..height).collect();
-                                    row_ops = false;
-                                    projection = None;
-                                }
-                                Err(msg) => {
-                                    return Some(self.record_runtime_error(msg, span));
-                                }
-                            }
+            "join" => {
+                let other = self.eval_expr_inner(&args.first()?.value);
+                let Value::LazyFrame {
+                    source: rsource,
+                    ops: rops,
+                } = other
+                else {
+                    return Some(self.record_runtime_error(
+                        "LazyFrame.join expects a LazyFrame as its first argument \
+                         (build one with other_df.lazy())",
+                        span,
+                    ));
+                };
+                let Value::Array(rc) = self.eval_expr_inner(&args.get(1)?.value) else {
+                    return Some(self.record_runtime_error(
+                        "LazyFrame.join expects a Vec[String] of key column names",
+                        span,
+                    ));
+                };
+                let mut on = Vec::new();
+                for v in rc.read().unwrap().iter() {
+                    match v {
+                        Value::String(s) => on.push(s.clone()),
+                        other => {
+                            return Some(self.record_runtime_error(
+                                format!(
+                                    "LazyFrame.join key names must be Strings, got {}",
+                                    other.variant_name()
+                                ),
+                                span,
+                            ));
                         }
                     }
                 }
-                let names: Vec<String> = match &projection {
-                    Some(cols) => cols.clone(),
-                    None => cur.iter().map(|(n, _)| n.clone()).collect(),
-                };
-                let mut out: Vec<(String, Value)> = Vec::with_capacity(names.len());
-                for name in names {
-                    let Some((_, col)) = cur.iter().find(|(n, _)| n == &name) else {
-                        return Some(self.record_runtime_error(
-                            format!("LazyFrame.collect: no column named '{name}'"),
-                            span,
-                        ));
-                    };
-                    let out_col = if row_ops {
-                        // Gather the surviving rows into fresh cells.
-                        if let Value::Column { data, valid } = col {
-                            let d = data.read().unwrap();
-                            let v = valid.read().unwrap();
-                            let nd: Vec<Value> = indices.iter().map(|&i| d[i].clone()).collect();
-                            let nv: Vec<bool> = indices.iter().map(|&i| v[i]).collect();
-                            Value::Column {
-                                data: Arc::new(RwLock::new(nd)),
-                                valid: Arc::new(RwLock::new(nv)),
-                            }
-                        } else {
-                            col.clone()
-                        }
-                    } else {
-                        // Pure projection — hand back views (the eager-
-                        // `select` sharing semantics).
-                        col.clone()
-                    };
-                    out.push((name, out_col));
+                if on.is_empty() {
+                    return Some(
+                        self.record_runtime_error("LazyFrame.join needs at least one key", span),
+                    );
                 }
-                Some(Value::DataFrame {
-                    columns: Arc::new(RwLock::new(out)),
+                let mut new_ops = ops.as_ref().clone();
+                new_ops.push(LazyOp::Join {
+                    right_source: rsource,
+                    right_ops: rops,
+                    on,
+                });
+                Some(Value::LazyFrame {
+                    source: Arc::clone(source),
+                    ops: Arc::new(new_ops),
                 })
+            }
+            "collect" => {
+                // Validate the whole plan first (the fold is the single
+                // validation authority), then run it — `eval_lazy_plan` is
+                // a free fn so the Join arm can recurse into its right
+                // sub-plan.
+                if let Err(msg) = fold_lazy_plan(source, ops) {
+                    return Some(self.record_runtime_error(msg, span));
+                }
+                match eval_lazy_plan(source, ops) {
+                    Ok(cols) => Some(Value::DataFrame {
+                        columns: Arc::new(RwLock::new(cols)),
+                    }),
+                    Err(msg) => Some(self.record_runtime_error(msg, span)),
+                }
             }
             "explain" => {
                 // Logical plan: innermost SCAN, one indented line per
@@ -734,6 +671,15 @@ impl<'a> super::Interpreter<'a> {
                                 .map(|a| a.to_string())
                                 .collect::<Vec<_>>()
                                 .join(", ")
+                        ),
+                        LazyOp::Join {
+                            right_source,
+                            right_ops,
+                            on,
+                        } => format!(
+                            "JOIN on=[{}] right=({})",
+                            on.join(", "),
+                            lazy_logical_compact(right_source, right_ops)
                         ),
                     };
                     lines.push(step);
@@ -1164,6 +1110,300 @@ fn sort_key_type_tag(k: &LazySortKey) -> u8 {
     }
 }
 
+/// Run a lazy plan to materialized output columns — the recursive
+/// evaluation core shared by `collect` and a JOIN parent evaluating its
+/// right sub-plan. Row-index pipeline over the ops IN ORDER (the
+/// optimizer only feeds `explain`); `GroupBy` and `Join` REPLACE the
+/// working column set mid-pipeline.
+fn eval_lazy_plan(
+    source: &Arc<RwLock<Vec<(String, Value)>>>,
+    ops: &Arc<Vec<crate::interpreter::value::LazyOp>>,
+) -> Result<Vec<(String, Value)>, String> {
+    use crate::interpreter::value::LazyOp;
+    let mut cur: Vec<(String, Value)> = source.read().unwrap().clone();
+    let mut height = lazy_cols_height(&cur);
+    let mut indices: Vec<usize> = (0..height).collect();
+    let mut projection: Option<Vec<String>> = None;
+    let mut row_ops = false;
+    for op in ops.iter() {
+        match op {
+            LazyOp::Select(cols) => projection = Some(cols.clone()),
+            LazyOp::Limit(n) => {
+                row_ops = true;
+                indices.truncate((*n).max(0) as usize);
+            }
+            LazyOp::Filter(ir) => {
+                row_ops = true;
+                let mut kept = Vec::with_capacity(indices.len());
+                for &row in &indices {
+                    if eval_lazy_pred(ir, &cur, row)? {
+                        kept.push(row);
+                    }
+                }
+                indices = kept;
+            }
+            LazyOp::Sort(keys) => {
+                row_ops = true;
+                let mut keyed: Vec<(usize, Vec<(u8, LazySortKey)>)> =
+                    Vec::with_capacity(indices.len());
+                for &row in &indices {
+                    let mut kvs = Vec::with_capacity(keys.len());
+                    for k in keys {
+                        kvs.push(eval_lazy_sort_key(k, &cur, row)?);
+                    }
+                    keyed.push((row, kvs));
+                }
+                keyed.sort_by(|(_, a), (_, b)| cmp_lazy_sort_keys(keys, a, b));
+                indices = keyed.into_iter().map(|(row, _)| row).collect();
+            }
+            LazyOp::GroupBy { keys, aggs } => {
+                cur = eval_lazy_group_by(keys, aggs, &cur, &indices)?;
+                height = lazy_cols_height(&cur);
+                indices = (0..height).collect();
+                row_ops = false;
+                projection = None;
+            }
+            LazyOp::Join {
+                right_source,
+                right_ops,
+                on,
+            } => {
+                // Materialize the LEFT state (applying any pending
+                // projection — fold narrows the schema at the join the
+                // same way), evaluate the RIGHT sub-plan recursively,
+                // then inner-join.
+                let left = materialize_lazy_cols(&cur, &indices, &projection, true)?;
+                let right = eval_lazy_plan(right_source, right_ops)?;
+                cur = eval_lazy_join(&left, &right, on)?;
+                height = lazy_cols_height(&cur);
+                indices = (0..height).collect();
+                row_ops = false;
+                projection = None;
+            }
+        }
+    }
+    materialize_lazy_cols(&cur, &indices, &projection, row_ops)
+}
+
+/// The row count of a column list (0 when empty).
+fn lazy_cols_height(cols: &[(String, Value)]) -> usize {
+    cols.first().map_or(0, |(_, c)| match c {
+        Value::Column { valid, .. } => valid.read().unwrap().len(),
+        _ => 0,
+    })
+}
+
+/// Gather the surviving rows / projection into output columns. With no
+/// row ops the projected columns are handed back as VIEWS (the eager-
+/// `select` sharing semantics); otherwise fresh gathered cells.
+fn materialize_lazy_cols(
+    cur: &[(String, Value)],
+    indices: &[usize],
+    projection: &Option<Vec<String>>,
+    row_ops: bool,
+) -> Result<Vec<(String, Value)>, String> {
+    let names: Vec<String> = match projection {
+        Some(cols) => cols.clone(),
+        None => cur.iter().map(|(n, _)| n.clone()).collect(),
+    };
+    let mut out: Vec<(String, Value)> = Vec::with_capacity(names.len());
+    for name in names {
+        let Some((_, col)) = cur.iter().find(|(n, _)| n == &name) else {
+            return Err(format!("LazyFrame.collect: no column named '{name}'"));
+        };
+        let out_col = if row_ops {
+            if let Value::Column { data, valid } = col {
+                let d = data.read().unwrap();
+                let v = valid.read().unwrap();
+                let nd: Vec<Value> = indices.iter().map(|&i| d[i].clone()).collect();
+                let nv: Vec<bool> = indices.iter().map(|&i| v[i]).collect();
+                Value::Column {
+                    data: Arc::new(RwLock::new(nd)),
+                    valid: Arc::new(RwLock::new(nv)),
+                }
+            } else {
+                col.clone()
+            }
+        } else {
+            col.clone()
+        };
+        out.push((name, out_col));
+    }
+    Ok(out)
+}
+
+/// Inner join two materialized column sets on equal-named keys. Left
+/// row order, then right match order (nested loop — MVP scale,
+/// deterministic). NULL keys join nothing. Output: left columns, then
+/// right non-key columns (`_right` suffix on collisions).
+fn eval_lazy_join(
+    left: &[(String, Value)],
+    right: &[(String, Value)],
+    on: &[String],
+) -> Result<Vec<(String, Value)>, String> {
+    let lh = lazy_cols_height(left);
+    let rh = lazy_cols_height(right);
+    // Loud on incompatible key types across the two sides — a
+    // String-vs-number key pair would otherwise silently join nothing
+    // (the "loud, not empty" rule the filter path already follows). An
+    // i64/f64 mix is fine: keys compare numerically, like filter/sort.
+    let key_family = |cols: &[(String, Value)], h: usize, k: &str| -> Result<Option<u8>, String> {
+        use crate::interpreter::value::LazyExprIR;
+        for row in 0..h {
+            let (rank, sk) = eval_lazy_sort_key(&LazyExprIR::Col(k.to_string()), cols, row)?;
+            if rank == 2 {
+                continue; // NULL — keep scanning for a typed value
+            }
+            return Ok(Some(match sk {
+                LazySortKey::S(_) => 1,
+                LazySortKey::B(_) => 2,
+                _ => 0, // numeric family: I / F / NaN
+            }));
+        }
+        Ok(None)
+    };
+    for k in on {
+        if let (Some(lf), Some(rf)) = (key_family(left, lh, k)?, key_family(right, rh, k)?) {
+            if lf != rf {
+                return Err(format!(
+                    "LazyFrame.join: key '{k}' has incompatible types on the two sides"
+                ));
+            }
+        }
+    }
+    // Key tuple per row, `None` when any key slot is NULL.
+    let key_tuple =
+        |cols: &[(String, Value)], row: usize| -> Result<Option<Vec<(u8, LazySortKey)>>, String> {
+            let mut kt = Vec::with_capacity(on.len());
+            for k in on {
+                use crate::interpreter::value::LazyExprIR;
+                let (rank, sk) = eval_lazy_sort_key(&LazyExprIR::Col(k.clone()), cols, row)?;
+                if rank == 2 {
+                    return Ok(None); // NULL key joins nothing
+                }
+                kt.push((rank, sk));
+            }
+            Ok(Some(kt))
+        };
+    let mut lrows: Vec<usize> = Vec::new();
+    let mut rrows: Vec<usize> = Vec::new();
+    for lrow in 0..lh {
+        let Some(lk) = key_tuple(left, lrow)? else {
+            continue;
+        };
+        for rrow in 0..rh {
+            let Some(rk) = key_tuple(right, rrow)? else {
+                continue;
+            };
+            if sort_keys_equal(&lk, &rk) {
+                lrows.push(lrow);
+                rrows.push(rrow);
+            }
+        }
+    }
+    let gather = |col: &Value, rows: &[usize]| -> Value {
+        if let Value::Column { data, valid } = col {
+            let d = data.read().unwrap();
+            let v = valid.read().unwrap();
+            Value::Column {
+                data: Arc::new(RwLock::new(rows.iter().map(|&i| d[i].clone()).collect())),
+                valid: Arc::new(RwLock::new(rows.iter().map(|&i| v[i]).collect())),
+            }
+        } else {
+            col.clone()
+        }
+    };
+    let mut out: Vec<(String, Value)> = Vec::new();
+    for (n, c) in left {
+        out.push((n.clone(), gather(c, &lrows)));
+    }
+    let left_names: Vec<&String> = left.iter().map(|(n, _)| n).collect();
+    for (n, c) in right {
+        if on.contains(n) {
+            continue;
+        }
+        let name = if left_names.contains(&n) {
+            format!("{n}_right")
+        } else {
+            n.clone()
+        };
+        out.push((name, gather(c, &rrows)));
+    }
+    Ok(out)
+}
+
+/// The right sub-plan's LOGICAL rendering flattened to one line
+/// (outermost step first, " <- " separated) — the v1 JOIN rendering
+/// (a real two-child tree layout is the P2 explain expansion).
+fn lazy_logical_compact(
+    source: &Arc<RwLock<Vec<(String, Value)>>>,
+    ops: &Arc<Vec<crate::interpreter::value::LazyOp>>,
+) -> String {
+    use crate::interpreter::value::LazyOp;
+    let src = source.read().unwrap();
+    let src_names: Vec<&str> = src.iter().map(|(n, _)| n.as_str()).collect();
+    let mut lines: Vec<String> = vec![format!("SCAN [{}]", src_names.join(", "))];
+    drop(src);
+    for op in ops.iter() {
+        let step = match op {
+            LazyOp::Select(cols) => format!("SELECT [{}]", cols.join(", ")),
+            LazyOp::Limit(n) => format!("LIMIT {n}"),
+            LazyOp::Filter(ir) => format!("FILTER {ir}"),
+            LazyOp::Sort(keys) => format!(
+                "SORT [{}]",
+                keys.iter()
+                    .map(|k| k.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            LazyOp::GroupBy { keys, aggs } => format!(
+                "GROUP BY [{}] AGG [{}]",
+                keys.iter()
+                    .map(|k| k.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                aggs.iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            LazyOp::Join {
+                right_source,
+                right_ops,
+                on,
+            } => format!(
+                "JOIN on=[{}] right=({})",
+                on.join(", "),
+                lazy_logical_compact(right_source, right_ops)
+            ),
+        };
+        lines.push(step);
+    }
+    lines.reverse();
+    lines.join(" <- ")
+}
+
+/// The right sub-plan's OPTIMIZED rendering flattened to one line —
+/// compact twin of `render_optimized_plan` for the JOIN label. An
+/// invalid sub-plan renders its message (the parent fold surfaces the
+/// error before collect runs).
+fn lazy_optimized_compact(
+    source: &Arc<RwLock<Vec<(String, Value)>>>,
+    ops: &Arc<Vec<crate::interpreter::value::LazyOp>>,
+) -> String {
+    match fold_lazy_plan(source, ops) {
+        Ok(plan) => {
+            let rendered = render_optimized_plan(&plan);
+            rendered
+                .lines()
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join(" <- ")
+        }
+        Err(msg) => format!("INVALID: {msg}"),
+    }
+}
+
 /// The output-column name of a group KEY expression — v1: a bare
 /// `col(..)`, optionally `alias`ed.
 fn lazy_group_key_name(k: &crate::interpreter::value::LazyExprIR) -> Result<String, String> {
@@ -1461,6 +1701,9 @@ pub(super) struct OptimizedLazyPlan {
     /// The final output projection (selects collapse — the last wins),
     /// or `None` for every column.
     projection: Option<Vec<String>>,
+    /// The plan's final schema (what a downstream consumer — e.g. a
+    /// JOIN parent — sees). Tracked through selects / group-bys / joins.
+    final_schema: Vec<String>,
 }
 
 /// Validate + optimize a lazy plan: stepwise visible-column tracking
@@ -1482,6 +1725,9 @@ fn fold_lazy_plan(
     // After a GroupBy the schema is DERIVED — downstream column refs no
     // longer touch the scan, so they stop feeding the scan projection.
     let mut past_group_by = false;
+    // Pushdown does not yet cross a JOIN (the P2 optimizer-expansion
+    // entry): once one appears the scan reads every column.
+    let mut past_join = false;
     for op in ops.iter() {
         match op {
             LazyOp::Select(cols) => {
@@ -1578,12 +1824,62 @@ fn fold_lazy_plan(
                     aggs: aggs.clone(),
                 });
             }
+            LazyOp::Join {
+                right_source,
+                right_ops,
+                on,
+            } => {
+                let right_plan = fold_lazy_plan(right_source, right_ops)?;
+                for k in on {
+                    if !visible.contains(k) {
+                        return Err(format!(
+                            "LazyFrame.join: no column named '{k}' on the LEFT side at \
+                             this plan step"
+                        ));
+                    }
+                    if !right_plan.final_schema.contains(k) {
+                        return Err(format!(
+                            "LazyFrame.join: no column named '{k}' on the RIGHT side"
+                        ));
+                    }
+                }
+                // Output schema: left, then right minus keys (collisions
+                // take a `_right` suffix). A pending left projection is
+                // APPLIED at the join (collect materializes it), so fold
+                // narrows to it first — and pushes it as an explicit
+                // SELECT step so the rendered pipeline stays honest.
+                if let Some(p) = &projection {
+                    visible = p.clone();
+                    steps.push(LazyOp::Select(p.clone()));
+                }
+                let mut out_schema = visible.clone();
+                for rc in &right_plan.final_schema {
+                    if on.contains(rc) {
+                        continue;
+                    }
+                    if out_schema.contains(rc) {
+                        out_schema.push(format!("{rc}_right"));
+                    } else {
+                        out_schema.push(rc.clone());
+                    }
+                }
+                visible = out_schema;
+                projection = None;
+                past_join = true;
+                steps.push(LazyOp::Join {
+                    right_source: Arc::clone(right_source),
+                    right_ops: Arc::clone(right_ops),
+                    on: on.clone(),
+                });
+            }
         }
     }
     // Scan projection: union of predicate columns + the final projection,
     // in SOURCE order. `None` when nothing narrows it. Past a GroupBy the
     // projection names DERIVED columns, so only pre-groupby refs count.
-    let scan_cols = if past_group_by {
+    let scan_cols = if past_join {
+        None
+    } else if past_group_by {
         if needed.is_empty() {
             None
         } else {
@@ -1606,7 +1902,7 @@ fn fold_lazy_plan(
         let has_filters = steps.iter().any(|s| {
             matches!(
                 s,
-                LazyOp::Filter(_) | LazyOp::Sort(_) | LazyOp::GroupBy { .. }
+                LazyOp::Filter(_) | LazyOp::Sort(_) | LazyOp::GroupBy { .. } | LazyOp::Join { .. }
             )
         });
         if has_filters {
@@ -1624,10 +1920,15 @@ fn fold_lazy_plan(
             projection.clone()
         }
     };
+    let final_schema = match &projection {
+        Some(p) => p.clone(),
+        None => visible.clone(),
+    };
     Ok(OptimizedLazyPlan {
         scan_cols,
         steps,
         projection,
+        final_schema,
     })
 }
 
@@ -1640,7 +1941,7 @@ fn render_optimized_plan(plan: &OptimizedLazyPlan) -> String {
     let has_filters = plan.steps.iter().any(|s| {
         matches!(
             s,
-            LazyOp::Filter(_) | LazyOp::Sort(_) | LazyOp::GroupBy { .. }
+            LazyOp::Filter(_) | LazyOp::Sort(_) | LazyOp::GroupBy { .. } | LazyOp::Join { .. }
         )
     });
     let mut scan = match &plan.scan_cols {
@@ -1676,7 +1977,19 @@ fn render_optimized_plan(plan: &OptimizedLazyPlan) -> String {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            LazyOp::Select(_) => continue,
+            LazyOp::Join {
+                right_source,
+                right_ops,
+                on,
+            } => format!(
+                "JOIN on=[{}] right=({})",
+                on.join(", "),
+                lazy_optimized_compact(right_source, right_ops)
+            ),
+            // Only pushed by the fold at a JOIN boundary (a pending left
+            // projection the join consumes); ordinary selects live in
+            // `projection`, not in `steps`.
+            LazyOp::Select(cols) => format!("SELECT [{}]", cols.join(", ")),
         };
         lines.push(rendered);
     }

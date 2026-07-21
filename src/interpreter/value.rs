@@ -57,7 +57,7 @@ pub struct TestOutcome {
 /// `LazyDataFrame` Option A, slice 1). Applied in list order over the
 /// source scan; `collect()` / `explain()` fold the list into the
 /// optimized single-scan form (outermost projection + minimum limit).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum LazyOp {
     /// Project to the named columns, in the given order.
     Select(Vec<String>),
@@ -75,6 +75,15 @@ pub enum LazyOp {
     GroupBy {
         keys: Vec<Arc<LazyExprIR>>,
         aggs: Vec<Arc<LazyExprIR>>,
+    },
+    /// Inner join (slice 5) — the right side is a whole nested sub-plan
+    /// (the plan tree's second child; the left spine stays the linear op
+    /// list). `on` keys must exist on both sides; non-key right columns
+    /// that collide with left names take a `_right` suffix.
+    Join {
+        right_source: Arc<RwLock<Vec<(String, Value)>>>,
+        right_ops: Arc<Vec<LazyOp>>,
+        on: Vec<String>,
     },
 }
 
