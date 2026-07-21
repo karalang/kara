@@ -525,6 +525,29 @@ mod codegen_tests {
         }
     }
 
+    #[test]
+    fn dataframe_write_csv_rejected_by_codegen_with_run_hint() {
+        // Phase-11 CSV leg slice 1 is interpreter-first: codegen must REJECT
+        // `df.write_csv(path)` with an actionable `karac run` pointer rather
+        // than silently skipping the write (silent run-vs-build divergence,
+        // the worst failure mode). The codegen twin is the follow-on slice.
+        let err = ir_result(
+            "fn main() with writes(FileSystem) {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"a\", Column.from_vec([1i64]));\n\
+                 match df.write_csv(\"/tmp/kara_cg_write_csv.csv\") {\n\
+                     Ok(_) => println(\"ok\"),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        )
+        .expect_err("DataFrame.write_csv must be rejected by codegen in slice 1");
+        assert!(
+            err.contains("interpreter-only") && err.contains("karac run"),
+            "got: {err}"
+        );
+    }
+
     // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ──
     // A function may RETURN a capturing closure with POD captures (heap RC env,
     // see heap_env_returned_capturing_closure_runs); the caller may then CALL

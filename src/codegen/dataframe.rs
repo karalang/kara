@@ -581,6 +581,19 @@ impl<'ctx> super::Codegen<'ctx> {
             let src = self.dataframe_ptr_for_var(var)?;
             return Ok(Some(self.compile_dataframe_describe(src)?));
         }
+        if method == "write_csv" {
+            // Phase-11 CSV leg slice 1 is interpreter-first (the established
+            // DataFrame pattern — dataframe.kara § write_csv). Loud, actionable
+            // deferral rather than a silent skip; the codegen twin (per-kind
+            // cell stringify over the entry `kind` tags + the
+            // `compile_fs_write_vals` core) is the follow-on slice.
+            return Err(
+                "DataFrame.write_csv is interpreter-only in this slice — run it with \
+                 `karac run` (tracker: phase-11-stdlib-longtail.md § Arrow IPC and \
+                 Parquet, CSV leg)"
+                    .to_string(),
+            );
+        }
         if !matches!(
             method,
             "insert" | "column" | "has_column" | "width" | "height" | "column_names" | "select"

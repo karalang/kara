@@ -341,6 +341,78 @@ impl<'a> super::Interpreter<'a> {
                     columns: Arc::new(RwLock::new(out)),
                 })
             }
+            // Serialize to a CSV file (phase-11 CSV leg, slice 1). Header row
+            // = column names in schema order; one line per table row; cells
+            // format like `println` (`Display` on the cell `Value`); a NULL
+            // slot is an empty cell. RFC-4180-lite quoting: any cell or
+            // header containing a comma, double-quote, CR, or LF is wrapped
+            // in double quotes with embedded quotes doubled — numeric cells
+            // never need it, so output stays minimal. Returns
+            // `Result[Unit, IoError]`; write errors map through
+            // `io_error_from_std` like the `File.*` arms.
+            "write_csv" => {
+                let path = match self.eval_expr_inner(&args.first()?.value) {
+                    Value::String(s) => s,
+                    other => {
+                        return Some(self.record_runtime_error(
+                            format!(
+                                "DataFrame.write_csv path must be a String, got {}",
+                                other.variant_name()
+                            ),
+                            span,
+                        ));
+                    }
+                };
+                self.track_effect("writes(FileSystem)");
+                let cols = columns.read().unwrap();
+                let quote = |cell: &str| -> String {
+                    if cell.contains(',')
+                        || cell.contains('"')
+                        || cell.contains('\n')
+                        || cell.contains('\r')
+                    {
+                        format!("\"{}\"", cell.replace('"', "\"\""))
+                    } else {
+                        cell.to_string()
+                    }
+                };
+                let mut out = String::new();
+                let header: Vec<String> = cols.iter().map(|(n, _)| quote(n)).collect();
+                out.push_str(&header.join(","));
+                out.push('\n');
+                let height = cols.first().map_or(0, |(_, c)| match c {
+                    Value::Column { valid, .. } => valid.read().unwrap().len(),
+                    _ => 0,
+                });
+                for row in 0..height {
+                    let mut cells: Vec<String> = Vec::with_capacity(cols.len());
+                    for (_, col) in cols.iter() {
+                        let Value::Column { data, valid } = col else {
+                            cells.push(String::new());
+                            continue;
+                        };
+                        let is_valid = valid.read().unwrap().get(row).copied().unwrap_or(false);
+                        if !is_valid {
+                            cells.push(String::new());
+                            continue;
+                        }
+                        let cell = data
+                            .read()
+                            .unwrap()
+                            .get(row)
+                            .map(|v| v.to_string())
+                            .unwrap_or_default();
+                        cells.push(quote(&cell));
+                    }
+                    out.push_str(&cells.join(","));
+                    out.push('\n');
+                }
+                use super::helpers::{io_err_value, io_error_from_std, io_ok};
+                Some(match std::fs::write(&path, out) {
+                    Ok(()) => io_ok(Value::Unit),
+                    Err(e) => io_err_value(io_error_from_std(&e)),
+                })
+            }
             _ => None,
         }
     }

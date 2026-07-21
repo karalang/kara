@@ -121,4 +121,19 @@ impl DataFrame {
     fn describe(ref self) -> DataFrame {
         DataFrame { handle_id: 0 }
     }
+
+    // Serialize the table to a CSV file (phase-11 CSV leg, slice 1):
+    // a header row of the column names in schema order, then one row per
+    // table row, comma-separated. Cells format like `println` (i64 exact,
+    // f64 shortest-roundtrip, bool `true`/`false`); a NULL slot is an
+    // empty cell. RFC-4180-lite quoting: a String cell (or column name)
+    // containing a comma, double-quote, or newline is wrapped in double
+    // quotes with embedded quotes doubled — other cells are never quoted.
+    // Interpreter-first slice: `karac build` reports a loud deferral
+    // pointing at `karac run` until the codegen twin lands (tracker:
+    // phase-11-stdlib-longtail.md § Arrow IPC and Parquet, CSV leg).
+    #[compiler_builtin]
+    fn write_csv(ref self, path: String) -> Result[Unit, IoError] with writes(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
 }

@@ -21591,6 +21591,65 @@ fn test_dataframe_column_missing_traps() {
 }
 
 #[test]
+fn test_dataframe_write_csv_serializes_header_rows_quoting_and_nulls() {
+    // `df.write_csv(path)` (phase-11 CSV leg, slice 1): header row of names
+    // in schema order, one line per row, cells formatted like `println`
+    // (i64 exact, f64 shortest-roundtrip — `88.0` renders `88`), a NULL slot
+    // as an empty cell, and RFC-4180 quoting only where needed (comma /
+    // double-quote / newline; embedded quotes doubled). Read the file back
+    // through `fs.read_to_string` and print it so the oracle is the exact
+    // byte content.
+    let tmp = std::env::temp_dir().join("kara_interp_df_write_csv.csv");
+    let _ = std::fs::remove_file(&tmp);
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let src = format!(
+        "fn main() with writes(FileSystem) reads(FileSystem) {{\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"age\", Column.from_vec([30i64, 25i64, 41i64]));\n\
+             df.insert(\"score\", Column.from_vec([91.5, 78.25, 88.0]));\n\
+             df.insert(\"name\", Column.from_vec([\"ada\", \"bob, jr.\", \"eve \\\"the\\\" grey\"]));\n\
+             let nn: Vec[Option[i64]] = vec![Some(1i64), None, Some(3i64)];\n\
+             df.insert(\"nullable\", Column.from_iter_nullable(nn));\n\
+             match df.write_csv(\"{path}\") {{\n\
+                 Ok(_) => match fs.read_to_string(\"{path}\") {{\n\
+                     Ok(s) => print(s),\n\
+                     Err(_) => println(\"read-err\"),\n\
+                 }},\n\
+                 Err(_) => println(\"write-err\"),\n\
+             }}\n\
+         }}"
+    );
+    let out = run_no_errors(&src);
+    let _ = std::fs::remove_file(&tmp);
+    assert_eq!(
+        out,
+        "age,score,name,nullable\n\
+         30,91.5,ada,1\n\
+         25,78.25,\"bob, jr.\",\n\
+         41,88,\"eve \"\"the\"\" grey\",3\n",
+        "write_csv must serialize header + rows with println formatting, \
+         RFC-4180 quoting, and empty cells for nulls",
+    );
+}
+
+#[test]
+fn test_dataframe_write_csv_unwritable_path_is_err() {
+    // A write to an unwritable path surfaces as `Err(IoError...)`, not a
+    // trap — the same Result posture as `fs.write`.
+    let out = run_no_errors(
+        "fn main() with writes(FileSystem) {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             match df.write_csv(\"/nonexistent-dir-kara/x.csv\") {\n\
+                 Ok(_) => println(\"ok\"),\n\
+                 Err(_) => println(\"io-err\"),\n\
+             }\n\
+         }",
+    );
+    assert_eq!(out, "io-err\n");
+}
+
+#[test]
 fn test_dataframe_select_subset_and_reorder() {
     // select picks a column subset in the given order (a reorder here);
     // the result is a fresh frame whose columns view the source buffers.

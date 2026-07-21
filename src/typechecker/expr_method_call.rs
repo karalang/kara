@@ -3419,11 +3419,12 @@ impl<'a> super::TypeChecker<'a> {
                     | "height"
                     | "select"
                     | "describe"
+                    | "write_csv"
             )
         {
             let arity = |m: &str| match m {
                 "insert" => 2usize,
-                "column" | "has_column" | "select" => 1,
+                "column" | "has_column" | "select" | "write_csv" => 1,
                 _ => 0,
             };
             let want = arity(method);
@@ -3441,7 +3442,7 @@ impl<'a> super::TypeChecker<'a> {
             // arg type isn't bound from the receiver (the baked-generic
             // limitation) — accepted as-is.
             let arg_tys: Vec<Type> = args.iter().map(|a| self.infer_expr(&a.value)).collect();
-            if matches!(method, "column" | "has_column" | "insert") {
+            if matches!(method, "column" | "has_column" | "insert" | "write_csv") {
                 self.check_assignable(&Type::Str, &arg_tys[0], args[0].value.span.clone());
             } else if method == "select" {
                 self.check_assignable(
@@ -3467,6 +3468,20 @@ impl<'a> super::TypeChecker<'a> {
                 "select" | "describe" => Type::Named {
                     name: "DataFrame".to_string(),
                     args: vec![],
+                },
+                // CSV serialization (phase-11 CSV leg slice 1) — the same
+                // `Result[Unit, IoError]` + `writes(FileSystem)` shape as
+                // `fs.write`; the effect rides the stdlib stub's declared
+                // signature like every other `#[compiler_builtin]` I/O fn.
+                "write_csv" => Type::Named {
+                    name: "Result".to_string(),
+                    args: vec![
+                        Type::Unit,
+                        Type::Named {
+                            name: "IoError".to_string(),
+                            args: vec![],
+                        },
+                    ],
                 },
                 // insert
                 _ => Type::Unit,

@@ -9008,3 +9008,40 @@ fn test_fence_zero_effects_ok() {
 fn test_compiler_fence_zero_effects_ok() {
     effectcheck_ok("pub fn b() { compiler_fence(MemoryOrdering.SeqCst) }");
 }
+
+// ── DataFrame.write_csv → writes(FileSystem) ──────────────────────
+//
+// Phase-11 CSV leg slice 1: the CSV serializer writes to disk, so the
+// method carries `writes(FileSystem)` via the builtin hand-seed (the
+// same bridge as File.* / BufWriter.*). A public fn calling it must
+// declare the effect; declaring it satisfies verification. Like the
+// BufReader/BufWriter tests, these use `effectcheck_full_pipeline` so
+// the typechecker's `method_callee_types` resolves the instance call.
+
+#[test]
+fn test_dataframe_write_csv_undeclared_writes_filesystem_errors() {
+    let result = effectcheck_full_pipeline(
+        "pub fn save(df: ref DataFrame) { df.write_csv(\"/tmp/x.csv\"); }",
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("writes(FileSystem)")),
+        "expected MissingEffectDeclaration for writes(FileSystem); got: {:?}",
+        result.errors,
+    );
+}
+
+#[test]
+fn test_dataframe_write_csv_declared_writes_filesystem_ok() {
+    let result = effectcheck_full_pipeline(
+        "pub fn save(df: ref DataFrame) with writes(FileSystem) { df.write_csv(\"/tmp/x.csv\"); }",
+    );
+    assert!(
+        result.errors.is_empty(),
+        "declared writes(FileSystem) must verify cleanly; got: {:?}",
+        result.errors,
+    );
+}

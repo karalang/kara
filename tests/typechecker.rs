@@ -30508,6 +30508,43 @@ fn test_dataframe_describe_types_and_arity() {
     );
 }
 
+#[test]
+fn test_dataframe_write_csv_types_and_args_checked() {
+    // write_csv(path: String) -> Result[Unit, IoError] (phase-11 CSV leg
+    // slice 1): the Ok/Err match arms type-check against Unit / IoError.
+    typecheck_ok(
+        "fn main() with writes(FileSystem) {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             match df.write_csv(\"/tmp/x.csv\") {\n\
+                 Ok(_) => { println(\"ok\"); }\n\
+                 Err(e) => { let _err: IoError = e; }\n\
+             }\n\
+         }",
+    );
+    // Exactly one argument.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let df: DataFrame = DataFrame.new();\n\
+             let _ = df.write_csv();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("write_csv expects 1")),
+        "{errors:?}",
+    );
+    // The path must be a String.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let df: DataFrame = DataFrame.new();\n\
+             let _ = df.write_csv(42);\n\
+         }",
+    );
+    assert!(!errors.is_empty(), "non-String path must be rejected");
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't
