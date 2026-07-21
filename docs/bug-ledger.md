@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 158 | 1 |
+| miscompile | 158 | 0 |
 | leak | 86 | 0 |
 | codegen-gap | 69 | 0 |
 | double-free | 68 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 438 | 2 |
+| codegen | 438 | 1 |
 | typecheck | 83 | 0 |
 | interp | 66 | 0 |
 | ownership | 25 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **607 surfaced · 2 open · 601 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **607 surfaced · 1 open · 602 fixed** (2026-05-20 → 2026-07-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-20-12 | 2026-07-20 | codegen | medium | An f16 inside a COMPOUND enum payload (`Option[(f16, f16)]`) builds and runs but produces a WRONG VALUE under `karac build`: `match o { Some(p) => println(p.0 + p.1) }` prints 32512 (0x7F00 — a mis-sized bit pattern read back as f16) while `karac run --interp` prints the correct 4. SILENT wrong answer (worst failure class). PRE-EXISTING: bit-identical before and after the landed B-2026-07-20-11 f32 width-normalize fix (5f5897b), so the f16 compound payload routes AROUND the four fixed sites (it never failed verification, unlike f32) — the mis-sizing lives elsewhere in the f16 payload pack/unpack path. A bare `Option[f16]` is untested here; f32 and f64 compound payloads are correct (B-2026-07-20-11 tests). | src/codegen (f16/bf16 compound enum-payload pack/unpack) |
 | B-2026-07-20-13 | 2026-07-20 | codegen | medium | wasm-threads has NO path for a request-driven EXPORTED fn to use the worker pool: `instantiate()` exports run on the caller's (browser main) thread by design, where every blocking primitive (`TaskHandle.join`, `TaskGroup`, `recv`) bottoms out in `memory.atomic.wait` and traps — so an app shaped as 'JS calls `process(...)` on demand' (Prism, and any tool-style app: SSR hydrate with heavy compute, an export-driven data cruncher) cannot fan work across the pool at all. The pool is reachable only by restructuring the whole program into a `run()`/`_start` blocking-loop-in-primary-worker shape driven by the baked host-async channels (frames/pointer/wheel/keydown), which have no generic 'request with arguments' producer. | src/wasm_glue.rs + docs/implementation_checklist/phase-10-targets.md |
 
-### Fixed (601)
+### Fixed (602)
 
-<details><summary>601 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>602 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -739,6 +738,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **607 surfaced 
 | B-2026-07-20-9 | codegen | high | `Vec[struct-with-heap-field].get(i)/.first()/.last().unwrap()` field read is FLAKY under codegen (JIT + AOT): `let a = v.get(0).unwrap(); print(a.nam… | b7b72eb |
 | B-2026-07-20-10 | codegen | high | Every WASM program that frees a heap buffer traps at runtime (`unreachable` via a `signature_mismatch:karac_free_buf` stub) | a25a2a1 |
 | B-2026-07-20-11 | codegen | medium | `karac build` fails LLVM module verification with `Invalid bitcast: bitcast float %elem to i64` for a fused f32 map-reduce whose base is an `iter_axi… | 5f5897b |
+| B-2026-07-20-12 | codegen | medium | An f16 inside a COMPOUND enum payload (`Option[(f16, f16)]`) builds and runs but produces a WRONG VALUE under `karac build`: `match o { Some(p) => pr… | 35d340f |
 | B-2026-07-20-14 | codegen | medium | Auto-par return-slot rebind LOSES an unannotated struct binding's type identity: `let tx = make_taps(..)` (struct-of-Vecs, no annotation) fanned out… | 29a4a97 |
 
 </details>
