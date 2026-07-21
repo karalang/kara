@@ -48,6 +48,7 @@ mod arena;
 #[cfg(feature = "gpu")]
 mod gpu;
 mod interner;
+mod lazy;
 mod map;
 mod mutex;
 mod once;
@@ -146,6 +147,30 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     keep!(
         karac_critical_section_acquire,
         karac_critical_section_release,
+    );
+    // LazyFrame codegen twin (`runtime/src/lazy.rs`, phase-11
+    // LazyDataFrame slice 8). `karac run` currently routes LazyFrame
+    // programs to the interpreter, but the JIT lane will lower these the
+    // moment that routing narrows — keep-list them now so the swap can't
+    // hit the B-2026-07-12-22 stale-symbol class.
+    keep!(
+        lazy::karac_lazy_expr_col,
+        lazy::karac_lazy_expr_lit_int,
+        lazy::karac_lazy_expr_lit_float,
+        lazy::karac_lazy_expr_lit_str,
+        lazy::karac_lazy_expr_lit_bool,
+        lazy::karac_lazy_expr_cmp,
+        lazy::karac_lazy_expr_bool,
+        lazy::karac_lazy_expr_not,
+        lazy::karac_lazy_expr_arith,
+        lazy::karac_lazy_expr_release,
+        lazy::karac_lazy_new,
+        lazy::karac_lazy_select,
+        lazy::karac_lazy_limit,
+        lazy::karac_lazy_filter,
+        lazy::karac_lazy_explain,
+        lazy::karac_lazy_collect,
+        lazy::karac_lazy_release,
     );
     // CPU feature detection (`runtime/src/cpu.rs`) — the `cpu.supports(name)`
     // intrinsic + `#[multiversion]` dispatch primitive. Codegen emits calls to
