@@ -152,6 +152,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // elements' caps in the clone slot below.
         let (scrut, refchain_tuple_clone) =
             self.clone_escaping_borrowed_ref_chain_tuple(scrutinee, scrut, ref_chain_escapes);
+        // B-2026-07-21-14: the RESULT-leaf sibling — `match <refparam>.res {
+        // Ok(s) => <consume s> … }`. A consuming Ok/Err arm zeroes the clone
+        // slot's payload area below; a no-bind arm leaves the cleanup armed.
+        let (scrut, refchain_result_clone) =
+            self.clone_escaping_borrowed_ref_chain_result(scrutinee, scrut, ref_chain_escapes);
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
         // that leaves a heap payload field unbound leaks it. Materialize +
@@ -562,6 +567,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         &elem_tes,
                         &arm.pattern,
                     );
+                }
+                // B-2026-07-21-14: ref-chain Result clone — a consuming
+                // Ok/Err arm zeroes the clone's payload area so its
+                // FreeInlineResultPayload skips the buffer the binding now
+                // owns.
+                if let Some(slot) = refchain_result_clone {
+                    self.suppress_inline_result_payload_cleanup_at(slot, &arm.pattern);
                 }
                 // Shared-enum analog: a `match e { S(s) => s }` over a SHARED
                 // enum box (`scrut` = the RC box pointer) that MOVES a Vec/String
@@ -1559,6 +1571,142 @@ impl<'ctx> super::Codegen<'ctx> {
         (
             self.builder
                 .build_load(ll, slot, "refchain.opt.cloned")
+                .unwrap(),
+            Some(slot),
+        )
+    }
+
+    /// B-2026-07-21-14 — the RESULT-leaf sibling of
+    /// [`Self::clone_escaping_borrowed_ref_chain_option`]: `match
+    /// <refparam>.field { Ok(s) => <consume s> … }` where the leaf field is a
+    /// `Result[T, E]` with at least one DIRECT inline-heap `String`/`Vec`
+    /// half. The consuming arm's binding aliased the caller's buffer (the
+    /// source suppressions bail on the borrowed root), so the binding's
+    /// scope-exit free and the caller's struct drop both freed it. Deep-clone
+    /// the live half in place (`deep_copy_result_inline_heap_halves_in_place`
+    /// — the `FreeInlineResultPayload` overlay words), register the clone
+    /// slot's cleanup via `track_inline_result_payload_var`, and let each
+    /// CONSUMING `Ok`/`Err` arm zero the clone's payload area
+    /// (`suppress_inline_result_payload_cleanup_at`) so the cleanup skips the
+    /// buffer the binding now owns; a no-bind arm leaves it armed and the
+    /// clone's payload frees at scope exit. Caller's value untouched —
+    /// interpreter copy semantics.
+    ///
+    /// Gates mirror the Option sibling: pure FieldAccess chain rooted at a
+    /// `ref`/`mut ref` param, an escaping binding, and each half either a
+    /// DIRECT inline-heap `String`/`Vec` (with a non-shared element) or a
+    /// heap-free scalar — shared halves, struct/wrapper halves, and nested
+    /// seeded-enum halves keep the status quo (other cleanup families).
+    pub(super) fn clone_escaping_borrowed_ref_chain_result(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        escapes: bool,
+    ) -> (BasicValueEnum<'ctx>, Option<PointerValue<'ctx>>) {
+        let ExprKind::FieldAccess { object, field } = &scrutinee.kind else {
+            return (val, None);
+        };
+        let mut cur = object.as_ref();
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n.as_str(),
+                ExprKind::SelfValue => break "self",
+                _ => return (val, None),
+            }
+        };
+        if !self.signature_ref_params.contains(root) {
+            return (val, None);
+        }
+        if !escapes {
+            return (val, None);
+        }
+        let Some(obj_ty) = self.place_chain_type_name(object) else {
+            return (val, None);
+        };
+        let Some(idx) = self
+            .struct_field_names
+            .get(obj_ty.as_str())
+            .and_then(|ns| ns.iter().position(|n| n == field))
+        else {
+            return (val, None);
+        };
+        let Some(field_te) = self
+            .struct_field_type_exprs
+            .get(obj_ty.as_str())
+            .and_then(|tes| tes.get(idx))
+            .cloned()
+        else {
+            return (val, None);
+        };
+        let TypeKind::Path(p) = &field_te.kind else {
+            return (val, None);
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
+            return (val, None);
+        }
+        let Some(args) = p.generic_args.as_ref() else {
+            return (val, None);
+        };
+        let mut half_tes = Vec::with_capacity(2);
+        for a in args.iter().take(2) {
+            match a {
+                crate::ast::GenericArg::Type(t) => half_tes.push(t),
+                _ => return (val, None),
+            }
+        }
+        if half_tes.len() != 2 {
+            return (val, None);
+        }
+        // Per-half shape gate: DIRECT String/Vec (deep-copied by the clone,
+        // freed by the overlay cleanup) or heap-free scalar (nothing to
+        // manage). Anything else — shared, struct wrapper, user enum, nested
+        // Option/Map/tuple-with-heap — bails to the status quo.
+        let mut any_heap_half = false;
+        for half in &half_tes {
+            let is_direct_vecstr = self.is_string_type_expr(half)
+                || (matches!(&half.kind, TypeKind::Path(hp)
+                        if matches!(hp.segments.last().map(|s| s.as_str()), Some("Vec") | Some("VecDeque")))
+                    && self.extract_vec_elem_type(half).is_some());
+            if is_direct_vecstr {
+                // A shared element would need per-element rc-incs the
+                // defensive copy doesn't emit — keep that shape status quo.
+                if crate::codegen::helpers::vec_inner_type_expr(half).is_some_and(|inner| {
+                    matches!(&inner.kind, TypeKind::Path(ip)
+                        if ip.segments.last().is_some_and(|n| self.shared_types.contains_key(n.as_str())))
+                }) {
+                    return (val, None);
+                }
+                any_heap_half = true;
+            } else if self.te_owns_heap_below_buffer(half) {
+                return (val, None);
+            }
+        }
+        if !any_heap_half {
+            return (val, None);
+        }
+        // The cleanup registration below keys off the same extraction — make
+        // sure it will actually arm (defensive; direct String/Vec always has
+        // an overlay elem).
+        if self.result_inline_payload_elems(&field_te).is_none() {
+            return (val, None);
+        }
+        let fn_val = self.current_fn.unwrap();
+        let ll = val.get_type();
+        let slot = self.create_entry_alloca(fn_val, "refchain.res.clone", ll);
+        // Register the cleanup BEFORE the deep copy emits IR: the tracker's
+        // nested-block defensive zero-init targets the ENTRY block, and once
+        // the copy has split blocks the current-block != entry test would
+        // wrongly fire it — landing the zero between the value store below
+        // and the copy's tag read, wiping the clone at runtime.
+        self.track_inline_result_payload_var("__refchain_res_tmp", slot, &field_te);
+        self.builder.build_store(slot, val).unwrap();
+        self.deep_copy_result_inline_heap_halves_in_place(slot, &field_te);
+        (
+            self.builder
+                .build_load(ll, slot, "refchain.res.cloned")
                 .unwrap(),
             Some(slot),
         )

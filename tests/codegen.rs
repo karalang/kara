@@ -56675,6 +56675,88 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ref_param_result_field_consume() {
+        // B-2026-07-21-14: the RESULT-leaf sibling of the ref-chain family —
+        // `match <refparam>.res { Ok(s) => <consume s> … }` over a
+        // `Result[String, i64]` / `Result[Vec[i64], i64]` field. The Option
+        // clone leg keys on the `Option` head, so a Result leaf's payload
+        // binding aliased the caller's buffer and both freed it (double-free
+        // abort on all compiled backends; interp correct). Now
+        // `clone_escaping_borrowed_ref_chain_result` deep-clones the live
+        // half in place (`deep_copy_result_inline_heap_halves_in_place`),
+        // registers the clone's FreeInlineResultPayload, and a CONSUMING
+        // Ok/Err arm zeroes the clone's payload area so the binding owns the
+        // buffer; a no-bind arm leaves the cleanup armed. Covers match /
+        // if-let / let-else routes, a String and a Vec Ok half, a scalar Err
+        // half (both live tags), a non-consuming `Ok(_)` arm, and caller
+        // reuse. The drain epilogue moves each holder's field out at the end
+        // because a struct's scope-exit drop does not free a `Result` field
+        // payload (the deliberate caller-retains exclusion in
+        // `field_copy_supported` — tracked on the ledger as its own bug).
+        let output = run_program(
+            "struct Holder { res: Result[String, i64], vres: Result[Vec[i64], i64], n: i64 }\n\
+             fn render(h: ref Holder) -> String {\n\
+                 match h.res {\n\
+                     Ok(s) => { return \"ok:\".to_string() + s; }\n\
+                     Err(e) => { return \"err:\".to_string() + e.to_string(); }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn code(h: ref Holder) -> i64 {\n\
+                 match h.res {\n\
+                     Ok(_) => { return 1; }\n\
+                     Err(e) => { return e; }\n\
+                 }\n\
+                 return -1;\n\
+             }\n\
+             fn total(h: ref Holder) -> i64 {\n\
+                 match h.vres {\n\
+                     Ok(v) => { return v.len() + v[0]; }\n\
+                     Err(e) => { return e; }\n\
+                 }\n\
+                 return -1;\n\
+             }\n\
+             fn ifl(h: ref Holder) -> String {\n\
+                 if let Ok(s) = h.res {\n\
+                     return \"if:\".to_string() + s;\n\
+                 }\n\
+                 return \"no\".to_string();\n\
+             }\n\
+             fn lel(h: ref Holder) -> String {\n\
+                 let Ok(s) = h.res else {\n\
+                     return \"no\".to_string();\n\
+                 }\n\
+                 return \"le:\".to_string() + s;\n\
+             }\n\
+             fn main() {\n\
+                 let a = Holder { res: Ok(\"rr\".to_string()), vres: Ok([10, 20]), n: 1 };\n\
+                 println(render(a));\n\
+                 println(render(a));\n\
+                 println(code(a));\n\
+                 println(total(a));\n\
+                 println(total(a));\n\
+                 println(ifl(a));\n\
+                 println(lel(a));\n\
+                 let b = Holder { res: Err(7), vres: Err(9), n: 2 };\n\
+                 println(render(b));\n\
+                 println(code(b));\n\
+                 println(total(b));\n\
+                 println(ifl(b));\n\
+                 println(lel(b));\n\
+                 let dra = a.res;\n\
+                 if let Ok(s) = dra { println(\"d:\".to_string() + s); }\n\
+                 let drv = a.vres;\n\
+                 if let Ok(v) = drv { println(v[1]); }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(
+            output,
+            "ok:rr\nok:rr\n1\n12\n12\nif:rr\nle:rr\nerr:7\n7\n9\nno\nno\nd:rr\n20\n"
+        );
+    }
+
+    #[test]
     fn test_e2e_ref_param_field_let_move_all_leaves() {
         // B-2026-07-21-11: `let p = <refparam>.field;` — a whole-field move
         // through a `ref` param bit-copy-aliased the caller's field while the

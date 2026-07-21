@@ -1435,6 +1435,141 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(merge_bb);
     }
 
+    /// B-2026-07-21-14 — the `Result` sibling of
+    /// [`Self::deep_copy_option_inline_payload_in_place`]: deep-copy a
+    /// `Result[T, E]` slot's LIVE inline-heap half in place. The `Ok` and
+    /// `Err` payloads OVERLAY the same words (`{ptr,len,cap}` at fields
+    /// 1..3, matching `FreeInlineResultPayload`'s overlay free), so this is
+    /// two tag-guarded copies of the same word dance — each emitted only
+    /// when that half's type arg is a DIRECT inline-heap `String`/`Vec`
+    /// (`VecDeque` shares the `Vec` overlay). A scalar half copies nothing;
+    /// the caller gates out every other half shape (shared, struct wrapper,
+    /// nested seeded enum), keeping copy-depth == the registered cleanup's
+    /// free-depth.
+    pub(super) fn deep_copy_result_inline_heap_halves_in_place(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        result_te: &TypeExpr,
+    ) {
+        let TypeKind::Path(p) = &result_te.kind else {
+            return;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
+            return;
+        }
+        let Some(args) = p.generic_args.as_ref() else {
+            return;
+        };
+        let ok_te = match args.first() {
+            Some(crate::ast::GenericArg::Type(t)) => t.clone(),
+            _ => return,
+        };
+        let err_te = match args.get(1) {
+            Some(crate::ast::GenericArg::Type(t)) => t.clone(),
+            _ => return,
+        };
+        let Some(layout) = self.enum_layouts.get("Result").cloned() else {
+            return;
+        };
+        let result_ty = layout.llvm_type;
+        let ok_tag = layout.tags.get("Ok").copied().unwrap_or(0);
+        let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+        let fn_val = self.current_fn.unwrap();
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(result_ty, slot, 0, "p14r.tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "p14r.tag")
+            .unwrap()
+            .into_int_value();
+        for (half_tag, half_te, label) in [(ok_tag, ok_te, "ok"), (err_tag, err_te, "err")] {
+            // Element type + element-deep TypeExpr, exactly as the Option
+            // sibling resolves them; a non-String/Vec half emits no copy arm.
+            let (elem_ty, deep_elem_te): (BasicTypeEnum<'ctx>, Option<TypeExpr>) =
+                if self.is_string_type_expr(&half_te) {
+                    (self.context.i8_type().into(), None)
+                } else if let Some(et) = self.extract_vec_elem_type(&half_te) {
+                    let inner = crate::codegen::helpers::vec_inner_type_expr(&half_te)
+                        .filter(Self::elem_te_needs_direct_recursive_drain);
+                    (et, inner)
+                } else {
+                    continue;
+                };
+            let copy_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("p14r.{label}"));
+            let next_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("p14r.{label}.next"));
+            let is_half = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    tag,
+                    i64_t.const_int(half_tag, false),
+                    &format!("p14r.is_{label}"),
+                )
+                .unwrap();
+            self.builder
+                .build_conditional_branch(is_half, copy_bb, next_bb)
+                .unwrap();
+            self.builder.position_at_end(copy_bb);
+            let data_w = self.load_enum_word(result_ty, slot, 1, "p14r.data");
+            let len_w = self.load_enum_word(result_ty, slot, 2, "p14r.len");
+            let cap_w = self.load_enum_word(result_ty, slot, 3, "p14r.cap");
+            let data_p = self
+                .builder
+                .build_int_to_ptr(data_w, ptr_ty, "p14r.data.p")
+                .unwrap();
+            let mut sv = vec_ty.get_undef();
+            sv = self
+                .builder
+                .build_insert_value(sv, data_p, 0, "p14r.sv.d")
+                .unwrap()
+                .into_struct_value();
+            sv = self
+                .builder
+                .build_insert_value(sv, len_w, 1, "p14r.sv.l")
+                .unwrap()
+                .into_struct_value();
+            sv = self
+                .builder
+                .build_insert_value(sv, cap_w, 2, "p14r.sv.c")
+                .unwrap()
+                .into_struct_value();
+            let copied = self
+                .emit_vecstr_defensive_copy(sv.into(), elem_ty, deep_elem_te.as_ref())
+                .into_struct_value();
+            let cd = self
+                .builder
+                .build_extract_value(copied, 0, "p14r.cd")
+                .unwrap()
+                .into_pointer_value();
+            let cl = self
+                .builder
+                .build_extract_value(copied, 1, "p14r.cl")
+                .unwrap();
+            let cc = self
+                .builder
+                .build_extract_value(copied, 2, "p14r.cc")
+                .unwrap();
+            let cd_w = self
+                .builder
+                .build_ptr_to_int(cd, i64_t, "p14r.cd.w")
+                .unwrap();
+            self.store_enum_word(result_ty, slot, 1, cd_w.into());
+            self.store_enum_word(result_ty, slot, 2, cl);
+            self.store_enum_word(result_ty, slot, 3, cc);
+            self.builder.build_unconditional_branch(next_bb).unwrap();
+            self.builder.position_at_end(next_bb);
+        }
+    }
+
     /// B-2026-07-04-7 — deep-copy an `Option[<non-shared struct/enum>]` FIELD's
     /// `Some` payload in place, so a callee-owned by-value aggregate param owns
     /// heap independent of the caller's retained original. Unlike the

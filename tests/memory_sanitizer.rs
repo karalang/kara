@@ -10405,6 +10405,86 @@ fn main() {
     }
 
     #[test]
+    fn asan_ref_param_result_field_consume_no_leak_no_double_free() {
+        // B-2026-07-21-14 memory leg: the ref-chain Result clone. Double-free
+        // half: a consumed Ok/Err payload freed exactly once by its binding,
+        // never again against the caller's retained field. Leak half: a
+        // NON-consuming arm (`Ok(_)` / the scalar-Err paths) leaves the
+        // clone's FreeInlineResultPayload armed — a lost registration would
+        // leak one cloned payload per call under LSan. Covers match /
+        // if-let / let-else, a `Result[String, String]` with BOTH halves
+        // heap (both live tags), and the drain epilogues each iteration
+        // (struct drops do not free Result field payloads — the deliberate
+        // caller-retains exclusion, tracked as its own ledger bug). Loop so
+        // any per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+struct Holder { res: Result[String, i64], n: i64 }
+struct Pair { r: Result[String, String] }
+fn render(h: ref Holder) -> i64 {
+    match h.res {
+        Ok(s) => { return ("o:".to_string() + s).len(); }
+        Err(e) => { return e; }
+    }
+    return -1;
+}
+fn tag(h: ref Holder) -> i64 {
+    match h.res {
+        Ok(_) => { return 1; }
+        Err(e) => { return e; }
+    }
+    return -1;
+}
+fn tell(p: ref Pair) -> i64 {
+    match p.r {
+        Ok(s) => { return s.len(); }
+        Err(m) => { return ("e:".to_string() + m).len(); }
+    }
+    return -1;
+}
+fn ifl(h: ref Holder) -> i64 {
+    if let Ok(s) = h.res {
+        return (s + "?").len();
+    }
+    return 0;
+}
+fn lel(h: ref Holder) -> i64 {
+    let Ok(s) = h.res else {
+        return 0;
+    }
+    return (s + "!").len();
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = Holder { res: Ok("payload".to_string()), n: 1 };
+        acc = acc + render(a) + render(a) + tag(a) + ifl(a) + lel(a);
+        let b = Holder { res: Err(7), n: 2 };
+        acc = acc + render(b) + tag(b) + ifl(b) + lel(b);
+        let g = Pair { r: Ok("good".to_string()) };
+        let w = Pair { r: Err("bad".to_string()) };
+        acc = acc + tell(g) + tell(w) + tell(g);
+        let dra = a.res;
+        if let Ok(s) = dra { acc = acc + s.len(); }
+        let drg = g.r;
+        if let Ok(s) = drg { acc = acc + s.len(); }
+        let drw = w.r;
+        match drw {
+            Ok(s) => { acc = acc + s.len(); }
+            Err(m) => { acc = acc + m.len(); }
+        }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["3040"],
+            "ref_param_result_field_consume",
+        );
+    }
+
+    #[test]
     fn asan_ref_param_struct_field_struct_pattern_no_leak_no_double_free() {
         // B-2026-07-21-7 memory leg: an ESCAPING struct-pattern match over
         // `<refparam>.field` now deep-clones the scrutinee and rides a

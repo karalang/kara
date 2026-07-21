@@ -68,6 +68,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-07-21-10: tuple-leaf sibling — see the match site.
         let (val, refchain_tuple_clone) =
             self.clone_escaping_borrowed_ref_chain_tuple(value, val, ref_chain_escapes);
+        // B-2026-07-21-14: Result-leaf sibling (`if let Ok(s) =
+        // <refparam>.res { <consume s> }`) — consuming then-arm zeroes the
+        // clone's payload area below; the miss edge leaves its cleanup armed.
+        let (val, refchain_result_clone) =
+            self.clone_escaping_borrowed_ref_chain_result(value, val, ref_chain_escapes);
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee with a heap-bearing payload has no source `EnumDrop`, so an
         // arm that leaves a heap field unbound leaks it (and the miss edge
@@ -171,6 +176,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some((slot, agg_ty, ref elem_tes)) = refchain_tuple_clone {
             let elem_tes = elem_tes.clone();
             self.zero_refchain_tuple_clone_on_consume(slot, agg_ty, &elem_tes, pattern);
+        }
+        // B-2026-07-21-14: ref-chain Result clone — a consuming Ok/Err
+        // pattern zeroes the clone's payload area (then-arm only; the miss
+        // edge keeps the cleanup armed so the clone's payload frees at
+        // scope exit).
+        if let Some(slot) = refchain_result_clone {
+            self.suppress_inline_result_payload_cleanup_at(slot, pattern);
         }
         self.tail_ret_inner = tail;
         let mut then_val = self.compile_block(then_block)?;
@@ -465,6 +477,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-07-21-10: tuple-leaf sibling — see the match site.
         let (val, refchain_tuple_clone) =
             self.clone_escaping_borrowed_ref_chain_tuple(value, val, ref_chain_escapes);
+        // B-2026-07-21-14: Result-leaf sibling — see the if-let site.
+        let (val, refchain_result_clone) =
+            self.clone_escaping_borrowed_ref_chain_result(value, val, ref_chain_escapes);
         // B-track (pattern-arm unbound heap-field drop): same fresh-temp enum
         // scrutinee fix as `compile_if_let`. The `EnumDrop` registered here
         // drains at the enclosing scope's exit on the match edge (after the
@@ -554,6 +569,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some((slot, agg_ty, ref elem_tes)) = refchain_tuple_clone {
             let elem_tes = elem_tes.clone();
             self.zero_refchain_tuple_clone_on_consume(slot, agg_ty, &elem_tes, pattern);
+        }
+        // B-2026-07-21-14: ref-chain Result clone — consuming Ok/Err pattern
+        // zeroes the clone's payload area on the match edge; the divergent
+        // else edge frees the clone's payload in its cleanup walk.
+        if let Some(slot) = refchain_result_clone {
+            self.suppress_inline_result_payload_cleanup_at(slot, pattern);
         }
         Ok(())
     }
