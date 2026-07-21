@@ -3501,6 +3501,44 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                        // (b2) Untyped let whose RHS is `m.remove(k)` on a
+                        //     `Map[K, shared V]` binding (B-2026-07-19-16's
+                        //     bound-form sibling): the builtin has no
+                        //     `fn_return_option_inner_shared` entry (it is
+                        //     not a declared fn), so case (b) misses and the
+                        //     binding was never registered — no scope-exit
+                        //     `RcDecOption`, leaking the removed value's box
+                        //     whenever the match arm only READS the payload.
+                        //     The value type is authoritative in the map
+                        //     receiver's `var_elem_type_exprs` record;
+                        //     `Map.remove` hands the caller the bucket's ref
+                        //     (the runtime tombstones the slot without a
+                        //     dec), so the binding owns exactly +1 and the
+                        //     queued dec balances it — identical to the
+                        //     annotated `let r: Option[V] = m.remove(k)`.
+                        if shared_option_info.is_none() {
+                            if let ExprKind::MethodCall { object, method, .. } = &value.kind {
+                                if method == "remove" {
+                                    if let ExprKind::Identifier(m) = &object.kind {
+                                        if self.map_val_types.contains_key(m.as_str()) {
+                                            if let Some(info) = self
+                                                .var_elem_type_exprs
+                                                .get(m.as_str())
+                                                .and_then(|vte| match &vte.kind {
+                                                    TypeKind::Path(p) => p.segments.last(),
+                                                    _ => None,
+                                                })
+                                                .and_then(|n| {
+                                                    self.shared_types.get(n.as_str()).cloned()
+                                                })
+                                            {
+                                                shared_option_info = Some((var_name.clone(), info));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         // (c) Untyped let with a FieldAccess RHS where
                         //     the object is a call-like (or
                         //     Identifier-bound) shared struct and the
@@ -5491,6 +5529,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         && !handled_result
                         && not_borrow
                         && self.try_track_discarded_inline_option_map(tail, val);
+                    // B-2026-07-19-16: a discarded `Option[shared T]` temp
+                    // (`m.remove(k);` on a `Map[K, shared V]` — the moved-out
+                    // value's ref lives in the discarded `Some`). Release the
+                    // Some payload's ref at the `;` — the trackers above and
+                    // below all decline a shared payload, and the generic
+                    // chokepoint has no Option arm, so this leaked one RC box
+                    // per discarded remove.
+                    let handled_shared_option = !handled_option
+                        && !handled_result
+                        && !handled_option_map
+                        && not_borrow
+                        && self.try_track_discarded_shared_option(tail, val);
                     // Slice 3r: a discarded BOXED-payload Option temp
                     // (`m.insert(k, v2);` displacing a struct value,
                     // `m.remove(k);` moving one out) owns both the box and
@@ -5499,6 +5549,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let handled_boxed_option = !handled_option
                         && !handled_result
                         && !handled_option_map
+                        && !handled_shared_option
                         && not_borrow
                         && self.try_track_discarded_boxed_option(tail, val);
                     // B-2026-07-01-7 (discard position): `make();` where
@@ -5513,6 +5564,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if !handled_option
                         && !handled_result
                         && !handled_option_map
+                        && !handled_shared_option
                         && !handled_boxed_option
                     {
                         self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));

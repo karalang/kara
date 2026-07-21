@@ -10003,6 +10003,48 @@ fn main() {
     }
 
     #[test]
+    fn asan_discarded_map_remove_shared_value_no_leak() {
+        // B-2026-07-19-16: a DISCARDED `m.remove(k);` on a `Map[K, shared V]`
+        // leaked the removed value's RC box — the runtime tombstones the slot
+        // and hands the value's ref back in `Some(old)`, and no discard
+        // tracker released it. Now `try_track_discarded_shared_option` queues
+        // the tag-guarded `RcDecOption` at the `;`. Also covers the guards
+        // around it: a DISPLACING `m.insert(k, v2);` must NOT get a second
+        // dec (the insert lowering releases the old value inline — an extra
+        // dec would double-free), an absent-key remove is a `None` no-op, and
+        // an UNANNOTATED `let r = m.remove(k)` registers its scope-exit
+        // release via the new map-receiver leg (case b2). Loop so any
+        // per-iteration imbalance accumulates under LSan/ASAN.
+        assert_clean_asan_run(
+            r#"
+shared struct DNode { key: i64, val: i64 }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut m: Map[i64, DNode] = Map.new();
+        m.insert(1, DNode { key: 1, val: 10 });
+        m.insert(1, DNode { key: 1, val: 11 });
+        m.insert(2, DNode { key: 2, val: 20 });
+        m.remove(1);
+        m.remove(99);
+        let removed = m.remove(2);
+        match removed {
+            Some(n) => { acc = acc + n.val; }
+            None => { acc = acc - 1; }
+        }
+        acc = acc + m.len();
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["800"],
+            "discarded_map_remove_shared_value",
+        );
+    }
+
+    #[test]
     fn asan_ref_param_enum_field_payload_consume_no_leak_no_double_free() {
         // B-2026-07-21-5/-6 memory leg: an ESCAPING `match <refparam>.field {
         // Ident(name) => <consume name> }` now deep-clones the scrutinee

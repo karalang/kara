@@ -4084,6 +4084,89 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
+    /// SHARED-payload sibling of `try_track_discarded_inline_option`
+    /// (B-2026-07-19-16): a statement-position `Option[shared T]` temporary —
+    /// canonically the discarded result of `m.remove(k)` over a
+    /// `Map[K, shared V]`. `Map.remove` MOVES the value out of the bucket
+    /// (the runtime tombstones the slot and frees only the key; the value's
+    /// ref is handed back inside `Some(old)`), so the discarded temp OWNS
+    /// that ref. The inline/boxed trackers decline a shared payload (it is
+    /// rc-managed, not buffer-owned) and `materialize_owned_temp` has no
+    /// `Option` arm, so the ref was never released — one leaked box per
+    /// discarded remove. Queue the same tag-guarded `RcDecOption` a
+    /// let-binding's scope-exit release uses, firing at the `;` via the
+    /// discard frame. The span-table leg also covers other owned
+    /// `Option[shared T]` producers discarded in statement position (call
+    /// returns); a BOUND result was already released by the binding's own
+    /// `track_rc_option_var`. Deliberately NOT extended to a displacing
+    /// `m.insert(k, v2);` here without separate verification of its
+    /// displaced-value balance.
+    pub(super) fn try_track_discarded_shared_option(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> bool {
+        // A MethodCall producer must be `Map.remove` — the only builtin
+        // discard shape that hands the caller an owned ref. A displacing
+        // `m.insert(k, v2)`'s old value is dec'd INLINE by the insert
+        // lowering (the `map.ins.some` rc_dec), so a second dec here would
+        // double-free (the insert's result te CAN land on this span via the
+        // receiver-span overwrite); `get`/`first`/`last` are borrows.
+        if let ExprKind::MethodCall { method, .. } = &tail.kind {
+            if method != "remove" {
+                return false;
+            }
+        }
+        let key = (tail.span.offset, tail.span.length);
+        // Payload `TypeExpr`: prefer the span-keyed `Option[V]` record (a
+        // call-shaped producer), but a `MethodCall` node reuses its
+        // receiver-side span, so `m.remove(k)` has no entry there — derive
+        // `V` from the Map receiver's value-te side table instead
+        // (`var_elem_type_exprs` holds the value of a Map variable).
+        let payload_te = match self.enum_inst_type_exprs.get(&key) {
+            Some(te) => match &te.kind {
+                TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Option") => {
+                    match p.generic_args.as_ref().and_then(|a| a.first()) {
+                        Some(GenericArg::Type(v)) => Some(v.clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
+            None => match &tail.kind {
+                ExprKind::MethodCall { object, method, .. } if method == "remove" => {
+                    match &object.kind {
+                        ExprKind::Identifier(m) if self.map_val_types.contains_key(m.as_str()) => {
+                            self.var_elem_type_exprs.get(m.as_str()).cloned()
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
+        };
+        let Some(payload_te) = payload_te else {
+            return false;
+        };
+        let Some(heap_type) = self.shared_heap_type_for_type_expr(&payload_te) else {
+            return false;
+        };
+        let BasicTypeEnum::StructType(option_ty) = val.get_type() else {
+            return false;
+        };
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return false;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__owned_shared_opt_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        self.track_rc_option_var("__owned_shared_opt_tmp", slot, option_ty, heap_type);
+        true
+    }
+
     /// BOXED-payload sibling of `try_track_discarded_inline_option` (slice
     /// 3r): a statement-position `Option[Wide]` temporary — the discarded
     /// result of `m.insert(k, v2)` over an existing key (the displaced old
