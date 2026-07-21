@@ -3952,6 +3952,17 @@ impl WsHandshakeReject {
     }
 }
 
+/// RFC 6455 §4.2.2 `Sec-WebSocket-Accept` value for a client's
+/// `Sec-WebSocket-Key`: base64(SHA-1(key ++ GUID)). Shared by the
+/// standalone `WebSocket.accept` handshake below and the
+/// `Server.serve_ws` hyper-upgrade path (`lib.rs::serve_request_ws`).
+pub(crate) fn ws_accept_value(key: &[u8]) -> String {
+    let mut digest_input: Vec<u8> = Vec::with_capacity(key.len() + WS_HANDSHAKE_GUID.len());
+    digest_input.extend_from_slice(key);
+    digest_input.extend_from_slice(WS_HANDSHAKE_GUID);
+    base64_encode(&sha1(&digest_input))
+}
+
 /// Validate a client's RFC 6455 §4.2.1 opening-handshake request.
 /// On success returns the `Sec-WebSocket-Key` value (to be fed
 /// into the `Sec-WebSocket-Accept` digest); on failure returns the
@@ -5174,11 +5185,7 @@ fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(
             ));
         }
     };
-    let mut digest_input: Vec<u8> = Vec::with_capacity(key.len() + WS_HANDSHAKE_GUID.len());
-    digest_input.extend_from_slice(key);
-    digest_input.extend_from_slice(WS_HANDSHAKE_GUID);
-    let digest = sha1(&digest_input);
-    let accept = base64_encode(&digest);
+    let accept = ws_accept_value(key);
 
     let response = format!(
         "HTTP/1.1 101 Switching Protocols\r\n\

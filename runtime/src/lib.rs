@@ -472,7 +472,11 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // the request/response accessors above are plain FFI-struct reads and
     // stay in every archive.
     #[cfg(feature = "net")]
-    keep!(karac_runtime_serve_http, karac_runtime_serve_http_static,);
+    keep!(
+        karac_runtime_serve_http,
+        karac_runtime_serve_http_static,
+        karac_runtime_serve_ws,
+    );
     // Scheduler + event loop (pub modules). Gated behind `net` alongside
     // the modules themselves — the wasm archive (`--no-default-features`,
     // phase-10) has no mio/tokio substrate.
@@ -6599,6 +6603,264 @@ pub unsafe extern "C" fn karac_runtime_serve_http(
             });
         }
     })
+}
+
+/// `Server.serve_ws` — the plain-HTTP accept loop with an in-place RFC 6455
+/// WebSocket-upgrade path (phase-8 line 170). Every request still routes
+/// through the ONE `handler` (the line-15 one-handler dispatch model is
+/// unchanged); the upgrade signal is the handler RETURNING STATUS 101
+/// (Switching Protocols) for a request that validated as a WebSocket
+/// opening handshake (`Upgrade: websocket` + `Connection: Upgrade` +
+/// `Sec-WebSocket-Version: 13` + a `Sec-WebSocket-Key`). On that signal the
+/// runtime — not the handler — completes the handshake (computes
+/// `Sec-WebSocket-Accept`, sends the real 101 with the upgrade headers),
+/// detaches the raw TCP socket via hyper's upgrade machinery, and invokes
+/// `ws_handler(fd)` on a dedicated blocking thread; the existing
+/// `karac_runtime_ws_*` framing FFI then services the connection. The
+/// runtime closes the fd after `ws_handler` returns (caller-retains model:
+/// the Kāra handler's `WebSocket` param is caller-owned, so exactly one
+/// close). A handler 101 on a NON-WebSocket request is sent as-is (no
+/// upgrade — the client sent no key to accept); any non-101 response on a
+/// WebSocket handshake request is sent normally (path gating: the handler
+/// 404s paths it doesn't want upgraded).
+///
+/// Conforming clients send no frames before receiving the 101 (RFC 6455
+/// §4.1 step 6 wait requirement), so hyper's post-request read buffer is
+/// empty at detach; a non-conforming early frame is dropped with the
+/// buffer. WebSocket-over-h2 (RFC 8441) is out of scope — the auto builder
+/// only takes the upgrade path on HTTP/1.1 connections.
+///
+/// Return codes: same classes as `karac_runtime_serve_http`.
+///
+/// # Safety
+///
+/// Same caller obligations as `karac_runtime_serve_http`; `ws_handler` must
+/// be a valid function pointer for the process lifetime.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_serve_ws(
+    addr_cstr: *const std::os::raw::c_char,
+    handler: extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse),
+    ws_handler: extern "C" fn(i64),
+    bound_port_out: *mut u16,
+) -> i32 {
+    if addr_cstr.is_null() {
+        return 1;
+    }
+    let cstr = std::ffi::CStr::from_ptr(addr_cstr);
+    let addr_str = match cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => return 2,
+    };
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return 3,
+    };
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => return 4,
+    };
+
+    runtime.block_on(async move {
+        let listener = match tokio::net::TcpListener::bind(socket_addr).await {
+            Ok(l) => l,
+            Err(_) => return 5,
+        };
+        if let Ok(local) = listener.local_addr() {
+            if !bound_port_out.is_null() {
+                *bound_port_out = local.port();
+            }
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
+            let _ = stdout.flush();
+        }
+        let limits = ServeLimits::from_env();
+        loop {
+            let permit = limits.acquire_permit().await;
+            let (stream, _peer) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(_) => continue,
+            };
+            let io = hyper_util::rt::TokioIo::new(stream);
+            let header_timeout = limits.header_timeout;
+            tokio::spawn(async move {
+                let _permit = permit;
+                let svc = hyper::service::service_fn(
+                    move |req: hyper::Request<hyper::body::Incoming>| async move {
+                        serve_request_ws(req, handler, ws_handler).await
+                    },
+                );
+                // HTTP/1.1 builder directly — NOT the auto (h1+h2) builder the
+                // plain `serve` loop uses. Two reasons: (1) a WebSocket upgrade
+                // is an HTTP/1.1 mechanism (h2 WS = RFC 8441 CONNECT, out of
+                // scope for v1), and (2) the auto builder wraps the connection
+                // IO in its private version-sniffing `Rewind` type, which makes
+                // `Upgraded::downcast` to the concrete `TokioIo<TcpStream>`
+                // impossible from here. `.with_upgrades()` keeps the connection
+                // alive past a 101 so `hyper::upgrade::on` can hand us the raw
+                // socket. h2c prior-knowledge clients are not served on a
+                // `serve_ws` listener in v1 (use `serve` for h2 workloads).
+                let mut builder = hyper::server::conn::http1::Builder::new();
+                if let Some(t) = header_timeout {
+                    builder.timer(hyper_util::rt::TokioTimer::new());
+                    builder.header_read_timeout(t);
+                }
+                let _ = builder.serve_connection(io, svc).with_upgrades().await;
+            });
+        }
+    })
+}
+
+/// True when `req` carries an RFC 6455 §4.2.1 opening handshake — the same
+/// three header checks `event_loop::ws_validate_handshake` applies to raw
+/// request bytes, evaluated on hyper's typed header map, plus key presence.
+#[cfg(feature = "net")]
+fn is_ws_handshake_request(req: &hyper::Request<hyper::body::Incoming>) -> bool {
+    let has_token = |name: &str, token: &str| {
+        req.headers()
+            .get_all(name)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .flat_map(|v| v.split(','))
+            .any(|t| t.trim().eq_ignore_ascii_case(token))
+    };
+    has_token("upgrade", "websocket")
+        && has_token("connection", "upgrade")
+        && has_token("sec-websocket-version", "13")
+        && req.headers().contains_key("sec-websocket-key")
+}
+
+/// Per-request body for `karac_runtime_serve_ws`: route through the ordinary
+/// `serve_request` handler bridge, then — iff the request was a WebSocket
+/// opening handshake AND the handler answered 101 — complete the upgrade and
+/// hand the detached socket to `ws_handler`. See `karac_runtime_serve_ws`'s
+/// doc for the full contract.
+#[cfg(feature = "net")]
+async fn serve_request_ws(
+    mut req: hyper::Request<hyper::body::Incoming>,
+    handler: extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse),
+    ws_handler: extern "C" fn(i64),
+) -> Result<hyper::Response<http_body_util::Full<bytes::Bytes>>, std::convert::Infallible> {
+    let ws_accept = if is_ws_handshake_request(&req) {
+        req.headers()
+            .get("sec-websocket-key")
+            .map(|k| crate::event_loop::ws_accept_value(k.as_bytes()))
+    } else {
+        None
+    };
+    // Register interest in the upgrade BEFORE the request is consumed by the
+    // handler bridge (hyper requires `upgrade::on` to run while the request
+    // is still whole).
+    let upgrade_fut = ws_accept.as_ref().map(|_| hyper::upgrade::on(&mut req));
+
+    let resp = serve_request(req, handler).await?;
+
+    if let (Some(accept), Some(fut)) = (ws_accept, upgrade_fut) {
+        if resp.status() == hyper::StatusCode::SWITCHING_PROTOCOLS {
+            tokio::spawn(async move {
+                let debug_ws = std::env::var("KARAC_DEBUG_SERVE_WS").as_deref() == Ok("1");
+                let upgraded = match fut.await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        if debug_ws {
+                            eprintln!("serve_ws: upgrade future failed: {e}");
+                        }
+                        return;
+                    }
+                };
+                // Recover the raw TCP stream. The serve loop feeds hyper a
+                // `TokioIo<TcpStream>`, so that is the concrete IO to
+                // downcast to; `read_buf` holds any bytes hyper read past
+                // the request (empty for RFC-conforming clients — see the
+                // entry doc).
+                let parts =
+                    match upgraded.downcast::<hyper_util::rt::TokioIo<tokio::net::TcpStream>>() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            if debug_ws {
+                                eprintln!("serve_ws: upgraded IO downcast failed");
+                            }
+                            return;
+                        }
+                    };
+                if debug_ws && !parts.read_buf.is_empty() {
+                    eprintln!(
+                        "serve_ws: dropping {}B of early client bytes",
+                        parts.read_buf.len()
+                    );
+                }
+                let tokio_stream = parts.io.into_inner();
+                let std_stream = match tokio_stream.into_std() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        if debug_ws {
+                            eprintln!("serve_ws: into_std failed: {e}");
+                        }
+                        return;
+                    }
+                };
+                // The framing FFI does blocking reads; tokio sockets are
+                // non-blocking by construction.
+                if let Err(e) = std_stream.set_nonblocking(false) {
+                    if debug_ws {
+                        eprintln!("serve_ws: set_nonblocking(false) failed: {e}");
+                    }
+                    return;
+                }
+                #[cfg(unix)]
+                let fd = {
+                    use std::os::unix::io::IntoRawFd;
+                    std_stream.into_raw_fd() as i64
+                };
+                #[cfg(windows)]
+                let fd = {
+                    use std::os::windows::io::IntoRawSocket;
+                    std_stream.into_raw_socket() as i64
+                };
+                // Run the (blocking) Kāra frame loop off the async workers.
+                // The runtime owns the close: the Kāra handler's `WebSocket`
+                // param is caller-retained, so its scope exit never closes
+                // the fd — reconstructing the stream here after the handler
+                // returns is the single close. A panicking handler skips the
+                // close (fd leak, never a double-close).
+                let _ = tokio::task::spawn_blocking(move || {
+                    let panicked = std::panic::catch_unwind(|| ws_handler(fd)).is_err();
+                    if !panicked {
+                        #[cfg(unix)]
+                        unsafe {
+                            use std::os::unix::io::FromRawFd;
+                            drop(std::net::TcpStream::from_raw_fd(fd as i32));
+                        }
+                        #[cfg(windows)]
+                        unsafe {
+                            use std::os::windows::io::FromRawSocket;
+                            drop(std::net::TcpStream::from_raw_socket(
+                                fd as std::os::windows::io::RawSocket,
+                            ));
+                        }
+                    }
+                })
+                .await;
+            });
+            // The handler's 101 was the SIGNAL; the wire response is the
+            // runtime-built RFC 6455 handshake (the handler's body/headers
+            // are not meaningful on a protocol switch).
+            let resp101 = hyper::Response::builder()
+                .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
+                .header("upgrade", "websocket")
+                .header("connection", "Upgrade")
+                .header("sec-websocket-accept", accept)
+                .body(http_body_util::Full::new(bytes::Bytes::new()))
+                .unwrap_or_default();
+            return Ok(resp101);
+        }
+    }
+    Ok(resp)
 }
 
 /// Synchronously serve HTTPS/1.1 traffic on `addr_cstr` until a fatal

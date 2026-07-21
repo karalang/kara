@@ -2371,4 +2371,78 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         Ok(result)
     }
+
+    /// WebSocket-handler ABI trampoline for `Server.serve_ws` (phase-8 line
+    /// 170). The user fn is `fn h(ws: WebSocket)` — a value-typed single-fd
+    /// struct param; the runtime's callback slot is `extern "C" fn(i64 fd)`.
+    /// The shim packs the fd into the user fn's declared param shape and
+    /// forwards. The fd's lifetime is runtime-owned: the caller-retains
+    /// param model means the user fn never closes its `WebSocket` param, and
+    /// `serve_request_ws` closes the socket after this shim returns —
+    /// exactly one close. Cached per user fn (same discipline as
+    /// `emit_http_handler_shim`, sharing `http_shim_cache` under a `ws:`
+    /// key prefix).
+    pub(super) fn emit_ws_handler_shim(
+        &mut self,
+        handler_fn: inkwell::values::FunctionValue<'ctx>,
+    ) -> inkwell::values::FunctionValue<'ctx> {
+        let user_name = handler_fn
+            .get_name()
+            .to_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|_| "ws_handler".to_string());
+        let cache_key = format!("ws:{user_name}");
+        if let Some(&cached) = self.http_shim_cache.get(&cache_key) {
+            return cached;
+        }
+        let shim_name = format!("_karac_ws_shim_{user_name}");
+        if let Some(existing) = self.module.get_function(&shim_name) {
+            self.http_shim_cache.insert(cache_key, existing);
+            return existing;
+        }
+
+        let void_ty = self.context.void_type();
+        let i64_ty = self.context.i64_type();
+        let shim_ty = void_ty.fn_type(&[i64_ty.into()], false);
+        let shim = self
+            .module
+            .add_function(&shim_name, shim_ty, Some(Linkage::External));
+
+        let saved_block = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(shim);
+
+        let entry = self.context.append_basic_block(shim, "entry");
+        self.builder.position_at_end(entry);
+        let fd = shim.get_nth_param(0).unwrap().into_int_value();
+
+        // Build the user fn's param value from the fd, honoring its declared
+        // LLVM shape: the canonical `WebSocket` is a `{ i64 }` struct; a
+        // plain-i64 shape (should the layout ever flatten) passes the fd
+        // straight through.
+        let arg: inkwell::values::BasicValueEnum<'ctx> =
+            match handler_fn.get_type().get_param_types().first() {
+                Some(inkwell::types::BasicMetadataTypeEnum::StructType(st)) => {
+                    let mut agg = st.get_undef();
+                    agg = self
+                        .builder
+                        .build_insert_value(agg, fd, 0, "ws.shim.pack")
+                        .unwrap()
+                        .into_struct_value();
+                    agg.into()
+                }
+                _ => fd.into(),
+            };
+        self.builder
+            .build_call(handler_fn, &[arg.into()], "ws.shim.call")
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+        self.current_fn = saved_fn;
+        self.http_shim_cache.insert(cache_key, shim);
+        shim
+    }
 }

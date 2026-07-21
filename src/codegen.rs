@@ -4413,6 +4413,24 @@ impl<'ctx> Codegen<'ctx> {
             karac_runtime_serve_https_type,
             Some(Linkage::External),
         );
+        // WebSocket-upgrade variant (phase-8 line 170): serve_http's shape
+        // plus a second `extern "C" fn(i64 fd)` handler slot for the
+        // upgraded-connection callback. Backs
+        // `Server.serve_ws(addr, handler, ws_handler)`.
+        let karac_runtime_serve_ws_type = context.i32_type().fn_type(
+            &[
+                ptr_type.into(), // addr_cstr
+                ptr_type.into(), // http handler shim fn-ptr
+                ptr_type.into(), // ws handler shim fn-ptr
+                ptr_type.into(), // bound_port_out
+            ],
+            false,
+        );
+        let _karac_runtime_serve_ws_fn = module.add_function(
+            "karac_runtime_serve_ws",
+            karac_runtime_serve_ws_type,
+            Some(Linkage::External),
+        );
 
         // HTTP handler ABI trampoline (2026-05-09): per-request runtime
         // externs invoked from the Kāra-side `Request.path()` / `.method()`
@@ -7710,6 +7728,16 @@ impl<'ctx> Codegen<'ctx> {
         // `ptr`-return signature toggle sees the right set. Drives all three
         // coupled toggles via `is_coroutine_compiled`.
         if self.coro_enabled {
+            // `Server.serve_ws` ws-handler exclusion (phase-8 line 170): a fn
+            // passed as the third arg of `Server.serve_ws(addr, handler,
+            // ws_handler)` is invoked through the runtime's `extern "C"
+            // fn(i64)` callback slot on a DEDICATED blocking thread — the
+            // same posture as `main`'s top-level accept. It cannot be a
+            // caller-driven coroutine ramp (the FFI slot is a plain void
+            // call), and its network leaf ops (`recv_text` parks) are exactly
+            // the thread-block park path. Collect the names before the key
+            // population below so they stay on the non-coro path.
+            let ws_handler_names = collect_serve_ws_handler_names(program);
             for key in program.state_struct_layouts.keys() {
                 // `main` is the C-ABI `i32 ()` entry point — it can't be a
                 // caller-driven coroutine ramp (and isn't called by anyone), so
@@ -7721,7 +7749,10 @@ impl<'ctx> Codegen<'ctx> {
                 // self ramp-drive). Generics stay on the per-mono degenerate
                 // path. `KARAC_PARK_ON_FD` is the leaf primitive and never lands
                 // in `state_struct_layouts`.
-                if key != "main" && !declarations::is_generic_fn_key(program, key) {
+                if key != "main"
+                    && !ws_handler_names.contains(key)
+                    && !declarations::is_generic_fn_key(program, key)
+                {
                     self.coro_fn_keys.insert(key.clone());
                 }
             }
@@ -9668,4 +9699,174 @@ impl<'ctx> Codegen<'ctx> {
             _ => "_".to_string(),
         }
     }
+}
+
+/// Collect the names of free fns passed as the WS-handler (third) argument of
+/// any `Server.serve_ws(addr, handler, ws_handler)` call in the program —
+/// both the `MethodCall`-on-`Server` and `Call(Path([Server, serve_ws]))`
+/// shapes. These fns are invoked through the runtime's `extern "C" fn(i64)`
+/// callback on a dedicated blocking thread, so they are excluded from
+/// `coro_fn_keys` (like `main`) and compile on the thread-block park path. A
+/// call shape the walk misses fails LOUDLY downstream (module verification —
+/// arity mismatch at the shim call), never silently.
+fn collect_serve_ws_handler_names(program: &Program) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    fn scan_expr(e: &Expr, out: &mut HashSet<String>) {
+        // Record a serve_ws third-arg identifier at this node, then recurse.
+        match &e.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                if method == "serve_ws"
+                    && matches!(&object.kind, ExprKind::Identifier(n) if n == "Server")
+                {
+                    if let Some(arg) = args.get(2) {
+                        if let ExprKind::Identifier(n) = &arg.value.kind {
+                            out.insert(n.clone());
+                        }
+                    }
+                }
+                scan_expr(object, out);
+                for a in args {
+                    scan_expr(&a.value, out);
+                }
+            }
+            ExprKind::Call { callee, args } => {
+                if let ExprKind::Path { segments, .. } = &callee.kind {
+                    if segments.len() == 2 && segments[0] == "Server" && segments[1] == "serve_ws" {
+                        if let Some(arg) = args.get(2) {
+                            if let ExprKind::Identifier(n) = &arg.value.kind {
+                                out.insert(n.clone());
+                            }
+                        }
+                    }
+                }
+                scan_expr(callee, out);
+                for a in args {
+                    scan_expr(&a.value, out);
+                }
+            }
+            ExprKind::Block(b) | ExprKind::Comptime(b) | ExprKind::LabeledBlock { body: b, .. } => {
+                scan_block(b, out)
+            }
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                scan_expr(condition, out);
+                scan_block(then_block, out);
+                if let Some(e2) = else_branch {
+                    scan_expr(e2, out);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                scan_expr(value, out);
+                scan_block(then_block, out);
+                if let Some(e2) = else_branch {
+                    scan_expr(e2, out);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                scan_expr(scrutinee, out);
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        scan_expr(g, out);
+                    }
+                    scan_expr(&arm.body, out);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                scan_expr(condition, out);
+                scan_block(body, out);
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                scan_expr(value, out);
+                scan_block(body, out);
+            }
+            ExprKind::For { iterable, body, .. } => {
+                scan_expr(iterable, out);
+                scan_block(body, out);
+            }
+            ExprKind::Loop { body, .. } => scan_block(body, out),
+            ExprKind::Closure { body, .. } => scan_expr(body, out),
+            ExprKind::Return(Some(inner)) => scan_expr(inner, out),
+            ExprKind::Binary { left, right, .. } => {
+                scan_expr(left, out);
+                scan_expr(right, out);
+            }
+            ExprKind::Unary { operand, .. } => scan_expr(operand, out),
+            ExprKind::Question(inner)
+            | ExprKind::FieldAccess { object: inner, .. }
+            | ExprKind::TupleIndex { object: inner, .. } => scan_expr(inner, out),
+            ExprKind::OptionalChain { object, args, .. } => {
+                scan_expr(object, out);
+                if let Some(args) = args {
+                    for a in args {
+                        scan_expr(&a.value, out);
+                    }
+                }
+            }
+            ExprKind::NilCoalesce { left, right } => {
+                scan_expr(left, out);
+                scan_expr(right, out);
+            }
+            ExprKind::Index { object, index } => {
+                scan_expr(object, out);
+                scan_expr(index, out);
+            }
+            ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
+                for it in items {
+                    scan_expr(it, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn scan_block(b: &Block, out: &mut HashSet<String>) {
+        for s in &b.stmts {
+            match &s.kind {
+                StmtKind::Let { value, .. } => scan_expr(value, out),
+                StmtKind::LetElse {
+                    value, else_block, ..
+                } => {
+                    scan_expr(value, out);
+                    scan_block(else_block, out);
+                }
+                StmtKind::Assign { target, value } => {
+                    scan_expr(target, out);
+                    scan_expr(value, out);
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
+                    scan_expr(target, out);
+                    scan_expr(value, out);
+                }
+                StmtKind::Expr(e) => scan_expr(e, out),
+                StmtKind::Defer { body: b2 } | StmtKind::ErrDefer { body: b2, .. } => {
+                    scan_block(b2, out)
+                }
+                _ => {}
+            }
+        }
+        if let Some(fe) = &b.final_expr {
+            scan_expr(fe, out);
+        }
+    }
+    let mut out = HashSet::new();
+    for item in &program.items {
+        if let Item::Function(f) = item {
+            scan_block(&f.body, &mut out);
+        }
+    }
+    out
 }

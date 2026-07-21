@@ -355,4 +355,37 @@ impl Server {
     fn serve_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })
     }
+
+    // `serve` with an in-place WebSocket-upgrade path (phase-8 line 170 —
+    // the `/ws`-route-on-the-HTTP-server shape: axum, Go net/http +
+    // gorilla, express + ws). Every request still routes through the ONE
+    // `handler` — the line-15 one-handler dispatch model is unchanged.
+    // The upgrade signal is the handler returning STATUS 101 (Switching
+    // Protocols) for a request that is a valid RFC 6455 opening handshake:
+    //
+    //   fn route(req: Request) -> Response {
+    //       match req.path() {
+    //           "/ws" => Response { status: 101, body: "" },
+    //           "/health" => Response { status: 200, body: "ok" },
+    //           _ => Response { status: 404, body: "" },
+    //       }
+    //   }
+    //
+    // On that signal the RUNTIME completes the handshake (it computes
+    // `Sec-WebSocket-Accept` and sends the real 101 + upgrade headers —
+    // the handler's 101 body/headers are not sent), detaches the raw
+    // socket, and invokes `ws_handler(ws)` with the upgraded connection
+    // on a dedicated thread; the full `WebSocket` frame surface
+    // (`send_text` / `recv_text` / binary / ping-pong / close) works on
+    // it. The runtime closes the socket after `ws_handler` returns.
+    // Path gating falls out of ordinary routing: any non-101 response
+    // on a handshake request (e.g. the 404 arm above) is sent normally
+    // and no upgrade happens; a 101 on a NON-handshake request is sent
+    // as-is (meaningless to a plain HTTP client, but never an upgrade).
+    // WebSocket-over-HTTP/2 (RFC 8441) is out of scope for v1 — only
+    // HTTP/1.1 connections take the upgrade path.
+    #[compiler_builtin]
+    fn serve_ws(addr: String, handler: Fn(Request) -> Response, ws_handler: Fn(WebSocket)) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
+        Err(HttpError { message: "" })
+    }
 }
