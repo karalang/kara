@@ -1130,11 +1130,47 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return None;
                 }
+                // Surface type name for the rebind: the explicit annotation
+                // when present, else — for an UNANNOTATED `let x = f(...)`
+                // whose callee's declared return type names a known user
+                // STRUCT — that struct's name. Without the fallback, a
+                // struct-of-Vecs binding (`let tx = lanczos_taps(..)`) crossed
+                // the par-group join with no `var_type_names` entry, so a
+                // later `tx.los[i]` (struct-field Vec indexing) could not
+                // resolve `tx`'s struct type and died on "Index operator
+                // applied to non-array type" — a compile FAILURE on code that
+                // builds fine with auto-par off (found by Prism's Lanczos
+                // resampler, the first auto-par'd struct-of-Vecs consumer).
+                // Restricted to `struct_types` hits so scalar/Vec/String slots
+                // keep their exact prior behavior.
+                let var_type_name = Self::let_binding_annotation_type_name(stmt).or_else(|| {
+                    let call_ret_struct = match &stmt.kind {
+                        StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                            match &value.kind {
+                                ExprKind::Call { callee, .. } => match &callee.kind {
+                                    ExprKind::Identifier(f) => self
+                                        .fn_return_type_exprs
+                                        .get(f.as_str())
+                                        .and_then(|te| match &te.kind {
+                                            crate::ast::TypeKind::Path(p) => {
+                                                p.segments.last().cloned()
+                                            }
+                                            _ => None,
+                                        }),
+                                    _ => None,
+                                },
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    call_ret_struct.filter(|n| self.struct_types.contains_key(n.as_str()))
+                });
                 slots.push(ReturnSlot {
                     binding_name: name,
                     branch_index: branch_idx,
                     llvm_ty,
-                    var_type_name: Self::let_binding_annotation_type_name(stmt),
+                    var_type_name,
                 });
             }
         }

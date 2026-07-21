@@ -290,6 +290,67 @@ mod par_codegen_tests {
         Some(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
+    // ── Auto-par slot rebind: unannotated struct-of-Vecs binding ─────
+
+    /// Regression: an UNANNOTATED `let tx = make_taps(..)` (a struct whose
+    /// fields are Vecs) grouped by auto-par with an independent let, then read
+    /// via struct-field indexing (`tx.los[i]`) AFTER the join, failed codegen
+    /// with "Index operator applied to non-array type": the return-slot rebind
+    /// only carried `var_type_names` from an explicit annotation, so the
+    /// parent lost the binding's struct identity. The slot typing now falls
+    /// back to the callee's declared return type (user structs only). Found by
+    /// Prism's Lanczos resampler (the tap-table shape) — sequential-wasm built
+    /// fine, native/wasm-threads (auto-par ON) failed.
+    #[test]
+    fn auto_par_unannotated_struct_of_vecs_slot_field_index() {
+        let src = r#"
+struct Taps {
+    los: Vec[i64],
+    wgts: Vec[f64],
+}
+
+fn make_taps(n: i64) -> Taps {
+    let mut los: Vec[i64] = Vec.new();
+    let mut wgts: Vec[f64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        los.push(n - 1 - i);
+        wgts.push((i as f64) + 0.5);
+        i = i + 1;
+    }
+    Taps { los: los, wgts: wgts }
+}
+
+fn consume(sw: i64, dw: i64) -> f64 {
+    let tx = make_taps(dw);
+    let mut tmp: Vec[f64] = Vec.filled(dw, 0.0);
+    let mut x: i64 = 0;
+    while x < dw {
+        let lo = tx.los[x];
+        tmp[x] = tx.wgts[lo] * ((sw + x) as f64);
+        x = x + 1;
+    }
+    let mut acc = 0.0;
+    x = 0;
+    while x < dw {
+        acc = acc + tmp[x];
+        x = x + 1;
+    }
+    acc
+}
+
+fn main() {
+    println(consume(3, 4));
+}
+"#;
+        if let Some(out) = run_program(src) {
+            // los = [3,2,1,0]; wgts = [0.5,1.5,2.5,3.5]
+            // x=0: wgts[3]*3 = 10.5; x=1: wgts[2]*4 = 10; x=2: wgts[1]*5 = 7.5;
+            // x=3: wgts[0]*6 = 3. total = 31.
+            assert_eq!(out.trim(), "31");
+        }
+    }
+
     // ── Atomic op arity — run/build agreement (B-2026-06-30-5) ─────
 
     /// E2E: the explicit-ordering atomic form (`fetch_add(v, ord)` through a
