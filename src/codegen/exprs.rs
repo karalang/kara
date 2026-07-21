@@ -526,7 +526,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
-                    self.compile_binop(op, lhs, rhs)
+                    let result = self.compile_binop(op, lhs, rhs)?;
+                    // B-2026-07-21-12: a string concat that STAYED a surface
+                    // `Binary` (the `String.add` desugar skips it when an
+                    // operand is ref-typed — e.g. a Vec-accessor `Some(s)`
+                    // payload binding) never went through the assoc-call
+                    // route's operand frees, so a fresh `.to_string()` operand
+                    // temp leaked once per evaluation. Free fresh-owned
+                    // operand temps here, mirroring the desugared route: the
+                    // fresh-temp expr gates + the `cap > 0` runtime guard
+                    // leave identifiers, places, and literals untouched, and
+                    // the concat COPIES operand bytes into a fresh buffer, so
+                    // freeing after the op is sound. Scalar/vector adds are
+                    // excluded by the result-shape gate.
+                    if matches!(op, BinOp::Add)
+                        && result.is_struct_value()
+                        && self.llvm_ty_is_vec_struct(result.get_type())
+                    {
+                        self.free_fresh_owned_str_arg(left, lhs);
+                        self.free_fresh_owned_str_arg(right, rhs);
+                    }
+                    Ok(result)
                 }
             },
             ExprKind::Unary { op, operand } => {

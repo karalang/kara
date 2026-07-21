@@ -1819,9 +1819,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // `compile_inline_temp_vec_index` mints has no consuming binding). The
         // `cap > 0` guard below no-ops on a borrowed (cap == 0) view, so a place
         // expression / rodata literal is never double-freed.
+        // B-2026-07-21-12: a string concat left as a surface `Binary` (the
+        // `String.add` desugar skips ref-typed operands) is as fresh-owned as
+        // the desugared Call — admit it so consumer sites (print args, push
+        // args, map keys, …) free the concat result exactly like the Call
+        // route. The `llvm_ty_is_vec_struct` + `cap > 0` guards in the free
+        // core make a scalar/vector `+` a no-op.
+        let is_string_concat_binary = matches!(
+            &arg.kind,
+            ExprKind::Binary {
+                op: crate::ast::BinOp::Add,
+                ..
+            }
+        ) && self.llvm_ty_is_vec_struct(val.get_type());
         if !self.expr_yields_fresh_owned_temp(arg)
             && !self.expr_is_fresh_owned_string_slice(arg)
             && !self.expr_is_inline_temp_vec_heap_index(arg)
+            && !is_string_concat_binary
         {
             return;
         }

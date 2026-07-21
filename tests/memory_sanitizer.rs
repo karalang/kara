@@ -10310,6 +10310,57 @@ fn main() {
     }
 
     #[test]
+    fn asan_surface_binary_string_concat_temp_no_leak_no_double_free() {
+        // B-2026-07-21-12: a string concat that STAYS a surface `Binary`
+        // (the `String.add` desugar skips it when an operand is a ref-typed
+        // Vec-accessor payload — `"f:".to_string() + s` with `s` from
+        // `v.first()`) bypassed the assoc-call route's operand frees AND the
+        // consumer sites' fresh-temp gate (Call/MethodCall-only), leaking
+        // both the `.to_string()` operand temp and the concat result once
+        // per evaluation. Now the Binary compile frees fresh-owned operand
+        // temps after the concat (mirroring the desugared route) and
+        // `free_fresh_owned_str_arg` admits a vec-struct-shaped Binary-Add
+        // arg. Double-free half: identifiers/places stay untouched (expr
+        // gates + cap>0), and a returned concat is freed exactly once by its
+        // consumer. Loop covers the print-arg form, the return form, and a
+        // nested concat with a bound intermediate.
+        assert_clean_asan_run(
+            r#"
+fn tag_first(items: ref Vec[String]) -> String {
+    match items.first() {
+        Some(s) => { return "f:".to_string() + s; }
+        None => { return "empty".to_string(); }
+    }
+    return "?".to_string();
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    let v: Vec[String] = ["aa", "bb"];
+    while i < 40 {
+        acc = acc + tag_first(v).len();
+        match v.first() {
+            Some(s) => { acc = acc + ("p:".to_string() + s).len(); }
+            None => { acc = acc - 1; }
+        }
+        match v.first() {
+            Some(s) => {
+                let t = "pre".to_string() + s;
+                acc = acc + (t + "!".to_string()).len();
+            }
+            None => { acc = acc - 1; }
+        }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["560"],
+            "surface_binary_string_concat_temp",
+        );
+    }
+
+    #[test]
     fn asan_ref_param_option_field_consume_no_leak_no_double_free() {
         // B-2026-07-21-9 memory leg: the ref-chain Option clone. Double-free
         // half: a consumed Some payload freed exactly once by its binding,

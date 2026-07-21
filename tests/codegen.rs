@@ -56565,6 +56565,44 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_surface_binary_string_concat_shapes() {
+        // B-2026-07-21-12 output leg: string concats that stay a surface
+        // `Binary` (ref-typed Vec-accessor payload operand blocks the
+        // `String.add` desugar) — return form, print-arg form, nested concat
+        // with a bound intermediate, and the desugared control shapes —
+        // all byte-identical to the interpreter. The LSan sibling guards
+        // the operand-temp/result frees the fix added.
+        let output = run_program(
+            "fn tag_first(items: ref Vec[String]) -> String {\n\
+                 match items.first() {\n\
+                     Some(s) => { return \"f:\".to_string() + s; }\n\
+                     None => { return \"empty\".to_string(); }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn main() {\n\
+                 let v: Vec[String] = [\"aa\", \"bb\"];\n\
+                 println(tag_first(v));\n\
+                 println(tag_first(v));\n\
+                 match v.first() {\n\
+                     Some(s) => { println(\"p:\".to_string() + s); }\n\
+                     None => { println(\"empty\"); }\n\
+                 }\n\
+                 match v.first() {\n\
+                     Some(s) => {\n\
+                         let t = \"pre\".to_string() + s;\n\
+                         println(t + \"!\".to_string());\n\
+                     }\n\
+                     None => { println(\"x\"); }\n\
+                 }\n\
+                 println(\"a\".to_string() + \"b\".to_string());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "f:aa\nf:aa\np:aa\npreaa!\nab\n");
+    }
+
+    #[test]
     fn test_e2e_ref_param_option_field_consume() {
         // B-2026-07-21-9: the Option-LEAF sibling of the ref-chain family —
         // `match <refparam>.opt { Some(s) => <consume s> … }` over an
