@@ -6913,6 +6913,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         // cleanup) and zero the SOURCE tag so the source
                         // struct-drop's `OptionInline` free skips it.
                         || self.option_inline_payload_elem(&field_te).is_some()
+                        // B-2026-07-21-15 — the Result sibling (direct
+                        // String/Vec halves): transfer the payload to the leaf
+                        // and zero the source's payload area.
+                        || self.result_field_direct_vecstr_halves_ok(&field_te)
                         || matches!(
                             &field_te.kind,
                             TypeKind::Path(p) if p.segments.last().is_some_and(|s|
@@ -7513,6 +7517,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // payload itself (no leak).
         if self.option_inline_payload_elem(te).is_some() {
             self.track_inline_option_payload_var(var_name, alloca, te);
+            return;
+        }
+        // B-2026-07-21-15 — the Result sibling: a direct-String/Vec-halves
+        // `Result` destructure leaf registers exactly like a let-bound Result
+        // binding (`FreeInlineResultPayload` + `inline_result_payload_vars`
+        // membership), so a later consuming match suppresses the free and an
+        // unconsumed leaf frees the payload itself.
+        if self.result_field_direct_vecstr_halves_ok(te) {
+            self.track_inline_result_payload_var(var_name, alloca, te);
             return;
         }
         if self.extract_map_kv_types(te).is_some() || self.extract_set_elem_type(te).is_some() {

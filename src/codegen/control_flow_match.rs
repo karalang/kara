@@ -4520,7 +4520,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // field: the arm's own binding frees the payload, so zero the
                 // SOURCE tag and let the struct-drop `OptionInline` free skip it.
                 self.zero_option_field_tag_at(field_ptr);
-            } else if fname != "Result" {
+            } else if fname == "Result" {
+                // B-2026-07-21-15 — the Result sibling: the struct drop now
+                // frees a direct-String/Vec-halves Result field, so a
+                // destructured-out field must zero the source's payload area
+                // (no-op for wider Result shapes — no registered free).
+                if let Some(layout) = self.enum_layouts.get("Result") {
+                    let result_ty = layout.llvm_type;
+                    self.zero_result_payload_area(result_ty, field_ptr, "p16.res");
+                }
+            } else {
                 if let Some(layout) = self.enum_layouts.get(fname).cloned() {
                     if !layout.is_shared {
                         self.zero_enum_payload_caps(field_ptr, &layout);
@@ -6329,7 +6338,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// offsets — which vary — so zeroing the whole area disarms BOTH shapes on a
     /// consuming move-out arm without knowing the field layout. Safe superset:
     /// the overlay's `cap` word is inside the zeroed range.
-    fn zero_result_payload_area(
+    pub(super) fn zero_result_payload_area(
         &self,
         result_ty: inkwell::types::StructType<'ctx>,
         slot: PointerValue<'ctx>,

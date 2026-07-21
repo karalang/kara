@@ -56675,6 +56675,71 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_result_field_drop_and_moves() {
+        // B-2026-07-21-15: a struct's `Result[String, i64]`-class field
+        // payload was NEVER freed at the owning struct's scope-exit drop —
+        // `field_copy_supported` deliberately kept every Result field
+        // caller-retains (no entry copy existed), so the OptionInline
+        // classifier never armed a free and the payload leaked wholesale.
+        // Now the DIRECT String/Vec-halves class completes the copy == drop
+        // pair: `field_copy_supported` admits it, the by-value entry copy
+        // duplicates the live half (`deep_copy_result_inline_heap_halves_
+        // in_place`), the struct drop frees it (the classifier's Result
+        // extension → `karac_drop_Result_<ok>_<err>`), and every move site
+        // zeroes the source payload area (whole-struct move, field move-out,
+        // #16 destructure, plus the B-2026-07-21-16 pattern/let/assign
+        // legs). Covers: unconsumed drop (the leak), by-value param passing
+        // (one holder per call — the harness ownership gate rejects
+        // double-consume reuse; the caller-retains reuse angle is covered
+        // by the ledger battery) + a consuming match on the callee's copy, a
+        // function-returned holder, a struct move + consume, a Vec element
+        // holder, a struct-pattern destructure with the leaf consumed, an
+        // Err-half scalar, and a both-halves-heap `Result[String, String]`.
+        let output = run_program(
+            "struct H3 { res: Result[String, i64], n: i64 }\n\
+             struct P2 { r: Result[String, String], n: i64 }\n\
+             fn take_n(h: H3) -> i64 { return h.n; }\n\
+             fn take_s(h: H3) -> String {\n\
+                 match h.res {\n\
+                     Ok(s) => { return s; }\n\
+                     Err(e) => { return e.to_string(); }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn mk(v: String) -> H3 { return H3 { res: Ok(v), n: 9 }; }\n\
+             fn main() {\n\
+                 let a1 = H3 { res: Ok(\"aa\".to_string()), n: 1 };\n\
+                 println(take_n(a1).to_string());\n\
+                 let a2 = H3 { res: Ok(\"aa\".to_string()), n: 1 };\n\
+                 println(take_s(a2));\n\
+                 let a3 = H3 { res: Ok(\"aa\".to_string()), n: 1 };\n\
+                 println(take_s(a3));\n\
+                 let b = mk(\"bb\".to_string());\n\
+                 println(b.n.to_string());\n\
+                 let c = H3 { res: Ok(\"cc\".to_string()), n: 3 };\n\
+                 let c2 = c;\n\
+                 match c2.res {\n\
+                     Ok(s) => { println(\"c:\".to_string() + s); }\n\
+                     Err(e) => { println(e.to_string()); }\n\
+                 }\n\
+                 let mut vs: Vec[H3] = vec![];\n\
+                 vs.push(H3 { res: Ok(\"vv\".to_string()), n: 4 });\n\
+                 println(vs[0].n.to_string());\n\
+                 let d = H3 { res: Ok(\"dd\".to_string()), n: 5 };\n\
+                 let H3 { res: r, n: k } = d;\n\
+                 println(k.to_string());\n\
+                 if let Ok(s) = r { println(\"r:\".to_string() + s); }\n\
+                 let e = H3 { res: Err(7), n: 6 };\n\
+                 println(take_s(e));\n\
+                 let g = P2 { r: Err(\"bad\".to_string()), n: 8 };\n\
+                 println(g.n.to_string());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "1\naa\naa\n9\nc:cc\n4\n5\nr:dd\n7\n8\n");
+    }
+
+    #[test]
     fn test_e2e_owned_struct_optres_field_consume_and_move() {
         // B-2026-07-21-16: consuming (or even print-only-binding) match /
         // if-let / let-else DIRECTLY over an OWNED struct's Option field,

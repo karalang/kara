@@ -4195,6 +4195,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Option field is now owned by the destination; zero the source
                 // tag so its struct-drop `OptionInline` skips it.
                 self.zero_option_field_tag_at(field_ptr);
+            } else if fname == "Result" {
+                // B-2026-07-21-15 — the Result sibling: the struct drop now
+                // frees a direct-String/Vec-halves Result field's payload, so
+                // a whole-struct move must zero the source's payload area
+                // (the destination owns it). No-op layout-wise for wider
+                // Result shapes (their struct drop registers no free).
+                if let Some(layout) = self.enum_layouts.get("Result") {
+                    let result_ty = layout.llvm_type;
+                    self.zero_result_payload_area(result_ty, field_ptr, "smv.res");
+                }
             } else if matches!(fname, "Map" | "HashMap" | "Set" | "HashSet") {
                 // B-2026-07-15-23 — a Map/Set field is a single opaque `ptr`
                 // handle stored inline. The struct's `StructDrop` (`FieldDrop::
@@ -4347,7 +4357,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // free (tag-guarded on `Some`) skips it; the destructure leaf now
             // owns the payload. The Option peer of the Vec cap-zero above.
             self.zero_option_field_tag_at(field_ptr);
-        } else if fname != "Result" {
+        } else if fname == "Result" {
+            // B-2026-07-21-15 — a moved-out `Result` field: zero the payload
+            // area so the owner's struct-drop Result overlay free skips it
+            // (no-op for wider Result shapes, which register no free).
+            if let Some(layout) = self.enum_layouts.get("Result") {
+                let result_ty = layout.llvm_type;
+                self.zero_result_payload_area(result_ty, field_ptr, "sfld.move.res");
+            }
+        } else {
             if let Some(layout) = self.enum_layouts.get(fname.as_str()).cloned() {
                 if !layout.is_shared {
                     self.zero_enum_payload_caps(field_ptr, &layout);

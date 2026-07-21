@@ -10440,6 +10440,69 @@ fn main() {
     }
 
     #[test]
+    fn asan_struct_result_field_drop_no_leak_no_double_free() {
+        // B-2026-07-21-15 memory leg. Leak half: an UNCONSUMED holder's
+        // Result payload (and an unconsumed destructure leaf) must be freed
+        // by the struct drop / the leaf's own registration — before the fix
+        // every such payload leaked wholesale. Double-free half: by-value
+        // passing (entry copy), struct moves, Vec-element holders, and
+        // consuming matches/destructures must each free the payload exactly
+        // once (every move site zeroes the source payload area). Includes a
+        // both-halves-heap `Result[String, String]` Err holder and an
+        // Err-scalar holder. Loop so any per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+struct H3 { res: Result[String, i64], n: i64 }
+struct P2 { r: Result[String, String], n: i64 }
+fn take_n(h: H3) -> i64 { return h.n; }
+fn take_s(h: H3) -> i64 {
+    match h.res {
+        Ok(s) => { return s.len(); }
+        Err(e) => { return e; }
+    }
+    return -1;
+}
+fn mk(v: String) -> H3 { return H3 { res: Ok(v), n: 9 }; }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = H3 { res: Ok("unconsumed".to_string()), n: 1 };
+        acc = acc + a.n;
+        let b1 = H3 { res: Ok("byvalue".to_string()), n: 2 };
+        let b2 = H3 { res: Ok("byvalue".to_string()), n: 2 };
+        let b3 = H3 { res: Ok("byvalue".to_string()), n: 2 };
+        acc = acc + take_n(b1) + take_s(b2) + take_s(b3);
+        let c = mk("returned".to_string());
+        acc = acc + c.n;
+        let d = H3 { res: Ok("moved".to_string()), n: 3 };
+        let d2 = d;
+        acc = acc + take_s(d2);
+        let mut vs: Vec[H3] = vec![];
+        vs.push(H3 { res: Ok("invec".to_string()), n: 4 });
+        acc = acc + vs[0].n;
+        let f = H3 { res: Ok("destr".to_string()), n: 5 };
+        let H3 { res: r, n: k } = f;
+        acc = acc + k;
+        if let Ok(s) = r { acc = acc + s.len(); }
+        let f2 = H3 { res: Ok("destr2".to_string()), n: 6 };
+        let H3 { res: r2, n: k2 } = f2;
+        acc = acc + k2;
+        let g = P2 { r: Err("bad".to_string()), n: 7 };
+        acc = acc + g.n;
+        let e = H3 { res: Err(11), n: 8 };
+        acc = acc + take_s(e);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["2760"],
+            "struct_result_field_drop",
+        );
+    }
+
+    #[test]
     fn asan_owned_struct_optres_field_consume_no_leak_no_double_free() {
         // B-2026-07-21-16 memory leg. Double-free half: a payload bound out
         // of an owned struct's Option field (direct match / if-let /

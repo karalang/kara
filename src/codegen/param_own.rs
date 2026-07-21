@@ -351,9 +351,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // symmetric with the Vec-element / destructure-leaf drop's
                     // `Option[shared]` rc-DEC (`emit_nested_struct_shared_rc_decs_ex`
                     // / `RcDecOption`). Other `Option` payloads (boxed-wide,
-                    // struct/enum-inline, plain-enum = B-27) and every `Result`
-                    // stay caller-retains (this routine can't duplicate them, and
-                    // the drop correspondingly leaves them excluded).
+                    // struct/enum-inline, plain-enum = B-27) stay caller-retains
+                    // (this routine can't duplicate them, and the drop
+                    // correspondingly leaves them excluded). `Result` fields in
+                    // the DIRECT String/Vec-halves class are copyable since
+                    // B-2026-07-21-15 (arm below); every other Result shape
+                    // stays caller-retains the same way.
                     // B-2026-07-18-2: under for-loop strict-shared mode an
                     // `Option` field is UNSUPPORTED — a shared-bearing struct's
                     // drain (synthesized as non-copy-supported) skips Option
@@ -381,7 +384,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .map(|pt| self.option_payload_struct_or_enum_copyable(&pt, stack))
                                 .unwrap_or(false)
                     }
-                    "Result" => false,
+                    // B-2026-07-21-15 — a `Result` field in the DIRECT
+                    // String/Vec-halves class IS copyable: the entry copy
+                    // duplicates the live half's `{ptr,len,cap}` overlay
+                    // (`deep_copy_result_inline_heap_halves_in_place`, built
+                    // for the -14 clone leg) and the struct drop's Result
+                    // overlay free (the OptionInline classifier's Result
+                    // extension) frees it — copy == drop. Under for-loop
+                    // strict-shared mode it stays unsupported, matching the
+                    // Option arm's rationale. Every other Result shape
+                    // (shared / wrapper / nested halves) stays caller-retains.
+                    "Result" if self.copy_support_for_loop_shared_mode => false,
+                    "Result" => self.result_field_direct_vecstr_halves_ok(fte),
                     _ if is_primitive_type_name(head) => true,
                     // B-2026-07-18-2: a DIRECT `shared` handle field is copyable
                     // in for-loop strict-shared mode — the "copy" is an rc-INC of
@@ -924,6 +938,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_struct_gep(agg_ty, base_ptr, idx, "p14.of")
                 {
                     self.deep_copy_option_inline_payload_in_place(field_ptr, fte);
+                }
+                return;
+            }
+        }
+        // B-2026-07-21-15 — a `Result[T, E]` field in the direct-String/Vec-
+        // halves class: deep-copy the LIVE half's `{ptr,len,cap}` overlay in
+        // place, symmetric with the struct drop's Result overlay free (the
+        // OptionInline classifier's Result extension). `field_copy_supported`
+        // vetted the class, so any Result reaching here is copyable.
+        if let TypeKind::Path(p) = &fte.kind {
+            if p.segments.last().map(|s| s.as_str()) == Some("Result") {
+                if let Ok(field_ptr) = self
+                    .builder
+                    .build_struct_gep(agg_ty, base_ptr, idx, "p14.rf")
+                {
+                    self.deep_copy_result_inline_heap_halves_in_place(field_ptr, fte);
                 }
                 return;
             }

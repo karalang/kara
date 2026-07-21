@@ -1411,7 +1411,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if *k == FieldDrop::None
                     && matches!(
                         field_kinds.get(idx).and_then(|o| o.as_deref()),
-                        Some("Option")
+                        Some("Option") | Some("Result")
                     )
                 {
                     option_idxs.push(idx);
@@ -1426,6 +1426,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 else {
                     continue;
                 };
+                // B-2026-07-21-15 — a `Result` field in the DIRECT
+                // String/Vec-halves class: same registration route as the
+                // Option arm (`vec_elem_agg_drop_for_type_expr` hands back
+                // the tag-dispatched `karac_drop_Result_<ok>_<err>`),
+                // symmetric with `field_copy_supported`'s Result admit and
+                // the entry copy's `deep_copy_result_inline_heap_halves_in_
+                // place`. Wider Result shapes never get here (the struct is
+                // not callee-owned) and stay caller-retains.
+                if matches!(
+                    field_kinds.get(idx).and_then(|o| o.as_deref()),
+                    Some("Result")
+                ) {
+                    if !self.result_field_direct_vecstr_halves_ok(&field_te) {
+                        continue;
+                    }
+                    if let Some(f) = self.vec_elem_agg_drop_for_type_expr(&field_te) {
+                        option_drops[idx] = Some(f);
+                        kinds[idx] = FieldDrop::OptionInline;
+                    }
+                    continue;
+                }
                 // The payload classes `field_copy_supported` admits and
                 // `param_own` entry-copies: the inline-`{ptr,len,cap}` String/Vec
                 // overlay, PLUS (B-2026-07-04-7) a non-shared struct/enum payload
