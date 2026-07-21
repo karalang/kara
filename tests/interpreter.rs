@@ -23782,3 +23782,99 @@ fn test_dataframe_read_csv_missing_file_and_ragged_rows_err() {
     let _ = std::fs::remove_file(&tmp);
     assert_eq!(out, "missing-err\nragged-err\n");
 }
+
+#[test]
+fn test_lazyframe_explain_and_collect_with_pushdown() {
+    // Phase-11 LazyDataFrame slice 1: `df.lazy().select(..).limit(..)`
+    // records a plan; `explain()` renders the logical plan (innermost
+    // SCAN) plus the optimized single-scan form (consecutive limits fuse
+    // to the min, the projection pushes into the scan); `collect()` runs
+    // the optimized plan (subset + reorder + truncate, typed reads).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64, 2i64, 3i64, 4i64]));\n\
+             df.insert(\"b\", Column.from_vec([10.5, 20.5, 30.5, 40.5]));\n\
+             df.insert(\"c\", Column.from_vec([\"x\", \"y\", \"z\", \"w\"]));\n\
+             let plan = df.lazy().select(vec![\"b\", \"a\"]).limit(7).limit(2);\n\
+             println(plan.explain());\n\
+             let out = plan.collect();\n\
+             println(out.width()); println(out.height());\n\
+             for n in out.column_names() { println(n); }\n\
+             let b: Column[f64] = out.column(\"b\");\n\
+             match b[1] { Some(v) => println(v), None => println(-1.0) }\n\
+         }",
+    );
+    assert_eq!(
+        out,
+        "== logical plan ==\n\
+         LIMIT 2\n\
+         \x20 LIMIT 7\n\
+         \x20   SELECT [b, a]\n\
+         \x20     SCAN [a, b, c]\n\
+         == optimized ==\n\
+         SCAN cols=[b, a] limit=2\n\
+         2\n2\nb\na\n20.5\n",
+        "explain must render logical + fused optimized plan; collect must run it",
+    );
+}
+
+#[test]
+fn test_lazyframe_collect_validates_at_run_not_build() {
+    // A select naming a missing column BUILDS fine (plans validate when
+    // they run); `explain()` renders INVALID PLAN; `collect()` is the
+    // runtime error.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let bad = df.lazy().select(vec![\"nope\"]);\n\
+             println(\"built-ok\");\n\
+             println(bad.explain());\n\
+         }",
+    );
+    assert!(
+        out.contains("built-ok")
+            && out.contains("INVALID PLAN: LazyFrame.select: no column named 'nope'"),
+        "got: {out}",
+    );
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().select(vec![\"nope\"]).collect();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no column named 'nope'")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_lazyframe_limit_clamps_and_no_select_keeps_all_columns() {
+    // A negative limit clamps to 0; a limit past the height keeps every
+    // row; with no select the collect keeps every source column (`*`).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64, 2i64]));\n\
+             let zero = df.lazy().limit(-3).collect();\n\
+             println(zero.height());\n\
+             let all = df.lazy().limit(99).collect();\n\
+             println(all.height()); println(all.width());\n\
+             println(df.lazy().explain());\n\
+         }",
+    );
+    assert_eq!(
+        out,
+        "0\n2\n1\n\
+         == logical plan ==\n\
+         SCAN [a]\n\
+         == optimized ==\n\
+         SCAN cols=[*]\n",
+        "limit must clamp; empty plan must scan everything",
+    );
+}

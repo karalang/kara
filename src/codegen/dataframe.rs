@@ -675,6 +675,19 @@ impl<'ctx> super::Codegen<'ctx> {
             let src = self.dataframe_ptr_for_var(var)?;
             return Ok(Some(self.compile_dataframe_describe(src)?));
         }
+        if method == "lazy" {
+            // Phase-11 LazyDataFrame slice 1 is interpreter-first (the
+            // DataFrame pattern). `lazy()` is the single entry point to the
+            // whole LazyFrame surface, so one loud bail here covers the
+            // chain; the codegen twin (plan as a compile-time value folded
+            // into eager select/limit calls, or a runtime plan object) is a
+            // follow-on slice.
+            return Err(
+                "LazyFrame (df.lazy()) is interpreter-only in this slice — run it with \
+                 `karac run` (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
+                    .to_string(),
+            );
+        }
         if method == "write_csv" {
             // Phase-11 CSV leg — the codegen twin. The serialization itself
             // lives in the runtime (`karac_runtime_df_write_csv` walks the

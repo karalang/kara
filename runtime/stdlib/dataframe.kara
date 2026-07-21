@@ -156,4 +156,70 @@ impl DataFrame {
     fn read_csv(path: String) -> Result[DataFrame, IoError] with reads(FileSystem) {
         Err(IoError.Other("placeholder"))
     }
+
+    // Start a lazy query over this table (phase-11 `LazyDataFrame`,
+    // Option A v1 — slice 1). Returns a `LazyFrame` recording a logical
+    // plan over a VIEW of this table's columns; nothing executes until
+    // `collect()`. The source view is live (a later mutation of the
+    // eager frame is visible at collect — the Column view semantics).
+    #[compiler_builtin]
+    fn lazy(ref self) -> LazyFrame {
+        LazyFrame { handle_id: 0 }
+    }
+}
+
+// `LazyFrame` — a deferred query plan over a DataFrame (phase-11
+// `LazyDataFrame`, Option A v1). Builder methods take OWNED `self` and
+// return a new `LazyFrame` (the fluent chain `df.lazy().select(cols)
+// .limit(n).collect()`); each records one logical-plan step, and
+// `collect()` runs the OPTIMIZED plan. Slice-1 surface: `select` /
+// `limit` / `collect` / `explain`; `filter` / `sort` / `group_by` /
+// `agg` / `join` land in follow-on slices (tracker:
+// phase-11-stdlib-longtail.md § LazyDataFrame).
+//
+// The slice-1 optimizer is the pushdown seed: consecutive `select`s
+// compose (the outermost wins, validated against the inner selection),
+// consecutive `limit`s fuse to the minimum, and both push into the scan
+// — `explain()` renders the logical plan AND the optimized single-scan
+// form (`SCAN cols=[..] limit=N`), the oracle for optimizer tests.
+struct LazyFrame {
+    // Opaque — interpreter intercepts all construction and access.
+    handle_id: i64,
+}
+
+impl LazyFrame {
+    // Project to the named columns, in the given order (subset /
+    // reorder — the lazy twin of `DataFrame.select`). A name absent
+    // from the upstream selection is a runtime error AT COLLECT (plans
+    // are validated when they run, not when they build).
+    #[compiler_builtin]
+    fn select(self, cols: Vec[String]) -> LazyFrame {
+        LazyFrame { handle_id: 0 }
+    }
+
+    // Keep at most the first `n` rows. A negative `n` clamps to 0; an
+    // `n` past the table height keeps every row. Consecutive limits
+    // fuse to the minimum.
+    #[compiler_builtin]
+    fn limit(self, n: i64) -> LazyFrame {
+        LazyFrame { handle_id: 0 }
+    }
+
+    // Run the optimized plan and materialize an eager `DataFrame`.
+    // Selected columns are views of the source buffers when no limit
+    // truncates them (the eager-`select` sharing semantics); a limit
+    // materializes fresh truncated columns.
+    #[compiler_builtin]
+    fn collect(self) -> DataFrame {
+        DataFrame { handle_id: 0 }
+    }
+
+    // Render the plan without running it: the logical plan as recorded
+    // (innermost SCAN, one indented line per step) followed by the
+    // optimized single-scan form. Deterministic output — the optimizer
+    // tests pin it byte-for-byte.
+    #[compiler_builtin]
+    fn explain(ref self) -> String {
+        ""
+    }
 }

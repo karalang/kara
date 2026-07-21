@@ -53,6 +53,18 @@ pub struct TestOutcome {
 
 // ── Runtime Values ──────────────────────────────────────────────
 
+/// One recorded step of a `LazyFrame` logical plan (phase-11
+/// `LazyDataFrame` Option A, slice 1). Applied in list order over the
+/// source scan; `collect()` / `explain()` fold the list into the
+/// optimized single-scan form (outermost projection + minimum limit).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LazyOp {
+    /// Project to the named columns, in the given order.
+    Select(Vec<String>),
+    /// Keep at most the first `n` rows (already clamped to `>= 0`).
+    Limit(i64),
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
@@ -180,6 +192,19 @@ pub enum Value {
     /// store; the interpreter only needs the logical semantics.
     DataFrame {
         columns: Arc<RwLock<Vec<(String, Value)>>>,
+    },
+    /// `LazyFrame` — a deferred query plan over a DataFrame (phase-11
+    /// `LazyDataFrame` Option A, slice 1). `source` is a live VIEW of the
+    /// source frame's column list (the same `Arc` the eager frame holds);
+    /// `ops` is the recorded logical plan in application order. Builder
+    /// methods (`select` / `limit`) clone the op list and push one step —
+    /// cheap at MVP scale, and a linear single-source pipeline is exactly
+    /// slice-1's plan shape (`join` turns it into a tree in a later
+    /// slice). Nothing executes until `collect()`; `explain()` renders
+    /// the plan. See `runtime/stdlib/dataframe.kara § LazyFrame`.
+    LazyFrame {
+        source: Arc<RwLock<Vec<(String, Value)>>>,
+        ops: Arc<Vec<LazyOp>>,
     },
     Map(Vec<(Value, Value)>),
     Struct {
@@ -878,6 +903,10 @@ impl std::fmt::Display for Value {
                     names.join(", ")
                 )
             }
+            // Summary form — plan step count; `explain()` renders the plan.
+            Value::LazyFrame { ops, .. } => {
+                write!(f, "LazyFrame[{} step(s)]", ops.len())
+            }
             Value::Tuple(vals) => {
                 write!(f, "(")?;
                 for (i, v) in vals.iter().enumerate() {
@@ -1222,6 +1251,7 @@ impl Value {
             Value::Tensor { .. } => "Tensor",
             Value::Column { .. } => "Column",
             Value::DataFrame { .. } => "DataFrame",
+            Value::LazyFrame { .. } => "LazyFrame",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
             Value::Vector(_) => "Vector",

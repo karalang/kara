@@ -568,6 +568,27 @@ mod codegen_tests {
     }
 
     #[test]
+    fn lazyframe_rejected_by_codegen_with_run_hint() {
+        // Phase-11 LazyDataFrame slice 1 is interpreter-first: `df.lazy()`
+        // (the single entry point to the LazyFrame surface) must be
+        // rejected LOUDLY by codegen with a `karac run` pointer rather
+        // than silently mis-lowering the chain.
+        let err = ir_result(
+            "fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"a\", Column.from_vec([1i64]));\n\
+                 let out = df.lazy().limit(1).collect();\n\
+                 println(out.height());\n\
+             }",
+        )
+        .expect_err("df.lazy() must be rejected by codegen in slice 1");
+        assert!(
+            err.contains("interpreter-only") && err.contains("karac run"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
     fn test_e2e_dataframe_read_csv_round_trips_all_backends() {
         // Phase-11 CSV leg — the read_csv codegen twin
         // (karac_runtime_df_read_csv builds the malloc'd control-block graph

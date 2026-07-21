@@ -6386,6 +6386,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // A LazyFrame-typed call that fell through is the documented slice-1
+        // deferral, not a codegen bug — a CHAIN (`df.lazy().limit(1).collect()`)
+        // reaches this fallthrough at the OUTERMOST call before the `lazy`
+        // bail in the DataFrame dispatcher fires, so point at `karac run`
+        // like that bail does (phase-11-stdlib-longtail.md § LazyDataFrame).
+        let key = (call_span.offset, call_span.length);
+        if self
+            .method_callee_types
+            .get(&key)
+            .is_some_and(|k| k.starts_with("LazyFrame."))
+        {
+            return Err(
+                "LazyFrame (df.lazy()) is interpreter-only in this slice — run it with \
+                 `karac run` (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
+                    .to_string(),
+            );
+        }
         let receiver_desc = match &object.kind {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
             _ => "non-identifier receiver".to_string(),

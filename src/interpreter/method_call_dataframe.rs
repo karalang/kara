@@ -413,9 +413,212 @@ impl<'a> super::Interpreter<'a> {
                     Err(e) => io_err_value(io_error_from_std(&e)),
                 })
             }
+            // Start a lazy query: a LazyFrame holding a live VIEW of this
+            // frame's column list (the same Arc — eager mutations before
+            // collect are visible, the Column view semantics) and an empty
+            // plan. Phase-11 LazyDataFrame slice 1.
+            "lazy" => Some(Value::LazyFrame {
+                source: Arc::clone(columns),
+                ops: Arc::new(Vec::new()),
+            }),
             _ => None,
         }
     }
+
+    /// `LazyFrame` methods (phase-11 LazyDataFrame, slice 1): the plan
+    /// builders `select` / `limit` (owned-self fluent chain — each clones
+    /// the op list and pushes one step), `collect` (validate + run the
+    /// optimized plan, materializing an eager DataFrame), and `explain`
+    /// (render the logical plan and its optimized single-scan form).
+    /// Returns `None` for a non-LazyFrame receiver / unknown method.
+    pub(super) fn try_eval_lazyframe_method(
+        &mut self,
+        method: &str,
+        obj: &Value,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Value> {
+        use crate::interpreter::value::LazyOp;
+        let Value::LazyFrame { source, ops } = obj else {
+            return None;
+        };
+        match method {
+            "select" => {
+                let Value::Array(rc) = self.eval_expr_inner(&args.first()?.value) else {
+                    return Some(self.record_runtime_error(
+                        "LazyFrame.select expects a Vec[String] of column names",
+                        span,
+                    ));
+                };
+                let mut cols: Vec<String> = Vec::new();
+                for v in rc.read().unwrap().iter() {
+                    match v {
+                        Value::String(s) => cols.push(s.clone()),
+                        other => {
+                            return Some(self.record_runtime_error(
+                                format!(
+                                    "LazyFrame.select column names must be Strings, got {}",
+                                    other.variant_name()
+                                ),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                let mut new_ops = ops.as_ref().clone();
+                new_ops.push(LazyOp::Select(cols));
+                Some(Value::LazyFrame {
+                    source: Arc::clone(source),
+                    ops: Arc::new(new_ops),
+                })
+            }
+            "limit" => {
+                let n = match self.eval_expr_inner(&args.first()?.value) {
+                    Value::Int(n) => n.max(0),
+                    other => {
+                        return Some(self.record_runtime_error(
+                            format!(
+                                "LazyFrame.limit expects an i64, got {}",
+                                other.variant_name()
+                            ),
+                            span,
+                        ));
+                    }
+                };
+                let mut new_ops = ops.as_ref().clone();
+                new_ops.push(LazyOp::Limit(n));
+                Some(Value::LazyFrame {
+                    source: Arc::clone(source),
+                    ops: Arc::new(new_ops),
+                })
+            }
+            "collect" => {
+                let (proj, limit) = match fold_lazy_plan(source, ops, span) {
+                    Ok(p) => p,
+                    Err(msg) => return Some(self.record_runtime_error(msg, span)),
+                };
+                let src = source.read().unwrap();
+                // Column order: the folded projection (or every source
+                // column). Each output column is a VIEW (handle clone)
+                // unless a limit truncates it, which materializes fresh
+                // cells — the eager-`select` sharing semantics.
+                let names: Vec<String> = match &proj {
+                    Some(cols) => cols.clone(),
+                    None => src.iter().map(|(n, _)| n.clone()).collect(),
+                };
+                let mut out: Vec<(String, Value)> = Vec::with_capacity(names.len());
+                for name in names {
+                    let Some((_, col)) = src.iter().find(|(n, _)| n == &name) else {
+                        // fold_lazy_plan validated projections, so this is
+                        // unreachable; defensive all the same.
+                        return Some(self.record_runtime_error(
+                            format!("LazyFrame.collect: no column named '{name}'"),
+                            span,
+                        ));
+                    };
+                    let out_col = match (limit, col) {
+                        (Some(n), Value::Column { data, valid }) => {
+                            let d = data.read().unwrap();
+                            let v = valid.read().unwrap();
+                            let keep = (n as usize).min(v.len());
+                            Value::Column {
+                                data: Arc::new(RwLock::new(d[..keep.min(d.len())].to_vec())),
+                                valid: Arc::new(RwLock::new(v[..keep].to_vec())),
+                            }
+                        }
+                        _ => col.clone(),
+                    };
+                    out.push((name, out_col));
+                }
+                Some(Value::DataFrame {
+                    columns: Arc::new(RwLock::new(out)),
+                })
+            }
+            "explain" => {
+                // Logical plan: innermost SCAN, one indented line per
+                // recorded step; then the optimized single-scan form.
+                // Deterministic — optimizer tests pin this byte-for-byte.
+                let src = source.read().unwrap();
+                let src_names: Vec<&str> = src.iter().map(|(n, _)| n.as_str()).collect();
+                let mut lines: Vec<String> = vec![format!("SCAN [{}]", src_names.join(", "))];
+                for op in ops.iter() {
+                    let step = match op {
+                        LazyOp::Select(cols) => format!("SELECT [{}]", cols.join(", ")),
+                        LazyOp::Limit(n) => format!("LIMIT {n}"),
+                    };
+                    lines.push(step);
+                }
+                let mut logical = String::new();
+                for (i, line) in lines.iter().rev().enumerate() {
+                    let indent = lines.len() - 1 - (lines.len() - 1 - i);
+                    let _ = indent;
+                    logical.push_str(&"  ".repeat(i));
+                    logical.push_str(line);
+                    logical.push('\n');
+                }
+                drop(src);
+                let optimized = match fold_lazy_plan(source, ops, span) {
+                    Ok((proj, limit)) => {
+                        let cols = match &proj {
+                            Some(c) => c.join(", "),
+                            None => "*".to_string(),
+                        };
+                        match limit {
+                            Some(n) => format!("SCAN cols=[{cols}] limit={n}"),
+                            None => format!("SCAN cols=[{cols}]"),
+                        }
+                    }
+                    Err(msg) => format!("INVALID PLAN: {msg}"),
+                };
+                Some(Value::String(format!(
+                    "== logical plan ==\n{logical}== optimized ==\n{optimized}"
+                )))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Fold a slice-1 lazy plan (select/limit steps over a single source)
+/// into its optimized single-scan form: the effective projection (the
+/// LAST select's columns, validated against what the preceding pipeline
+/// exposes) and the minimum limit. Errors carry the offending column name
+/// — surfaced at `collect()` (plans validate when they RUN) and rendered
+/// by `explain()` as `INVALID PLAN`.
+#[allow(clippy::type_complexity)]
+fn fold_lazy_plan(
+    source: &Arc<RwLock<Vec<(String, Value)>>>,
+    ops: &Arc<Vec<crate::interpreter::value::LazyOp>>,
+    _span: &Span,
+) -> Result<(Option<Vec<String>>, Option<i64>), String> {
+    use crate::interpreter::value::LazyOp;
+    let src = source.read().unwrap();
+    let mut visible: Vec<String> = src.iter().map(|(n, _)| n.clone()).collect();
+    drop(src);
+    let mut proj: Option<Vec<String>> = None;
+    let mut limit: Option<i64> = None;
+    for op in ops.iter() {
+        match op {
+            LazyOp::Select(cols) => {
+                for c in cols {
+                    if !visible.contains(c) {
+                        return Err(format!(
+                            "LazyFrame.select: no column named '{c}' at this plan step"
+                        ));
+                    }
+                }
+                visible = cols.clone();
+                proj = Some(cols.clone());
+            }
+            LazyOp::Limit(n) => {
+                limit = Some(match limit {
+                    Some(m) => m.min(*n),
+                    None => *n,
+                });
+            }
+        }
+    }
+    Ok((proj, limit))
 }
 
 /// Parse RFC-4180-lite CSV text into a `Value::DataFrame` (phase-11 CSV
