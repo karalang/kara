@@ -85,6 +85,12 @@ pub enum LazyOp {
         right_ops: Arc<Vec<LazyOp>>,
         on: Vec<String>,
     },
+    /// Computed / renamed columns (slice 7 — the expression-projection
+    /// leg). Each entry needs an output name (a bare `col(..)` keeps its
+    /// own; anything else must be `.alias_(..)`ed); results REPLACE a
+    /// same-named column or APPEND. Entries all see the step's INPUT
+    /// frame, never each other (the Polars parallel semantics).
+    WithColumns(Vec<Arc<LazyExprIR>>),
 }
 
 /// A lazy scalar expression tree (phase-11 LazyDataFrame slice 2) — the
@@ -110,6 +116,14 @@ pub enum LazyExprIR {
     And(Box<LazyExprIR>, Box<LazyExprIR>),
     Or(Box<LazyExprIR>, Box<LazyExprIR>),
     Not(Box<LazyExprIR>),
+    /// Numeric arithmetic (slice 7) — `col("a").mul(2)`. NULL on either
+    /// side makes the result NULL; i64 pairs stay i64 (loud on division
+    /// by zero / overflow), any f64 widens (IEEE thereafter).
+    Arith {
+        op: LazyArithOp,
+        lhs: Box<LazyExprIR>,
+        rhs: Box<LazyExprIR>,
+    },
     /// Descending sort-key marker (`col("cnt").desc()`) — only
     /// meaningful as a `LazyFrame.sort` key; an error anywhere else.
     Desc(Box<LazyExprIR>),
@@ -150,6 +164,28 @@ impl LazyAggOp {
     }
 }
 
+/// The slice-7 arithmetic vocabulary (`add`/`sub`/`mul`/`div` builder
+/// methods — the bare-operator spelling waits on the queued operator-
+/// overload decision, same as the comparisons).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LazyArithOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl LazyArithOp {
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            LazyArithOp::Add => "+",
+            LazyArithOp::Sub => "-",
+            LazyArithOp::Mul => "*",
+            LazyArithOp::Div => "/",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LazyCmpOp {
     Gt,
@@ -185,6 +221,7 @@ impl std::fmt::Display for LazyExprIR {
             LazyExprIR::LitStr(s) => write!(f, "\"{s}\""),
             LazyExprIR::LitBool(b) => write!(f, "{b}"),
             LazyExprIR::Cmp { op, lhs, rhs } => write!(f, "({lhs} {} {rhs})", op.symbol()),
+            LazyExprIR::Arith { op, lhs, rhs } => write!(f, "({lhs} {} {rhs})", op.symbol()),
             LazyExprIR::And(a, b) => write!(f, "({a} and {b})"),
             LazyExprIR::Or(a, b) => write!(f, "({a} or {b})"),
             LazyExprIR::Not(x) => write!(f, "(not {x})"),

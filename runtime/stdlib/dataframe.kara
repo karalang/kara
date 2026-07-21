@@ -243,6 +243,21 @@ impl LazyExpr {
     #[compiler_builtin]
     fn ne[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
 
+    // Numeric arithmetic (phase-11 slice 7) — `rhs` is a numeric literal
+    // or another `LazyExpr`. NULL on either side makes the result NULL;
+    // an i64 pair stays i64 (division by zero / overflow are loud errors
+    // at collect), any f64 side widens the result to f64 (IEEE
+    // thereafter). The bare-operator spelling (`col("a") * 2`) waits on
+    // the queued operator-overload decision, like the comparisons.
+    #[compiler_builtin]
+    fn add[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn sub[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn mul[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn div[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+
     // Boolean combinators over predicate sub-expressions. `and` / `or` /
     // `not` are Kāra KEYWORDS (the logical operators), so the methods take
     // a trailing underscore — the exact convention Polars-Python adopted
@@ -351,6 +366,20 @@ impl LazyFrame {
     // that is the P2 optimizer-expansion entry.
     #[compiler_builtin]
     fn join(self, other: LazyFrame, on: Vec[String]) -> LazyFrame {
+        LazyFrame { handle_id: 0 }
+    }
+
+    // Computed / renamed columns (phase-11 slice 7 — the expression-
+    // projection leg). Each entry needs an output name: a bare
+    // `col(..)` keeps its own, anything computed must be `.alias_(..)`ed
+    // — `with_columns(vec![col("a").mul(2).alias_("a2")])`. Results
+    // REPLACE a same-named column or APPEND after the existing ones;
+    // entries all see this step's INPUT frame, never each other (the
+    // Polars parallel semantics — a duplicate output name in one call
+    // is a loud error). Combined with `select(names)` this is the full
+    // expression-projection surface: compute here, project there.
+    #[compiler_builtin]
+    fn with_columns(self, exprs: Vec[LazyExpr]) -> LazyFrame {
         LazyFrame { handle_id: 0 }
     }
 

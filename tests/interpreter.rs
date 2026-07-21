@@ -24506,3 +24506,152 @@ fn test_lazyframe_constant_folding_preserves_errors() {
         "{errors:?}",
     );
 }
+
+#[test]
+fn test_lazyframe_with_columns_arithmetic_pipeline() {
+    // Phase-11 LazyDataFrame slice 7: `with_columns` (the expression-
+    // projection leg) + arithmetic expression nodes (add/sub/mul/div).
+    // Entries need an output name (bare col keeps its own — a rename
+    // copy via alias_; computed entries must be aliased); results
+    // REPLACE a same-named column in place or APPEND; entries see the
+    // step's INPUT frame (Polars parallel semantics). NULL propagates
+    // through arithmetic; i64 pairs stay i64, an f64 side widens; a
+    // computed bool column comes from a comparison expression; sort
+    // works on a computed column. A select BEFORE with_columns flushes
+    // as an explicit SELECT step whose columns join the scan set (they
+    // flow through to the output); constant folding applies inside
+    // entries (`2 + 1` folds to `3`).
+    let out = run_no_errors(
+        "import std.lazy.{col, lit};\n\
+         fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64, 2i64, 3i64]));\n\
+             df.insert(\"b\", Column.from_vec([10.5, 20.5, 30.5]));\n\
+             df.insert(\"name\", Column.from_vec([\"x\", \"y\", \"z\"]));\n\
+             let plan = df.lazy().with_columns(vec![col(\"a\").mul(2).alias_(\"a2\"), col(\"b\").add(col(\"a\")).alias_(\"ab\"), col(\"name\").alias_(\"label\")]);\n\
+             println(plan.explain());\n\
+             let out = plan.collect();\n\
+             println(out.width());\n\
+             for n in out.column_names() { println(n); }\n\
+             let a2: Column[i64] = out.column(\"a2\");\n\
+             let ab: Column[f64] = out.column(\"ab\");\n\
+             match a2[2] { Some(v) => println(v), None => println(-1i64) }\n\
+             match ab[0] { Some(v) => println(v), None => println(-1.0) }\n\
+             let rep = df.lazy().with_columns(vec![col(\"a\").add(100).alias_(\"a\")]).collect();\n\
+             for n in rep.column_names() { println(n); }\n\
+             let ra: Column[i64] = rep.column(\"a\");\n\
+             match ra[0] { Some(v) => println(v), None => println(-1i64) }\n\
+             let nn: Vec[Option[i64]] = vec![Some(1i64), None];\n\
+             let mut nf: DataFrame = DataFrame.new();\n\
+             nf.insert(\"v\", Column.from_iter_nullable(nn));\n\
+             let v10: Column[i64] = nf.lazy().with_columns(vec![col(\"v\").mul(10).alias_(\"v10\")]).collect().column(\"v10\");\n\
+             match v10[0] { Some(v) => println(v), None => println(\"null\") }\n\
+             match v10[1] { Some(v) => println(v), None => println(\"null\") }\n\
+             let piped = df.lazy()\n\
+                 .select(vec![\"a\", \"b\"])\n\
+                 .with_columns(vec![col(\"a\").mul(lit(2).add(1)).alias_(\"a3\")])\n\
+                 .filter(col(\"a3\").gt(3));\n\
+             println(piped.explain());\n\
+             let out4 = piped.collect();\n\
+             println(out4.height());\n\
+             let a3: Column[i64] = out4.column(\"a3\");\n\
+             match a3[0] { Some(v) => println(v), None => println(-1i64) }\n\
+             let bg: Column[bool] = df.lazy().with_columns(vec![col(\"a\").ge(2).alias_(\"big\")]).collect().column(\"big\");\n\
+             match bg[0] { Some(v) => println(v), None => println(\"null\") }\n\
+             match bg[1] { Some(v) => println(v), None => println(\"null\") }\n\
+             let s = df.lazy().with_columns(vec![col(\"a\").mul(-1).alias_(\"neg\")]).sort(vec![col(\"neg\")]).collect();\n\
+             let sa: Column[i64] = s.column(\"a\");\n\
+             match sa[0] { Some(v) => println(v), None => println(-1i64) }\n\
+         }",
+    );
+    assert_eq!(
+        out,
+        "== logical plan ==\n\
+         WITH [(a * 2) as a2, (b + a) as ab, name as label]\n\
+         \x20 SCAN [a, b, name]\n\
+         == optimized ==\n\
+         WITH [(a * 2) as a2, (b + a) as ab, name as label]\n\
+         \x20 SCAN cols=[a, b, name]\n\
+         6\na\nb\nname\na2\nab\nlabel\n\
+         6\n11.5\n\
+         a\nb\nname\n101\n\
+         10\nnull\n\
+         == logical plan ==\n\
+         FILTER (a3 > 3)\n\
+         \x20 WITH [(a * (2 + 1)) as a3]\n\
+         \x20   SELECT [a, b]\n\
+         \x20     SCAN [a, b, name]\n\
+         == optimized ==\n\
+         FILTER (a3 > 3)\n\
+         \x20 WITH [(a * 3) as a3]\n\
+         \x20   SELECT [a, b]\n\
+         \x20     SCAN cols=[a, b]\n\
+         2\n6\n\
+         false\ntrue\n\
+         3\n",
+        "with_columns must compute/replace/append, fold inside entries, flush selects honestly",
+    );
+}
+
+#[test]
+fn test_lazyframe_with_columns_errors() {
+    // Unnamed computed entries and duplicate output names are loud at
+    // fold (explain shows INVALID PLAN, collect errors); i64 division
+    // by zero and arithmetic on non-numeric columns are loud at eval.
+    let errors = runtime_errors(
+        "import std.lazy.{col};\n\
+         fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().with_columns(vec![col(\"a\").mul(2)]).collect();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("each entry needs an output name")),
+        "{errors:?}",
+    );
+    let errors = runtime_errors(
+        "import std.lazy.{col};\n\
+         fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().with_columns(vec![col(\"a\").mul(2).alias_(\"z\"), col(\"a\").add(1).alias_(\"z\")]).collect();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("duplicate output name 'z'")),
+        "{errors:?}",
+    );
+    let errors = runtime_errors(
+        "import std.lazy.{col};\n\
+         fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64, 0i64]));\n\
+             let _ = df.lazy().with_columns(vec![col(\"a\").div(col(\"a\")).alias_(\"q\")]).collect();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("integer division by zero")),
+        "{errors:?}",
+    );
+    let errors = runtime_errors(
+        "import std.lazy.{col};\n\
+         fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"s\", Column.from_vec([\"x\"]));\n\
+             let _ = df.lazy().with_columns(vec![col(\"s\").add(1).alias_(\"t\")]).collect();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("arithmetic on non-numeric values")),
+        "{errors:?}",
+    );
+}

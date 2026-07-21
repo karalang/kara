@@ -507,6 +507,41 @@ impl<'a> super::Interpreter<'a> {
                     ops: Arc::new(new_ops),
                 })
             }
+            "with_columns" => {
+                let Value::Array(rc) = self.eval_expr_inner(&args.first()?.value) else {
+                    return Some(self.record_runtime_error(
+                        "LazyFrame.with_columns expects a Vec[LazyExpr]",
+                        span,
+                    ));
+                };
+                let mut exprs = Vec::new();
+                for v in rc.read().unwrap().iter() {
+                    match v {
+                        Value::LazyExpr(ir) => exprs.push(Arc::clone(ir)),
+                        other => {
+                            return Some(self.record_runtime_error(
+                                format!(
+                                    "LazyFrame.with_columns entries must be LazyExprs, got {}",
+                                    other.variant_name()
+                                ),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                if exprs.is_empty() {
+                    return Some(self.record_runtime_error(
+                        "LazyFrame.with_columns needs at least one entry",
+                        span,
+                    ));
+                }
+                let mut new_ops = ops.as_ref().clone();
+                new_ops.push(LazyOp::WithColumns(exprs));
+                Some(Value::LazyFrame {
+                    source: Arc::clone(source),
+                    ops: Arc::new(new_ops),
+                })
+            }
             "sort" => {
                 let Value::Array(rc) = self.eval_expr_inner(&args.first()?.value) else {
                     return Some(self.record_runtime_error(
@@ -681,6 +716,14 @@ impl<'a> super::Interpreter<'a> {
                             on.join(", "),
                             lazy_logical_compact(right_source, right_ops)
                         ),
+                        LazyOp::WithColumns(exprs) => format!(
+                            "WITH [{}]",
+                            exprs
+                                .iter()
+                                .map(|e| e.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
                     };
                     lines.push(step);
                 }
@@ -737,6 +780,28 @@ impl<'a> super::Interpreter<'a> {
                 Err(msg) => return Some(self.record_runtime_error(msg, span)),
             };
             return Some(Value::LazyExpr(Arc::new(LazyExprIR::Cmp {
+                op,
+                lhs: Box::new(ir.as_ref().clone()),
+                rhs: Box::new(rhs),
+            })));
+        }
+        let arith_op = {
+            use crate::interpreter::value::LazyArithOp;
+            match method {
+                "add" => Some(LazyArithOp::Add),
+                "sub" => Some(LazyArithOp::Sub),
+                "mul" => Some(LazyArithOp::Mul),
+                "div" => Some(LazyArithOp::Div),
+                _ => None,
+            }
+        };
+        if let Some(op) = arith_op {
+            let rhs_val = self.eval_expr_inner(&args.first()?.value);
+            let rhs = match lazy_expr_ir_from_value(&rhs_val) {
+                Ok(ir) => ir,
+                Err(msg) => return Some(self.record_runtime_error(msg, span)),
+            };
+            return Some(Value::LazyExpr(Arc::new(LazyExprIR::Arith {
                 op,
                 lhs: Box::new(ir.as_ref().clone()),
                 rhs: Box::new(rhs),
@@ -936,6 +1001,61 @@ fn eval_lazy_scalar(
             return Err(
                 "LazyExpr.alias() is only meaningful inside LazyGroupBy.agg(..)".to_string(),
             )
+        }
+        LazyExprIR::Arith { op, lhs, rhs } => {
+            use crate::interpreter::value::LazyArithOp;
+            let (Some(a), Some(b)) = (
+                eval_lazy_scalar(lhs, columns, row)?,
+                eval_lazy_scalar(rhs, columns, row)?,
+            ) else {
+                return Ok(None); // NULL on either side → NULL result
+            };
+            match (&a, &b) {
+                (LazyScalar::I(x), LazyScalar::I(y)) => {
+                    // i64 pairs stay i64; division by zero and overflow
+                    // are loud (matching the language's scalar posture).
+                    let v = match op {
+                        LazyArithOp::Add => x.checked_add(*y),
+                        LazyArithOp::Sub => x.checked_sub(*y),
+                        LazyArithOp::Mul => x.checked_mul(*y),
+                        LazyArithOp::Div => {
+                            if *y == 0 {
+                                return Err(
+                                    "LazyExpr: integer division by zero in expression".to_string()
+                                );
+                            }
+                            x.checked_div(*y)
+                        }
+                    };
+                    match v {
+                        Some(v) => Some(LazyScalar::I(v)),
+                        None => return Err("LazyExpr: integer overflow in expression".to_string()),
+                    }
+                }
+                (LazyScalar::I(_) | LazyScalar::F(_), LazyScalar::I(_) | LazyScalar::F(_)) => {
+                    let x = match &a {
+                        LazyScalar::I(v) => *v as f64,
+                        LazyScalar::F(v) => *v,
+                        _ => unreachable!(),
+                    };
+                    let y = match &b {
+                        LazyScalar::I(v) => *v as f64,
+                        LazyScalar::F(v) => *v,
+                        _ => unreachable!(),
+                    };
+                    Some(LazyScalar::F(match op {
+                        LazyArithOp::Add => x + y,
+                        LazyArithOp::Sub => x - y,
+                        LazyArithOp::Mul => x * y,
+                        LazyArithOp::Div => x / y, // IEEE: /0 → inf/NaN
+                    }))
+                }
+                _ => {
+                    return Err(
+                        "LazyExpr: arithmetic on non-numeric values (String / bool)".to_string()
+                    )
+                }
+            }
         }
         // Bool-valued sub-expressions evaluate through the predicate path.
         LazyExprIR::Cmp { .. } | LazyExprIR::And(..) | LazyExprIR::Or(..) | LazyExprIR::Not(..) => {
@@ -1180,9 +1300,83 @@ fn eval_lazy_plan(
                 row_ops = false;
                 projection = None;
             }
+            LazyOp::WithColumns(exprs) => {
+                // Materialize the current state (pending projection
+                // applied — fold flushes it the same way), compute every
+                // entry against that INPUT frame (the Polars parallel
+                // semantics — entries never see each other), then
+                // replace-or-append by output name.
+                cur = materialize_lazy_cols(&cur, &indices, &projection, true)?;
+                height = lazy_cols_height(&cur);
+                indices = (0..height).collect();
+                row_ops = false;
+                projection = None;
+                let mut computed: Vec<(String, Value)> = Vec::with_capacity(exprs.len());
+                for e in exprs.iter() {
+                    let (name, inner) = with_columns_output(e)?;
+                    let mut data = Vec::with_capacity(height);
+                    let mut validv = Vec::with_capacity(height);
+                    for row in 0..height {
+                        match eval_lazy_scalar(inner, &cur, row)? {
+                            Some(LazyScalar::I(v)) => {
+                                data.push(Value::Int(v));
+                                validv.push(true);
+                            }
+                            Some(LazyScalar::F(v)) => {
+                                data.push(Value::Float(v));
+                                validv.push(true);
+                            }
+                            Some(LazyScalar::S(v)) => {
+                                data.push(Value::String(v));
+                                validv.push(true);
+                            }
+                            Some(LazyScalar::B(v)) => {
+                                data.push(Value::Bool(v));
+                                validv.push(true);
+                            }
+                            None => {
+                                data.push(Value::Unit);
+                                validv.push(false);
+                            }
+                        }
+                    }
+                    computed.push((
+                        name,
+                        Value::Column {
+                            data: Arc::new(RwLock::new(data)),
+                            valid: Arc::new(RwLock::new(validv)),
+                        },
+                    ));
+                }
+                for (name, col) in computed {
+                    match cur.iter_mut().find(|(n, _)| n == &name) {
+                        Some(slot) => slot.1 = col,
+                        None => cur.push((name, col)),
+                    }
+                }
+            }
         }
     }
     materialize_lazy_cols(&cur, &indices, &projection, row_ops)
+}
+
+/// The output name of one `with_columns` entry and the expression that
+/// computes it: a bare `col(..)` keeps its own name (a same-named
+/// replace — useful after `alias_`-free type coercions land; today an
+/// identity copy), anything else must be `.alias_(..)`ed.
+fn with_columns_output(
+    e: &crate::interpreter::value::LazyExprIR,
+) -> Result<(String, &crate::interpreter::value::LazyExprIR), String> {
+    use crate::interpreter::value::LazyExprIR;
+    match e {
+        LazyExprIR::Alias { name, expr } => Ok((name.clone(), expr.as_ref())),
+        LazyExprIR::Col(n) => Ok((n.clone(), e)),
+        _ => Err(
+            "LazyFrame.with_columns: each entry needs an output name — a bare col(..) keeps \
+             its own, anything computed must be .alias_(..)ed"
+                .to_string(),
+        ),
+    }
 }
 
 /// The row count of a column list (0 when empty).
@@ -1375,6 +1569,14 @@ fn lazy_logical_compact(
                 "JOIN on=[{}] right=({})",
                 on.join(", "),
                 lazy_logical_compact(right_source, right_ops)
+            ),
+            LazyOp::WithColumns(exprs) => format!(
+                "WITH [{}]",
+                exprs
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         };
         lines.push(step);
@@ -1674,7 +1876,7 @@ fn lazy_expr_cols(ir: &crate::interpreter::value::LazyExprIR, out: &mut Vec<Stri
                 out.push(n.clone());
             }
         }
-        LazyExprIR::Cmp { lhs, rhs, .. } => {
+        LazyExprIR::Cmp { lhs, rhs, .. } | LazyExprIR::Arith { lhs, rhs, .. } => {
             lazy_expr_cols(lhs, out);
             lazy_expr_cols(rhs, out);
         }
@@ -1806,6 +2008,50 @@ fn fold_lazy_expr(
                     }
                 }),
             }
+        }
+        LazyExprIR::Arith { op, lhs, rhs } => {
+            use crate::interpreter::value::LazyArithOp;
+            let l = fold_lazy_expr(lhs);
+            let r = fold_lazy_expr(rhs);
+            let folded = match (&l, &r) {
+                (LazyExprIR::LitInt(x), LazyExprIR::LitInt(y)) => match op {
+                    // Checked — a would-be overflow / division by zero
+                    // stays UNFOLDED so collect errors loudly.
+                    LazyArithOp::Add => x.checked_add(*y).map(LazyExprIR::LitInt),
+                    LazyArithOp::Sub => x.checked_sub(*y).map(LazyExprIR::LitInt),
+                    LazyArithOp::Mul => x.checked_mul(*y).map(LazyExprIR::LitInt),
+                    LazyArithOp::Div => {
+                        if *y == 0 {
+                            None
+                        } else {
+                            x.checked_div(*y).map(LazyExprIR::LitInt)
+                        }
+                    }
+                },
+                (
+                    LazyExprIR::LitInt(_) | LazyExprIR::LitFloat(_),
+                    LazyExprIR::LitInt(_) | LazyExprIR::LitFloat(_),
+                ) => {
+                    let as_f = |e: &LazyExprIR| match e {
+                        LazyExprIR::LitInt(v) => *v as f64,
+                        LazyExprIR::LitFloat(v) => *v,
+                        _ => unreachable!(),
+                    };
+                    let (x, y) = (as_f(&l), as_f(&r));
+                    Some(LazyExprIR::LitFloat(match op {
+                        LazyArithOp::Add => x + y,
+                        LazyArithOp::Sub => x - y,
+                        LazyArithOp::Mul => x * y,
+                        LazyArithOp::Div => x / y, // IEEE, like eval
+                    }))
+                }
+                _ => None,
+            };
+            folded.unwrap_or(LazyExprIR::Arith {
+                op: *op,
+                lhs: Box::new(l),
+                rhs: Box::new(r),
+            })
         }
         LazyExprIR::Not(x) => match fold_lazy_expr(x) {
             LazyExprIR::LitBool(b) => LazyExprIR::LitBool(!b),
@@ -2025,6 +2271,58 @@ fn fold_lazy_plan(
                     on: on.clone(),
                 });
             }
+            LazyOp::WithColumns(exprs) => {
+                // Every entry validates against this step's INPUT schema
+                // (the Polars parallel semantics — entries never see
+                // each other); duplicate output names in one call are a
+                // loud error.
+                let mut outs: Vec<String> = Vec::new();
+                for e in exprs {
+                    let (name, _) = with_columns_output(e)?;
+                    let mut cols = Vec::new();
+                    lazy_expr_cols(e, &mut cols);
+                    for c in &cols {
+                        if !visible.contains(c) {
+                            return Err(format!(
+                                "LazyFrame.with_columns: no column named '{c}' at this plan step"
+                            ));
+                        }
+                        if !past_group_by && !needed.contains(c) {
+                            needed.push(c.clone());
+                        }
+                    }
+                    if outs.contains(&name) {
+                        return Err(format!(
+                            "LazyFrame.with_columns: duplicate output name '{name}'"
+                        ));
+                    }
+                    outs.push(name);
+                }
+                // Flush a pending projection as an explicit SELECT step
+                // (same boundary rule as JOIN — lifting a select past
+                // this step would reorder it against the computed
+                // columns). Its columns MATERIALIZE here, so they all
+                // join the scan set (they flow through to the output —
+                // no top projection narrows them away anymore).
+                if let Some(p) = projection.take() {
+                    visible = p.clone();
+                    for c in &p {
+                        if !past_group_by && !needed.contains(c) {
+                            needed.push(c.clone());
+                        }
+                    }
+                    steps.push(LazyOp::Select(p));
+                }
+                for name in outs {
+                    if !visible.contains(&name) {
+                        visible.push(name);
+                    }
+                }
+                // Constant folding applies inside each entry.
+                steps.push(LazyOp::WithColumns(
+                    exprs.iter().map(|e| Arc::new(fold_lazy_expr(e))).collect(),
+                ));
+            }
         }
     }
     // Scan projection: union of predicate columns + the final projection,
@@ -2055,7 +2353,11 @@ fn fold_lazy_plan(
         let has_filters = steps.iter().any(|s| {
             matches!(
                 s,
-                LazyOp::Filter(_) | LazyOp::Sort(_) | LazyOp::GroupBy { .. } | LazyOp::Join { .. }
+                LazyOp::Filter(_)
+                    | LazyOp::Sort(_)
+                    | LazyOp::GroupBy { .. }
+                    | LazyOp::Join { .. }
+                    | LazyOp::WithColumns(_)
             )
         });
         if has_filters {
@@ -2139,9 +2441,17 @@ fn render_optimized_plan(plan: &OptimizedLazyPlan) -> String {
                 on.join(", "),
                 lazy_optimized_compact(right_source, right_ops)
             ),
-            // Only pushed by the fold at a JOIN boundary (a pending left
-            // projection the join consumes); ordinary selects live in
-            // `projection`, not in `steps`.
+            LazyOp::WithColumns(exprs) => format!(
+                "WITH [{}]",
+                exprs
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            // Only pushed by the fold at a JOIN/WITH boundary (a pending
+            // left projection the step consumes); ordinary selects live
+            // in `projection`, not in `steps`.
             LazyOp::Select(cols) => format!("SELECT [{}]", cols.join(", ")),
         };
         lines.push(rendered);
