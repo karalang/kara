@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 159 | 0 |
 | leak | 88 | 1 |
-| double-free | 74 | 1 |
+| double-free | 74 | 0 |
 | codegen-gap | 70 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 38 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 451 | 2 |
+| codegen | 451 | 1 |
 | typecheck | 83 | 0 |
 | interp | 67 | 0 |
 | ownership | 25 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **620 surfaced · 2 open · 614 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **620 surfaced · 1 open · 615 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-21-10 | 2026-07-21 | codegen | medium | match on a TUPLE-typed FIELD through a `ref` param with a consuming binding double-frees: `match h.pair { (s, x) => return "t:".to_string() + s + … }` (h: ref Holder, pair: (String, i64)) aborts free(): double free under JIT/AOT-O2/AOT-O0; interp prints t:tp:4. The tuple-LEAF sibling of B-2026-07-21-5/-6/-7: no clone leg covers a tuple leaf, so the String element binding aliases the caller's buffer and both free it. | — |
 | B-2026-07-21-12 | 2026-07-21 | codegen | low | Vec[String] field .first() consuming read through a `ref` param LEAKS the element copy at O0: `match h.items.first() { Some(s) => return "f:" + s, … }` (h: ref Holder) leaks one element-sized block per call under AOT-O0 (valgrind: 2 bytes x 2 for two calls); output correct on all backends; O2 elides the allocation. | — |
 
-### Fixed (614)
+### Fixed (615)
 
-<details><summary>614 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>615 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -751,6 +750,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **620 surfaced 
 | B-2026-07-21-7 | codegen | high | Struct-PATTERN destructure of a struct-typed FIELD reached through a `ref` param double-frees when a binding escapes: `match h.inner { Pt { s, x } =>… | 06ea22a |
 | B-2026-07-21-8 | codegen | high | if-let over an enum FIELD through a `ref` param with a CONSUMING binding double-frees: `if let Ident(name) = st.tok { return "i:".to_string() + name;… | 5fa61ca |
 | B-2026-07-21-9 | codegen | high | match on an Option[String] FIELD through a `ref` param with a consuming Some arm double-frees: `match h.opt { Some(s) => return "o:".to_string() + s,… | c1cbed1 |
+| B-2026-07-21-10 | codegen | medium | match on a TUPLE-typed FIELD through a `ref` param with a consuming binding double-frees: `match h.pair { (s, x) => return "t:".to_string() + s + … }… | 8c47c73 |
 | B-2026-07-21-11 | codegen | high | whole-field `let` move of a struct-typed FIELD through a `ref` param double-frees when the copy's heap is consumed: `let p = h.inner; return "l:" + p… | ca37738 |
 | B-2026-07-21-13 | codegen | high | `vec_field.push(nodes[j])` — pushing a BARE `shared struct` element read from another `Vec[shared]` (an aliasing indexed read, source still owns it)… | a4a66c5 |
 
