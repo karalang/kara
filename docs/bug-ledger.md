@@ -93,9 +93,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 159 | 0 |
-| leak | 87 | 0 |
+| leak | 88 | 1 |
+| double-free | 74 | 4 |
 | codegen-gap | 70 | 0 |
-| double-free | 70 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 38 | 0 |
 | run-vs-build | 37 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 445 | 0 |
+| codegen | 450 | 5 |
 | typecheck | 83 | 0 |
 | interp | 67 | 0 |
 | ownership | 25 | 0 |
@@ -124,11 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **614 surfaced · 0 open · 610 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **619 surfaced · 5 open · 610 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (5)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-21-8 | 2026-07-21 | codegen | high | if-let over an enum FIELD through a `ref` param with a CONSUMING binding double-frees: `if let Ident(name) = st.tok { return "i:".to_string() + name; }` (st: ref SpTok) aborts free(): double free under JIT/AOT-O2/AOT-O0; interp prints i:il. The if-let ROUTE sibling of B-2026-07-21-5/-6: compile_if_let consults scrutinee_is_borrowed_binding/borrow_call but never the ref-chain clone legs the match path gained (clone_escaping_borrowed_ref_chain_enum/_struct), so the payload binding aliases the caller's buffer and both free it. | — |
+| B-2026-07-21-9 | 2026-07-21 | codegen | high | match on an Option[String] FIELD through a `ref` param with a consuming Some arm double-frees: `match h.opt { Some(s) => return "o:".to_string() + s, None => … }` (h: ref Holder, opt: Option[String]) aborts free(): double free under JIT/AOT-O2/AOT-O0; interp prints o:op. The Option-LEAF sibling of B-2026-07-21-5/-6: the ref-chain clone leg gates to user enums (seeded Option has all-None drop kinds and no freshtemp channel), so the inline String payload binding aliases the caller's buffer and both free it. | — |
+| B-2026-07-21-10 | 2026-07-21 | codegen | medium | match on a TUPLE-typed FIELD through a `ref` param with a consuming binding double-frees: `match h.pair { (s, x) => return "t:".to_string() + s + … }` (h: ref Holder, pair: (String, i64)) aborts free(): double free under JIT/AOT-O2/AOT-O0; interp prints t:tp:4. The tuple-LEAF sibling of B-2026-07-21-5/-6/-7: no clone leg covers a tuple leaf, so the String element binding aliases the caller's buffer and both free it. | — |
+| B-2026-07-21-11 | 2026-07-21 | codegen | high | whole-field `let` move of a struct-typed FIELD through a `ref` param double-frees when the copy's heap is consumed: `let p = h.inner; return "l:" + p.s + …` (h: ref Holder, inner: Pt{String,i64}) aborts free(): double free under JIT/AOT-O2/AOT-O0; interp prints l:ld:6. The LET-route sibling of B-2026-07-21-7: the field read through the borrow is a bit-copy alias, the binding gets owned struct tracking, and both it and the caller's struct drop free the same String. | — |
+| B-2026-07-21-12 | 2026-07-21 | codegen | low | Vec[String] field .first() consuming read through a `ref` param LEAKS the element copy at O0: `match h.items.first() { Some(s) => return "f:" + s, … }` (h: ref Holder) leaks one element-sized block per call under AOT-O0 (valgrind: 2 bytes x 2 for two calls); output correct on all backends; O2 elides the allocation. | — |
 
 ### Fixed (610)
 
