@@ -63,6 +63,77 @@ pub enum LazyOp {
     Select(Vec<String>),
     /// Keep at most the first `n` rows (already clamped to `>= 0`).
     Limit(i64),
+    /// Keep only rows where the predicate expression evaluates true
+    /// (slice 2). Column refs validate at collect against the columns
+    /// visible at this step; a NULL slot fails any comparison.
+    Filter(Arc<LazyExprIR>),
+}
+
+/// A lazy scalar expression tree (phase-11 LazyDataFrame slice 2) — the
+/// planner's pushdown unit. Built by `LazyExpr.col(..)` + the comparison /
+/// boolean builder methods; inspectable DATA, unlike a closure. Rendered
+/// by `explain()`; evaluated per row at `collect()`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LazyExprIR {
+    /// A column reference, resolved at the plan step where the enclosing
+    /// expression applies.
+    Col(String),
+    LitInt(i64),
+    LitFloat(f64),
+    LitStr(String),
+    LitBool(bool),
+    /// A comparison — bool-valued; NULL on either side makes it FALSE
+    /// (documented simple semantics, not full SQL three-valued logic).
+    Cmp {
+        op: LazyCmpOp,
+        lhs: Box<LazyExprIR>,
+        rhs: Box<LazyExprIR>,
+    },
+    And(Box<LazyExprIR>, Box<LazyExprIR>),
+    Or(Box<LazyExprIR>, Box<LazyExprIR>),
+    Not(Box<LazyExprIR>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LazyCmpOp {
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    Eq,
+    Ne,
+}
+
+impl LazyCmpOp {
+    /// The rendering used by `explain()` — Kāra's own operator spellings.
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            LazyCmpOp::Gt => ">",
+            LazyCmpOp::Ge => ">=",
+            LazyCmpOp::Lt => "<",
+            LazyCmpOp::Le => "<=",
+            LazyCmpOp::Eq => "==",
+            LazyCmpOp::Ne => "!=",
+        }
+    }
+}
+
+impl std::fmt::Display for LazyExprIR {
+    /// Deterministic fully-parenthesized rendering for `explain()` —
+    /// optimizer tests pin it byte-for-byte.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LazyExprIR::Col(n) => write!(f, "{n}"),
+            LazyExprIR::LitInt(v) => write!(f, "{v}"),
+            LazyExprIR::LitFloat(v) => write!(f, "{v}"),
+            LazyExprIR::LitStr(s) => write!(f, "\"{s}\""),
+            LazyExprIR::LitBool(b) => write!(f, "{b}"),
+            LazyExprIR::Cmp { op, lhs, rhs } => write!(f, "({lhs} {} {rhs})", op.symbol()),
+            LazyExprIR::And(a, b) => write!(f, "({a} and {b})"),
+            LazyExprIR::Or(a, b) => write!(f, "({a} or {b})"),
+            LazyExprIR::Not(x) => write!(f, "(not {x})"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +277,9 @@ pub enum Value {
         source: Arc<RwLock<Vec<(String, Value)>>>,
         ops: Arc<Vec<LazyOp>>,
     },
+    /// A lazy expression handle (`LazyExpr` surface value) — an immutable
+    /// shared expression tree; builder methods wrap it in new nodes.
+    LazyExpr(Arc<LazyExprIR>),
     Map(Vec<(Value, Value)>),
     Struct {
         name: String,
@@ -907,6 +981,8 @@ impl std::fmt::Display for Value {
             Value::LazyFrame { ops, .. } => {
                 write!(f, "LazyFrame[{} step(s)]", ops.len())
             }
+            // The expression tree itself — small by construction.
+            Value::LazyExpr(ir) => write!(f, "LazyExpr[{ir}]"),
             Value::Tuple(vals) => {
                 write!(f, "(")?;
                 for (i, v) in vals.iter().enumerate() {
@@ -1252,6 +1328,7 @@ impl Value {
             Value::Column { .. } => "Column",
             Value::DataFrame { .. } => "DataFrame",
             Value::LazyFrame { .. } => "LazyFrame",
+            Value::LazyExpr(_) => "LazyExpr",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
             Value::Vector(_) => "Vector",

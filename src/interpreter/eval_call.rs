@@ -886,6 +886,33 @@ impl<'a> super::Interpreter<'a> {
                         return v;
                     }
                 }
+                // Lazy expression column reference (phase-11 LazyDataFrame
+                // slice 2): `LazyExpr.col("age")` — the root constructor of
+                // every predicate tree (std.lazy's free `col` delegates
+                // here). Resolution against visible columns happens at
+                // collect, so construction never fails.
+                "LazyExpr.col" => {
+                    let name = match args.first() {
+                        Some(arg) => match self.eval_expr_inner(&arg.value) {
+                            Value::String(s) => s,
+                            _ => {
+                                return self.record_runtime_error(
+                                    "LazyExpr.col expects a String column name",
+                                    span,
+                                );
+                            }
+                        },
+                        None => {
+                            return self.record_runtime_error(
+                                "LazyExpr.col expects a String column name",
+                                span,
+                            );
+                        }
+                    };
+                    return Value::LazyExpr(std::sync::Arc::new(
+                        crate::interpreter::value::LazyExprIR::Col(name),
+                    ));
+                }
                 // Phase-11 CSV leg slice 2: parse a CSV file into a table
                 // (the inverse of `df.write_csv`). Read errors map through
                 // `io_error_from_std`; parse errors (ragged rows, empty

@@ -1502,6 +1502,11 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_lazyframe_method(method, &obj, args, span) {
             return v;
         }
+        // LazyExpr comparison / boolean builders (slice 2) — a
+        // non-LazyExpr receiver falls through.
+        if let Some(v) = self.try_eval_lazyexpr_method(method, &obj, args, span) {
+            return v;
+        }
         if let Some(v) = self.try_eval_iterator_method(method, object, &obj, args, span) {
             return v;
         }

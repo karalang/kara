@@ -23878,3 +23878,113 @@ fn test_lazyframe_limit_clamps_and_no_select_keeps_all_columns() {
         "limit must clamp; empty plan must scan everything",
     );
 }
+
+#[test]
+fn test_lazyframe_filter_expression_pipeline() {
+    // Phase-11 LazyDataFrame slice 2: `filter` takes an inspectable
+    // `LazyExpr` predicate (built by `col(..)` + comparison/boolean
+    // methods). explain renders the FILTER step in both plans — the
+    // optimized pipeline keeps filter/limit relative order (they do not
+    // commute), lifts the projection to the top, and scan-projects the
+    // union of needed columns in source order. collect evaluates per row.
+    let out = run_no_errors(
+        "import std.lazy.{col};\n\
+         fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"age\", Column.from_vec([30i64, 15i64, 41i64, 8i64]));\n\
+             df.insert(\"name\", Column.from_vec([\"ada\", \"bob\", \"eve\", \"kid\"]));\n\
+             df.insert(\"score\", Column.from_vec([9.5, 3.5, 7.0, 1.0]));\n\
+             let plan = df.lazy()\n\
+                 .filter(col(\"age\").gt(10).and_(col(\"score\").ge(3.5)))\n\
+                 .select(vec![\"name\", \"age\"])\n\
+                 .limit(2);\n\
+             println(plan.explain());\n\
+             let out = plan.collect();\n\
+             println(out.height());\n\
+             let names: Column[String] = out.column(\"name\");\n\
+             match names[0] { Some(v) => println(v), None => println(\"null\") }\n\
+             match names[1] { Some(v) => println(v), None => println(\"null\") }\n\
+         }",
+    );
+    assert_eq!(
+        out,
+        "== logical plan ==\n\
+         LIMIT 2\n\
+         \x20 SELECT [name, age]\n\
+         \x20   FILTER ((age > 10) and (score >= 3.5))\n\
+         \x20     SCAN [age, name, score]\n\
+         == optimized ==\n\
+         SELECT [name, age]\n\
+         \x20 LIMIT 2\n\
+         \x20   FILTER ((age > 10) and (score >= 3.5))\n\
+         \x20     SCAN cols=[age, name, score]\n\
+         2\nada\nbob\n",
+        "filter must render in both plans and evaluate per row",
+    );
+}
+
+#[test]
+fn test_lazyframe_filter_nulls_col_vs_col_and_combinators() {
+    // NULL slots fail comparisons (rows dropped); col-vs-col comparisons;
+    // eq/ne + not_ + or_; adjacent filters fuse with `and` in the
+    // optimized plan; LazyExpr.col is the canonical (import-free) spelling.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"age\", Column.from_vec([30i64, 15i64, 41i64, 8i64]));\n\
+             df.insert(\"name\", Column.from_vec([\"ada\", \"bob\", \"eve\", \"kid\"]));\n\
+             let nn: Vec[Option[i64]] = vec![Some(30i64), None, Some(41i64), Some(8i64)];\n\
+             df.insert(\"opt\", Column.from_iter_nullable(nn));\n\
+             println(df.lazy().filter(LazyExpr.col(\"opt\").eq(LazyExpr.col(\"age\"))).collect().height());\n\
+             println(df.lazy().filter(LazyExpr.col(\"name\").ne(\"bob\").not_()).collect().height());\n\
+             println(df.lazy().filter(LazyExpr.col(\"age\").lt(10).or_(LazyExpr.col(\"age\").gt(40))).collect().height());\n\
+             let fused = df.lazy().filter(LazyExpr.col(\"age\").gt(10)).filter(LazyExpr.col(\"age\").lt(40));\n\
+             println(fused.collect().height());\n\
+             println(fused.explain());\n\
+         }",
+    );
+    assert_eq!(
+        out,
+        "3\n1\n2\n2\n\
+         == logical plan ==\n\
+         FILTER (age < 40)\n\
+         \x20 FILTER (age > 10)\n\
+         \x20   SCAN [age, name, opt]\n\
+         == optimized ==\n\
+         FILTER ((age > 10) and (age < 40))\n\
+         \x20 SCAN cols=[age]\n",
+        "nulls drop, col-vs-col compares, adjacent filters fuse",
+    );
+}
+
+#[test]
+fn test_lazyframe_filter_errors_validate_at_collect() {
+    // A predicate naming a missing column builds; collect errors. A
+    // String-vs-number comparison is a runtime error (loud, not empty).
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().filter(LazyExpr.col(\"nope\").gt(0)).collect();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no column named 'nope'")),
+        "{errors:?}",
+    );
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().filter(LazyExpr.col(\"a\").gt(\"x\")).collect();\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("cannot compare values of different types")),
+        "{errors:?}",
+    );
+}

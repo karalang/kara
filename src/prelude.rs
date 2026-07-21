@@ -297,6 +297,11 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // data-science stdlib, interpreter MVP). See
     // `runtime/stdlib/dataframe.kara`.
     "DataFrame",
+    // `LazyFrame` deferred query plan + `LazyExpr` predicate expression
+    // (phase-11 LazyDataFrame, interpreter MVP). See
+    // `runtime/stdlib/dataframe.kara` / `lazy.kara`.
+    "LazyFrame",
+    "LazyExpr",
     // `Semaphore` application-layer backpressure primitive (phase-8 P1).
     // See `runtime/stdlib/semaphore.kara`.
     "Semaphore",
@@ -988,6 +993,10 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
     (
         &["std", "embeddings"],
         include_str!("../runtime/stdlib/embeddings.kara"),
+    ),
+    (
+        &["std", "lazy"],
+        include_str!("../runtime/stdlib/lazy.kara"),
     ),
     (
         &["std", "autograd"],

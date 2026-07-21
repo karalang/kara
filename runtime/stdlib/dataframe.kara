@@ -187,6 +187,62 @@ struct LazyFrame {
     handle_id: i64,
 }
 
+// `LazyExpr` — a lazy scalar expression over a row (phase-11
+// LazyDataFrame, slice 2). Built by `col(name)` + the comparison /
+// boolean builder methods; consumed by `LazyFrame.filter` (and, in later
+// slices, expression-`select` / `agg`). Expressions are DATA — an
+// inspectable tree the optimizer can push down, fold, and dedupe — which
+// is why `filter` takes one of these and NOT a closure (a closure is
+// opaque to the planner; deferred.md § Lazy DataFrame Query Planner).
+// The design sketch's bare-operator form (`col("age") > 21`) needs an
+// operator overload returning a non-bool, a language-level decision —
+// until then the Polars-Rust spelling (`col("age").gt(21)`) is canonical.
+struct LazyExpr {
+    // Opaque — interpreter intercepts all construction and access.
+    handle_id: i64,
+}
+
+impl LazyExpr {
+    // A column reference: `LazyExpr.col("age").gt(21)` — resolved against
+    // the columns VISIBLE at the plan step where the enclosing expression
+    // is applied (validated at collect, like select). The design sketch's
+    // bare `col("age")` spelling is the `std.lazy` module's free-fn
+    // wrapper (`import std.lazy.{col}` — runtime/stdlib/lazy.kara).
+    #[compiler_builtin]
+    fn col(name: String) -> LazyExpr {
+        LazyExpr { handle_id: 0 }
+    }
+
+    // Comparisons — `rhs` is a literal scalar (i64 / f64 / String / bool)
+    // or another `LazyExpr` (column-vs-column). An i64 column compares
+    // against an f64 literal by widening; comparing incompatible types
+    // (String vs number) is a runtime error at collect. A NULL slot makes
+    // the comparison false (the row is dropped — SQL-ish semantics).
+    #[compiler_builtin]
+    fn gt[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn ge[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn lt[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn le[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn eq[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn ne[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+
+    // Boolean combinators over predicate sub-expressions. `and` / `or` /
+    // `not` are Kāra KEYWORDS (the logical operators), so the methods take
+    // a trailing underscore — the exact convention Polars-Python adopted
+    // for the same keyword collision.
+    #[compiler_builtin]
+    fn and_(self, rhs: LazyExpr) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn or_(self, rhs: LazyExpr) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    #[compiler_builtin]
+    fn not_(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+}
+
 impl LazyFrame {
     // Project to the named columns, in the given order (subset /
     // reorder — the lazy twin of `DataFrame.select`). A name absent
@@ -194,6 +250,18 @@ impl LazyFrame {
     // are validated when they run, not when they build).
     #[compiler_builtin]
     fn select(self, cols: Vec[String]) -> LazyFrame {
+        LazyFrame { handle_id: 0 }
+    }
+
+    // Keep only the rows where `pred` evaluates true (phase-11 slice 2).
+    // The predicate is an inspectable `LazyExpr` tree — the planner's
+    // pushdown unit. Column references validate at COLLECT against the
+    // columns visible at this plan step; a NULL slot fails the predicate
+    // (the row is dropped). Filters do NOT commute with limits (the
+    // optimizer preserves their relative order) but do commute with
+    // selects (predicates reference pre-projection columns).
+    #[compiler_builtin]
+    fn filter(self, pred: LazyExpr) -> LazyFrame {
         LazyFrame { handle_id: 0 }
     }
 

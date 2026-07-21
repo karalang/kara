@@ -1,0 +1,15 @@
+// `std.lazy` — ergonomic free-fn wrappers for the LazyFrame expression
+// surface (phase-11 LazyDataFrame; deferred.md § Lazy DataFrame Query
+// Planner "Design shape"). The canonical constructors live on `LazyExpr`
+// (baked, always available); this gated module restores the design
+// sketch's bare spelling:
+//
+//     import std.lazy.{col};
+//     df.lazy().filter(col("age").gt(21)).collect()
+//
+// Real bodies (no interception) — each delegates to the baked assoc fn.
+
+#[must_use = "the column reference is the root of a predicate tree — discarding it builds nothing"]
+pub fn col(name: String) -> LazyExpr {
+    LazyExpr.col(name)
+}

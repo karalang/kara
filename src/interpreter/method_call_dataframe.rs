@@ -425,11 +425,11 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    /// `LazyFrame` methods (phase-11 LazyDataFrame, slice 1): the plan
-    /// builders `select` / `limit` (owned-self fluent chain — each clones
-    /// the op list and pushes one step), `collect` (validate + run the
-    /// optimized plan, materializing an eager DataFrame), and `explain`
-    /// (render the logical plan and its optimized single-scan form).
+    /// `LazyFrame` methods (phase-11 LazyDataFrame, slices 1-2): the plan
+    /// builders `select` / `limit` / `filter` (owned-self fluent chain —
+    /// each clones the op list and pushes one step), `collect` (validate +
+    /// run the plan, materializing an eager DataFrame), and `explain`
+    /// (render the logical plan and its optimized pipeline form).
     /// Returns `None` for a non-LazyFrame receiver / unknown method.
     pub(super) fn try_eval_lazyframe_method(
         &mut self,
@@ -492,41 +492,92 @@ impl<'a> super::Interpreter<'a> {
                     ops: Arc::new(new_ops),
                 })
             }
-            "collect" => {
-                let (proj, limit) = match fold_lazy_plan(source, ops, span) {
-                    Ok(p) => p,
-                    Err(msg) => return Some(self.record_runtime_error(msg, span)),
+            "filter" => {
+                let Value::LazyExpr(ir) = self.eval_expr_inner(&args.first()?.value) else {
+                    return Some(self.record_runtime_error(
+                        "LazyFrame.filter expects a LazyExpr predicate (build one with \
+                         LazyExpr.col(..) / std.lazy's col(..))",
+                        span,
+                    ));
                 };
+                let mut new_ops = ops.as_ref().clone();
+                new_ops.push(LazyOp::Filter(ir));
+                Some(Value::LazyFrame {
+                    source: Arc::clone(source),
+                    ops: Arc::new(new_ops),
+                })
+            }
+            "collect" => {
+                // Validate the whole plan first (stepwise visible-column
+                // tracking, incl. predicate column refs) — the fold is the
+                // single validation authority for collect AND explain.
+                if let Err(msg) = fold_lazy_plan(source, ops) {
+                    return Some(self.record_runtime_error(msg, span));
+                }
                 let src = source.read().unwrap();
-                // Column order: the folded projection (or every source
-                // column). Each output column is a VIEW (handle clone)
-                // unless a limit truncates it, which materializes fresh
-                // cells — the eager-`select` sharing semantics.
-                let names: Vec<String> = match &proj {
+                let height = src.first().map_or(0, |(_, c)| match c {
+                    Value::Column { valid, .. } => valid.read().unwrap().len(),
+                    _ => 0,
+                });
+                // Row-index pipeline over the ops IN ORDER — correct by
+                // construction (the optimizer only feeds `explain`).
+                let mut indices: Vec<usize> = (0..height).collect();
+                let mut projection: Option<Vec<String>> = None;
+                let mut row_ops = false;
+                for op in ops.iter() {
+                    match op {
+                        LazyOp::Select(cols) => projection = Some(cols.clone()),
+                        LazyOp::Limit(n) => {
+                            row_ops = true;
+                            indices.truncate((*n).max(0) as usize);
+                        }
+                        LazyOp::Filter(ir) => {
+                            row_ops = true;
+                            let mut kept = Vec::with_capacity(indices.len());
+                            for &row in &indices {
+                                match eval_lazy_pred(ir, &src, row) {
+                                    Ok(true) => kept.push(row),
+                                    Ok(false) => {}
+                                    Err(msg) => {
+                                        drop(src);
+                                        return Some(self.record_runtime_error(msg, span));
+                                    }
+                                }
+                            }
+                            indices = kept;
+                        }
+                    }
+                }
+                let names: Vec<String> = match &projection {
                     Some(cols) => cols.clone(),
                     None => src.iter().map(|(n, _)| n.clone()).collect(),
                 };
                 let mut out: Vec<(String, Value)> = Vec::with_capacity(names.len());
                 for name in names {
                     let Some((_, col)) = src.iter().find(|(n, _)| n == &name) else {
-                        // fold_lazy_plan validated projections, so this is
-                        // unreachable; defensive all the same.
                         return Some(self.record_runtime_error(
                             format!("LazyFrame.collect: no column named '{name}'"),
                             span,
                         ));
                     };
-                    let out_col = match (limit, col) {
-                        (Some(n), Value::Column { data, valid }) => {
+                    let out_col = if row_ops {
+                        // Gather the surviving rows into fresh cells.
+                        if let Value::Column { data, valid } = col {
                             let d = data.read().unwrap();
                             let v = valid.read().unwrap();
-                            let keep = (n as usize).min(v.len());
+                            let nd: Vec<Value> = indices.iter().map(|&i| d[i].clone()).collect();
+                            let nv: Vec<bool> = indices.iter().map(|&i| v[i]).collect();
                             Value::Column {
-                                data: Arc::new(RwLock::new(d[..keep.min(d.len())].to_vec())),
-                                valid: Arc::new(RwLock::new(v[..keep].to_vec())),
+                                data: Arc::new(RwLock::new(nd)),
+                                valid: Arc::new(RwLock::new(nv)),
                             }
+                        } else {
+                            col.clone()
                         }
-                        _ => col.clone(),
+                    } else {
+                        // Pure projection — hand back views (the eager-
+                        // `select` sharing semantics).
+                        col.clone()
                     };
                     out.push((name, out_col));
                 }
@@ -536,7 +587,7 @@ impl<'a> super::Interpreter<'a> {
             }
             "explain" => {
                 // Logical plan: innermost SCAN, one indented line per
-                // recorded step; then the optimized single-scan form.
+                // recorded step; then the optimized pipeline form.
                 // Deterministic — optimizer tests pin this byte-for-byte.
                 let src = source.read().unwrap();
                 let src_names: Vec<&str> = src.iter().map(|(n, _)| n.as_str()).collect();
@@ -545,29 +596,19 @@ impl<'a> super::Interpreter<'a> {
                     let step = match op {
                         LazyOp::Select(cols) => format!("SELECT [{}]", cols.join(", ")),
                         LazyOp::Limit(n) => format!("LIMIT {n}"),
+                        LazyOp::Filter(ir) => format!("FILTER {ir}"),
                     };
                     lines.push(step);
                 }
                 let mut logical = String::new();
                 for (i, line) in lines.iter().rev().enumerate() {
-                    let indent = lines.len() - 1 - (lines.len() - 1 - i);
-                    let _ = indent;
                     logical.push_str(&"  ".repeat(i));
                     logical.push_str(line);
                     logical.push('\n');
                 }
                 drop(src);
-                let optimized = match fold_lazy_plan(source, ops, span) {
-                    Ok((proj, limit)) => {
-                        let cols = match &proj {
-                            Some(c) => c.join(", "),
-                            None => "*".to_string(),
-                        };
-                        match limit {
-                            Some(n) => format!("SCAN cols=[{cols}] limit={n}"),
-                            None => format!("SCAN cols=[{cols}]"),
-                        }
-                    }
+                let optimized = match fold_lazy_plan(source, ops) {
+                    Ok(plan) => render_optimized_plan(&plan),
                     Err(msg) => format!("INVALID PLAN: {msg}"),
                 };
                 Some(Value::String(format!(
@@ -577,26 +618,271 @@ impl<'a> super::Interpreter<'a> {
             _ => None,
         }
     }
+
+    /// `LazyExpr` builder methods (phase-11 LazyDataFrame slice 2):
+    /// the comparisons (`gt`/`ge`/`lt`/`le`/`eq`/`ne` — RHS a literal
+    /// scalar or another expression) and the boolean combinators
+    /// (`and_`/`or_`/`not_` — underscore-suffixed because `and`/`or`/`not`
+    /// are Kāra keywords, the Polars-Python convention for the same
+    /// collision). Returns `None` for a non-LazyExpr receiver.
+    pub(super) fn try_eval_lazyexpr_method(
+        &mut self,
+        method: &str,
+        obj: &Value,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Value> {
+        use crate::interpreter::value::{LazyCmpOp, LazyExprIR};
+        let Value::LazyExpr(ir) = obj else {
+            return None;
+        };
+        let cmp = |op: LazyCmpOp| Some(op);
+        let cmp_op = match method {
+            "gt" => cmp(LazyCmpOp::Gt),
+            "ge" => cmp(LazyCmpOp::Ge),
+            "lt" => cmp(LazyCmpOp::Lt),
+            "le" => cmp(LazyCmpOp::Le),
+            "eq" => cmp(LazyCmpOp::Eq),
+            "ne" => cmp(LazyCmpOp::Ne),
+            _ => None,
+        };
+        if let Some(op) = cmp_op {
+            let rhs_val = self.eval_expr_inner(&args.first()?.value);
+            let rhs = match lazy_expr_ir_from_value(&rhs_val) {
+                Ok(ir) => ir,
+                Err(msg) => return Some(self.record_runtime_error(msg, span)),
+            };
+            return Some(Value::LazyExpr(Arc::new(LazyExprIR::Cmp {
+                op,
+                lhs: Box::new(ir.as_ref().clone()),
+                rhs: Box::new(rhs),
+            })));
+        }
+        match method {
+            "and_" | "or_" => {
+                let rhs_val = self.eval_expr_inner(&args.first()?.value);
+                let Value::LazyExpr(rhs) = rhs_val else {
+                    return Some(self.record_runtime_error(
+                        format!("LazyExpr.{method} expects a LazyExpr argument"),
+                        span,
+                    ));
+                };
+                let a = Box::new(ir.as_ref().clone());
+                let b = Box::new(rhs.as_ref().clone());
+                let node = if method == "and_" {
+                    LazyExprIR::And(a, b)
+                } else {
+                    LazyExprIR::Or(a, b)
+                };
+                Some(Value::LazyExpr(Arc::new(node)))
+            }
+            "not_" => Some(Value::LazyExpr(Arc::new(LazyExprIR::Not(Box::new(
+                ir.as_ref().clone(),
+            ))))),
+            _ => None,
+        }
+    }
 }
 
-/// Fold a slice-1 lazy plan (select/limit steps over a single source)
-/// into its optimized single-scan form: the effective projection (the
-/// LAST select's columns, validated against what the preceding pipeline
-/// exposes) and the minimum limit. Errors carry the offending column name
-/// — surfaced at `collect()` (plans validate when they RUN) and rendered
-/// by `explain()` as `INVALID PLAN`.
-#[allow(clippy::type_complexity)]
+/// Convert a comparison RHS `Value` into expression IR: a literal scalar
+/// (i64 / f64 / String / bool) or another `LazyExpr` (column-vs-column).
+fn lazy_expr_ir_from_value(v: &Value) -> Result<crate::interpreter::value::LazyExprIR, String> {
+    use crate::interpreter::value::LazyExprIR;
+    Ok(match v {
+        Value::Int(n) => LazyExprIR::LitInt(*n),
+        Value::Float(f) => LazyExprIR::LitFloat(*f),
+        Value::String(s) => LazyExprIR::LitStr(s.clone()),
+        Value::Bool(b) => LazyExprIR::LitBool(*b),
+        Value::LazyExpr(ir) => ir.as_ref().clone(),
+        other => {
+            return Err(format!(
+                "LazyExpr comparison expects a scalar literal (i64 / f64 / String / bool) \
+                 or another LazyExpr, got {}",
+                other.variant_name()
+            ))
+        }
+    })
+}
+
+/// A scalar produced while evaluating a lazy expression over one row.
+/// `None` (at the caller) marks a NULL slot.
+enum LazyScalar {
+    I(i64),
+    F(f64),
+    S(String),
+    B(bool),
+}
+
+/// Evaluate an expression to a scalar over `columns` at `row`.
+/// `Ok(None)` = a NULL column slot was read (comparisons against it are
+/// FALSE — the documented simple semantics, not full three-valued logic).
+fn eval_lazy_scalar(
+    ir: &crate::interpreter::value::LazyExprIR,
+    columns: &[(String, Value)],
+    row: usize,
+) -> Result<Option<LazyScalar>, String> {
+    use crate::interpreter::value::LazyExprIR;
+    Ok(match ir {
+        LazyExprIR::Col(name) => {
+            let Some((_, col)) = columns.iter().find(|(n, _)| n == name) else {
+                return Err(format!("LazyFrame.filter: no column named '{name}'"));
+            };
+            let Value::Column { data, valid } = col else {
+                return Err(format!("LazyFrame.filter: '{name}' is not a Column"));
+            };
+            if !valid.read().unwrap().get(row).copied().unwrap_or(false) {
+                return Ok(None);
+            }
+            match &data.read().unwrap()[row] {
+                Value::Int(n) => Some(LazyScalar::I(*n)),
+                Value::Float(f) => Some(LazyScalar::F(*f)),
+                Value::String(s) => Some(LazyScalar::S(s.clone())),
+                Value::Bool(b) => Some(LazyScalar::B(*b)),
+                other => {
+                    return Err(format!(
+                        "LazyFrame.filter: unsupported cell type {} in column '{name}'",
+                        other.variant_name()
+                    ))
+                }
+            }
+        }
+        LazyExprIR::LitInt(n) => Some(LazyScalar::I(*n)),
+        LazyExprIR::LitFloat(f) => Some(LazyScalar::F(*f)),
+        LazyExprIR::LitStr(s) => Some(LazyScalar::S(s.clone())),
+        LazyExprIR::LitBool(b) => Some(LazyScalar::B(*b)),
+        // Bool-valued sub-expressions evaluate through the predicate path.
+        LazyExprIR::Cmp { .. } | LazyExprIR::And(..) | LazyExprIR::Or(..) | LazyExprIR::Not(..) => {
+            Some(LazyScalar::B(eval_lazy_pred(ir, columns, row)?))
+        }
+    })
+}
+
+/// Evaluate a predicate (bool-valued) expression over one row. A NULL
+/// slot makes the enclosing COMPARISON false; `and`/`or` short-circuit;
+/// a non-boolean tree at predicate position is an error.
+fn eval_lazy_pred(
+    ir: &crate::interpreter::value::LazyExprIR,
+    columns: &[(String, Value)],
+    row: usize,
+) -> Result<bool, String> {
+    use crate::interpreter::value::{LazyCmpOp, LazyExprIR};
+    match ir {
+        LazyExprIR::Cmp { op, lhs, rhs } => {
+            let (Some(a), Some(b)) = (
+                eval_lazy_scalar(lhs, columns, row)?,
+                eval_lazy_scalar(rhs, columns, row)?,
+            ) else {
+                return Ok(false); // NULL involved → comparison is false
+            };
+            let ord = match (&a, &b) {
+                (LazyScalar::I(x), LazyScalar::I(y)) => x.partial_cmp(y),
+                (LazyScalar::F(x), LazyScalar::F(y)) => x.partial_cmp(y),
+                (LazyScalar::I(x), LazyScalar::F(y)) => (*x as f64).partial_cmp(y),
+                (LazyScalar::F(x), LazyScalar::I(y)) => x.partial_cmp(&(*y as f64)),
+                (LazyScalar::S(x), LazyScalar::S(y)) => Some(x.cmp(y)),
+                (LazyScalar::B(x), LazyScalar::B(y)) => {
+                    if matches!(op, LazyCmpOp::Eq | LazyCmpOp::Ne) {
+                        Some(x.cmp(y))
+                    } else {
+                        return Err(
+                            "LazyFrame.filter: ordered comparison on bool values".to_string()
+                        );
+                    }
+                }
+                _ => {
+                    return Err(
+                        "LazyFrame.filter: cannot compare values of different types \
+                         (String vs number / bool vs non-bool)"
+                            .to_string(),
+                    )
+                }
+            };
+            let Some(ord) = ord else {
+                return Ok(false); // NaN comparisons are false (IEEE posture)
+            };
+            Ok(match op {
+                LazyCmpOp::Gt => ord.is_gt(),
+                LazyCmpOp::Ge => ord.is_ge(),
+                LazyCmpOp::Lt => ord.is_lt(),
+                LazyCmpOp::Le => ord.is_le(),
+                LazyCmpOp::Eq => ord.is_eq(),
+                LazyCmpOp::Ne => ord.is_ne(),
+            })
+        }
+        LazyExprIR::And(a, b) => {
+            Ok(eval_lazy_pred(a, columns, row)? && eval_lazy_pred(b, columns, row)?)
+        }
+        LazyExprIR::Or(a, b) => {
+            Ok(eval_lazy_pred(a, columns, row)? || eval_lazy_pred(b, columns, row)?)
+        }
+        LazyExprIR::Not(x) => Ok(!eval_lazy_pred(x, columns, row)?),
+        LazyExprIR::LitBool(b) => Ok(*b),
+        LazyExprIR::Col(_) => match eval_lazy_scalar(ir, columns, row)? {
+            Some(LazyScalar::B(b)) => Ok(b),
+            Some(_) => Err(
+                "LazyFrame.filter: predicate must be boolean (a bare column reference \
+                 must name a bool column)"
+                    .to_string(),
+            ),
+            None => Ok(false),
+        },
+        _ => Err("LazyFrame.filter: predicate must be boolean".to_string()),
+    }
+}
+
+/// The columns an expression references (for validation + scan-projection
+/// union in the optimizer).
+fn lazy_expr_cols(ir: &crate::interpreter::value::LazyExprIR, out: &mut Vec<String>) {
+    use crate::interpreter::value::LazyExprIR;
+    match ir {
+        LazyExprIR::Col(n) => {
+            if !out.contains(n) {
+                out.push(n.clone());
+            }
+        }
+        LazyExprIR::Cmp { lhs, rhs, .. } => {
+            lazy_expr_cols(lhs, out);
+            lazy_expr_cols(rhs, out);
+        }
+        LazyExprIR::And(a, b) | LazyExprIR::Or(a, b) => {
+            lazy_expr_cols(a, out);
+            lazy_expr_cols(b, out);
+        }
+        LazyExprIR::Not(x) => lazy_expr_cols(x, out),
+        _ => {}
+    }
+}
+
+/// The optimized pipeline form of a slice-1/2 lazy plan.
+pub(super) struct OptimizedLazyPlan {
+    /// Scan-level projection: the union of columns any predicate or the
+    /// final projection needs, in SOURCE order. `None` = every column.
+    scan_cols: Option<Vec<String>>,
+    /// The row pipeline nearest-scan-first: filters (adjacent ones fused
+    /// with `and`) and limits (adjacent ones fused to the min), in their
+    /// original relative order (filters do NOT commute with limits).
+    steps: Vec<crate::interpreter::value::LazyOp>,
+    /// The final output projection (selects collapse — the last wins),
+    /// or `None` for every column.
+    projection: Option<Vec<String>>,
+}
+
+/// Validate + optimize a lazy plan: stepwise visible-column tracking
+/// (selects narrow it; predicate refs must be visible AT THEIR STEP),
+/// select collapse, adjacent filter/limit fusion, and the scan-projection
+/// union. The single validation authority for `collect` and `explain`.
 fn fold_lazy_plan(
     source: &Arc<RwLock<Vec<(String, Value)>>>,
     ops: &Arc<Vec<crate::interpreter::value::LazyOp>>,
-    _span: &Span,
-) -> Result<(Option<Vec<String>>, Option<i64>), String> {
-    use crate::interpreter::value::LazyOp;
+) -> Result<OptimizedLazyPlan, String> {
+    use crate::interpreter::value::{LazyExprIR, LazyOp};
     let src = source.read().unwrap();
-    let mut visible: Vec<String> = src.iter().map(|(n, _)| n.clone()).collect();
+    let source_order: Vec<String> = src.iter().map(|(n, _)| n.clone()).collect();
     drop(src);
-    let mut proj: Option<Vec<String>> = None;
-    let mut limit: Option<i64> = None;
+    let mut visible: Vec<String> = source_order.clone();
+    let mut projection: Option<Vec<String>> = None;
+    let mut needed: Vec<String> = Vec::new();
+    let mut steps: Vec<LazyOp> = Vec::new();
     for op in ops.iter() {
         match op {
             LazyOp::Select(cols) => {
@@ -608,17 +894,110 @@ fn fold_lazy_plan(
                     }
                 }
                 visible = cols.clone();
-                proj = Some(cols.clone());
+                projection = Some(cols.clone());
             }
-            LazyOp::Limit(n) => {
-                limit = Some(match limit {
-                    Some(m) => m.min(*n),
-                    None => *n,
-                });
+            LazyOp::Limit(n) => match steps.last_mut() {
+                Some(LazyOp::Limit(m)) => *m = (*m).min(*n),
+                _ => steps.push(LazyOp::Limit(*n)),
+            },
+            LazyOp::Filter(ir) => {
+                let mut cols = Vec::new();
+                lazy_expr_cols(ir, &mut cols);
+                for c in &cols {
+                    if !visible.contains(c) {
+                        return Err(format!(
+                            "LazyFrame.filter: no column named '{c}' at this plan step"
+                        ));
+                    }
+                    if !needed.contains(c) {
+                        needed.push(c.clone());
+                    }
+                }
+                match steps.last_mut() {
+                    Some(LazyOp::Filter(prev)) => {
+                        *prev = Arc::new(LazyExprIR::And(
+                            Box::new(prev.as_ref().clone()),
+                            Box::new(ir.as_ref().clone()),
+                        ));
+                    }
+                    _ => steps.push(LazyOp::Filter(Arc::clone(ir))),
+                }
             }
         }
     }
-    Ok((proj, limit))
+    // Scan projection: union of predicate columns + the final projection,
+    // in SOURCE order. `None` when nothing narrows it.
+    let scan_cols = if projection.is_none() && needed.is_empty() {
+        None
+    } else {
+        let mut wanted: Vec<String> = Vec::new();
+        if let Some(p) = &projection {
+            wanted.extend(p.iter().cloned());
+        }
+        wanted.extend(needed.iter().cloned());
+        let has_filters = steps.iter().any(|s| matches!(s, LazyOp::Filter(_)));
+        if has_filters {
+            // Union in source order (deterministic).
+            Some(
+                source_order
+                    .iter()
+                    .filter(|n| wanted.contains(n))
+                    .cloned()
+                    .collect(),
+            )
+        } else {
+            // No filters: the scan can project straight to the output
+            // order — the top SELECT is then elided by the renderer.
+            projection.clone()
+        }
+    };
+    Ok(OptimizedLazyPlan {
+        scan_cols,
+        steps,
+        projection,
+    })
+}
+
+/// Render the optimized pipeline, innermost SCAN last. A limit adjacent
+/// to the scan fuses into the scan line; with no filters the projection
+/// lives on the scan itself and the top SELECT is elided (recovering the
+/// slice-1 single-scan rendering for select/limit-only plans).
+fn render_optimized_plan(plan: &OptimizedLazyPlan) -> String {
+    use crate::interpreter::value::LazyOp;
+    let has_filters = plan.steps.iter().any(|s| matches!(s, LazyOp::Filter(_)));
+    let mut scan = match &plan.scan_cols {
+        Some(cols) => format!("SCAN cols=[{}]", cols.join(", ")),
+        None => "SCAN cols=[*]".to_string(),
+    };
+    let mut steps = plan.steps.clone();
+    // Fuse a scan-adjacent limit into the scan line.
+    if let Some(LazyOp::Limit(n)) = steps.first() {
+        scan = format!("{scan} limit={n}");
+        steps.remove(0);
+    }
+    let mut lines: Vec<String> = vec![scan];
+    for step in &steps {
+        let rendered = match step {
+            LazyOp::Limit(n) => format!("LIMIT {n}"),
+            LazyOp::Filter(ir) => format!("FILTER {ir}"),
+            LazyOp::Select(_) => continue,
+        };
+        lines.push(rendered);
+    }
+    if has_filters {
+        if let Some(p) = &plan.projection {
+            lines.push(format!("SELECT [{}]", p.join(", ")));
+        }
+    }
+    let mut out = String::new();
+    for (i, line) in lines.iter().rev().enumerate() {
+        out.push_str(&"  ".repeat(i));
+        out.push_str(line);
+        out.push('\n');
+    }
+    // Trim the trailing newline — explain() adds its own framing.
+    out.pop();
+    out
 }
 
 /// Parse RFC-4180-lite CSV text into a `Value::DataFrame` (phase-11 CSV
