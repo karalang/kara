@@ -24462,7 +24462,17 @@ fn main() {
     // surfaces here.
 
     #[test]
-    fn test_ir_multiple_user_drops_drain_lifo_at_scope_exit() {
+    fn test_ir_user_drops_nll_placement_never_used_bindings() {
+        // B-2026-07-21-1 (NLL user-drop placement): a NEVER-USED user-Drop
+        // binding dies at its own declaration — "a value whose last use is
+        // mid-scope is dropped at that use and does not appear in the
+        // end-of-scope stack at all" (design.md § Drop ordering; the
+        // interpreter has implemented this since the NLL sub-step). So two
+        // never-used bindings `a` then `b` each fire at their own let —
+        // @karac_drop_A appears BEFORE @karac_drop_B in the IR (declaration
+        // order), NOT the scope-exit LIFO the pre-NLL codegen emitted.
+        // Same-statement multi-drop LIFO and mid-scope timing are covered
+        // by the E2E `test_e2e_user_drop_nll_timing_and_order`.
         let ir = ir_for(
             r#"
 struct A { tag: i64 }
@@ -24498,18 +24508,52 @@ fn main() {
                     main_body
                 )
             });
-        // LIFO: b (declared second) drops FIRST; a (declared first)
-        // drops LAST. So @karac_drop_B's call site must appear at a
-        // smaller string offset than @karac_drop_A's.
+        // NLL: each never-used binding drops at its own declaration, so A
+        // (declared first) fires first.
         assert!(
-            b_idx < a_idx,
-            "expected LIFO drop ordering — `@karac_drop_B` should appear \
-             before `@karac_drop_A` in main (last-declared, first-dropped); \
-             B at {}, A at {}; body was:\n{}",
-            b_idx,
+            a_idx < b_idx,
+            "expected NLL declaration-point drop placement — `@karac_drop_A` \
+             should appear before `@karac_drop_B` in main (each never-used \
+             binding dies at its own let); A at {}, B at {}; body was:\n{}",
             a_idx,
+            b_idx,
             main_body
         );
+    }
+
+    #[test]
+    fn test_e2e_user_drop_nll_timing_and_order() {
+        // B-2026-07-21-1: user `impl Drop` bodies fire at each binding's
+        // LIVE-RANGE END (NLL), in LIFO order for drops due at the same
+        // statement — matching the interpreter and design.md § Drop
+        // ordering. Covers: (1) mid-scope last use — the drop fires BEFORE
+        // the scope's next statement; (2) two bindings last-used in the same
+        // statement — LIFO (`c:B` before `c:A`), and before the trailing
+        // statement; (3) a binding used up to scope end — drop at scope
+        // exit. Byte-identical to the interpreter (the run-vs-build
+        // divergence this bug filed).
+        if let Some(out) = run_program(
+            "struct Res { name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { print(f\"c:{self.name}|\"); }\n\
+             }\n\
+             fn main() {\n\
+                 {\n\
+                     let r = Res { name: \"mid\".to_string() };\n\
+                     print(f\"use:{r.name}|\");\n\
+                     print(\"after|\");\n\
+                 }\n\
+                 print(\"S1|\");\n\
+                 let a = Res { name: \"A\".to_string() };\n\
+                 let b = Res { name: \"B\".to_string() };\n\
+                 print(f\"{a.name}{b.name}|\");\n\
+                 print(\"tail|\");\n\
+                 let z = Res { name: \"Z\".to_string() };\n\
+                 print(f\"end:{z.name}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "use:mid|c:mid|after|S1|AB|c:B|c:A|tail|end:Zc:Z|");
+        }
     }
 
     // ── Phase 6 line 17 slice 9d — TcpStream / TcpListener close-on-drop ──

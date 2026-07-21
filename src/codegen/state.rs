@@ -901,6 +901,14 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Cached `karac_drop_<Type>` wrapper from
         /// `Codegen::user_drop_wrapper_fns`.
         drop_fn: FunctionValue<'ctx>,
+        /// The binding's Kāra type name (`"Foo"` for `let f = Foo {..}`).
+        /// Gates the NLL live-range-end firing (`fire_due_user_drops`,
+        /// B-2026-07-21-1): only a non-shared STRUCT user-drop — whose
+        /// let-path registration is mutually exclusive with every other
+        /// cleanup action — may fire early; enum user-drops (dual-
+        /// registered with a complementary `EnumDrop` payload walk) and
+        /// par-branch registrations (empty name) stay at scope exit.
+        type_name: String,
     },
     /// User-source `errdefer { ... }` block to compile on error-exit
     /// paths only. Pushed in program order at the `errdefer` statement's

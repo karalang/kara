@@ -517,6 +517,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 binding_name: binding_name.to_string(),
                 binding_ptr: parent_alloca,
                 drop_fn,
+                // Par-branch write-back registration: no Kāra type name in
+                // scope here. The empty name keeps this entry out of the NLL
+                // early-fire gate (`fire_due_user_drops` requires a known
+                // non-shared struct name) — it drains at scope exit as before.
+                type_name: String::new(),
             },
             SlotOwnership::Soa {
                 soa_struct_ty,

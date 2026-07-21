@@ -4659,6 +4659,87 @@ impl<'ctx> super::Codegen<'ctx> {
                 binding_name: binding_name.to_string(),
                 binding_ptr,
                 drop_fn,
+                type_name: type_name.to_string(),
+            });
+        }
+    }
+
+    /// NLL live-range-end firing for user-`impl Drop` bindings
+    /// (B-2026-07-21-1). design.md § Drop ordering: "Destructors fire at
+    /// each binding's live-range end, not lexical scope end … a value whose
+    /// last use is mid-scope is dropped at that use and does not appear in
+    /// the end-of-scope stack at all." Codegen previously ran EVERY user
+    /// drop body at scope exit — observationally divergent from the
+    /// interpreter (which implements NLL placement) whenever the drop body
+    /// has side effects. Called by `compile_block` after each statement
+    /// with the block's precomputed last-use map (the same
+    /// `compute_block_last_use` analysis the interpreter uses, so both
+    /// backends agree statement-for-statement); fires every due entry in
+    /// LIFO order (reverse introduction — the §867 single-stack rule) and
+    /// removes it from the frame so the scope-exit drain never re-fires it.
+    ///
+    /// Gated to non-shared STRUCT user-drops: their let-path registration
+    /// is mutually exclusive with every other cleanup action (the wrapper
+    /// runs field cleanup internally), so early-firing + removal is
+    /// complete. Enum user-drops (dual-registered with a complementary
+    /// `EnumDrop` payload walk) and par-branch registrations (empty
+    /// `type_name`) stay at scope exit — a conservative residual, never a
+    /// double-fire. Memory-only drops (no user body) also stay at scope
+    /// exit: with no observable side effects, scope-exit free is
+    /// equivalent to NLL free.
+    pub(super) fn fire_due_user_drops(
+        &mut self,
+        last_use: &std::collections::HashMap<String, usize>,
+        stmt_idx: usize,
+    ) {
+        // A terminated insert block (the statement ended in return/break)
+        // cannot take the drop call — and doesn't need it: the exit-path
+        // cleanup drain already handles the frame's remaining entries.
+        if self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_terminator())
+            .is_some()
+        {
+            return;
+        }
+        let due: Vec<(String, PointerValue<'ctx>, FunctionValue<'ctx>)> = {
+            let Some(frame) = self.scope_cleanup_actions.last() else {
+                return;
+            };
+            frame
+                .iter()
+                .rev()
+                .filter_map(|a| match a {
+                    CleanupAction::UserDrop {
+                        binding_name,
+                        binding_ptr,
+                        drop_fn,
+                        type_name,
+                    } if last_use.get(binding_name.as_str()).copied() == Some(stmt_idx)
+                        && self.struct_types.contains_key(type_name.as_str())
+                        && !self.shared_types.contains_key(type_name.as_str()) =>
+                    {
+                        Some((binding_name.clone(), *binding_ptr, *drop_fn))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        if due.is_empty() {
+            return;
+        }
+        for (name, ptr, drop_fn) in &due {
+            self.builder
+                .build_call(*drop_fn, &[(*ptr).into()], &format!("nll.drop.{name}"))
+                .unwrap();
+        }
+        let names: std::collections::HashSet<&str> =
+            due.iter().map(|(n, _, _)| n.as_str()).collect();
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.retain(|a| {
+                !matches!(a, CleanupAction::UserDrop { binding_name, .. }
+                    if names.contains(binding_name.as_str()))
             });
         }
     }
@@ -6695,9 +6776,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // path is the unique field-cleanup invocation for types
             // with a user Drop impl.
             CleanupAction::UserDrop {
-                binding_name: _,
                 binding_ptr,
                 drop_fn,
+                ..
             } => {
                 self.builder
                     .build_call(*drop_fn, &[(*binding_ptr).into()], "")

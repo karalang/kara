@@ -32,6 +32,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // with it cleared (a non-tail `if let` in stmt position must not pick up
         // tail-return compensation); restore it for the final expr below.
         let tail_inner = self.tail_ret_inner.take();
+        // NLL user-drop placement (B-2026-07-21-1): precompute each binding's
+        // last-use statement index with the SAME analysis the interpreter's
+        // block loop uses, so a user `impl Drop` body fires at the binding's
+        // live-range end on both backends (design.md § Drop ordering).
+        // Guarded on the program having any user Drop impl at all — the
+        // common no-user-Drop program pays nothing.
+        let user_drop_last_use = if self.user_drop_wrapper_fns.is_empty() {
+            None
+        } else {
+            Some(crate::interpreter::compute_block_last_use(block))
+        };
         for (i, stmt) in block.stmts.iter().enumerate() {
             // Auto-par reduction lowering for NESTED blocks (2026-07-15).
             // `compile_function_body` attempts this for the fn's top-level
@@ -53,6 +64,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some()
             {
                 return Ok(None);
+            }
+            // Fire user-Drop bodies whose binding's last use was this
+            // statement (NLL placement; see the map above). Runs only on the
+            // fall-through path — a terminated block (return/break in the
+            // statement) exits above and its remaining entries drain via the
+            // exit-path cleanup as before.
+            if let Some(lu) = &user_drop_last_use {
+                self.fire_due_user_drops(lu, i);
             }
         }
         if let Some(ref expr) = block.final_expr {
@@ -391,6 +410,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // `if let` in STATEMENT position doesn't pick it up; re-apply it to the
         // final expr via `compile_tail_final_expr` at the tail emission below.
         let auto_par_tail = self.tail_ret_inner.take();
+
+        // NLL user-drop last-use map for the auto-par body path — the
+        // sequential-statement arm below fires due user drops per statement,
+        // mirroring `compile_block` (B-2026-07-21-1). Same guard: free when
+        // the program has no user Drop impl.
+        let auto_par_user_drop_last_use = if self.user_drop_wrapper_fns.is_empty() {
+            None
+        } else {
+            Some(crate::interpreter::compute_block_last_use(body))
+        };
 
         // Auto-par reduction diagnostic (slice 3a / 3b, 2026-05-19). When
         // the env var `KARAC_REDUCE_DEBUG=1` is set, print every
@@ -813,6 +842,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 let lowered = self.try_emit_reduction_lowering(body, i)?;
                 if lowered.is_none() {
                     self.compile_stmt(&body.stmts[i])?;
+                }
+                // NLL user-drop placement for SEQUENTIAL top-level statements
+                // (B-2026-07-21-1) — the auto-par body path compiles these
+                // outside `compile_block`, so it needs the same per-statement
+                // fire. Group-dispatched indices are skipped (conservative:
+                // a binding whose last use falls inside a par group drains at
+                // scope exit as before). `fire_due_user_drops` self-guards on
+                // a terminated insert block.
+                if let Some(lu) = &auto_par_user_drop_last_use {
+                    self.fire_due_user_drops(lu, i);
                 }
                 i += 1;
             }

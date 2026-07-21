@@ -494,20 +494,26 @@ impl<'a> super::Interpreter<'a> {
     /// not fire again at scope exit. NLL placement per design.md §
     /// Drop ordering within a branch (sub-step 3). `Defer` slots
     /// always stay in `cleanup` and drain at scope exit. Walks
-    /// `cleanup` front-to-back so program-order is preserved on
-    /// in-place removal; the relative LIFO order of remaining
-    /// entries is unchanged. Drop firings are recorded on
-    /// `drop_trace` directly here (rather than via `run_cleanup`)
-    /// so test traces include NLL and scope-exit firings in their
-    /// actual program order.
+    /// `cleanup` BACK-TO-FRONT so multiple drops due at the SAME
+    /// statement fire in LIFO (reverse-introduction) order — the
+    /// design.md § 867 single-stack rule ("drain in the same LIFO
+    /// stack ... ordered by program-order of introduction") applies
+    /// to NLL firings too, and codegen's `fire_due_user_drops`
+    /// mirrors this exact order (B-2026-07-21-1; the previous
+    /// front-to-back walk fired same-statement drops FIFO). In-place
+    /// removal keeps the relative order of remaining entries
+    /// unchanged. Drop firings are recorded on `drop_trace` directly
+    /// here (rather than via `run_cleanup`) so test traces include
+    /// NLL and scope-exit firings in their actual program order.
     fn fire_due_drops(
         &mut self,
         cleanup: &mut Vec<CleanupAction>,
         last_use: &HashMap<String, usize>,
         stmt_idx: usize,
     ) {
-        let mut i = 0;
-        while i < cleanup.len() {
+        let mut i = cleanup.len();
+        while i > 0 {
+            i -= 1;
             let should_fire = match &cleanup[i] {
                 CleanupAction::Drop { name } => last_use.get(name).copied() == Some(stmt_idx),
                 CleanupAction::Defer(_) => false,
@@ -522,8 +528,6 @@ impl<'a> super::Interpreter<'a> {
                     self.invoke_user_drop_if_applicable(&name);
                     self.drop_trace.push(name);
                 }
-            } else {
-                i += 1;
             }
         }
     }

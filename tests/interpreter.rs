@@ -3604,8 +3604,11 @@ fn test_user_drop_body_fires_at_nll_endpoint() {
     // unchanged; Prereq.4 only adds the side effect of running the
     // user body at the same point. `n` drops too (also a binding
     // and `let _ = ...` would suppress; here we keep the binding so
-    // both drops fire).
-    assert_eq!(drops, vec!["f".to_string(), "n".to_string()]);
+    // both drops fire). Both are due at the same statement (`let n =
+    // f.x` is f's last use AND n's declaration-with-no-later-use), so
+    // they fire LIFO — `n` (introduced later) before `f` — per the
+    // design.md § 867 single-stack rule (B-2026-07-21-1).
+    assert_eq!(drops, vec!["n".to_string(), "f".to_string()]);
 }
 
 #[test]
@@ -4347,26 +4350,25 @@ fn test_user_drop_lifo_at_scope_exit_when_both_used_to_last_stmt() {
              println(a.tag + b.tag);\n\
          }",
     );
-    // Note: kara's interpreter NLL fires when last-use == stmt_idx.
-    // Both a and b have last-use at stmt 2 (the println). They
-    // fire in fire_due_drops walking front-to-back, so in
-    // PUSH order — a before b — at NLL endpoint, not scope-exit
-    // LIFO. This pins the behaviour the interpreter actually
-    // exhibits today; the codegen test
-    // (test_ir_multiple_user_drops_drain_lifo_at_scope_exit)
-    // pins the IR-level LIFO drain. Reconciling these is a
-    // follow-on slice tracked in phase-7-codegen.md.
+    // Both a and b have last-use at stmt 2 (the println), so both fire
+    // at that NLL endpoint — in LIFO (reverse-introduction) order per
+    // the design.md § 867 single-stack rule: b (declared second) drops
+    // first, then a. This is the B-2026-07-21-1 reconciliation: the
+    // interpreter's fire_due_drops now walks back-to-front, and
+    // codegen's `fire_due_user_drops` emits the identical order (the
+    // old front-to-back FIFO here, and codegen's old scope-exit-only
+    // drain, were the two halves of the divergence).
     assert_eq!(
         output,
-        vec!["3\n".to_string(), "1\n".to_string(), "2\n".to_string()],
-        "expected sum-print then both user-drop bodies (a then b in NLL push order); got {:?}",
+        vec!["3\n".to_string(), "2\n".to_string(), "1\n".to_string()],
+        "expected sum-print then both user-drop bodies (b then a, same-statement LIFO); got {:?}",
         output
     );
     // drop_trace records both bindings in the order they fired.
     assert_eq!(
         drops,
-        vec!["a".to_string(), "b".to_string()],
-        "drop_trace should record both bindings in NLL fire order"
+        vec!["b".to_string(), "a".to_string()],
+        "drop_trace should record both bindings in LIFO fire order"
     );
 }
 

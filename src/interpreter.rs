@@ -13,6 +13,11 @@ mod eval_expr;
 mod eval_ops;
 mod eval_stmt;
 mod exec;
+// Shared with codegen's NLL user-drop placement (`fire_due_user_drops`,
+// B-2026-07-21-1): both backends must compute a binding's last-use statement
+// index with the SAME analysis so drop timing agrees statement-for-statement.
+// Pure AST analysis — nothing interpreter-runtime crosses the boundary.
+pub(crate) use exec::compute_block_last_use;
 mod helpers;
 mod iter_eval;
 mod layout_query;
