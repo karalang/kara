@@ -533,6 +533,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // both neutralize only the scrutinee copy, never the enum field
                 // in the SOURCE struct, which the owning struct's drop now frees.
                 self.suppress_destructured_struct_field_enum_cleanup(scrutinee, &arm.pattern);
+                // B-2026-07-21-16: the seeded Option/Result sibling of #15 —
+                // `match a.opt { Some(s) => … }` over an OWNED place. The #15
+                // route hands these to the generic enum suppressor, which
+                // no-ops on the seeded all-None drop-kind layouts, so the
+                // source field stayed armed and the struct drop double-freed
+                // the consumed payload. Zero the source in the binding arm.
+                let optres_bindings_owned = !self.pattern_binding_is_borrow;
+                self.suppress_consumed_place_optres_field_source(
+                    scrutinee,
+                    &arm.pattern,
+                    optres_bindings_owned,
+                );
                 // #16: a plain struct-pattern destructure (`match v { S { s } =>
                 // … }`) of an owned local struct. Cap-zero each consumed field in
                 // the source slot so the scrutinee's struct drop skips the buffer
@@ -1641,50 +1653,7 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return (val, None);
         };
-        let TypeKind::Path(p) = &field_te.kind else {
-            return (val, None);
-        };
-        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
-            return (val, None);
-        }
-        let Some(args) = p.generic_args.as_ref() else {
-            return (val, None);
-        };
-        let mut half_tes = Vec::with_capacity(2);
-        for a in args.iter().take(2) {
-            match a {
-                crate::ast::GenericArg::Type(t) => half_tes.push(t),
-                _ => return (val, None),
-            }
-        }
-        if half_tes.len() != 2 {
-            return (val, None);
-        }
-        // Per-half shape gate: DIRECT String/Vec (deep-copied by the clone,
-        // freed by the overlay cleanup) or heap-free scalar (nothing to
-        // manage). Anything else — shared, struct wrapper, user enum, nested
-        // Option/Map/tuple-with-heap — bails to the status quo.
-        let mut any_heap_half = false;
-        for half in &half_tes {
-            let is_direct_vecstr = self.is_string_type_expr(half)
-                || (matches!(&half.kind, TypeKind::Path(hp)
-                        if matches!(hp.segments.last().map(|s| s.as_str()), Some("Vec") | Some("VecDeque")))
-                    && self.extract_vec_elem_type(half).is_some());
-            if is_direct_vecstr {
-                // A shared element would need per-element rc-incs the
-                // defensive copy doesn't emit — keep that shape status quo.
-                if crate::codegen::helpers::vec_inner_type_expr(half).is_some_and(|inner| {
-                    matches!(&inner.kind, TypeKind::Path(ip)
-                        if ip.segments.last().is_some_and(|n| self.shared_types.contains_key(n.as_str())))
-                }) {
-                    return (val, None);
-                }
-                any_heap_half = true;
-            } else if self.te_owns_heap_below_buffer(half) {
-                return (val, None);
-            }
-        }
-        if !any_heap_half {
+        if !self.result_field_direct_vecstr_halves_ok(&field_te) {
             return (val, None);
         }
         // The cleanup registration below keys off the same extraction — make
@@ -2001,6 +1970,210 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         self.zero_option_field_tag_at(clone_slot);
+    }
+
+    /// The B-2026-07-21-14 per-half `Result[T, E]` shape gate, shared by the
+    /// ref-chain clone leg and the B-2026-07-21-16 owned-place move legs:
+    /// every half must be a DIRECT inline-heap `String`/`Vec`/`VecDeque`
+    /// (with a non-shared element) or a heap-free scalar, and at least one
+    /// half must be heap. Anything else — shared, struct wrapper, user enum,
+    /// nested Option/Map/tuple-with-heap — fails the gate so callers keep
+    /// the status quo (those payload classes belong to other cleanup
+    /// families, and the overlay copy/free pair only handles the
+    /// `{ptr,len,cap}` class).
+    pub(super) fn result_field_direct_vecstr_halves_ok(&self, field_te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &field_te.kind else {
+            return false;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
+            return false;
+        }
+        let Some(args) = p.generic_args.as_ref() else {
+            return false;
+        };
+        let mut half_tes = Vec::with_capacity(2);
+        for a in args.iter().take(2) {
+            match a {
+                crate::ast::GenericArg::Type(t) => half_tes.push(t),
+                _ => return false,
+            }
+        }
+        if half_tes.len() != 2 {
+            return false;
+        }
+        let mut any_heap_half = false;
+        for half in &half_tes {
+            let is_direct_vecstr = self.is_string_type_expr(half)
+                || (matches!(&half.kind, TypeKind::Path(hp)
+                        if matches!(hp.segments.last().map(|s| s.as_str()), Some("Vec") | Some("VecDeque")))
+                    && self.extract_vec_elem_type(half).is_some());
+            if is_direct_vecstr {
+                // A shared element would need per-element rc-incs the
+                // defensive copy doesn't emit — keep that shape status quo.
+                if crate::codegen::helpers::vec_inner_type_expr(half).is_some_and(|inner| {
+                    matches!(&inner.kind, TypeKind::Path(ip)
+                        if ip.segments.last().is_some_and(|n| self.shared_types.contains_key(n.as_str())))
+                }) {
+                    return false;
+                }
+                any_heap_half = true;
+            } else if self.te_owns_heap_below_buffer(half) {
+                return false;
+            }
+        }
+        any_heap_half
+    }
+
+    /// B-2026-07-21-16 — shared shape resolver for the OWNED-place
+    /// `Option`/`Result` field-move legs: `value` must be a FieldAccess
+    /// place whose leaf field is an `Option` with an inline non-shared
+    /// String/Vec payload, or a `Result` in the direct-String/Vec-halves
+    /// class, reachable through `field_chain_place_ptr` (which bails on
+    /// borrowed roots — the ref-param shapes belong to the -9/-14 clone
+    /// legs — and on non-place roots). Returns `(is_result, field_te,
+    /// source_ptr)`. The type gates are checked BEFORE the place walk (it
+    /// emits IR for `vec[i]` roots).
+    pub(super) fn place_optres_field_move_info(
+        &mut self,
+        value: &Expr,
+    ) -> Option<(bool, TypeExpr, PointerValue<'ctx>)> {
+        let ExprKind::FieldAccess { object, field } = &value.kind else {
+            return None;
+        };
+        let obj_ty = self.place_chain_type_name(object)?;
+        let idx = self
+            .struct_field_names
+            .get(obj_ty.as_str())?
+            .iter()
+            .position(|n| n == field)?;
+        let field_te = self
+            .struct_field_type_exprs
+            .get(obj_ty.as_str())?
+            .get(idx)?
+            .clone();
+        let TypeKind::Path(p) = &field_te.kind else {
+            return None;
+        };
+        let is_result = match p.segments.last().map(|s| s.as_str()) {
+            Some("Option") => {
+                if self.option_inline_payload_elem(&field_te).is_none()
+                    || self
+                        .option_inner_shared_type_for_type_expr(&field_te)
+                        .is_some()
+                {
+                    return None;
+                }
+                false
+            }
+            Some("Result") => {
+                if !self.result_field_direct_vecstr_halves_ok(&field_te) {
+                    return None;
+                }
+                true
+            }
+            _ => return None,
+        };
+        let src_ptr = self.field_chain_place_ptr(value)?;
+        Some((is_result, field_te, src_ptr))
+    }
+
+    /// B-2026-07-21-16 (pattern leg) — a consuming variant-pattern match /
+    /// if-let / let-else DIRECTLY over an owned place's `Option`/`Result`
+    /// field (`match a.opt { Some(s) => … }`): the binding registers its own
+    /// free (any binding sub-pattern does, even a print-only read), but
+    /// nothing neutralized the SOURCE field, so the owning struct's drop
+    /// (`OptionInline`) freed the same buffer again. Zero the source in the
+    /// taken arm — Option TAG to `None` / Result payload area — so the
+    /// struct drop skips the payload the binding now owns; non-binding arms
+    /// (`Some(_)` / `None` / `Err(_)` etc.) leave the source armed and the
+    /// struct drop frees it. `bindings_owned` is the scrutinee's
+    /// `!pattern_binding_is_borrow` classification, captured while active —
+    /// when bindings are borrow-aliases they register no free, so zeroing
+    /// the source would turn the owner's single free into a leak.
+    pub(super) fn suppress_consumed_place_optres_field_source(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        bindings_owned: bool,
+    ) {
+        if !bindings_owned {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        let want_result = match path.last().map(|s| s.as_str()) {
+            Some("Some") => false,
+            Some("Ok") | Some("Err") => true,
+            _ => return,
+        };
+        if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        let Some((is_result, _field_te, src_ptr)) = self.place_optres_field_move_info(scrutinee)
+        else {
+            return;
+        };
+        if is_result != want_result {
+            return;
+        }
+        if is_result {
+            let Some(layout) = self.enum_layouts.get("Result") else {
+                return;
+            };
+            let result_ty = layout.llvm_type;
+            self.zero_result_payload_area(result_ty, src_ptr, "respl.place.move");
+        } else {
+            self.zero_option_field_tag_at(src_ptr);
+        }
+    }
+
+    /// B-2026-07-21-16 (let leg) — `let x = <ownedplace>.optresfield;` is a
+    /// true field MOVE: register the binding's own
+    /// `FreeInline{Option,Result}Payload` (so a later consuming match routes
+    /// through the proven identifier-keyed suppressors) and zero the SOURCE
+    /// field so the owning struct's drop skips the payload `x` now owns.
+    /// Self-gating via [`Self::place_optres_field_move_info`] — borrowed
+    /// roots (the -11 clone leg's territory), non-Option/Result leaves, and
+    /// unsupported payload classes all no-op to the status quo.
+    pub(super) fn track_place_optres_field_move(&mut self, var_name: &str, value: &Expr) {
+        let Some((is_result, field_te, src_ptr)) = self.place_optres_field_move_info(value) else {
+            return;
+        };
+        let Some(slot_ptr) = self.variables.get(var_name).map(|s| s.ptr) else {
+            return;
+        };
+        if is_result {
+            self.track_inline_result_payload_var(var_name, slot_ptr, &field_te);
+            let Some(layout) = self.enum_layouts.get("Result") else {
+                return;
+            };
+            let result_ty = layout.llvm_type;
+            self.zero_result_payload_area(result_ty, src_ptr, "respl.letmove");
+        } else {
+            self.track_inline_option_payload_var(var_name, slot_ptr, &field_te);
+            self.zero_option_field_tag_at(src_ptr);
+        }
+    }
+
+    /// B-2026-07-21-16 (assign leg) — `x = <ownedplace>.optresfield;`: zero
+    /// the SOURCE only. The assign target's own cleanup registration (from
+    /// its let-site) owns the moved-in payload; if the target is untracked
+    /// the move can at worst leak (strictly better than the double-free),
+    /// and registering here would double up on a tracked target.
+    pub(super) fn suppress_place_optres_field_move_source(&mut self, value: &Expr) {
+        let Some((is_result, _field_te, src_ptr)) = self.place_optres_field_move_info(value) else {
+            return;
+        };
+        if is_result {
+            let Some(layout) = self.enum_layouts.get("Result") else {
+                return;
+            };
+            let result_ty = layout.llvm_type;
+            self.zero_result_payload_area(result_ty, src_ptr, "respl.assignmove");
+        } else {
+            self.zero_option_field_tag_at(src_ptr);
+        }
     }
 
     /// `if let` / `while let` sibling of the arm-loop escape walk in

@@ -10405,6 +10405,74 @@ fn main() {
     }
 
     #[test]
+    fn asan_owned_struct_optres_field_consume_no_leak_no_double_free() {
+        // B-2026-07-21-16 memory leg. Double-free half: a payload bound out
+        // of an owned struct's Option field (direct match / if-let /
+        // let-else scrutinee, let-move, assign-move) must be freed exactly
+        // once by its binding — the source field is zeroed so the struct
+        // drop's OptionInline arm skips it. Leak half: a NON-binding arm
+        // (`Some(_)` / miss edges) leaves the source armed and the struct
+        // drop must still free it; the let-move leg must also arm the new
+        // binding's own cleanup (an unconsumed `let x = d.opt` frees via x).
+        // Result shapes ride the same legs (the drain route). Loop so any
+        // per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+struct H2 { opt: Option[String], n: i64 }
+struct H3 { res: Result[String, i64], n: i64 }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = H2 { opt: Some("payload".to_string()), n: 1 };
+        match a.opt {
+            Some(s) => { acc = acc + ("m:".to_string() + s).len(); }
+            None => { }
+        }
+        let b = H2 { opt: Some("iff".to_string()), n: 2 };
+        if let Some(s) = b.opt {
+            acc = acc + s.len();
+        }
+        let c = H2 { opt: Some("lel".to_string()), n: 3 };
+        let Some(t) = c.opt else {
+            return;
+        }
+        acc = acc + (t + "!").len();
+        let d = H2 { opt: Some("moved".to_string()), n: 4 };
+        let x = d.opt;
+        if let Some(s) = x {
+            acc = acc + s.len();
+        }
+        let d2 = H2 { opt: Some("unconsumed".to_string()), n: 5 };
+        let x2 = d2.opt;
+        let e = H2 { opt: Some("assign".to_string()), n: 6 };
+        let mut y: Option[String] = None;
+        y = e.opt;
+        if let Some(s) = y {
+            acc = acc + s.len();
+        }
+        let w = H2 { opt: Some("wild".to_string()), n: 7 };
+        match w.opt {
+            Some(_) => { acc = acc + 1; }
+            None => { }
+        }
+        let g = H3 { res: Ok("resmv".to_string()), n: 8 };
+        let dr = g.res;
+        match dr {
+            Ok(s) => { acc = acc + s.len(); }
+            Err(e2) => { acc = acc + e2; }
+        }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["1320"],
+            "owned_struct_optres_field_consume",
+        );
+    }
+
+    #[test]
     fn asan_ref_param_result_field_consume_no_leak_no_double_free() {
         // B-2026-07-21-14 memory leg: the ref-chain Result clone. Double-free
         // half: a consumed Ok/Err payload freed exactly once by its binding,

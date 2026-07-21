@@ -5029,6 +5029,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-07-21-16 (let leg): `let x = <ownedplace>.optresfield;`
+                // is a true field MOVE — register x's own inline-payload
+                // cleanup and zero the SOURCE field so the owning struct's
+                // drop skips the payload x now owns (previously the move
+                // neither armed x nor disarmed the source: balanced while x
+                // was never consumed, double-free once it was). Self-gating:
+                // borrowed roots, non-Option/Result leaves, and unsupported
+                // payload classes no-op.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    let var_name = var_name.clone();
+                    self.track_place_optres_field_move(&var_name, value);
+                }
                 // Slice γ (2026-05-14): track value-type struct bindings
                 // for scope-exit drop-fn invocation. Mirrors the enum
                 // tracking above. The drop fn frees per-field heap
@@ -6156,6 +6168,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     if lhs_is_tracked_struct && !rhs_is_self_alias {
                         self.suppress_source_vec_cleanup_for_arg(value);
                     }
+                    // B-2026-07-21-16 (assign leg): `x = <ownedplace>.optresfield;`
+                    // — a field MOVE into an existing binding. Zero the source
+                    // so the owning struct's drop skips the payload now in x's
+                    // slot (x's own let-site cleanup owns it).
+                    self.suppress_place_optres_field_move_source(value);
                 } else if let ExprKind::FieldAccess { object, field } = &target.kind {
                     // Heap-env closure FIELD reassignment (`r.f = make(j)` /
                     // `r.f = g`): drop r.f's CURRENT env, inc the new env on a

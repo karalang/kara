@@ -131,6 +131,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.pattern_binding_is_borrow {
             self.clone_escaping_borrow_payload_binding(value, pattern, Some(&[]), &[then_block])?;
         }
+        let optres_bindings_owned = !self.pattern_binding_is_borrow;
         self.pattern_binding_is_borrow = saved_borrow_flag;
         // B-track: zero the caps of moved-in fields so the source EnumDrop
         // (registered above) frees only the *unbound* heap fields, not the ones
@@ -145,6 +146,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // the binding's. No-op for temp / non-inline scrutinees.
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
+        // B-2026-07-21-16: `if let Some(s) = a.opt { … }` over an OWNED place
+        // — zero the source field in the then-arm (the binding owns the
+        // payload); the miss edge leaves it for the struct drop.
+        self.suppress_consumed_place_optres_field_source(value, pattern, optres_bindings_owned);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
         // B-2026-07-03-31: skip disarming the source payload drop when the
         // then-block ONLY BORROWS the bound payload (not moved out) — the
@@ -536,6 +541,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.pattern_binding_is_borrow {
             self.clone_escaping_borrow_payload_binding(value, pattern, None, &[])?;
         }
+        let optres_bindings_owned = !self.pattern_binding_is_borrow;
         self.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
@@ -545,6 +551,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // so zero x's source `cap` to avoid a double-free at that scope's exit.
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
+        // B-2026-07-21-16: `let Some(s) = a.opt else { … }` over an OWNED
+        // place — zero the source field on the match edge (the escaped
+        // binding owns the payload); the divergent else edge leaves it for
+        // the struct drop.
+        self.suppress_consumed_place_optres_field_source(value, pattern, optres_bindings_owned);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
         self.suppress_inline_option_agg_payload_cleanup(value, pattern);
         // Slice 3t: boxed-payload struct-destructure field suppression

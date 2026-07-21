@@ -56675,6 +56675,64 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_owned_struct_optres_field_consume_and_move() {
+        // B-2026-07-21-16: consuming (or even print-only-binding) match /
+        // if-let / let-else DIRECTLY over an OWNED struct's Option field,
+        // and let/assign moves of such a field, double-freed: the binding's
+        // own free plus the struct drop's OptionInline arm hit the same
+        // buffer (the Facet A move-site zeroing never covered these sites).
+        // Now the consuming arm / let / assign zero the SOURCE field (Option
+        // tag to None; Result payload area), making the move real. Result
+        // shapes ride the same legs (load-bearing once B-2026-07-21-15 arms
+        // the struct-drop Result free; the drained `let dr = h.res` route
+        // also gives dr a real cleanup registration today). Non-binding arms
+        // leave the source to the struct drop.
+        let output = run_program(
+            "struct H2 { opt: Option[String], n: i64 }\n\
+             struct H3 { res: Result[String, i64], n: i64 }\n\
+             fn main() {\n\
+                 let a = H2 { opt: Some(\"ma\".to_string()), n: 1 };\n\
+                 match a.opt {\n\
+                     Some(s) => { println(\"m:\".to_string() + s); }\n\
+                     None => { println(\"none\".to_string()); }\n\
+                 }\n\
+                 let b = H2 { opt: Some(\"if\".to_string()), n: 2 };\n\
+                 if let Some(s) = b.opt {\n\
+                     println(\"i:\".to_string() + s);\n\
+                 }\n\
+                 let c = H2 { opt: Some(\"le\".to_string()), n: 3 };\n\
+                 let Some(t) = c.opt else {\n\
+                     return;\n\
+                 }\n\
+                 println(\"l:\".to_string() + t);\n\
+                 let d = H2 { opt: Some(\"mv\".to_string()), n: 4 };\n\
+                 let x = d.opt;\n\
+                 if let Some(s) = x {\n\
+                     println(\"x:\".to_string() + s);\n\
+                 }\n\
+                 let e = H2 { opt: Some(\"as\".to_string()), n: 5 };\n\
+                 let mut y: Option[String] = None;\n\
+                 y = e.opt;\n\
+                 if let Some(s) = y {\n\
+                     println(\"y:\".to_string() + s);\n\
+                 }\n\
+                 let g = H3 { res: Ok(\"rr\".to_string()), n: 6 };\n\
+                 match g.res {\n\
+                     Ok(s) => { println(\"g:\".to_string() + s); }\n\
+                     Err(e2) => { println(e2.to_string()); }\n\
+                 }\n\
+                 let h = H2 { opt: Some(\"wc\".to_string()), n: 7 };\n\
+                 match h.opt {\n\
+                     Some(_) => { println(\"has\".to_string()); }\n\
+                     None => { println(\"no\".to_string()); }\n\
+                 }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "m:ma\ni:if\nl:le\nx:mv\ny:as\ng:rr\nhas\n");
+    }
+
+    #[test]
     fn test_e2e_ref_param_result_field_consume() {
         // B-2026-07-21-14: the RESULT-leaf sibling of the ref-chain family —
         // `match <refparam>.res { Ok(s) => <consume s> … }` over a
