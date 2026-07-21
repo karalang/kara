@@ -4358,6 +4358,24 @@ fn program_declares_gpu_kernel(program: &crate::ast::Program) -> bool {
     })
 }
 
+/// True when the program touches the LazyFrame surface — `df.lazy()` or
+/// any `LazyFrame` / `LazyExpr` / `LazyGroupBy` method (phase-11
+/// LazyDataFrame; interpreter-only until the codegen twin lands).
+/// `karac run` routes such a program to the tree-walk interpreter: the
+/// JIT lane's codegen otherwise fails with a deferral that tells the
+/// user to "run it with `karac run`" — the very command they typed
+/// (mirrors the gpu/regex fallbacks above; the AOT `karac build` path
+/// keeps its loud deferral).
+#[cfg(feature = "llvm")]
+fn program_uses_lazyframe(typed: &TypeCheckResult) -> bool {
+    typed.method_callee_types.values().any(|v| {
+        v == "DataFrame.lazy"
+            || v.starts_with("LazyFrame.")
+            || v.starts_with("LazyExpr.")
+            || v.starts_with("LazyGroupBy.")
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cmd_run(
     filename: &str,
@@ -4925,11 +4943,17 @@ fn cmd_run(
     // libkarac_runtime_gpu.a and links the real backend) is unaffected.
     #[cfg(feature = "llvm")]
     let program_uses_gpu = program_declares_gpu_kernel(&pipeline.parsed.program);
+    // LazyFrame programs are interpreter-only in this slice — route them
+    // there instead of dead-ending in the JIT lane's codegen deferral
+    // (see `program_uses_lazyframe`).
+    #[cfg(feature = "llvm")]
+    let program_uses_lazy = pipeline.typed.as_ref().is_some_and(program_uses_lazyframe);
     #[cfg(feature = "llvm")]
     if output == OutputMode::Text
         && timeout.is_none()
         && !interp
         && !program_uses_gpu
+        && !program_uses_lazy
         && std::env::var("KARAC_RUN_JIT").as_deref() != Ok("0")
     {
         // Codegen consumes ownership + concurrency (the interpreter path skips

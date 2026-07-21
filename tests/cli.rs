@@ -3772,6 +3772,53 @@ fn test_run_gpu_dispatch_routes_to_interpreter() {
 }
 
 #[test]
+fn test_run_lazyframe_routes_to_interpreter() {
+    // Phase-11 LazyDataFrame: the surface is interpreter-only until the
+    // codegen twin lands, and the JIT-default `karac run` previously
+    // dead-ended in the codegen deferral — whose message told the user to
+    // "run it with `karac run`", the very command they had typed. `cmd_run`
+    // now detects the LazyFrame surface from the typed method-callee table
+    // and routes to the tree-walk interpreter (mirroring the gpu/regex
+    // fallbacks). All three run forms must agree; `karac build` keeps the
+    // loud deferral (covered by codegen.rs).
+    let src = "fn main() {\n\
+               \x20   let mut df: DataFrame = DataFrame.new();\n\
+               \x20   df.insert(\"a\", Column.from_vec([1i64, 2i64, 3i64]));\n\
+               \x20   let out = df.lazy().filter(LazyExpr.col(\"a\").gt(1)).collect();\n\
+               \x20   println(out.height());\n\
+               }\n";
+    let path = write_run_temp("lazyframe", src);
+    let p = path.to_str().unwrap();
+
+    let assert_ok = |label: &str, cmd: KaracBin| {
+        let out = cmd.output().unwrap();
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !combined.contains("codegen failed"),
+            "LazyFrame under {label} dead-ended in the codegen deferral it was supposed \
+             to route around:\n{combined}"
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.trim() == "2",
+            "LazyFrame under {label} should print 2; got:\n{combined}"
+        );
+    };
+
+    assert_ok("`run` (JIT-default)", karac_bin().args(["run", p]));
+    assert_ok("`run --interp`", karac_bin().args(["run", "--interp", p]));
+    assert_ok(
+        "`run` KARAC_RUN_JIT=0",
+        karac_bin().args(["run", p]).env("KARAC_RUN_JIT", "0"),
+    );
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
 fn test_run_comptime_derive_fn_skipped_by_codegen() {
     // B-2026-07-08-15 Layer 3: a `#[derive(X)]`'s `comptime fn derive_x` runs
     // only at compile time (the comptime fold evaluates it via the interpreter
