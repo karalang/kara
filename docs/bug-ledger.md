@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 159 | 0 |
 | leak | 88 | 0 |
-| double-free | 74 | 0 |
+| double-free | 75 | 1 |
 | codegen-gap | 70 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 38 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 451 | 0 |
+| codegen | 452 | 1 |
 | typecheck | 83 | 0 |
 | interp | 67 | 0 |
 | ownership | 25 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **620 surfaced · 0 open · 616 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **621 surfaced · 1 open · 616 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-21-14 | 2026-07-21 | codegen | medium | match on a Result[String, i64] FIELD through a `ref` param with a consuming Ok arm double-frees under AOT (O0 and O2): `match h.res { Ok(s) => return "ok:".to_string() + s, Err(e) => … }` (h: ref Holder) aborts free(): double free; interp AND JIT print ok:rr (JIT survives by layout luck). The Result-LEAF sibling of B-2026-07-21-9 — exactly the open territory that fix's resolution flagged: the clone dispatcher has no Result value deep-clone, and the ref-chain clone legs gate Result out, so the inline String payload binding aliases the caller's buffer and both free it. | — |
 
 ### Fixed (616)
 
