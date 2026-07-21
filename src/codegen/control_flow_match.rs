@@ -142,6 +142,11 @@ impl<'ctx> super::Codegen<'ctx> {
             &arm_patterns,
             ref_chain_escapes,
         );
+        // B-2026-07-21-9: the OPTION-leaf sibling — `match <refparam>.opt {
+        // Some(s) => <consume s> … }`. A consuming Some arm zeroes the clone
+        // slot's tag below; None/wildcard arms leave the cleanup armed.
+        let (scrut, refchain_option_clone) =
+            self.clone_escaping_borrowed_ref_chain_option(scrutinee, scrut, ref_chain_escapes);
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
         // that leaves a heap payload field unbound leaks it. Materialize +
@@ -535,6 +540,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         &clone_name,
                         &arm.pattern,
                     );
+                }
+                // B-2026-07-21-9: ref-chain Option clone — a consuming Some
+                // arm zeroes the clone's tag so its FreeInlineOptionPayload
+                // skips the payload the binding now owns.
+                if let Some(clone_slot) = refchain_option_clone {
+                    self.zero_refchain_option_clone_on_consume(clone_slot, &arm.pattern);
                 }
                 // Shared-enum analog: a `match e { S(s) => s }` over a SHARED
                 // enum box (`scrut` = the RC box pointer) that MOVES a Vec/String
@@ -1427,6 +1438,137 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap(),
             Some((slot, struct_name)),
         )
+    }
+
+    /// B-2026-07-21-9 — the OPTION-leaf sibling of
+    /// [`Self::clone_escaping_borrowed_ref_chain_enum`]: `match
+    /// <refparam>.field { Some(s) => <consume s> … }` where the leaf field is
+    /// an `Option[String]`/`Option[Vec[U]]` (inline heap payload). The enum
+    /// clone leg gates seeded Option out (all-`None` drop kinds, no freshtemp
+    /// channel), so the inline payload binding aliased the caller's buffer
+    /// and both freed it. Deep-clone the Option value (the dispatcher's
+    /// tag-guarded `emit_option_value_clone_fn`), register a
+    /// `FreeInlineOptionPayload` on the clone slot, and let the CONSUMING
+    /// `Some` arm zero the clone's TAG (`zero_option_field_tag_at`) so the
+    /// cleanup skips the payload the binding now owns; a non-consuming arm
+    /// (`None` / `_`) leaves the tag and the cleanup frees the clone's
+    /// payload. Caller's value untouched — interpreter semantics.
+    ///
+    /// Gates mirror the siblings: pure FieldAccess chain rooted at a
+    /// `ref`/`mut ref` param (the leaf hop must be a named field — the
+    /// payload te comes from the owning struct's field table), an escaping
+    /// binding, and an INLINE heap payload (`option_inline_payload_elem`;
+    /// boxed/shared/Map payloads keep the status quo — they are other
+    /// cleanup families). Returns the (possibly cloned) value plus the clone
+    /// slot for the consuming-arm tag zero.
+    pub(super) fn clone_escaping_borrowed_ref_chain_option(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        escapes: bool,
+    ) -> (BasicValueEnum<'ctx>, Option<PointerValue<'ctx>>) {
+        let ExprKind::FieldAccess { object, field } = &scrutinee.kind else {
+            return (val, None);
+        };
+        let mut cur = object.as_ref();
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n.as_str(),
+                ExprKind::SelfValue => break "self",
+                _ => return (val, None),
+            }
+        };
+        if !self.ref_params.contains_key(root) {
+            return (val, None);
+        }
+        if !escapes {
+            return (val, None);
+        }
+        let Some(obj_ty) = self.place_chain_type_name(object) else {
+            return (val, None);
+        };
+        let Some(idx) = self
+            .struct_field_names
+            .get(obj_ty.as_str())
+            .and_then(|ns| ns.iter().position(|n| n == field))
+        else {
+            return (val, None);
+        };
+        let Some(field_te) = self
+            .struct_field_type_exprs
+            .get(obj_ty.as_str())
+            .and_then(|tes| tes.get(idx))
+            .cloned()
+        else {
+            return (val, None);
+        };
+        // Inline String/Vec payloads only — a shared payload is rc-managed,
+        // a boxed/Map payload belongs to other cleanup families.
+        let Some(payload_elem_ty) = self.option_inline_payload_elem(&field_te) else {
+            return (val, None);
+        };
+        if self
+            .option_inner_shared_type_for_type_expr(&field_te)
+            .is_some()
+        {
+            return (val, None);
+        }
+        let Some(layout) = self.enum_layouts.get("Option") else {
+            return (val, None);
+        };
+        let option_ty = layout.llvm_type;
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+        let fn_val = self.current_fn.unwrap();
+        let ll = val.get_type();
+        let clone_fn = self.emit_clone_fn_for_type_expr(&field_te);
+        let src = self.create_entry_alloca(fn_val, "refchain.opt.src", ll);
+        self.builder.build_store(src, val).unwrap();
+        let slot = self.create_entry_alloca(fn_val, "refchain.opt.clone", ll);
+        self.builder
+            .build_call(clone_fn, &[src.into(), slot.into()], "")
+            .unwrap();
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(
+                crate::codegen::state::CleanupAction::FreeInlineOptionPayload {
+                    option_slot: slot,
+                    option_ty,
+                    some_tag,
+                    payload_elem_ty: Some(payload_elem_ty),
+                },
+            );
+        }
+        (
+            self.builder
+                .build_load(ll, slot, "refchain.opt.cloned")
+                .unwrap(),
+            Some(slot),
+        )
+    }
+
+    /// Consuming-`Some`-arm companion of
+    /// [`Self::clone_escaping_borrowed_ref_chain_option`]: when the arm's
+    /// pattern moves the `Some` payload into a binding, zero the clone slot's
+    /// TAG so its `FreeInlineOptionPayload` cleanup skips the buffer the
+    /// binding now owns. Non-consuming patterns (`None`, `_`, `Some(_)`)
+    /// leave the tag — the cleanup frees the clone's payload.
+    pub(super) fn zero_refchain_option_clone_on_consume(
+        &mut self,
+        clone_slot: PointerValue<'ctx>,
+        pattern: &Pattern,
+    ) {
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        if path.last().map(|s| s.as_str()) != Some("Some") {
+            return;
+        }
+        if !patterns.first().is_some_and(pattern_consumes_field) {
+            return;
+        }
+        self.zero_option_field_tag_at(clone_slot);
     }
 
     /// `if let` / `while let` sibling of the arm-loop escape walk in

@@ -60,6 +60,11 @@ impl<'ctx> super::Codegen<'ctx> {
             &[pattern],
             ref_chain_escapes,
         );
+        // B-2026-07-21-9: the Option-leaf sibling (`if let Some(s) =
+        // <refparam>.opt { <consume s> }`) — consuming then-arm zeroes the
+        // clone's tag below; the miss edge leaves its cleanup armed.
+        let (val, refchain_option_clone) =
+            self.clone_escaping_borrowed_ref_chain_option(value, val, ref_chain_escapes);
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee with a heap-bearing payload has no source `EnumDrop`, so an
         // arm that leaves a heap field unbound leaks it (and the miss edge
@@ -151,6 +156,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some((clone_ptr, clone_name)) = &refchain_struct_clone {
             let (clone_ptr, clone_name) = (*clone_ptr, clone_name.clone());
             self.suppress_destructured_struct_pattern_cleanup_at(clone_ptr, &clone_name, pattern);
+        }
+        // B-2026-07-21-9: ref-chain Option clone — a consuming Some pattern
+        // zeroes the clone's tag (then-arm only; the miss edge keeps the
+        // cleanup armed so the clone's payload frees at scope exit).
+        if let Some(clone_slot) = refchain_option_clone {
+            self.zero_refchain_option_clone_on_consume(clone_slot, pattern);
         }
         self.tail_ret_inner = tail;
         let mut then_val = self.compile_block(then_block)?;
@@ -439,6 +450,9 @@ impl<'ctx> super::Codegen<'ctx> {
             &[pattern],
             ref_chain_escapes,
         );
+        // B-2026-07-21-9: Option-leaf sibling — see the if-let site.
+        let (val, refchain_option_clone) =
+            self.clone_escaping_borrowed_ref_chain_option(value, val, ref_chain_escapes);
         // B-track (pattern-arm unbound heap-field drop): same fresh-temp enum
         // scrutinee fix as `compile_if_let`. The `EnumDrop` registered here
         // drains at the enclosing scope's exit on the match edge (after the
@@ -517,6 +531,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some((clone_ptr, clone_name)) = &refchain_struct_clone {
             let (clone_ptr, clone_name) = (*clone_ptr, clone_name.clone());
             self.suppress_destructured_struct_pattern_cleanup_at(clone_ptr, &clone_name, pattern);
+        }
+        // B-2026-07-21-9: ref-chain Option clone — consuming Some pattern
+        // zeroes the clone's tag on the match edge; the divergent else edge
+        // frees the clone's payload in its cleanup walk.
+        if let Some(clone_slot) = refchain_option_clone {
+            self.zero_refchain_option_clone_on_consume(clone_slot, pattern);
         }
         Ok(())
     }

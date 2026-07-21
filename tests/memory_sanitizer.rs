@@ -10096,6 +10096,50 @@ fn main() {
     }
 
     #[test]
+    fn asan_ref_param_option_field_consume_no_leak_no_double_free() {
+        // B-2026-07-21-9 memory leg: the ref-chain Option clone. Double-free
+        // half: a consumed Some payload freed exactly once by its binding,
+        // never again by the caller. Leak half: a NON-consuming arm
+        // (`Some(_)` / the None-holder paths) leaves the clone's
+        // FreeInlineOptionPayload armed — a lost registration would leak one
+        // cloned payload per call under LSan. Loop so any per-iteration
+        // imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+struct Holder { opt: Option[String], n: i64 }
+fn render(h: ref Holder) -> i64 {
+    match h.opt {
+        Some(s) => { return ("o:".to_string() + s).len(); }
+        None => { return 0; }
+    }
+    return -1;
+}
+fn has(h: ref Holder) -> i64 {
+    match h.opt {
+        Some(_) => { return 1; }
+        None => { return 0; }
+    }
+    return -1;
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = Holder { opt: Some("payload".to_string()), n: 1 };
+        acc = acc + render(a) + render(a) + has(a);
+        let e = Holder { opt: None, n: 2 };
+        acc = acc + render(e) + has(e);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["760"],
+            "ref_param_option_field_consume",
+        );
+    }
+
+    #[test]
     fn asan_ref_param_struct_field_struct_pattern_no_leak_no_double_free() {
         // B-2026-07-21-7 memory leg: an ESCAPING struct-pattern match over
         // `<refparam>.field` now deep-clones the scrutinee and rides a

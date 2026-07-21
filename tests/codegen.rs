@@ -56524,6 +56524,78 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ref_param_option_field_consume() {
+        // B-2026-07-21-9: the Option-LEAF sibling of the ref-chain family —
+        // `match <refparam>.opt { Some(s) => <consume s> … }` over an
+        // `Option[String]` / `Option[Vec[U]]` field. The enum clone leg gates
+        // seeded Option out (all-None drop kinds, no freshtemp channel), so
+        // the inline payload binding aliased the caller's buffer and both
+        // freed it (double-free abort on all compiled backends; interp
+        // correct). Now `clone_escaping_borrowed_ref_chain_option`
+        // deep-clones the Option value (the dispatcher's tag-guarded clone),
+        // registers a FreeInlineOptionPayload on the clone slot, and a
+        // CONSUMING Some arm zeroes the clone's tag so the binding owns the
+        // payload; None / `Some(_)` arms leave the cleanup armed. Covers
+        // match / if-let / let-else routes, a String and a Vec payload, the
+        // None paths, a non-consuming `Some(_)` arm, and caller reuse.
+        let output = run_program(
+            "struct Holder { opt: Option[String], vs: Option[Vec[i64]], n: i64 }\n\
+             fn render(h: ref Holder) -> String {\n\
+                 match h.opt {\n\
+                     Some(s) => { return \"o:\".to_string() + s; }\n\
+                     None => { return \"none\".to_string(); }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn has(h: ref Holder) -> i64 {\n\
+                 match h.opt {\n\
+                     Some(_) => { return 1; }\n\
+                     None => { return 0; }\n\
+                 }\n\
+                 return -1;\n\
+             }\n\
+             fn total(h: ref Holder) -> i64 {\n\
+                 match h.vs {\n\
+                     Some(v) => { return v.len() + v[0]; }\n\
+                     None => { return 0; }\n\
+                 }\n\
+                 return -1;\n\
+             }\n\
+             fn ifl(h: ref Holder) -> String {\n\
+                 if let Some(s) = h.opt {\n\
+                     return \"if:\".to_string() + s;\n\
+                 }\n\
+                 return \"none\".to_string();\n\
+             }\n\
+             fn lel(h: ref Holder) -> String {\n\
+                 let Some(s) = h.opt else {\n\
+                     return \"none\".to_string();\n\
+                 }\n\
+                 return \"le:\".to_string() + s;\n\
+             }\n\
+             fn main() {\n\
+                 let a = Holder { opt: Some(\"op\".to_string()), vs: Some([10, 20]), n: 1 };\n\
+                 println(render(a));\n\
+                 println(render(a));\n\
+                 println(has(a));\n\
+                 println(total(a));\n\
+                 println(total(a));\n\
+                 println(ifl(a));\n\
+                 println(lel(a));\n\
+                 let e = Holder { opt: None, vs: None, n: 2 };\n\
+                 println(render(e));\n\
+                 println(ifl(e));\n\
+                 println(lel(e));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(
+            output,
+            "o:op\no:op\n1\n12\n12\nif:op\nle:op\nnone\nnone\nnone\n"
+        );
+    }
+
+    #[test]
     fn test_e2e_inline_index_map_get_unwrap_vec_value() {
         // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
         // (`m.get(k).unwrap()[i]`) used to loud-bail "Index operator applied to
