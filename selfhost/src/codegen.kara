@@ -31,6 +31,8 @@ import ast.{
     SelfMode,
     PatInt,
     FloatLit,
+    CharLit,
+    ByteLit,
     TypeExpr,
     PathType,
     Block,
@@ -3611,6 +3613,28 @@ impl Emitter {
             Int(n) => {
                 let IntLit { value, suffix, span } = n;
                 Val { op: value.to_string(), kind: 0, heap: false }
+            }
+            Char(cl) => {
+                // A char literal (Slice 37): int-backed — the Unicode scalar
+                // value in an i64. Comparisons/enum payloads ride the int
+                // machinery; PRINTING a char (UTF-8 encode parity) is a
+                // deferred surface — corpus discipline is compare-only.
+                let CharLit { value, span: clsp } = cl;
+                Val {
+                    op: (value as i64).to_string(),
+                    kind: 0,
+                    heap: false,
+                }
+            }
+            Byte(bl) => {
+                // A byte literal (Slice 37): int-backed, same as the u8
+                // values `s.bytes()` already yields.
+                let ByteLit { value, span: blsp } = bl;
+                Val {
+                    op: (value as i64).to_string(),
+                    kind: 0,
+                    heap: false,
+                }
             }
             Float(fl) => {
                 // A float literal (Slice 36): emitted as the EXACT hex bit

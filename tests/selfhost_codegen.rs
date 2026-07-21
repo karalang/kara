@@ -319,6 +319,12 @@ const CORPUS: &[&str] = &[
     // (Rust-Display shortest-roundtrip — 0.1+0.2 and 42.0 print exactly
     // as the seed does).
     "fn area(w: f64, h: f64) -> f64 {\n    return w * h;\n}\nfn main() {\n    let x = 1.5;\n    let y = 2.25;\n    println((x + y).to_string());\n    println((x * y).to_string());\n    println((y - x).to_string());\n    println((y / x).to_string());\n    println((x < y).to_string());\n    println((x == 1.5).to_string());\n    println(area(3.5, 2.0).to_string());\n    let z = 0.1;\n    println((z + 0.2).to_string());\n    let mut acc = 0.0;\n    let mut i = 0;\n    while i < 4 {\n        acc = acc + 0.25;\n        i = i + 1;\n    }\n    println(acc.to_string());\n    println(42.0.to_string());\n}",
+    // Slice 37: char/u8 LITERALS + ENUM PAYLOADS — int-backed (the
+    // Unicode scalar / byte value in an i64), so comparisons, params,
+    // and payload slots ride the existing int machinery. CharTok(char) /
+    // ByteTok(u8) — the Token.CharLiteral/ByteLiteral shape. Char
+    // PRINTING (UTF-8 encode parity) is deferred; compare-only corpus.
+    "enum Tok { Eof, CharTok(char), ByteTok(u8) }\nfn code(t: ref Tok) -> i64 {\n    match t {\n        CharTok(c) => {\n            if c == 'z' {\n                return 1000;\n            }\n            return 1;\n        }\n        ByteTok(b) => {\n            if b == 43 {\n                return 2000;\n            }\n            return 2;\n        }\n        Eof => {}\n    }\n    return 0;\n}\nfn is_lower(c: char) -> bool {\n    return c >= 'a' and c <= 'z';\n}\nfn main() {\n    println(code(Tok.CharTok('z')).to_string());\n    println(code(Tok.CharTok('A')).to_string());\n    println(code(Tok.ByteTok(43)).to_string());\n    println(code(Tok.Eof).to_string());\n    println(is_lower('m').to_string());\n    println(is_lower('M').to_string());\n    let c = 'q';\n    if c == 'q' {\n        println(\"q!\");\n    }\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
