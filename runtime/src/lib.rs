@@ -163,6 +163,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         lazy::karac_lazy_expr_bool,
         lazy::karac_lazy_expr_not,
         lazy::karac_lazy_expr_arith,
+        lazy::karac_lazy_expr_retain,
         lazy::karac_lazy_expr_release,
         lazy::karac_lazy_new,
         lazy::karac_lazy_select,
@@ -170,6 +171,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         lazy::karac_lazy_filter,
         lazy::karac_lazy_explain,
         lazy::karac_lazy_collect,
+        lazy::karac_lazy_retain,
         lazy::karac_lazy_release,
     );
     // CPU feature detection (`runtime/src/cpu.rs`) — the `cpu.supports(name)`

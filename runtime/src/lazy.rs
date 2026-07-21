@@ -188,6 +188,17 @@ pub unsafe extern "C" fn karac_lazy_expr_not(x: *const ExprNode) -> *const ExprN
 }
 
 #[no_mangle]
+/// Bump an expr handle's count — emitted ONLY before a `return` of a
+/// LazyExpr-typed value (the escaping count that outlives the producing
+/// scope's release; the caller registers the matching release).
+///
+/// # Safety
+/// `x` must be a live expr handle.
+pub unsafe extern "C" fn karac_lazy_expr_retain(x: *const ExprNode) {
+    Arc::increment_strong_count(x);
+}
+
+#[no_mangle]
 /// # Safety
 /// `lhs`/`rhs` must be live expr handles (borrowed).
 pub unsafe extern "C" fn karac_lazy_expr_arith(
@@ -283,6 +294,16 @@ fn clone_ops(ops: &[PlanOp]) -> Vec<PlanOp> {
             PlanOp::Filter(e) => PlanOp::Filter(Arc::clone(e)),
         })
         .collect()
+}
+
+#[no_mangle]
+/// Bump a plan handle's count — the return-position sibling of
+/// `karac_lazy_expr_retain`.
+///
+/// # Safety
+/// `plan` must be a live plan handle.
+pub unsafe extern "C" fn karac_lazy_retain(plan: *const LazyPlan) {
+    Arc::increment_strong_count(plan);
 }
 
 #[no_mangle]
