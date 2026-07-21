@@ -124,21 +124,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-<<<<<<< Updated upstream
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **626 surfaced · 1 open · 621 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
-=======
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **626 surfaced · 1 open · 620 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
->>>>>>> Stashed changes
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **626 surfaced · 0 open · 621 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-<<<<<<< Updated upstream
-| B-2026-07-21-19 | 2026-07-21 | codegen | medium | A nested `Option[shared]` FIELD reachable ONLY through a popped node leaks when the container is drained via `if let`/`while let`/`let…else` (but NOT `match`). `shared struct N { val: i64, mut nxt: Option[N] }`; `st: Vec[N]` holds node A with `A.nxt = Some(B)` where B is referenced nowhere else; `if let Some(n) = st.pop() { … }` frees A but leaks B (24 bytes). `match st.pop() { Some(n) => … }` is CLEAN (B freed). Build-and-drop without any pop is also CLEAN. So the container drop and the match path both recurse into the popped node's nested shared field; the three non-match binding forms do not. Codegen-only; AOT valgrind/LSan (output correct on all surfaces). | — |
-=======
-| B-2026-07-21-17 | 2026-07-21 | interp | low | A runtime error raised inside a spliced gated-stdlib wrapper body reports the USER file's path with the SPLICE-COMPOSITE line/col — `import std.lazy.{lit}; lit(vec![1i64])` errors at `<user file>:19:5` when the user file has 6 lines (line 19 is the wrapper body's position in the composite spliced source, not a location in the file named). | — |
->>>>>>> Stashed changes
+_None — the ledger is fully drained._
 
 ### Fixed (621)
 
