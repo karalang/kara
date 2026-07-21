@@ -23988,3 +23988,81 @@ fn test_lazyframe_filter_errors_validate_at_collect() {
         "{errors:?}",
     );
 }
+
+#[test]
+fn test_lazyframe_sort_multikey_desc_nulls_last_stable() {
+    // Phase-11 LazyDataFrame slice 3: stable multi-key sort with a
+    // `.desc()` key marker; NULL keys sort LAST regardless of direction;
+    // sort renders in both explain plans and preserves order vs limit.
+    let out = run_no_errors(
+        "import std.lazy.{col};\n\
+         fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"dept\", Column.from_vec([\"b\", \"a\", \"b\", \"a\", \"b\"]));\n\
+             df.insert(\"score\", Column.from_vec([3i64, 9i64, 7i64, 9i64, 3i64]));\n\
+             df.insert(\"name\", Column.from_vec([\"v\", \"w\", \"x\", \"y\", \"z\"]));\n\
+             let plan = df.lazy().sort(vec![col(\"dept\"), col(\"score\").desc()]).select(vec![\"name\"]).limit(3);\n\
+             println(plan.explain());\n\
+             let out = plan.collect();\n\
+             let names: Column[String] = out.column(\"name\");\n\
+             match names[0] { Some(v) => println(v), None => println(\"null\") }\n\
+             match names[1] { Some(v) => println(v), None => println(\"null\") }\n\
+             match names[2] { Some(v) => println(v), None => println(\"null\") }\n\
+             let mut d2: DataFrame = DataFrame.new();\n\
+             let nn: Vec[Option[i64]] = vec![Some(5i64), None, Some(9i64)];\n\
+             d2.insert(\"k\", Column.from_iter_nullable(nn));\n\
+             d2.insert(\"tag\", Column.from_vec([\"five\", \"none\", \"nine\"]));\n\
+             let s2 = d2.lazy().sort(vec![col(\"k\").desc()]).collect();\n\
+             let tags: Column[String] = s2.column(\"tag\");\n\
+             match tags[0] { Some(v) => println(v), None => println(\"null\") }\n\
+             match tags[2] { Some(v) => println(v), None => println(\"null\") }\n\
+         }",
+    );
+    assert_eq!(
+        out,
+        "== logical plan ==\n\
+         LIMIT 3\n\
+         \x20 SELECT [name]\n\
+         \x20   SORT [dept, score desc]\n\
+         \x20     SCAN [dept, score, name]\n\
+         == optimized ==\n\
+         SELECT [name]\n\
+         \x20 LIMIT 3\n\
+         \x20   SORT [dept, score desc]\n\
+         \x20     SCAN cols=[dept, score, name]\n\
+         w\ny\nx\nnine\nnone\n",
+        "multi-key desc sort must be stable with NULLs last under desc",
+    );
+}
+
+#[test]
+fn test_lazyframe_sort_errors() {
+    // A missing sort-key column errors at collect; desc() outside a sort
+    // key (in a filter) errors loudly.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().sort(vec![LazyExpr.col(\"nope\")]).collect();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no column named 'nope'")),
+        "{errors:?}",
+    );
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().filter(LazyExpr.col(\"a\").desc().gt(0)).collect();\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("only meaningful as a LazyFrame.sort key")),
+        "{errors:?}",
+    );
+}

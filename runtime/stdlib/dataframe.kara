@@ -241,6 +241,12 @@ impl LazyExpr {
     fn or_(self, rhs: LazyExpr) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
     fn not_(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+
+    // Sort-direction marker: `sort(vec![col("cnt").desc()])`. ONLY
+    // meaningful as a `LazyFrame.sort` key — using a desc-wrapped
+    // expression in a filter is a runtime error at collect.
+    #[compiler_builtin]
+    fn desc(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
 }
 
 impl LazyFrame {
@@ -250,6 +256,17 @@ impl LazyFrame {
     // are validated when they run, not when they build).
     #[compiler_builtin]
     fn select(self, cols: Vec[String]) -> LazyFrame {
+        LazyFrame { handle_id: 0 }
+    }
+
+    // Stable multi-key sort (phase-11 slice 3): keys evaluate per row
+    // (usually bare `col(..)` refs; any scalar expression works),
+    // ascending by default, `.desc()` per key for descending. NULL keys
+    // sort LAST regardless of direction (then NaN, then values —
+    // deterministic total order). Sort does NOT commute with limit
+    // (top-k ≠ truncate-then-sort); the optimizer preserves their order.
+    #[compiler_builtin]
+    fn sort(self, keys: Vec[LazyExpr]) -> LazyFrame {
         LazyFrame { handle_id: 0 }
     }
 

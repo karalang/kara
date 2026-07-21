@@ -67,6 +67,9 @@ pub enum LazyOp {
     /// (slice 2). Column refs validate at collect against the columns
     /// visible at this step; a NULL slot fails any comparison.
     Filter(Arc<LazyExprIR>),
+    /// Stable multi-key sort (slice 3). Each key is an expression,
+    /// optionally `Desc`-wrapped for descending; NULL keys sort last.
+    Sort(Vec<Arc<LazyExprIR>>),
 }
 
 /// A lazy scalar expression tree (phase-11 LazyDataFrame slice 2) — the
@@ -92,6 +95,9 @@ pub enum LazyExprIR {
     And(Box<LazyExprIR>, Box<LazyExprIR>),
     Or(Box<LazyExprIR>, Box<LazyExprIR>),
     Not(Box<LazyExprIR>),
+    /// Descending sort-key marker (`col("cnt").desc()`) — only
+    /// meaningful as a `LazyFrame.sort` key; an error anywhere else.
+    Desc(Box<LazyExprIR>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -132,6 +138,7 @@ impl std::fmt::Display for LazyExprIR {
             LazyExprIR::And(a, b) => write!(f, "({a} and {b})"),
             LazyExprIR::Or(a, b) => write!(f, "({a} or {b})"),
             LazyExprIR::Not(x) => write!(f, "(not {x})"),
+            LazyExprIR::Desc(x) => write!(f, "{x} desc"),
         }
     }
 }

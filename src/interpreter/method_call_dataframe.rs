@@ -507,6 +507,40 @@ impl<'a> super::Interpreter<'a> {
                     ops: Arc::new(new_ops),
                 })
             }
+            "sort" => {
+                let Value::Array(rc) = self.eval_expr_inner(&args.first()?.value) else {
+                    return Some(self.record_runtime_error(
+                        "LazyFrame.sort expects a Vec[LazyExpr] of sort keys",
+                        span,
+                    ));
+                };
+                let mut keys = Vec::new();
+                for v in rc.read().unwrap().iter() {
+                    match v {
+                        Value::LazyExpr(ir) => keys.push(Arc::clone(ir)),
+                        other => {
+                            return Some(self.record_runtime_error(
+                                format!(
+                                    "LazyFrame.sort keys must be LazyExprs, got {}",
+                                    other.variant_name()
+                                ),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                if keys.is_empty() {
+                    return Some(
+                        self.record_runtime_error("LazyFrame.sort needs at least one key", span),
+                    );
+                }
+                let mut new_ops = ops.as_ref().clone();
+                new_ops.push(LazyOp::Sort(keys));
+                Some(Value::LazyFrame {
+                    source: Arc::clone(source),
+                    ops: Arc::new(new_ops),
+                })
+            }
             "collect" => {
                 // Validate the whole plan first (stepwise visible-column
                 // tracking, incl. predicate column refs) — the fold is the
@@ -545,6 +579,38 @@ impl<'a> super::Interpreter<'a> {
                                 }
                             }
                             indices = kept;
+                        }
+                        LazyOp::Sort(keys) => {
+                            row_ops = true;
+                            // Evaluate every key for every surviving row up
+                            // front, then a stable multi-key sort. NULL keys
+                            // last, NaN just before them (rank 0 = value,
+                            // 1 = NaN, 2 = NULL — deterministic total order).
+                            let mut err: Option<String> = None;
+                            let mut keyed: Vec<(usize, Vec<(u8, LazySortKey)>)> =
+                                Vec::with_capacity(indices.len());
+                            for &row in &indices {
+                                let mut kvs = Vec::with_capacity(keys.len());
+                                for k in keys {
+                                    match eval_lazy_sort_key(k, &src, row) {
+                                        Ok(kv) => kvs.push(kv),
+                                        Err(msg) => {
+                                            err = Some(msg);
+                                            break;
+                                        }
+                                    }
+                                }
+                                if err.is_some() {
+                                    break;
+                                }
+                                keyed.push((row, kvs));
+                            }
+                            if let Some(msg) = err {
+                                drop(src);
+                                return Some(self.record_runtime_error(msg, span));
+                            }
+                            keyed.sort_by(|(_, a), (_, b)| cmp_lazy_sort_keys(keys, a, b));
+                            indices = keyed.into_iter().map(|(row, _)| row).collect();
                         }
                     }
                 }
@@ -597,6 +663,13 @@ impl<'a> super::Interpreter<'a> {
                         LazyOp::Select(cols) => format!("SELECT [{}]", cols.join(", ")),
                         LazyOp::Limit(n) => format!("LIMIT {n}"),
                         LazyOp::Filter(ir) => format!("FILTER {ir}"),
+                        LazyOp::Sort(keys) => format!(
+                            "SORT [{}]",
+                            keys.iter()
+                                .map(|k| k.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
                     };
                     lines.push(step);
                 }
@@ -679,6 +752,9 @@ impl<'a> super::Interpreter<'a> {
             "not_" => Some(Value::LazyExpr(Arc::new(LazyExprIR::Not(Box::new(
                 ir.as_ref().clone(),
             ))))),
+            "desc" => Some(Value::LazyExpr(Arc::new(LazyExprIR::Desc(Box::new(
+                ir.as_ref().clone(),
+            ))))),
             _ => None,
         }
     }
@@ -750,6 +826,9 @@ fn eval_lazy_scalar(
         LazyExprIR::LitFloat(f) => Some(LazyScalar::F(*f)),
         LazyExprIR::LitStr(s) => Some(LazyScalar::S(s.clone())),
         LazyExprIR::LitBool(b) => Some(LazyScalar::B(*b)),
+        LazyExprIR::Desc(_) => {
+            return Err("LazyExpr.desc() is only meaningful as a LazyFrame.sort key".to_string())
+        }
         // Bool-valued sub-expressions evaluate through the predicate path.
         LazyExprIR::Cmp { .. } | LazyExprIR::And(..) | LazyExprIR::Or(..) | LazyExprIR::Not(..) => {
             Some(LazyScalar::B(eval_lazy_pred(ir, columns, row)?))
@@ -830,6 +909,99 @@ fn eval_lazy_pred(
     }
 }
 
+/// One evaluated sort-key scalar, ordered by `cmp_lazy_sort_keys`.
+enum LazySortKey {
+    Null,
+    Nan,
+    I(i64),
+    F(f64),
+    S(String),
+    B(bool),
+}
+
+/// Evaluate one sort key for one row: strip a `Desc` wrapper (the
+/// comparator re-checks the direction), evaluate the inner expression,
+/// and normalize NULL / NaN into ranks (0 = value, 1 = NaN, 2 = NULL —
+/// NULLs last, never reversed, so they stay last under `desc` too).
+fn eval_lazy_sort_key(
+    key: &crate::interpreter::value::LazyExprIR,
+    columns: &[(String, Value)],
+    row: usize,
+) -> Result<(u8, LazySortKey), String> {
+    use crate::interpreter::value::LazyExprIR;
+    let inner = match key {
+        LazyExprIR::Desc(x) => x.as_ref(),
+        other => other,
+    };
+    Ok(match eval_lazy_scalar(inner, columns, row)? {
+        None => (2, LazySortKey::Null),
+        Some(LazyScalar::F(f)) if f.is_nan() => (1, LazySortKey::Nan),
+        Some(LazyScalar::I(v)) => (0, LazySortKey::I(v)),
+        Some(LazyScalar::F(v)) => (0, LazySortKey::F(v)),
+        Some(LazyScalar::S(v)) => (0, LazySortKey::S(v)),
+        Some(LazyScalar::B(v)) => (0, LazySortKey::B(v)),
+    })
+}
+
+/// Multi-key comparator: keys in order; per key, rank first (values <
+/// NaN < NULL — never reversed), then the value comparison, reversed for
+/// a `Desc`-wrapped key. Mixed value types within one key can only arise
+/// from computed expressions over mixed columns — ordered by type tag
+/// (deterministic; homogeneous columns never hit it).
+fn cmp_lazy_sort_keys(
+    keys: &[Arc<crate::interpreter::value::LazyExprIR>],
+    a: &[(u8, LazySortKey)],
+    b: &[(u8, LazySortKey)],
+) -> std::cmp::Ordering {
+    use crate::interpreter::value::LazyExprIR;
+    use std::cmp::Ordering;
+    for (i, key) in keys.iter().enumerate() {
+        let desc = matches!(key.as_ref(), LazyExprIR::Desc(_));
+        let (ra, ka) = &a[i];
+        let (rb, kb) = &b[i];
+        let ord = match ra.cmp(rb) {
+            Ordering::Equal if *ra == 0 => {
+                let v = match (ka, kb) {
+                    (LazySortKey::I(x), LazySortKey::I(y)) => x.cmp(y),
+                    (LazySortKey::F(x), LazySortKey::F(y)) => {
+                        x.partial_cmp(y).unwrap_or(Ordering::Equal)
+                    }
+                    (LazySortKey::I(x), LazySortKey::F(y)) => {
+                        (*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal)
+                    }
+                    (LazySortKey::F(x), LazySortKey::I(y)) => {
+                        x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal)
+                    }
+                    (LazySortKey::S(x), LazySortKey::S(y)) => x.cmp(y),
+                    (LazySortKey::B(x), LazySortKey::B(y)) => x.cmp(y),
+                    _ => sort_key_type_tag(ka).cmp(&sort_key_type_tag(kb)),
+                };
+                if desc {
+                    v.reverse()
+                } else {
+                    v
+                }
+            }
+            other => other, // rank order never reverses (NULLs stay last)
+        };
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    Ordering::Equal
+}
+
+fn sort_key_type_tag(k: &LazySortKey) -> u8 {
+    match k {
+        LazySortKey::B(_) => 0,
+        LazySortKey::I(_) => 1,
+        LazySortKey::F(_) => 2,
+        LazySortKey::S(_) => 3,
+        LazySortKey::Nan => 4,
+        LazySortKey::Null => 5,
+    }
+}
+
 /// The columns an expression references (for validation + scan-projection
 /// union in the optimizer).
 fn lazy_expr_cols(ir: &crate::interpreter::value::LazyExprIR, out: &mut Vec<String>) {
@@ -848,7 +1020,7 @@ fn lazy_expr_cols(ir: &crate::interpreter::value::LazyExprIR, out: &mut Vec<Stri
             lazy_expr_cols(a, out);
             lazy_expr_cols(b, out);
         }
-        LazyExprIR::Not(x) => lazy_expr_cols(x, out),
+        LazyExprIR::Not(x) | LazyExprIR::Desc(x) => lazy_expr_cols(x, out),
         _ => {}
     }
 }
@@ -923,6 +1095,25 @@ fn fold_lazy_plan(
                     _ => steps.push(LazyOp::Filter(Arc::clone(ir))),
                 }
             }
+            LazyOp::Sort(keys) => {
+                // No fusion: a later sort dominates but the EARLIER sort is
+                // the stable tie-break within equal keys, so both must run.
+                for k in keys {
+                    let mut cols = Vec::new();
+                    lazy_expr_cols(k, &mut cols);
+                    for c in &cols {
+                        if !visible.contains(c) {
+                            return Err(format!(
+                                "LazyFrame.sort: no column named '{c}' at this plan step"
+                            ));
+                        }
+                        if !needed.contains(c) {
+                            needed.push(c.clone());
+                        }
+                    }
+                }
+                steps.push(LazyOp::Sort(keys.clone()));
+            }
         }
     }
     // Scan projection: union of predicate columns + the final projection,
@@ -935,7 +1126,9 @@ fn fold_lazy_plan(
             wanted.extend(p.iter().cloned());
         }
         wanted.extend(needed.iter().cloned());
-        let has_filters = steps.iter().any(|s| matches!(s, LazyOp::Filter(_)));
+        let has_filters = steps
+            .iter()
+            .any(|s| matches!(s, LazyOp::Filter(_) | LazyOp::Sort(_)));
         if has_filters {
             // Union in source order (deterministic).
             Some(
@@ -964,7 +1157,10 @@ fn fold_lazy_plan(
 /// slice-1 single-scan rendering for select/limit-only plans).
 fn render_optimized_plan(plan: &OptimizedLazyPlan) -> String {
     use crate::interpreter::value::LazyOp;
-    let has_filters = plan.steps.iter().any(|s| matches!(s, LazyOp::Filter(_)));
+    let has_filters = plan
+        .steps
+        .iter()
+        .any(|s| matches!(s, LazyOp::Filter(_) | LazyOp::Sort(_)));
     let mut scan = match &plan.scan_cols {
         Some(cols) => format!("SCAN cols=[{}]", cols.join(", ")),
         None => "SCAN cols=[*]".to_string(),
@@ -980,6 +1176,13 @@ fn render_optimized_plan(plan: &OptimizedLazyPlan) -> String {
         let rendered = match step {
             LazyOp::Limit(n) => format!("LIMIT {n}"),
             LazyOp::Filter(ir) => format!("FILTER {ir}"),
+            LazyOp::Sort(keys) => format!(
+                "SORT [{}]",
+                keys.iter()
+                    .map(|k| k.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             LazyOp::Select(_) => continue,
         };
         lines.push(rendered);
