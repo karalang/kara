@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 158 | 0 |
-| leak | 86 | 0 |
+| leak | 87 | 1 |
 | codegen-gap | 70 | 0 |
 | double-free | 68 | 0 |
 | missing-feature | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 441 | 1 |
+| codegen | 442 | 2 |
 | typecheck | 83 | 0 |
 | interp | 67 | 0 |
 | ownership | 25 | 0 |
@@ -124,12 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **610 surfaced · 1 open · 605 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **611 surfaced · 2 open · 605 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
+| B-2026-07-19-16 | 2026-07-19 | codegen | low | A DISCARDED `Map.remove(k)` result over a `Map[K, shared V]` LEAKS the removed value's RC. `Map.remove` MOVES the value out of the bucket (the runtime tombstones the slot and does NOT free the value — it's handed back as `Some(old)`), so the returned `Option[shared V]` OWNS that ref. When the call is used as a bare expression statement (`m.remove(k);`, discarding the result), codegen never drops the discarded temporary, so the moved-out shared value's refcount is never decremented and its box leaks. BINDING the result and consuming/dropping it (`let removed = m.remove(k); match removed { … }`) is clean — the scope-exit / match drop releases it. So the leak is specific to the DISCARDED-expression-statement form of a value-moving Map.remove. | src/codegen (expression-statement drop of a discarded Option[shared] value; Map.remove path in src/codegen/maps.rs returns the moved-out value) |
 | B-2026-07-21-3 | 2026-07-21 | codegen | medium | Construction-heavy `Vector[f64,2]` patterns are a ~4.7x PESSIMIZATION on wasm: rewriting Prism's Lanczos tap loop from 4 scalar f64 accumulators to two lane-pair vectors (fresh `Vector[f64,2](a, b)` built per tap from u8/f64 loads + a `.splat` per tap) took the 3 MP threaded resize from 183 ms to 866 ms (sequential 516 -> 1146 ms), byte-identical output. The Fathom pattern (vectors LIVE across the loop, splats hoisted, rare lane extracts) wins 1.47x; the per-tap-construction shape loses badly — likely lane-insert/extract dominated or partially scalarized. | src/codegen (Vector[T,N] lowering on wasm) |
 
 ### Fixed (605)
