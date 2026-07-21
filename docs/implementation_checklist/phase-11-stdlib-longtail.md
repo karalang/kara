@@ -86,6 +86,7 @@ Semantics in `../design.md § Numerical Types` and `§ Numeric Semantics > Liter
   - [ ] **`df[...]` indexing (deferred).** Ambiguous (column-by-name vs row-by-index); defer until `row_iter` / `select` settle the row-view story.
 
 - [ ] **Arrow IPC and Parquet.** `Tensor.from_arrow_ipc(bytes)` / `arr.to_arrow_ipc()`; `Column.from_arrow_ipc(bytes)` / `col.to_arrow_ipc()`; `DataFrame.read_parquet(path) with reads(FileSystem)` / `df.write_parquet(path) with writes(FileSystem)`; `DataFrame.read_csv(path)` / `df.write_csv(path)` matching the same effect pattern. IPC implementation uses the Arrow C Data Interface for zero-copy where feasible. **UNBLOCKED (verified 2026-07-09)** — the `Tensor`/`Column`/`DataFrame` value types this operates on now lower in codegen (`src/codegen/tensor.rs`, `src/codegen/column.rs`, `src/codegen/dataframe.rs`); remaining work is a LARGE greenfield authoring task (no Arrow-IPC/Parquet/CSV module exists in `runtime/stdlib/` yet — only `tensor.kara`/`column.kara`/`dataframe.kara`).
+  - [ ] **CSV leg IN PROGRESS (claimed 2026-07-21, cloud session A).** Slice 1: `df.write_csv(path) -> Result[Unit, IoError] with writes(FileSystem)` — interpreter-MVP + typechecker intercept + loud codegen deferral (the established DataFrame pattern; codegen + `DataFrame.read_csv` with i64→f64→String type inference are follow-on slices). Claim note added for cross-session coordination — another session should pick a different item.
 
 **ML / AI-adjacent and SIMD data-spine (v66/v67 graduations).**
 
