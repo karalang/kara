@@ -4550,6 +4550,76 @@ impl Emitter {
             }
             return Val { op: r, kind: rk, heap: rh };
         }
+        if method == "is_some" or method == "is_none" or method == "is_ok" or method == "is_err" {
+            // Option/Result tag predicates (Slice 34): extract the tag and
+            // compare against 0 — None=0/Some=1, Ok=0/Err=1, so is_none and
+            // is_ok test eq while is_some and is_err test ne.
+            let ov9 = self.emit_value(object);
+            let Val { op: oop9, kind: ok9, heap: oh9 } = ov9;
+            if ok9 >= 1000 and ok9 < 2000 {
+                let ety9 = self.ty_text(ok9);
+                let tg9 = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + tg9.clone()
+                    + " = extractvalue "
+                    + ety9
+                    + " "
+                    + oop9
+                    + ", 0\n";
+                let mut cc = "ne".to_string();
+                if method == "is_none" or method == "is_ok" {
+                    cc = "eq".to_string();
+                }
+                let r9 = self.fresh();
+                self.body =
+                    self.body + "  " + r9.clone() + " = icmp " + cc + " i64 " + tg9 + ", 0\n";
+                return Val { op: r9, kind: 1, heap: false };
+            }
+            return Val { op: "false".to_string(), kind: 1, heap: false };
+        }
+        if method == "unwrap" {
+            // `o.unwrap()` (Slice 34): extract the Some/Ok payload by its
+            // recorded kind — a String payload is a BORROW (the receiver's
+            // owner keeps and frees the buffer). NO tag check: the corpus
+            // discipline is unwrap-only-verified-Some/Ok (the seed panics on
+            // None/Err — panic parity is a deferred surface).
+            let ov9 = self.emit_value(object);
+            let Val { op: oop9, kind: ok9, heap: oh9 } = ov9;
+            if ok9 >= 1000 and ok9 < 2000 {
+                let ei9 = ok9 - 1000;
+                // Variant 1 for Option (Some), variant 0 for Result (Ok).
+                let mut vtag = 1;
+                if ok9 >= 1002 and ok9 <= 1005 {
+                    vtag = 0;
+                }
+                let plk9 = self.en_var_pl[self.en_off[ei9] + vtag];
+                let ety9 = self.ty_text(ok9);
+                if plk9 == 2 {
+                    let r9 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + r9.clone()
+                        + " = extractvalue "
+                        + ety9
+                        + " "
+                        + oop9
+                        + ", 2\n";
+                    return Val { op: r9, kind: 2, heap: false };
+                }
+                let r9 = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + r9.clone()
+                    + " = extractvalue "
+                    + ety9
+                    + " "
+                    + oop9
+                    + ", 1\n";
+                return Val { op: r9, kind: 0, heap: false };
+            }
+            return Val { op: "0".to_string(), kind: 0, heap: false };
+        }
         {
             {
                 if method == "new" {
