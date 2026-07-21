@@ -1050,6 +1050,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // body and restore below, like `variables` — see the matching note
             // in `ensure_layout_mono_generated`.
             let saved_ref_params = std::mem::take(&mut self.ref_params);
+            let saved_signature_ref_params = std::mem::take(&mut self.signature_ref_params);
             // Slice 5: per-binding layout carrier — the mono body seeds its own
             // locals at their `let` sites; swap out the caller's map and restore
             // below, parallel to `variables` / `ref_params`.
@@ -1082,6 +1083,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.soa_return_locals = saved_soa_return_locals;
             self.binding_layouts = saved_binding_layouts;
             self.ref_params = saved_ref_params;
+            self.signature_ref_params = saved_signature_ref_params;
             self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
             self.layout_subst = saved_layout_subst;
             self.const_subst = saved_const_subst;
@@ -1588,6 +1590,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // mirroring the `variables` save/restore above. Without this a mono's
         // ref param would mark a same-named caller binding as a borrow.
         let saved_ref_params = std::mem::take(&mut self.ref_params);
+        let saved_signature_ref_params = std::mem::take(&mut self.signature_ref_params);
         // Slice 5: the mono body seeds its own locals' layouts in
         // `binding_layouts` at their `let` sites. Take the caller's carrier for
         // the duration (the body starts empty, like `variables`) and restore it
@@ -1607,6 +1610,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.soa_return_locals = saved_soa_return_locals;
         self.binding_layouts = saved_binding_layouts;
         self.ref_params = saved_ref_params;
+        self.signature_ref_params = saved_signature_ref_params;
         self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
         self.return_layout = saved_return_layout;
         self.layout_subst = saved_layout_subst;
@@ -1817,6 +1821,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // correctly inside mono bodies too.
             if let Some(inner_ty) = self.inner_type_of_ref(&param.ty) {
                 self.ref_params.insert(param_name.clone(), inner_ty);
+                self.signature_ref_params.insert(param_name.clone());
             }
             // Track declared type name for struct/enum field resolution.
             // B-2026-07-03-11: if the declared type is a generic type parameter

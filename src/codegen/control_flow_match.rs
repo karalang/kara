@@ -1299,7 +1299,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return (val, false),
             }
         };
-        if !self.ref_params.contains_key(root) {
+        if !self.signature_ref_params.contains(root) {
             return (val, false);
         }
         if !escapes {
@@ -1386,7 +1386,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return (val, None),
             }
         };
-        if !self.ref_params.contains_key(root) {
+        if !self.signature_ref_params.contains(root) {
             return (val, None);
         }
         if !escapes {
@@ -1481,7 +1481,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return (val, None),
             }
         };
-        if !self.ref_params.contains_key(root) {
+        if !self.signature_ref_params.contains(root) {
             return (val, None);
         }
         if !escapes {
@@ -1546,6 +1546,149 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap(),
             Some(slot),
         )
+    }
+
+    /// B-2026-07-21-11 — the LET-move sibling of the ref-chain clone family:
+    /// `let p = <refparam>.field;` where the field is heap-bearing — a
+    /// non-shared user STRUCT or ENUM, a `String`/`Vec`/`VecDeque`, or an
+    /// `Option` with an inline heap payload. The field read through the
+    /// borrow bit-copy-aliases the caller's field; the binding then gets
+    /// owned tracking below the Let's RHS compile, and the #16/#19 source
+    /// suppressions bail on the borrowed root (the ref param's slot holds a
+    /// POINTER, not the struct) — so the binding and the caller's struct drop
+    /// freed the same heap. Deep-copy the compiled value IN PLACE so the
+    /// binding owns an independent copy and every downstream registration
+    /// behaves as if the RHS were a fresh owned temp — interpreter copy
+    /// semantics; the caller's field is untouched. Same shape gates as the
+    /// scrutinee clones: a pure FieldAccess/TupleIndex chain (no `Index` hop)
+    /// rooted DIRECTLY at a `ref`/`mut ref` param, leaf clone-family
+    /// supported (`Result` fields stay status quo — the dispatcher has no
+    /// Result deep clone). Unconditional on use (a let-bound copy outlives
+    /// analysis reach cheaply enough — the shape itself is the move).
+    pub(super) fn clone_ref_chain_field_move_rhs(
+        &mut self,
+        value: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        if !matches!(
+            value.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            return val;
+        }
+        let mut cur = value;
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n.as_str(),
+                ExprKind::SelfValue => break "self",
+                _ => return val,
+            }
+        };
+        if !self.signature_ref_params.contains(root) {
+            return val;
+        }
+        let Some(leaf) = self.place_chain_type_name(value) else {
+            return val;
+        };
+        if self.shared_types.contains_key(leaf.as_str()) {
+            return val;
+        }
+        // Enum leaf: in-place payload deep-copy (same duplication the
+        // scrutinee clone uses — copy-depth == drop-depth). Seeded
+        // Option/Result are NOT this leg (their erased layouts carry
+        // all-None drop kinds) — Option falls through to the field-te leg
+        // below, Result stays status quo (no deep clone in the dispatcher).
+        if !matches!(leaf.as_str(), "Option" | "Result") {
+            if let Some(layout) = self.enum_layouts.get(leaf.as_str()).cloned() {
+                if layout.is_shared
+                    || !layout
+                        .field_drop_kinds
+                        .values()
+                        .flatten()
+                        .any(|k| k.is_heap_bearing())
+                {
+                    return val;
+                }
+                let fn_val = self.current_fn.unwrap();
+                let ll = val.get_type();
+                let slot = self.create_entry_alloca(fn_val, "refchain.letmove.enum", ll);
+                self.builder.build_store(slot, val).unwrap();
+                self.deep_copy_enum_heap_payload_in_place(&leaf, slot, &layout);
+                return self
+                    .builder
+                    .build_load(ll, slot, "refchain.letmove.enum.copy")
+                    .unwrap();
+            }
+        }
+        // String / Vec / VecDeque / Option leaf: the full field te (element /
+        // payload types included) comes from the owning struct's field table
+        // — the name-based leaf resolution loses `Vec[U]`'s element and
+        // `Option[T]`'s payload. Same double-free shape: the bit-copy aliased
+        // the caller's buffer while the Let registers an owned cleanup below.
+        let te = if matches!(
+            leaf.as_str(),
+            "String" | "str" | "Vec" | "VecDeque" | "Option"
+        ) {
+            let ExprKind::FieldAccess { object, field } = &value.kind else {
+                return val;
+            };
+            let Some(obj_ty) = self.place_chain_type_name(object) else {
+                return val;
+            };
+            let Some(fte) = self
+                .struct_field_names
+                .get(obj_ty.as_str())
+                .and_then(|ns| ns.iter().position(|n| n == field))
+                .and_then(|idx| {
+                    self.struct_field_type_exprs
+                        .get(obj_ty.as_str())
+                        .and_then(|tes| tes.get(idx))
+                })
+                .cloned()
+            else {
+                return val;
+            };
+            // Option leaf: inline String/Vec payloads only — shared payloads
+            // are rc-managed, boxed/Map payloads belong to other cleanup
+            // families (mirrors the -9 scrutinee-clone gate).
+            if leaf == "Option"
+                && (self.option_inline_payload_elem(&fte).is_none()
+                    || self.option_inner_shared_type_for_type_expr(&fte).is_some())
+            {
+                return val;
+            }
+            fte
+        } else if self.struct_types.contains_key(leaf.as_str()) {
+            // Struct leaf: dispatcher deep clone keyed on the bare name.
+            TypeExpr {
+                kind: TypeKind::Path(crate::ast::PathExpr {
+                    segments: vec![leaf.clone()],
+                    generic_args: None,
+                    span: value.span.clone(),
+                }),
+                span: value.span.clone(),
+            }
+        } else {
+            return val;
+        };
+        if !self.borrow_payload_clone_supported(&te) {
+            return val;
+        }
+        let fn_val = self.current_fn.unwrap();
+        let ll = val.get_type();
+        let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+        let src = self.create_entry_alloca(fn_val, "refchain.letmove.src", ll);
+        self.builder.build_store(src, val).unwrap();
+        let dst = self.create_entry_alloca(fn_val, "refchain.letmove.clone", ll);
+        self.builder
+            .build_call(clone_fn, &[src.into(), dst.into()], "")
+            .unwrap();
+        self.builder
+            .build_load(ll, dst, "refchain.letmove.copy")
+            .unwrap()
     }
 
     /// Consuming-`Some`-arm companion of

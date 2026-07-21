@@ -1240,6 +1240,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_option_shared_heap.clear();
         self.ref_option_shared_heap.clear();
         self.ref_params.clear();
+        self.signature_ref_params.clear();
         self.entry_slot_ref_vars.clear();
         self.owned_vecstr_params.clear();
         self.for_loop_borrow_vars.clear();
@@ -1522,6 +1523,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Track ref params: alloca holds a pointer-to-data.
                 if let Some(inner_ty) = self.inner_type_of_ref(&param.ty) {
                     self.ref_params.insert(param_name.clone(), inner_ty);
+                    self.signature_ref_params.insert(param_name.clone());
                 }
                 // `mut ref Option[shared T]` param: record the inner shared heap
                 // layout so an in-callee reassignment (`prev = Some(n)`) routes

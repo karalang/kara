@@ -10213,6 +10213,65 @@ fn main() {
     }
 
     #[test]
+    fn asan_ref_param_field_let_move_no_leak_no_double_free() {
+        // B-2026-07-21-11 memory leg: the let-move deep copy. Double-free
+        // half: the copy's heap freed exactly once by the binding, never
+        // again by the caller's struct drop. Leak half: every clone the
+        // helper mints (struct, enum, String, Vec[String], Option payload)
+        // must drain through the binding's normal owned tracking — a
+        // mis-registered clone leaks once per call under LSan. Loop so any
+        // per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Plus, Ident(String) }
+struct Pt { s: String, x: i64 }
+struct Holder { inner: Pt, tok: Tok, name: String, strs: Vec[String], opt: Option[String], n: i64 }
+fn f_struct(h: ref Holder) -> i64 {
+    let p = h.inner;
+    return p.s.len() + p.x;
+}
+fn f_enum(h: ref Holder) -> i64 {
+    let t = h.tok;
+    match t {
+        Ident(nm) => { return nm.len(); }
+        Plus => { return 0; }
+    }
+    return -1;
+}
+fn f_str(h: ref Holder) -> i64 {
+    let s = h.name;
+    return s.len();
+}
+fn f_vstr(h: ref Holder) -> i64 {
+    let v = h.strs;
+    return (v[0] + v[1]).len();
+}
+fn f_opt(h: ref Holder) -> i64 {
+    let o = h.opt;
+    match o {
+        Some(s) => { return s.len(); }
+        None => { return 0; }
+    }
+    return -1;
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = Holder { inner: Pt { s: "ld".to_string(), x: 6 }, tok: Tok.Ident("mv".to_string()), name: "st".to_string(), strs: ["ab", "cd"], opt: Some("xy".to_string()), n: 1 };
+        acc = acc + f_struct(a) + f_enum(a) + f_str(a) + f_vstr(a) + f_opt(a);
+        acc = acc + f_struct(a);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["1040"],
+            "ref_param_field_let_move",
+        );
+    }
+
+    #[test]
     fn asan_ref_param_option_field_consume_no_leak_no_double_free() {
         // B-2026-07-21-9 memory leg: the ref-chain Option clone. Double-free
         // half: a consumed Some payload freed exactly once by its binding,

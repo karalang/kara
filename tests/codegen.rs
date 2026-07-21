@@ -56637,6 +56637,86 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ref_param_field_let_move_all_leaves() {
+        // B-2026-07-21-11: `let p = <refparam>.field;` — a whole-field move
+        // through a `ref` param bit-copy-aliased the caller's field while the
+        // binding got owned tracking (the #16/#19 source suppressions bail on
+        // the borrowed root), so binding and caller freed the same heap —
+        // double-free abort on all compiled backends; interp correct. Now
+        // `clone_ref_chain_field_move_rhs` deep-copies the RHS in place for
+        // every heap-bearing leaf: user struct, user enum, String, Vec[i64],
+        // Vec[String], and Option[String] (inline payloads; Result stays
+        // status quo — no dispatcher deep clone). Caller reuse after every
+        // call pins that the caller's fields survive. Sibling LSan test
+        // guards the leak/double-free halves.
+        let output = run_program(
+            "enum Tok { Plus, Ident(String) }\n\
+             struct Pt { s: String, x: i64 }\n\
+             struct Holder { inner: Pt, tok: Tok, name: String, items: Vec[i64],\n\
+                             strs: Vec[String], opt: Option[String], n: i64 }\n\
+             fn f_struct(h: ref Holder) -> String {\n\
+                 let p = h.inner;\n\
+                 return \"l:\".to_string() + p.s + \":\" + p.x.to_string();\n\
+             }\n\
+             fn f_enum(h: ref Holder) -> String {\n\
+                 let t = h.tok;\n\
+                 match t {\n\
+                     Ident(nm) => { return \"t:\".to_string() + nm; }\n\
+                     Plus => { return \"+\".to_string(); }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn f_str(h: ref Holder) -> String {\n\
+                 let s = h.name;\n\
+                 return \"n:\".to_string() + s;\n\
+             }\n\
+             fn f_vec(h: ref Holder) -> i64 {\n\
+                 let v = h.items;\n\
+                 return v.len() + v[0];\n\
+             }\n\
+             fn f_vstr(h: ref Holder) -> String {\n\
+                 let v = h.strs;\n\
+                 return v[0] + v[1];\n\
+             }\n\
+             fn f_opt(h: ref Holder) -> i64 {\n\
+                 let o = h.opt;\n\
+                 match o {\n\
+                     Some(s) => { return s.len(); }\n\
+                     None => { return 0; }\n\
+                 }\n\
+                 return -1;\n\
+             }\n\
+             fn main() {\n\
+                 let a = Holder {\n\
+                     inner: Pt { s: \"ld\".to_string(), x: 6 },\n\
+                     tok: Tok.Ident(\"mv\".to_string()),\n\
+                     name: \"st\".to_string(),\n\
+                     items: [7, 8],\n\
+                     strs: [\"ab\", \"cd\"],\n\
+                     opt: Some(\"xy\".to_string()),\n\
+                     n: 1,\n\
+                 };\n\
+                 println(f_struct(a));\n\
+                 println(f_struct(a));\n\
+                 println(f_enum(a));\n\
+                 println(f_enum(a));\n\
+                 println(f_str(a));\n\
+                 println(f_str(a));\n\
+                 println(f_vec(a));\n\
+                 println(f_vstr(a));\n\
+                 println(f_vstr(a));\n\
+                 println(f_opt(a));\n\
+                 println(f_opt(a));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(
+            output,
+            "l:ld:6\nl:ld:6\nt:mv\nt:mv\nn:st\nn:st\n9\nabcd\nabcd\n2\n2\n"
+        );
+    }
+
+    #[test]
     fn test_e2e_inline_index_map_get_unwrap_vec_value() {
         // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
         // (`m.get(k).unwrap()[i]`) used to loud-bail "Index operator applied to

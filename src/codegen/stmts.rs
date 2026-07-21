@@ -3291,6 +3291,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.pending_let_elem_type_expr = saved_pending_let_elem_te;
                 self.pending_let_tensor_info = saved_pending_let_tensor;
                 self.pending_let_column_info = saved_pending_let_column;
+                // B-2026-07-21-11: `let p = <refparam>.field;` — a whole-field
+                // move of a heap-bearing struct/enum through a `ref` param
+                // bit-copy-aliases the caller's field while the binding gets
+                // owned tracking below (the #16/#19 source suppressions bail
+                // on the borrowed root). Deep-copy the value in place so the
+                // binding owns an independent copy — the let-move sibling of
+                // the ref-chain scrutinee clones. No-op for every other RHS.
+                let val = self.clone_ref_chain_field_move_rhs(value, val);
                 // `let w = v[i]` over a heap-element `Vec` — deep-clone the shallow
                 // element so the binding owns a distinct buffer; without it both
                 // the binding's drop and `v`'s element-drop free the same buffer

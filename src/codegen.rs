@@ -1955,6 +1955,18 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) slice_alias_md: HashMap<String, slice_alias::SliceAliasMd>,
     /// Variables that are ref parameters (name → inner LLVM type for dereferencing).
     pub(crate) ref_params: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// The SUBSET of `ref_params` that are genuine function-SIGNATURE
+    /// `ref`/`mut ref` parameters (B-2026-07-21-11 regression fix):
+    /// `ref_params` also carries pattern-binding pointer SHIMS (borrow-mode
+    /// payload bindings, `bind_pattern_values_via_ptr` GEP shims, `let r: ref
+    /// T` locals) whose ownership is governed by their own machinery
+    /// (`borrowed_agg_payload_struct_vars` deep-copies, borrow
+    /// classification). The ref-chain clone legs must fire ONLY for chains
+    /// rooted at a signature param — cloning a shim-rooted chain duplicates
+    /// the existing copy machinery into a leak (caught by the
+    /// B-2026-07-17-20 LSan test). Mirrors `ref_params`' lifecycle: cleared
+    /// at function entry, swapped around mono bodies, shadow-danced per name.
+    pub(crate) signature_ref_params: std::collections::HashSet<String>,
     /// Locals bound to a `mut ref V` slot pointer returned by
     /// `m.entry(k).or_insert(d)` / `or_insert_with(f)` — the two-step
     /// `let r = m.entry(k).or_insert(0); *r += 1`. The binding's alloca holds
@@ -6706,6 +6718,7 @@ impl<'ctx> Codegen<'ctx> {
             slice_alias_md: HashMap::new(),
             fn_param_slice_elem: HashMap::new(),
             ref_params: HashMap::new(),
+            signature_ref_params: std::collections::HashSet::new(),
             entry_slot_ref_vars: HashMap::new(),
             owned_vecstr_params: HashSet::new(),
             for_loop_borrow_vars: HashSet::new(),
