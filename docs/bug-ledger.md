@@ -756,7 +756,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **624 surfaced 
 | B-2026-07-21-12 | codegen | low | Vec[String] field .first() consuming read through a `ref` param LEAKS the element copy at O0: `match h.items.first() { Some(s) => return "f:" + s, …… | acd2ba3 |
 | B-2026-07-21-13 | codegen | high | `vec_field.push(nodes[j])` — pushing a BARE `shared struct` element read from another `Vec[shared]` (an aliasing indexed read, source still owns it)… | a4a66c5 |
 | B-2026-07-21-14 | codegen | medium | match on a Result[String, i64] FIELD through a `ref` param with a consuming Ok arm double-frees under AOT (O0 and O2): `match h.res { Ok(s) => return… | 3ea6b06 |
-| B-2026-07-21-16 | codegen | high | match/if-let/let-else DIRECTLY over an OWNED struct's `Option[String]` field with a payload binding double-frees under AOT — `match a.opt { Some(s) =… | 3040db8 |
+| B-2026-07-21-16 | codegen | high | match/if-let/let-else DIRECTLY over an OWNED struct's `Option[String]` field with a payload binding double-frees under AOT — `match a.opt { Some(s) =… | f9be2c7 |
 
 </details>
 
