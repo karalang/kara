@@ -213,6 +213,18 @@ impl LazyExpr {
         LazyExpr { handle_id: 0 }
     }
 
+    // A literal scalar wrapped as an expression (`lit(true)`, `lit(21)`)
+    // — the CONSTANT-FOLDING trigger (phase-11 slice 6): a runtime
+    // value baked into the plan folds at plan time, so a flag like
+    // `filter(col("age").gt(21).and_(lit(enabled)))` renders as
+    // `FILTER (age > 21)` (or drops the filter entirely) in the
+    // optimized plan. Accepts i64 / f64 / String / bool; anything else
+    // is a loud construction error. Free-fn wrapper in std.lazy.
+    #[compiler_builtin]
+    fn lit[T](v: T) -> LazyExpr {
+        LazyExpr { handle_id: 0 }
+    }
+
     // Comparisons — `rhs` is a literal scalar (i64 / f64 / String / bool)
     // or another `LazyExpr` (column-vs-column). An i64 column compares
     // against an f64 literal by widening; comparing incompatible types

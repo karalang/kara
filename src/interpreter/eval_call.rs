@@ -913,6 +913,36 @@ impl<'a> super::Interpreter<'a> {
                         crate::interpreter::value::LazyExprIR::Col(name),
                     ));
                 }
+                // Literal expression constructor (phase-11 LazyDataFrame
+                // slice 6): `LazyExpr.lit(true)` / std.lazy's free `lit` —
+                // the constant-folding trigger. A runtime-constant flag
+                // baked into a predicate folds at plan time.
+                "LazyExpr.lit" => {
+                    use crate::interpreter::value::LazyExprIR;
+                    let Some(arg) = args.first() else {
+                        return self.record_runtime_error(
+                            "LazyExpr.lit expects a scalar literal (i64 / f64 / String / bool)",
+                            span,
+                        );
+                    };
+                    let ir = match self.eval_expr_inner(&arg.value) {
+                        Value::Int(n) => LazyExprIR::LitInt(n),
+                        Value::Float(v) => LazyExprIR::LitFloat(v),
+                        Value::String(s) => LazyExprIR::LitStr(s),
+                        Value::Bool(b) => LazyExprIR::LitBool(b),
+                        other => {
+                            return self.record_runtime_error(
+                                format!(
+                                    "LazyExpr.lit expects a scalar literal (i64 / f64 / \
+                                     String / bool), got {}",
+                                    other.variant_name()
+                                ),
+                                span,
+                            );
+                        }
+                    };
+                    return Value::LazyExpr(std::sync::Arc::new(ir));
+                }
                 // Phase-11 CSV leg slice 2: parse a CSV file into a table
                 // (the inverse of `df.write_csv`). Read errors map through
                 // `io_error_from_std`; parse errors (ragged rows, empty

@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
 | perf | 22 | 0 |
-| diagnostics | 12 | 0 |
+| diagnostics | 13 | 1 |
 | use-after-free | 5 | 0 |
 | other | 2 | 0 |
 
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 454 | 2 |
 | typecheck | 83 | 0 |
-| interp | 67 | 0 |
+| interp | 68 | 1 |
 | ownership | 25 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **623 surfaced · 2 open · 617 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **624 surfaced · 3 open · 617 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-21-15 | 2026-07-21 | codegen | medium | a struct with a `Result[String, i64]`-class field leaks the live half's heap payload at the owning struct's scope-exit drop — `let a = Holder { res: Ok("rr".to_string()), n: 1 }; println(a.n.to_string());` leaks the 2-byte "rr" buffer (valgrind, AOT O0/O2). No match, no borrow, no call needed: the struct drop simply never frees a Result field's payload. The Option sibling is CLEAN (`Option[String]` field frees via the struct drop's OptionInline arm). | — |
 | B-2026-07-21-16 | 2026-07-21 | codegen | high | match/if-let/let-else DIRECTLY over an OWNED struct's `Option[String]` field with a payload binding double-frees under AOT — `match a.opt { Some(s) => println(s), None => {} }` (a an owned local `H2 { opt: Option[String], n: i64 }`) frees the payload once via the binding's arm-exit cleanup and AGAIN via the struct drop's OptionInline arm (valgrind Invalid free; output correct — frees run at scope exit). Even a PRINT-ONLY binding arm reproduces. Same class: `let x = a.opt;` or `x = a.opt;` (assign) followed by consuming x. The Result sibling shapes are currently clean only because the struct drop skips Result fields entirely (B-2026-07-21-15's leak). | — |
+| B-2026-07-21-17 | 2026-07-21 | interp | low | A runtime error raised inside a spliced gated-stdlib wrapper body reports the USER file's path with the SPLICE-COMPOSITE line/col — `import std.lazy.{lit}; lit(vec![1i64])` errors at `<user file>:19:5` when the user file has 6 lines (line 19 is the wrapper body's position in the composite spliced source, not a location in the file named). | — |
 
 ### Fixed (617)
 

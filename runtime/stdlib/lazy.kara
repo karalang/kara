@@ -13,3 +13,8 @@
 pub fn col(name: String) -> LazyExpr {
     LazyExpr.col(name)
 }
+
+#[must_use = "the literal expression is a predicate building block — discarding it builds nothing"]
+pub fn lit[T](v: T) -> LazyExpr {
+    LazyExpr.lit(v)
+}

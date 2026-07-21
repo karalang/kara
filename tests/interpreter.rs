@@ -24360,3 +24360,149 @@ fn test_lazyframe_join_errors() {
         "{errors:?}",
     );
 }
+
+#[test]
+fn test_lazyframe_constant_folding_and_cse() {
+    // Phase-11 LazyDataFrame slice 6: constant folding + CSE — the last
+    // two passes of the pinned Option A optimizer list. `lit(..)` wraps a
+    // runtime scalar as an expression; literal arms fold at PLAN time
+    // (the logical plan keeps the verbatim tree, the optimized one shows
+    // the folded form): `x and true` → `x` (and the scan projection
+    // narrows to what the folded predicate reads), a constant-true
+    // filter drops out entirely (single-scan rendering returns), a
+    // constant-false one stays honest (`FILTER false`, empty collect,
+    // schema preserved), `x or true` collapses the filter away, literal
+    // comparisons fold through `not_`, and structurally-identical
+    // conjuncts dedupe (CSE) — both within one predicate and across
+    // adjacent fused filters.
+    let out = run_no_errors(
+        "import std.lazy.{col, lit};\n\
+         fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64, 5i64, 9i64]));\n\
+             df.insert(\"b\", Column.from_vec([10i64, 20i64, 30i64]));\n\
+             let enabled = true;\n\
+             let plan = df.lazy().filter(col(\"a\").gt(2).and_(lit(enabled))).select(vec![\"a\"]);\n\
+             println(plan.explain());\n\
+             println(plan.collect().height());\n\
+             let t = df.lazy().filter(lit(true)).select(vec![\"b\"]);\n\
+             println(t.explain());\n\
+             println(t.collect().height());\n\
+             let f = df.lazy().filter(lit(false));\n\
+             println(f.explain());\n\
+             println(f.collect().height());\n\
+             println(f.collect().width());\n\
+             let dup = df.lazy().filter(col(\"a\").gt(2)).filter(col(\"a\").gt(2));\n\
+             println(dup.explain());\n\
+             println(dup.collect().height());\n\
+             let dom = df.lazy().filter(col(\"a\").gt(2).or_(lit(true)));\n\
+             println(dom.explain());\n\
+             println(dom.collect().height());\n\
+             let cmpf = df.lazy().filter(lit(3).gt(4).not_());\n\
+             println(cmpf.explain());\n\
+             let inner = df.lazy().filter(col(\"a\").gt(2).and_(col(\"a\").gt(2)));\n\
+             println(inner.explain());\n\
+         }",
+    );
+    assert_eq!(
+        out,
+        "== logical plan ==\n\
+         SELECT [a]\n\
+         \x20 FILTER ((a > 2) and true)\n\
+         \x20   SCAN [a, b]\n\
+         == optimized ==\n\
+         SELECT [a]\n\
+         \x20 FILTER (a > 2)\n\
+         \x20   SCAN cols=[a]\n\
+         2\n\
+         == logical plan ==\n\
+         SELECT [b]\n\
+         \x20 FILTER true\n\
+         \x20   SCAN [a, b]\n\
+         == optimized ==\n\
+         SCAN cols=[b]\n\
+         3\n\
+         == logical plan ==\n\
+         FILTER false\n\
+         \x20 SCAN [a, b]\n\
+         == optimized ==\n\
+         FILTER false\n\
+         \x20 SCAN cols=[*]\n\
+         0\n2\n\
+         == logical plan ==\n\
+         FILTER (a > 2)\n\
+         \x20 FILTER (a > 2)\n\
+         \x20   SCAN [a, b]\n\
+         == optimized ==\n\
+         FILTER (a > 2)\n\
+         \x20 SCAN cols=[a]\n\
+         2\n\
+         == logical plan ==\n\
+         FILTER ((a > 2) or true)\n\
+         \x20 SCAN [a, b]\n\
+         == optimized ==\n\
+         SCAN cols=[*]\n\
+         3\n\
+         == logical plan ==\n\
+         FILTER (not (3 > 4))\n\
+         \x20 SCAN [a, b]\n\
+         == optimized ==\n\
+         SCAN cols=[*]\n\
+         == logical plan ==\n\
+         FILTER ((a > 2) and (a > 2))\n\
+         \x20 SCAN [a, b]\n\
+         == optimized ==\n\
+         FILTER (a > 2)\n\
+         \x20 SCAN cols=[a]\n",
+        "literal arms must fold at plan time; duplicate conjuncts must dedupe",
+    );
+}
+
+#[test]
+fn test_lazyframe_constant_folding_preserves_errors() {
+    // Folding must never mask an error: a bad column name in an elided
+    // branch stays loud (validation runs on the ORIGINAL expression);
+    // `lit` rejects non-scalar values; a type-mismatched literal
+    // comparison stays UNFOLDED and errors at collect.
+    let errors = runtime_errors(
+        "import std.lazy.{col, lit};\n\
+         fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().filter(col(\"nope\").gt(1).and_(lit(false))).collect();\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("no column named 'nope' at this plan step")),
+        "{errors:?}",
+    );
+    let errors = runtime_errors(
+        "import std.lazy.{lit};\n\
+         fn main() {\n\
+             let v: Vec[i64] = vec![1i64];\n\
+             let _ = lit(v);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("LazyExpr.lit expects a scalar literal")),
+        "{errors:?}",
+    );
+    let errors = runtime_errors(
+        "import std.lazy.{lit};\n\
+         fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.lazy().filter(lit(1).eq(\"x\")).collect();\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("cannot compare values of different types")),
+        "{errors:?}",
+    );
+}

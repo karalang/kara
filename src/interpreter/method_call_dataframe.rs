@@ -1689,6 +1689,142 @@ fn lazy_expr_cols(ir: &crate::interpreter::value::LazyExprIR, out: &mut Vec<Stri
     }
 }
 
+/// Flatten a same-op `and`/`or` chain into its leaves, folding each leaf
+/// on the way in (so a leaf that simplifies into another same-op chain —
+/// e.g. via double-negation removal — flattens too).
+fn flatten_bool_chain(
+    ir: crate::interpreter::value::LazyExprIR,
+    is_and: bool,
+    out: &mut Vec<crate::interpreter::value::LazyExprIR>,
+) {
+    use crate::interpreter::value::LazyExprIR;
+    match ir {
+        LazyExprIR::And(a, b) if is_and => {
+            flatten_bool_chain(fold_lazy_expr(&a), is_and, out);
+            flatten_bool_chain(fold_lazy_expr(&b), is_and, out);
+        }
+        LazyExprIR::Or(a, b) if !is_and => {
+            flatten_bool_chain(fold_lazy_expr(&a), is_and, out);
+            flatten_bool_chain(fold_lazy_expr(&b), is_and, out);
+        }
+        other => out.push(other),
+    }
+}
+
+/// Bottom-up plan-time expression simplification — the CONSTANT FOLDING
+/// and CSE passes of the pinned Option A optimizer (deferred.md § Lazy
+/// DataFrame Query Planner). Three rewrites:
+///
+///   1. Literal-only comparisons fold to `LitBool`, mirroring
+///      `eval_lazy_pred` EXACTLY (i64↔f64 widen; NaN comparisons are
+///      false for every op — the engine's documented posture). A
+///      type-mismatched or bool-ordered literal comparison stays
+///      UNFOLDED so collect still errors loudly.
+///   2. Boolean algebra over `lit(..)` arms: the neutral literal drops
+///      out of its chain (`x and true` → `x`, `x or false` → `x`), the
+///      dominating literal collapses it (`_ and false` → `false`,
+///      `_ or true` → `true`); `not` on a literal flips it, and double
+///      negation cancels.
+///   3. CSE: structurally-identical conjuncts/disjuncts within one
+///      `and`/`or` chain deduplicate to the first occurrence — adjacent
+///      -filter fusion feeds this `X and X` when the same predicate is
+///      applied twice.
+///
+/// `collect` always evaluates the ORIGINAL ops, so folding can never
+/// change results — it feeds `explain` and the scan projection.
+fn fold_lazy_expr(
+    ir: &crate::interpreter::value::LazyExprIR,
+) -> crate::interpreter::value::LazyExprIR {
+    use crate::interpreter::value::{LazyCmpOp, LazyExprIR};
+    match ir {
+        LazyExprIR::Cmp { op, lhs, rhs } => {
+            let l = fold_lazy_expr(lhs);
+            let r = fold_lazy_expr(rhs);
+            // `Some(ord)` = a foldable literal pair; the inner Option is
+            // `partial_cmp`'s (None = NaN involved → false, like eval).
+            let ord = match (&l, &r) {
+                (LazyExprIR::LitInt(x), LazyExprIR::LitInt(y)) => Some(x.partial_cmp(y)),
+                (LazyExprIR::LitFloat(x), LazyExprIR::LitFloat(y)) => Some(x.partial_cmp(y)),
+                (LazyExprIR::LitInt(x), LazyExprIR::LitFloat(y)) => {
+                    Some((*x as f64).partial_cmp(y))
+                }
+                (LazyExprIR::LitFloat(x), LazyExprIR::LitInt(y)) => {
+                    Some(x.partial_cmp(&(*y as f64)))
+                }
+                (LazyExprIR::LitStr(x), LazyExprIR::LitStr(y)) => Some(Some(x.cmp(y))),
+                (LazyExprIR::LitBool(x), LazyExprIR::LitBool(y))
+                    if matches!(op, LazyCmpOp::Eq | LazyCmpOp::Ne) =>
+                {
+                    Some(Some(x.cmp(y)))
+                }
+                _ => None,
+            };
+            match ord {
+                Some(ord) => LazyExprIR::LitBool(ord.is_some_and(|o| match op {
+                    LazyCmpOp::Gt => o.is_gt(),
+                    LazyCmpOp::Ge => o.is_ge(),
+                    LazyCmpOp::Lt => o.is_lt(),
+                    LazyCmpOp::Le => o.is_le(),
+                    LazyCmpOp::Eq => o.is_eq(),
+                    LazyCmpOp::Ne => o.is_ne(),
+                })),
+                None => LazyExprIR::Cmp {
+                    op: *op,
+                    lhs: Box::new(l),
+                    rhs: Box::new(r),
+                },
+            }
+        }
+        LazyExprIR::And(..) | LazyExprIR::Or(..) => {
+            let is_and = matches!(ir, LazyExprIR::And(..));
+            let mut leaves: Vec<LazyExprIR> = Vec::new();
+            flatten_bool_chain(ir.clone(), is_and, &mut leaves);
+            let mut out: Vec<LazyExprIR> = Vec::new();
+            for leaf in leaves {
+                match leaf {
+                    LazyExprIR::LitBool(b) => {
+                        if b == is_and {
+                            continue; // neutral: true in and / false in or
+                        }
+                        return LazyExprIR::LitBool(b); // dominator
+                    }
+                    other => {
+                        if !out.contains(&other) {
+                            out.push(other); // CSE: first occurrence wins
+                        }
+                    }
+                }
+            }
+            let mut it = out.into_iter();
+            match it.next() {
+                None => LazyExprIR::LitBool(is_and), // all leaves were neutral
+                Some(first) => it.fold(first, |acc, x| {
+                    if is_and {
+                        LazyExprIR::And(Box::new(acc), Box::new(x))
+                    } else {
+                        LazyExprIR::Or(Box::new(acc), Box::new(x))
+                    }
+                }),
+            }
+        }
+        LazyExprIR::Not(x) => match fold_lazy_expr(x) {
+            LazyExprIR::LitBool(b) => LazyExprIR::LitBool(!b),
+            LazyExprIR::Not(inner) => *inner, // double negation cancels
+            other => LazyExprIR::Not(Box::new(other)),
+        },
+        LazyExprIR::Desc(x) => LazyExprIR::Desc(Box::new(fold_lazy_expr(x))),
+        LazyExprIR::Agg { op, arg } => LazyExprIR::Agg {
+            op: *op,
+            arg: Box::new(fold_lazy_expr(arg)),
+        },
+        LazyExprIR::Alias { name, expr } => LazyExprIR::Alias {
+            name: name.clone(),
+            expr: Box::new(fold_lazy_expr(expr)),
+        },
+        leaf => leaf.clone(),
+    }
+}
+
 /// The optimized pipeline form of a slice-1/2 lazy plan.
 pub(super) struct OptimizedLazyPlan {
     /// Scan-level projection: the union of columns any predicate or the
@@ -1746,6 +1882,9 @@ fn fold_lazy_plan(
                 _ => steps.push(LazyOp::Limit(*n)),
             },
             LazyOp::Filter(ir) => {
+                // Validate against the ORIGINAL expression — folding may
+                // elide a branch, but a bad column name in it must stay
+                // a loud error.
                 let mut cols = Vec::new();
                 lazy_expr_cols(ir, &mut cols);
                 for c in &cols {
@@ -1754,18 +1893,32 @@ fn fold_lazy_plan(
                             "LazyFrame.filter: no column named '{c}' at this plan step"
                         ));
                     }
+                }
+                // Constant folding + CSE (slice 6) — plan-time only
+                // (collect evaluates the original ops). The scan
+                // projection counts only the columns the FOLDED
+                // predicate still reads.
+                let folded = fold_lazy_expr(ir);
+                let mut fcols = Vec::new();
+                lazy_expr_cols(&folded, &mut fcols);
+                for c in &fcols {
                     if !past_group_by && !needed.contains(c) {
                         needed.push(c.clone());
                     }
                 }
+                if matches!(folded, LazyExprIR::LitBool(true)) {
+                    continue; // a constant-true filter drops out
+                }
                 match steps.last_mut() {
                     Some(LazyOp::Filter(prev)) => {
-                        *prev = Arc::new(LazyExprIR::And(
+                        // Re-fold after fusing so duplicate adjacent
+                        // filters (`X and X`) collapse — the CSE trigger.
+                        *prev = Arc::new(fold_lazy_expr(&LazyExprIR::And(
                             Box::new(prev.as_ref().clone()),
-                            Box::new(ir.as_ref().clone()),
-                        ));
+                            Box::new(folded),
+                        )));
                     }
-                    _ => steps.push(LazyOp::Filter(Arc::clone(ir))),
+                    _ => steps.push(LazyOp::Filter(Arc::new(folded))),
                 }
             }
             LazyOp::Sort(keys) => {
