@@ -94,10 +94,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 159 | 0 |
 | leak | 91 | 0 |
-| double-free | 76 | 0 |
+| double-free | 77 | 1 |
 | codegen-gap | 70 | 0 |
 | missing-feature | 61 | 0 |
-| false-positive | 38 | 0 |
+| false-positive | 39 | 1 |
 | run-vs-build | 37 | 0 |
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 456 | 0 |
+| codegen | 457 | 1 |
 | typecheck | 83 | 0 |
 | interp | 68 | 0 |
-| ownership | 25 | 0 |
+| ownership | 26 | 1 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
 | runtime | 13 | 0 |
@@ -124,11 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **626 surfaced · 0 open · 621 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **628 surfaced · 2 open · 621 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (2)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-21-20 | 2026-07-21 | ownership | low | Spurious E0500 UseAfterMove on a weak-to-weak field splice `nodes[i].next = nodes[prev].next` where both sides index the SAME `Vec[shared]` and `next` is a `weak` field. `karac check` reports "value 'nodes' moved here, used again here" (moved at the RHS `nodes[prev].next` read), but `karac build`/`run` compile and run it CORRECTLY and valgrind-clean (the reuse takes the advisory shared/RC fallback). The false-positive is specific to the extra `weak`-field access on the RHS: the strong-element form `nodes[i].next = nodes[prev]` (the #143 shape) is NOT flagged. Advisory only — ownership errors other than aliased exclusive borrows do not block the build. | — |
+| B-2026-07-21-21 | 2026-07-21 | codegen | high | Materializing a `weak`-field read into a strong `Option[shared]` local and then storing it back into another `weak` field DOUBLE-FREES / use-after-frees. `let after: Option[Node] = nodes[prev].next; nodes[i].next = after;` (`next` is a `weak Node` field) `check`s clean but leaks the upgraded node (40 bytes for a single splice) and, across multiple such splices, corrupts the heap — valgrind reports 'Invalid read of size 8' (use-after-free) and the fuller workload aborts with 'free(): double free detected'. The weak->strong upgrade rc-incs the node, but the subsequent store of that strong `Option` into a `weak` field does not balance against the temp's scope-exit drop, so the node is over-released and later reads/frees hit freed memory. Codegen-only (interp/JIT output correct); AOT valgrind + glibc double-free abort. | — |
 
 ### Fixed (621)
 
