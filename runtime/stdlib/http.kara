@@ -388,4 +388,17 @@ impl Server {
     fn serve_ws(addr: String, handler: Fn(Request) -> Response, ws_handler: Fn(WebSocket)) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })
     }
+
+    // TLS twin of `serve_ws`: same status-101 upgrade contract, with TLS
+    // terminated in front of hyper (`serve_tls`'s cert/key PEM surface).
+    // After the upgrade the connection's rustls session is handed to the
+    // WebSocket frame layer, so `ws_handler`'s `send_text`/`recv_text`
+    // transparently encrypt — the same wss:// posture as the standalone
+    // `WebSocket.accept_tls`. This listener is HTTP/1.1-only (ALPN
+    // advertises no h2): a WebSocket upgrade is an h1 mechanism, so h2
+    // workloads belong on `serve_tls`.
+    #[compiler_builtin]
+    fn serve_ws_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response, ws_handler: Fn(WebSocket)) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
+        Err(HttpError { message: "" })
+    }
 }

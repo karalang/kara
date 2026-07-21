@@ -1091,6 +1091,7 @@ pub(super) fn is_sanitizer_link(extra_cc_args: &[&str]) -> bool {
 const TLS_RUNTIME_SYMBOL_MARKERS: &[&str] = &[
     "karac_runtime_tls_",
     "karac_runtime_serve_https",
+    "karac_runtime_serve_ws_tls",
     "karac_runtime_http_client_",
     "karac_runtime_http_builder_",
     "karac_runtime_ws_accept_tls",

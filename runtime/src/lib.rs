@@ -562,6 +562,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_http_client_get,
         karac_runtime_http_client_post,
         karac_runtime_serve_https,
+        karac_runtime_serve_ws_tls,
         tls::karac_runtime_tls_config_new,
         tls::karac_runtime_tls_config_free,
     );
@@ -6877,6 +6878,229 @@ async fn serve_request_ws(
             // The handler's 101 was the SIGNAL; the wire response is the
             // runtime-built RFC 6455 handshake (the handler's body/headers
             // are not meaningful on a protocol switch).
+            let resp101 = hyper::Response::builder()
+                .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
+                .header("upgrade", "websocket")
+                .header("connection", "Upgrade")
+                .header("sec-websocket-accept", accept)
+                .body(http_body_util::Full::new(bytes::Bytes::new()))
+                .unwrap_or_default();
+            return Ok(resp101);
+        }
+    }
+    Ok(resp)
+}
+
+/// `Server.serve_ws_tls` — the TLS twin of [`karac_runtime_serve_ws`]
+/// (phase-8 line 170 follow-on): the `serve_https` accept loop (TLS
+/// terminated in front of hyper via `tokio_rustls::TlsAcceptor`) with the
+/// same status-101 WebSocket-upgrade contract. Differences from the plain
+/// variant, all forced by the TLS transport:
+///
+/// - ALPN advertises **`http/1.1` only** — the upgrade path uses hyper's
+///   `http1::Builder` (WS upgrade is an h1 mechanism), so `h2` must not be
+///   negotiated on this listener (use `serve_tls` for h2 workloads).
+/// - The upgrade task downcasts to the TLS IO shape, splits it into the
+///   raw TCP stream + the live `rustls::ServerConnection`, and registers
+///   the session in the `tls::SESSIONS` registry keyed by the fd — exactly
+///   the state `WebSocket.accept_tls` leaves behind — so the existing
+///   `karac_runtime_ws_*` framing FFI transparently routes frames through
+///   rustls for this fd.
+/// - Post-handler cleanup is `karac_runtime_tls_close(fd)` (deregister +
+///   close), the single owner of both the session entry and the socket.
+///
+/// Return codes: `serve_https`'s classes (1-5 shared, 6 = PEM/config).
+///
+/// # Safety
+///
+/// Same caller obligations as [`karac_runtime_serve_https`]; `ws_handler`
+/// must be a valid function pointer for the process lifetime.
+#[cfg(all(feature = "net", feature = "tls"))]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_serve_ws_tls(
+    addr_cstr: *const std::os::raw::c_char,
+    cert_pem: *const u8,
+    cert_len: i64,
+    key_pem: *const u8,
+    key_len: i64,
+    handler: extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse),
+    ws_handler: extern "C" fn(i64),
+    bound_port_out: *mut u16,
+) -> i32 {
+    if addr_cstr.is_null() {
+        return 1;
+    }
+    let cstr = std::ffi::CStr::from_ptr(addr_cstr);
+    let addr_str = match cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => return 2,
+    };
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return 3,
+    };
+    let cert_bytes: &[u8] = if cert_pem.is_null() || cert_len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(cert_pem, cert_len as usize)
+    };
+    let key_bytes: &[u8] = if key_pem.is_null() || key_len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(key_pem, key_len as usize)
+    };
+    let mut server_config = match crate::tls::build_server_config(cert_bytes, key_bytes) {
+        Ok(c) => c,
+        Err(_) => return 6,
+    };
+    // h1-only ALPN — see the entry doc.
+    server_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => return 4,
+    };
+
+    runtime.block_on(async move {
+        let listener = match tokio::net::TcpListener::bind(socket_addr).await {
+            Ok(l) => l,
+            Err(_) => return 5,
+        };
+        if let Ok(local) = listener.local_addr() {
+            if !bound_port_out.is_null() {
+                *bound_port_out = local.port();
+            }
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
+            let _ = stdout.flush();
+        }
+        let limits = ServeLimits::from_env();
+        loop {
+            let permit = limits.acquire_permit().await;
+            let (tcp_stream, _peer) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(_) => continue,
+            };
+            let acceptor = acceptor.clone();
+            let header_timeout = limits.header_timeout;
+            tokio::spawn(async move {
+                let _permit = permit;
+                let tls_stream = match acceptor.accept(tcp_stream).await {
+                    Ok(s) => s,
+                    // Per-connection handshake failures are swallowed —
+                    // a single bad client must not break the accept loop.
+                    Err(_) => return,
+                };
+                let io = hyper_util::rt::TokioIo::new(tls_stream);
+                let svc = hyper::service::service_fn(
+                    move |req: hyper::Request<hyper::body::Incoming>| async move {
+                        serve_request_ws_tls(req, handler, ws_handler).await
+                    },
+                );
+                let mut builder = hyper::server::conn::http1::Builder::new();
+                if let Some(t) = header_timeout {
+                    builder.timer(hyper_util::rt::TokioTimer::new());
+                    builder.header_read_timeout(t);
+                }
+                let _ = builder.serve_connection(io, svc).with_upgrades().await;
+            });
+        }
+    })
+}
+
+/// Per-request body for [`karac_runtime_serve_ws_tls`] — the TLS twin of
+/// [`serve_request_ws`]. Identical contract; only the detach differs: the
+/// upgraded IO splits into the raw TCP socket + the live rustls server
+/// session, which is parked in the `tls::SESSIONS` registry so the frame
+/// FFI routes this fd through TLS.
+#[cfg(all(feature = "net", feature = "tls"))]
+async fn serve_request_ws_tls(
+    mut req: hyper::Request<hyper::body::Incoming>,
+    handler: extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse),
+    ws_handler: extern "C" fn(i64),
+) -> Result<hyper::Response<http_body_util::Full<bytes::Bytes>>, std::convert::Infallible> {
+    let ws_accept = if is_ws_handshake_request(&req) {
+        req.headers()
+            .get("sec-websocket-key")
+            .map(|k| crate::event_loop::ws_accept_value(k.as_bytes()))
+    } else {
+        None
+    };
+    let upgrade_fut = ws_accept.as_ref().map(|_| hyper::upgrade::on(&mut req));
+
+    let resp = serve_request(req, handler).await?;
+
+    if let (Some(accept), Some(fut)) = (ws_accept, upgrade_fut) {
+        if resp.status() == hyper::StatusCode::SWITCHING_PROTOCOLS {
+            tokio::spawn(async move {
+                let debug_ws = std::env::var("KARAC_DEBUG_SERVE_WS").as_deref() == Ok("1");
+                let upgraded = match fut.await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        if debug_ws {
+                            eprintln!("serve_ws_tls: upgrade future failed: {e}");
+                        }
+                        return;
+                    }
+                };
+                let parts =
+                    match upgraded.downcast::<hyper_util::rt::TokioIo<
+                        tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+                    >>() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            if debug_ws {
+                                eprintln!("serve_ws_tls: upgraded IO downcast failed");
+                            }
+                            return;
+                        }
+                    };
+                if debug_ws && !parts.read_buf.is_empty() {
+                    eprintln!(
+                        "serve_ws_tls: dropping {}B of early client bytes",
+                        parts.read_buf.len()
+                    );
+                }
+                // Split the TLS stream: the rustls `ServerConnection` keeps
+                // any already-decrypted plaintext in its own buffers, so
+                // handing it to the sync session registry loses nothing.
+                let (tokio_tcp, server_conn) = parts.io.into_inner().into_inner();
+                let std_tcp = match tokio_tcp.into_std() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        if debug_ws {
+                            eprintln!("serve_ws_tls: into_std failed: {e}");
+                        }
+                        return;
+                    }
+                };
+                if let Err(e) = std_tcp.set_nonblocking(false) {
+                    if debug_ws {
+                        eprintln!("serve_ws_tls: set_nonblocking(false) failed: {e}");
+                    }
+                    return;
+                }
+                // Register the live session against the fd — the state
+                // `WebSocket.accept_tls` leaves behind — WITHOUT closing the
+                // socket (`tcpstream_into_key` releases ownership).
+                let key = crate::tls::tcpstream_into_key(std_tcp);
+                crate::tls::register_session_for_fd(key, rustls::Connection::Server(server_conn));
+                let fd = key as i64;
+                let _ = tokio::task::spawn_blocking(move || {
+                    let panicked = std::panic::catch_unwind(|| ws_handler(fd)).is_err();
+                    if !panicked {
+                        // Deregister the TLS session + close the socket —
+                        // the single cleanup site (caller-retains model).
+                        let _ = crate::tls::karac_runtime_tls_close(fd);
+                    }
+                })
+                .await;
+            });
             let resp101 = hyper::Response::builder()
                 .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
                 .header("upgrade", "websocket")

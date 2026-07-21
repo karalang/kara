@@ -3091,4 +3091,201 @@ fn main() with sends(Network) receives(Network) {{
             panic!("serve_ws E2E failed: {e}");
         }
     }
+
+    /// `Server.serve_ws_tls` end-to-end — the wss:// twin of the plain
+    /// serve_ws test: TLS terminated in front of hyper (fixture cert), the
+    /// same status-101 upgrade contract, and the post-upgrade frames routed
+    /// through the rustls session the runtime parks in the `tls::SESSIONS`
+    /// registry. Asserts an HTTPS `/health` 200 and a full wss:// echo
+    /// round-trip over one rustls client session.
+    #[test]
+    fn test_http_server_serve_ws_tls_upgrade_and_echo() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let cert_path = workspace_root().join("tests/fixtures/tls/cert.pem");
+        let key_path = workspace_root().join("tests/fixtures/tls/key.pem");
+        let (Ok(cert_pem), Ok(key_pem)) = (
+            std::fs::read_to_string(&cert_path),
+            std::fs::read_to_string(&key_path),
+        ) else {
+            eprintln!("skip: tls fixtures not present");
+            return;
+        };
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        fn kara_escape(s: &str) -> String {
+            s.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        }
+        let cert_lit = kara_escape(&cert_pem);
+        let key_lit = kara_escape(&key_pem);
+        let src = format!(
+            r#"
+            fn route(req: Request) -> Response {{
+                match req.path() {{
+                    "/ws" => Response {{ status: 101, body: "" }},
+                    "/health" => Response {{ status: 200, body: "ok" }},
+                    _ => Response {{ status: 404, body: "" }},
+                }}
+            }}
+
+            fn on_ws(ws: WebSocket) {{
+                let mut buf: Array[u8, 4096] = [0u8; 4096];
+                loop {{
+                    match ws.recv_text(mut buf) {{
+                        Result.Ok(n) => {{
+                            if n == 0 {{ break; }}
+                            match ws.send_text(buf[0..n]) {{
+                                Result.Ok(_) => {{}}
+                                Result.Err(_) => {{ break; }}
+                            }}
+                        }}
+                        Result.Err(_) => {{ break; }}
+                    }}
+                }}
+            }}
+
+            fn main() {{
+                let cert = "{cert_lit}";
+                let key = "{key_lit}";
+                let _r = Server.serve_ws_tls("127.0.0.1:0", cert, key, route, on_ws);
+            }}
+            "#
+        );
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_servewstls_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(&src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn serve_ws_tls binary");
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let port = match port_opt {
+            Some(p) => p,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("serve_ws_tls server did not emit BOUND_PORT within timeout");
+            }
+        };
+
+        let run = || -> Result<(), String> {
+            use std::sync::Arc;
+            // (1) HTTPS /health still served (retry while TLS stack warms).
+            let started = Instant::now();
+            let mut health: Option<(u16, String)> = None;
+            while started.elapsed() < Duration::from_secs(10) {
+                match https_get_no_verify(port, "/health") {
+                    Ok(r) => {
+                        health = Some(r);
+                        break;
+                    }
+                    Err(_) => std::thread::sleep(Duration::from_millis(50)),
+                }
+            }
+            let (status, body) = health.ok_or("HTTPS GET /health never succeeded")?;
+            if status != 200 || body.trim() != "ok" {
+                return Err(format!("/health expected 200 ok; got {status} {body:?}"));
+            }
+
+            // (2) wss:// session: 101 + frame echo over one rustls stream.
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
+            let config = rustls::ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .map_err(|e| format!("client config: {e}"))?
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoVerify))
+                .with_no_client_auth();
+            let server_name = rustls::pki_types::ServerName::try_from("localhost")
+                .map_err(|e| format!("server name: {e}"))?;
+            let mut conn = rustls::ClientConnection::new(Arc::new(config), server_name)
+                .map_err(|e| format!("client conn: {e}"))?;
+            let mut sock = std::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+                .map_err(|e| format!("tcp connect: {e}"))?;
+            sock.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+
+            let key = "c2VydmVfd3NfdGxzX2tleQ==";
+            let req = format!(
+                "GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+                 Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n\
+                 Sec-WebSocket-Version: 13\r\n\r\n"
+            );
+            tls.write_all(req.as_bytes())
+                .map_err(|e| format!("wss write: {e}"))?;
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && head.len() < 8192 {
+                let n = tls.read(&mut byte).map_err(|e| format!("wss read: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+                head.push(byte[0]);
+            }
+            let head_str = String::from_utf8_lossy(&head);
+            if !head_str.starts_with("HTTP/1.1 101") {
+                return Err(format!("/ws over TLS should 101; got: {head_str}"));
+            }
+            let lower = head_str.to_lowercase();
+            if !lower.contains("sec-websocket-accept:") {
+                return Err(format!("101 missing Sec-WebSocket-Accept: {head_str}"));
+            }
+
+            let payload = b"hello wss";
+            let mask = [0xAAu8, 0xBB, 0xCC, 0xDD];
+            let mut frame = vec![0x81u8, 0x80 | (payload.len() as u8)];
+            frame.extend_from_slice(&mask);
+            frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+            tls.write_all(&frame)
+                .map_err(|e| format!("wss frame write: {e}"))?;
+            let mut echo = Vec::new();
+            let mut chunk = [0u8; 256];
+            while echo.len() < 2 + payload.len() {
+                let n = tls
+                    .read(&mut chunk)
+                    .map_err(|e| format!("wss echo read: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+                echo.extend_from_slice(&chunk[..n]);
+            }
+            if echo.len() < 2 + payload.len() || echo[0] != 0x81 {
+                return Err(format!("bad wss echo frame: {:02x?}", echo));
+            }
+            let n = (echo[1] & 0x7F) as usize;
+            if &echo[2..2 + n] != payload {
+                return Err(format!(
+                    "wss echo payload mismatch: {:?}",
+                    String::from_utf8_lossy(&echo[2..2 + n])
+                ));
+            }
+            Ok(())
+        };
+
+        let outcome = run();
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+        if let Err(e) = outcome {
+            panic!("serve_ws_tls E2E failed: {e}");
+        }
+    }
 }

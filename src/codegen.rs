@@ -4431,6 +4431,25 @@ impl<'ctx> Codegen<'ctx> {
             karac_runtime_serve_ws_type,
             Some(Linkage::External),
         );
+        // TLS twin: `serve_https`'s cert/key params + the ws handler slot.
+        let karac_runtime_serve_ws_tls_type = context.i32_type().fn_type(
+            &[
+                ptr_type.into(), // addr_cstr
+                ptr_type.into(), // cert_pem
+                i64_type.into(), // cert_len
+                ptr_type.into(), // key_pem
+                i64_type.into(), // key_len
+                ptr_type.into(), // http handler shim fn-ptr
+                ptr_type.into(), // ws handler shim fn-ptr
+                ptr_type.into(), // bound_port_out
+            ],
+            false,
+        );
+        let _karac_runtime_serve_ws_tls_fn = module.add_function(
+            "karac_runtime_serve_ws_tls",
+            karac_runtime_serve_ws_tls_type,
+            Some(Linkage::External),
+        );
 
         // HTTP handler ABI trampoline (2026-05-09): per-request runtime
         // externs invoked from the Kāra-side `Request.path()` / `.method()`
@@ -9702,7 +9721,8 @@ impl<'ctx> Codegen<'ctx> {
 }
 
 /// Collect the names of free fns passed as the WS-handler (third) argument of
-/// any `Server.serve_ws(addr, handler, ws_handler)` call in the program —
+/// any `Server.serve_ws(addr, handler, ws_handler)` / `Server.serve_ws_tls(addr,
+/// cert, key, handler, ws_handler)` call in the program —
 /// both the `MethodCall`-on-`Server` and `Call(Path([Server, serve_ws]))`
 /// shapes. These fns are invoked through the runtime's `extern "C" fn(i64)`
 /// callback on a dedicated blocking thread, so they are excluded from
@@ -9720,12 +9740,19 @@ fn collect_serve_ws_handler_names(program: &Program) -> std::collections::HashSe
                 args,
                 ..
             } => {
-                if method == "serve_ws"
-                    && matches!(&object.kind, ExprKind::Identifier(n) if n == "Server")
-                {
-                    if let Some(arg) = args.get(2) {
-                        if let ExprKind::Identifier(n) = &arg.value.kind {
-                            out.insert(n.clone());
+                if matches!(&object.kind, ExprKind::Identifier(n) if n == "Server") {
+                    // `serve_ws(addr, handler, ws_handler)` → arg 2;
+                    // `serve_ws_tls(addr, cert, key, handler, ws_handler)` → arg 4.
+                    let ws_arg_idx = match method.as_str() {
+                        "serve_ws" => Some(2),
+                        "serve_ws_tls" => Some(4),
+                        _ => None,
+                    };
+                    if let Some(idx) = ws_arg_idx {
+                        if let Some(arg) = args.get(idx) {
+                            if let ExprKind::Identifier(n) = &arg.value.kind {
+                                out.insert(n.clone());
+                            }
                         }
                     }
                 }
@@ -9736,10 +9763,17 @@ fn collect_serve_ws_handler_names(program: &Program) -> std::collections::HashSe
             }
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Path { segments, .. } = &callee.kind {
-                    if segments.len() == 2 && segments[0] == "Server" && segments[1] == "serve_ws" {
-                        if let Some(arg) = args.get(2) {
-                            if let ExprKind::Identifier(n) = &arg.value.kind {
-                                out.insert(n.clone());
+                    if segments.len() == 2 && segments[0] == "Server" {
+                        let ws_arg_idx = match segments[1].as_str() {
+                            "serve_ws" => Some(2),
+                            "serve_ws_tls" => Some(4),
+                            _ => None,
+                        };
+                        if let Some(idx) = ws_arg_idx {
+                            if let Some(arg) = args.get(idx) {
+                                if let ExprKind::Identifier(n) = &arg.value.kind {
+                                    out.insert(n.clone());
+                                }
                             }
                         }
                     }

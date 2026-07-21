@@ -2059,6 +2059,206 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result);
         }
 
+        // `Server.serve_ws_tls(addr, cert_pem, key_pem, handler, ws_handler)`
+        // — the TLS twin: `serve_tls`'s cert/key marshalling + `serve_ws`'s
+        // two-shim wiring, targeting `karac_runtime_serve_ws_tls`.
+        if type_name == "Server" && method == "serve_ws_tls" && _args.len() == 5 {
+            let addr_val = self.compile_expr(&_args[0].value)?;
+            let addr_sv = addr_val.into_struct_value();
+            let addr_ptr_raw = self
+                .builder
+                .build_extract_value(addr_sv, 0, "wss.serve.addr.data")
+                .unwrap()
+                .into_pointer_value();
+            let addr_len = self
+                .builder
+                .build_extract_value(addr_sv, 1, "wss.serve.addr.len")
+                .unwrap()
+                .into_int_value();
+            let one = self.context.i64_type().const_int(1, false);
+            let needed = self
+                .builder
+                .build_int_add(addr_len, one, "wss.serve.addr.cstr.len")
+                .unwrap();
+            let addr_cstr = self
+                .builder
+                .build_call(self.malloc_fn, &[needed.into()], "wss.serve.addr.cstr.buf")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            self.builder
+                .build_memcpy(addr_cstr, 1, addr_ptr_raw, 1, addr_len)
+                .unwrap();
+            let i8_ty = self.context.i8_type();
+            let zero_byte = i8_ty.const_int(0, false);
+            let term_ptr = unsafe {
+                self.builder
+                    .build_in_bounds_gep(i8_ty, addr_cstr, &[addr_len], "wss.serve.addr.cstr.term")
+                    .unwrap()
+            };
+            self.builder.build_store(term_ptr, zero_byte).unwrap();
+
+            let cert_val = self.compile_expr(&_args[1].value)?;
+            let cert_sv = cert_val.into_struct_value();
+            let cert_ptr = self
+                .builder
+                .build_extract_value(cert_sv, 0, "wss.serve.cert.data")
+                .unwrap()
+                .into_pointer_value();
+            let cert_len = self
+                .builder
+                .build_extract_value(cert_sv, 1, "wss.serve.cert.len")
+                .unwrap()
+                .into_int_value();
+
+            let key_val = self.compile_expr(&_args[2].value)?;
+            let key_sv = key_val.into_struct_value();
+            let key_ptr = self
+                .builder
+                .build_extract_value(key_sv, 0, "wss.serve.key.data")
+                .unwrap()
+                .into_pointer_value();
+            let key_len = self
+                .builder
+                .build_extract_value(key_sv, 1, "wss.serve.key.len")
+                .unwrap()
+                .into_int_value();
+
+            let handler_fn = self.resolve_free_fn_for_handler_arg(&_args[3].value)?;
+            let http_shim = self.emit_http_handler_shim(handler_fn);
+            let ws_handler_fn = self.resolve_free_fn_for_handler_arg(&_args[4].value)?;
+            let ws_shim = self.emit_ws_handler_shim(ws_handler_fn);
+
+            let serve_fn = self
+                .module
+                .get_function("karac_runtime_serve_ws_tls")
+                .expect("karac_runtime_serve_ws_tls declared in Codegen::new");
+            let null_port_out = self.context.ptr_type(AddressSpace::default()).const_null();
+            let call = self
+                .builder
+                .build_call(
+                    serve_fn,
+                    &[
+                        addr_cstr.into(),
+                        cert_ptr.into(),
+                        cert_len.into(),
+                        key_ptr.into(),
+                        key_len.into(),
+                        http_shim.as_global_value().as_pointer_value().into(),
+                        ws_shim.as_global_value().as_pointer_value().into(),
+                        null_port_out.into(),
+                    ],
+                    "wss.serve.call",
+                )
+                .unwrap();
+            let rc_i32 = call.try_as_basic_value().unwrap_basic().into_int_value();
+
+            let result_layout = self
+                .enum_layouts
+                .get("Result")
+                .expect("Result layout registered before Server.serve_ws_tls dispatch");
+            let result_ty = result_layout.llvm_type;
+            let total_fields = result_ty.count_fields() as u64;
+            let i64_ty = self.context.i64_type();
+            let fn_val = self
+                .current_fn
+                .ok_or_else(|| "Server.serve_ws_tls called outside fn".to_string())?;
+            let result_slot =
+                self.create_entry_alloca(fn_val, "wss.serve.result", result_ty.into());
+
+            let rc_zero = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::EQ,
+                    rc_i32,
+                    self.context.i32_type().const_int(0, false),
+                    "rc.is_zero",
+                )
+                .unwrap();
+            let ok_bb = self.context.append_basic_block(fn_val, "servewstls.ok");
+            let err_bb = self.context.append_basic_block(fn_val, "servewstls.err");
+            let cont_bb = self.context.append_basic_block(fn_val, "servewstls.cont");
+            self.builder
+                .build_conditional_branch(rc_zero, ok_bb, err_bb)
+                .unwrap();
+
+            self.builder.position_at_end(ok_bb);
+            let zero_w = i64_ty.const_int(0, false);
+            for w in 0..total_fields {
+                let elem_ptr = self
+                    .builder
+                    .build_struct_gep(result_ty, result_slot, w as u32, &format!("ok.w{w}"))
+                    .unwrap();
+                self.builder.build_store(elem_ptr, zero_w).unwrap();
+            }
+            self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+            self.builder.position_at_end(err_bb);
+            let one_w = i64_ty.const_int(1, false);
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 0, "err.tag")
+                .unwrap();
+            self.builder.build_store(tag_ptr, one_w).unwrap();
+            let msg = "http: serve_ws_tls failed";
+            let msg_global = self
+                .builder
+                .build_global_string_ptr(msg, "wss.serve.err.msg")
+                .unwrap();
+            let msg_len = i64_ty.const_int(msg.len() as u64, false);
+            let msg_buf = self
+                .builder
+                .build_call(self.malloc_fn, &[msg_len.into()], "err.msg.buf")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            self.builder
+                .build_memcpy(msg_buf, 1, msg_global.as_pointer_value(), 1, msg_len)
+                .unwrap();
+            let msg_ptr_buf_int = self
+                .builder
+                .build_ptr_to_int(msg_buf, i64_ty, "err.msg.ptr.i64")
+                .unwrap();
+            if total_fields > 1 {
+                let p1 = self
+                    .builder
+                    .build_struct_gep(result_ty, result_slot, 1, "err.payload.ptr")
+                    .unwrap();
+                self.builder.build_store(p1, msg_ptr_buf_int).unwrap();
+            }
+            if total_fields > 2 {
+                let p2 = self
+                    .builder
+                    .build_struct_gep(result_ty, result_slot, 2, "err.payload.len")
+                    .unwrap();
+                self.builder.build_store(p2, msg_len).unwrap();
+            }
+            if total_fields > 3 {
+                let p3 = self
+                    .builder
+                    .build_struct_gep(result_ty, result_slot, 3, "err.payload.cap")
+                    .unwrap();
+                self.builder.build_store(p3, msg_len).unwrap();
+            }
+            for w in 4..total_fields {
+                let elem_ptr = self
+                    .builder
+                    .build_struct_gep(result_ty, result_slot, w as u32, &format!("err.w{w}"))
+                    .unwrap();
+                self.builder.build_store(elem_ptr, zero_w).unwrap();
+            }
+            self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+            self.builder.position_at_end(cont_bb);
+            let result = self
+                .builder
+                .build_load(result_ty, result_slot, "wss.serve.result.val")
+                .unwrap();
+            return Ok(result);
+        }
+
         // Phase-8 std.http × TLS bridge: `Server.serve_tls(addr,
         // cert_pem, key_pem, handler)` — HTTPS variant of `serve`. The
         // handler-shim trampoline is reused verbatim (`Request` /
