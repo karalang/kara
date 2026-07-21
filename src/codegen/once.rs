@@ -18,25 +18,27 @@
 //! - `is_set()` returns `bool`.
 //! - `get_or_init(|| ...)` runs the closure once when unset, seals the cell,
 //!   and returns the borrow — the closure fires only on the `unset` branch.
-//!   Scalar OR heap-FREE aggregate `T` (a struct/tuple of scalars); a
-//!   heap-owning `T` stays gated (the `ref T` value-copy would double-free).
 //!
-//! Element-type support (B-2026-07-12-2): `set`/`get`/`is_set` handle ANY `T` —
-//! scalar, `String`/`Vec` (heap-fitting, 3 words), and WIDE `T` (> 3 words: a
-//! multi-field struct, a struct with a heap field, a 4+-scalar struct). A wide
-//! `T`'s value can't fit the 3-word `Option`/`Result` inline payload area, so
-//! `get` heap-BOXES it (a shallow bit-copy behind a pointer, the `Vec.get`/
-//! `Map.get` `Option[ref T]` convention — freed box-only for the borrow) and
-//! `set`'s `Err(AlreadySetError { rejected })` payload boxes past the 5-word
-//! `Result` area; a discarded wide/struct-with-heap rejected value is freed by
-//! the `FreeInlineResultPayload` struct-drop arm. `get_or_init` still requires a
-//! a scalar OR heap-FREE aggregate `T` (its closure's direct aggregate return
-//! is inferred); a HEAP-OWNING `T` stays loud-gated with a `--interp` hint (the
-//! returned `ref T` value-copy would double-free the sealed heap).
+//! Element-type support (B-2026-07-12-2, completed): `set`/`get`/`is_set`/
+//! `get_or_init` all handle ANY `T` — scalar, `String`/`Vec` (heap-fitting,
+//! 3 words), and WIDE `T` (> 3 words: a multi-field struct, a struct with a
+//! heap field, a 4+-scalar struct). A wide `T`'s value can't fit the 3-word
+//! `Option`/`Result` inline payload area, so `get` heap-BOXES it (a shallow
+//! bit-copy behind a pointer, the `Vec.get`/`Map.get` `Option[ref T]`
+//! convention — freed box-only for the borrow) and `set`'s
+//! `Err(AlreadySetError { rejected })` payload boxes past the 5-word `Result`
+//! area; a discarded wide/struct-with-heap rejected value is freed by the
+//! `FreeInlineResultPayload` struct-drop arm. `get_or_init` with a HEAP-OWNING
+//! `T` returns a BORROWED VIEW — every heap cap in the returned value-copy is
+//! zeroed (`zero_heap_caps_in_value`, the Interner/Arena `{ptr,len,cap=0}`
+//! convention), so the caller's cap-guarded frees no-op and the cell's
+//! `FreeOnceHandle` elem-drop stays the sealed value's single owner; a
+//! racing-`set` LOSER's freshly-built value is freed on the `goi.set.lost`
+//! arm (nothing else owns it).
 
 use crate::ast::*;
 
-use inkwell::types::BasicType;
+use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::BasicValueEnum;
 use inkwell::IntPredicate;
 
@@ -287,15 +289,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// borrow; if already set, return the existing value without invoking the
     /// closure. The closure fires at most once (only on the `unset` branch).
     /// The returned `ref T` is represented as the loaded `T` value (the `get`
-    /// precedent). `T` may be a scalar OR a heap-FREE aggregate (a struct/tuple
-    /// of scalars) — the closure's direct aggregate return is now inferred
-    /// (`infer_closure_return_type`'s struct-literal arm). A HEAP-OWNING `T` (a
-    /// struct with a `String`/`Vec` field) stays loud-gated: the returned
-    /// `ref T` value-copy aliases the cell's sealed heap, and the caller's
-    /// binding would drop it — a double-free against the cell's element drop.
-    /// That needs a by-pointer borrow representation (a follow-on to
-    /// B-2026-07-12-2); `set`/`get` accept any `T` because they don't return a
-    /// value-copy the caller owns.
+    /// precedent) — and for a HEAP-OWNING `T` (`String`/`Vec`, or a struct with
+    /// a heap field) as a BORROWED VIEW of that value: every heap cap zeroed,
+    /// so the caller's cap-guarded frees no-op against the cell's sealed heap
+    /// (the B-2026-07-12-2 follow-on that used to loud-gate here). A losing
+    /// racing `set` frees the loser's freshly-built heap value in place.
     fn compile_once_get_or_init(
         &mut self,
         recv: &str,
@@ -312,22 +310,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(recv)
             .map(|(te, _)| te.clone())
             .ok_or_else(|| format!("OnceLock/OnceCell binding '{recv}' missing element type"))?;
-        // A HEAP-OWNING element (`String`/`Vec`, or a struct/enum with a heap
-        // field) is loud-gated: `get_or_init` returns a `ref T` value-copy that
-        // ALIASES the cell's sealed heap, and the caller's binding drops it —
-        // double-freeing the cell's element drop. A heap-FREE `T` (scalar or a
-        // struct/tuple of scalars) is safe (no drop, no aliasing). The
-        // by-pointer borrow that would unblock heap `T` is a deferred follow-on.
-        if self.type_expr_has_drop_heap(&elem_te) {
-            return Err(
-                "codegen: `OnceLock`/`OnceCell`.get_or_init(...) with a heap-owning element type \
-                 (a `String`/`Vec`, or a struct/enum with a heap field) is not yet supported under \
-                 `karac build` — the returned `ref T` value-copy would double-free the sealed \
-                 value's heap. Use a scalar or heap-free-aggregate `T`, or `if not c.is_set() { \
-                 c.set(init()); } c.get()`, or run with `karac run --interp`."
-                    .to_string(),
-            );
-        }
+        // A HEAP-OWNING element (`String`/`Vec`, or a struct with a heap
+        // field) returns a BORROWED VIEW: the loaded value-copy aliases the
+        // cell's sealed heap, so every heap cap in the returned value is
+        // zeroed (`zero_heap_caps_in_value`) — the `{ptr, len, cap = 0}`
+        // static-buffer convention (Interner `resolve` / Arena `get`). All
+        // downstream frees are cap-guarded (`FreeVecBuffer`, the struct-drop
+        // walk), so the caller's binding no-ops at scope exit and the cell's
+        // `FreeOnceHandle` elem-drop stays the single owner. This closes the
+        // B-2026-07-12-2 follow-on that previously loud-gated heap `T` here.
+        let elem_is_heap = self.type_expr_has_drop_heap(&elem_te);
         let (elem_ty, size) = self.once_elem_ty_and_size(recv)?;
         let handle = self.load_once_handle(recv)?;
         let fn_val = self.current_fn.unwrap();
@@ -390,20 +382,47 @@ impl<'ctx> super::Codegen<'ctx> {
             .module
             .get_function("karac_runtime_once_set")
             .expect("karac_runtime_once_set declared in Codegen::new");
-        self.builder
+        let set_won = self
+            .builder
             .build_call(
                 set_fn,
                 &[handle.into(), val_slot.into(), size_const.into()],
                 "goi.set",
             )
-            .unwrap();
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        // Racing-`set` loser cleanup (heap `T` only): if another task sealed
+        // the cell between our `is_set` check and our `set`, the runtime
+        // rejected our freshly-built `init_val` — nothing else owns its heap,
+        // so free its buffers here (cap-guarded, so a heap-free shape emits
+        // nothing). Single-threaded programs never take this branch; without
+        // it a lost race leaks the loser's value.
+        if elem_is_heap {
+            let lost_bb = self.context.append_basic_block(fn_val, "goi.set.lost");
+            let sealed_bb = self.context.append_basic_block(fn_val, "goi.set.sealed");
+            let zero_i8 = set_won.get_type().const_zero();
+            let won_b = self
+                .builder
+                .build_int_compare(IntPredicate::NE, set_won, zero_i8, "goi.set.won.b")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(won_b, sealed_bb, lost_bb)
+                .unwrap();
+            self.builder.position_at_end(lost_bb);
+            self.free_heap_value_at(val_slot, elem_ty);
+            self.builder.build_unconditional_branch(sealed_bb).unwrap();
+            self.builder.position_at_end(sealed_bb);
+        }
         self.builder.build_unconditional_branch(cont_bb).unwrap();
 
         // ── cont: the cell is now sealed on both paths — load + return it ───
         // A concurrent racing `set` between our `is_set` check and our `set`
-        // would win, and `once_get` returns the winner's value (the losing
-        // `init_val` is dropped by the caller's normal temp cleanup) — the
-        // race-safe "one winner" semantics the spec requires.
+        // would win, and `once_get` returns the winner's value (a heap loser's
+        // buffers are freed on the `goi.set.lost` arm above; a scalar loser
+        // needs no cleanup) — the race-safe "one winner" semantics the spec
+        // requires.
         self.builder.position_at_end(cont_bb);
         let get_fn = self
             .module
@@ -420,6 +439,129 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem_ty, vptr, "goi.result")
             .unwrap();
+        // Heap `T`: hand back a BORROWED VIEW — every heap cap in the value
+        // copy zeroed, so cap-guarded downstream frees no-op and the sealed
+        // value's single owner stays the cell (see the gate-removal note
+        // above).
+        if elem_is_heap {
+            return Ok(self.zero_heap_caps_in_value(result));
+        }
         Ok(result)
+    }
+
+    /// Return `val` with the `cap` word of every String/Vec (`{ptr,len,cap}`)
+    /// field zeroed, recursing into nested struct/tuple fields — the value
+    /// becomes a borrowed `cap = 0` view whose cap-guarded frees all no-op.
+    /// Fields are recognized structurally (`== vec_struct_type()`), the same
+    /// signal `aggregate_has_heap_field` / `FreeVecBuffer`'s recursive element
+    /// drop use. Non-aggregate values pass through unchanged.
+    pub(super) fn zero_heap_caps_in_value(
+        &self,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let BasicValueEnum::StructValue(sv) = val else {
+            return val;
+        };
+        let vec_ty = self.vec_struct_type();
+        let zero = self.context.i64_type().const_zero();
+        if sv.get_type() == vec_ty {
+            return self
+                .builder
+                .build_insert_value(sv, zero, 2, "goi.cap0")
+                .unwrap()
+                .into_struct_value()
+                .into();
+        }
+        let st = sv.get_type();
+        let mut out = sv;
+        for i in 0..st.count_fields() {
+            let Some(BasicTypeEnum::StructType(field_st)) = st.get_field_type_at_index(i) else {
+                continue;
+            };
+            let field_is_heapish = field_st == vec_ty || self.aggregate_has_heap_field(field_st);
+            if !field_is_heapish {
+                continue;
+            }
+            let field = self
+                .builder
+                .build_extract_value(out, i, "goi.cap0.f")
+                .unwrap();
+            let zeroed = self.zero_heap_caps_in_value(field);
+            out = self
+                .builder
+                .build_insert_value(out, zeroed, i, "goi.cap0.iv")
+                .unwrap()
+                .into_struct_value();
+        }
+        out.into()
+    }
+
+    /// Emit cap-guarded frees for the heap buffers of the value stored at
+    /// `slot` (typed `elem_ty`) — a bare String/Vec frees its own buffer; a
+    /// struct/tuple walks its fields via `emit_aggregate_heap_field_frees`.
+    /// Scalars and heap-free aggregates emit nothing.
+    fn free_heap_value_at(
+        &mut self,
+        slot: inkwell::values::PointerValue<'ctx>,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+    ) {
+        let vec_ty = self.vec_struct_type();
+        match elem_ty {
+            BasicTypeEnum::StructType(st) if st == vec_ty => {
+                // Wrap the bare triple as a 1-field aggregate walk: reuse the
+                // same cap-guarded free by treating `slot` as the field ptr.
+                // `emit_aggregate_heap_field_frees` GEPs fields off a struct
+                // type, so for the bare case emit the guarded free inline.
+                let i64_t = self.context.i64_type();
+                let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                let fn_val = self.current_fn.unwrap();
+                let data_pp = self
+                    .builder
+                    .build_struct_gep(vec_ty, slot, 0, "goi.lost.data.pp")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_pp, "goi.lost.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let cap_pp = self
+                    .builder
+                    .build_struct_gep(vec_ty, slot, 2, "goi.lost.cap.pp")
+                    .unwrap();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_pp, "goi.lost.cap")
+                    .unwrap()
+                    .into_int_value();
+                let has_cap = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::SGT,
+                        cap,
+                        i64_t.const_zero(),
+                        "goi.lost.has_cap",
+                    )
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "goi.lost.free");
+                let done_bb = self.context.append_basic_block(fn_val, "goi.lost.done");
+                self.builder
+                    .build_conditional_branch(has_cap, free_bb, done_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                let free_fn = self
+                    .module
+                    .get_function("free")
+                    .expect("free declared in Codegen::new");
+                self.builder
+                    .build_call(free_fn, &[data.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+                self.builder.position_at_end(done_bb);
+            }
+            BasicTypeEnum::StructType(st) => {
+                self.emit_aggregate_heap_field_frees(slot, st);
+            }
+            _ => {}
+        }
     }
 }

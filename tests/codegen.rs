@@ -5523,7 +5523,11 @@ fn main() {
             ok.is_none(),
             "heap-free aggregate get_or_init must now compile; got: {ok:?}"
         );
-        // (b) heap-owning aggregate stays loud-gated.
+        // (b) heap-owning aggregate now compiles too (B-2026-07-12-2 follow-on
+        // closed): the returned value is a borrowed cap-0 view of the sealed
+        // element, so the caller's cap-guarded frees no-op — see
+        // `codegen/once.rs::compile_once_get_or_init` and the leak validation
+        // in `tests/memory_sanitizer.rs::asan_oncelock_get_or_init_heap_*`.
         let heap = compile_err(
             "struct Rec { id: i64, name: String }\n\
              fn main() {\n\
@@ -5532,10 +5536,9 @@ fn main() {
              }",
             "heap",
         );
-        let msg = heap.expect("heap-owning get_or_init must be rejected under karac build");
         assert!(
-            msg.contains("get_or_init") && msg.contains("heap-owning element type"),
-            "gate error should name the heap-owning get_or_init limitation; got: {msg}"
+            heap.is_none(),
+            "heap-owning get_or_init must now compile under karac build; got: {heap:?}"
         );
     }
 
@@ -5604,9 +5607,10 @@ fn main() {
             wide.is_none(),
             "WIDE-T OnceLock.set/get must now compile under karac build (gap 3); got: {wide:?}"
         );
-        // (c) `get_or_init` with a HEAP-OWNING element stays loud-gated (a
-        // heap-free aggregate like `P { a, b }` now compiles — see
-        // `test_oncelock_get_or_init_heapfree_aggregate_ok_heap_gated`).
+        // (c) `get_or_init` with a HEAP-OWNING element now compiles as well
+        // (borrowed cap-0 view return — the last B-2026-07-12-2 follow-on;
+        // see `test_oncelock_get_or_init_heapfree_aggregate_ok_heap_gated`
+        // and the asan_oncelock_get_or_init_heap_* leak validation).
         let goi = compile_err(
             "struct Rec { id: i64, name: String }\n\
              fn main() {\n\
@@ -5615,11 +5619,48 @@ fn main() {
              }",
             "get_or_init_heap",
         );
-        let msg = goi.expect("get_or_init with a heap-owning element must be rejected");
         assert!(
-            msg.contains("heap-owning element type"),
-            "gate error should name the get_or_init heap-owning limitation; got: {msg}"
+            goi.is_none(),
+            "get_or_init with a heap-owning element must now compile; got: {goi:?}"
         );
+    }
+
+    #[test]
+    fn test_e2e_oncelock_get_or_init_heap_elements() {
+        // B-2026-07-12-2 follow-on (closed): `get_or_init` with heap-owning
+        // element types — `String`, `Vec[i64]`, and a struct with a `String`
+        // field — returns a borrowed cap-0 view of the sealed value. The
+        // closure fires only on the first (unset) call: the second
+        // `get_or_init` must return the sealed value, not run its closure.
+        // Method dispatch on the binding (`a.len()`) works via the let-site
+        // registration under the cell's element type. Leak/double-free
+        // validation lives in `tests/memory_sanitizer.rs`'s
+        // `asan_oncelock_get_or_init_heap_*` twins.
+        if let Some(out) = run_program(
+            "struct Config { name: String, port: i64 }\n\
+             fn main() {\n\
+                 let c: OnceLock[String] = OnceLock.new();\n\
+                 let a = c.get_or_init(|| \"first\".to_string());\n\
+                 println(a);\n\
+                 let b = c.get_or_init(|| \"second\".to_string());\n\
+                 println(b);\n\
+                 println(a.len());\n\
+                 let v: OnceCell[Vec[i64]] = OnceCell.new();\n\
+                 let xs = v.get_or_init(|| Vec[10, 20, 30]);\n\
+                 println(xs.len());\n\
+                 match xs.get(1) { Some(n) => println(n), None => println(-1) }\n\
+                 let k: OnceLock[Config] = OnceLock.new();\n\
+                 let cfg = k.get_or_init(|| Config { name: \"svc\".to_string(), port: 8080 });\n\
+                 println(cfg.name);\n\
+                 println(cfg.port);\n\
+                 let s: OnceLock[String] = OnceLock.new();\n\
+                 match s.set(\"sealed\".to_string()) { Ok(_) => {}, Err(_) => {}, }\n\
+                 let t = s.get_or_init(|| \"never\".to_string());\n\
+                 println(t);\n\
+             }",
+        ) {
+            assert_eq!(out, "first\nfirst\n5\n3\n20\nsvc\n8080\nsealed\n");
+        }
     }
 
     #[test]

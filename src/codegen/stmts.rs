@@ -2547,6 +2547,24 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.arena_checkpoint_owner
                                     .insert(var_name.clone(), o.clone());
                             }
+                            // `let s = c.get_or_init(|| ...)` on a OnceLock/
+                            // OnceCell receiver — the value is a BORROWED
+                            // cap-0 view of the sealed element (once.rs), so
+                            // register the binding under the cell's element
+                            // type for method dispatch (`s.len()`, Display,
+                            // …), exactly like the Interner/Arena borrow
+                            // arms above. Any cap-guarded cleanup queued by
+                            // the registration no-ops on the zeroed caps.
+                            if method == "get_or_init" {
+                                if let Some(elem_te) = self
+                                    .once_var_types
+                                    .get(o.as_str())
+                                    .map(|(te, _)| te.clone())
+                                {
+                                    self.register_var_from_type_expr(var_name, &elem_te);
+                                    detected = true;
+                                }
+                            }
                         }
                     }
                     // Explicit type annotation: let v: Vec[T] = ... or let s: String = ...

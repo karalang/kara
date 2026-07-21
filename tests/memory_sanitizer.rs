@@ -2286,6 +2286,90 @@ fn main() {
     }
 
     #[test]
+    fn asan_oncelock_get_or_init_string_no_leak() {
+        // B-2026-07-12-2 follow-on (closed): `get_or_init` with a HEAP `T`
+        // (`String`). The returned value is a borrowed cap-0 view — the
+        // binding's scope-exit free must no-op (no double-free against the
+        // cell's `FreeOnceHandle` elem-drop) and the sealed String must be
+        // freed exactly once per cell. The second `get_or_init` call takes the
+        // already-set path (its closure value is never built). Loops so LSan
+        // catches a per-iteration leak of either the sealed value or a
+        // spuriously-built second closure value.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[String] = OnceLock.new();
+        let a = cell.get_or_init(|| "alpha".to_string());
+        let b = cell.get_or_init(|| "unused".to_string());
+        total = total + a.len() + b.len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // (5 + 5) * 40 = 400
+            &["400"],
+            "oncelock_get_or_init_string_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_oncelock_get_or_init_heap_struct_no_leak() {
+        // Heap-owning STRUCT `T` (`Config { name: String, port: i64 }`) — the
+        // wide struct-with-heap shape. The borrowed view's nested String cap is
+        // zeroed (recursive `zero_heap_caps_in_value`), so the binding's
+        // struct-drop no-ops on the field; the cell's elem-drop is the single
+        // owner of the sealed struct's heap.
+        assert_clean_asan_run(
+            r#"
+struct Config { name: String, port: i64 }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceLock[Config] = OnceLock.new();
+        let cfg = cell.get_or_init(|| Config { name: "service".to_string(), port: 8080i64 });
+        total = total + cfg.port + cfg.name.len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // (8080 + 7) * 40 = 323480
+            &["323480"],
+            "oncelock_get_or_init_heap_struct_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_oncelock_get_or_init_vec_no_leak() {
+        // Heap `Vec[i64]` element `T` via `OnceCell` — same borrowed-view
+        // contract as the String twin; also reads through the view (`get`) to
+        // prove the aliased buffer is live until cell teardown.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let cell: OnceCell[Vec[i64]] = OnceCell.new();
+        let xs = cell.get_or_init(|| Vec[10i64, 20i64, 30i64]);
+        match xs.get(1i64) { Some(n) => { total = total + n + xs.len(); }, None => {} }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // (20 + 3) * 40 = 920
+            &["920"],
+            "oncelock_get_or_init_vec_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_result_discard_struct_with_heap_no_leak() {
         // B-2026-07-12-2 gap 3 (general, NOT once-specific) — a discarded
         // fresh-temp `Result[i64, Rec]` whose `Err` payload is a multi-field
