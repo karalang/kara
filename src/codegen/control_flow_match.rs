@@ -213,7 +213,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Fresh-temp Option[shared] scrutinee — release the temp's
         // transferred ref (B-2026-07-15-1; see the tracker's doc).
         if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() && freshtemp_inline_res.is_none() {
-            self.track_freshtemp_shared_option_scrutinee(scrutinee, arms, scrut);
+            let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+            self.track_freshtemp_shared_option_scrutinee(scrutinee, &pats, scrut);
         }
         // Detect borrow-returning scrutinees so pattern bindings don't
         // register a `FreeVecBuffer` against a buffer the container still
@@ -6102,7 +6103,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn track_freshtemp_shared_option_scrutinee(
         &mut self,
         scrutinee: &Expr,
-        arms: &[MatchArm],
+        patterns: &[&Pattern],
         val: BasicValueEnum<'ctx>,
     ) {
         if !self.expr_yields_fresh_owned_temp(scrutinee) {
@@ -6118,11 +6119,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Some(<binding>)` sub-pattern (its span is in
         // `pattern_binding_types`); bail when no arm proves a shared payload.
         let mut heap_type = None;
-        for arm in arms {
-            if self.variant_pattern_enum_name(&arm.pattern).as_deref() != Some("Option") {
+        for pat in patterns {
+            if self.variant_pattern_enum_name(pat).as_deref() != Some("Option") {
                 continue;
             }
-            let PatternKind::TupleVariant { patterns, .. } = &arm.pattern.kind else {
+            let PatternKind::TupleVariant { patterns, .. } = &pat.kind else {
                 continue;
             };
             let Some(sub) = patterns.first() else {

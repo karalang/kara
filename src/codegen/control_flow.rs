@@ -90,6 +90,24 @@ impl<'ctx> super::Codegen<'ctx> {
         if freshtemp_enum.is_none() {
             self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val);
         }
+        // Fresh-temp INLINE-heap `Result` scrutinee (`if let Ok(_) = cell.set(v)`)
+        // and fresh-temp `Option[shared]` scrutinee (`if let Some(n) = st.pop()`)
+        // — the `match` path (compile_match) registers both, but the if-let path
+        // historically stopped at the boxed-enum tracker, so an owned
+        // `Option[shared T]` rvalue from an INLINED builtin (`Vec.pop` /
+        // `VecDeque.pop_front`, whose result never rides the general
+        // owned-temp-drop registration a real `fn`/method return does) leaked
+        // its transferred ref: the pattern bind's inc + scope-exit dec cancel,
+        // orphaning the +1 the container relinquished (B-2026-07-21-18). Mirror
+        // the match chain's mutually-exclusive gating exactly.
+        let freshtemp_inline_res = if freshtemp_enum.is_none() {
+            self.track_freshtemp_inline_result_scrutinee(value, val)
+        } else {
+            None
+        };
+        if freshtemp_enum.is_none() && freshtemp_inline_res.is_none() {
+            self.track_freshtemp_shared_option_scrutinee(value, &[pattern], val);
+        }
         let cond = self.compile_pattern_condition(pattern, val)?;
         // Reuse if-else codegen
         let fn_val = self.current_fn.unwrap();
@@ -379,6 +397,19 @@ impl<'ctx> super::Codegen<'ctx> {
         if freshtemp_enum.is_none() {
             self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val);
         }
+        // Fresh-temp inline-`Result` / `Option[shared]` scrutinee — mirror the
+        // match + if-let chain so `while let Some(n) = st.pop()` over a
+        // `Vec[shared T]` releases the popped node's transferred ref per
+        // iteration instead of leaking it (B-2026-07-21-18). Registered in the
+        // current (per-iteration body) frame, same as the boxed tracker above.
+        let freshtemp_inline_res = if freshtemp_enum.is_none() {
+            self.track_freshtemp_inline_result_scrutinee(value, val)
+        } else {
+            None
+        };
+        if freshtemp_enum.is_none() && freshtemp_inline_res.is_none() {
+            self.track_freshtemp_shared_option_scrutinee(value, &[pattern], val);
+        }
         // Borrowed identifier scrutinee — see the if-let site (slice 3q).
         // Slice 3s adds the borrow-CALL half (`m.get` scrutinee) + the
         // escaping-payload clone, mirroring if-let.
@@ -499,6 +530,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // divergent else edge's cleanup walk on the miss edge.
         if freshtemp_enum.is_none() {
             self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val);
+        }
+        // Fresh-temp inline-`Result` / `Option[shared]` scrutinee — mirror the
+        // match + if-let chain so `let Some(n) = st.pop() else { … }` over a
+        // `Vec[shared T]` releases the popped node's transferred ref instead of
+        // leaking it (B-2026-07-21-18).
+        let freshtemp_inline_res = if freshtemp_enum.is_none() {
+            self.track_freshtemp_inline_result_scrutinee(value, val)
+        } else {
+            None
+        };
+        if freshtemp_enum.is_none() && freshtemp_inline_res.is_none() {
+            self.track_freshtemp_shared_option_scrutinee(value, &[pattern], val);
         }
         let cond = self.compile_pattern_condition(pattern, val)?;
 

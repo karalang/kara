@@ -408,6 +408,41 @@ fn main() {
     }
 
     #[test]
+    fn asan_iflet_pop_shared_struct_no_leak() {
+        // B-2026-07-21-18: `if let Some(n) = st.pop()` over a `Vec[shared T]`
+        // leaked the popped node. `Vec.pop` is an INLINED builtin: its result
+        // is an owned `Option[shared T]` rvalue (the container relinquishes the
+        // slot via `len--`, transferring its +1 to the returned Option), but it
+        // never rides the general owned-temp-drop registration a real fn/method
+        // return does. The `match` scrutinee chain registered
+        // `track_freshtemp_shared_option_scrutinee` for exactly this shape; the
+        // `if let` / `while let` / `let…else` paths stopped at the boxed-enum
+        // tracker, so the pattern bind's inc + scope-exit dec cancelled and the
+        // transferred +1 orphaned → every popped node leaked (kata #94 iterative
+        // inorder, #23 merge-k heap). Must print 6 and be LSan-clean. `match`
+        // (already clean pre-fix) is exercised alongside as a guard.
+        assert_clean_asan_run(
+            r#"
+shared struct N { val: i64 }
+fn main() {
+    let mut st: Vec[N] = Vec.new();
+    st.push(N { val: 1i64 });
+    st.push(N { val: 2i64 });
+    st.push(N { val: 3i64 });
+    let mut sum = 0i64;
+    // if let form
+    if let Some(a) = st.pop() { sum = sum + a.val; }
+    // while let form drains the rest
+    while let Some(b) = st.pop() { sum = sum + b.val; }
+    println(sum.to_string());
+}
+"#,
+            &["6"],
+            "asan_iflet_pop_shared_struct_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_vec_indexed_shared_option_field_store_no_crash_no_leak() {
         // B-2026-07-19-6: `v[i].next = Some(v[j])` — a field store of an
         // `Option[shared]` into a Vec-INDEXED shared-struct element (identifier
