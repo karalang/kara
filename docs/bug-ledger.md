@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 159 | 0 |
 | leak | 89 | 1 |
-| double-free | 76 | 1 |
+| double-free | 76 | 0 |
 | codegen-gap | 70 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 38 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 454 | 2 |
+| codegen | 454 | 1 |
 | typecheck | 83 | 0 |
 | interp | 68 | 1 |
 | ownership | 25 | 0 |
@@ -124,19 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **624 surfaced · 3 open · 617 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **624 surfaced · 2 open · 618 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-21-15 | 2026-07-21 | codegen | medium | a struct with a `Result[String, i64]`-class field leaks the live half's heap payload at the owning struct's scope-exit drop — `let a = Holder { res: Ok("rr".to_string()), n: 1 }; println(a.n.to_string());` leaks the 2-byte "rr" buffer (valgrind, AOT O0/O2). No match, no borrow, no call needed: the struct drop simply never frees a Result field's payload. The Option sibling is CLEAN (`Option[String]` field frees via the struct drop's OptionInline arm). | — |
-| B-2026-07-21-16 | 2026-07-21 | codegen | high | match/if-let/let-else DIRECTLY over an OWNED struct's `Option[String]` field with a payload binding double-frees under AOT — `match a.opt { Some(s) => println(s), None => {} }` (a an owned local `H2 { opt: Option[String], n: i64 }`) frees the payload once via the binding's arm-exit cleanup and AGAIN via the struct drop's OptionInline arm (valgrind Invalid free; output correct — frees run at scope exit). Even a PRINT-ONLY binding arm reproduces. Same class: `let x = a.opt;` or `x = a.opt;` (assign) followed by consuming x. The Result sibling shapes are currently clean only because the struct drop skips Result fields entirely (B-2026-07-21-15's leak). | — |
 | B-2026-07-21-17 | 2026-07-21 | interp | low | A runtime error raised inside a spliced gated-stdlib wrapper body reports the USER file's path with the SPLICE-COMPOSITE line/col — `import std.lazy.{lit}; lit(vec![1i64])` errors at `<user file>:19:5` when the user file has 6 lines (line 19 is the wrapper body's position in the composite spliced source, not a location in the file named). | — |
 
-### Fixed (617)
+### Fixed (618)
 
-<details><summary>617 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>618 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -757,6 +756,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **624 surfaced 
 | B-2026-07-21-12 | codegen | low | Vec[String] field .first() consuming read through a `ref` param LEAKS the element copy at O0: `match h.items.first() { Some(s) => return "f:" + s, …… | acd2ba3 |
 | B-2026-07-21-13 | codegen | high | `vec_field.push(nodes[j])` — pushing a BARE `shared struct` element read from another `Vec[shared]` (an aliasing indexed read, source still owns it)… | a4a66c5 |
 | B-2026-07-21-14 | codegen | medium | match on a Result[String, i64] FIELD through a `ref` param with a consuming Ok arm double-frees under AOT (O0 and O2): `match h.res { Ok(s) => return… | 3ea6b06 |
+| B-2026-07-21-16 | codegen | high | match/if-let/let-else DIRECTLY over an OWNED struct's `Option[String]` field with a payload binding double-frees under AOT — `match a.opt { Some(s) =… | 3040db8 |
 
 </details>
 
