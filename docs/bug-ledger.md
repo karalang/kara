@@ -737,7 +737,7 @@ _None — the ledger is fully drained._
 | B-2026-07-20-10 | codegen | high | Every WASM program that frees a heap buffer traps at runtime (`unreachable` via a `signature_mismatch:karac_free_buf` stub) | a25a2a1 |
 | B-2026-07-20-11 | codegen | medium | `karac build` fails LLVM module verification with `Invalid bitcast: bitcast float %elem to i64` for a fused f32 map-reduce whose base is an `iter_axi… | 5f5897b |
 | B-2026-07-20-12 | codegen | medium | An f16 inside a COMPOUND enum payload (`Option[(f16, f16)]`) builds and runs but produces a WRONG VALUE under `karac build`: `match o { Some(p) => pr… | 35d340f |
-| B-2026-07-20-13 | codegen | medium | wasm-threads has NO path for a request-driven EXPORTED fn to use the worker pool: `instantiate()` exports run on the caller's (browser main) thread b… | 33c069d |
+| B-2026-07-20-13 | codegen | medium | wasm-threads has NO path for a request-driven EXPORTED fn to use the worker pool: `instantiate()` exports run on the caller's (browser main) thread b… | 7517adb |
 | B-2026-07-20-14 | codegen | medium | Auto-par return-slot rebind LOSES an unannotated struct binding's type identity: `let tx = make_taps(..)` (struct-of-Vecs, no annotation) fanned out… | 29a4a97 |
 
 </details>
