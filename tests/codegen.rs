@@ -568,35 +568,59 @@ mod codegen_tests {
     }
 
     #[test]
-    fn dataframe_read_csv_rejected_by_codegen_with_run_hint() {
-        // Slice 2 (read_csv) is interpreter-first too: codegen must REJECT the
-        // assoc call loudly rather than fall to the const-0 default (silent
-        // run-vs-build divergence, the B-2026-07-18-20 class).
-        let err = ir_result(
-            "fn main() with reads(FileSystem) {\n\
-                 match DataFrame.read_csv(\"/tmp/kara_cg_read_csv.csv\") {\n\
-                     Ok(df) => println(df.width()),\n\
-                     Err(_) => println(\"err\"),\n\
-                 }\n\
-             }",
-        )
-        .expect_err("DataFrame.read_csv must be rejected by codegen in slice 2");
-        assert!(
-            err.contains("interpreter-only") && err.contains("karac run"),
-            "got: {err}"
+    fn test_e2e_dataframe_read_csv_round_trips_all_backends() {
+        // Phase-11 CSV leg — the read_csv codegen twin
+        // (karac_runtime_df_read_csv builds the malloc'd control-block graph
+        // runtime-side; the Ok(df) pattern binding restores the pointer
+        // shape, registers method dispatch, and owns the frame via
+        // FreeDataFrame). Round-trip a mixed table through write_csv →
+        // read_csv and read back values, inferred types, quoting, and the
+        // null — output must match the interpreter twin. Replaced the
+        // slice-2 loud-deferral assert when the twin landed.
+        let tmp = std::env::temp_dir().join("kara_e2e_df_read_csv_rt.csv");
+        let _ = std::fs::remove_file(&tmp);
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            "fn main() with writes(FileSystem) reads(FileSystem) {{\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"age\", Column.from_vec([30i64, 25i64, 41i64]));\n\
+                 df.insert(\"score\", Column.from_vec([91.5, 78.25, 88.0]));\n\
+                 df.insert(\"name\", Column.from_vec([\"ada\", \"bob, jr.\", \"eve \\\"the\\\" grey\"]));\n\
+                 let nn: Vec[Option[i64]] = vec![Some(1i64), None, Some(3i64)];\n\
+                 df.insert(\"nullable\", Column.from_iter_nullable(nn));\n\
+                 let _ = df.write_csv(\"{path}\");\n\
+                 match DataFrame.read_csv(\"{path}\") {{\n\
+                     Ok(back) => {{\n\
+                         println(back.width()); println(back.height());\n\
+                         let ages: Column[i64] = back.column(\"age\");\n\
+                         match ages[2] {{ Some(v) => println(v), None => println(-1i64) }}\n\
+                         let scores: Column[f64] = back.column(\"score\");\n\
+                         match scores[1] {{ Some(v) => println(v), None => println(-1.0) }}\n\
+                         let names: Column[String] = back.column(\"name\");\n\
+                         match names[1] {{ Some(v) => println(v), None => println(\"null\") }}\n\
+                         match names[2] {{ Some(v) => println(v), None => println(\"null\") }}\n\
+                         let nulls: Column[i64] = back.column(\"nullable\");\n\
+                         println(nulls.null_count());\n\
+                         match nulls[1] {{ Some(v) => println(v), None => println(\"null-ok\") }}\n\
+                     }}\n\
+                     Err(_) => println(\"read failed\"),\n\
+                 }}\n\
+                 match DataFrame.read_csv(\"/definitely-missing-kara.csv\") {{\n\
+                     Ok(_) => println(\"bad\"),\n\
+                     Err(_) => println(\"missing-err\"),\n\
+                 }}\n\
+             }}"
         );
+        let out = run_program(&src);
+        let _ = std::fs::remove_file(&tmp);
+        if let Some(out) = out {
+            assert_eq!(
+                out, "4\n3\n41\n78.25\nbob, jr.\neve \"the\" grey\n1\nnull-ok\nmissing-err\n",
+                "read_csv round-trip must match the interpreter twin",
+            );
+        }
     }
 
-    // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ──
-    // A function may RETURN a capturing closure with POD captures (heap RC env,
-    // see heap_env_returned_capturing_closure_runs); the caller may then CALL
-    // the binding. Re-escaping that binding stays rejected by the misuse guard.
-
-    /// Return-again (B-2026-06-22-2): a relay may RE-RETURN a bound heap-env
-    /// closure via an explicit top-level `return f;`. The env box moves out to
-    /// the caller (the source's `FreeClosureEnv` is neutralized; `relay` is
-    /// registered as heap-env-returning so the caller's binding frees it), freed
-    /// exactly once. Was rejected by the Slice 1 misuse guard; now supported.
     #[test]
     fn heap_env_binding_returned_again_runs() {
         let out = run_program(

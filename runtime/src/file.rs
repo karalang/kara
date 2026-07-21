@@ -950,6 +950,239 @@ pub unsafe extern "C" fn karac_runtime_df_write_csv(
     };
 }
 
+/// RFC-4180-lite CSV record/field splitter — the runtime twin of the
+/// interpreter's `parse_csv_to_dataframe` splitter
+/// (`src/interpreter/method_call_dataframe.rs`); the two must stay
+/// semantically identical (run-vs-build parity). `Some(s)` = value cell,
+/// `None` = NULL (an UNQUOTED empty cell; a quoted cell — even `""` — is
+/// always a value). Errors on an unterminated quoted cell.
+#[allow(clippy::type_complexity)]
+fn csv_split_records(text: &str) -> Result<Vec<Vec<Option<String>>>, String> {
+    let mut records: Vec<Vec<Option<String>>> = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut fields: Vec<Option<String>> = Vec::new();
+    let mut chars = text.chars().peekable();
+    let mut in_quotes = false;
+    fn flush(field: &mut String, quoted: &mut bool, fields: &mut Vec<Option<String>>) {
+        let cell = std::mem::take(field);
+        fields.push(if cell.is_empty() && !*quoted {
+            None
+        } else {
+            Some(cell)
+        });
+        *quoted = false;
+    }
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            match c {
+                '"' => {
+                    if chars.peek() == Some(&'"') {
+                        chars.next();
+                        field.push('"');
+                    } else {
+                        in_quotes = false;
+                    }
+                }
+                other => field.push(other),
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_quotes = true;
+                quoted = true;
+            }
+            ',' => flush(&mut field, &mut quoted, &mut fields),
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                flush(&mut field, &mut quoted, &mut fields);
+                records.push(std::mem::take(&mut fields));
+            }
+            '\n' => {
+                flush(&mut field, &mut quoted, &mut fields);
+                records.push(std::mem::take(&mut fields));
+            }
+            other => field.push(other),
+        }
+    }
+    if in_quotes {
+        return Err("CSV parse error: unterminated quoted cell".to_string());
+    }
+    if !field.is_empty() || quoted || !fields.is_empty() {
+        flush(&mut field, &mut quoted, &mut fields);
+        records.push(fields);
+    }
+    Ok(records)
+}
+
+/// malloc-compatible allocation of `size` bytes (8-aligned), zeroed.
+/// Freed by codegen's `free` (the same pairing `fs_read_lines` relies on).
+/// Returns null for `size == 0` — codegen's frees are null-guarded.
+unsafe fn df_alloc_zeroed(size: usize) -> *mut u8 {
+    if size == 0 {
+        return ptr::null_mut();
+    }
+    let layout = Layout::from_size_align(size, 8).expect("df_read_csv layout");
+    let p = std::alloc::alloc_zeroed(layout);
+    if p.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+    p
+}
+
+/// Copy `bytes` into a fresh malloc-compatible buffer (null for empty).
+unsafe fn df_alloc_bytes(bytes: &[u8]) -> *mut u8 {
+    if bytes.is_empty() {
+        return ptr::null_mut();
+    }
+    let layout = Layout::array::<u8>(bytes.len()).unwrap();
+    let p = alloc(layout);
+    if p.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+    ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+    p
+}
+
+/// `DataFrame.read_csv(path) -> Result[DataFrame, IoError]` — parse a CSV
+/// file into a freshly-built DataFrame control-block graph (the codegen
+/// twin of the interpreter arm; parsing/inference semantics identical).
+/// First record = column names; per-column inference over value cells
+/// (all i64 → kind 1/size 8, else all f64 → kind 3/size 8, else String →
+/// kind 4/size 24); an unquoted-empty cell is a NULL slot (validity bit 0,
+/// zeroed data). Ragged rows / empty file / unterminated quote →
+/// `IoError.Other(<msg>)`; read errors map through the std error kinds.
+///
+/// Every allocation (control block, entries, names, column controls,
+/// data buffers, bitmaps, String cell heaps) is malloc-compatible and laid
+/// out exactly as codegen builds frames itself, so the caller's ordinary
+/// `FreeDataFrame` cleanup frees the whole graph — String cells carry
+/// `cap == len` so `column_free_allocations`' cap-guard frees them, and
+/// NULL/empty cells are `{null, 0, 0}` (skipped).
+///
+/// # Safety
+///
+/// `out_io` must point to a writable `KaracIoResult`; `out_df` to a
+/// writable pointer slot; `path_ptr`/`path_len` must describe a valid
+/// byte range.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_df_read_csv(
+    out_io: *mut KaracIoResult,
+    out_df: *mut *mut u8,
+    path_ptr: *const u8,
+    path_len: i64,
+) {
+    *out_df = ptr::null_mut();
+    let Some(path) = read_path(path_ptr, path_len) else {
+        *out_io = err(&std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "path is not valid UTF-8",
+        ));
+        return;
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) => {
+            *out_io = err(&e);
+            return;
+        }
+    };
+    let records = match csv_split_records(&text) {
+        Ok(r) => r,
+        Err(msg) => {
+            *out_io = err(&std::io::Error::other(msg));
+            return;
+        }
+    };
+    let Some(header) = records.first() else {
+        *out_io = err(&std::io::Error::other(
+            "CSV parse error: empty file (no header row)",
+        ));
+        return;
+    };
+    let names: Vec<String> = header
+        .iter()
+        .enumerate()
+        .map(|(i, c)| c.clone().unwrap_or_else(|| format!("column_{i}")))
+        .collect();
+    let width = names.len();
+    for (i, rec) in records.iter().enumerate().skip(1) {
+        if rec.len() != width {
+            *out_io = err(&std::io::Error::other(format!(
+                "CSV parse error: row {} has {} cell(s) but the header has {}",
+                i,
+                rec.len(),
+                width
+            )));
+            return;
+        }
+    }
+    let rows = records.len() - 1;
+
+    // Build entries (stride 40: name*, name_len, col_ctrl*, elem_size, kind).
+    let entries = df_alloc_zeroed(width * 40);
+    for (ci, name) in names.iter().enumerate() {
+        let cells: Vec<&Option<String>> = records.iter().skip(1).map(|r| &r[ci]).collect();
+        let all_i64 = cells
+            .iter()
+            .all(|c| c.as_ref().is_none_or(|s| s.parse::<i64>().is_ok()));
+        let all_f64 = all_i64
+            || cells
+                .iter()
+                .all(|c| c.as_ref().is_none_or(|s| s.parse::<f64>().is_ok()));
+        let (kind, elem_size): (i64, usize) = if all_i64 {
+            (1, 8)
+        } else if all_f64 {
+            (3, 8)
+        } else {
+            (4, 24)
+        };
+        // Data buffer + validity bitmap (bit i = valid). Zero-initialized,
+        // so NULL slots need no store and String NULLs are `{null,0,0}`.
+        let data = df_alloc_zeroed(rows * elem_size);
+        let bitmap = df_alloc_zeroed(rows.div_ceil(8));
+        for (ri, cell) in cells.iter().enumerate() {
+            let Some(s) = cell.as_ref() else { continue };
+            *bitmap.add(ri / 8) |= 1 << (ri % 8);
+            let p = data.add(ri * elem_size);
+            match kind {
+                1 => *(p as *mut i64) = s.parse::<i64>().unwrap(),
+                3 => *(p as *mut f64) = s.parse::<f64>().unwrap(),
+                _ => {
+                    let bytes = s.as_bytes();
+                    *(p as *mut *mut u8) = df_alloc_bytes(bytes);
+                    *(p.add(8) as *mut i64) = bytes.len() as i64;
+                    *(p.add(16) as *mut i64) = bytes.len() as i64; // cap == len → owned
+                }
+            }
+        }
+        // Column control {data, bitmap, len, cap}.
+        let ctrl = df_alloc_zeroed(32);
+        *(ctrl as *mut *mut u8) = data;
+        *(ctrl.add(8) as *mut *mut u8) = bitmap;
+        *(ctrl.add(16) as *mut i64) = rows as i64;
+        *(ctrl.add(24) as *mut i64) = rows as i64;
+        // Entry.
+        let e = entries.add(ci * 40);
+        let nbytes = name.as_bytes();
+        *(e as *mut *mut u8) = df_alloc_bytes(nbytes);
+        *(e.add(8) as *mut i64) = nbytes.len() as i64;
+        *(e.add(16) as *mut *mut u8) = ctrl;
+        *(e.add(24) as *mut i64) = elem_size as i64;
+        *(e.add(32) as *mut i64) = kind;
+    }
+    // DataFrame control {entries, len, capacity}.
+    let control = df_alloc_zeroed(24);
+    *(control as *mut *mut u8) = entries;
+    *(control.add(8) as *mut i64) = width as i64;
+    *(control.add(16) as *mut i64) = width as i64;
+    *out_df = control;
+    *out_io = ok(0);
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]

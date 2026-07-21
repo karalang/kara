@@ -20375,6 +20375,60 @@ fn main() with writes(FileSystem) reads(FileSystem) {{
         );
     }
 
+    /// `DataFrame.read_csv` heap lifecycle (phase-11 CSV leg): the runtime
+    /// builds the WHOLE frame graph (control + entries + names + column
+    /// controls + data + bitmaps + String cell heaps) with malloc-compatible
+    /// allocations, and the Ok(df) pattern binding owns it via the ordinary
+    /// FreeDataFrame cleanup — every allocation freed exactly once,
+    /// including per-cell String heaps (cap == len) and skipped nulls
+    /// ({null,0,0}). A missing free leaks (Linux detect_leaks); a double
+    /// free is caught everywhere.
+    #[test]
+    fn asan_dataframe_read_csv_no_leak() {
+        let label = "dataframe_read_csv";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let tmp = std::env::temp_dir().join("kara_asan_df_read_csv.csv");
+        std::fs::write(&tmp, "n,s,opt\n1,\"a,b\",7\n2,plain,\n3,\"q\"\"q\",9\n").unwrap();
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            r#"
+fn main() with reads(FileSystem) {{
+    match DataFrame.read_csv("{path}") {{
+        Ok(df) => {{
+            println(df.width());
+            println(df.height());
+            let s: Column[String] = df.column("s");
+            match s[0] {{ Some(v) => println(v.len()), None => println(-1) }}
+            let o: Column[i64] = df.column("opt");
+            println(o.null_count());
+        }}
+        Err(_) => println(-2),
+    }}
+}}
+"#
+        );
+        let result = run_under_asan(&src, label);
+        let _ = std::fs::remove_file(&tmp);
+        let Some((stdout, status)) = result else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check karac_runtime_df_read_csv allocations vs FreeDataFrame",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["3", "3", "3", "1"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// DataFrame `column_names` / `select` heap lifecycle (phase-11 Arrow
     /// Q6 codegen, slice 2c): `column_names` mallocs a fresh `Vec[String]`
     /// whose elements are independent name copies (freed by the Vec's own

@@ -148,9 +148,10 @@ impl DataFrame {
     // round-trip-consistent; a genuinely empty String cell is
     // indistinguishable and also reads back as NULL, documented v1
     // lossiness). A file with only a header yields a 0-row table; ragged
-    // rows (cell count ≠ header count) are an IoError. Interpreter-first
-    // slice, like `write_csv`: `karac build` reports a loud deferral
-    // pointing at `karac run` until the codegen twin lands.
+    // rows (cell count ≠ header count) are an IoError. All three backends
+    // parse identically: the interpreter arm and the codegen twin
+    // (`karac_runtime_df_read_csv`, which builds the frame's control-block
+    // graph runtime-side) share the same splitter/inference semantics.
     #[compiler_builtin]
     fn read_csv(path: String) -> Result[DataFrame, IoError] with reads(FileSystem) {
         Err(IoError.Other("placeholder"))

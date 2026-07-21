@@ -467,16 +467,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // `DataFrame.new()` — a fresh empty table. See
         // `src/codegen/dataframe.rs`.
         if type_name == "DataFrame" && method == "read_csv" {
-            // Phase-11 CSV leg slice 2 is interpreter-first (like write_csv).
-            // Loud, actionable deferral rather than the assoc-call const-0
-            // default (which would be a SILENT run-vs-build divergence, the
-            // B-2026-07-18-20 class).
-            return Err(
-                "DataFrame.read_csv is interpreter-only in this slice — run it with \
-                 `karac run` (tracker: phase-11-stdlib-longtail.md § Arrow IPC and \
-                 Parquet, CSV leg)"
-                    .to_string(),
-            );
+            // Phase-11 CSV leg — the codegen twin (runtime-side parse +
+            // frame construction; see `compile_dataframe_read_csv`).
+            return self.compile_dataframe_read_csv(&_args[0].value);
         }
         if type_name == "DataFrame" && method == "new" {
             return self.compile_dataframe_new();

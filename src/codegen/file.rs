@@ -683,6 +683,95 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(result)
     }
 
+    /// Store a `Result.Err(IoError…)` into `result_slot` from a runtime-
+    /// filled `KaracIoResult` — the exact Err-arm shape `read_lines` emits
+    /// inline (Err tag 0, IoError variant tag = error_kind − 1, and the
+    /// `Other(String)` message aggregate ptr/len/len in the trailing payload
+    /// words). Factored for the two-out-param lowerings that branch on
+    /// error_kind themselves (`DataFrame.read_csv`); the builder must be
+    /// positioned in the Err block.
+    pub(super) fn store_io_err_result_into_slot(
+        &mut self,
+        io_slot: inkwell::values::PointerValue<'ctx>,
+        error_kind: inkwell::values::IntValue<'ctx>,
+        result_slot: inkwell::values::PointerValue<'ctx>,
+        result_ty: inkwell::types::StructType<'ctx>,
+    ) -> Result<(), String> {
+        let i64_ty = self.context.i64_type();
+        let io_ty = self.kara_io_result_type();
+        let msg_ptr_ptr = self
+            .builder
+            .build_struct_gep(io_ty, io_slot, 3, "ioe.msg.ptr.ptr")
+            .unwrap();
+        let msg_ptr = self
+            .builder
+            .build_load(
+                self.context.ptr_type(inkwell::AddressSpace::default()),
+                msg_ptr_ptr,
+                "ioe.msg.ptr",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let msg_len_ptr = self
+            .builder
+            .build_struct_gep(io_ty, io_slot, 4, "ioe.msg.len.ptr")
+            .unwrap();
+        let msg_len = self
+            .builder
+            .build_load(i64_ty, msg_len_ptr, "ioe.msg.len")
+            .unwrap()
+            .into_int_value();
+        let total_fields = result_ty.count_fields() as u64;
+        let zero_i64 = i64_ty.const_int(0, false);
+        let tag_ptr_err = self
+            .builder
+            .build_struct_gep(result_ty, result_slot, 0, "ioe.err.tag")
+            .unwrap();
+        self.builder.build_store(tag_ptr_err, zero_i64).unwrap();
+        let err_kind_i64 = self
+            .builder
+            .build_int_z_extend(error_kind, i64_ty, "ioe.kind.i64")
+            .unwrap();
+        let one_i64 = i64_ty.const_int(1, false);
+        let io_tag = self
+            .builder
+            .build_int_sub(err_kind_i64, one_i64, "ioe.variant.tag")
+            .unwrap();
+        if total_fields > 1 {
+            let p1 = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 1, "ioe.io.tag")
+                .unwrap();
+            self.builder.build_store(p1, io_tag).unwrap();
+        }
+        let msg_ptr_int = self
+            .builder
+            .build_ptr_to_int(msg_ptr, i64_ty, "ioe.msg.ptr.i64")
+            .unwrap();
+        if total_fields > 2 {
+            let p2 = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 2, "ioe.io.w0")
+                .unwrap();
+            self.builder.build_store(p2, msg_ptr_int).unwrap();
+        }
+        if total_fields > 3 {
+            let p3 = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 3, "ioe.io.w1")
+                .unwrap();
+            self.builder.build_store(p3, msg_len).unwrap();
+        }
+        if total_fields > 4 {
+            let p4 = self
+                .builder
+                .build_struct_gep(result_ty, result_slot, 4, "ioe.io.w2")
+                .unwrap();
+            self.builder.build_store(p4, msg_len).unwrap();
+        }
+        Ok(())
+    }
+
     /// Compile `file.read(buf)` — reads up to `buf.len()` bytes into
     /// `buf`'s backing storage. Returns `Result[usize, IoError]` with
     /// the byte count (0 = clean EOF).

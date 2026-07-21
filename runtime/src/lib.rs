@@ -412,6 +412,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         file::karac_runtime_fs_read_lines,
         file::karac_runtime_fs_write,
         file::karac_runtime_df_write_csv,
+        file::karac_runtime_df_read_csv,
     );
     // JSON runtime (this file's `runtime_json_*` block).
     keep!(

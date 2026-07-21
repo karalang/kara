@@ -559,6 +559,100 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// `DataFrame.read_csv(path) -> Result[DataFrame, IoError]` — the
+    /// codegen twin (phase-11 CSV leg). The parse + inference + frame
+    /// construction all live in `karac_runtime_df_read_csv` (which builds
+    /// the same malloc'd control-block graph codegen builds itself, so the
+    /// ordinary `FreeDataFrame` cleanup frees it); this lowering passes the
+    /// path, branches on the KaracIoResult, and wraps the returned control
+    /// pointer in `Result.Ok` — the two-out-param shape of
+    /// `compile_fs_read_lines_val`.
+    pub(super) fn compile_dataframe_read_csv(
+        &mut self,
+        path_arg: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use inkwell::values::BasicMetadataValueEnum;
+        let i32_ty = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let zero_i32 = i32_ty.const_int(0, false);
+
+        let (path_ptr, path_len) = self.df_string_parts(path_arg)?;
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "DataFrame.read_csv outside fn".to_string())?;
+        let io_slot = self.alloca_io_result_slot()?;
+        let df_slot = self.create_entry_alloca(fn_val, "rcsv.df.slot", ptr_ty.into());
+
+        let f = self
+            .module
+            .get_function("karac_runtime_df_read_csv")
+            .expect("karac_runtime_df_read_csv declared in Codegen::new");
+        self.builder
+            .build_call(
+                f,
+                &[
+                    BasicMetadataValueEnum::PointerValue(io_slot),
+                    BasicMetadataValueEnum::PointerValue(df_slot),
+                    BasicMetadataValueEnum::PointerValue(path_ptr),
+                    BasicMetadataValueEnum::IntValue(path_len),
+                ],
+                "df.read_csv.call",
+            )
+            .unwrap();
+
+        let io_ty = self.kara_io_result_type();
+        let kind_ptr = self
+            .builder
+            .build_struct_gep(io_ty, io_slot, 1, "rcsv.io.kind.ptr")
+            .unwrap();
+        let error_kind = self
+            .builder
+            .build_load(i32_ty, kind_ptr, "rcsv.io.kind")
+            .unwrap()
+            .into_int_value();
+
+        let result_layout = self
+            .enum_layouts
+            .get("Result")
+            .ok_or_else(|| "Result layout not registered before DataFrame codegen".to_string())?;
+        let result_ty = result_layout.llvm_type;
+        let result_slot = self.create_entry_alloca(fn_val, "rcsv.result", result_ty.into());
+
+        let is_ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, error_kind, zero_i32, "rcsv.is_ok")
+            .unwrap();
+        let ok_bb = self.context.append_basic_block(fn_val, "rcsv.ok");
+        let err_bb = self.context.append_basic_block(fn_val, "rcsv.err");
+        let cont_bb = self.context.append_basic_block(fn_val, "rcsv.cont");
+        self.builder
+            .build_conditional_branch(is_ok, ok_bb, err_bb)
+            .unwrap();
+
+        // ── Ok arm: Result.Ok(<DataFrame control ptr>) ────────────────
+        self.builder.position_at_end(ok_bb);
+        let df_ptr = self
+            .builder
+            .build_load(ptr_ty, df_slot, "rcsv.df.val")
+            .unwrap();
+        let ok_agg = self.build_nonshared_enum_value("Result", "Ok", &[df_ptr])?;
+        self.builder
+            .build_store(result_slot, ok_agg.into_struct_value())
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── Err arm: Result.Err(IoError…) — same shape as read_lines ──
+        self.builder.position_at_end(err_bb);
+        self.store_io_err_result_into_slot(io_slot, error_kind, result_slot, result_ty)?;
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        self.builder.position_at_end(cont_bb);
+        Ok(self
+            .builder
+            .build_load(result_ty, result_slot, "rcsv.result.val")
+            .unwrap())
+    }
+
     // ── Method dispatch ─────────────────────────────────────────
 
     /// DataFrame instance methods on an identifier receiver. Returns

@@ -146,6 +146,40 @@ impl<'ctx> super::Codegen<'ctx> {
                 // call dispatch on a pattern-bound shared handle finds
                 // the heap struct.
                 let key = (pattern.span.offset, pattern.span.length);
+                // DataFrame payload binding (`Ok(df)` from
+                // `DataFrame.read_csv`, phase-11 CSV leg): the frame is a
+                // single control-block pointer carried as an i64 payload
+                // word. Restore the pointer shape (like the shared-struct arm
+                // below), register the name via `record_var_type_name` (which
+                // inserts `dataframe_var_infos`, so method dispatch on the
+                // binding resolves), and queue the ordinary `FreeDataFrame`
+                // scope cleanup — the binding OWNS the runtime-built frame.
+                if matches!(
+                    self.pattern_binding_types.get(&key).map(|s| s.as_str()),
+                    Some("DataFrame")
+                ) {
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    let ptr_val: BasicValueEnum<'ctx> = match scrut {
+                        BasicValueEnum::IntValue(iv) => self
+                            .builder
+                            .build_int_to_ptr(iv, ptr_ty, &format!("{name}.df.ptr"))
+                            .unwrap()
+                            .into(),
+                        other => other,
+                    };
+                    let alloca = self.create_entry_alloca(fn_val, name, ptr_ty.into());
+                    self.builder.build_store(alloca, ptr_val).unwrap();
+                    self.variables.insert(
+                        name.clone(),
+                        VarSlot {
+                            ptr: alloca,
+                            ty: ptr_ty.into(),
+                        },
+                    );
+                    self.record_var_type_name(name.clone(), "DataFrame".to_string());
+                    self.track_dataframe_var(alloca);
+                    return Ok(());
+                }
                 if let Some(type_name) = self.pattern_binding_types.get(&key).cloned() {
                     if let Some(info) = self.shared_types.get(&type_name).cloned() {
                         let ptr_ty = self.context.ptr_type(AddressSpace::default());

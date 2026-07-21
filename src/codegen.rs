@@ -4567,6 +4567,25 @@ impl<'ctx> Codegen<'ctx> {
             df_write_csv_type,
             Some(Linkage::External),
         );
+        // `DataFrame.read_csv(path)` — parse a CSV file into a fresh
+        // DataFrame control-block graph built runtime-side (phase-11 CSV
+        // leg): (out_io, out_df, path_ptr, path_len) -> void. Two
+        // out-params like fs_read_lines; the Ok payload is the df control
+        // pointer written through out_df.
+        let df_read_csv_type = file_call_void_type.fn_type(
+            &[
+                ptr_type.into(),
+                ptr_type.into(),
+                ptr_type.into(),
+                i64_type.into(),
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_df_read_csv",
+            df_read_csv_type,
+            Some(Linkage::External),
+        );
         // Flush: (out, handle) -> void.
         let file_flush_type =
             file_call_void_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
