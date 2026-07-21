@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 24 | 0 |
 | perf | 22 | 0 |
 | diagnostics | 12 | 0 |
-| use-after-free | 4 | 0 |
+| use-after-free | 5 | 1 |
 | other | 2 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 450 | 5 |
+| codegen | 451 | 6 |
 | typecheck | 83 | 0 |
 | interp | 67 | 0 |
 | ownership | 25 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **619 surfaced · 5 open · 610 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **620 surfaced · 6 open · 610 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **619 surfaced 
 | B-2026-07-21-10 | 2026-07-21 | codegen | medium | match on a TUPLE-typed FIELD through a `ref` param with a consuming binding double-frees: `match h.pair { (s, x) => return "t:".to_string() + s + … }` (h: ref Holder, pair: (String, i64)) aborts free(): double free under JIT/AOT-O2/AOT-O0; interp prints t:tp:4. The tuple-LEAF sibling of B-2026-07-21-5/-6/-7: no clone leg covers a tuple leaf, so the String element binding aliases the caller's buffer and both free it. | — |
 | B-2026-07-21-11 | 2026-07-21 | codegen | high | whole-field `let` move of a struct-typed FIELD through a `ref` param double-frees when the copy's heap is consumed: `let p = h.inner; return "l:" + p.s + …` (h: ref Holder, inner: Pt{String,i64}) aborts free(): double free under JIT/AOT-O2/AOT-O0; interp prints l:ld:6. The LET-route sibling of B-2026-07-21-7: the field read through the borrow is a bit-copy alias, the binding gets owned struct tracking, and both it and the caller's struct drop free the same String. | — |
 | B-2026-07-21-12 | 2026-07-21 | codegen | low | Vec[String] field .first() consuming read through a `ref` param LEAKS the element copy at O0: `match h.items.first() { Some(s) => return "f:" + s, … }` (h: ref Holder) leaks one element-sized block per call under AOT-O0 (valgrind: 2 bytes x 2 for two calls); output correct on all backends; O2 elides the allocation. | — |
+| B-2026-07-21-10 | 2026-07-21 | codegen | high | `vec_field.push(nodes[j])` — pushing a BARE `shared struct` element read from another `Vec[shared]` (an aliasing indexed read, source still owns it) into a `Vec[shared]` does NOT retain (inc) the element. The container and the source Vec then BOTH reference the node at refcount 1; when the SOURCE Vec drops (e.g. a function-local `Vec[Node]` whose one node is returned), its per-element dec frees the node while the container still points at it — use-after-free / garbage reads under codegen. The interpreter (reference-semantic handles) is correct, so it is a silent run-vs-build divergence. | src/codegen/vec_method.rs (Vec.push/push_back arg-retain: has Option[shared] binding/field retain via share_option_shared_ref_for_arg, but no retain for a BARE `shared struct` element aliased from an indexed Vec read) |
 
 ### Fixed (610)
 
