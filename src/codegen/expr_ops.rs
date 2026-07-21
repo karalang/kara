@@ -2655,6 +2655,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return true;
                 }
+                // `opt.unwrap()`/`expect()` whose recorded inner type is
+                // `char` — e.g. the inline first-char read
+                // `println(s.chars().next().unwrap())` (B-2026-07-21-2). The
+                // typechecker records the unwrap inner type span-keyed;
+                // without this arm the reconstructed i32 prints as its
+                // integer codepoint (90 instead of 'Z') while the let-bound
+                // form renders the glyph (via `pattern_binding_types`).
+                if matches!(method.as_str(), "unwrap" | "expect") {
+                    if let ExprKind::MethodCall {
+                        args_close_span, ..
+                    } = &expr.kind
+                    {
+                        let key = crate::token::method_call_key(&expr.span, args_close_span);
+                        if let Some(te) = self.method_unwrap_inner_types.get(&key) {
+                            if let TypeKind::Path(p) = &te.kind {
+                                if p.segments.last().map(|s| s.as_str()) == Some("char") {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
                 let recv_ty = match &object.kind {
                     ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
                     ExprKind::SelfValue => self.var_type_names.get("self"),

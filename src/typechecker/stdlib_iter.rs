@@ -31,6 +31,14 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
+                // Record the element type span-keyed (like `find`/`last`) so
+                // codegen can lower a CHAIN-receiver `next()` — the idiomatic
+                // first-element read `s.chars().next()` — as a first-yield
+                // terminal with a correctly-annotated `Option[T]` accumulator
+                // (B-2026-07-21-2). Stateful multi-pull `next()` on a
+                // materialized iterator binding stays interp-only.
+                self.iter_terminal_elem_types
+                    .insert(SpanKey::from_span(span), Self::type_to_type_expr(item));
                 Type::Named {
                     name: "Option".to_string(),
                     args: vec![item.clone()],

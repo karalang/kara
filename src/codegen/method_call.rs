@@ -791,6 +791,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // the common no-materialized-iter program pays nothing.
         if !self.iter_let_bindings.is_empty() {
             if let Some(sub) = self.substitute_iter_let_receiver(object) {
+                // STATEFUL `next()` on a materialized iterator binding must NOT
+                // be inlined: substitution rewrites `it.next()` to
+                // `<chain>.next()`, and the chain-receiver first-yield arm
+                // (B-2026-07-21-2) would then return the FIRST element on
+                // EVERY pull — `it.next(); it.next()` silently yielding
+                // element 0 twice. Bail loud instead (this shape was already a
+                // loud no-handler before; keep it loud with a better message).
+                if method == "next" && args.is_empty() {
+                    return Err(
+                        "stateful `Iterator.next()` on a materialized iterator binding \
+                         (`let it = ...; it.next()`) is not supported under `karac build` \
+                         (codegen has no runtime iterator value); re-run with `--interp` \
+                         (or `KARAC_RUN_JIT=0`), or call `.next()` directly on the chain \
+                         for a single first-element read."
+                            .to_string(),
+                    );
+                }
                 return self.compile_method_call(&sub, method, args, call_span, args_close_span);
             }
         }
@@ -5829,6 +5846,39 @@ impl<'ctx> super::Codegen<'ctx> {
                  element over a fused map/filter chain; a heap element (String / Vec / \
                  struct) or an unsupported chain shape is deferred — run it under the \
                  interpreter (`karac run --interp`, or `KARAC_RUN_JIT=0`)."
+                    .to_string(),
+            );
+        }
+
+        // `<iter-chain>.next() -> Option[T]` — the single-pull FIRST-YIELD read
+        // on a chain receiver (`s.chars().next()`, `v.iter().filter(p).next()`;
+        // B-2026-07-21-2). A fresh chain expression is its own iterator, so its
+        // `next()` is exactly `find(|_| true)` — reuse that proven terminal with
+        // a synthesized const-true predicate (same peel, same `Option[T]`
+        // accumulator annotation from `iter_terminal_elem_types`, same scalar
+        // gate). Stateful multi-pull on a MATERIALIZED binding is intercepted
+        // loud at the substitution guard above and never reaches here.
+        if method == "next"
+            && args.is_empty()
+            && matches!(
+                &object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Range { .. }
+            )
+        {
+            let true_pred = Expr {
+                kind: ExprKind::Bool(true),
+                span: call_span.clone(),
+            };
+            if let Some(v) =
+                self.try_compile_iter_chain_find(object, "__nxp", &true_pred, call_span)?
+            {
+                return Ok(v);
+            }
+            return Err(
+                "`Iterator.next()` on an iterator chain is lowered under `karac build` \
+                 only for a SCALAR element (a heap element — String / Vec / struct — or \
+                 an unsupported chain shape is deferred); re-run with `--interp` (or \
+                 `KARAC_RUN_JIT=0`)."
                     .to_string(),
             );
         }

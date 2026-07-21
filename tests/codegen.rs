@@ -12677,6 +12677,64 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_iter_chain_next_first_yield_terminal() {
+        // B-2026-07-21-2: `<iter-chain>.next() -> Option[T]` — the single-pull
+        // FIRST-YIELD read on a chain receiver. A fresh chain expression is its
+        // own iterator, so `next()` lowers as `find(|_| true)` (same peel,
+        // scalar gate, Option[T] annotation). Covers the idiomatic first-char
+        // read `s.chars().next()` (glyph-rendered inline AND let-bound — the
+        // unwrap-of-Option[char] arm in `expr_is_char`), a filter hit, a filter
+        // miss (None), a map chain, and a range. Stateful multi-pull on a
+        // materialized binding and heap elements stay loud interp-only bails.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s = \"Zebra\".to_string();\n\
+                 println(s.chars().next().unwrap());\n\
+                 let c = s.chars().next().unwrap();\n\
+                 println(c);\n\
+                 let v: Vec[i64] = [4, 9, 1, 7];\n\
+                 match v.iter().filter(|x| x > 5).next() { Some(n) => println(n), None => println(-1) }\n\
+                 match v.iter().filter(|x| x > 100).next() { Some(n) => println(n), None => println(-1) }\n\
+                 match v.iter().map(|x| x * 3).next() { Some(n) => println(n), None => println(-1) }\n\
+                 match (3..8).next() { Some(n) => println(n), None => println(-1) }\n\
+             }",
+        ) {
+            assert_eq!(out, "Z\nZ\n9\n-1\n12\n3\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_iter_chain_next_stateful_and_heap_deferred_loud() {
+        // The two out-of-scope shapes must bail LOUD (never silent-wrong):
+        // stateful `next()` on a MATERIALIZED binding (would re-yield element 0
+        // on every pull if inlined), and a heap element (Some(elem) would alias
+        // the borrowed source — find's gate).
+        let err = ir_result(
+            "fn main() {\n\
+                 let v: Vec[i64] = [1, 2, 3];\n\
+                 let it = v.iter();\n\
+                 match it.next() { Some(n) => println(n), None => println(-1) }\n\
+             }\n",
+        )
+        .expect_err("stateful materialized next must bail loud");
+        assert!(
+            err.contains("materialized iterator") && err.contains("--interp"),
+            "expected stateful-next deferral message, got: {err}"
+        );
+        let err2 = ir_result(
+            "fn main() {\n\
+                 let v: Vec[String] = [\"aa\", \"bb\"];\n\
+                 match v.iter().next() { Some(s) => println(s), None => println(\"none\") }\n\
+             }\n",
+        )
+        .expect_err("heap-element next must bail loud");
+        assert!(
+            err2.contains("Iterator.next()") && err2.contains("--interp"),
+            "expected heap-next deferral message, got: {err2}"
+        );
+    }
+
+    #[test]
     fn test_e2e_iter_chain_find_heap_element_deferred_loud() {
         // A HEAP-element `find` (`Some(elem)` would alias the borrowed source
         // buffer — the reduce/max deferral) must bail LOUD naming find + pointing
