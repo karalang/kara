@@ -56717,6 +56717,59 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ref_param_tuple_field_consume() {
+        // B-2026-07-21-10: the TUPLE-leaf sibling of the ref-chain family —
+        // `match <refparam>.pair { (s, x) => <consume s> … }` over a
+        // `(String, i64)` field double-freed (binding aliased the caller's
+        // element; both freed it). Now `clone_escaping_borrowed_ref_chain_-
+        // tuple` deep-clones the tuple (dispatcher per-element clone),
+        // registers a tuple StructDrop on the clone, and consuming arms zero
+        // the consumed elements' caps in the clone slot — a `_` element stays
+        // owned by the clone drop. Covers match, a wildcard-element arm over
+        // a two-String tuple (the unbound String freed exactly once by the
+        // clone drop), if-let, let-else, and caller reuse.
+        let output = run_program(
+            "struct Holder { pair: (String, i64), two: (String, String), n: i64 }\n\
+             fn render(h: ref Holder) -> String {\n\
+                 match h.pair {\n\
+                     (s, x) => { return \"t:\".to_string() + s + \":\" + x.to_string(); }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn left_only(h: ref Holder) -> String {\n\
+                 match h.two {\n\
+                     (a, _) => { return \"L:\".to_string() + a; }\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn ifl(h: ref Holder) -> String {\n\
+                 if let (s, x) = h.pair {\n\
+                     return \"i:\".to_string() + s + \":\" + x.to_string();\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn lel(h: ref Holder) -> String {\n\
+                 let (s, x) = h.pair else {\n\
+                     return \"?\".to_string();\n\
+                 }\n\
+                 return \"e:\".to_string() + s + \":\" + x.to_string();\n\
+             }\n\
+             fn main() {\n\
+                 let a = Holder { pair: (\"tp\".to_string(), 4),\n\
+                                  two: (\"aa\".to_string(), \"bb\".to_string()), n: 1 };\n\
+                 println(render(a));\n\
+                 println(render(a));\n\
+                 println(left_only(a));\n\
+                 println(left_only(a));\n\
+                 println(ifl(a));\n\
+                 println(lel(a));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "t:tp:4\nt:tp:4\nL:aa\nL:aa\ni:tp:4\ne:tp:4\n");
+    }
+
+    #[test]
     fn test_e2e_inline_index_map_get_unwrap_vec_value() {
         // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
         // (`m.get(k).unwrap()[i]`) used to loud-bail "Index operator applied to

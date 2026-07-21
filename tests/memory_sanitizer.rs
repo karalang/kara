@@ -10272,6 +10272,44 @@ fn main() {
     }
 
     #[test]
+    fn asan_ref_param_tuple_field_consume_no_leak_no_double_free() {
+        // B-2026-07-21-10 memory leg: the ref-chain tuple clone. Double-free
+        // half: a consumed String element freed exactly once by its binding.
+        // Leak half: a `_` element must be freed exactly once by the clone's
+        // tuple StructDrop (a lost registration leaks one element per call
+        // under LSan). Loop so any per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+struct Holder { pair: (String, i64), two: (String, String), n: i64 }
+fn render(h: ref Holder) -> i64 {
+    match h.pair {
+        (s, x) => { return ("t:".to_string() + s).len() + x; }
+    }
+    return -1;
+}
+fn left_only(h: ref Holder) -> i64 {
+    match h.two {
+        (a, _) => { return a.len(); }
+    }
+    return -1;
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = Holder { pair: ("tp".to_string(), 4), two: ("aa".to_string(), "bravo".to_string()), n: 1 };
+        acc = acc + render(a) + render(a) + left_only(a);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["720"],
+            "ref_param_tuple_field_consume",
+        );
+    }
+
+    #[test]
     fn asan_ref_param_option_field_consume_no_leak_no_double_free() {
         // B-2026-07-21-9 memory leg: the ref-chain Option clone. Double-free
         // half: a consumed Some payload freed exactly once by its binding,

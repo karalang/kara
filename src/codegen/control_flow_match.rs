@@ -147,6 +147,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // slot's tag below; None/wildcard arms leave the cleanup armed.
         let (scrut, refchain_option_clone) =
             self.clone_escaping_borrowed_ref_chain_option(scrutinee, scrut, ref_chain_escapes);
+        // B-2026-07-21-10: the TUPLE-leaf sibling — `match <refparam>.pair {
+        // (s, x) => <consume s> … }`. Consuming arms zero the consumed
+        // elements' caps in the clone slot below.
+        let (scrut, refchain_tuple_clone) =
+            self.clone_escaping_borrowed_ref_chain_tuple(scrutinee, scrut, ref_chain_escapes);
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
         // that leaves a heap payload field unbound leaks it. Materialize +
@@ -546,6 +551,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // skips the payload the binding now owns.
                 if let Some(clone_slot) = refchain_option_clone {
                     self.zero_refchain_option_clone_on_consume(clone_slot, &arm.pattern);
+                }
+                // B-2026-07-21-10: ref-chain tuple clone — zero the consumed
+                // elements' caps in the clone slot.
+                if let Some((slot, agg_ty, ref elem_tes)) = refchain_tuple_clone {
+                    let elem_tes = elem_tes.clone();
+                    self.zero_refchain_tuple_clone_on_consume(
+                        slot,
+                        agg_ty,
+                        &elem_tes,
+                        &arm.pattern,
+                    );
                 }
                 // Shared-enum analog: a `match e { S(s) => s }` over a SHARED
                 // enum box (`scrut` = the RC box pointer) that MOVES a Vec/String
@@ -1689,6 +1705,131 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_load(ll, dst, "refchain.letmove.copy")
             .unwrap()
+    }
+
+    /// B-2026-07-21-10 — the TUPLE-leaf sibling: `match <refparam>.pair {
+    /// (s, x) => <consume s> … }` where the leaf field is a tuple with heap
+    /// elements. Same aliasing double-free as the other leaves; same recipe:
+    /// deep-clone the tuple value (the dispatcher's per-element tuple clone),
+    /// register the clone's own tuple `StructDrop`
+    /// (`synthesize_tuple_drop_fn_te`), and let each consuming arm zero the
+    /// consumed elements' caps in the CLONE slot
+    /// (`zero_refchain_tuple_clone_on_consume` → `zero_tuple_elem_cap_at`)
+    /// so bindings own their elements and the clone drop frees only unbound
+    /// ones. Leaf te resolves from the owning struct's field table (the
+    /// name-based leaf walk has no tuple name); gates mirror the siblings.
+    #[allow(clippy::type_complexity)] // slot + agg ty + elem tes travel together to the per-arm zero
+    pub(super) fn clone_escaping_borrowed_ref_chain_tuple(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        escapes: bool,
+    ) -> (
+        BasicValueEnum<'ctx>,
+        Option<(PointerValue<'ctx>, StructType<'ctx>, Vec<TypeExpr>)>,
+    ) {
+        let ExprKind::FieldAccess { object, field } = &scrutinee.kind else {
+            return (val, None);
+        };
+        let mut cur = object.as_ref();
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n.as_str(),
+                ExprKind::SelfValue => break "self",
+                _ => return (val, None),
+            }
+        };
+        if !self.signature_ref_params.contains(root) {
+            return (val, None);
+        }
+        if !escapes {
+            return (val, None);
+        }
+        let Some(obj_ty) = self.place_chain_type_name(object) else {
+            return (val, None);
+        };
+        let Some(fte) = self
+            .struct_field_names
+            .get(obj_ty.as_str())
+            .and_then(|ns| ns.iter().position(|n| n == field))
+            .and_then(|idx| {
+                self.struct_field_type_exprs
+                    .get(obj_ty.as_str())
+                    .and_then(|tes| tes.get(idx))
+            })
+            .cloned()
+        else {
+            return (val, None);
+        };
+        let TypeKind::Tuple(elem_tes) = &fte.kind else {
+            return (val, None);
+        };
+        let elem_tes = elem_tes.clone();
+        if !elem_tes.iter().any(|e| self.te_owns_heap_below_buffer(e)) {
+            return (val, None);
+        }
+        if !self.borrow_payload_clone_supported(&fte) {
+            return (val, None);
+        }
+        let BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
+            return (val, None);
+        };
+        let Some(drop_fn) = self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes) else {
+            return (val, None);
+        };
+        let fn_val = self.current_fn.unwrap();
+        let ll = val.get_type();
+        let clone_fn = self.emit_clone_fn_for_type_expr(&fte);
+        let src = self.create_entry_alloca(fn_val, "refchain.tup.src", ll);
+        self.builder.build_store(src, val).unwrap();
+        let slot = self.create_entry_alloca(fn_val, "refchain.tup.clone", ll);
+        self.builder
+            .build_call(clone_fn, &[src.into(), slot.into()], "")
+            .unwrap();
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(crate::codegen::state::CleanupAction::StructDrop {
+                struct_alloca: slot,
+                drop_fn,
+            });
+        }
+        (
+            self.builder
+                .build_load(ll, slot, "refchain.tup.cloned")
+                .unwrap(),
+            Some((slot, agg_ty, elem_tes)),
+        )
+    }
+
+    /// Consuming-arm companion of
+    /// [`Self::clone_escaping_borrowed_ref_chain_tuple`]: zero each consumed
+    /// element's caps in the clone slot so the clone's tuple drop frees only
+    /// the elements this pattern left unbound.
+    pub(super) fn zero_refchain_tuple_clone_on_consume(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        agg_ty: StructType<'ctx>,
+        elem_tes: &[TypeExpr],
+        pattern: &Pattern,
+    ) {
+        let PatternKind::Tuple(ps) = &pattern.kind else {
+            return;
+        };
+        for (i, sub) in ps.iter().enumerate() {
+            if !pattern_consumes_field(sub) {
+                continue;
+            }
+            let Some(te) = elem_tes.get(i) else {
+                continue;
+            };
+            if !self.te_owns_heap_below_buffer(te) {
+                continue;
+            }
+            let te = te.clone();
+            self.zero_tuple_elem_cap_at(slot, agg_ty, i as u32, &te);
+        }
     }
 
     /// Consuming-`Some`-arm companion of

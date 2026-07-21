@@ -65,6 +65,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // clone's tag below; the miss edge leaves its cleanup armed.
         let (val, refchain_option_clone) =
             self.clone_escaping_borrowed_ref_chain_option(value, val, ref_chain_escapes);
+        // B-2026-07-21-10: tuple-leaf sibling — see the match site.
+        let (val, refchain_tuple_clone) =
+            self.clone_escaping_borrowed_ref_chain_tuple(value, val, ref_chain_escapes);
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee with a heap-bearing payload has no source `EnumDrop`, so an
         // arm that leaves a heap field unbound leaks it (and the miss edge
@@ -162,6 +165,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // cleanup armed so the clone's payload frees at scope exit).
         if let Some(clone_slot) = refchain_option_clone {
             self.zero_refchain_option_clone_on_consume(clone_slot, pattern);
+        }
+        // B-2026-07-21-10: ref-chain tuple clone — consumed elements' caps
+        // zeroed in the clone slot (then-arm only).
+        if let Some((slot, agg_ty, ref elem_tes)) = refchain_tuple_clone {
+            let elem_tes = elem_tes.clone();
+            self.zero_refchain_tuple_clone_on_consume(slot, agg_ty, &elem_tes, pattern);
         }
         self.tail_ret_inner = tail;
         let mut then_val = self.compile_block(then_block)?;
@@ -453,6 +462,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-07-21-9: Option-leaf sibling — see the if-let site.
         let (val, refchain_option_clone) =
             self.clone_escaping_borrowed_ref_chain_option(value, val, ref_chain_escapes);
+        // B-2026-07-21-10: tuple-leaf sibling — see the match site.
+        let (val, refchain_tuple_clone) =
+            self.clone_escaping_borrowed_ref_chain_tuple(value, val, ref_chain_escapes);
         // B-track (pattern-arm unbound heap-field drop): same fresh-temp enum
         // scrutinee fix as `compile_if_let`. The `EnumDrop` registered here
         // drains at the enclosing scope's exit on the match edge (after the
@@ -537,6 +549,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // frees the clone's payload in its cleanup walk.
         if let Some(clone_slot) = refchain_option_clone {
             self.zero_refchain_option_clone_on_consume(clone_slot, pattern);
+        }
+        // B-2026-07-21-10: ref-chain tuple clone — match-edge element zero.
+        if let Some((slot, agg_ty, ref elem_tes)) = refchain_tuple_clone {
+            let elem_tes = elem_tes.clone();
+            self.zero_refchain_tuple_clone_on_consume(slot, agg_ty, &elem_tes, pattern);
         }
         Ok(())
     }
