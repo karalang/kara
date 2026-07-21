@@ -30,6 +30,7 @@ import ast.{
     ImplBlockNode,
     SelfMode,
     PatInt,
+    FloatLit,
     TypeExpr,
     PathType,
     Block,
@@ -294,6 +295,14 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
     out = out + "declare void @free(ptr)\n";
     out = out + "declare ptr @realloc(ptr, i64)\n";
     out = out + "declare i32 @memcmp(ptr, ptr, i64)\n";
+    out = out + "declare i64 @karac_runtime_f64_to_str(double, ptr, i64)\n";
+    // Spawn-site metadata stubs (Slice 36): the runtime references these
+    // externs from cgus that some runtime calls (e.g. f64_to_str) drag in at
+    // link time; the seed's AOT plants them in every object. LEN=0 means the
+    // entry array is never dereferenced.
+    out = out + "@KARAC_SPAWN_SITES_ENABLED = global i8 0\n";
+    out = out + "@KARAC_SPAWN_SITES_LEN = global i32 0\n";
+    out = out + "@KARAC_SPAWN_SITES = global [0 x i8] zeroinitializer\n";
     out = out + "@.fmt_i = internal constant [5 x i8] c\"%lld\\00\"\n";
     out = out + "@.true = internal constant [5 x i8] c\"true\\00\"\n";
     out = out + "@.false = internal constant [6 x i8] c\"false\\00\"\n";
@@ -517,6 +526,10 @@ impl Emitter {
                 }
                 if segments[0] == "bool" {
                     return 1;
+                }
+                if segments[0] == "f64" {
+                    // f64 (Slice 36).
+                    return 5;
                 }
                 if segments[0] == "Option" {
                     // Option[i64] / Option[String] (Slice 29): the synthetic
@@ -862,6 +875,9 @@ impl Emitter {
         if rk == 2 or rk == 3 or rk == 4 or rk >= 10 {
             tv = "zeroinitializer".to_string();
         }
+        if rk == 5 {
+            tv = "0.0".to_string();
+        }
         match tail {
             Some(e) => {
                 if use_val {
@@ -933,7 +949,7 @@ impl Emitter {
                 + "  ret i32 0\n}\n";
         } else {
             let mut rty = "i64".to_string();
-            if rk == 1 or rk == 2 or rk == 3 or rk == 4 or rk >= 10 {
+            if rk == 1 or rk == 2 or rk == 3 or rk == 4 or rk == 5 or rk >= 10 {
                 rty = self.ty_text(rk);
             }
             self.funcs = self.funcs
@@ -1120,6 +1136,10 @@ impl Emitter {
                         }
                         if vk == 1 {
                             zi = "false".to_string();
+                        }
+                        if vk == 5 {
+                            // Scalar double: zeroinitializer is aggregate-only.
+                            zi = "0.0".to_string();
                         }
                         self.entry_allocas = self.entry_allocas
                             + "  store "
@@ -1471,7 +1491,7 @@ impl Emitter {
                                 + alist
                                 + ")\n";
                             self.emit_free_val(r);
-                        } else if rk == 3 or rk == 4 or rk >= 10 {
+                        } else if rk == 3 or rk == 4 or rk == 5 or rk >= 10 {
                             self.body = self.body
                                 + "  "
                                 + r.clone()
@@ -1934,6 +1954,7 @@ impl Emitter {
                         or self.cur_ret == 2
                         or self.cur_ret == 3
                         or self.cur_ret == 4
+                        or self.cur_ret == 5
                         or self.cur_ret >= 10
                     {
                         self.body =
@@ -3472,10 +3493,50 @@ impl Emitter {
                 if heap {
                     self.emit_free_val(op);
                 }
+            } else if kind == 5 {
+                // f64 (Slice 36): format via the runtime, print, free.
+                let sv = self.emit_f64_to_string(op);
+                let Val { op: sop, kind: sk, heap: sh } = sv;
+                self.emit_println_strval(sop.clone());
+                self.emit_free_val(sop);
             } else {
                 self.emit_println_int(op);
             }
         }
+    }
+
+    // Format an f64 VALUE via `karac_runtime_f64_to_str` (Slice 36) — the
+    // Rust `format!(\"{val}\")` shortest-roundtrip semantics, so output
+    // matches the seed exactly. Returns an OWNED heap string.
+    fn emit_f64_to_string(mut ref self, op: String) -> Val {
+        let buf = self.fresh();
+        self.body = self.body + "  " + buf.clone() + " = call ptr @malloc(i64 32)\n";
+        let n = self.fresh();
+        self.body = self.body
+            + "  "
+            + n.clone()
+            + " = call i64 @karac_runtime_f64_to_str(double "
+            + op
+            + ", ptr "
+            + buf.clone()
+            + ", i64 32)\n";
+        let a0 = self.fresh();
+        self.body = self.body
+            + "  "
+            + a0.clone()
+            + " = insertvalue { ptr, i64 } undef, ptr "
+            + buf
+            + ", 0\n";
+        let a1 = self.fresh();
+        self.body = self.body
+            + "  "
+            + a1.clone()
+            + " = insertvalue { ptr, i64 } "
+            + a0
+            + ", i64 "
+            + n
+            + ", 1\n";
+        Val { op: a1, kind: 2, heap: true }
     }
 
     // Print a STRING VALUE (`{ ptr, i64 }` aggregate operand): extract the
@@ -3550,6 +3611,16 @@ impl Emitter {
             Int(n) => {
                 let IntLit { value, suffix, span } = n;
                 Val { op: value.to_string(), kind: 0, heap: false }
+            }
+            Float(fl) => {
+                // A float literal (Slice 36): emitted as the EXACT hex bit
+                // pattern — LLVM rejects inexact decimal FP text.
+                let FloatLit { value, suffix, span: flsp } = fl;
+                Val {
+                    op: "0x".to_string() + hex_u64(value.to_bits() as i64),
+                    kind: 5,
+                    heap: false,
+                }
             }
             Str(sl) => {
                 // A string literal as a VALUE (Slice 7): intern the global and
@@ -3780,6 +3851,63 @@ impl Emitter {
                         self.emit_free_val(rop);
                     }
                     return out;
+                }
+                if lk == 5 and rk == 5 {
+                    // f64 arithmetic + ORDERED comparisons (Slice 36).
+                    let r5 = self.fresh();
+                    if kind == 1 {
+                        let mut cc5 = "oeq".to_string();
+                        if text == "ne" {
+                            cc5 = "one".to_string();
+                        }
+                        if text == "slt" {
+                            cc5 = "olt".to_string();
+                        }
+                        if text == "sle" {
+                            cc5 = "ole".to_string();
+                        }
+                        if text == "sgt" {
+                            cc5 = "ogt".to_string();
+                        }
+                        if text == "sge" {
+                            cc5 = "oge".to_string();
+                        }
+                        self.body = self.body
+                            + "  "
+                            + r5.clone()
+                            + " = fcmp "
+                            + cc5
+                            + " double "
+                            + lop
+                            + ", "
+                            + rop
+                            + "\n";
+                        return Val { op: r5, kind: 1, heap: false };
+                    }
+                    let mut op5 = "fadd".to_string();
+                    if text == "sub" {
+                        op5 = "fsub".to_string();
+                    }
+                    if text == "mul" {
+                        op5 = "fmul".to_string();
+                    }
+                    if text == "sdiv" {
+                        op5 = "fdiv".to_string();
+                    }
+                    if text == "srem" {
+                        op5 = "frem".to_string();
+                    }
+                    self.body = self.body
+                        + "  "
+                        + r5.clone()
+                        + " = "
+                        + op5
+                        + " double "
+                        + lop
+                        + ", "
+                        + rop
+                        + "\n";
+                    return Val { op: r5, kind: 5, heap: false };
                 }
                 let r = self.fresh();
                 if kind == 1 {
@@ -4126,7 +4254,7 @@ impl Emitter {
                         + ")\n";
                     return Val { op: r, kind: 2, heap: true };
                 }
-                if rk == 3 or rk == 4 or rk >= 10 {
+                if rk == 3 or rk == 4 or rk == 5 or rk >= 10 {
                     self.body = self.body
                         + "  "
                         + r.clone()
@@ -4612,7 +4740,7 @@ impl Emitter {
             let sym = "@u_" + tn + "_m_" + method;
             let r = self.fresh();
             let mut rty2 = "i64".to_string();
-            if rk == 1 or rk == 2 or rk == 3 or rk == 4 or rk >= 10 {
+            if rk == 1 or rk == 2 or rk == 3 or rk == 4 or rk == 5 or rk >= 10 {
                 rty2 = self.ty_text(rk);
             }
             self.body = self.body
@@ -4850,6 +4978,11 @@ impl Emitter {
                 if kind == 2 {
                     return Val { op: op, kind: 2, heap: heap };
                 }
+                if kind == 5 {
+                    // f64.to_string() (Slice 36): the runtime's Rust-Display
+                    // formatter — exact parity with the seed's output.
+                    return self.emit_f64_to_string(op);
+                }
                 if kind == 1 {
                     let pr = self.fresh();
                     self.body = self.body
@@ -4983,6 +5116,21 @@ impl Emitter {
 // A binary operator's lowering, computed in ONE match (BinOp is not Copy):
 // `kind` 0 = arithmetic (text = the i64 opcode), 1 = comparison (text = the
 // signed icmp condition code), 2 = logical (text = the i1 opcode).
+// The 16-hex-digit form of an i64 bit pattern (Slice 36): LLVM double
+// constants use `0x<bits>` — exact by construction, unlike decimal FP text
+// (which LLVM rejects when inexact). The `& 15` mask cleans the arithmetic
+// shift's sign extension, so negative bit patterns (sign-bit doubles) work.
+fn hex_u64(bits: i64) -> String {
+    let mut s = "".to_string();
+    let mut i = 0;
+    while i < 16 {
+        let nib = (bits >> ((15 - i) * 4)) & 15;
+        s = s + hex_digit(nib);
+        i = i + 1;
+    }
+    s
+}
+
 struct BinIr {
     kind: i64,
     text: String,
@@ -5018,6 +5166,10 @@ fn kind_ty(kind: i64) -> String {
     }
     if kind == 3 or kind == 4 {
         return "{ ptr, i64, i64 }".to_string();
+    }
+    if kind == 5 {
+        // f64 (Slice 36).
+        return "double".to_string();
     }
     "i64".to_string()
 }

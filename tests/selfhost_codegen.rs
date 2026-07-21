@@ -313,6 +313,12 @@ const CORPUS: &[&str] = &[
     // layout (i64 -> slot 1, String -> slot 2); match binds positionally
     // by each payload's recorded kind; Vec[Tok] elements compose.
     "enum Tok { Eof, Integer(i64, String), Ident(String) }\nfn describe(t: ref Tok) -> String {\n    match t {\n        Integer(v, lex) => {\n            return \"int \".to_string() + v.to_string() + \" '\" + lex + \"'\";\n        }\n        Ident(name) => {\n            return \"ident \".to_string() + name;\n        }\n        Eof => {}\n    }\n    return \"eof\".to_string();\n}\nfn main() {\n    let a = Tok.Integer(42, \"42\".to_string());\n    println(describe(a));\n    let b = Tok.Ident(\"foo\".to_string());\n    println(describe(b));\n    println(describe(Tok.Eof));\n    let mut v: Vec[Tok] = Vec.new();\n    v.push(Tok.Integer(7, \"0x7\".to_string()));\n    v.push(Tok.Eof);\n    let mut i = 0;\n    while i < v.len() {\n        let t = v[i];\n        match t {\n            Integer(val, lx) => {\n                println(val.to_string() + \"/\" + lx);\n            }\n            Ident(nm) => {\n                println(nm);\n            }\n            Eof => {\n                println(\"eof\");\n            }\n        }\n        i = i + 1;\n    }\n}",
+    // Slice 36: f64 (kind 5) — literals as EXACT hex bit patterns (LLVM
+    // rejects inexact decimal FP), fadd/fsub/fmul/fdiv + ordered fcmp,
+    // params/returns/locals, and to_string via karac_runtime_f64_to_str
+    // (Rust-Display shortest-roundtrip — 0.1+0.2 and 42.0 print exactly
+    // as the seed does).
+    "fn area(w: f64, h: f64) -> f64 {\n    return w * h;\n}\nfn main() {\n    let x = 1.5;\n    let y = 2.25;\n    println((x + y).to_string());\n    println((x * y).to_string());\n    println((y - x).to_string());\n    println((y / x).to_string());\n    println((x < y).to_string());\n    println((x == 1.5).to_string());\n    println(area(3.5, 2.0).to_string());\n    let z = 0.1;\n    println((z + 0.2).to_string());\n    let mut acc = 0.0;\n    let mut i = 0;\n    while i < 4 {\n        acc = acc + 0.25;\n        i = i + 1;\n    }\n    println(acc.to_string());\n    println(42.0.to_string());\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
@@ -495,12 +501,18 @@ fn leak_audit(i: usize, src: &str, ir: &str) {
     let ll = dir.join("prog.ll");
     let bin = dir.join("prog");
     std::fs::write(&ll, ir).unwrap();
-    let cc = Command::new("clang")
-        .arg(&ll)
-        .arg("-o")
-        .arg(&bin)
-        .output()
-        .unwrap();
+    // Link the runtime archive when present (Slice 36): runtime-backed
+    // surface (f64.to_string -> karac_runtime_f64_to_str) needs it; earlier
+    // corpus IR referenced only libc symbols. The emitted spawn-site stub
+    // globals satisfy the runtime's metadata externs.
+    let runtime =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/release/libkarac_runtime.a");
+    let mut cc_cmd = Command::new("clang");
+    cc_cmd.arg(&ll);
+    if runtime.exists() {
+        cc_cmd.arg(&runtime).arg("-lm");
+    }
+    let cc = cc_cmd.arg("-o").arg(&bin).output().unwrap();
     assert!(
         cc.status.success(),
         "clang failed on corpus[{i}] ({src:?}):\n{}",
