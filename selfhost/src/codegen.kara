@@ -159,6 +159,12 @@ struct Emitter {
     en_names: Vec[String],
     en_var_names: Vec[String],
     en_var_pl: Vec[i64],
+    // Parallel to `en_var_pl` (Slice 35): the SECOND payload's kind for
+    // two-payload variants (`Integer(i64, String)`), -1 otherwise. Payloads
+    // route by KIND into the widened layout — i64 → slot 1, String → slot 2 —
+    // so (i64,String) and (String,i64) both work; same-kind pairs are out of
+    // surface (slot collision).
+    en_var_pl2: Vec[i64],
     en_off: Vec[i64],
     en_cnt: Vec[i64],
 }
@@ -198,6 +204,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         en_names: Vec.new(),
         en_var_names: Vec.new(),
         en_var_pl: Vec.new(),
+        en_var_pl2: Vec.new(),
         en_off: Vec.new(),
         en_cnt: Vec.new(),
     };
@@ -273,7 +280,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_off, en_cnt } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_var_pl2, en_off, en_cnt } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -356,6 +363,11 @@ impl Emitter {
         self.en_var_names.push("Err".to_string());
         self.en_var_pl.push(2);
         self.en_cnt.push(2);
+        // Backfill the second-payload table for all synthetics (Slice 35):
+        // Option/Result variants are single-payload.
+        while self.en_var_pl2.len() < self.en_var_pl.len() {
+            self.en_var_pl2.push(0 - 1);
+        }
         // Pass A — struct defs (Slice 12), BEFORE fn signatures so a param /
         // return type can name any struct regardless of order. Indexed reads
         // through the ref (`sd.fields[i].ty` — the proven idiom; whole-Vec
@@ -395,6 +407,13 @@ impl Emitter {
                         } else {
                             let pk4 = self.kind_of_ty(ed.variants[vi].tuple_types[0]);
                             self.en_var_pl.push(pk4);
+                        }
+                        if ed.variants[vi].tuple_types.len() >= 2 {
+                            // Two-payload variant (Slice 35).
+                            let pk5 = self.kind_of_ty(ed.variants[vi].tuple_types[1]);
+                            self.en_var_pl2.push(pk5);
+                        } else {
+                            self.en_var_pl2.push(0 - 1);
                         }
                         vi = vi + 1;
                     }
@@ -2408,6 +2427,7 @@ impl Emitter {
             let MatchArm { pattern, guard, body, span: asp } = arm;
             let mut tag = 0 - 1;
             let mut bind_payload = "".to_string();
+            let mut bind_payload2 = "".to_string();
             let mut bind_whole = "".to_string();
             match pattern {
                 TupleVariantPat(tvp) => {
@@ -2415,14 +2435,22 @@ impl Emitter {
                     let li = segments.len() - 1;
                     let vn = segments[li];
                     tag = self.en_variant_tag(ei, vn);
+                    let mut pei = 0;
                     for el in elems {
                         match el {
                             BindingPat(bp) => {
                                 let BindingPattern { name: bn, span: bsp } = bp;
-                                bind_payload = bn;
+                                // POSITIONAL (Slice 35): elem 0 binds the
+                                // first payload, elem 1 the second.
+                                if pei == 0 {
+                                    bind_payload = bn;
+                                } else {
+                                    bind_payload2 = bn;
+                                }
                             }
                             _ => {}
                         }
+                        pei = pei + 1;
                     }
                 }
                 BindingPat(bp) => {
@@ -2507,6 +2535,57 @@ impl Emitter {
                             + pl
                             + ", ptr %v"
                             + idx.to_string()
+                            + ", align 8\n";
+                    }
+                }
+                if bind_payload2 != "" {
+                    // The SECOND payload (Slice 35), by its own recorded kind.
+                    let plk3 = self.en_var_pl2[self.en_off[ei] + tag];
+                    if plk3 == 2 {
+                        let pl2 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pl2.clone()
+                            + " = extractvalue "
+                            + ety.clone()
+                            + " "
+                            + sop.clone()
+                            + ", 2\n";
+                        let idx2 = self.locals.len();
+                        self.locals.push(bind_payload2);
+                        self.locals_kind.push(2);
+                        self.locals_heap.push(false);
+                        self.body = self.body
+                            + "  %v"
+                            + idx2.to_string()
+                            + " = alloca { ptr, i64 }, align 8\n";
+                        self.body = self.body
+                            + "  store { ptr, i64 } "
+                            + pl2
+                            + ", ptr %v"
+                            + idx2.to_string()
+                            + ", align 8\n";
+                    } else {
+                        let pl2 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pl2.clone()
+                            + " = extractvalue "
+                            + ety.clone()
+                            + " "
+                            + sop.clone()
+                            + ", 1\n";
+                        let idx2 = self.locals.len();
+                        self.locals.push(bind_payload2);
+                        self.locals_kind.push(0);
+                        self.locals_heap.push(false);
+                        self.body =
+                            self.body + "  %v" + idx2.to_string() + " = alloca i64, align 8\n";
+                        self.body = self.body
+                            + "  store i64 "
+                            + pl2
+                            + ", ptr %v"
+                            + idx2.to_string()
                             + ", align 8\n";
                     }
                 }
@@ -3003,7 +3082,7 @@ impl Emitter {
         let cnt = self.en_cnt[ei];
         let mut vi = 0;
         while vi < cnt {
-            if self.en_var_pl[off + vi] == 2 {
+            if self.en_var_pl[off + vi] == 2 or self.en_var_pl2[off + vi] == 2 {
                 return true;
             }
             vi = vi + 1;
@@ -3020,7 +3099,7 @@ impl Emitter {
         let mut acc = "".to_string();
         let mut vi = 0;
         while vi < cnt {
-            if self.en_var_pl[off + vi] == 2 {
+            if self.en_var_pl[off + vi] == 2 or self.en_var_pl2[off + vi] == 2 {
                 let c = self.fresh();
                 self.body = self.body
                     + "  "
@@ -3886,19 +3965,26 @@ impl Emitter {
                 }
                 if enum_ei >= 0 and enum_tag >= 0 {
                     // Payload-carrying construction (Slice 14; String payloads
-                    // Slice 23). Base is zeroinitializer so untouched payload
-                    // slots hold null/0 — the tag-guarded free/copy paths never
-                    // read them, and free(null) is a no-op besides.
+                    // Slice 23; TWO-payload variants Slice 35). Args route by
+                    // KIND into the widened layout: i64 → slot 1, String →
+                    // slot 2 (materialized in if borrowed). Base is
+                    // zeroinitializer so untouched payload slots hold null/0
+                    // — the tag-guarded free/copy paths never read them, and
+                    // free(null) is a no-op besides.
                     let ety = self.ty_text(1000 + enum_ei);
-                    let plk = self.en_var_pl[self.en_off[enum_ei] + enum_tag];
-                    let mut pv = "0".to_string();
-                    let mut ph = false;
+                    let mut iv2 = "".to_string();
+                    let mut sv2 = "".to_string();
+                    let mut sh2 = false;
                     for a in args {
                         let CallArg { label, mut_marker, value, span: asp } = a;
                         let av = self.emit_value(value);
                         let Val { op: aop, kind: ak, heap: ah } = av;
-                        pv = aop;
-                        ph = ah;
+                        if ak == 2 {
+                            sv2 = aop;
+                            sh2 = ah;
+                        } else {
+                            iv2 = aop;
+                        }
                     }
                     let a0 = self.fresh();
                     self.body = self.body
@@ -3909,11 +3995,26 @@ impl Emitter {
                         + " zeroinitializer, i64 "
                         + enum_tag.to_string()
                         + ", 0\n";
-                    if plk == 2 {
-                        // The enum OWNS its String payload: a borrowed arg
-                        // materializes in, a heap temp transfers.
-                        let mut sv = pv;
-                        if not ph {
+                    let mut cur2 = a0;
+                    let mut has_str = false;
+                    if iv2 != "" {
+                        let a1 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a1.clone()
+                            + " = insertvalue "
+                            + ety.clone()
+                            + " "
+                            + cur2
+                            + ", i64 "
+                            + iv2
+                            + ", 1\n";
+                        cur2 = a1;
+                    }
+                    if sv2 != "" {
+                        has_str = true;
+                        let mut sv = sv2;
+                        if not sh2 {
                             let mv = self.emit_materialize(sv.clone());
                             let Val { op: mop, kind: mk, heap: mh } = mv;
                             sv = mop;
@@ -3925,24 +4026,13 @@ impl Emitter {
                             + " = insertvalue "
                             + ety
                             + " "
-                            + a0
+                            + cur2
                             + ", { ptr, i64 } "
                             + sv
                             + ", 2\n";
-                        return Val { op: a2, kind: 1000 + enum_ei, heap: true };
+                        cur2 = a2;
                     }
-                    let a1 = self.fresh();
-                    self.body = self.body
-                        + "  "
-                        + a1.clone()
-                        + " = insertvalue "
-                        + ety
-                        + " "
-                        + a0
-                        + ", i64 "
-                        + pv
-                        + ", 1\n";
-                    return Val { op: a1, kind: 1000 + enum_ei, heap: false };
+                    return Val { op: cur2, kind: 1000 + enum_ei, heap: has_str };
                 }
                 let si = self.sig_index(cname);
                 let mut alist = "".to_string();
