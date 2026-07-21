@@ -5394,14 +5394,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     Ok(self.builder.build_int_truncate(iv, i64_t, "trunc").unwrap())
                 }
             }
-            // f64 shares the word's 64-bit width — bitcast directly. f32 is
-            // 32 bits and a float↔int bitcast requires EQUAL widths
-            // (B-2026-07-20-11: the direct f32→i64 bitcast failed module
-            // verification), so route its bit pattern through i32 then
-            // zero-extend — the low-32-bits packing every unpack site
-            // already expects (`pat.f32.tr/bc`, `col.f32bits`).
+            // f64 shares the word's 64-bit width — bitcast directly. Narrower
+            // floats (f32, f16/bf16) must bitcast at their EXACT width (a
+            // float↔int bitcast requires equal widths — B-2026-07-20-11 f32,
+            // B-2026-07-20-12 f16/bf16) then zero-extend, the low-bits packing
+            // every unpack site expects (`pat.f32.tr/bc`, `col.f32bits`).
             BasicValueEnum::FloatValue(fv) => {
-                if fv.get_type() == self.context.f64_type() {
+                let bits_ty = self.float_bits_int_type(fv.get_type());
+                if bits_ty.get_bit_width() == 64 {
                     Ok(self
                         .builder
                         .build_bit_cast(fv, i64_t, "fcast")
@@ -5410,12 +5410,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     let bits = self
                         .builder
-                        .build_bit_cast(fv, self.context.i32_type(), "f32cast")
+                        .build_bit_cast(fv, bits_ty, "fbits")
                         .unwrap()
                         .into_int_value();
                     Ok(self
                         .builder
-                        .build_int_z_extend(bits, i64_t, "f32cast.zx")
+                        .build_int_z_extend(bits, i64_t, "fbits.zx")
                         .unwrap())
                 }
             }

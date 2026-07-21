@@ -12265,6 +12265,43 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_f16_bf16_enum_payload_pack_unpack() {
+        // B-2026-07-20-12 — an f16/bf16 enum payload bound out of a match
+        // stayed a RAW i64 word (its bit pattern), so arithmetic on it read
+        // the pattern as an integer VALUE: `Some((1.5f16, 2.5f16))` printed
+        // 32512 (0x3E00 + 0x4100, an int add of bit patterns) and the single
+        // form printed 15874.5 (sitofp 0x3E00 + 2.5). Two typechecker
+        // omissions (float_surface_name and type_to_type_expr skipped
+        // F16/BF16) plus the f32-only width split at the codegen float
+        // pack/unpack sites (now exact-width via `float_bits_int_type`:
+        // f16/bf16 ↔ i16). Covers: compound tuple binding (p.0 + p.1),
+        // tuple destructure `Some((a, b))`, runtime-value pack through a fn
+        // (non-const path), single payload, bf16, and Result[f16, String].
+        if let Some(out) = run_program(
+            "fn mk(x: f16, y: f16) -> Option[(f16, f16)] {\n\
+                 Some((x, y))\n\
+             }\n\
+             fn mk1(x: f16) -> Option[f16] {\n\
+                 if x > 0.0f16 { Some(x) } else { None }\n\
+             }\n\
+             fn mkb(x: bf16) -> Option[bf16] {\n\
+                 Some(x)\n\
+             }\n\
+             fn main() {\n\
+                 let o: Option[(f16, f16)] = Some((1.5f16, 2.5f16));\n\
+                 match o { Some(p) => println(p.0 + p.1), None => println(0.0f16) }\n\
+                 match mk(0.25f16, 0.75f16) { Some((a, b)) => println(a + b), None => println(0.0f16) }\n\
+                 match mk1(3.5f16) { Some(v) => println(v), None => println(0.0f16) }\n\
+                 match mkb(1.25bf16) { Some(v) => println(v + 0.5bf16), None => println(0.0bf16) }\n\
+                 let r: Result[f16, String] = Ok(2.0f16);\n\
+                 match r { Ok(v) => println(v * 3.0f16), Err(e) => println(e) }\n\
+             }",
+        ) {
+            assert_eq!(out, "4\n1\n3.5\n1.75\n6\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_materialized_iterator_binding() {
         // B-2026-07-11-19 — a `let it = v.iter()` iterator binding used at a
         // terminal / adaptor / for-loop. Codegen has no runtime iterator value,

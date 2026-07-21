@@ -48,6 +48,11 @@ fn narrow_int_surface_name(ty: &Type) -> Option<String> {
 /// lexer's `Token::Float(f64, …)`) bind/print as raw integer bits.
 fn float_surface_name(ty: &Type) -> Option<String> {
     match ty {
+        // f16/bf16 included (B-2026-07-20-12): without a recorded surface
+        // name, an f16 enum-payload binding stayed a raw i64 word at codegen
+        // and arithmetic on it read the bit pattern as an integer VALUE.
+        Type::Float(FloatSize::F16) => Some("f16".to_string()),
+        Type::Float(FloatSize::BF16) => Some("bf16".to_string()),
         Type::Float(FloatSize::F32) => Some("f32".to_string()),
         Type::Float(FloatSize::F64) => Some("f64".to_string()),
         _ => None,
@@ -1285,6 +1290,11 @@ impl<'a> super::TypeChecker<'a> {
             Type::UInt(UIntSize::U32) => path("u32", vec![]),
             Type::UInt(UIntSize::U64) => path("u64", vec![]),
             Type::UInt(UIntSize::Usize) => path("usize", vec![]),
+            // f16/bf16 included (B-2026-07-20-12): a tuple binding's recorded
+            // `(f16, f16)` TypeExpr must lower its elements as `half`/`bfloat`,
+            // not fall to the unknown-name i64 default.
+            Type::Float(FloatSize::F16) => path("f16", vec![]),
+            Type::Float(FloatSize::BF16) => path("bf16", vec![]),
             Type::Float(FloatSize::F32) => path("f32", vec![]),
             Type::Float(FloatSize::F64) => path("f64", vec![]),
             Type::Bool => path("bool", vec![]),

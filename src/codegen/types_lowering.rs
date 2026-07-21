@@ -1989,6 +1989,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or_else(|| self.context.i64_type().into())
     }
 
+    /// The same-width integer type for a float type's bit pattern —
+    /// f64→i64, f32→i32, f16/bf16→i16. An enum payload word stores a
+    /// float as its bit pattern zero-extended into the i64 word, and a
+    /// float↔int bitcast requires EQUAL widths, so pack/unpack must
+    /// bitcast at the float's exact width and zext/trunc the rest of
+    /// the way (B-2026-07-20-11 f32, B-2026-07-20-12 f16/bf16).
+    pub(super) fn float_bits_int_type(
+        &self,
+        ft: inkwell::types::FloatType<'ctx>,
+    ) -> inkwell::types::IntType<'ctx> {
+        if ft == self.context.f64_type() {
+            self.context.i64_type()
+        } else if ft == self.context.f32_type() {
+            self.context.i32_type()
+        } else {
+            // f16 and bf16 are both 16-bit patterns.
+            self.context.i16_type()
+        }
+    }
+
     pub(super) fn llvm_type_for_name(&self, name: &str) -> BasicTypeEnum<'ctx> {
         // Active monomorphization substitution takes priority.
         if let Some(&ty) = self.type_subst.get(name) {

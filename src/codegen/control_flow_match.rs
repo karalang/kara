@@ -2751,6 +2751,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some("Vec") | Some("VecDeque") | Some("String") | Some("StringSlice")
                     | Some("CString") => self.vec_struct_type().into(),
                     Some("Slice") => self.slice_struct_type().into(),
+                    // Float-typed element binding (`Some((x, y))` where the
+                    // elements are floats): the tuple slot must be the real
+                    // float type, because `reconstruct_payload_value`'s scalar
+                    // tail rebuilds the element AS a float (pat.fb.bc) and an
+                    // `insertvalue float into i64` slot is invalid IR
+                    // (B-2026-07-20-12 companion hardening).
+                    Some(n @ ("f16" | "bf16" | "f32" | "f64")) => self.llvm_type_for_name(n),
                     // Shared type (struct OR enum): the value is an RC heap
                     // pointer — a single `ptr`, not the inline tagged-union /
                     // struct aggregate. Must precede the struct/enum arms: a
@@ -2997,16 +3004,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     // float payload (`Option[f64]`, the lexer's
                     // `Token::Float(f64, …)`) is corrupt.
                     BasicTypeEnum::FloatType(ft) => {
-                        if ft == self.context.f64_type() {
+                        let bits_ty = self.float_bits_int_type(ft);
+                        if bits_ty.get_bit_width() == 64 {
                             let f = self.builder.build_bit_cast(w, ft, "pat.f64.bc").unwrap();
                             return Ok(f);
                         } else {
-                            let i32_t = self.context.i32_type();
+                            // f32 → low 32 bits; f16/bf16 → low 16 bits
+                            // (B-2026-07-20-12): truncate to the float's exact
+                            // width, then bitcast.
                             let lo = self
                                 .builder
-                                .build_int_truncate(w, i32_t, "pat.f32.tr")
+                                .build_int_truncate(w, bits_ty, "pat.fb.tr")
                                 .unwrap();
-                            let f = self.builder.build_bit_cast(lo, ft, "pat.f32.bc").unwrap();
+                            let f = self.builder.build_bit_cast(lo, ft, "pat.fb.bc").unwrap();
                             return Ok(f);
                         }
                     }
@@ -3170,17 +3180,18 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                         BasicTypeEnum::FloatType(ft) => {
-                            // f64 bitcasts directly; f32 unpacks from the low
-                            // 32 bits (trunc + bitcast) — a direct i64→f32
-                            // bitcast is invalid IR (B-2026-07-20-11).
-                            if ft == self.context.f64_type() {
+                            // f64 bitcasts directly; a narrower float unpacks
+                            // from the word's low bits at its exact width
+                            // (B-2026-07-20-11 f32, B-2026-07-20-12 f16/bf16).
+                            let bits_ty = self.float_bits_int_type(ft);
+                            if bits_ty.get_bit_width() == 64 {
                                 self.builder.build_bit_cast(word, ft, "pl.fc").unwrap()
                             } else {
                                 let lo = self
                                     .builder
-                                    .build_int_truncate(word, self.context.i32_type(), "pl.f32.tr")
+                                    .build_int_truncate(word, bits_ty, "pl.fb.tr")
                                     .unwrap();
-                                self.builder.build_bit_cast(lo, ft, "pl.f32.bc").unwrap()
+                                self.builder.build_bit_cast(lo, ft, "pl.fb.bc").unwrap()
                             }
                         }
                         BasicTypeEnum::PointerType(_) => self
@@ -3278,17 +3289,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     BasicTypeEnum::FloatType(ft) => {
-                        // Same f32 width rule as `pl.fc` above (B-2026-07-20-11).
-                        if ft == self.context.f64_type() {
+                        // Same exact-width rule as `pl.fc` above
+                        // (B-2026-07-20-11 f32, B-2026-07-20-12 f16/bf16).
+                        let bits_ty = self.float_bits_int_type(ft);
+                        if bits_ty.get_bit_width() == 64 {
                             self.builder.build_bit_cast(word, ft, "pl.sub.fc").unwrap()
                         } else {
                             let lo = self
                                 .builder
-                                .build_int_truncate(word, self.context.i32_type(), "pl.sub.f32.tr")
+                                .build_int_truncate(word, bits_ty, "pl.sub.fb.tr")
                                 .unwrap();
-                            self.builder
-                                .build_bit_cast(lo, ft, "pl.sub.f32.bc")
-                                .unwrap()
+                            self.builder.build_bit_cast(lo, ft, "pl.sub.fb.bc").unwrap()
                         }
                     }
                     BasicTypeEnum::PointerType(_) => self

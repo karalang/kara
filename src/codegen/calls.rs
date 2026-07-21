@@ -2956,18 +2956,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             BasicTypeEnum::FloatType(ft) => {
-                // f64 bitcasts directly; f32's pattern sits in the low 32
-                // bits (see `coerce_to_i64`'s pack side), so truncate then
-                // bitcast — a direct i64→f32 bitcast is invalid IR
-                // (B-2026-07-20-11).
-                if ft == self.context.f64_type() {
+                // f64 bitcasts directly; a narrower float's pattern sits in
+                // the word's low bits (see `coerce_to_i64`'s pack side), so
+                // truncate to the float's exact width then bitcast — a
+                // width-mismatched float↔int bitcast is invalid IR
+                // (B-2026-07-20-11 f32, B-2026-07-20-12 f16/bf16).
+                let bits_ty = self.float_bits_int_type(ft);
+                if bits_ty.get_bit_width() == 64 {
                     Ok(self.builder.build_bit_cast(w0, ft, "or.pl.fc").unwrap())
                 } else {
                     let lo = self
                         .builder
-                        .build_int_truncate(w0, self.context.i32_type(), "or.pl.f32.tr")
+                        .build_int_truncate(w0, bits_ty, "or.pl.fb.tr")
                         .unwrap();
-                    Ok(self.builder.build_bit_cast(lo, ft, "or.pl.f32.bc").unwrap())
+                    Ok(self.builder.build_bit_cast(lo, ft, "or.pl.fb.bc").unwrap())
                 }
             }
             BasicTypeEnum::PointerType(_) => Ok(self
