@@ -24543,6 +24543,93 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vector_adjacent_vec_load_fuses() {
+        // B-2026-07-21-3 (contiguous leg): `Vector[f64, 2](v[p], v[p + 1])`
+        // over one plain Vec whose element type equals the lane type lowers
+        // as ONE `load <2 x double>` (elem-aligned) from the element pointer
+        // at `p` — not two checked scalar loads + two insertelements (which
+        // the wasm backend never re-fuses; Prism's vertical Lanczos pass
+        // measured ~4.7x slower on the chain form). A non-adjacent / mixed
+        // construction keeps the insertelement chain.
+        let ir = ir_for(
+            r#"
+fn pair_sum(v: Vec[f64], p: i64) -> f64 {
+    let pair = Vector[f64, 2](v[p], v[p + 1]);
+    return pair.reduce_sum();
+}
+fn mixed(v: Vec[f64]) -> f64 {
+    let q = Vector[f64, 2](v[0], 5.0);
+    return q.reduce_sum();
+}
+fn main() {
+    let v: Vec[f64] = [1.0, 2.0, 3.0];
+    println(pair_sum(v, 1));
+    println(mixed(v));
+}
+"#,
+        );
+        let fused = function_body(&ir, "pair_sum").unwrap_or_else(|| {
+            panic!("pair_sum body not found in IR:\n{}", ir);
+        });
+        assert!(
+            fused.contains("load <2 x double>") && fused.contains("vsimd"),
+            "expected a single fused `load <2 x double>` (vsimd) in pair_sum; body was:\n{}",
+            fused
+        );
+        assert!(
+            !fused.contains("vec.ins"),
+            "adjacent-lane construction should not emit an insertelement chain; body was:\n{}",
+            fused
+        );
+        let chain = function_body(&ir, "mixed").unwrap_or_else(|| {
+            panic!("mixed body not found in IR:\n{}", ir);
+        });
+        assert!(
+            chain.contains("vec.ins"),
+            "mixed (non-adjacent) construction must keep the insertelement chain; body was:\n{}",
+            chain
+        );
+    }
+
+    #[test]
+    fn test_e2e_vector_adjacent_vec_load_shapes() {
+        // B-2026-07-21-3 output leg: the fused adjacent-load construction is
+        // byte-identical to the insertelement chain across identifier bases
+        // in a loop, literal bases, i64 lanes, and a mixed (unfused)
+        // construction. The IR twin asserts the fusion actually happens.
+        let output = run_program(
+            "fn vsum(v: Vec[f64]) -> f64 {\n\
+                 let mut acc = Vector[f64, 2](0.0, 0.0);\n\
+                 let mut p: i64 = 0;\n\
+                 while p + 1 < v.len() {\n\
+                     let pair = Vector[f64, 2](v[p], v[p + 1]);\n\
+                     acc = acc + pair;\n\
+                     p = p + 2;\n\
+                 }\n\
+                 return acc.reduce_sum();\n\
+             }\n\
+             fn main() {\n\
+                 let mut v: Vec[f64] = Vec.new();\n\
+                 let mut i: i64 = 0;\n\
+                 while i < 8 {\n\
+                     v.push(i.to_f64() + 0.5);\n\
+                     i = i + 1;\n\
+                 }\n\
+                 println(vsum(v));\n\
+                 let w: Vec[f64] = [10.0, 20.0, 30.0];\n\
+                 println(Vector[f64, 2](w[0], w[1]).reduce_sum());\n\
+                 println(Vector[f64, 2](w[1], w[2]).reduce_sum());\n\
+                 let a: Vec[i64] = [7, 8, 9];\n\
+                 println(Vector[i64, 2](a[1], a[2]).reduce_sum());\n\
+                 let q = Vector[f64, 4](w[0], w[1], w[2], 5.0);\n\
+                 println(q.reduce_sum());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "32\n30\n50\n17\n65\n");
+    }
+
+    #[test]
     fn test_e2e_user_drop_nll_timing_and_order() {
         // B-2026-07-21-1: user `impl Drop` bodies fire at each binding's
         // LIVE-RANGE END (NLL), in LIFO order for drops due at the same

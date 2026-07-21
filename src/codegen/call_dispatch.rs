@@ -5510,6 +5510,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicTypeEnum::VectorType(vt) = vec_ty else {
             return Err("Vector construction: lowered type is not an LLVM vector".to_string());
         };
+        // B-2026-07-21-3 (contiguous leg): `Vector[T, N](v[i], v[i+1], …)`
+        // over one plain Vec whose element type IS the lane type is a
+        // contiguous N-lane region — one vector load beats N scalar loads +
+        // N insertelements (the wasm backend does not clean the chain up;
+        // Prism's vertical Lanczos pass is the motivating shape).
+        if let Some(v) = self.try_compile_vector_adjacent_vec_load(vt, args)? {
+            return Ok(v);
+        }
         let i32_ty = self.context.i32_type();
         let mut acc = vt.get_undef();
         for (i, arg) in args.iter().enumerate() {
@@ -5522,5 +5530,199 @@ impl<'ctx> super::Codegen<'ctx> {
                 .map_err(|e| format!("Vector construction insertelement failed: {e}"))?;
         }
         Ok(acc.into())
+    }
+
+    /// B-2026-07-21-3: lower `Vector[T, N](v[b], v[b+1], …, v[b+N-1])` — every
+    /// lane an index into the SAME plain (non-array-slot) Vec variable whose
+    /// element type equals the lane type, at consecutive offsets from a
+    /// side-effect-free base index — as ONE `load <N x T>` from the element
+    /// pointer at `b`. The per-tap construction shape otherwise emits N
+    /// checked scalar loads + N insertelements, which the wasm backend never
+    /// re-fuses (measured ~4.7x on Prism's vertical Lanczos pass, where
+    /// `Vector[f64, 2](tmp[p], tmp[p+1])` is literally a contiguous f64x2).
+    ///
+    /// Semantics parity with the scalar chain:
+    ///   - base `b` compiles ONCE (identifier / int-literal bases only, and
+    ///     the `b + k` offsets are re-derived arithmetically, so no
+    ///     side-effect is duplicated or dropped);
+    ///   - bounds: `b` is checked first (respecting the BCE-proven halves),
+    ///     then `b + N-1` gets the upper check with its lower half proven by
+    ///     the base check — the same panic, in the same order, the scalar
+    ///     form produces (`v[b]` panics before `v[b+1]` when both are out);
+    ///   - the load's alignment is the ELEMENT's, not the vector's — the
+    ///     address is only elem-aligned (wasm `v128.load` and native movups
+    ///     both take unaligned).
+    ///
+    /// Returns `Ok(None)` for every non-matching shape (different vars, a
+    /// cast lane, non-consecutive offsets, slice/array receivers, mismatched
+    /// elem type) — the insertelement chain remains the general path.
+    fn try_compile_vector_adjacent_vec_load(
+        &mut self,
+        vt: inkwell::types::VectorType<'ctx>,
+        args: &[CallArg],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let n = args.len();
+        if n < 2 {
+            return Ok(None);
+        }
+        // Lane 0 shapes the pattern: `vec_var[base]` with a reusable base.
+        let ExprKind::Index { object, index } = &args[0].value.kind else {
+            return Ok(None);
+        };
+        let ExprKind::Identifier(vec_var) = &object.kind else {
+            return Ok(None);
+        };
+        if !self.vec_elem_types.contains_key(vec_var.as_str()) {
+            return Ok(None);
+        }
+        // Array-slot Vec bindings have a distinct representation — mirror the
+        // bypass in `ref_arg_index_borrow_ptr`.
+        if self
+            .variables
+            .get(vec_var.as_str())
+            .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)))
+        {
+            return Ok(None);
+        }
+        let elem_ty = self.vec_elem_type_for_var(vec_var);
+        if elem_ty != vt.get_element_type() {
+            return Ok(None);
+        }
+        // Base must be side-effect-free and reproducible: a bare identifier
+        // or an int literal. (A compound base would need its own temp to
+        // avoid double-eval; not worth it for the motivating idiom.)
+        let base = index.as_ref();
+        let base_lit = match &base.kind {
+            ExprKind::Identifier(_) => None,
+            ExprKind::Integer(c, _) => Some(*c),
+            _ => return Ok(None),
+        };
+        // Lanes 1..N must be `vec_var[base + k]` (or literal `c + k`).
+        for (k, arg) in args.iter().enumerate().skip(1) {
+            let ExprKind::Index {
+                object: obj_k,
+                index: idx_k,
+            } = &arg.value.kind
+            else {
+                return Ok(None);
+            };
+            if !matches!(&obj_k.kind, ExprKind::Identifier(v) if v == vec_var) {
+                return Ok(None);
+            }
+            // `base + k`, in either operand order. The lowering pass rewrites
+            // integer `+` into `iN.add(a, b)` (a `Call` on the width's
+            // intrinsic path) in index position, so both the surface `Binary`
+            // and the desugared `Call` spellings are accepted.
+            let ident_plus_lit = |a: &Expr, b_: &Expr| {
+                matches!((&a.kind, &base.kind), (ExprKind::Identifier(x), ExprKind::Identifier(y)) if x == y)
+                    && matches!(&b_.kind, ExprKind::Integer(c, _) if *c == k as i64)
+            };
+            let matches_offset = match (&idx_k.kind, base_lit) {
+                (ExprKind::Integer(c, _), Some(b)) => *c == b + k as i64,
+                (
+                    ExprKind::Binary {
+                        op: BinOp::Add,
+                        left,
+                        right,
+                    },
+                    None,
+                ) => ident_plus_lit(left, right) || ident_plus_lit(right, left),
+                (
+                    ExprKind::Call {
+                        callee,
+                        args: cargs,
+                    },
+                    None,
+                ) => {
+                    matches!(
+                        &callee.kind,
+                        ExprKind::Path { segments, .. }
+                            if segments.last().map(|s| s.as_str()) == Some("add")
+                                && segments.len() == 2
+                                && (segments[0].starts_with('i') || segments[0].starts_with('u'))
+                    ) && cargs.len() == 2
+                        && (ident_plus_lit(&cargs[0].value, &cargs[1].value)
+                            || ident_plus_lit(&cargs[1].value, &cargs[0].value))
+                }
+                _ => false,
+            };
+            if !matches_offset {
+                return Ok(None);
+            }
+        }
+        let vec_var = vec_var.clone();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_struct = self.vec_struct_type();
+        let Some(vec_ptr) = self.get_data_ptr(&vec_var) else {
+            return Ok(None);
+        };
+        let (lower_proven, upper_proven) = self.index_bounds_already_proven(base, &vec_var);
+        let idx_raw = self.compile_expr(base)?;
+        let idx_val = self.coerce_to_i64(idx_raw)?;
+        // Base check first (whatever the BCE analysis didn't prove) — same
+        // order and panic as the scalar `v[b]`.
+        self.emit_split_bounds_check(
+            "vsimd.base",
+            idx_val,
+            vec_struct,
+            vec_ptr,
+            lower_proven,
+            upper_proven,
+            Some(elem_ty),
+        );
+        // Last-lane upper check: `b >= 0` is established past the base check
+        // (checked or proven), so only the upper half can fail — exactly the
+        // panic the scalar `v[b+N-1]` would raise.
+        let last_idx = self
+            .builder
+            .build_int_add(
+                idx_val,
+                i64_t.const_int((n - 1) as u64, false),
+                "vsimd.last",
+            )
+            .unwrap();
+        self.emit_split_bounds_check(
+            "vsimd.last",
+            last_idx,
+            vec_struct,
+            vec_ptr,
+            true,
+            false,
+            Some(elem_ty),
+        );
+        let data_pp = self
+            .builder
+            .build_struct_gep(vec_struct, vec_ptr, 0, "v.data.ptr")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_pp, "v.data")
+            .unwrap()
+            .into_pointer_value();
+        // In-bounds: `b` and `b+N-1` are both checked above, and the region
+        // between them is contiguous within the same allocation.
+        let elem_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[idx_val], "vsimd.base.ptr")
+                .unwrap()
+        };
+        let loaded = self
+            .builder
+            .build_load(vt, elem_ptr, "vsimd.load")
+            .map_err(|e| format!("Vector adjacent-load failed: {e}"))?;
+        // Element alignment, not the vector's natural 16 — the address is
+        // only guaranteed elem-aligned.
+        let elem_align = match elem_ty {
+            BasicTypeEnum::FloatType(ft) => {
+                (self.float_bits_int_type(ft).get_bit_width() / 8).max(1)
+            }
+            BasicTypeEnum::IntType(it) => (it.get_bit_width() / 8).max(1),
+            _ => return Ok(None),
+        };
+        if let Some(inst) = loaded.as_instruction_value() {
+            let _ = inst.set_alignment(elem_align);
+        }
+        Ok(Some(loaded))
     }
 }
