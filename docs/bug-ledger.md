@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 159 | 0 |
 | leak | 87 | 0 |
 | codegen-gap | 70 | 0 |
-| double-free | 70 | 1 |
+| double-free | 70 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 38 | 0 |
 | run-vs-build | 37 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 445 | 1 |
+| codegen | 445 | 0 |
 | typecheck | 83 | 0 |
 | interp | 67 | 0 |
 | ownership | 25 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **614 surfaced · 1 open · 609 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **614 surfaced · 0 open · 610 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-21-7 | 2026-07-21 | codegen | high | Struct-PATTERN destructure of a struct-typed FIELD reached through a `ref` param double-frees when a binding escapes: `match h.inner { Pt { s, x } => return "p:".to_string() + s + ... }` with `h: ref Holder` aborts `free(): double free detected` under JIT and AOT (O0+O2); interp prints p:sp:7. The struct-leaf sibling of B-2026-07-21-5/-6: the bound field `s` bit-copy-aliases the CALLER's String and both the binding's scope-exit free and the caller's struct drop free the same buffer. | — |
+_None — the ledger is fully drained._
 
-### Fixed (609)
+### Fixed (610)
 
-<details><summary>609 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>610 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -747,6 +745,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **614 surfaced 
 | B-2026-07-21-3 | codegen | medium | Construction-heavy `Vector[f64,2]` patterns are a ~4.7x PESSIMIZATION on wasm: rewriting Prism's Lanczos tap loop from 4 scalar f64 accumulators to t… | 6951017 |
 | B-2026-07-21-5 | codegen | high | AOT double-free: Vec[struct-with-enum-field] element bind -> ref-param call -> match on the enum field -> concat consumes the String payload binding | 94cf1c4 |
 | B-2026-07-21-6 | codegen | high | JIT-only miscompile: a match-bound String payload of an enum FIELD reached through a `ref` struct param prints EMPTY when an arm CONSUMES it via conc… | 94cf1c4 |
+| B-2026-07-21-7 | codegen | high | Struct-PATTERN destructure of a struct-typed FIELD reached through a `ref` param double-frees when a binding escapes: `match h.inner { Pt { s, x } =>… | 06ea22a |
 
 </details>
 
