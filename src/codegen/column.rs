@@ -656,9 +656,10 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Encode a loaded element value as a single i64 enum-payload word
     /// (for the `Option[T]` index result). The inverse decode is the
-    /// canonical Option-match path. Handles the POD element types;
-    /// `f32` is bit-cast to `i32` then zero-extended (a direct
-    /// `f32 -> i64` bit-cast is a size mismatch).
+    /// canonical Option-match path. Handles the POD element types; a
+    /// narrower float is bit-cast at its exact width then zero-extended
+    /// (`float_bits_int_type` — a width-mismatched float↔int bit-cast is
+    /// invalid IR).
     fn column_value_to_word(&self, val: BasicValueEnum<'ctx>) -> IntValue<'ctx> {
         let i64_t = self.context.i64_type();
         match val {
@@ -669,14 +670,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into_int_value()
                 } else {
-                    let i32_t = self.context.i32_type();
+                    // Width-matched int intermediary (`float_bits_int_type`:
+                    // i32 for f32, i16 for f16/bf16) — the same low-N-bits
+                    // contract as the enum-payload sites (B-2026-07-20-12
+                    // hardening; Column dtypes are f32/f64 today, so the
+                    // 16-bit leg is future-proofing, not a live path).
+                    let bits_ty = self.float_bits_int_type(fv.get_type());
                     let bits = self
                         .builder
-                        .build_bit_cast(fv, i32_t, "col.f32bits")
+                        .build_bit_cast(fv, bits_ty, "col.fbits.n")
                         .unwrap()
                         .into_int_value();
                     self.builder
-                        .build_int_z_extend(bits, i64_t, "col.f32word")
+                        .build_int_z_extend(bits, i64_t, "col.fword")
                         .unwrap()
                 }
             }
@@ -711,12 +717,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 if ft == self.context.f64_type() {
                     self.builder.build_bit_cast(w, ft, "col.w2v.f64").unwrap()
                 } else {
-                    let i32_t = self.context.i32_type();
+                    // Width-matched trunc + bitcast (B-2026-07-20-12
+                    // hardening) — inverse of `column_value_to_word`.
+                    let bits_ty = self.float_bits_int_type(ft);
                     let lo = self
                         .builder
-                        .build_int_truncate(w, i32_t, "col.w2v.lo")
+                        .build_int_truncate(w, bits_ty, "col.w2v.lo")
                         .unwrap();
-                    self.builder.build_bit_cast(lo, ft, "col.w2v.f32").unwrap()
+                    self.builder.build_bit_cast(lo, ft, "col.w2v.f").unwrap()
                 }
             }
             other => other.const_zero(),
