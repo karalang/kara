@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 37 | 0 |
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
-| perf | 22 | 1 |
+| perf | 22 | 0 |
 | diagnostics | 12 | 0 |
 | use-after-free | 4 | 0 |
 | other | 2 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 445 | 2 |
+| codegen | 445 | 1 |
 | typecheck | 83 | 0 |
 | interp | 67 | 0 |
 | ownership | 25 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **614 surfaced · 2 open · 608 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **614 surfaced · 1 open · 609 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-21-3 | 2026-07-21 | codegen | medium | Construction-heavy `Vector[f64,2]` patterns are a ~4.7x PESSIMIZATION on wasm: rewriting Prism's Lanczos tap loop from 4 scalar f64 accumulators to two lane-pair vectors (fresh `Vector[f64,2](a, b)` built per tap from u8/f64 loads + a `.splat` per tap) took the 3 MP threaded resize from 183 ms to 866 ms (sequential 516 -> 1146 ms), byte-identical output. The Fathom pattern (vectors LIVE across the loop, splats hoisted, rare lane extracts) wins 1.47x; the per-tap-construction shape loses badly — likely lane-insert/extract dominated or partially scalarized. | src/codegen (Vector[T,N] lowering on wasm) |
 | B-2026-07-21-7 | 2026-07-21 | codegen | high | Struct-PATTERN destructure of a struct-typed FIELD reached through a `ref` param double-frees when a binding escapes: `match h.inner { Pt { s, x } => return "p:".to_string() + s + ... }` with `h: ref Holder` aborts `free(): double free detected` under JIT and AOT (O0+O2); interp prints p:sp:7. The struct-leaf sibling of B-2026-07-21-5/-6: the bound field `s` bit-copy-aliases the CALLER's String and both the binding's scope-exit free and the caller's struct drop free the same buffer. | — |
 
-### Fixed (608)
+### Fixed (609)
 
-<details><summary>608 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>609 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -745,6 +744,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **614 surfaced 
 | B-2026-07-20-14 | codegen | medium | Auto-par return-slot rebind LOSES an unannotated struct binding's type identity: `let tx = make_taps(..)` (struct-of-Vecs, no annotation) fanned out… | 29a4a97 |
 | B-2026-07-21-1 | interp+codegen | medium | INTERP BUG (run-vs-build): user `impl Drop` destructors run at LAST USE in FIFO (declaration) order under the tree-walk interpreter, while codegen (J… | 7c4bf90 |
 | B-2026-07-21-2 | codegen | low | `<chain>.next()` — e.g | 5a9536b |
+| B-2026-07-21-3 | codegen | medium | Construction-heavy `Vector[f64,2]` patterns are a ~4.7x PESSIMIZATION on wasm: rewriting Prism's Lanczos tap loop from 4 scalar f64 accumulators to t… | 6951017 |
 | B-2026-07-21-5 | codegen | high | AOT double-free: Vec[struct-with-enum-field] element bind -> ref-param call -> match on the enum field -> concat consumes the String payload binding | 94cf1c4 |
 | B-2026-07-21-6 | codegen | high | JIT-only miscompile: a match-bound String payload of an enum FIELD reached through a `ref` struct param prints EMPTY when an arm CONSUMES it via conc… | 94cf1c4 |
 
