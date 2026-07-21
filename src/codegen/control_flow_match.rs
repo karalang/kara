@@ -118,18 +118,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // fresh-temp drop-tracking below (identical to the FieldAccess-index case).
         let (scrut, did_clone_loop_elem) =
             self.clone_escaping_owned_agg_loop_var_enum(scrutinee, scrut, arms);
+        // One escape walk shared by both ref-chain clone legs below (their
+        // cheap shape gates run first inside each leg; the walk itself only
+        // runs for place-chain scrutinees).
+        let ref_chain_escapes = matches!(
+            scrutinee.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) && !self.no_arm_payload_escapes(arms);
         // B-2026-07-21-5/-6: an ESCAPING match over `<refparam>.field` whose
         // leaf is a heap-bearing user enum — the borrowed-chain sibling of the
         // loop-element clone above (see its doc). Same `did_clone` contract.
         let (scrut, did_clone_ref_chain) =
-            self.clone_escaping_borrowed_ref_chain_enum(scrutinee, scrut, arms);
+            self.clone_escaping_borrowed_ref_chain_enum(scrutinee, scrut, ref_chain_escapes);
         let did_clone_borrowed_index_field =
             did_clone_borrowed_index_field || did_clone_loop_elem || did_clone_ref_chain;
         // B-2026-07-21-7: the STRUCT-leaf sibling — an ESCAPING struct-pattern
         // match over `<refparam>.field`. The clone carries its own StructDrop;
         // each arm's suppression below fires against the clone slot.
-        let (scrut, refchain_struct_clone) =
-            self.clone_escaping_borrowed_ref_chain_struct(scrutinee, scrut, arms);
+        let arm_patterns: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+        let (scrut, refchain_struct_clone) = self.clone_escaping_borrowed_ref_chain_struct(
+            scrutinee,
+            scrut,
+            &arm_patterns,
+            ref_chain_escapes,
+        );
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
         // that leaves a heap payload field unbound leaks it. Materialize +
@@ -1248,7 +1260,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         scrutinee: &Expr,
         val: BasicValueEnum<'ctx>,
-        arms: &[MatchArm],
+        escapes: bool,
     ) -> (BasicValueEnum<'ctx>, bool) {
         if !matches!(
             scrutinee.kind,
@@ -1279,7 +1291,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.ref_params.contains_key(root) {
             return (val, false);
         }
-        if self.no_arm_payload_escapes(arms) {
+        if !escapes {
             return (val, false);
         }
         let Some(enum_name) = self.place_chain_type_name(scrutinee) else {
@@ -1343,7 +1355,8 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         scrutinee: &Expr,
         val: BasicValueEnum<'ctx>,
-        arms: &[MatchArm],
+        patterns: &[&Pattern],
+        escapes: bool,
     ) -> (BasicValueEnum<'ctx>, Option<(PointerValue<'ctx>, String)>) {
         if !matches!(
             scrutinee.kind,
@@ -1365,7 +1378,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.ref_params.contains_key(root) {
             return (val, None);
         }
-        if self.no_arm_payload_escapes(arms) {
+        if !escapes {
             return (val, None);
         }
         let Some(struct_name) = self.place_chain_type_name(scrutinee) else {
@@ -1377,14 +1390,14 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return (val, None);
         }
-        let all_arms_struct_or_wild = arms.iter().all(|a| match &a.pattern.kind {
+        let all_patterns_struct_or_wild = patterns.iter().all(|p| match &p.kind {
             PatternKind::Struct { path, .. } => {
                 path.last().map(|s| s.as_str()) == Some(struct_name.as_str())
             }
             PatternKind::Wildcard => true,
             _ => false,
         });
-        if !all_arms_struct_or_wild {
+        if !all_patterns_struct_or_wild {
             return (val, None);
         }
         let te = TypeExpr {
@@ -1414,6 +1427,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap(),
             Some((slot, struct_name)),
         )
+    }
+
+    /// `if let` / `while let` sibling of the arm-loop escape walk in
+    /// [`Self::no_arm_payload_escapes`]: does the given BLOCK move any of the
+    /// pattern's leaf bindings? Feeds the `escapes` flag of the ref-chain
+    /// clone legs from the single-pattern binding sites (B-2026-07-21-8).
+    pub(super) fn pattern_bindings_escape_in_block(
+        &self,
+        pattern: &Pattern,
+        block: &Block,
+    ) -> bool {
+        let mut names: Vec<String> = Vec::new();
+        collect_pattern_bindings(pattern, &mut names);
+        names
+            .iter()
+            .any(|n| self.borrow_binding_escapes_block(block, n))
     }
 
     /// No arm moves any of its pattern's leaf bindings out of the arm body or
@@ -5586,13 +5615,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// no-op for place scrutinees (owned elsewhere — a wholesale free
     /// would double-free against that owner's cleanup) and for heap-free
     /// enums. The builder must be positioned at the miss block.
+    ///
+    /// `force` (B-2026-07-21-8): the while-let ref-chain clone leg evaluates
+    /// its deep clone in the HEADER, so the final non-matching evaluation's
+    /// copy is an owned temp this drop must free even though the scrutinee
+    /// EXPR is a place (the fresh-temp gate would wrongly bail).
     pub(super) fn drop_freshtemp_enum_scrutinee_on_miss(
         &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
         val: BasicValueEnum<'ctx>,
+        force: bool,
     ) {
-        if !self.expr_yields_fresh_owned_temp(scrutinee) {
+        if !force && !self.expr_yields_fresh_owned_temp(scrutinee) {
             return;
         }
         let BasicValueEnum::StructValue(sv) = val else {

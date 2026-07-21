@@ -10045,6 +10045,57 @@ fn main() {
     }
 
     #[test]
+    fn asan_ref_param_field_chain_iflet_whilelet_letelse_no_leak_no_double_free() {
+        // B-2026-07-21-8 memory leg: the if-let / while-let / let-else routes
+        // of the ref-chain clone. Double-free half: consumed payloads freed
+        // exactly once by their bindings, never again by the caller. Leak
+        // half: the clone's unbound remainder must drain (freshtemp EnumDrop /
+        // clone StructDrop), and while-let's final NON-matching header
+        // evaluation must free its clone on the miss edge (the forced
+        // wholesale drop) — a miss leak accumulates per call under LSan.
+        // The no-match Holder exercises the miss edges each iteration.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Plus, Ident(String) }
+struct Pt { s: String, x: i64 }
+struct Holder { tok: Tok, inner: Pt, n: i64 }
+fn iflet_enum(h: ref Holder) -> i64 {
+    if let Ident(name) = h.tok {
+        return ("i:".to_string() + name).len();
+    }
+    return 0;
+}
+fn whilelet_enum(h: ref Holder) -> i64 {
+    while let Ident(name) = h.tok {
+        return ("w:".to_string() + name).len();
+    }
+    return 0;
+}
+fn letelse_struct(h: ref Holder) -> i64 {
+    let Pt { s, x } = h.inner else {
+        return 0;
+    }
+    return ("l:".to_string() + s).len() + x;
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = Holder { tok: Tok.Ident("token".to_string()), inner: Pt { s: "pt".to_string(), x: 3 }, n: 1 };
+        acc = acc + iflet_enum(a) + whilelet_enum(a) + letelse_struct(a);
+        let p = Holder { tok: Tok.Plus, inner: Pt { s: "q".to_string(), x: 1 }, n: 2 };
+        acc = acc + iflet_enum(p) + whilelet_enum(p);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["840"],
+            "ref_param_field_chain_iflet_whilelet_letelse",
+        );
+    }
+
+    #[test]
     fn asan_ref_param_struct_field_struct_pattern_no_leak_no_double_free() {
         // B-2026-07-21-7 memory leg: an ESCAPING struct-pattern match over
         // `<refparam>.field` now deep-clones the scrutinee and rides a

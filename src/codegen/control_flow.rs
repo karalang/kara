@@ -39,6 +39,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // a bare-arg `Option[shared]` leaf gets its per-branch inc.
         let tail = self.tail_ret_inner.take();
         let val = self.compile_expr(value)?;
+        // B-2026-07-21-8: the if-let route of the ref-chain consuming-read
+        // family — `if let Ident(name) = st.tok { <consume name> }` with
+        // `st: ref` aliased the caller's payload exactly like the match route
+        // (B-2026-07-21-5/-6/-7), but this path never ran the clone legs.
+        // Same contract as compile_match: an ESCAPING pattern binding over a
+        // `<refparam>.field` chain deep-clones the scrutinee; the enum clone
+        // rides the freshtemp drop-tracking (forced below via `did_clone`),
+        // the struct clone carries its own StructDrop with the then-arm
+        // suppression firing against the clone slot.
+        let ref_chain_escapes = matches!(
+            value.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) && self.pattern_bindings_escape_in_block(pattern, then_block);
+        let (val, did_clone_ref_enum) =
+            self.clone_escaping_borrowed_ref_chain_enum(value, val, ref_chain_escapes);
+        let (val, refchain_struct_clone) = self.clone_escaping_borrowed_ref_chain_struct(
+            value,
+            val,
+            &[pattern],
+            ref_chain_escapes,
+        );
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee with a heap-bearing payload has no source `EnumDrop`, so an
         // arm that leaves a heap field unbound leaks it (and the miss edge
@@ -47,7 +68,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // exit; the suppression after `bind_pattern_values` (then-arm only)
         // zeroes the caps of fields the pattern moved into bindings. No-op for
         // non-fresh / non-enum scrutinees.
-        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val, false);
+        let freshtemp_enum =
+            self.materialize_freshtemp_enum_scrutinee(value, pattern, val, did_clone_ref_enum);
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // Option[Wide]/Result[Wide,_] scrutinee (box-only — the bound payload
         // owns its inner heap). Registers in the enclosing frame, so the box
@@ -121,6 +143,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // (self-gated on `boxed_enum_payload_vars` membership — only a
         // binding OWNED here is registered, so borrow scrutinees no-op).
         self.suppress_boxed_payload_struct_destructure(value, pattern);
+        // B-2026-07-21-8: ref-chain struct clone — fire the per-field
+        // cap-zeroing against the CLONE slot (the expr-based suppressors
+        // bail on the borrowed root), so the clone's StructDrop frees only
+        // the fields this pattern left unbound. Then-arm only, matching the
+        // match path.
+        if let Some((clone_ptr, clone_name)) = &refchain_struct_clone {
+            let (clone_ptr, clone_name) = (*clone_ptr, clone_name.clone());
+            self.suppress_destructured_struct_pattern_cleanup_at(clone_ptr, &clone_name, pattern);
+        }
         self.tail_ret_inner = tail;
         let mut then_val = self.compile_block(then_block)?;
         let then_terminated = self
@@ -267,6 +298,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // `compile_if_let`).
         self.builder.position_at_end(cond_bb);
         let val = self.compile_expr(value)?;
+        // B-2026-07-21-8 (while-let leg): an ESCAPING `while let V(x) =
+        // <refparam>.field` aliases the caller's payload exactly like the
+        // match/if-let routes — clone per evaluation. The clone emits here in
+        // the HEADER, so a matching iteration's copy rides the per-iteration
+        // freshtemp drop (forced below via `did_clone`), and the final
+        // non-matching evaluation's copy is freed wholesale on the miss edge
+        // (`force` on the miss drop). The struct-leaf leg is deliberately not
+        // wired here: a struct pattern always matches, so that while-let
+        // shape is a degenerate infinite loop, not a real idiom.
+        let ref_chain_escapes = matches!(
+            value.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) && self.pattern_bindings_escape_in_block(pattern, body);
+        let (val, did_clone_ref_enum) =
+            self.clone_escaping_borrowed_ref_chain_enum(value, val, ref_chain_escapes);
         let cond = self.compile_pattern_condition(pattern, val)?;
         self.builder
             .build_conditional_branch(cond.into_int_value(), body_bb, miss_bb)
@@ -286,7 +332,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // in `body_bb` (dominated by `cond_bb` where `val` is defined). The
         // heap-bearing *miss* variant at loop exit (the final non-matching
         // scrutinee) is freed wholesale on the `miss_bb` edge below.
-        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val, false);
+        let freshtemp_enum =
+            self.materialize_freshtemp_enum_scrutinee(value, pattern, val, did_clone_ref_enum);
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // boxed-payload scrutinee, registered in the per-iteration body frame
         // (drains each iteration). An `Option` loop terminates on `None` (no
@@ -350,7 +397,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `miss_bb`. Place / heap-free scrutinees are a no-op (the helper's
         // gate), so a place scrutinee keeps its owner's cleanup untouched.
         self.builder.position_at_end(miss_bb);
-        self.drop_freshtemp_enum_scrutinee_on_miss(value, pattern, val);
+        self.drop_freshtemp_enum_scrutinee_on_miss(value, pattern, val, did_clone_ref_enum);
         self.builder.build_unconditional_branch(exit_bb).unwrap();
 
         self.builder.position_at_end(exit_bb);
@@ -375,13 +422,31 @@ impl<'ctx> super::Codegen<'ctx> {
         else_block: &Block,
     ) -> Result<(), String> {
         let val = self.compile_expr(value)?;
+        // B-2026-07-21-8 (let-else leg): same ref-chain clone contract as the
+        // if-let site. A `let…else` binding escapes into the enclosing scope
+        // by construction, so the escape flag is unconditional for a matching
+        // shape (no arm to analyze — mirroring the `escape_exprs = None`
+        // convention of the borrow-payload clone below).
+        let ref_chain_escapes = matches!(
+            value.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        );
+        let (val, did_clone_ref_enum) =
+            self.clone_escaping_borrowed_ref_chain_enum(value, val, ref_chain_escapes);
+        let (val, refchain_struct_clone) = self.clone_escaping_borrowed_ref_chain_struct(
+            value,
+            val,
+            &[pattern],
+            ref_chain_escapes,
+        );
         // B-track (pattern-arm unbound heap-field drop): same fresh-temp enum
         // scrutinee fix as `compile_if_let`. The `EnumDrop` registered here
         // drains at the enclosing scope's exit on the match edge (after the
         // escaped bindings), and at the divergent else edge's
         // `emit_scope_cleanup` walk on the miss edge (wholesale). Suppression
         // on the match edge zeroes the caps of moved-in fields.
-        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val, false);
+        let freshtemp_enum =
+            self.materialize_freshtemp_enum_scrutinee(value, pattern, val, did_clone_ref_enum);
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // boxed-payload scrutinee (box-only). Registers in the enclosing frame,
         // so it frees after the escaped bindings on the match edge and via the
@@ -445,6 +510,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // (self-gated on `boxed_enum_payload_vars` membership — only a
         // binding OWNED here is registered, so borrow scrutinees no-op).
         self.suppress_boxed_payload_struct_destructure(value, pattern);
+        // B-2026-07-21-8: ref-chain struct clone — per-field cap-zeroing
+        // against the CLONE slot on the match edge (see the if-let site);
+        // the else edge diverges with the clone's StructDrop firing
+        // wholesale in its cleanup walk.
+        if let Some((clone_ptr, clone_name)) = &refchain_struct_clone {
+            let (clone_ptr, clone_name) = (*clone_ptr, clone_name.clone());
+            self.suppress_destructured_struct_pattern_cleanup_at(clone_ptr, &clone_name, pattern);
+        }
         Ok(())
     }
 

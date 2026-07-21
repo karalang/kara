@@ -56449,6 +56449,81 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ref_param_field_chain_iflet_whilelet_letelse() {
+        // B-2026-07-21-8: the if-let / while-let / let-else ROUTES of the
+        // ref-param field-chain consuming-read family. Each route binds a
+        // heap payload out of `<refparam>.field` and consumes it (string `+`
+        // desugars to `Call(String.add, ..)` — an escape), but none ran the
+        // ref-chain clone legs the match route gained for B-2026-07-21-5/-6/-7
+        // — the binding aliased the caller's buffer and both freed it
+        // (double-free abort on every compiled backend; interp correct).
+        // Now: if-let and let-else run both clone legs (enum leaf rides the
+        // freshtemp channel, struct leaf carries its own StructDrop with the
+        // suppression firing on the clone slot); while-let clones per header
+        // evaluation, with the final non-matching copy freed wholesale on the
+        // miss edge (`drop_freshtemp_enum_scrutinee_on_miss(force)`). Caller
+        // reuse after every call pins that the caller's value survives.
+        let output = run_program(
+            "enum Tok { Plus, Ident(String) }\n\
+             struct Pt { s: String, x: i64 }\n\
+             struct Holder { tok: Tok, inner: Pt, n: i64 }\n\
+             fn iflet_enum(h: ref Holder) -> String {\n\
+                 if let Ident(name) = h.tok {\n\
+                     return \"ie:\".to_string() + name;\n\
+                 }\n\
+                 return \"+\".to_string();\n\
+             }\n\
+             fn iflet_struct(h: ref Holder) -> String {\n\
+                 if let Pt { s, x } = h.inner {\n\
+                     return \"is:\".to_string() + s + \":\" + x.to_string();\n\
+                 }\n\
+                 return \"?\".to_string();\n\
+             }\n\
+             fn whilelet_enum(h: ref Holder) -> String {\n\
+                 while let Ident(name) = h.tok {\n\
+                     return \"we:\".to_string() + name;\n\
+                 }\n\
+                 return \"+\".to_string();\n\
+             }\n\
+             fn letelse_enum(h: ref Holder) -> String {\n\
+                 let Ident(name) = h.tok else {\n\
+                     return \"+\".to_string();\n\
+                 }\n\
+                 return \"le:\".to_string() + name;\n\
+             }\n\
+             fn letelse_struct(h: ref Holder) -> String {\n\
+                 let Pt { s, x } = h.inner else {\n\
+                     return \"?\".to_string();\n\
+                 }\n\
+                 return \"ls:\".to_string() + s + \":\" + x.to_string();\n\
+             }\n\
+             fn main() {\n\
+                 let a = Holder {\n\
+                     tok: Tok.Ident(\"tk\".to_string()),\n\
+                     inner: Pt { s: \"pt\".to_string(), x: 5 },\n\
+                     n: 1,\n\
+                 };\n\
+                 println(iflet_enum(a));\n\
+                 println(iflet_enum(a));\n\
+                 println(iflet_struct(a));\n\
+                 println(whilelet_enum(a));\n\
+                 println(whilelet_enum(a));\n\
+                 println(letelse_enum(a));\n\
+                 println(letelse_struct(a));\n\
+                 let p = Holder { tok: Tok.Plus, inner: Pt { s: \"z\".to_string(), x: 0 }, n: 2 };\n\
+                 println(iflet_enum(p));\n\
+                 println(whilelet_enum(p));\n\
+                 println(letelse_enum(p));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(
+            output,
+            "ie:tk\nie:tk\nis:pt:5\nwe:tk\nwe:tk\nle:tk\nls:pt:5\n+\n+\n+\n"
+        );
+    }
+
+    #[test]
     fn test_e2e_inline_index_map_get_unwrap_vec_value() {
         // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
         // (`m.get(k).unwrap()[i]`) used to loud-bail "Index operator applied to
