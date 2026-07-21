@@ -375,6 +375,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_push_aliased_bare_shared_element_retained_no_uaf() {
+        // B-2026-07-21-13: `node.neighbors.push(nodes[j])` — pushing an ALIASING
+        // bare `shared struct` element (an indexed pool-Vec read, reference-
+        // semantic so no clone/inc) into another node's `Vec[Node]` must RETAIN
+        // it. `build_graph` links `nodes[0].neighbors -> nodes[1]` then RETURNS
+        // the pool (its local scope ends); without the retain the returned pool's
+        // element `nodes[1]` was freed while `nodes[0].neighbors` still pointed at
+        // it — reading `neighbors[0].val` was a use-after-free / garbage (kata
+        // #133 Clone Graph, build/JIT diverged from interp). ACYCLIC here so it is
+        // fully reclaimable — a cyclic adjacency would leak by RC construction
+        // (out of scope, like the #141 linked-list cycle). Must print 200 and be
+        // LSan-clean.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+fn build() -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: 100i64, neighbors: Vec.new() });
+    nodes.push(Node { val: 200i64, neighbors: Vec.new() });
+    nodes[0i64].neighbors.push(nodes[1i64]);
+    return nodes;
+}
+fn main() {
+    let g: Vec[Node] = build();
+    println(g[0i64].neighbors[0i64].val.to_string());
+}
+"#,
+            &["200"],
+            "asan_push_aliased_bare_shared_element_retained_no_uaf",
+        );
+    }
+
+    #[test]
     fn asan_vec_indexed_shared_option_field_store_no_crash_no_leak() {
         // B-2026-07-19-6: `v[i].next = Some(v[j])` — a field store of an
         // `Option[shared]` into a Vec-INDEXED shared-struct element (identifier

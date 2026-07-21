@@ -4884,6 +4884,68 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_option_inner_rc_inc_for_loaded(val, inner_info.heap_type);
     }
 
+    /// Bare-`shared struct` sibling of the `share_option_shared_*` push-retain
+    /// family (B-2026-07-21-13). When a `Vec[shared T]`/`Vec[Node]` receives a
+    /// BARE shared-struct element that is an ALIASING read — an indexed element
+    /// `v[i]` or a struct field `n.field`, where the source container/struct
+    /// still owns that node — the container co-owns the node and needs an
+    /// independent `+1`. A `shared struct` is reference-semantic, so the read
+    /// yields the box POINTER (no clone, no inc); without the retain the source's
+    /// drop (e.g. a function-local pool `Vec[Node]` whose one node is returned)
+    /// frees the node while the container still points at it — use-after-free
+    /// (kata #133 Clone Graph's `nodes[i].neighbors.push(nodes[j])`). A fresh
+    /// `Node{..}` / call move-out is not a place expression, so it never reaches
+    /// here and keeps its sole `+1`. `Option[shared]` and enum elements are
+    /// handled by the `share_option_shared_*` siblings and excluded here.
+    pub(super) fn share_shared_struct_ref_for_arg(
+        &self,
+        arg_expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let BasicValueEnum::PointerValue(ptr) = val else {
+            return;
+        };
+        // Resolve the pushed element's declared TypeExpr from an aliasing read.
+        let elem_te: Option<TypeExpr> = match &arg_expr.kind {
+            ExprKind::Index { object, index } if !matches!(index.kind, ExprKind::Range { .. }) => {
+                self.vec_index_elem_type_expr(object)
+            }
+            ExprKind::FieldAccess { object, field } => self
+                .shared_type_for_expr(object)
+                .and_then(|(tn, _)| {
+                    self.struct_field_names
+                        .get(&tn)
+                        .and_then(|ns| ns.iter().position(|n| n == field))
+                        .map(|idx| (tn, idx))
+                })
+                .and_then(|(tn, idx)| {
+                    self.struct_field_type_exprs
+                        .get(&tn)
+                        .and_then(|v| v.get(idx))
+                        .cloned()
+                }),
+            _ => None,
+        };
+        let Some(te) = elem_te else {
+            return;
+        };
+        // `Option[shared T]` is the sibling helpers' job — not this one.
+        if self.option_inner_shared_type_for_type_expr(&te).is_some() {
+            return;
+        }
+        // Must name a BARE shared STRUCT (not a shared enum).
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(seg) = p.segments.last() {
+                if let Some(info) = self.shared_types.get(seg.as_str()) {
+                    if !info.is_enum {
+                        let heap_type = info.heap_type;
+                        self.emit_refcount_inc(seg, heap_type, ptr);
+                    }
+                }
+            }
+        }
+    }
+
     /// B-2026-07-16-5: true when `e` denotes a BORROWED String/Vec value —
     /// an Identifier naming a `ref` / `mut ref` param whose pointee is the
     /// `{ptr,len,cap}` triple layout, or a field access whose DECLARED

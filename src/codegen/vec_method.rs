@@ -2536,6 +2536,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `option_shared_payload_element_drop`. Retain-alone leaks the
                 // drain path; the inner-drop-alone double-frees the residual path.
                 self.share_option_shared_field_ref_for_arg(&args[0].value, elem_val);
+                // Bare `shared struct` sibling (B-2026-07-21-13): pushing an
+                // ALIASING indexed element / field of a bare shared struct
+                // (`node.neighbors.push(nodes[j])`) co-owns the node, so retain
+                // it — a reference-semantic read yields the box pointer with no
+                // inc, and the source container's drop would otherwise free the
+                // still-referenced node (use-after-free). Fresh constructions /
+                // call move-outs are not place exprs and are skipped.
+                self.share_shared_struct_ref_for_arg(&args[0].value, elem_val);
 
                 // Load current vec fields.
                 let data_ptr_ptr = self
