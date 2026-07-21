@@ -318,6 +318,39 @@ impl Emitter {
         self.en_var_names.push("Some".to_string());
         self.en_var_pl.push(2);
         self.en_cnt.push(2);
+        // SYNTHETIC Result enums (Slice 30) at FIXED kinds 1002..1005 —
+        // one per {i64,String}² payload combination (Ok kind, Err kind);
+        // tag 0 = Ok, tag 1 = Err. All four share the WIDENED layout (see
+        // ty_text) so an Ok(x)/Err(e) construction is layout-valid for
+        // every instantiation and a context-resolved sentinel works.
+        self.en_names.push("Result$ii".to_string());
+        self.en_off.push(4);
+        self.en_var_names.push("Ok".to_string());
+        self.en_var_pl.push(0);
+        self.en_var_names.push("Err".to_string());
+        self.en_var_pl.push(0);
+        self.en_cnt.push(2);
+        self.en_names.push("Result$is".to_string());
+        self.en_off.push(6);
+        self.en_var_names.push("Ok".to_string());
+        self.en_var_pl.push(0);
+        self.en_var_names.push("Err".to_string());
+        self.en_var_pl.push(2);
+        self.en_cnt.push(2);
+        self.en_names.push("Result$si".to_string());
+        self.en_off.push(8);
+        self.en_var_names.push("Ok".to_string());
+        self.en_var_pl.push(2);
+        self.en_var_names.push("Err".to_string());
+        self.en_var_pl.push(0);
+        self.en_cnt.push(2);
+        self.en_names.push("Result$ss".to_string());
+        self.en_off.push(10);
+        self.en_var_names.push("Ok".to_string());
+        self.en_var_pl.push(2);
+        self.en_var_names.push("Err".to_string());
+        self.en_var_pl.push(2);
+        self.en_cnt.push(2);
         // Pass A — struct defs (Slice 12), BEFORE fn signatures so a param /
         // return type can name any struct regardless of order. Indexed reads
         // through the ref (`sd.fields[i].ty` — the proven idiom; whole-Vec
@@ -468,6 +501,23 @@ impl Emitter {
                     }
                     return 1000;
                 }
+                if segments[0] == "Result" {
+                    // Result[T, E] over {i64,String}² (Slice 30): fixed
+                    // synthetic kinds 1002..1005 by payload combination.
+                    if generics.len() == 2 {
+                        let ok2 = self.kind_of_ty(generics[0]);
+                        let ek2 = self.kind_of_ty(generics[1]);
+                        let mut rkk = 1002;
+                        if ok2 == 2 {
+                            rkk = rkk + 2;
+                        }
+                        if ek2 == 2 {
+                            rkk = rkk + 1;
+                        }
+                        return rkk;
+                    }
+                    return 1002;
+                }
                 if segments[0] == "Vec" {
                     // Slice 16: Vec[String] (kind 4, {ptr,i64} elements) vs
                     // Vec[i64] (kind 3); Slice 18: Vec[<struct>] (kind
@@ -546,7 +596,13 @@ impl Emitter {
         if kind >= 1000 {
             // A str-enum (Slice 23: any variant carries a String payload)
             // widens to { tag, i64 payload, String payload }; pure-i64 enums
-            // keep the two-slot layout.
+            // keep the two-slot layout. The four synthetic Result kinds
+            // (Slice 30) are ALWAYS widened — even Result$ii — so every
+            // instantiation shares one layout and Ok/Err construction is
+            // context-free.
+            if kind >= 1002 and kind <= 1005 {
+                return "{ i64, i64, { ptr, i64 } }".to_string();
+            }
             if self.en_has_heap(kind - 1000) {
                 return "{ i64, i64, { ptr, i64 } }".to_string();
             }
@@ -812,6 +868,12 @@ impl Emitter {
                                 tv = mop;
                             }
                         }
+                        if kind == 0 - 9 or kind == 0 - 10 {
+                            // A sentinel-kinded None/Ok/Err tail (Slices
+                            // 29/30): the value is layout-valid for the
+                            // declared return kind as-is.
+                            tv = op;
+                        }
                     }
                 } else {
                     self.emit_expr(e);
@@ -972,20 +1034,29 @@ impl Emitter {
                                 None => {}
                             }
                         }
-                        if vk == 0 - 9 {
-                            // `let x: Option[T] = None` (Slice 29): the
-                            // annotation supplies the concrete Option kind;
-                            // an unannotated bare-None let defaults to
-                            // Option[i64].
+                        if vk == 0 - 9 or vk == 0 - 10 {
+                            // `let x: Option[T] = None` / `let r: Result[T,E]
+                            // = Ok(x)` (Slices 29/30): the annotation supplies
+                            // the concrete kind; unannotated defaults are
+                            // Option[i64] / Result[i64,i64]. A heap-bearing
+                            // resolved kind marks the slot OWNING — the frees
+                            // are tag-conditional, so this is safe for any
+                            // runtime tag.
                             vk2 = 1000;
+                            if vk == 0 - 10 {
+                                vk2 = 1002;
+                            }
                             match ty {
                                 Some(t) => {
                                     let dk2 = self.kind_of_ty(t);
-                                    if dk2 == 1000 or dk2 == 1001 {
+                                    if dk2 >= 1000 and dk2 < 2000 {
                                         vk2 = dk2;
                                     }
                                 }
                                 None => {}
+                            }
+                            if self.en_has_heap(vk2 - 1000) {
+                                vh = true;
                             }
                         }
                         let vk = vk2;
@@ -1122,7 +1193,14 @@ impl Emitter {
                         let idx = self.local_slot(name);
                         if idx >= 0 {
                             let v1 = self.emit_value(value);
-                            let Val { op: v0op, kind: vk, heap: v0h } = v1;
+                            let Val { op: v0op, kind: vk0, heap: v0h } = v1;
+                            let mut vk = vk0;
+                            if vk == 0 - 9 or vk == 0 - 10 {
+                                // A sentinel-kinded None/Ok/Err RHS (Slices
+                                // 29/30) takes the SLOT's concrete kind — the
+                                // value layout is context-free by design.
+                                vk = self.locals_kind[idx];
+                            }
                             let mut v = v0op;
                             let mut vh = v0h;
                             if vk == 2 and not vh {
@@ -3607,6 +3685,69 @@ impl Emitter {
                         + pv2
                         + ", 1\n";
                     return Val { op: a1, kind: 1000, heap: false };
+                }
+                if cname == "Ok" or cname == "Err" {
+                    // `Ok(x)` / `Err(e)` (Slice 30): construct into the
+                    // uniform widened Result layout — payload slot by the
+                    // arg's kind, tag 0/1 — under the Result sentinel kind
+                    // (-10); the consuming context picks the instantiation.
+                    let mut rtag = 0;
+                    if cname == "Err" {
+                        rtag = 1;
+                    }
+                    let mut pv3 = "0".to_string();
+                    let mut pk4 = 0;
+                    let mut ph3 = false;
+                    for a in args {
+                        let CallArg { label, mut_marker, value, span: asp } = a;
+                        let av = self.emit_value(value);
+                        let Val { op: aop, kind: ak, heap: ah } = av;
+                        pv3 = aop;
+                        pk4 = ak;
+                        ph3 = ah;
+                    }
+                    let rty3 = "{ i64, i64, { ptr, i64 } }".to_string();
+                    let a0 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + a0.clone()
+                        + " = insertvalue "
+                        + rty3.clone()
+                        + " zeroinitializer, i64 "
+                        + rtag.to_string()
+                        + ", 0\n";
+                    if pk4 == 2 {
+                        let mut sv3 = pv3;
+                        if not ph3 {
+                            let mv = self.emit_materialize(sv3.clone());
+                            let Val { op: mop, kind: mk, heap: mh } = mv;
+                            sv3 = mop;
+                        }
+                        let a1 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + a1.clone()
+                            + " = insertvalue "
+                            + rty3
+                            + " "
+                            + a0
+                            + ", { ptr, i64 } "
+                            + sv3
+                            + ", 2\n";
+                        return Val { op: a1, kind: 0 - 10, heap: true };
+                    }
+                    let a1 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + a1.clone()
+                        + " = insertvalue "
+                        + rty3
+                        + " "
+                        + a0
+                        + ", i64 "
+                        + pv3
+                        + ", 1\n";
+                    return Val { op: a1, kind: 0 - 10, heap: false };
                 }
                 if enum_ei >= 0 and enum_tag >= 0 {
                     // Payload-carrying construction (Slice 14; String payloads
