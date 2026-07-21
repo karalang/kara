@@ -236,8 +236,13 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
                     span: isp,
                 } = ib;
                 let tk = e.kind_of_ty(target_ty);
-                if tk >= 10 and tk < 1000 {
-                    let tn = e.st_names[tk - 10];
+                if (tk >= 10 and tk < 1000) or (tk >= 1000 and tk < 2000) {
+                    let mut tn = "".to_string();
+                    if tk < 1000 {
+                        tn = e.st_names[tk - 10];
+                    } else {
+                        tn = e.en_names[tk - 1000];
+                    }
                     for m in methods {
                         let FnDefNode {
                             is_pub,
@@ -424,13 +429,18 @@ impl Emitter {
                     self.sig_self_kind.push(0 - 1);
                 }
                 Impl(ib) => {
-                    // Inherent impl methods (Slice 27): each method signs in
-                    // as "<Type>.<name>" with its receiver mode + kind. All
-                    // reads are INDEXED through the borrowed payload (the
-                    // B-2026-07-17-20 discipline).
+                    // Inherent impl methods (Slice 27; ENUM receivers Slice
+                    // 31): each method signs in as "<Type>.<name>" with its
+                    // receiver mode + kind. All reads are INDEXED through the
+                    // borrowed payload (the B-2026-07-17-20 discipline).
                     let tk = self.kind_of_ty(ib.target_ty);
-                    if tk >= 10 and tk < 1000 {
-                        let tn = self.st_names[tk - 10];
+                    if (tk >= 10 and tk < 1000) or (tk >= 1000 and tk < 2000) {
+                        let mut tn = "".to_string();
+                        if tk < 1000 {
+                            tn = self.st_names[tk - 10];
+                        } else {
+                            tn = self.en_names[tk - 1000];
+                        }
                         let mcnt = ib.methods.len();
                         let mut mi = 0;
                         while mi < mcnt {
@@ -732,6 +742,10 @@ impl Emitter {
             if self_mode == 0 {
                 if self_kind >= 10 and self_kind < 1000 {
                     sowns = self.st_has_heap(self_kind - 10);
+                }
+                if self_kind >= 1000 and self_kind < 2000 {
+                    // Owned enum self (Slice 31).
+                    sowns = self.en_has_heap(self_kind - 1000);
                 }
             }
             self.locals_heap.push(sowns);
@@ -4282,10 +4296,16 @@ impl Emitter {
                 return Val { op: "0".to_string(), kind: 0, heap: false };
             }
             let rck = self.locals_kind[ridx];
-            if rck < 10 or rck >= 1000 {
+            if rck < 10 or rck >= 2000 {
                 return Val { op: "0".to_string(), kind: 0, heap: false };
             }
-            let tn = self.st_names[rck - 10];
+            let mut tn = "".to_string();
+            if rck < 1000 {
+                tn = self.st_names[rck - 10];
+            } else {
+                // Enum receiver (Slice 31).
+                tn = self.en_names[rck - 1000];
+            }
             let key = tn.clone() + "." + method.clone();
             let si = self.sig_index(key);
             if si < 0 {
@@ -4308,10 +4328,16 @@ impl Emitter {
                     + ridx.to_string()
                     + ", align 8\n";
                 let mut rop2 = rv2;
-                if smode == 0 and self.st_has_heap(rck - 10) {
+                if smode == 0 and rck < 1000 and self.st_has_heap(rck - 10) {
                     // Owned self MOVES IN: the borrow deep-copies (the
                     // binder keeps + frees its own buffers).
                     let mv = self.emit_materialize_struct(rop2.clone(), rck - 10);
+                    let Val { op: mop, kind: mk, heap: mh } = mv;
+                    rop2 = mop;
+                }
+                if smode == 0 and rck >= 1000 and self.en_has_heap(rck - 1000) {
+                    // Owned ENUM self (Slice 31): tag-conditional deep copy.
+                    let mv = self.emit_materialize_enum(rop2.clone(), rck - 1000);
                     let Val { op: mop, kind: mk, heap: mh } = mv;
                     rop2 = mop;
                 }
