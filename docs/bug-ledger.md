@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 159 | 1 |
-| leak | 87 | 1 |
+| miscompile | 159 | 0 |
+| leak | 87 | 0 |
 | codegen-gap | 70 | 0 |
-| double-free | 69 | 1 |
+| double-free | 70 | 1 |
 | missing-feature | 61 | 0 |
 | false-positive | 38 | 0 |
 | run-vs-build | 37 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 444 | 4 |
+| codegen | 445 | 2 |
 | typecheck | 83 | 0 |
 | interp | 67 | 0 |
 | ownership | 25 | 0 |
@@ -124,20 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **613 surfaced · 4 open · 605 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **614 surfaced · 2 open · 608 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-19-16 | 2026-07-19 | codegen | low | A DISCARDED `Map.remove(k)` result over a `Map[K, shared V]` LEAKS the removed value's RC. `Map.remove` MOVES the value out of the bucket (the runtime tombstones the slot and does NOT free the value — it's handed back as `Some(old)`), so the returned `Option[shared V]` OWNS that ref. When the call is used as a bare expression statement (`m.remove(k);`, discarding the result), codegen never drops the discarded temporary, so the moved-out shared value's refcount is never decremented and its box leaks. BINDING the result and consuming/dropping it (`let removed = m.remove(k); match removed { … }`) is clean — the scope-exit / match drop releases it. So the leak is specific to the DISCARDED-expression-statement form of a value-moving Map.remove. | src/codegen (expression-statement drop of a discarded Option[shared] value; Map.remove path in src/codegen/maps.rs returns the moved-out value) |
 | B-2026-07-21-3 | 2026-07-21 | codegen | medium | Construction-heavy `Vector[f64,2]` patterns are a ~4.7x PESSIMIZATION on wasm: rewriting Prism's Lanczos tap loop from 4 scalar f64 accumulators to two lane-pair vectors (fresh `Vector[f64,2](a, b)` built per tap from u8/f64 loads + a `.splat` per tap) took the 3 MP threaded resize from 183 ms to 866 ms (sequential 516 -> 1146 ms), byte-identical output. The Fathom pattern (vectors LIVE across the loop, splats hoisted, rare lane extracts) wins 1.47x; the per-tap-construction shape loses badly — likely lane-insert/extract dominated or partially scalarized. | src/codegen (Vector[T,N] lowering on wasm) |
-| B-2026-07-21-5 | 2026-07-21 | codegen | high | AOT double-free: Vec[struct-with-enum-field] element bind -> ref-param call -> match on the enum field -> concat consumes the String payload binding. 19-line repro: `let t = v[0]; render(t)` where render(st: ref SpTok) matches `st.tok` and an arm returns `"id:".to_string() + name`. Interp correct; AOT aborts with free(): double free; `karac run` (JIT) exits 1 SILENTLY with no output (a third divergence surface). Element-bind aliasing family (B-2026-06-14-12 / B-2026-07-18-2): the element bind's deep copy of the enum String payload appears aliased with the container's copy, and the ref-callee's consuming concat frees it against the binder's drop. | — |
-| B-2026-07-21-6 | 2026-07-21 | codegen | high | JIT-only miscompile: a match-bound String payload of an enum FIELD reached through a `ref` struct param prints EMPTY when an arm CONSUMES it via concat — `karac run` prints 'id:' where interp and AOT both print 'id:foo' (three-way divergence). 17-line repro: render(st: ref SpTok) matching st.tok, arm `head = "id:".to_string() + name`. Non-consuming uses (name.len()) are correct; heavier compositions (a Vec[SpTok] coexisting) degrade to a SILENT exit 1 with zero stdout/stderr. | — |
+| B-2026-07-21-7 | 2026-07-21 | codegen | high | Struct-PATTERN destructure of a struct-typed FIELD reached through a `ref` param double-frees when a binding escapes: `match h.inner { Pt { s, x } => return "p:".to_string() + s + ... }` with `h: ref Holder` aborts `free(): double free detected` under JIT and AOT (O0+O2); interp prints p:sp:7. The struct-leaf sibling of B-2026-07-21-5/-6: the bound field `s` bit-copy-aliases the CALLER's String and both the binding's scope-exit free and the caller's struct drop free the same buffer. | — |
 
-### Fixed (605)
+### Fixed (608)
 
-<details><summary>605 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>608 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -730,6 +728,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **613 surfaced 
 | B-2026-07-19-13 | codegen | medium | Indexed-shared-struct field READ (`nodes[i].field`) hardcoded heap offset `idx + 1` instead of routing through `shared_gep_layout`, so it mis-read an… | 8f606de |
 | B-2026-07-19-14 | typecheck+interp+codegen | medium | Iterator predicate/Option-adaptor cluster UNIMPLEMENTED: `filter_map`, `find_map`, `partition` are rejected `no method '<name>' on type 'Iterator'` i… | 242c07c |
 | B-2026-07-19-15 | codegen | low | `Vec[T].sorted()` (immutable sort returning a NEW Vec) is UNIMPLEMENTED in codegen for every element type — it falls to the generic 'Vec/String metho… | c6848c4 |
+| B-2026-07-19-16 | codegen | low | A DISCARDED `Map.remove(k)` result over a `Map[K, shared V]` LEAKS the removed value's RC | 47f7940 |
 | B-2026-07-20-1 | typecheck+codegen | high | Iterating a `Vec` that lives in a TUPLE element (`t.0.iter()`, `t.0.iter().fold(..)`) silently iterated ZERO times under codegen (JIT + native) while… | eeee817 |
 | B-2026-07-20-2 | codegen | medium | Indexing a `Vec` that lives in a TUPLE element (`t.0[i]`) fails codegen LOUD — `error: codegen failed: Index operator applied to non-array type` (JIT… | 8efca21 |
 | B-2026-07-20-3 | interp+codegen | high | Index-STORE into a `Vec` that lives in a TUPLE element (`t.0[i] = v`) is DROPPED by the tree-walk interpreter (SILENT — the store is a no-op: `let mu… | b7d2bc8 |
@@ -746,6 +745,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **613 surfaced 
 | B-2026-07-20-14 | codegen | medium | Auto-par return-slot rebind LOSES an unannotated struct binding's type identity: `let tx = make_taps(..)` (struct-of-Vecs, no annotation) fanned out… | 29a4a97 |
 | B-2026-07-21-1 | interp+codegen | medium | INTERP BUG (run-vs-build): user `impl Drop` destructors run at LAST USE in FIFO (declaration) order under the tree-walk interpreter, while codegen (J… | 7c4bf90 |
 | B-2026-07-21-2 | codegen | low | `<chain>.next()` — e.g | 5a9536b |
+| B-2026-07-21-5 | codegen | high | AOT double-free: Vec[struct-with-enum-field] element bind -> ref-param call -> match on the enum field -> concat consumes the String payload binding | 94cf1c4 |
+| B-2026-07-21-6 | codegen | high | JIT-only miscompile: a match-bound String payload of an enum FIELD reached through a `ref` struct param prints EMPTY when an arm CONSUMES it via conc… | 94cf1c4 |
 
 </details>
 
