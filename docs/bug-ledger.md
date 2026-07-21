@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
 | perf | 22 | 0 |
-| diagnostics | 13 | 1 |
+| diagnostics | 13 | 0 |
 | use-after-free | 5 | 0 |
 | other | 2 | 0 |
 
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 456 | 1 |
 | typecheck | 83 | 0 |
-| interp | 68 | 1 |
+| interp | 68 | 0 |
 | ownership | 25 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **626 surfaced · 2 open · 620 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **626 surfaced · 1 open · 621 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-21-17 | 2026-07-21 | interp | low | A runtime error raised inside a spliced gated-stdlib wrapper body reports the USER file's path with the SPLICE-COMPOSITE line/col — `import std.lazy.{lit}; lit(vec![1i64])` errors at `<user file>:19:5` when the user file has 6 lines (line 19 is the wrapper body's position in the composite spliced source, not a location in the file named). | — |
 | B-2026-07-21-19 | 2026-07-21 | codegen | medium | A nested `Option[shared]` FIELD reachable ONLY through a popped node leaks when the container is drained via `if let`/`while let`/`let…else` (but NOT `match`). `shared struct N { val: i64, mut nxt: Option[N] }`; `st: Vec[N]` holds node A with `A.nxt = Some(B)` where B is referenced nowhere else; `if let Some(n) = st.pop() { … }` frees A but leaks B (24 bytes). `match st.pop() { Some(n) => … }` is CLEAN (B freed). Build-and-drop without any pop is also CLEAN. So the container drop and the match path both recurse into the popped node's nested shared field; the three non-match binding forms do not. Codegen-only; AOT valgrind/LSan (output correct on all surfaces). | — |
 
-### Fixed (620)
+### Fixed (621)
 
-<details><summary>620 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>621 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -758,6 +757,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **626 surfaced 
 | B-2026-07-21-14 | codegen | medium | match on a Result[String, i64] FIELD through a `ref` param with a consuming Ok arm double-frees under AOT (O0 and O2): `match h.res { Ok(s) => return… | 3ea6b06 |
 | B-2026-07-21-15 | codegen | medium | a struct with a `Result[String, i64]`-class field leaks the live half's heap payload at the owning struct's scope-exit drop — `let a = Holder { res:… | ecf05ca |
 | B-2026-07-21-16 | codegen | high | match/if-let/let-else DIRECTLY over an OWNED struct's `Option[String]` field with a payload binding double-frees under AOT — `match a.opt { Some(s) =… | f9be2c7 |
+| B-2026-07-21-17 | interp | low | A runtime error raised inside a spliced gated-stdlib wrapper body reports the USER file's path with the SPLICE-COMPOSITE line/col — `import std.lazy.… | 5d5361f |
 | B-2026-07-21-18 | codegen | medium | `if let Some(n) = v.pop()` / `while let` / `let…else` over a `Vec[shared T]` (or `VecDeque`) LEAKS the popped node — every element popped through a N… | 587dc94 |
 
 </details>
