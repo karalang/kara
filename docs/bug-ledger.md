@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 159 | 0 |
-| leak | 88 | 0 |
-| double-free | 75 | 1 |
+| leak | 89 | 1 |
+| double-free | 75 | 0 |
 | codegen-gap | 70 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 38 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 452 | 1 |
+| codegen | 453 | 1 |
 | typecheck | 83 | 0 |
 | interp | 67 | 0 |
 | ownership | 25 | 0 |
@@ -124,17 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **621 surfaced · 1 open · 616 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **622 surfaced · 1 open · 617 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-21-14 | 2026-07-21 | codegen | medium | match on a Result[String, i64] FIELD through a `ref` param with a consuming Ok arm double-frees under AOT (O0 and O2): `match h.res { Ok(s) => return "ok:".to_string() + s, Err(e) => … }` (h: ref Holder) aborts free(): double free; interp AND JIT print ok:rr (JIT survives by layout luck). The Result-LEAF sibling of B-2026-07-21-9 — exactly the open territory that fix's resolution flagged: the clone dispatcher has no Result value deep-clone, and the ref-chain clone legs gate Result out, so the inline String payload binding aliases the caller's buffer and both free it. | — |
+| B-2026-07-21-15 | 2026-07-21 | codegen | medium | a struct with a `Result[String, i64]`-class field leaks the live half's heap payload at the owning struct's scope-exit drop — `let a = Holder { res: Ok("rr".to_string()), n: 1 }; println(a.n.to_string());` leaks the 2-byte "rr" buffer (valgrind, AOT O0/O2). No match, no borrow, no call needed: the struct drop simply never frees a Result field's payload. The Option sibling is CLEAN (`Option[String]` field frees via the struct drop's OptionInline arm). | — |
 
-### Fixed (616)
+### Fixed (617)
 
-<details><summary>616 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>617 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -754,6 +754,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **621 surfaced 
 | B-2026-07-21-11 | codegen | high | whole-field `let` move of a struct-typed FIELD through a `ref` param double-frees when the copy's heap is consumed: `let p = h.inner; return "l:" + p… | ca37738 |
 | B-2026-07-21-12 | codegen | low | Vec[String] field .first() consuming read through a `ref` param LEAKS the element copy at O0: `match h.items.first() { Some(s) => return "f:" + s, …… | acd2ba3 |
 | B-2026-07-21-13 | codegen | high | `vec_field.push(nodes[j])` — pushing a BARE `shared struct` element read from another `Vec[shared]` (an aliasing indexed read, source still owns it)… | a4a66c5 |
+| B-2026-07-21-14 | codegen | medium | match on a Result[String, i64] FIELD through a `ref` param with a consuming Ok arm double-frees under AOT (O0 and O2): `match h.res { Ok(s) => return… | 3806ca4 |
 
 </details>
 
