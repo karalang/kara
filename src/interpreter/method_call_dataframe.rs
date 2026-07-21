@@ -417,3 +417,138 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 }
+
+/// Parse RFC-4180-lite CSV text into a `Value::DataFrame` (phase-11 CSV
+/// leg, slice 2 — the inverse of `write_csv`). First record = column
+/// names. A double-quoted cell may contain commas, CR/LF, and doubled
+/// quotes (`""` → `"`); an UNQUOTED empty cell is a NULL slot (write_csv's
+/// NULL encoding), while a quoted cell — even `""` — is always a value.
+/// Per-column type inference over the value cells: all parse as i64 →
+/// `Column[i64]`; else all parse as f64 → `Column[f64]`; else
+/// `Column[String]`. Null slots store the `Value::Unit` placeholder +
+/// `valid=false`, matching `Column.from_iter_nullable`. Ragged rows (cell
+/// count ≠ header count) and an empty file are `Err(<message>)` — the
+/// caller wraps the message in `IoError.Other`.
+pub(super) fn parse_csv_to_dataframe(text: &str) -> Result<Value, String> {
+    // Record/field splitter honoring quotes. `Some(s)` = value cell,
+    // `None` = null (unquoted empty).
+    let mut records: Vec<Vec<Option<String>>> = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false; // current field was ever quoted
+    let mut fields: Vec<Option<String>> = Vec::new();
+    let mut chars = text.chars().peekable();
+    let mut in_quotes = false;
+    let flush_field = |field: &mut String, quoted: &mut bool, fields: &mut Vec<Option<String>>| {
+        let cell = std::mem::take(field);
+        fields.push(if cell.is_empty() && !*quoted {
+            None
+        } else {
+            Some(cell)
+        });
+        *quoted = false;
+    };
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            match c {
+                '"' => {
+                    if chars.peek() == Some(&'"') {
+                        chars.next();
+                        field.push('"');
+                    } else {
+                        in_quotes = false;
+                    }
+                }
+                other => field.push(other),
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_quotes = true;
+                quoted = true;
+            }
+            ',' => flush_field(&mut field, &mut quoted, &mut fields),
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                flush_field(&mut field, &mut quoted, &mut fields);
+                records.push(std::mem::take(&mut fields));
+            }
+            '\n' => {
+                flush_field(&mut field, &mut quoted, &mut fields);
+                records.push(std::mem::take(&mut fields));
+            }
+            other => field.push(other),
+        }
+    }
+    if in_quotes {
+        return Err("CSV parse error: unterminated quoted cell".to_string());
+    }
+    // A final record without a trailing newline.
+    if !field.is_empty() || quoted || !fields.is_empty() {
+        flush_field(&mut field, &mut quoted, &mut fields);
+        records.push(fields);
+    }
+    let Some(header) = records.first() else {
+        return Err("CSV parse error: empty file (no header row)".to_string());
+    };
+    let names: Vec<String> = header
+        .iter()
+        .enumerate()
+        .map(|(i, c)| c.clone().unwrap_or_else(|| format!("column_{i}")))
+        .collect();
+    let width = names.len();
+    for (i, rec) in records.iter().enumerate().skip(1) {
+        if rec.len() != width {
+            return Err(format!(
+                "CSV parse error: row {} has {} cell(s) but the header has {}",
+                i,
+                rec.len(),
+                width
+            ));
+        }
+    }
+    // Per-column inference + build.
+    let mut columns: Vec<(String, Value)> = Vec::with_capacity(width);
+    for (ci, name) in names.into_iter().enumerate() {
+        let cells: Vec<&Option<String>> = records.iter().skip(1).map(|r| &r[ci]).collect();
+        let all_i64 = cells
+            .iter()
+            .all(|c| c.as_ref().is_none_or(|s| s.parse::<i64>().is_ok()));
+        let all_f64 = all_i64
+            || cells
+                .iter()
+                .all(|c| c.as_ref().is_none_or(|s| s.parse::<f64>().is_ok()));
+        let mut data: Vec<Value> = Vec::with_capacity(cells.len());
+        let mut valid: Vec<bool> = Vec::with_capacity(cells.len());
+        for c in cells {
+            match c {
+                None => {
+                    data.push(Value::Unit);
+                    valid.push(false);
+                }
+                Some(s) => {
+                    data.push(if all_i64 {
+                        Value::Int(s.parse::<i64>().unwrap())
+                    } else if all_f64 {
+                        Value::Float(s.parse::<f64>().unwrap())
+                    } else {
+                        Value::String(s.clone())
+                    });
+                    valid.push(true);
+                }
+            }
+        }
+        columns.push((
+            name,
+            Value::Column {
+                data: Arc::new(RwLock::new(data)),
+                valid: Arc::new(RwLock::new(valid)),
+            },
+        ));
+    }
+    Ok(Value::DataFrame {
+        columns: Arc::new(RwLock::new(columns)),
+    })
+}

@@ -9045,3 +9045,30 @@ fn test_dataframe_write_csv_declared_writes_filesystem_ok() {
         result.errors,
     );
 }
+
+#[test]
+fn test_dataframe_read_csv_undeclared_reads_filesystem_errors() {
+    let result =
+        effectcheck_full_pipeline("pub fn load() { let _ = DataFrame.read_csv(\"/tmp/x.csv\"); }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("reads(FileSystem)")),
+        "expected MissingEffectDeclaration for reads(FileSystem); got: {:?}",
+        result.errors,
+    );
+}
+
+#[test]
+fn test_dataframe_read_csv_declared_reads_filesystem_ok() {
+    let result = effectcheck_full_pipeline(
+        "pub fn load() with reads(FileSystem) { let _ = DataFrame.read_csv(\"/tmp/x.csv\"); }",
+    );
+    assert!(
+        result.errors.is_empty(),
+        "declared reads(FileSystem) must verify cleanly; got: {:?}",
+        result.errors,
+    );
+}

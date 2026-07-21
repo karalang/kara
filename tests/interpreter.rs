@@ -23711,3 +23711,72 @@ fn gpu_upload_download_get_clean_compiled_only_diagnostic() {
         errors[0].message
     );
 }
+
+#[test]
+fn test_dataframe_read_csv_round_trips_types_nulls_and_quoting() {
+    // `DataFrame.read_csv` (phase-11 CSV leg, slice 2) inverts `write_csv`:
+    // header → names, per-column inference (all-i64 → Column[i64], else
+    // all-f64 → Column[f64], else String), unquoted-empty → NULL, quoted
+    // cells unescape (comma kept, doubled quotes → one). Round-trip a mixed
+    // table and read back values, types, and the null.
+    let tmp = std::env::temp_dir().join("kara_interp_df_read_csv_rt.csv");
+    let _ = std::fs::remove_file(&tmp);
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let src = format!(
+        "fn main() with writes(FileSystem) reads(FileSystem) {{\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"age\", Column.from_vec([30i64, 25i64, 41i64]));\n\
+             df.insert(\"score\", Column.from_vec([91.5, 78.25, 88.0]));\n\
+             df.insert(\"name\", Column.from_vec([\"ada\", \"bob, jr.\", \"eve \\\"the\\\" grey\"]));\n\
+             let nn: Vec[Option[i64]] = vec![Some(1i64), None, Some(3i64)];\n\
+             df.insert(\"nullable\", Column.from_iter_nullable(nn));\n\
+             let _ = df.write_csv(\"{path}\");\n\
+             match DataFrame.read_csv(\"{path}\") {{\n\
+                 Ok(back) => {{\n\
+                     println(back.width()); println(back.height());\n\
+                     let ages: Column[i64] = back.column(\"age\");\n\
+                     match ages[2] {{ Some(v) => println(v), None => println(-1i64) }}\n\
+                     let scores: Column[f64] = back.column(\"score\");\n\
+                     match scores[1] {{ Some(v) => println(v), None => println(-1.0) }}\n\
+                     let names: Column[String] = back.column(\"name\");\n\
+                     match names[1] {{ Some(v) => println(v), None => println(\"null\") }}\n\
+                     match names[2] {{ Some(v) => println(v), None => println(\"null\") }}\n\
+                     let nulls: Column[i64] = back.column(\"nullable\");\n\
+                     println(nulls.null_count());\n\
+                     match nulls[1] {{ Some(v) => println(v), None => println(\"null-ok\") }}\n\
+                 }}\n\
+                 Err(_) => println(\"read failed\"),\n\
+             }}\n\
+         }}"
+    );
+    let out = run_no_errors(&src);
+    let _ = std::fs::remove_file(&tmp);
+    assert_eq!(
+        out, "4\n3\n41\n78.25\nbob, jr.\neve \"the\" grey\n1\nnull-ok\n",
+        "read_csv must invert write_csv: types inferred, quoting unescaped, nulls kept",
+    );
+}
+
+#[test]
+fn test_dataframe_read_csv_missing_file_and_ragged_rows_err() {
+    // A missing file surfaces the mapped IoError; a ragged row (cell count
+    // ≠ header count) is IoError.Other with the parser's message.
+    let tmp = std::env::temp_dir().join("kara_interp_df_read_csv_ragged.csv");
+    std::fs::write(&tmp, "a,b\n1,2\n3\n").unwrap();
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let src = format!(
+        "fn main() with reads(FileSystem) {{\n\
+             match DataFrame.read_csv(\"/definitely-missing-kara.csv\") {{\n\
+                 Ok(_) => println(\"bad\"),\n\
+                 Err(_) => println(\"missing-err\"),\n\
+             }}\n\
+             match DataFrame.read_csv(\"{path}\") {{\n\
+                 Ok(_) => println(\"bad\"),\n\
+                 Err(_) => println(\"ragged-err\"),\n\
+             }}\n\
+         }}"
+    );
+    let out = run_no_errors(&src);
+    let _ = std::fs::remove_file(&tmp);
+    assert_eq!(out, "missing-err\nragged-err\n");
+}

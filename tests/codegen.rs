@@ -548,6 +548,26 @@ mod codegen_tests {
         );
     }
 
+    #[test]
+    fn dataframe_read_csv_rejected_by_codegen_with_run_hint() {
+        // Slice 2 (read_csv) is interpreter-first too: codegen must REJECT the
+        // assoc call loudly rather than fall to the const-0 default (silent
+        // run-vs-build divergence, the B-2026-07-18-20 class).
+        let err = ir_result(
+            "fn main() with reads(FileSystem) {\n\
+                 match DataFrame.read_csv(\"/tmp/kara_cg_read_csv.csv\") {\n\
+                     Ok(df) => println(df.width()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        )
+        .expect_err("DataFrame.read_csv must be rejected by codegen in slice 2");
+        assert!(
+            err.contains("interpreter-only") && err.contains("karac run"),
+            "got: {err}"
+        );
+    }
+
     // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ──
     // A function may RETURN a capturing closure with POD captures (heap RC env,
     // see heap_env_returned_capturing_closure_runs); the caller may then CALL

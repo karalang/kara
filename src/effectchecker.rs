@@ -1036,12 +1036,14 @@ impl<'a> EffectChecker<'a> {
                 );
                 self.inferred_effects.insert(fn_name.to_string(), set);
             }
-            // Phase 11 DataFrame CSV leg slice 1: `df.write_csv(path)` writes
-            // the serialized table to disk — `writes(FileSystem)`, the same
-            // bridge-the-`with`-clause-into-inference seeding as `File.*` /
-            // `BufWriter.*` above (the declared clause on the
-            // `#[compiler_builtin]` stub in dataframe.kara doesn't reach the
-            // walker's path-keyed lookup on its own).
+            // Phase 11 DataFrame CSV leg: `df.write_csv(path)` writes the
+            // serialized table to disk — `writes(FileSystem)`; the
+            // `DataFrame.read_csv(path)` inverse parses a file —
+            // `reads(FileSystem)`. Same bridge-the-`with`-clause-into-
+            // inference seeding as `File.*` / `BufWriter.*` above (the
+            // declared clauses on the `#[compiler_builtin]` stubs in
+            // dataframe.kara don't reach the walker's path-keyed lookup on
+            // their own).
             {
                 let mut set = EffectSet::new();
                 set.add(
@@ -1050,6 +1052,10 @@ impl<'a> EffectChecker<'a> {
                 );
                 self.inferred_effects
                     .insert("DataFrame.write_csv".to_string(), set);
+                let mut rset = EffectSet::new();
+                rset.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span.clone()));
+                self.inferred_effects
+                    .insert("DataFrame.read_csv".to_string(), rset);
             }
             // Phase 8 `Stdin.lines()` slice: the stdin line iterator carries
             // `reads(Stdin), blocks` (design.md § "Source effects flow through

@@ -886,6 +886,46 @@ impl<'a> super::Interpreter<'a> {
                         return v;
                     }
                 }
+                // Phase-11 CSV leg slice 2: parse a CSV file into a table
+                // (the inverse of `df.write_csv`). Read errors map through
+                // `io_error_from_std`; parse errors (ragged rows, empty
+                // file, unterminated quote) surface as `IoError.Other` with
+                // the parser's message.
+                "DataFrame.read_csv" => {
+                    let path = match args.first() {
+                        Some(arg) => match self.eval_expr_inner(&arg.value) {
+                            Value::String(s) => s,
+                            _ => {
+                                return self.record_runtime_error(
+                                    "DataFrame.read_csv expects a String path",
+                                    span,
+                                );
+                            }
+                        },
+                        None => {
+                            return self.record_runtime_error(
+                                "DataFrame.read_csv expects a String path",
+                                span,
+                            );
+                        }
+                    };
+                    self.track_effect("reads(FileSystem)");
+                    use super::helpers::{io_err_value, io_error_from_std, io_ok};
+                    let text = match std::fs::read_to_string(&path) {
+                        Ok(t) => t,
+                        Err(e) => return io_err_value(io_error_from_std(&e)),
+                    };
+                    return match super::method_call_dataframe::parse_csv_to_dataframe(&text) {
+                        Ok(df) => io_ok(df),
+                        Err(msg) => io_err_value(Value::EnumVariant {
+                            enum_name: "IoError".to_string(),
+                            variant: "Other".to_string(),
+                            data: crate::interpreter::value::EnumData::Tuple(vec![Value::String(
+                                msg,
+                            )]),
+                        }),
+                    };
+                }
                 "Semaphore.new" => {
                     if let Some(v) = self.eval_semaphore_new(args) {
                         return v;

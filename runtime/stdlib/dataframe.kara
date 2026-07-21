@@ -136,4 +136,22 @@ impl DataFrame {
     fn write_csv(ref self, path: String) -> Result[Unit, IoError] with writes(FileSystem) {
         Err(IoError.Other("placeholder"))
     }
+
+    // Parse a CSV file into a table (phase-11 CSV leg, slice 2 — the
+    // inverse of `write_csv`). First row = column names; RFC-4180-lite
+    // cells (double-quoted cells may contain commas/newlines/doubled
+    // quotes). Per-column type inference over the data cells: every
+    // non-empty cell parses as i64 → `Column[i64]`; else every non-empty
+    // cell parses as f64 → `Column[f64]`; else `Column[String]`. An EMPTY
+    // cell is a NULL slot in every case (write_csv's NULL encoding —
+    // round-trip-consistent; a genuinely empty String cell is
+    // indistinguishable and also reads back as NULL, documented v1
+    // lossiness). A file with only a header yields a 0-row table; ragged
+    // rows (cell count ≠ header count) are an IoError. Interpreter-first
+    // slice, like `write_csv`: `karac build` reports a loud deferral
+    // pointing at `karac run` until the codegen twin lands.
+    #[compiler_builtin]
+    fn read_csv(path: String) -> Result[DataFrame, IoError] with reads(FileSystem) {
+        Err(IoError.Other("placeholder"))
+    }
 }
