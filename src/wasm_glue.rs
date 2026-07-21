@@ -915,6 +915,29 @@ pub fn render_dts(
          \x20 opts?: InstantiateOpts,\n\
          ): {run_ret};\n"
     );
+    if threaded {
+        let _ = write!(
+            out,
+            "\n/**\n\
+             \x20* Request-driven instantiation with the worker pool available: every\n\
+             \x20* export is dispatched to a dedicated worker (where blocking\n\
+             \x20* `join`/`recv` are legal) and returns a Promise. Falls back to the\n\
+             \x20* sequential module (same Promise call shape) without threads\n\
+             \x20* support. `_start` never runs. Host-async producers (std.web.time /\n\
+             \x20* std.web.events) are unsupported here — use run() for those.\n\
+             \x20*/\n\
+             export interface KaraThreadedHandle {{\n\
+             \x20 memory: WebAssembly.Memory;\n\
+             \x20 threaded: boolean;\n\
+             \x20 exports: {{ [name: string]: (...args: any[]) => Promise<any> }};\n\
+             \x20 terminate(): Promise<void>;\n\
+             }}\n\
+             export function instantiateThreaded(\n\
+             \x20 {host_param},\n\
+             \x20 opts?: InstantiateOpts & {{ forceSequential?: boolean; }},\n\
+             ): Promise<KaraThreadedHandle>;\n"
+        );
+    }
 
     out
 }
@@ -1515,7 +1538,7 @@ function startHostService(hostCtl, memory, hostImpls) {
 
 /** Worker-side protocol: instantiate the shared-memory module and
  * either run `_start` (primary) or `wasi_thread_start` (pthread). */
-async function karaThreadWorkerMain(data, postMessageFn) {
+async function karaThreadWorkerMain(data, postMessageFn, onMessageFn) {
   const { role, module, memory, tidCounter, env, tid, startArg, hostCtl, spawnCtl } =
     data;
   const imports = {
@@ -1547,6 +1570,51 @@ async function karaThreadWorkerMain(data, postMessageFn) {
     imports.kara_host = makeHostProxy(hostCtl);
   }
   const instance = await WebAssembly.instantiate(module, imports);
+  if (role === "exports") {
+    // Proxied-exports mode (instantiateThreaded): this worker never runs
+    // `_start`. It builds the same marshalled export wrappers the sequential
+    // `instantiate()` hands the caller (karaBuildExports — cabi lowering for
+    // strings/structs, karaLift for results), then serves call requests from
+    // the main thread. Blocking primitives (`TaskHandle.join`, `recv`) are
+    // LEGAL here — this is a worker, not the main thread — which is the whole
+    // point (B-2026-07-20-13): a request-driven exported fn can fan work
+    // across the pool. Calls are serialized by the worker's event loop: a
+    // call posted while another runs queues until the current one returns.
+    // Run the crt's runtime init WITHOUT `_start`: an export-only program's
+    // `main` is an undefined-weak that traps if reached, and `_start` =
+    // init_tp + ctors + main. The threaded link surfaces the two init pieces
+    // (driver.rs `--export` set): `__wasi_init_tp` sets up this thread's
+    // thread pointer / TLS — pthread primitives (pool spawn/join futexes)
+    // HANG without it — and `__wasm_call_ctors` runs static ctors.
+    if (typeof instance.exports.__wasi_init_tp === "function") {
+      instance.exports.__wasi_init_tp();
+    }
+    if (typeof instance.exports.__wasm_call_ctors === "function") {
+      instance.exports.__wasm_call_ctors();
+    }
+    const built = karaBuildExports(instance);
+    const names = Object.keys(built).filter((k) => typeof built[k] === "function");
+    onMessageFn((msg) => {
+      if (!msg || msg.__karaThreads !== "call") return;
+      let reply;
+      try {
+        reply = {
+          __karaThreads: "result",
+          id: msg.id,
+          value: built[msg.fn](...msg.args),
+        };
+      } catch (e) {
+        reply = {
+          __karaThreads: "callError",
+          id: msg.id,
+          message: String(e && e.stack ? e.stack : e),
+        };
+      }
+      postMessageFn(reply);
+    });
+    postMessageFn({ __karaThreads: "ready", exportNames: names });
+    return;
+  }
   if (role === "primary") {
     let code = 0;
     try {
@@ -1582,7 +1650,11 @@ async function karaMaybeRunAsThreadWorker() {
     if (!data || data.__karaThreads !== true) return;
     nodeWorkerThreads = wt;
     nodeFsSync = await import("node:fs");
-    await karaThreadWorkerMain(data, (m) => wt.parentPort.postMessage(m));
+    await karaThreadWorkerMain(
+      data,
+      (m) => wt.parentPort.postMessage(m),
+      (h) => wt.parentPort.on("message", h),
+    );
     return;
   }
   const isWorkerScope =
@@ -1595,9 +1667,14 @@ async function karaMaybeRunAsThreadWorker() {
     });
   });
   if (!data || data.__karaThreads !== true) return;
-  await karaThreadWorkerMain(data, (m) => globalThis.postMessage(m));
+  await karaThreadWorkerMain(
+    data,
+    (m) => globalThis.postMessage(m),
+    (h) => globalThis.addEventListener("message", (e) => h(e.data)),
+  );
   // A finished pthread's worker has nothing left to do (pool workers
-  // never reach here — worker_loop doesn't return).
+  // never reach here — worker_loop doesn't return). An "exports" worker
+  // stays alive serving calls.
   if (data.role === "pthread") globalThis.close();
 }
 await karaMaybeRunAsThreadWorker();
@@ -2310,6 +2387,187 @@ export async function run(hostImpls = {}, opts = {}) {
     if (!(e instanceof KaraExit) || e.code !== 0) throw e;
   }
   return handle;
+}
+
+/**
+ * Instantiate for REQUEST-DRIVEN use with the worker pool available
+ * (B-2026-07-20-13): exported fns are dispatched to a dedicated "exports"
+ * worker — where blocking primitives (`TaskHandle.join`, `recv`) are legal,
+ * unlike the browser main thread — and every export returns a Promise.
+ * `_start` never runs; the worker serves calls for the handle's lifetime.
+ * Calls are serialized in arrival order by the worker's event loop.
+ *
+ * Falls back to the sequential module (Promise-wrapped exports, identical
+ * call shape) when SharedArrayBuffer / cross-origin isolation are
+ * unavailable, `opts.forceSequential` is set, or the build is
+ * sequential-only — unless `[wasm] fallback = false`, which throws.
+ * Host fn implementations run on the main thread in both modes (threaded:
+ * via the worker→main proxy). Host-async producers (`std.web.time` /
+ * `std.web.events` channels) are not supported in this mode yet — use
+ * `run()` for event-loop programs. `handle.terminate()` stops the worker
+ * and services (needed for node processes to exit; optional in a page).
+ */
+export async function instantiateThreaded(hostImpls = {}, opts = {}) {
+  const wrapSequential = async () => {
+    const h = await instantiate(hostImpls, opts);
+    const wrapped = {};
+    for (const k of Object.keys(h.exports)) {
+      const v = h.exports[k];
+      wrapped[k] = typeof v === "function" ? async (...a) => v(...a) : v;
+    }
+    return {
+      memory: h.memory,
+      threaded: false,
+      exports: wrapped,
+      terminate: async () => {},
+    };
+  };
+  if (WASM_THREADS_FILENAME === null || opts.forceSequential) {
+    return await wrapSequential();
+  }
+  if (!threadsSupported()) {
+    if (THREADS_NO_FALLBACK) {
+      throw new Error(
+        "karac: this build requires wasm-threads (SharedArrayBuffer + " +
+          "cross-origin isolation) but they are unavailable. Serve with " +
+          "COOP/COEP headers. Sequential fallback was disabled by " +
+          "`[wasm] fallback = false` in kara.toml.",
+      );
+    }
+    console.warn(
+      "karac: SharedArrayBuffer/cross-origin isolation unavailable; " +
+        "instantiateThreaded falling back to the sequential module",
+    );
+    return await wrapSequential();
+  }
+  const missing = DECLARED_IMPORTS.filter(
+    (n) => typeof hostImpls?.[n] !== "function",
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      "missing host fn implementation(s): " + missing.join(", "),
+    );
+  }
+  const isNode =
+    typeof process !== "undefined" && !!(process.versions && process.versions.node);
+  if (isNode) {
+    nodeWorkerThreads = await import("node:worker_threads");
+    nodeFsSync = await import("node:fs");
+  }
+  const src = await defaultSource(WASM_THREADS_FILENAME);
+  const bytes =
+    typeof Response !== "undefined" && src instanceof Response
+      ? await src.arrayBuffer()
+      : src;
+  const module = await WebAssembly.compile(bytes);
+  // Host-async producers need the main-thread service instance run() stands
+  // up; this mode has none (yet). Gate on what the MODULE actually imports —
+  // BUILTIN_HOST_FNS is the static all-producers list, present even for
+  // programs that use none of them.
+  const usedBuiltins = WebAssembly.Module.imports(module)
+    .filter((i) => i.module === "kara_host" && BUILTIN_HOST_FNS.includes(i.name))
+    .map((i) => i.name);
+  if (usedBuiltins.length > 0) {
+    throw new Error(
+      "karac: instantiateThreaded does not support host-async producers yet " +
+        "(program imports: " + usedBuiltins.join(", ") + ") — use run() for " +
+        "event-loop programs",
+    );
+  }
+  const memory = new WebAssembly.Memory({
+    initial: THREADS_MEM_INITIAL_PAGES,
+    maximum: THREADS_MEM_MAX_PAGES,
+    shared: true,
+  });
+  const tidCounter = new SharedArrayBuffer(4);
+  new Int32Array(tidCounter)[0] = 1;
+  let hostCtl = null;
+  let hostService = null;
+  if (DECLARED_IMPORTS.length > 0) {
+    hostCtl = new SharedArrayBuffer(HOST_CTL_BYTES);
+    hostService = startHostService(hostCtl, memory, { ...hostImpls });
+  }
+  const poolSize =
+    THREADS_POOL_SIZE ??
+    (globalThis.navigator && navigator.hardwareConcurrency) ??
+    4;
+  const env = ["KARAC_PAR_WORKERS=" + poolSize];
+  let spawnCtl = null;
+  let spawnService = null;
+  if (!isNode) {
+    spawnCtl = new SharedArrayBuffer(SPAWN_CTL_BYTES);
+  }
+  const data = {
+    __karaThreads: true,
+    role: "exports",
+    module,
+    memory,
+    tidCounter,
+    env,
+    tid: 0,
+    startArg: 0,
+    hostCtl,
+    spawnCtl,
+  };
+  if (spawnCtl) spawnService = startSpawnService(spawnCtl, data);
+
+  const pending = new Map();
+  let nextCallId = 1;
+  let fatal = null;
+  let readyResolve, readyReject;
+  const ready = new Promise((res, rej) => { readyResolve = res; readyReject = rej; });
+  const w = spawnKaraWorkerSync(data);
+  const onMessage = (msg) => {
+    if (!msg || !msg.__karaThreads) return;
+    if (msg.__karaThreads === "ready") {
+      readyResolve(msg.exportNames || []);
+    } else if (msg.__karaThreads === "result" && pending.has(msg.id)) {
+      pending.get(msg.id).resolve(msg.value);
+      pending.delete(msg.id);
+    } else if (msg.__karaThreads === "callError" && pending.has(msg.id)) {
+      pending.get(msg.id).reject(new Error(msg.message));
+      pending.delete(msg.id);
+    } else if (msg.__karaThreads === "error") {
+      fatal = new Error(msg.message);
+      readyReject(fatal);
+      for (const p of pending.values()) p.reject(fatal);
+      pending.clear();
+    }
+  };
+  if (nodeWorkerThreads) {
+    w.on("message", onMessage);
+    w.on("error", (e) => onMessage({ __karaThreads: "error", message: String(e) }));
+  } else {
+    w.addEventListener("message", (e) => onMessage(e.data));
+    w.addEventListener("error", (e) =>
+      onMessage({ __karaThreads: "error", message: String(e.error ?? "worker error") }),
+    );
+  }
+  const postCall = (m) => {
+    if (nodeWorkerThreads) w.postMessage(m);
+    else w.postMessage(m);
+  };
+  const exportNames = await ready;
+  const exportsProxy = {};
+  for (const fn of exportNames) {
+    exportsProxy[fn] = (...args) =>
+      new Promise((resolve, reject) => {
+        if (fatal) { reject(fatal); return; }
+        const id = nextCallId++;
+        pending.set(id, { resolve, reject });
+        postCall({ __karaThreads: "call", id, fn, args });
+      });
+  }
+  return {
+    memory,
+    threaded: true,
+    exports: exportsProxy,
+    terminate: async () => {
+      try { if (typeof w.terminate === "function") await w.terminate(); } catch {}
+      if (hostService) await hostService.stop();
+      if (spawnService) await spawnService.stop();
+    },
+  };
 }
 "##;
 

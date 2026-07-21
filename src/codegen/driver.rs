@@ -241,6 +241,15 @@ pub fn link_wasm_executable_threaded(
         // without an explicit `--export`. Harmless for programs that use no
         // event-data producer; the symbol is already linked from the archive.
         "--export=karac_runtime_event_scratch",
+        // Proxied-exports mode (`instantiateThreaded`, B-2026-07-20-13): the
+        // exports worker must run the crt's runtime init WITHOUT `_start` —
+        // an export-only program's `main` is an undefined-weak that traps
+        // `unreachable` if reached, and `_start` = init_tp + ctors + main.
+        // Surface the two init pieces so the glue can call exactly them:
+        // `__wasi_init_tp` (main thread's thread pointer / TLS — pthread
+        // futexes hang without it) and `__wasm_call_ctors`.
+        "--export=__wasi_init_tp",
+        "--export=__wasm_call_ctors",
     ]);
     // Phase-10 WASM entry-point discovery — same per-target `pub fn`
     // exports as the sequential path (see [`link_wasm_executable`]).

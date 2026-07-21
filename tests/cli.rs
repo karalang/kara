@@ -17179,6 +17179,116 @@ console.log("PROXY_OK");
 /// (sender clone survives `after`'s return, host owns + drops it, the
 /// service instance's `channel_send`/`atomic.notify` reaches the parked
 /// futex, on a dedicated stack that never clobbers the worker's frames).
+/// Proxied-exports E2E (B-2026-07-20-13, `instantiateThreaded`): a
+/// REQUEST-DRIVEN exported fn fans work across the worker pool. The export
+/// runs in a dedicated "exports" worker (blocking `join` legal there, unlike
+/// the main thread), each call returns a Promise, and a user host fn called
+/// from inside the export rides the worker->main proxy. Load-immune evidence:
+/// the threaded `TaskHandle.join` Condvar-blocks with no work-helping, so the
+/// join returning at all proves pool workers (real threads) ran the tasks.
+/// The crt-init split (`__wasi_init_tp` + `__wasm_call_ctors` exported and
+/// called instead of `_start`) is what this exercises end-to-end — an
+/// export-only program's `main` is an undefined-weak that traps if reached,
+/// and pthread futexes hang without the thread-pointer init.
+#[test]
+fn wasm_threads_instantiate_threaded_export_taskgroup_e2e() {
+    let tmp = wasm_test_dir("wtitx");
+    let path = tmp.join("itx.kara");
+    std::fs::write(
+        &path,
+        "effect resource Host;\n\
+         host fn notify(v: i64) with writes(Host);\n\n\
+         #[target(wasm_browser)]\n\
+         pub fn compute(n: i64) -> i64 with writes(Host) {\n    \
+             let mut g: TaskGroup = TaskGroup.new();\n    \
+             let mut hs: Vec[TaskHandle[i64]] = Vec.new();\n    \
+             let mut i: i64 = 0;\n    \
+             while i < 4 {\n        \
+                 let base = i * 1000;\n        \
+                 let h: TaskHandle[i64] = g.spawn(|| {\n            \
+                     let mut s: i64 = 0;\n            \
+                     let mut k: i64 = 0;\n            \
+                     while k < n { s = s + base + k; k = k + 1; }\n            \
+                     s\n        \
+                 });\n        \
+                 hs.push(h);\n        \
+                 i = i + 1;\n    \
+             }\n    \
+             let mut total: i64 = 0;\n    \
+             for h in hs { total = total + h.join(); }\n    \
+             notify(total);\n    \
+             total\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_instantiate_threaded_export_taskgroup_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "itx wasm-threads build failed: {stderr}"
+    );
+    assert!(tmp.join("itx.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { instantiateThreaded } from "./itx.js";
+let notified = null;
+const h = await instantiateThreaded({ notify: (v) => { notified = v; } });
+if (h.threaded !== true) { console.error("FAIL: expected threaded"); process.exit(1); }
+const r = await h.exports.compute(100n);
+// per task i: sum_{k<100} (i*1000 + k) = 100000*i + 4950; total over i=0..3
+// = 100000*6 + 4*4950 = 619800
+if (r !== 619800n) { console.error("FAIL: result " + r); process.exit(1); }
+if (notified !== 619800n) { console.error("FAIL: host fn proxy, notified=" + notified); process.exit(1); }
+// second call on the SAME handle — the worker keeps serving.
+const r2 = await h.exports.compute(10n);
+// per task i: 10000*i + 45; total = 10000*6 + 180 = 60180
+if (r2 !== 60180n) { console.error("FAIL: second call " + r2); process.exit(1); }
+console.log("ITX_OK r=" + r + " r2=" + r2);
+await h.terminate();
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!(
+            "skip: wasm_threads_instantiate_threaded_export_taskgroup_e2e — node not on PATH"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "itx harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("ITX_OK r=619800 r2=60180"),
+        "missing ITX_OK: stdout={node_stdout} stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn wasm_threads_timer_after_recv_e2e() {
     let tmp = wasm_test_dir("wttimer");
