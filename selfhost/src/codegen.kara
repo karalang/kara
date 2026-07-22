@@ -1419,6 +1419,8 @@ impl Emitter {
                     let si = self.sig_index(cname);
                     let mut alist = "".to_string();
                     let mut ai = 0;
+                    let mut rt_ops: Vec[String] = Vec.new();
+                    let mut rt_kinds: Vec[i64] = Vec.new();
                     for a in args {
                         let CallArg { label, mut_marker, value, span: asp } = a;
                         // `mut ref` params (Slice 20): the arg must be a local
@@ -1491,6 +1493,12 @@ impl Emitter {
                             let Val { op: mop, kind: mk, heap: mh } = mv;
                             aop = mop;
                         }
+                        if pref and heap {
+                            // Heap temp lent to a `ref` param (Slice 40):
+                            // caller frees post-call.
+                            rt_ops.push(aop.clone());
+                            rt_kinds.push(pk);
+                        }
                         if ai > 0 {
                             alist = alist + ", ";
                         }
@@ -1554,6 +1562,7 @@ impl Emitter {
                                 + alist
                                 + ")\n";
                         }
+                        self.emit_ref_temp_frees(rt_ops, rt_kinds);
                     }
                 }
             }
@@ -3394,6 +3403,27 @@ impl Emitter {
 
     // Free the payload buffer a STR-ENUM VALUE owns, tag-conditionally
     // (Slice 23).
+    // Free a batch of heap TEMPS that were lent to `ref` params (Slice 40) —
+    // emitted AFTER the call, kind-dispatched. Non-heap kinds are skipped
+    // (recorded only when heap=true, so every entry frees something).
+    fn emit_ref_temp_frees(mut ref self, ops: Vec[String], kinds: Vec[i64]) {
+        let mut i = 0;
+        while i < ops.len() {
+            let op = ops[i];
+            let k = kinds[i];
+            if k == 2 {
+                self.emit_free_val(op);
+            } else if k == 3 or k == 4 or k >= 2000 {
+                self.emit_free_vec_val(op, k);
+            } else if k >= 10 and k < 1000 {
+                self.emit_free_struct_val(op, k - 10);
+            } else if k >= 1000 and k < 2000 {
+                self.emit_free_enum_val(op, k - 1000);
+            }
+            i = i + 1;
+        }
+    }
+
     fn emit_free_enum_val(mut ref self, op: String, ei: i64) {
         let ety = self.ty_text(1000 + ei);
         let tg = self.fresh();
@@ -4430,6 +4460,12 @@ impl Emitter {
                 let si = self.sig_index(cname);
                 let mut alist = "".to_string();
                 let mut ai = 0;
+                // Heap TEMPS passed to `ref` params (Slice 40): the callee is
+                // non-owning, so the CALLER frees them AFTER the call (a
+                // binding-owned arg is heap=false and its binder frees it —
+                // nothing to do). Collected op+kind, freed post-call.
+                let mut rt_ops: Vec[String] = Vec.new();
+                let mut rt_kinds: Vec[i64] = Vec.new();
                 for a in args {
                     let CallArg { label, mut_marker, value, span: asp } = a;
                     let v = self.emit_value(value);
@@ -4479,6 +4515,12 @@ impl Emitter {
                         let Val { op: mop, kind: mk, heap: mh } = mv;
                         aop = mop;
                     }
+                    if pref and heap {
+                        // A heap temp lent to a `ref` param (Slice 40): record
+                        // it for a post-call free (nobody else owns it).
+                        rt_ops.push(aop.clone());
+                        rt_kinds.push(pk);
+                    }
                     if ai > 0 {
                         alist = alist + ", ";
                     }
@@ -4506,6 +4548,7 @@ impl Emitter {
                         + "("
                         + alist
                         + ")\n";
+                    self.emit_ref_temp_frees(rt_ops, rt_kinds);
                     return Val { op: r, kind: 1, heap: false };
                 }
                 if rk == 2 {
@@ -4517,6 +4560,7 @@ impl Emitter {
                         + "("
                         + alist
                         + ")\n";
+                    self.emit_ref_temp_frees(rt_ops, rt_kinds);
                     return Val { op: r, kind: 2, heap: true };
                 }
                 if rk == 3 or rk == 4 or rk == 5 or rk >= 10 {
@@ -4530,6 +4574,7 @@ impl Emitter {
                         + "("
                         + alist
                         + ")\n";
+                    self.emit_ref_temp_frees(rt_ops, rt_kinds);
                     let mut rh = false;
                     if rk >= 10 and rk < 1000 {
                         rh = self.st_has_heap(rk - 10);
@@ -4551,6 +4596,7 @@ impl Emitter {
                     + "("
                     + alist
                     + ")\n";
+                self.emit_ref_temp_frees(rt_ops, rt_kinds);
                 Val { op: r, kind: 0, heap: false }
             }
             If(n) => {
@@ -4970,6 +5016,8 @@ impl Emitter {
                 alist = sty3 + " " + rop2;
             }
             let mut ai = 1;
+            let mut rt_ops: Vec[String] = Vec.new();
+            let mut rt_kinds: Vec[i64] = Vec.new();
             for ma in margs {
                 let CallArg { label, mut_marker, value, span: masp } = ma;
                 let av = self.emit_value(value);
@@ -4998,6 +5046,11 @@ impl Emitter {
                     let Val { op: mop, kind: mk, heap: mh } = mv;
                     aop = mop;
                 }
+                if pref and ah {
+                    // Heap temp lent to a `ref` method param (Slice 40).
+                    rt_ops.push(aop.clone());
+                    rt_kinds.push(pk);
+                }
                 alist = alist + ", " + self.ty_text(pk) + " " + aop;
                 ai = ai + 1;
             }
@@ -5018,6 +5071,7 @@ impl Emitter {
                 + "("
                 + alist
                 + ")\n";
+            self.emit_ref_temp_frees(rt_ops, rt_kinds);
             let mut rh = false;
             if rk == 2 or rk == 3 or rk == 4 or rk >= 2000 {
                 rh = true;
