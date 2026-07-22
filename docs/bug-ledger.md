@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 160 | 1 |
-| leak | 92 | 1 |
+| leak | 92 | 0 |
 | double-free | 77 | 0 |
 | codegen-gap | 70 | 0 |
 | missing-feature | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 459 | 2 |
+| codegen | 459 | 1 |
 | typecheck | 83 | 0 |
 | interp | 68 | 0 |
 | ownership | 26 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **630 surfaced · 2 open · 623 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **630 surfaced · 1 open · 624 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-22-1 | 2026-07-22 | codegen | high | test_e2e_f16_bf16_enum_payload_pack_unpack CRASHES on macOS arm64 (empty stdout vs expected '4\n1\n3.5\n1.75\n6\n') while Linux arm64 AND x86 are green — the B-2026-07-20-12 f16-in-compound-enum-payload fix does not hold on Mach-O/Apple arm64; CI leg 'Codegen E2E (macOS arm64)' red across all recent main runs. | — |
-| B-2026-07-22-2 | 2026-07-22 | codegen | medium | asan_closure_captures_heap_struct_returned_clean FAILS on the arm64 LSan CI leg (memory-sanitizer-arm64) while the x86 LSan leg is green — an arm64-ONLY leak (or arm64-only asan report) in the closure-captures-heap-struct-returned path; red across all recent main runs. | — |
 
-### Fixed (623)
+### Fixed (624)
 
-<details><summary>623 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>624 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -762,6 +761,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **630 surfaced 
 | B-2026-07-21-18 | codegen | medium | `if let Some(n) = v.pop()` / `while let` / `let…else` over a `Vec[shared T]` (or `VecDeque`) LEAKS the popped node — every element popped through a N… | 587dc94 |
 | B-2026-07-21-20 | ownership | low | Spurious E0500 UseAfterMove on a weak-to-weak field splice `nodes[i].next = nodes[prev].next` where both sides index the SAME `Vec[shared]` and `next… | e1ddb43 |
 | B-2026-07-21-21 | codegen | high | Materializing a `weak`-field read into a strong `Option[shared]` local and then storing it back into another `weak` field DOUBLE-FREES / use-after-fr… | e1ddb43 |
+| B-2026-07-22-2 | codegen | medium | asan_closure_captures_heap_struct_returned_clean FAILS on the arm64 LSan CI leg (memory-sanitizer-arm64) while the x86 LSan leg is green — an arm64-O… | ad55064 |
 
 </details>
 
