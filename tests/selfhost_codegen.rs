@@ -359,6 +359,12 @@ const CORPUS: &[&str] = &[
     // enums with a consuming str-temp hit the open seed bug
     // B-2026-07-22-9 (the Kara emitter compiles those correctly).
     "enum Bag { Empty, Nums(Vec[i64]), Words(Vec[i64]) }\nfn total(b: ref Bag) -> i64 {\n    match b {\n        Nums(v) => {\n            let mut t = 0;\n            let mut i = 0;\n            while i < v.len() {\n                t = t + v[i];\n                i = i + 1;\n            }\n            return t;\n        }\n        Words(w) => {\n            return w.len();\n        }\n        Empty => {}\n    }\n    return 0 - 1;\n}\nfn mk(a: i64, b: i64, c: i64) -> Bag {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(a);\n    v.push(b);\n    v.push(c);\n    return Bag.Nums(v);\n}\nfn main() {\n    let x = mk(3, 4, 5);\n    println(total(x).to_string());\n    let y = x;\n    println(total(y).to_string());\n    println(total(Bag.Empty).to_string());\n    let mut vv: Vec[Bag] = Vec.new();\n    vv.push(mk(1, 2, 3));\n    vv.push(mk(10, 20, 30));\n    let mut i = 0;\n    while i < vv.len() {\n        let e = vv[i];\n        println(total(e).to_string());\n        i = i + 1;\n    }\n}",
+    // Slice 42: VEC-TYPED STRUCT FIELDS — CStr { bytes: Vec[i64], .. }:
+    // st_stride (+24B header), st_has_heap (always), materialize/free
+    // struct fields gained a vec leg (deep-copy / free the whole vec),
+    // StructLit materializes a borrowed vec field in. Field reads
+    // (c.bytes[i]) and Vec[CStr] elements compose.
+    "struct CStr { bytes: Vec[i64], source_len: i64 }\nfn sum_bytes(c: ref CStr) -> i64 {\n    let mut t = 0;\n    let mut i = 0;\n    while i < c.bytes.len() {\n        t = t + c.bytes[i];\n        i = i + 1;\n    }\n    return t;\n}\nfn mk(a: i64, b: i64) -> CStr {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(a);\n    v.push(b);\n    v.push(a + b);\n    return CStr { bytes: v, source_len: 3 };\n}\nfn main() {\n    let c = mk(10, 20);\n    println(sum_bytes(c).to_string());\n    println(c.source_len.to_string());\n    let d = c;\n    println(sum_bytes(d).to_string());\n    let mut cs: Vec[CStr] = Vec.new();\n    cs.push(mk(1, 2));\n    cs.push(mk(5, 6));\n    let mut i = 0;\n    while i < cs.len() {\n        let e = cs[i];\n        println(sum_bytes(e).to_string());\n        i = i + 1;\n    }\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

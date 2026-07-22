@@ -3550,6 +3550,10 @@ impl Emitter {
                     return true;
                 }
             }
+            if fk == 3 or fk == 4 or fk >= 2000 {
+                // A Vec-typed field (Slice 42) always owns its buffer.
+                return true;
+            }
             fi = fi + 1;
         }
         false
@@ -3576,6 +3580,10 @@ impl Emitter {
                     es = 32;
                 }
                 n = n + es;
+            } else if fk == 3 or fk == 4 or fk >= 2000 {
+                // A Vec-typed field (Slice 42): the 24-byte {ptr,len,cap}
+                // header.
+                n = n + 24;
             } else {
                 n = n + 8;
             }
@@ -3603,6 +3611,10 @@ impl Emitter {
             if fk >= 1000 and fk < 2000 {
                 deep = self.en_has_heap(fk - 1000);
             }
+            if fk == 3 or fk == 4 or fk >= 2000 {
+                // A Vec-typed field (Slice 42) always deep-copies.
+                deep = true;
+            }
             if deep {
                 let f = self.fresh();
                 self.body = self.body
@@ -3618,6 +3630,11 @@ impl Emitter {
                 let mut mop2 = "".to_string();
                 if fk == 2 {
                     let mv = self.emit_materialize(f);
+                    let Val { op: mop, kind: mk, heap: mh } = mv;
+                    mop2 = mop;
+                } else if fk == 3 or fk == 4 or fk >= 2000 {
+                    // Vec-typed field (Slice 42): deep-copy the whole vec.
+                    let mv = self.emit_materialize_vec(f, fk);
                     let Val { op: mop, kind: mk, heap: mh } = mv;
                     mop2 = mop;
                 } else if fk < 1000 {
@@ -3666,6 +3683,9 @@ impl Emitter {
             if fk >= 1000 and fk < 2000 {
                 deep = self.en_has_heap(fk - 1000);
             }
+            if fk == 3 or fk == 4 or fk >= 2000 {
+                deep = true;
+            }
             if deep {
                 let f = self.fresh();
                 self.body = self.body
@@ -3680,6 +3700,9 @@ impl Emitter {
                     + "\n";
                 if fk == 2 {
                     self.emit_free_val(f);
+                } else if fk == 3 or fk == 4 or fk >= 2000 {
+                    // Vec-typed field (Slice 42): free the whole vec.
+                    self.emit_free_vec_val(f, fk);
                 } else if fk < 1000 {
                     // Nested struct field (Slice 33): recurse.
                     self.emit_free_struct_val(f, fk - 10);
@@ -4878,6 +4901,14 @@ impl Emitter {
                             let Val { op: mop, kind: mk, heap: mh } = mv;
                             fop2 = mop;
                         }
+                    }
+                    if (kind == 3 or kind == 4 or kind >= 2000) and not heap {
+                        // A borrowed VEC field value (Slice 42) deep-copies
+                        // in; a heap temp (fresh Vec.new()+push chain, or a
+                        // fn-returned vec) transfers directly.
+                        let mv = self.emit_materialize_vec(fop2.clone(), kind);
+                        let Val { op: mop, kind: mk, heap: mh } = mv;
+                        fop2 = mop;
                     }
                     lit_names.push(fname);
                     lit_ops.push(fop2);
