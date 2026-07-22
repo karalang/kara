@@ -70259,6 +70259,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_f32_literal_index_store() {
+        // B-2026-07-22-7: an untyped float literal (defaults to f64)
+        // index-assigned to an f32 tensor element must `fptrunc` to f32.
+        // Without the coercion the store wrote 8 bytes into the 4-byte
+        // slot, and the later f32 read got the low half — zero for many
+        // round values (`double 5.0` low word = 0) — so the element
+        // silently read 0. Covers constant and variable indices, a
+        // matching-width `f32` suffix (control), and stores read back +
+        // reduced to their exact values (no transcendental / no divergence).
+        let out = run_program(
+            "fn main() {\n\
+                 let mut a: Tensor[f32, [4]] = Tensor.zeros(vec![4]);\n\
+                 a[0] = 5.0; a[1] = 6.5;\n\
+                 let k: i64 = 2;\n\
+                 a[k] = 1.25;\n\
+                 a[3] = 3.0f32;\n\
+                 println(a[0]); println(a[1]); println(a[2]); println(a[3]);\n\
+                 println(a.sum());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "5\n6.5\n1.25\n3\n15.75\n",
+                "f32 tensor literal index-store must fptrunc and round-trip exactly",
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_column_neg_i64_min_traps() {
         // B-2026-07-01-2: `-c` on a Column[i64] slot holding i64::MIN must
         // trap with the scalar checked-neg overflow (like the interpreter),

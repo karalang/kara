@@ -527,6 +527,26 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
     ) -> Result<(), String> {
         let (_, slot) = self.tensor_index_elem_ptr(t_ptr, info, index)?;
+        // Coerce the rhs to the element's LLVM type before storing
+        // (B-2026-07-22-7). A bare `5.0` literal compiles to `f64`; storing
+        // it into an `f32` element slot without an `fptrunc` writes 8 bytes
+        // where 4 are expected, and a later `f32` read gets the low half —
+        // which is zero for many round values (`double 5.0` low word = 0),
+        // so `t[0] = 5.0; t[0]` silently read 0. An int literal (`i64`
+        // default) into a float element is the same class (the low word of
+        // `i64 5` reads as a tiny f32 denormal). The scalar `let x: f32 =
+        // 5.0` path already coerces; the tensor index-store just wasn't
+        // routing through it. `sitofp` first for an int rhs into a float
+        // element, then `coerce_scalar_to_type` for float↔float / int↔int
+        // width.
+        let val = match (val, info.elem) {
+            (BasicValueEnum::IntValue(iv), BasicTypeEnum::FloatType(ft)) => self
+                .builder
+                .build_signed_int_to_float(iv, ft, "t.store.i2f")
+                .unwrap()
+                .into(),
+            _ => self.coerce_scalar_to_type(val, info.elem),
+        };
         self.builder.build_store(slot, val).unwrap();
         Ok(())
     }
