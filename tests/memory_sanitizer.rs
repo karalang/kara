@@ -20571,6 +20571,81 @@ fn main() {
         );
     }
 
+    /// B-2026-07-22-9: a bare owned-heap USER-ENUM binding produced in a
+    /// par branch and then MOVED double-freed. Auto-par grouped the
+    /// String-payload `describe(Node.Ident(..))` sibling with the
+    /// `let a = mk_nums()` Vec-payload producer; the producer branch wrote
+    /// the `Node` back to the parent's return slot (a header bit-copy of
+    /// its `Nums(Vec)` payload), and the later `let c = a` move + scope-exit
+    /// drop then freed the Vec buffer twice. The move-hazard classifier only
+    /// tracked `String`/`Vec`/`Option`/`Result` bindings, never a user enum
+    /// that transitively owns heap, so neither the consumer guard
+    /// (B-2026-07-16-19) nor the new producer guard fired and the producer
+    /// stayed parallelized. Fixed by classifying a heap-owning user
+    /// enum/struct as a move-hazard AND de-parallelizing the producer of a
+    /// hazard consumed-by-move later. Interp was always correct; JIT + AOT
+    /// aborted. Loops 200× so any per-iteration double-free aborts under
+    /// ASAN and any leak accumulates for LSan. Threads the full pipeline so
+    /// auto-par actually fires (the `None` harness leaves it dormant).
+    #[test]
+    fn asan_auto_par_moved_heap_enum_producer_no_double_free() {
+        let label = "auto_par_moved_heap_enum_producer";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan_with_full_pipeline(
+            r#"
+enum Node { Empty, Ident(String), Nums(Vec[i64]) }
+fn describe(n: ref Node) -> String {
+    match n {
+        Ident(name) => { return "id ".to_string() + name; }
+        Nums(v) => { return "nums ".to_string() + v.len().to_string(); }
+        Empty => {}
+    }
+    return "empty".to_string();
+}
+fn mk_nums() -> Node {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(3);
+    return Node.Nums(v);
+}
+fn main() {
+    let mut total = 0i64;
+    let mut i = 0i64;
+    while i < 200 {
+        let d1 = describe(Node.Ident("foo".to_string()));
+        total = total + d1.len();
+        let a = mk_nums();
+        let d2 = describe(a);
+        total = total + d2.len();
+        let c = a;
+        let d3 = describe(c);
+        total = total + d3.len();
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             the moved heap-enum par producer double-freed its Vec payload",
+            status.code()
+        );
+        // d1="id foo"(6) + d2="nums 1"(6) + d3="nums 1"(6) = 18 per iter × 200.
+        assert_eq!(
+            stdout.trim(),
+            "3600",
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// A3a leak regression: two independent allocating calls (each builds a
     /// fresh Vec) now AUTO-parallelize — `(Allocates,Allocates)` is no longer a
     /// conflict. Each Vec is built in its own par branch, published to the

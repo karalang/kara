@@ -3261,6 +3261,75 @@ impl<'a> ConcurrencyChecker<'a> {
     /// (string form). `HashMap` value is `true` when the type is an
     /// `Option`/`Result` wrapper (whose combinator METHODS consume `self`),
     /// `false` for a bare container (whose methods are ref-self dominated).
+    /// Does the named user type (enum/struct) transitively OWN non-RC heap
+    /// — a `String`/`Vec`/`Map`/`Set`/… payload or field, directly or
+    /// through a nested non-`shared` aggregate? Drives the B-2026-07-22-9
+    /// move-hazard classification: a bare owned-heap enum/struct binding
+    /// produced in a par branch and then MOVED (`let c = a`, owned call
+    /// arg) double-frees through the par-return writeback, exactly like the
+    /// `Option`/`Result` payload case (B-2026-07-16-19). `shared`/`par`
+    /// aggregates are RC-managed (balanced retain/release across the branch
+    /// bit-copy) and excluded. `visited` guards recursive enums
+    /// (`enum List { Nil, Cons(i64, List) }`).
+    fn named_type_owns_heap(&self, name: &str, visited: &mut HashSet<String>) -> bool {
+        if name.is_empty() || !visited.insert(name.to_string()) {
+            return false;
+        }
+        for item in &self.program.items {
+            match item {
+                Item::EnumDef(e) if e.name == name => {
+                    if e.is_shared || e.is_par {
+                        return false;
+                    }
+                    return e.variants.iter().any(|v| match &v.kind {
+                        VariantKind::Unit => false,
+                        VariantKind::Tuple(tys) => {
+                            tys.iter().any(|t| self.type_expr_owns_heap(t, visited))
+                        }
+                        VariantKind::Struct(fs) => {
+                            fs.iter().any(|f| self.type_expr_owns_heap(&f.ty, visited))
+                        }
+                    });
+                }
+                Item::StructDef(s) if s.name == name => {
+                    if s.is_shared || s.is_par {
+                        return false;
+                    }
+                    return s
+                        .fields
+                        .iter()
+                        .any(|f| self.type_expr_owns_heap(&f.ty, visited));
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Type-expr twin of [`Self::named_type_owns_heap`]: does this type own
+    /// non-RC heap? A bare heap container, an `Option`/`Result` with a heap
+    /// payload, or a user enum/struct that transitively owns heap.
+    fn type_expr_owns_heap(&self, te: &TypeExpr, visited: &mut HashSet<String>) -> bool {
+        match &te.kind {
+            TypeKind::Path(p) => {
+                let head = p.segments.last().map(String::as_str).unwrap_or("");
+                if matches!(
+                    head,
+                    "String" | "Vec" | "Map" | "Set" | "SortedMap" | "SortedSet"
+                ) {
+                    return true;
+                }
+                if matches!(head, "Option" | "Result") {
+                    return p.generic_args.iter().flatten().any(
+                        |a| matches!(a, GenericArg::Type(t) if self.type_expr_owns_heap(t, visited)),
+                    );
+                }
+                self.named_type_owns_heap(head, visited)
+            }
+            _ => false,
+        }
+    }
+
     fn collect_move_hazard_locals(&self, block: &Block) -> HashMap<String, bool> {
         fn head_is_container(head: &str) -> bool {
             matches!(
@@ -3268,7 +3337,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 "Vec" | "String" | "Map" | "Set" | "SortedMap" | "SortedSet"
             )
         }
-        fn type_expr_hazard(te: &TypeExpr) -> Option<bool> {
+        fn type_expr_hazard(this: &ConcurrencyChecker, te: &TypeExpr) -> Option<bool> {
             match &te.kind {
                 TypeKind::Path(p) => {
                     let head = p.segments.last().map(String::as_str).unwrap_or("");
@@ -3277,11 +3346,19 @@ impl<'a> ConcurrencyChecker<'a> {
                     }
                     if matches!(head, "Option" | "Result") {
                         let payload_hazard = p.generic_args.iter().flatten().any(
-                            |a| matches!(a, GenericArg::Type(t) if type_expr_hazard(t).is_some()),
+                            |a| matches!(a, GenericArg::Type(t) if type_expr_hazard(this, t).is_some()),
                         );
                         if payload_hazard {
                             return Some(true);
                         }
+                    }
+                    // A user enum/struct that transitively owns heap is a
+                    // move-hazard too (B-2026-07-22-9) — classified
+                    // non-wrapper (`false`): its methods aren't `Option`/
+                    // `Result` combinators, it just must not be
+                    // par-produced-then-moved.
+                    if this.named_type_owns_heap(head, &mut HashSet::new()) {
+                        return Some(false);
                     }
                     None
                 }
@@ -3292,7 +3369,10 @@ impl<'a> ConcurrencyChecker<'a> {
         // typechecker's `expr_types` keyed by the LET RHS's span — the
         // `pattern_binding_types` string records only the head name
         // ("Option"), losing the payload that decides hazard-ness.
-        fn semantic_type_hazard(t: &crate::typechecker::types::Type) -> Option<bool> {
+        fn semantic_type_hazard(
+            this: &ConcurrencyChecker,
+            t: &crate::typechecker::types::Type,
+        ) -> Option<bool> {
             use crate::typechecker::types::Type as T;
             match t {
                 T::Str => Some(false),
@@ -3301,9 +3381,15 @@ impl<'a> ConcurrencyChecker<'a> {
                         return Some(false);
                     }
                     if matches!(name.as_str(), "Option" | "Result")
-                        && args.iter().any(|a| semantic_type_hazard(a).is_some())
+                        && args.iter().any(|a| semantic_type_hazard(this, a).is_some())
                     {
                         return Some(true);
+                    }
+                    // User enum/struct transitively owning heap
+                    // (B-2026-07-22-9) — the un-annotated `let a = mk_nums()`
+                    // twin of the `type_expr_hazard` enum/struct arm.
+                    if this.named_type_owns_heap(name, &mut HashSet::new()) {
+                        return Some(false);
                     }
                     None
                 }
@@ -3321,11 +3407,11 @@ impl<'a> ConcurrencyChecker<'a> {
                 return;
             };
             let hazard = match ty {
-                Some(te) => type_expr_hazard(te),
+                Some(te) => type_expr_hazard(this, te),
                 None => value_span.and_then(|vs| {
                     this.types
                         .and_then(|t| t.expr_types.get(&SpanKey::from_span(vs)))
-                        .and_then(semantic_type_hazard)
+                        .and_then(|t| semantic_type_hazard(this, t))
                 }),
             };
             if let Some(is_wrapper) = hazard {
@@ -3349,7 +3435,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     walk_expr(this, value, out);
                 }
                 StmtKind::LetUninit { name, ty, .. } => {
-                    if let Some(is_wrapper) = type_expr_hazard(ty) {
+                    if let Some(is_wrapper) = type_expr_hazard(this, ty) {
                         out.insert(name.clone(), is_wrapper);
                     }
                 }
@@ -3704,9 +3790,44 @@ impl<'a> ConcurrencyChecker<'a> {
         let mut groups: Vec<ParallelGroup> = Vec::new();
         let mut assigned = vec![false; n];
 
+        // B-2026-07-22-9: a statement that PRODUCES a move-hazard binding
+        // later consumed by a MOVE cannot be auto-parallelized either — the
+        // dual of the consumer guard below (B-2026-07-16-19). When the
+        // producer runs in a `__par_branch` worker, its owned heap value is
+        // written back to the parent frame via the par-return slot (a
+        // bit-copy of the {tag,ptr,len,cap} header); a later sequential
+        // `let c = a` / owned-arg move of that binding then double-frees —
+        // the move's source-null and the writeback copy don't compose, so
+        // both the moved-into binding's scope-exit drop and the residual
+        // writeback copy free the same buffer. De-parallelizing only the
+        // CONSUMER (line ~3763) is insufficient: the consumer already runs
+        // in the sequential tail there, yet the PRODUCER stays grouped and
+        // the double-free still fires. The proven-broken repro is a
+        // String-payload enum temp describe() sibling (which seeds the
+        // group) beside a `let a = mk_nums()` Vec-payload producer whose `a`
+        // is then `let c = a`-moved; either alone is clean (no group forms),
+        // only their coexistence parallelizes the producer. Sequential is
+        // always correct; auto-par is only an optimization.
+        let mut hazard_producer = vec![false; n];
+        for i in 0..n {
+            let produces_consumed_hazard = infos[i].let_introduced.iter().any(|name| {
+                // Consumed-by-move by any LATER statement (the writeback +
+                // move race is strictly forward: the producer's value is
+                // handed to the parent, then a subsequent stmt moves it).
+                ((i + 1)..n).any(|j| consuming_hazard_reads[j].contains(name))
+            });
+            hazard_producer[i] = produces_consumed_hazard;
+        }
+
         // For each unassigned statement, try to build a maximal parallel group
         for start in 0..n {
             if assigned[start] {
+                continue;
+            }
+
+            // B-2026-07-22-9 seed guard: see `hazard_producer` above.
+            if hazard_producer[start] {
+                assigned[start] = true;
                 continue;
             }
 
@@ -3827,6 +3948,13 @@ impl<'a> ConcurrencyChecker<'a> {
                 // Consuming read of a move-hazard capture ends the group too
                 // (seed-side guard's candidate mirror, B-2026-07-16-19).
                 if !consuming_hazard_reads[candidate].is_empty() {
+                    break;
+                }
+
+                // A move-hazard PRODUCER whose binding is consumed-by-move
+                // later ends the group too (seed-side guard's candidate
+                // mirror, B-2026-07-22-9).
+                if hazard_producer[candidate] {
                     break;
                 }
 
