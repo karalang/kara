@@ -782,6 +782,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // moved-out handle / drop-side-effect doesn't fire here — the
                     // caller fires it when its own binding goes out of scope.
                     self.suppress_source_vec_cleanup_for_arg(e);
+                    // B-2026-07-22-2: `return mk().s;` — the caller now owns
+                    // the extracted field's buffer; zero it in the staged
+                    // fresh-temp slot so the drain below frees only the
+                    // temp's unread remainder.
+                    self.consume_freshtemp_field_move(e);
                     if let ExprKind::Identifier(name) = &e.kind {
                         self.suppress_user_drop_for_var(name);
                         self.suppress_map_cleanup_for_tail_identifier(name);

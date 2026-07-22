@@ -1818,6 +1818,17 @@ pub(super) struct Codegen<'ctx> {
     /// Symmetric to `suppress_source_vec_cleanup_for_arg`'s
     /// cap-zeroing for Identifier RHS aliasing.
     pub(crate) last_fstr_acc: Option<PointerValue<'ctx>>,
+    /// B-2026-07-22-2 — the most recent FRESH call-result struct temp
+    /// materialized by a field access in expression position
+    /// (`println(mk().s)` / `take(mk().s)` / `mkv().v.len()`):
+    /// `(slot, struct_name, accessed_field, object_span_key)`. The temp's
+    /// struct drop is registered at the access; the extracted field value is
+    /// a BORROW for read consumers, and a MOVE consumer (let / assign /
+    /// return / fn tail) zeroes the accessed field's heap in the slot via
+    /// `consume_freshtemp_field_move` (matched on field name + object span
+    /// so a stale entry can never disarm an unrelated statement's temp).
+    pub(crate) freshtemp_field_access_slot:
+        Option<(PointerValue<'ctx>, String, String, (usize, usize))>,
     // ── Shared types (RC) ─────────────────────────────────────────
     /// Shared type metadata (struct/enum name → heap layout info).
     pub(crate) shared_types: HashMap<String, SharedTypeInfo<'ctx>>,
@@ -6947,6 +6958,7 @@ impl<'ctx> Codegen<'ctx> {
             pending_map_insert_old_dec: false,
             pending_spawn_detach: false,
             last_fstr_acc: None,
+            freshtemp_field_access_slot: None,
             shared_types: HashMap::new(),
             malloc_fn,
             alloc_fallible_fn,

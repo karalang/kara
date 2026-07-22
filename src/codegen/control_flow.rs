@@ -168,6 +168,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // — zero the source field in the then-arm (the binding owns the
         // payload); the miss edge leaves it for the struct drop.
         self.suppress_consumed_place_optres_field_source(value, pattern, optres_bindings_owned);
+        // B-2026-07-22-2: fresh-temp sibling (`if let Some(s) = mk().opt`).
+        self.consume_freshtemp_field_scrutinee(value, pattern, optres_bindings_owned);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
         // B-2026-07-03-31: skip disarming the source payload drop when the
         // then-block ONLY BORROWS the bound payload (not moved out) — the
@@ -599,6 +601,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // binding owns the payload); the divergent else edge leaves it for
         // the struct drop.
         self.suppress_consumed_place_optres_field_source(value, pattern, optres_bindings_owned);
+        // B-2026-07-22-2: fresh-temp sibling (`let Some(s) = mk().opt else`).
+        self.consume_freshtemp_field_scrutinee(value, pattern, optres_bindings_owned);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
         self.suppress_inline_option_agg_payload_cleanup(value, pattern);
         // Slice 3t: boxed-payload struct-destructure field suppression

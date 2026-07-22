@@ -546,6 +546,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     &arm.pattern,
                     optres_bindings_owned,
                 );
+                // B-2026-07-22-2: the fresh-temp sibling — `match mk().opt {
+                // Some(s) => … }` zeroes the accessed field in the staged
+                // temp slot on a consuming arm.
+                self.consume_freshtemp_field_scrutinee(
+                    scrutinee,
+                    &arm.pattern,
+                    optres_bindings_owned,
+                );
                 // #16: a plain struct-pattern destructure (`match v { S { s } =>
                 // … }`) of an owned local struct. Cap-zero each consumed field in
                 // the source slot so the scrutinee's struct drop skips the buffer
@@ -2127,6 +2135,51 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.zero_option_field_tag_at(src_ptr);
         }
+    }
+
+    /// B-2026-07-22-2 (pattern leg) — `match mk().opt { Some(s) => … }`: the
+    /// scrutinee is the staged fresh-temp field access
+    /// (`freshtemp_field_access_slot`), whose owning temp now carries a
+    /// registered struct drop. A CONSUMING arm's binding owns the extracted
+    /// payload, so zero the accessed field in the temp slot (per its kind —
+    /// Option tag / Result area / Vec-String cap, via
+    /// `zero_struct_field_move_cap`) in that arm; a non-binding arm leaves
+    /// it armed and the temp's drop frees the field. Emitted per-arm (only
+    /// the taken arm executes its zero); the channel is deliberately NOT
+    /// cleared — the span-key match keeps stale entries inert for later
+    /// statements.
+    pub(super) fn consume_freshtemp_field_scrutinee(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        bindings_owned: bool,
+    ) {
+        if !bindings_owned {
+            return;
+        }
+        let ExprKind::FieldAccess { object, field } = &scrutinee.kind else {
+            return;
+        };
+        let Some((slot, name, ch_field, key)) = self.freshtemp_field_access_slot.clone() else {
+            return;
+        };
+        if ch_field != *field || key != (object.span.offset, object.span.length) {
+            return;
+        }
+        let consumes = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => {
+                patterns.iter().any(pattern_consumes_field)
+            }
+            PatternKind::Struct { fields, .. } => fields
+                .iter()
+                .any(|f| f.pattern.as_ref().is_none_or(pattern_consumes_field)),
+            PatternKind::Binding(_) => true,
+            _ => false,
+        };
+        if !consumes {
+            return;
+        }
+        self.zero_struct_field_move_cap(slot, &name, &ch_field);
     }
 
     /// B-2026-07-21-16 (let leg) — `let x = <ownedplace>.optresfield;` is a

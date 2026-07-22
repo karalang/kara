@@ -5052,6 +5052,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     let var_name = var_name.clone();
                     self.track_place_optres_field_move(&var_name, value);
+                    // B-2026-07-22-2 (move leg): `let s = mk().s;` — the
+                    // binding now owns the accessed field's buffer; zero it
+                    // in the staged fresh-temp slot so the temp's struct
+                    // drop frees only the UNREAD remainder.
+                    self.consume_freshtemp_field_move(value);
                 }
                 // Slice γ (2026-05-14): track value-type struct bindings
                 // for scope-exit drop-fn invocation. Mirrors the enum
@@ -6015,11 +6020,27 @@ impl<'ctx> super::Codegen<'ctx> {
                         ExprKind::Identifier(rhs_name) if rhs_name != name
                             && self.vec_elem_types.contains_key(rhs_name.as_str())
                     );
+                    // B-2026-07-22-2: `acc = mk().s;` — the RHS is the staged
+                    // fresh-temp field move (a buffer distinct from acc's old
+                    // one, about to be owned by acc via the consume below), so
+                    // the displaced old buffer must be freed here exactly like
+                    // the fresh-Call RHS case. `rhs_yields_fresh_ref` doesn't
+                    // classify a FieldAccess, so without this arm the old
+                    // value orphaned.
+                    let rhs_is_staged_freshtemp_field = matches!(
+                        &value.kind,
+                        ExprKind::FieldAccess { object, field }
+                            if self.freshtemp_field_access_slot.as_ref().is_some_and(
+                                |(_, _, ch_f, key)| ch_f == field
+                                    && *key == (object.span.offset, object.span.length)
+                            )
+                    );
                     let trigger_eager_free = lhs_is_tracked_vec
                         && !rhs_is_self_alias
                         && (staged_fstr_acc.is_some()
                             || rhs_is_moved_alias
                             || rhs_is_fresh
+                            || rhs_is_staged_freshtemp_field
                             || rhs_is_heap_vec_index);
                     if trigger_eager_free {
                         if let Some(slot) = self.variables.get(name).copied() {
@@ -6185,6 +6206,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // so the owning struct's drop skips the payload now in x's
                     // slot (x's own let-site cleanup owns it).
                     self.suppress_place_optres_field_move_source(value);
+                    // B-2026-07-22-2 (assign leg): `x = mk().s;` — same move
+                    // semantics against the staged fresh-temp slot.
+                    self.consume_freshtemp_field_move(value);
                 } else if let ExprKind::FieldAccess { object, field } = &target.kind {
                     // Heap-env closure FIELD reassignment (`r.f = make(j)` /
                     // `r.f = g`): drop r.f's CURRENT env, inc the new env on a

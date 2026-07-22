@@ -57105,6 +57105,55 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_freshtemp_field_access_all_consumers() {
+        // B-2026-07-22-2: a FRESH call-result struct temp whose field is
+        // read in expression position never dropped its aggregate — every
+        // heap field leaked, even unread ones (x86 -O2 DCE'd the dead
+        // allocations; arm64 -O2 did not, going red on the
+        // memory-sanitizer-arm64 leg via the closure-capture test whose
+        // consumers hit exactly this shape). The temp is now materialized
+        // and drop-tracked at the access; move consumers (let / assign /
+        // return / fn tail / consuming match arms) zero the accessed field
+        // in the slot. This E2E pins output correctness across the full
+        // consumer matrix; the LSan sibling guards the memory halves.
+        let output = run_program(
+            "struct W { s: String }\n\
+             struct W2 { s: String, t: String }\n\
+             struct Wv { v: Vec[i64] }\n\
+             struct H { opt: Option[String], n: i64 }\n\
+             fn mk() -> W { return W { s: \"one\".to_string() }; }\n\
+             fn mk2() -> W2 { return W2 { s: \"aa\".to_string(), t: \"bb\".to_string() }; }\n\
+             fn mkv() -> Wv { return Wv { v: [1, 2, 3] }; }\n\
+             fn mko() -> H { return H { opt: Some(\"op\".to_string()), n: 5 }; }\n\
+             fn take(x: String) -> i64 { return x.len(); }\n\
+             fn get() -> String { return mk().s; }\n\
+             fn get2() -> String { mk().s }\n\
+             fn main() {\n\
+                 println(mk().s);\n\
+                 println(take(mk().s).to_string());\n\
+                 println(mkv().v.len().to_string());\n\
+                 println(mko().n.to_string());\n\
+                 let s = mk2().s;\n\
+                 println(s);\n\
+                 let mut acc = \"seed\".to_string();\n\
+                 acc = mk().s;\n\
+                 println(acc);\n\
+                 println(get());\n\
+                 println(get2());\n\
+                 match mko().opt {\n\
+                     Some(p) => { println(\"m:\".to_string() + p); }\n\
+                     None => { }\n\
+                 }\n\
+                 if let Some(q) = mko().opt {\n\
+                     println(\"i:\".to_string() + q);\n\
+                 }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "one\n3\n3\n5\naa\none\none\none\nm:op\ni:op\n");
+    }
+
+    #[test]
     fn test_e2e_struct_result_field_drop_and_moves() {
         // B-2026-07-21-15: a struct's `Result[String, i64]`-class field
         // payload was NEVER freed at the owning struct's scope-exit drop —

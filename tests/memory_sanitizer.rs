@@ -10474,6 +10474,68 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_field_access_no_leak_no_double_free() {
+        // B-2026-07-22-2 memory leg. Leak half: a fresh call-result struct
+        // temp read in expression position must drop its aggregate — the
+        // read field after a borrow consumer, AND the unread remainder
+        // (mk2().s leaves .t). Double-free half: move consumers (let /
+        // assign / return / tail / consuming match arms) own the accessed
+        // field exactly once against the temp's registered drop. NOTE: x86
+        // -O2 folds several of these leaks invisible; the arm64 LSan leg is
+        // the real guard for this class (B-2026-07-12-29 precedent). Loop
+        // so any per-iteration imbalance accumulates.
+        assert_clean_asan_run(
+            r#"
+struct W { s: String }
+struct W2 { s: String, t: String }
+struct Wv { v: Vec[i64] }
+struct H { opt: Option[String], n: i64 }
+enum E { A(String) }
+fn mk() -> W { return W { s: "one".to_string() }; }
+fn mk2() -> W2 { return W2 { s: "aa".to_string(), t: "bb".to_string() }; }
+fn mkv() -> Wv { return Wv { v: [1, 2, 3] }; }
+fn mko() -> H { return H { opt: Some("op".to_string()), n: 5 }; }
+fn take(x: String) -> i64 { return x.len(); }
+fn get() -> String { return mk().s; }
+fn get2() -> String { mk().s }
+fn f(w: W) -> W { let g = || w; g() }
+fn fv(w: Wv) -> Wv { let g = || w; g() }
+fn fe(e: E) -> E { let g = || e; g() }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc2: i64 = 0;
+    while i < 40 {
+        acc2 = acc2 + mk().s.len();
+        acc2 = acc2 + take(mk().s);
+        acc2 = acc2 + mkv().v.len();
+        acc2 = acc2 + mko().n;
+        let s = mk2().s;
+        acc2 = acc2 + s.len();
+        let mut acc = "seed".to_string();
+        acc = mk().s;
+        acc2 = acc2 + acc.len();
+        acc2 = acc2 + get().len() + get2().len();
+        match mko().opt {
+            Some(p) => { acc2 = acc2 + p.len(); }
+            None => { }
+        }
+        if let Some(q) = mko().opt {
+            acc2 = acc2 + q.len();
+        }
+        acc2 = acc2 + f(W { s: "one".to_string() }).s.len();
+        acc2 = acc2 + fv(Wv { v: [1, 2, 3] }).v.len();
+        match fe(E.A("four".to_string())) { E.A(t) => { acc2 = acc2 + t.len(); } }
+        i = i + 1;
+    }
+    println(acc2);
+}
+"#,
+            &["1560"],
+            "freshtemp_field_access",
+        );
+    }
+
+    #[test]
     fn asan_struct_result_field_drop_no_leak_no_double_free() {
         // B-2026-07-21-15 memory leg. Leak half: an UNCONSUMED holder's
         // Result payload (and an unconsumed destructure leaf) must be freed

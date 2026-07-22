@@ -785,6 +785,21 @@ impl<'ctx> super::Codegen<'ctx> {
             // Look up field index from struct type name in object's identifier
             let field_idx = self.field_index_for(object, field);
             if let Some(idx) = field_idx {
+                // B-2026-07-22-2 — a FRESH call-result struct temp read in
+                // expression position (`println(mk().s)`, `take(mk().s)`,
+                // `mkv().v.len()`, `println(mk().n)`): nothing owned the temp
+                // aggregate, so its heap fields leaked wholesale — even the
+                // UNREAD ones. (x86 -O2 happened to DCE the dead allocations,
+                // arm64 -O2 did not — the memory-sanitizer-arm64 CI split
+                // that got this filed as an "arm64-only" leak; -O0 shows it
+                // on every arch.) Materialize the temp into a slot and
+                // register its struct drop. The extracted field value is a
+                // BORROW for read consumers (print / args / method receivers
+                // — owned-param callees entry-copy under caller-retains);
+                // MOVE consumers (let / assign / return / fn tail) zero the
+                // accessed field's heap in the slot via the staged
+                // side-channel so their binding becomes its sole owner.
+                self.track_freshtemp_field_access_object(object, field, sv);
                 let extracted = self.builder.build_extract_value(sv, idx, field).unwrap();
                 // Borrowed (`ref`) field: the extract yields the stored borrow
                 // POINTER. In this generic value-read position (`println(p.f)`,
@@ -821,6 +836,70 @@ impl<'ctx> super::Codegen<'ctx> {
              `--interp` (or `KARAC_RUN_JIT=0`) and please report it",
             field
         ))
+    }
+
+    /// B-2026-07-22-2 — materialize a FRESH call-result struct temp whose
+    /// field is being read in expression position, register its struct drop
+    /// (scope-exit drain), and stage `(slot, struct, field, object-span)`
+    /// for the MOVE consumers. Gates: the object is a fresh owned temp
+    /// (`expr_yields_fresh_owned_temp` — Call/MethodCall, non-borrow), not a
+    /// borrow-returning accessor, and a non-shared user struct.
+    /// `track_struct_var` self-filters heapless structs (its drop synthesis
+    /// returns None), so a scalar-only temp costs one dead alloca at most.
+    fn track_freshtemp_field_access_object(
+        &mut self,
+        object: &Expr,
+        field: &str,
+        sv: inkwell::values::StructValue<'ctx>,
+    ) {
+        if !self.expr_yields_fresh_owned_temp(object) {
+            return;
+        }
+        if self.scrutinee_is_borrow_call(object) {
+            return;
+        }
+        let Some(name) = self.type_name_of_expr(object) else {
+            return;
+        };
+        if !self.struct_types.contains_key(name.as_str())
+            || self.shared_types.contains_key(name.as_str())
+        {
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let slot = self.create_entry_alloca(fn_val, "__freshtemp_fldobj", sv.get_type().into());
+        let _ = self.builder.build_store(slot, sv);
+        self.track_struct_var(&name, slot);
+        self.freshtemp_field_access_slot = Some((
+            slot,
+            name,
+            field.to_string(),
+            (object.span.offset, object.span.length),
+        ));
+    }
+
+    /// Move-consumer companion of
+    /// [`Self::track_freshtemp_field_access_object`]: when a let / assign /
+    /// return / fn-tail consumes exactly the staged field access (matched on
+    /// field name AND object span, so a stale entry never disarms an
+    /// unrelated temp), zero the accessed field's heap in the slot — the
+    /// consumer's binding is now its sole owner, and the temp's struct drop
+    /// frees only the UNREAD remainder.
+    pub(super) fn consume_freshtemp_field_move(&mut self, value: &Expr) {
+        let ExprKind::FieldAccess { object, field } = &value.kind else {
+            return;
+        };
+        let Some((slot, name, ch_field, span_key)) = self.freshtemp_field_access_slot.clone()
+        else {
+            return;
+        };
+        if ch_field != *field || span_key != (object.span.offset, object.span.length) {
+            return;
+        }
+        self.freshtemp_field_access_slot = None;
+        self.zero_struct_field_move_cap(slot, &name, field);
     }
 
     /// FFI union field read helper — phase 5 line 569 slice 4. Returns

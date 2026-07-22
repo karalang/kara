@@ -3087,6 +3087,10 @@ impl<'ctx> super::Codegen<'ctx> {
         });
         if let Some(expr) = from_final.or(from_last_stmt) {
             self.suppress_source_vec_cleanup_for_arg(expr);
+            // B-2026-07-22-2: `fn get() -> String { mk().s }` tail — the
+            // caller owns the extracted field; zero it in the staged
+            // fresh-temp slot so the frame drain frees only the remainder.
+            self.consume_freshtemp_field_move(expr);
             // Sub-slice (3) of move-suppression — when the tail
             // expression is an Identifier whose binding has a user
             // `impl Drop`, the source binding's value is moved out as
