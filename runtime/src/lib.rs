@@ -42,6 +42,10 @@ mod emutls;
 pub mod event_loop;
 mod fatal;
 mod file;
+// f-string format-spec runtime formatter (`karac_runtime_fmt_*`) — the
+// shared-renderer path for binary / center-align / custom-fill specs that
+// `snprintf` can't express. Shares `src/format_spec.rs` via `#[path]`.
+mod fmt;
 mod lifecycle;
 // `std.process` Command/Child spawning (phase-8 P1, codegen leg).
 // Target-independent like `file`: on wasm the std::process stubs
@@ -468,6 +472,15 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         process::karac_runtime_process_read_to_string,
         process::karac_runtime_process_stdin_write,
         process::karac_runtime_process_stdin_close,
+    );
+    // f-string format-spec runtime formatter (`runtime/src/fmt.rs`) — same
+    // JIT-keep-list class as file/process: the LLJIT `dlsym` generator must
+    // resolve these for `karac run` on any program using a binary /
+    // center-align / custom-fill format spec (B-2026-07-12-22 class).
+    keep!(
+        fmt::karac_runtime_fmt_int,
+        fmt::karac_runtime_fmt_float,
+        fmt::karac_runtime_fmt_str,
     );
     // JSON runtime (this file's `runtime_json_*` block).
     keep!(

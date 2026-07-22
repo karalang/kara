@@ -8660,6 +8660,46 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_fstring_binary_center_and_fill_specs() {
+        // Binary `b`, center align `^`, and custom (non-space) fill — the
+        // format specs `snprintf` can't express, routed through the shared
+        // runtime formatter (`karac_runtime_fmt_*`) which calls the SAME
+        // `FormatSpec::apply_*` the interpreter uses, so `karac build` matches
+        // `karac run --interp` byte-for-byte. Covers int/float/string holes,
+        // combined specs (center hex, fill+center+precision), and the
+        // source-wider-than-width no-pad branch.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let x = 5i64;\n\
+                 let big = 255i64;\n\
+                 let neg = 42i64;\n\
+                 let pi = 3.14159f64;\n\
+                 let name = \"kara\";\n\
+                 println(f\"[{x:b}]\");\n\
+                 println(f\"[{big:b}]\");\n\
+                 println(f\"[{x:08b}]\");\n\
+                 println(f\"[{neg:^6}]\");\n\
+                 println(f\"[{name:^10}]\");\n\
+                 println(f\"[{pi:^10.2}]\");\n\
+                 println(f\"[{name:*^10}]\");\n\
+                 println(f\"[{name:*<10}]\");\n\
+                 println(f\"[{neg:*>8}]\");\n\
+                 println(f\"[{pi:*^10.2}]\");\n\
+                 println(f\"[{big:^8x}]\");\n\
+                 println(f\"[{name:.^12}]\");\n\
+                 println(f\"[{name:^2}]\");\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "[101]\n[11111111]\n[00000101]\n[  42  ]\n[   kara   ]\n[   3.14   ]\n\
+                 [***kara***]\n[kara******]\n[******42]\n[***3.14***]\n[   ff   ]\n\
+                 [....kara....]\n[kara]\n"
+            );
+        }
+    }
+
     /// Associated-type PROJECTION in a generic fn's signature under codegen —
     /// `fn get[C: Container](c: C) -> C.Item { c.first() }`. The mono lowered
     /// `C.Item` to the i64/`{}` default (only `segments.first()` was read),

@@ -7634,7 +7634,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `crate::format_spec` result as the interpreter, so run == build.
         if let Some(spec_raw) = spec {
             if let Ok(fs) = crate::format_spec::FormatSpec::parse(spec_raw) {
-                return self.compile_fstr_part_spec(e, &fs);
+                return self.compile_fstr_part_spec(e, spec_raw, &fs);
             }
         }
         // A user `impl Display` (a compiled `<Type>.to_string`) wins over the
@@ -7995,8 +7995,18 @@ impl<'ctx> super::Codegen<'ctx> {
     fn compile_fstr_part_spec(
         &mut self,
         e: &Expr,
+        spec_raw: &str,
         fs: &crate::format_spec::FormatSpec,
     ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        // Binary radix, center align, and custom (non-space) fill can't be
+        // expressed by `snprintf`, so route them through the shared runtime
+        // formatter (`karac_runtime_fmt_*`), which parses `spec_raw` and calls
+        // the SAME `FormatSpec::apply_*` the interpreter uses. Everything else
+        // stays on the faster inline `snprintf` path below.
+        if fs.needs_runtime_formatter() {
+            return self.compile_fstr_part_spec_runtime(e, spec_raw, fs);
+        }
+
         let i64_t = self.context.i64_type();
         let i32_t = self.context.i32_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -8172,6 +8182,209 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok((buf_ptr, len))
             }
         }
+    }
+
+    /// The runtime-formatter path of [`Self::compile_fstr_part_spec`] — used
+    /// for specs `snprintf` can't express (binary `b`, center align `^`,
+    /// custom fill). Emits the raw spec as a global, compiles `e`, and calls
+    /// `karac_runtime_fmt_int` / `_float` / `_str` (which parse the spec and
+    /// render via the SAME `FormatSpec::apply_*` the interpreter uses), writing
+    /// into a stack buffer sized to the spec's guaranteed maximum output.
+    /// Returns `(ptr, len)` — the buffer pointer and the rendered byte length.
+    fn compile_fstr_part_spec_runtime(
+        &mut self,
+        e: &Expr,
+        spec_raw: &str,
+        fs: &crate::format_spec::FormatSpec,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let width = fs.width.unwrap_or(0) as u64;
+
+        // Raw spec bytes as a global (ptr, len). The runtime re-parses with the
+        // same `FormatSpec::parse`; the re-parse is trivial and only happens for
+        // these rare specs.
+        let spec_g = self
+            .builder
+            .build_global_string_ptr(spec_raw, "fmt.spec")
+            .unwrap()
+            .as_pointer_value();
+        let spec_len = i64_t.const_int(spec_raw.len() as u64, false);
+
+        let val = self.compile_expr(e)?;
+
+        // String hole: reuse the byte-comparison pad/nopad structure of the
+        // `snprintf` string path (so multibyte behavior is IDENTICAL — no new
+        // divergence). When the source is at least `width` bytes wide, no
+        // padding can apply, so return the source directly. Otherwise call
+        // `karac_runtime_fmt_str` into a fixed buffer sized `(width+1)*4` bytes
+        // (holds up to `width` chars of up to 4 UTF-8 bytes each).
+        if let BasicValueEnum::StructValue(sv) = val {
+            if self.llvm_ty_is_vec_struct(sv.get_type().into()) {
+                let sptr = self
+                    .builder
+                    .build_extract_value(sv, 0, "fmt.s.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let slen = self
+                    .builder
+                    .build_extract_value(sv, 1, "fmt.s.len")
+                    .unwrap()
+                    .into_int_value();
+                if width == 0 {
+                    return Ok((sptr, slen));
+                }
+                let cap = (width + 1) * 4;
+                let wconst = i64_t.const_int(width, false);
+                let need_pad = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, slen, wconst, "fmt.s.needpad")
+                    .unwrap();
+                let pad_bb = self.context.append_basic_block(fn_val, "fmt.s.pad");
+                let nopad_bb = self.context.append_basic_block(fn_val, "fmt.s.nopad");
+                let merge_bb = self.context.append_basic_block(fn_val, "fmt.s.merge");
+                let buf = self.create_entry_alloca(
+                    fn_val,
+                    "fmt.s.buf",
+                    self.context.i8_type().array_type(cap as u32).into(),
+                );
+                let buf_ptr = self
+                    .builder
+                    .build_pointer_cast(buf, ptr_ty, "fmt.s.bufp")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(need_pad, pad_bb, nopad_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(pad_bb);
+                let fmt_str_fn = self
+                    .module
+                    .get_function("karac_runtime_fmt_str")
+                    .expect("karac_runtime_fmt_str declared in Codegen::new");
+                let written = self
+                    .builder
+                    .build_call(
+                        fmt_str_fn,
+                        &[
+                            spec_g.into(),
+                            spec_len.into(),
+                            sptr.into(),
+                            slen.into(),
+                            buf_ptr.into(),
+                            i64_t.const_int(cap, false).into(),
+                        ],
+                        "fmt.s.call",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let pad_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(nopad_bb);
+                let nopad_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(merge_bb);
+                let ptr_phi = self.builder.build_phi(ptr_ty, "fmt.s.ptr.phi").unwrap();
+                ptr_phi.add_incoming(&[(&buf_ptr, pad_end), (&sptr, nopad_end)]);
+                let len_phi = self.builder.build_phi(i64_t, "fmt.s.len.phi").unwrap();
+                len_phi.add_incoming(&[(&written, pad_end), (&slen, nopad_end)]);
+                return Ok((
+                    ptr_phi.as_basic_value().into_pointer_value(),
+                    len_phi.as_basic_value().into_int_value(),
+                ));
+            }
+        }
+
+        // Numeric hole (int binary/center/fill, or float center/fill). Output
+        // is bounded: at most `max(width, 72)` chars of up to 4 UTF-8 bytes
+        // each (72 covers a 64-bit binary rendering plus sign/slack). A fixed
+        // stack buffer avoids any heap ownership on the f-string append path.
+        let cap = (std::cmp::max(width, 72) + 2) * 4;
+        let buf = self.create_entry_alloca(
+            fn_val,
+            "fmt.n.buf",
+            self.context.i8_type().array_type(cap as u32).into(),
+        );
+        let buf_ptr = self
+            .builder
+            .build_pointer_cast(buf, ptr_ty, "fmt.n.bufp")
+            .unwrap();
+        let cap_v = i64_t.const_int(cap, false);
+
+        let written = if let BasicValueEnum::FloatValue(fv) = val {
+            // Ensure f64 for the ABI (the interpreter renders at f64 too).
+            let f64_v = if fv.get_type() == self.context.f64_type() {
+                fv
+            } else {
+                self.builder
+                    .build_float_ext(fv, self.context.f64_type(), "fmt.n.f64")
+                    .unwrap()
+            };
+            let fmt_float_fn = self
+                .module
+                .get_function("karac_runtime_fmt_float")
+                .expect("karac_runtime_fmt_float declared in Codegen::new");
+            self.builder
+                .build_call(
+                    fmt_float_fn,
+                    &[
+                        spec_g.into(),
+                        spec_len.into(),
+                        f64_v.into(),
+                        buf_ptr.into(),
+                        cap_v.into(),
+                    ],
+                    "fmt.n.fcall",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value()
+        } else {
+            let iv = val.into_int_value();
+            let unsigned = self.expr_is_unsigned_int(e);
+            let widened = if iv.get_type().get_bit_width() < 64 {
+                if unsigned {
+                    self.builder
+                        .build_int_z_extend(iv, i64_t, "fmt.n.zx")
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_int_s_extend(iv, i64_t, "fmt.n.sx")
+                        .unwrap()
+                }
+            } else {
+                iv
+            };
+            let is_unsigned = i32_t.const_int(unsigned as u64, false);
+            let fmt_int_fn = self
+                .module
+                .get_function("karac_runtime_fmt_int")
+                .expect("karac_runtime_fmt_int declared in Codegen::new");
+            self.builder
+                .build_call(
+                    fmt_int_fn,
+                    &[
+                        spec_g.into(),
+                        spec_len.into(),
+                        widened.into(),
+                        is_unsigned.into(),
+                        buf_ptr.into(),
+                        cap_v.into(),
+                    ],
+                    "fmt.n.icall",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value()
+        };
+        Ok((buf_ptr, written))
     }
 
     /// Lazily declare `karac_runtime_f64_to_str(double, ptr, i64) -> i64` —

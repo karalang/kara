@@ -4696,6 +4696,58 @@ impl<'ctx> Codegen<'ctx> {
             process_close_type,
             Some(Linkage::External),
         );
+        // f-string format-spec runtime formatter (`runtime/src/fmt.rs`) — the
+        // shared-renderer path for binary / center-align / custom-fill specs
+        // `snprintf` can't express. Each takes the raw spec bytes + the value +
+        // a caller output buffer, returns bytes written. Sizes are `i64` on
+        // every target (the Rust ABI uses `i64`, so no wasm size-switching).
+        let fmt_int_type = i64_type.fn_type(
+            &[
+                ptr_type.into(), // spec_ptr
+                i64_type.into(), // spec_len
+                i64_type.into(), // value
+                i32_type.into(), // is_unsigned
+                ptr_type.into(), // out_buf
+                i64_type.into(), // out_cap
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_fmt_int",
+            fmt_int_type,
+            Some(Linkage::External),
+        );
+        let fmt_float_type = i64_type.fn_type(
+            &[
+                ptr_type.into(),
+                i64_type.into(),
+                context.f64_type().into(), // value
+                ptr_type.into(),
+                i64_type.into(),
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_fmt_float",
+            fmt_float_type,
+            Some(Linkage::External),
+        );
+        let fmt_str_type = i64_type.fn_type(
+            &[
+                ptr_type.into(), // spec_ptr
+                i64_type.into(), // spec_len
+                ptr_type.into(), // s_ptr
+                i64_type.into(), // s_len
+                ptr_type.into(), // out_buf
+                i64_type.into(), // out_cap
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_fmt_str",
+            fmt_str_type,
+            Some(Linkage::External),
+        );
         // `df.write_csv(path)` — serialize a DataFrame control block to a
         // CSV file in the runtime (walks the fixed entry/Column layouts;
         // phase-11 CSV leg): (out, df_ctrl, path_ptr, path_len) -> void.

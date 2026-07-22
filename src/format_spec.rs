@@ -161,31 +161,22 @@ impl FormatSpec {
                 "format spec `{raw}`: precision is not valid with an integer type"
             ));
         }
-        // v1 supports the printf-expressible subset in BOTH the interpreter and
-        // `karac build`, so they accept exactly the same specifiers. Center
-        // align, a custom (non-space) fill char, and binary need the shared
-        // runtime formatter — a planned follow-up — and are rejected for now so
-        // a program can never format one way under `run` and another under
-        // `build`.
-        if spec.align == Some(Align::Center) {
-            return Err(format!(
-                "format spec `{raw}`: center align `^` is not yet supported (planned \
-                 follow-up); use `<` (left) or `>` (right)"
-            ));
-        }
-        if spec.radix == Radix::Bin {
-            return Err(format!(
-                "format spec `{raw}`: binary `b` is not yet supported (planned follow-up); \
-                 use `x`/`X`/`o` or decimal"
-            ));
-        }
-        if spec.fill.is_some() && spec.fill != Some(' ') {
-            return Err(format!(
-                "format spec `{raw}`: a custom fill char is not yet supported (planned \
-                 follow-up); only space padding is available"
-            ));
-        }
         Ok(spec)
+    }
+
+    /// True when this spec cannot be rendered by codegen's inline `snprintf`
+    /// path and must route through the shared runtime formatter
+    /// (`karac_runtime_fmt_*`) instead. printf has no binary conversion, no
+    /// center alignment, and no custom (non-space) fill char — but the
+    /// `apply_*` helpers on this struct handle all three, so codegen hands the
+    /// value + raw spec to the runtime, which parses with THIS parser and calls
+    /// the SAME `apply_*`. The interpreter always calls `apply_*` directly, so
+    /// `karac run` == `karac build` for these specifiers by construction. Every
+    /// other spec stays on the faster inline `to_printf` path.
+    pub fn needs_runtime_formatter(&self) -> bool {
+        self.align == Some(Align::Center)
+            || self.radix == Radix::Bin
+            || (self.fill.is_some() && self.fill != Some(' '))
     }
 
     /// Pad `body` to `width` honoring `align` (default: right for the numeric
@@ -311,7 +302,9 @@ impl FormatSpec {
     }
 
     /// The printf conversion char for the integer radix (`d`/`x`/`X`/`o`).
-    /// Binary is gated out at parse, so its arm is unreachable.
+    /// Binary routes through the runtime formatter (`needs_runtime_formatter`),
+    /// never the `snprintf` path that calls this, so its arm is unreachable
+    /// here (kept as a defined mapping rather than a panic).
     pub fn int_conv(&self) -> char {
         match self.radix {
             Radix::Dec => 'd',
@@ -325,10 +318,12 @@ impl FormatSpec {
     /// Build the printf conversion string codegen feeds to `snprintf` — e.g.
     /// `%04lld`, `%-8.2f`, `%6s`. `length_mod` is the C length modifier (`"ll"`
     /// for i64, `""` for double / string), `conv` the conversion char, and
-    /// `numeric` gates the `0` zero-pad flag (printf ignores `0` for `s`). The
-    /// supported spec set (no center / custom-fill / binary; no string
-    /// precision) is exactly what printf renders identically to the `apply_*`
-    /// helpers above, so `karac run` == `karac build`.
+    /// `numeric` gates the `0` zero-pad flag (printf ignores `0` for `s`). Only
+    /// reached for specs where `needs_runtime_formatter()` is false — the
+    /// printf-expressible subset (no center / custom-fill / binary; no string
+    /// precision), exactly what printf renders identically to the `apply_*`
+    /// helpers above, so `karac run` == `karac build`. Center / custom-fill /
+    /// binary take the runtime-formatter path instead.
     pub fn to_printf(&self, length_mod: &str, conv: char, numeric: bool) -> String {
         let mut s = String::from("%");
         if self.align == Some(Align::Left) {
@@ -403,13 +398,35 @@ mod tests {
     }
 
     #[test]
-    fn deferred_specifiers_rejected() {
-        // Center / custom fill / binary need the shared runtime formatter — a
-        // follow-up — so they are rejected uniformly (parity between run/build).
-        assert!(FormatSpec::parse("^5").is_err());
-        assert!(FormatSpec::parse("b").is_err());
-        assert!(FormatSpec::parse("*^7").is_err());
-        assert!(FormatSpec::parse("*<7").is_err());
+    fn binary_center_and_fill_now_parse_and_render() {
+        // Formerly-deferred specs — now parse and render via the `apply_*`
+        // helpers (codegen routes them through the shared runtime formatter,
+        // the interpreter calls these directly). `needs_runtime_formatter()`
+        // is what tells codegen to take that path.
+        // Binary radix.
+        let b = spec("b");
+        assert!(b.needs_runtime_formatter());
+        assert_eq!(b.apply_int(5), "101");
+        assert_eq!(spec("08b").apply_int(5), "00000101");
+        assert_eq!(spec("b").apply_uint(255), "11111111");
+        // Center align (default space fill).
+        let c = spec("^7");
+        assert!(c.needs_runtime_formatter());
+        assert_eq!(c.apply_str("hi"), "  hi   ");
+        assert_eq!(spec("^6").apply_int(42), "  42  ");
+        // Custom fill char + align.
+        let f = spec("*^7");
+        assert!(f.needs_runtime_formatter());
+        assert_eq!(f.apply_str("hi"), "**hi***");
+        assert_eq!(spec("*<7").apply_str("hi"), "hi*****");
+        assert_eq!(spec("*>7").apply_int(42), "*****42");
+        // Custom fill center on a float with precision.
+        assert_eq!(spec("*^8.2").apply_float(1.5), "**1.50**");
+        // A plain space-fill / left / right / hex spec does NOT need the
+        // runtime path (stays on the faster snprintf route).
+        assert!(!spec("<5").needs_runtime_formatter());
+        assert!(!spec("08x").needs_runtime_formatter());
+        assert!(!spec(".2").needs_runtime_formatter());
     }
 
     #[test]

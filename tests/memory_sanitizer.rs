@@ -5262,6 +5262,40 @@ fn main() {
     }
 
     #[test]
+    fn asan_fstring_runtime_formatter_specs_no_leak() {
+        // The runtime-formatter format-spec path (binary / center-align /
+        // custom-fill, `karac_runtime_fmt_*`) renders into stack buffers whose
+        // bytes are copied into the assembled f-string. Loop over a mix of
+        // int/float/string holes — and a long-string no-pad branch — so LSan
+        // catches any leak of the assembled String or an overrun of the
+        // fixed-size render buffers. The final String is the only heap object
+        // per iteration and must free exactly once.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let name = "kara";
+        let s1 = f"[{i:08b}]";
+        let s2 = f"[{name:*^12}]";
+        let s3 = f"[{i:^10}]";
+        let longer = "this-string-is-wider-than-the-width";
+        let s4 = f"[{longer:^5}]";
+        total = total + s1.len() + s2.len() + s3.len() + s4.len();
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // s1: "[" + 8 + "]" = 10; s2: "[" + 12 + "]" = 14; s3: "[" + 10 + "]" = 12;
+            // s4: "[" + 35 (source wider than width, no pad) + "]" = 37. Sum = 73 per iter * 40 = 2920.
+            &["2920"],
+            "asan_fstring_runtime_formatter_specs_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_b04_2_nonterminal_fstring_map_no_leak() {
         // B-2026-07-04-2 sub-part 3 (non-terminal f-string map): `v.iter()
         // .map(|x| f"..").filter(g).collect()` splits at the f-string map —

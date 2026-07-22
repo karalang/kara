@@ -5043,6 +5043,30 @@ fn test_fstring_format_specifiers() {
 }
 
 #[test]
+fn test_fstring_binary_center_fill_specifiers() {
+    // Binary radix, center align, and custom fill — the runtime-formatter
+    // specs. Same output codegen asserts in
+    // tests/codegen.rs::e2e_fstring_binary_center_and_fill_specs (run==build).
+    assert_eq!(
+        run("fn main() {\n\
+                 let n = 5;\n\
+                 let big = 255;\n\
+                 let neg = 42;\n\
+                 let pi = 3.14159;\n\
+                 let s = \"kara\";\n\
+                 println(f\"{n:b}|{big:b}|{n:08b}\");\n\
+                 println(f\"{neg:^6}|{s:^10}|{pi:^10.2}\");\n\
+                 println(f\"{s:*^10}|{s:*<10}|{neg:*>8}|{pi:*^10.2}\");\n\
+                 println(f\"{big:^8x}|{s:.^12}|{s:^2}\");\n\
+             }"),
+        "101|11111111|00000101\n\
+         \x20 42  |   kara   |   3.14   \n\
+         ***kara***|kara******|******42|***3.14***\n\
+         \x20  ff   |....kara....|kara\n"
+    );
+}
+
+#[test]
 fn test_fstring_format_specifier_errors() {
     // Malformed / type-incompatible specifiers are COMPILE errors (parse or
     // typecheck) — never silently dropped, which is the whole point.
@@ -5070,8 +5094,9 @@ fn test_fstring_format_specifier_errors() {
             "needs a precision",
         ),
         (
-            "fn main() { let n = 1; println(f\"{n:^5}\"); }",
-            "center align",
+            // Binary radix on a float is still rejected (radix is int-only).
+            "fn main() { let f = 1.0; println(f\"{f:b}\"); }",
+            "radix",
         ),
     ] {
         let errs = compile_errors(src);
