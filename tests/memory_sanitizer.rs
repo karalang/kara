@@ -2527,6 +2527,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_backpressure_primitives_no_leak() {
+        // `Semaphore` / `RateLimiter` each own a heap `Karac*` object behind
+        // their `handle_id`; the synthesized single-owner Drop must free it at
+        // scope exit. Loop so LSan catches a per-iteration leak of either
+        // runtime object (or the per-key bucket map the RateLimiter grows).
+        // The RateLimiter key is a fresh f-string String each round, exercising
+        // the borrowed-key path (runtime copies the bytes; the arg temp frees).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let sem = Semaphore.new(2);
+        match sem.acquire(0i64) { Ok(u) => { total = total + 1i64; }, Err(e) => {} }
+        match sem.acquire(0i64) { Ok(u) => { total = total + 1i64; }, Err(e) => {} }
+        match sem.acquire(0i64) { Ok(u) => { total = total + 1i64; }, Err(e) => {} }
+        sem.release();
+        let rl = RateLimiter.new_token_bucket(1i64, 2i64);
+        let key = f"client-{i}";
+        if rl.try_acquire(key) { total = total + 10i64; }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // per iter: 2 acquires ok (+2), 1 timeout, try_acquire ok (+10) = 12; * 40 = 480
+            &["480"],
+            "backpressure_primitives_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_process_stdin_write_close_no_leak() {
         // `ChildStdin.write` borrows the String argument (runtime reads the
         // descriptor only); the argument temp and the `cat` output String

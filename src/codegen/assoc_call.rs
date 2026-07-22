@@ -552,6 +552,70 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result.into());
         }
 
+        // `Semaphore.new(permits)` / `RateLimiter.new_token_bucket(rate,
+        // capacity)` — allocate the runtime handle and wrap the pointer (cast
+        // to i64) as `{ handle_id: <i64> }`, exactly like `BoundedChannel.new`.
+        // The stdlib stub bodies return `{ handle_id: 0 }`; this intercept
+        // replaces it with the FFI so the instance methods (and the Drop) find
+        // a real object at the pointer. (`src/codegen/backpressure.rs`.)
+        if type_name == "Semaphore" && method == "new" && _args.len() == 1 {
+            let permits = self.compile_expr(&_args[0].value)?.into_int_value();
+            let new_fn = self
+                .module
+                .get_function("karac_runtime_semaphore_new")
+                .expect("karac_runtime_semaphore_new declared in Codegen::new");
+            let ptr = self
+                .builder
+                .build_call(new_fn, &[permits.into()], "__semaphore_new")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let i64_ty = self.context.i64_type();
+            let handle = self
+                .builder
+                .build_ptr_to_int(ptr, i64_ty, "sem.handle")
+                .unwrap();
+            let struct_ty = self.context.struct_type(&[i64_ty.into()], false);
+            let result = self
+                .builder
+                .build_insert_value(struct_ty.get_undef(), handle, 0, "semaphore")
+                .unwrap()
+                .into_struct_value();
+            return Ok(result.into());
+        }
+        if type_name == "RateLimiter" && method == "new_token_bucket" && _args.len() == 2 {
+            let rate = self.compile_expr(&_args[0].value)?.into_int_value();
+            let capacity = self.compile_expr(&_args[1].value)?.into_int_value();
+            let new_fn = self
+                .module
+                .get_function("karac_runtime_rate_limiter_new")
+                .expect("karac_runtime_rate_limiter_new declared in Codegen::new");
+            let ptr = self
+                .builder
+                .build_call(
+                    new_fn,
+                    &[rate.into(), capacity.into()],
+                    "__rate_limiter_new",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let i64_ty = self.context.i64_type();
+            let handle = self
+                .builder
+                .build_ptr_to_int(ptr, i64_ty, "rl.handle")
+                .unwrap();
+            let struct_ty = self.context.struct_type(&[i64_ty.into()], false);
+            let result = self
+                .builder
+                .build_insert_value(struct_ty.get_undef(), handle, 0, "rate_limiter")
+                .unwrap()
+                .into_struct_value();
+            return Ok(result.into());
+        }
+
         // `Regex.compile(pattern: String) -> Result[Regex, RegexError]`
         // (B-2026-07-14-19) — the AOT backend for `runtime/stdlib/regex.kara`'s
         // `#[compiler_builtin]` stub, matching the interpreter's

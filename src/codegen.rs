@@ -23,6 +23,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 mod assoc_call;
+mod backpressure;
 mod bce_length_pin;
 mod borrow_elision;
 mod bounded_channel;
@@ -6398,6 +6399,63 @@ impl<'ctx> Codegen<'ctx> {
         module.add_function(
             "karac_runtime_bounded_channel_drop",
             bch_drop_ty,
+            Some(Linkage::External),
+        );
+
+        // Backpressure primitives (`runtime/src/semaphore.rs`,
+        // `runtime/src/rate_limiter.rs`), backing `Semaphore` / `RateLimiter`.
+        // Same single-owner opaque-handle shape as bounded_channel: the
+        // `*mut Karac{Semaphore,RateLimiter}` round-trips through the `i64
+        // handle_id` field (ptrtoint at `new`, inttoptr at op/drop).
+        //
+        // Semaphore: `_new(permits: i64) -> ptr`; `_acquire(sem, timeout: i64)
+        // -> u8` (1 = permit taken → `Ok(())`, 0 = exhausted → `Err(Timeout)`;
+        // timeout ignored in v1); `_release(sem)`; `_drop(sem)`.
+        let sem_new_ty = ptr_type.fn_type(&[i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_semaphore_new",
+            sem_new_ty,
+            Some(Linkage::External),
+        );
+        let sem_acquire_ty = context
+            .i8_type()
+            .fn_type(&[ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_semaphore_acquire",
+            sem_acquire_ty,
+            Some(Linkage::External),
+        );
+        let sem_void_ptr_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_semaphore_release",
+            sem_void_ptr_ty,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_semaphore_drop",
+            sem_void_ptr_ty,
+            Some(Linkage::External),
+        );
+        // RateLimiter: `_new(rate: i64, capacity: i64) -> ptr`;
+        // `_try_acquire(rl, key_ptr, key_len: i64) -> u8` (1 = token taken →
+        // `true`, 0 = limited → `false`); `_drop(rl)`.
+        let rl_new_ty = ptr_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_rate_limiter_new",
+            rl_new_ty,
+            Some(Linkage::External),
+        );
+        let rl_try_ty = context
+            .i8_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_rate_limiter_try_acquire",
+            rl_try_ty,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_rate_limiter_drop",
+            sem_void_ptr_ty,
             Some(Linkage::External),
         );
 

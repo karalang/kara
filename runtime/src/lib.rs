@@ -35,6 +35,9 @@
 mod alloc;
 mod bounded_channel;
 mod channel;
+// Application-layer backpressure primitives (phase-8): counting semaphore
+// and per-key token-bucket rate limiter. Target-independent handle types,
+// same single-owner shape as `bounded_channel`.
 mod clone;
 mod cpu;
 mod emutls;
@@ -42,6 +45,8 @@ mod emutls;
 pub mod event_loop;
 mod fatal;
 mod file;
+mod rate_limiter;
+mod semaphore;
 // f-string format-spec runtime formatter (`karac_runtime_fmt_*`) — the
 // shared-renderer path for binary / center-align / custom-fill specs that
 // `snprintf` can't express. Shares `src/format_spec.rs` via `#[path]`.
@@ -357,6 +362,19 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         bounded_channel::karac_runtime_bounded_channel_send,
         bounded_channel::karac_runtime_bounded_channel_recv,
         bounded_channel::karac_runtime_bounded_channel_drop,
+    );
+    // Backpressure primitives (`runtime/src/semaphore.rs`,
+    // `runtime/src/rate_limiter.rs`). Back `Semaphore.new`/`.acquire`/
+    // `.release` + `RateLimiter.new_token_bucket`/`.try_acquire` and their
+    // Drops. Same JIT-keep-list class as bounded_channel.
+    keep!(
+        semaphore::karac_runtime_semaphore_new,
+        semaphore::karac_runtime_semaphore_acquire,
+        semaphore::karac_runtime_semaphore_release,
+        semaphore::karac_runtime_semaphore_drop,
+        rate_limiter::karac_runtime_rate_limiter_new,
+        rate_limiter::karac_runtime_rate_limiter_try_acquire,
+        rate_limiter::karac_runtime_rate_limiter_drop,
     );
     // Blocking-mutex slow path (`runtime/src/mutex.rs`). Backs the contended
     // branch of a `lock` block's futex acquire + the wake on its release;

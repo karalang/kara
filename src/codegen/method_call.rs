@@ -1474,6 +1474,14 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(v);
         }
 
+        // Backpressure primitives — `Semaphore.acquire`/`.release` and
+        // `RateLimiter.try_acquire` (`src/codegen/backpressure.rs`, phase-8).
+        // Self-gating on the receiver's static type name, so an unrelated
+        // `acquire` / `release` / `try_acquire` method falls through.
+        if let Some(v) = self.try_compile_backpressure_method(object, method, args)? {
+            return Ok(v);
+        }
+
         // Tensor shape-transform family (`reshape` / `permute` / `slice`
         // / `squeeze`, phase-11 numerical stdlib — `src/codegen/tensor.rs`).
         // Handled here (before the rest of dispatch) so both identifier

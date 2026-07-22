@@ -3998,6 +3998,34 @@ impl<'ctx> super::Codegen<'ctx> {
             self.seeded_enum_names.insert("ChannelError".to_string());
         }
 
+        // `SemaphoreError` (1 i64 word — tag only) — backs the `Semaphore
+        // .acquire` lowering's `Err(Timeout)` arm (`src/codegen/backpressure
+        // .rs`). Single unit variant, same shape as `ChannelError.Full`.
+        //   Timeout (tag=0) — 0 payload words
+        if !self.enum_layouts.contains_key("SemaphoreError") {
+            let ty = self.context.struct_type(&[i64_t], false);
+            let mut tags = HashMap::new();
+            tags.insert("Timeout".to_string(), 0u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("Timeout".to_string(), 0usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("Timeout".to_string(), Vec::new());
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("Timeout".to_string(), Vec::new());
+            self.enum_layouts.insert(
+                "SemaphoreError".to_string(),
+                EnumLayout {
+                    llvm_type: ty,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.seeded_enum_names.insert("SemaphoreError".to_string());
+        }
+
         // `OnFull` (1 i64 word — tag only; both variants payload-free):
         //   Block (tag=0), FailFast (tag=1)  — declaration order.
         if !self.enum_layouts.contains_key("OnFull") {

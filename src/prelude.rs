@@ -2476,6 +2476,8 @@ mod tests {
             "BoundedChannel",
             "CriticalSectionGuard",
             "PooledConnection",
+            "RateLimiter",
+            "Semaphore",
             "TaskGroup",
             "TcpListener",
             "TcpStream",

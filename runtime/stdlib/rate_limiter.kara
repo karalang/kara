@@ -49,3 +49,17 @@ impl RateLimiter {
         false
     }
 }
+
+// Drop-skip-sound: if this Drop never runs, the runtime `KaracRateLimiter`
+// (per-key token buckets behind a lock) is not freed — a pure memory leak.
+// No UB, no type-system violation: nothing observes the leaked buckets, and
+// tokens are not a safety resource (leaking them only affects future rate
+// decisions, which are advisory). Only resources leak. `RateLimiter` is
+// single-owner (no `clone`); codegen's move-aware Drop emits
+// `karac_runtime_rate_limiter_drop` exactly once at scope exit. The
+// interpreter drains this empty body as a no-op (its side-table persists
+// for the interpreter's lifetime). Audited 2026-07-22.
+impl Drop for RateLimiter {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}

@@ -11051,6 +11051,28 @@ fn test_process_write_stdin_close_and_read_stdout_roundtrip() {
 // ── Semaphore — application-layer backpressure primitive ───────────
 
 #[test]
+fn test_semaphore_and_rate_limiter_codegen_parity() {
+    // The exact program tests/codegen.rs::e2e_backpressure_semaphore_and_rate_limiter
+    // compiles — pinned here so run==build stays honest for the whole
+    // Semaphore + RateLimiter surface.
+    let output = run(r#"fn main() {
+         let sem = Semaphore.new(2i64);
+         match sem.acquire(0i64) { Ok(u) => { println("a1"); }, Err(e) => { println("t1"); }, }
+         match sem.acquire(0i64) { Ok(u) => { println("a2"); }, Err(e) => { println("t2"); }, }
+         match sem.acquire(0i64) { Ok(u) => { println("a3"); }, Err(e) => { println("t3"); }, }
+         sem.release();
+         match sem.acquire(0i64) { Ok(u) => { println("a4"); }, Err(e) => { println("t4"); }, }
+         let rl = RateLimiter.new_token_bucket(1i64, 3i64);
+         println(rl.try_acquire("k1"));
+         println(rl.try_acquire("k1"));
+         println(rl.try_acquire("k1"));
+         println(rl.try_acquire("k1"));
+         println(rl.try_acquire("k2"));
+     }"#);
+    assert_eq!(output, "a1\na2\nt3\na4\ntrue\ntrue\ntrue\nfalse\ntrue\n");
+}
+
+#[test]
 fn test_semaphore_acquire_grants_up_to_permit_count_then_times_out() {
     // new(2): two acquires succeed (permits 2 -> 1 -> 0), the third
     // finds the semaphore exhausted and (single-threaded) fails closed.

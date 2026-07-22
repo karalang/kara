@@ -67,3 +67,17 @@ impl Semaphore {
         Unit
     }
 }
+
+// Drop-skip-sound: if this Drop never runs, the runtime `KaracSemaphore`
+// (a permit counter behind a lock) is not freed — a pure memory leak. No
+// UB, no type-system violation: nothing observes the leaked counter, and
+// permits are not a safety resource (releasing/leaking them only affects
+// the in-flight budget, which is advisory). Only resources leak.
+// `Semaphore` is single-owner (no `clone`); codegen's move-aware Drop
+// emits `karac_runtime_semaphore_drop` exactly once at scope exit. The
+// interpreter drains this empty body as a no-op (its side-table persists
+// for the interpreter's lifetime). Audited 2026-07-22.
+impl Drop for Semaphore {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}

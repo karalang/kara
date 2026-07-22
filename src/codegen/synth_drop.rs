@@ -4110,6 +4110,18 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_bounded_channel_drop_body();
         }
 
+        // `Semaphore.drop` / `RateLimiter.drop` — same single-owner
+        // handle-free shape as `BoundedChannel.drop` (load `self.handle_id`,
+        // `inttoptr`, call the runtime `_drop`). The stdlib declares
+        // `impl Drop` for both, so `drop_method_keys` carries their names when
+        // the prelude is in scope. (`src/codegen/backpressure.rs`.)
+        if program.drop_method_keys.contains_key("Semaphore") {
+            self.emit_handle_drop_body("Semaphore", "karac_runtime_semaphore_drop");
+        }
+        if program.drop_method_keys.contains_key("RateLimiter") {
+            self.emit_handle_drop_body("RateLimiter", "karac_runtime_rate_limiter_drop");
+        }
+
         // `CriticalSectionGuard.drop` (design.md § Critical sections). Loads
         // `self.restore_token` (`{i64}` field 0) and calls
         // `karac_critical_section_release(token)` to re-enable interrupts to
@@ -4225,6 +4237,58 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder
             .build_call(free_fn, &[ch_ptr.into()], "")
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+    }
+
+    /// Hand-roll `@<TypeName>.drop(ptr) -> void` for a single-owner
+    /// `{ handle_id: i64 }` handle type: load field 0, `inttoptr`, call
+    /// `free_fn`. Generalizes `emit_bounded_channel_drop_body`; used by the
+    /// `Semaphore` / `RateLimiter` backpressure primitives.
+    fn emit_handle_drop_body(&mut self, type_name: &str, free_fn_name: &str) {
+        let fn_name = format!("{type_name}.drop");
+        if self.module.get_function(&fn_name).is_some() {
+            return;
+        }
+        let free_fn = match self.module.get_function(free_fn_name) {
+            Some(f) => f,
+            None => return,
+        };
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let void_ty = self.context.void_type();
+        let struct_ty = self.context.struct_type(&[i64_ty.into()], false);
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let handle_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, self_ptr, 0, "handle_ptr")
+            .unwrap();
+        let handle = self
+            .builder
+            .build_load(i64_ty, handle_ptr, "handle")
+            .unwrap()
+            .into_int_value();
+        let obj_ptr = self
+            .builder
+            .build_int_to_ptr(handle, ptr_ty, "obj_ptr")
+            .unwrap();
+        self.builder
+            .build_call(free_fn, &[obj_ptr.into()], "")
             .unwrap();
         self.builder.build_return(None).unwrap();
 

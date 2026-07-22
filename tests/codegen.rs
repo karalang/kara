@@ -8661,6 +8661,36 @@ fn main() {
     }
 
     #[test]
+    fn e2e_backpressure_semaphore_and_rate_limiter() {
+        // `Semaphore` (new/acquire/release) and `RateLimiter`
+        // (new_token_bucket/try_acquire) codegen (phase-8 backpressure
+        // primitives) — the collapsed single-threaded semantics match the
+        // interpreter byte-for-byte: acquire grants up to the permit budget
+        // then fails closed with `Err(Timeout)`; release frees one;
+        // try_acquire bursts up to capacity per key then reports limited, with
+        // independent per-key buckets. Same output as
+        // tests/interpreter.rs::test_semaphore_and_rate_limiter_codegen_parity.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let sem = Semaphore.new(2i64);\n\
+                 match sem.acquire(0i64) { Ok(u) => { println(\"a1\"); }, Err(e) => { println(\"t1\"); }, }\n\
+                 match sem.acquire(0i64) { Ok(u) => { println(\"a2\"); }, Err(e) => { println(\"t2\"); }, }\n\
+                 match sem.acquire(0i64) { Ok(u) => { println(\"a3\"); }, Err(e) => { println(\"t3\"); }, }\n\
+                 sem.release();\n\
+                 match sem.acquire(0i64) { Ok(u) => { println(\"a4\"); }, Err(e) => { println(\"t4\"); }, }\n\
+                 let rl = RateLimiter.new_token_bucket(1i64, 3i64);\n\
+                 println(rl.try_acquire(\"k1\"));\n\
+                 println(rl.try_acquire(\"k1\"));\n\
+                 println(rl.try_acquire(\"k1\"));\n\
+                 println(rl.try_acquire(\"k1\"));\n\
+                 println(rl.try_acquire(\"k2\"));\n\
+             }",
+        ) {
+            assert_eq!(out, "a1\na2\nt3\na4\ntrue\ntrue\ntrue\nfalse\ntrue\n");
+        }
+    }
+
+    #[test]
     fn e2e_fstring_binary_center_and_fill_specs() {
         // Binary `b`, center align `^`, and custom (non-space) fill — the
         // format specs `snprintf` can't express, routed through the shared
