@@ -17,6 +17,10 @@ mod exec;
 // B-2026-07-21-1): both backends must compute a binding's last-use statement
 // index with the SAME analysis so drop timing agrees statement-for-statement.
 // Pure AST analysis — nothing interpreter-runtime crosses the boundary.
+// cfg-gated: codegen is the only consumer of the re-export (the
+// interpreter's own user imports straight from `exec`), so CI's
+// featureless clippy flags it unused without the gate.
+#[cfg(feature = "llvm")]
 pub(crate) use exec::compute_block_last_use;
 mod helpers;
 mod iter_eval;

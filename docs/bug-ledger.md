@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 159 | 0 |
-| leak | 91 | 0 |
+| miscompile | 160 | 1 |
+| leak | 92 | 1 |
 | double-free | 77 | 1 |
 | codegen-gap | 70 | 0 |
 | missing-feature | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 457 | 1 |
+| codegen | 459 | 3 |
 | typecheck | 83 | 0 |
 | interp | 68 | 0 |
 | ownership | 26 | 1 |
@@ -124,14 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **628 surfaced · 2 open · 621 fixed** (2026-05-20 → 2026-07-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **630 surfaced · 4 open · 621 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-21-20 | 2026-07-21 | ownership | low | Spurious E0500 UseAfterMove on a weak-to-weak field splice `nodes[i].next = nodes[prev].next` where both sides index the SAME `Vec[shared]` and `next` is a `weak` field. `karac check` reports "value 'nodes' moved here, used again here" (moved at the RHS `nodes[prev].next` read), but `karac build`/`run` compile and run it CORRECTLY and valgrind-clean (the reuse takes the advisory shared/RC fallback). The false-positive is specific to the extra `weak`-field access on the RHS: the strong-element form `nodes[i].next = nodes[prev]` (the #143 shape) is NOT flagged. Advisory only — ownership errors other than aliased exclusive borrows do not block the build. | — |
 | B-2026-07-21-21 | 2026-07-21 | codegen | high | Materializing a `weak`-field read into a strong `Option[shared]` local and then storing it back into another `weak` field DOUBLE-FREES / use-after-frees. `let after: Option[Node] = nodes[prev].next; nodes[i].next = after;` (`next` is a `weak Node` field) `check`s clean but leaks the upgraded node (40 bytes for a single splice) and, across multiple such splices, corrupts the heap — valgrind reports 'Invalid read of size 8' (use-after-free) and the fuller workload aborts with 'free(): double free detected'. The weak->strong upgrade rc-incs the node, but the subsequent store of that strong `Option` into a `weak` field does not balance against the temp's scope-exit drop, so the node is over-released and later reads/frees hit freed memory. Codegen-only (interp/JIT output correct); AOT valgrind + glibc double-free abort. | — |
+| B-2026-07-22-1 | 2026-07-22 | codegen | high | test_e2e_f16_bf16_enum_payload_pack_unpack CRASHES on macOS arm64 (empty stdout vs expected '4\n1\n3.5\n1.75\n6\n') while Linux arm64 AND x86 are green — the B-2026-07-20-12 f16-in-compound-enum-payload fix does not hold on Mach-O/Apple arm64; CI leg 'Codegen E2E (macOS arm64)' red across all recent main runs. | — |
+| B-2026-07-22-2 | 2026-07-22 | codegen | medium | asan_closure_captures_heap_struct_returned_clean FAILS on the arm64 LSan CI leg (memory-sanitizer-arm64) while the x86 LSan leg is green — an arm64-ONLY leak (or arm64-only asan report) in the closure-captures-heap-struct-returned path; red across all recent main runs. | — |
 
 ### Fixed (621)
 
