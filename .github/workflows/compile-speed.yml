@@ -95,16 +95,38 @@ jobs:
               });
             }
 
-      - name: Refresh baseline
+      - name: Upload measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-speed-${{ github.run_id }}
+          path: |
+            bench/compile_speed/latest.json
+            bench/compile_speed/gate.md
+          if-no-files-found: ignore
+
+      # main is a protected branch (required status checks), so the refresh
+      # rides a PR from a well-known branch instead of a direct push. Drift
+      # >5% is rare, so this is an occasional one-click merge, not churn.
+      - name: Refresh baseline (PR on drift)
         if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           cd bench/compile_speed
           python3 compare.py --latest latest.json --write-baseline baseline.json
-          if ! git diff --quiet baseline.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add baseline.json
-            git commit -m "bench(compile-speed): refresh baseline from main run"
-            git pull --rebase origin main
-            git push origin main
+          if git diff --quiet baseline.json; then
+            echo "baseline current — no PR needed"
+            exit 0
           fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B bench/compile-speed-baseline
+          git add baseline.json
+          git commit -m "bench(compile-speed): refresh baseline from main run ${{ github.run_id }}"
+          git push -f origin bench/compile-speed-baseline
+          gh pr create \
+            --base main --head bench/compile-speed-baseline \
+            --title "bench(compile-speed): refresh baseline" \
+            --body "Automated baseline refresh from the main-leg run of commit ${{ github.sha }} — a karac/rustc ratio drifted >5% from the stored baseline. Merging keeps the compile-speed gate honest." \
+            || echo "PR already open — branch force-push updated it"
