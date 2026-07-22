@@ -24722,3 +24722,34 @@ fn test_script_mode_items_hoist_and_statements_run_in_order() {
         "42\n43\n"
     );
 }
+
+// ── Narrow-float precision (B-2026-07-22-4) ────────────────────────────────
+
+#[test]
+fn test_narrow_float_literals_and_casts_round_to_storage_precision() {
+    // The interpreter models every float as f64, but a value TYPED f16/bf16
+    // must still be representable in that format or it diverges from all
+    // three LLVM backends (which materialize `2.7bf16` as the bfloat
+    // constant 2.703125 and lower `x as bf16` with an RNE truncation).
+    // Literals round at creation; casts round at the cast.
+    assert_eq!(run("println(2.7bf16);\n"), "2.703125\n");
+    assert_eq!(run("println(2.7f16);\n"), "2.69921875\n");
+    // Casts through a fn boundary (the B-2026-07-22-4 filing shape).
+    assert_eq!(
+        run("fn nar(x: f64) -> bf16 { x as bf16 }\nprintln(nar(2.7));\n"),
+        "2.703125\n"
+    );
+    assert_eq!(
+        run("fn narf(x: f64) -> f16 { x as f16 }\nprintln(narf(2.7));\n"),
+        "2.69921875\n"
+    );
+    assert_eq!(
+        run("fn nar32(x: f32) -> bf16 { x as bf16 }\nprintln(nar32(2.7f32));\n"),
+        "2.703125\n"
+    );
+    // int → narrow float takes the rounding path too (65505 is not
+    // f16-representable; nearest even is 65504).
+    assert_eq!(run("println(65505 as f16);\n"), "65504\n");
+    // Exact values stay exact.
+    assert_eq!(run("println(1.25bf16);\nprintln(1.5f16);\n"), "1.25\n1.5\n");
+}

@@ -26,7 +26,16 @@ impl<'a> super::Interpreter<'a> {
         match &expr.kind {
             // Literals
             ExprKind::Integer(i, _) => Value::Int(*i),
-            ExprKind::Float(f, _) => Value::Float(*f),
+            // Suffixed narrow-float literals round to the target format's
+            // precision at creation (B-2026-07-22-4): codegen materializes
+            // `2.7bf16` as the bfloat constant 2.703125, so an interpreter
+            // that kept the full f64 would diverge on every inexact literal.
+            ExprKind::Float(f, suffix) => Value::Float(match suffix {
+                Some(crate::token::FloatSuffix::F16) => round_f64_via_f16(*f),
+                Some(crate::token::FloatSuffix::BF16) => round_f64_via_bf16(*f),
+                Some(crate::token::FloatSuffix::F32) => *f as f32 as f64,
+                _ => *f,
+            }),
             ExprKind::Bool(b) => Value::Bool(*b),
             ExprKind::CharLit(c) => Value::Char(*c),
             // `b'X'` evaluates as a u8 via the shared `Value::Int(i64)` carrier
@@ -1639,6 +1648,8 @@ pub(super) fn cast_value(val: Value, target: &str) -> Value {
             "u16" => Value::Int((i as u16) as i64),
             "u32" => Value::Int((i as u32) as i64),
             "u64" | "usize" | "uint" => Value::Int(i),
+            "f16" => Value::Float(round_f64_via_f16(i as f64)),
+            "bf16" => Value::Float(round_f64_via_bf16(i as f64)),
             "f32" => Value::Float(i as f32 as f64),
             "f64" | "float" => Value::Float(i as f64),
             "bool" => Value::Bool(i != 0),
@@ -1647,6 +1658,11 @@ pub(super) fn cast_value(val: Value, target: &str) -> Value {
     };
     let float_from = |f: f64| -> Value {
         match target {
+            // Narrowing float casts round to the target's storage precision
+            // (B-2026-07-22-4) — `2.7 as bf16` is 2.703125 on every LLVM
+            // backend; identity here would diverge.
+            "f16" => Value::Float(round_f64_via_f16(f)),
+            "bf16" => Value::Float(round_f64_via_bf16(f)),
             "f32" => Value::Float(f as f32 as f64),
             "f64" | "float" => Value::Float(f),
             "i8" => Value::Int(f as i8 as i64),
@@ -1666,5 +1682,118 @@ pub(super) fn cast_value(val: Value, target: &str) -> Value {
         Value::Bool(b) => int_from(b as i64),
         Value::Char(c) => int_from(c as u32 as i64),
         other => other,
+    }
+}
+
+/// Round an `f64` through IEEE 754 half precision and re-widen
+/// (B-2026-07-22-4). The interpreter models every float as `f64`, so a
+/// value that is *typed* f16 must still be f16-representable or it
+/// diverges from all three LLVM backends. Routed through f32 first (the
+/// f64→f32 step is Rust's own RNE cast); the residual double-rounding
+/// corner (an f64 exactly at an f16 tie boundary that f32 rounding
+/// shifts) is not constructible from decimal literals of practical
+/// length — the same trade-off codegen documents for its f64→bf16 path.
+pub(super) fn round_f64_via_f16(x: f64) -> f64 {
+    f16_bits_to_f64(f32_to_f16_bits(x as f32))
+}
+
+/// Round an `f64` through bfloat16 and re-widen (B-2026-07-22-4). Matches
+/// codegen's runtime lowering exactly: f64→f32 (RNE), then the
+/// round-to-nearest-even bias trick with NaN quieting
+/// (`emit_f32_to_bf16` / compiler-rt `__truncsfbf2`).
+pub(super) fn round_f64_via_bf16(x: f64) -> f64 {
+    let f = x as f32;
+    let bits = f.to_bits();
+    let out: u16 = if f.is_nan() {
+        ((bits | 0x0040_0000) >> 16) as u16
+    } else {
+        let lsb = (bits >> 16) & 1;
+        (bits.wrapping_add(0x7FFF + lsb) >> 16) as u16
+    };
+    f32::from_bits((out as u32) << 16) as f64
+}
+
+/// f32 → f16 bit pattern with round-to-nearest-even, handling
+/// Inf/NaN/overflow/subnormals/underflow. The standard software
+/// half-conversion; no `half`-crate dependency.
+fn f32_to_f16_bits(x: f32) -> u16 {
+    let b = x.to_bits();
+    let sign = ((b >> 16) & 0x8000) as u16;
+    let exp = ((b >> 23) & 0xFF) as i32;
+    let frac = b & 0x007F_FFFF;
+    if exp == 0xFF {
+        // Inf / NaN (quiet the NaN, keep the top payload bits)
+        return if frac != 0 {
+            sign | 0x7E00 | ((frac >> 13) as u16)
+        } else {
+            sign | 0x7C00
+        };
+    }
+    if exp == 0 && frac == 0 {
+        return sign;
+    }
+    let e = exp - 127;
+    if e >= 16 {
+        return sign | 0x7C00; // ≥ 2^16 → Inf
+    }
+    if e >= -14 {
+        // Normal f16 range: 24-bit significand → 11 bits, RNE on the cut.
+        let mant = 0x0080_0000 | frac;
+        let base = mant >> 13;
+        let rem = mant & 0x1FFF;
+        let mut r = base;
+        if rem > 0x1000 || (rem == 0x1000 && (base & 1) == 1) {
+            r += 1;
+        }
+        let mut ee = (e + 15) as u32;
+        let mut mm = r & 0x3FF;
+        if r == 0x800 {
+            // Mantissa carry (0x7FF+1): bump the exponent.
+            ee += 1;
+            mm = 0;
+        }
+        if ee >= 31 {
+            return sign | 0x7C00; // rounded past 65504 → Inf
+        }
+        return sign | ((ee as u16) << 10) | (mm as u16);
+    }
+    if e < -25 {
+        return sign; // below half the smallest subnormal → ±0
+    }
+    // Subnormal f16: shift the significand into the subnormal position,
+    // RNE on the cut. (`r` reaching 0x400 IS the smallest normal — the
+    // bit pattern composes correctly.)
+    let mant = 0x0080_0000u32 | frac;
+    let shift = (13 + (-14 - e)) as u32;
+    let base = mant >> shift;
+    let rem = mant & ((1u32 << shift) - 1);
+    let half = 1u32 << (shift - 1);
+    let mut r = base as u16;
+    if rem > half || (rem == half && (r & 1) == 1) {
+        r += 1;
+    }
+    sign | r
+}
+
+/// f16 bit pattern → f64 (exact — every f16 is an f64).
+fn f16_bits_to_f64(h: u16) -> f64 {
+    let neg = h & 0x8000 != 0;
+    let exp = ((h >> 10) & 0x1F) as i32;
+    let mant = (h & 0x3FF) as f64;
+    let v = if exp == 31 {
+        if mant != 0.0 {
+            f64::NAN
+        } else {
+            f64::INFINITY
+        }
+    } else if exp == 0 {
+        mant * (2.0f64).powi(-24)
+    } else {
+        (1.0 + mant / 1024.0) * (2.0f64).powi(exp - 15)
+    };
+    if neg {
+        -v
+    } else {
+        v
     }
 }
