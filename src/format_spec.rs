@@ -359,8 +359,13 @@ mod tests {
         assert_eq!(spec("04").apply_int(7), "0007");
         assert_eq!(spec("05").apply_int(-7), "-0007");
         assert_eq!(spec("<4").apply_int(7), "7   ");
-        // Matches printf `%4lld` / `%04lld` / `%-4lld`.
+        // Matches printf `%4lld` / `%04lld` / `%-4lld`. The libc cross-check
+        // is skipped on Windows: MSVC's UCRT exposes `snprintf` only as an
+        // inline in <stdio.h>, so a bare `extern "C" { fn snprintf }` fails to
+        // link (LNK2019). The exact-value asserts above cover the same logic.
+        #[cfg(not(windows))]
         assert_eq!(spec("4").apply_int(7), format_via_libc_int("%4lld", 7));
+        #[cfg(not(windows))]
         assert_eq!(spec("04").apply_int(7), format_via_libc_int("%04lld", 7));
     }
 
@@ -438,7 +443,10 @@ mod tests {
     }
 
     // Cross-check a couple of integer results against libc printf so the
-    // `apply_*` helpers provably match the `snprintf` codegen path.
+    // `apply_*` helpers provably match the `snprintf` codegen path. Not built
+    // on Windows — bare `snprintf` is unlinkable against MSVC's UCRT (see the
+    // call sites in `int_width_and_zero_pad`).
+    #[cfg(not(windows))]
     fn format_via_libc_int(fmt: &str, v: i64) -> String {
         use std::ffi::CString;
         extern "C" {
