@@ -1853,6 +1853,37 @@ impl<'ctx> super::Codegen<'ctx> {
     /// fresh-temp expression gate would reject an `Identifier` / place-expr key.
     /// The `cap > 0` runtime guard is the sole safety net, exactly as it is for
     /// the fresh-temp path.
+    /// Reclaim a DISPLACED / removed owned-heap Map value (`old_val`) whose
+    /// discarded `Some(old)` payload nobody holds (B-2026-07-22-12 and its
+    /// deferred `Map[K, Vec[String]]` follow-up). Prefers the value's full
+    /// per-value drop fn (`map_val_drop_fn_for_type_expr`) so a `Vec[String]`
+    /// value deep-drops its inner Strings *and* the outer buffer; falls back to
+    /// the shallow `{ptr,len,cap}` free for `String` / `Vec[primitive]` values
+    /// (where the one-level free is exact — the drop-fn helper returns `None`
+    /// for them by design). The runtime already moved `old_val` out of the
+    /// bucket, so this is the sole owner — no double-free against the bucket.
+    pub(super) fn reclaim_displaced_owned_map_value(
+        &mut self,
+        var_name: &str,
+        old_val: BasicValueEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+    ) {
+        if let Some(vte) = self.var_elem_type_exprs.get(var_name).cloned() {
+            if let Some(drop_fn) = self.map_val_drop_fn_for_type_expr(&vte) {
+                if let Some(fn_val) = self.current_fn {
+                    let slot = self.create_entry_alloca(fn_val, "map.old.drop", val_ty);
+                    self.builder.build_store(slot, old_val).unwrap();
+                    self.builder
+                        .build_call(drop_fn, &[slot.into()], "")
+                        .unwrap();
+                    return;
+                }
+            }
+        }
+        // String / Vec[primitive]: the shallow buffer free is exact.
+        self.free_str_vec_buffer_if_heap(old_val);
+    }
+
     pub(super) fn free_str_vec_buffer_if_heap(&mut self, val: BasicValueEnum<'ctx>) {
         if !self.llvm_ty_is_vec_struct(val.get_type()) {
             return;

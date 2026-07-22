@@ -1802,12 +1802,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         // B-2026-07-22-12: owned-heap V (`String` / `Vec`). The
                         // displaced old value was loaded into `old_val` and is
                         // about to be wrapped in a `Some(old)` payload nobody
-                        // holds (the result is discarded) — free its buffer
-                        // now. `free_str_vec_buffer_if_heap` self-guards on the
-                        // vec-struct shape and a `cap>0` heap check, so a rodata
-                        // literal or a fresh-insert-shaped value no-ops. (The
-                        // none_bb / fresh-insert path never reaches here.)
-                        self.free_str_vec_buffer_if_heap(old_val);
+                        // holds (the result is discarded) — reclaim it now. Deep
+                        // per-value drop for `Vec[String]` (inner Strings + outer
+                        // buffer); shallow `{ptr,len,cap}` free for `String` /
+                        // `Vec[primitive]`, self-guarded on cap>0 so a rodata
+                        // literal no-ops. (The fresh-insert path never reaches
+                        // here.)
+                        self.reclaim_displaced_owned_map_value(var_name, old_val, val_ty);
                     }
                 }
                 // Multi-word payload via `coerce_to_payload_words` — see
@@ -2137,7 +2138,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             );
                         }
                     } else if self.map_val_owned_heap_str_vec_for(var_name) {
-                        self.free_str_vec_buffer_if_heap(old_val);
+                        // Deep drop for Vec[String]; shallow free for String /
+                        // Vec[primitive] (B-2026-07-22-12 remove sibling).
+                        self.reclaim_displaced_owned_map_value(var_name, old_val, val_ty);
                     }
                 }
                 // Multi-word payload via `coerce_to_payload_words` — see

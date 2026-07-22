@@ -32203,6 +32203,12 @@ fn mk(a: i64) -> Vec[i64] {
     v.push(a + 1);
     return v;
 }
+fn mks(a: String) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(heapstr(a));
+    v.push(heapstr("second-inner"));
+    return v;
+}
 fn main() {
     let mut total: i64 = 0;
     let mut i: i64 = 0;
@@ -32219,6 +32225,13 @@ fn main() {
         let _ = g.insert(7, mk(10));
         let _ = g.insert(7, mk(20));
         total = total + g.len();
+
+        // Map[i64, Vec[String]] overwrite — deep drop: the displaced Vec's
+        // INNER Strings must free too, not just the outer buffer.
+        let mut gs: Map[i64, Vec[String]] = Map.new();
+        let _ = gs.insert(5, mks("aa"));
+        let _ = gs.insert(5, mks("bb"));
+        total = total + gs.len();
 
         // Bound result: the caller consumes the displaced old value — must NOT
         // also be freed by the fix (no double-free).
@@ -32240,9 +32253,9 @@ fn main() {
     println(total);
 }
 "#,
-            // Per iter: m.len()=1, g.len()=1, prev.len()=len("old-heaptail")=12,
-            // r.len()=0 → 14; x200 = 2800.
-            &["2800"],
+            // Per iter: m.len()=1, g.len()=1, gs.len()=1,
+            // prev.len()=len("old-heaptail")=12, r.len()=0 → 15; x200 = 3000.
+            &["3000"],
             "map_string_value_overwrite_discard_no_leak",
         );
     }
