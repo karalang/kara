@@ -2638,6 +2638,33 @@ impl Emitter {
                             + ", ptr %v"
                             + idx.to_string()
                             + ", align 8\n";
+                    } else if plk2 == 5 {
+                        // An f64 payload (Slice 44): slot 1 holds its bits —
+                        // extract i64, bitcast back to double, bind as kind 5.
+                        let pl = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pl.clone()
+                            + " = extractvalue "
+                            + ety.clone()
+                            + " "
+                            + sop.clone()
+                            + ", 1\n";
+                        let plf = self.fresh();
+                        self.body =
+                            self.body + "  " + plf.clone() + " = bitcast i64 " + pl + " to double\n";
+                        let idx = self.locals.len();
+                        self.locals.push(bind_payload);
+                        self.locals_kind.push(5);
+                        self.locals_heap.push(false);
+                        self.body =
+                            self.body + "  %v" + idx.to_string() + " = alloca double, align 8\n";
+                        self.body = self.body
+                            + "  store double "
+                            + plf
+                            + ", ptr %v"
+                            + idx.to_string()
+                            + ", align 8\n";
                     } else {
                         let pl = self.fresh();
                         self.body = self.body
@@ -2686,6 +2713,32 @@ impl Emitter {
                         self.body = self.body
                             + "  store { ptr, i64 } "
                             + pl2
+                            + ", ptr %v"
+                            + idx2.to_string()
+                            + ", align 8\n";
+                    } else if plk3 == 5 {
+                        // Second payload f64 (Slice 44): bits in slot 1.
+                        let pl2 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pl2.clone()
+                            + " = extractvalue "
+                            + ety.clone()
+                            + " "
+                            + sop.clone()
+                            + ", 1\n";
+                        let pl2f = self.fresh();
+                        self.body =
+                            self.body + "  " + pl2f.clone() + " = bitcast i64 " + pl2 + " to double\n";
+                        let idx2 = self.locals.len();
+                        self.locals.push(bind_payload2);
+                        self.locals_kind.push(5);
+                        self.locals_heap.push(false);
+                        self.body =
+                            self.body + "  %v" + idx2.to_string() + " = alloca double, align 8\n";
+                        self.body = self.body
+                            + "  store double "
+                            + pl2f
                             + ", ptr %v"
                             + idx2.to_string()
                             + ", align 8\n";
@@ -4586,6 +4639,15 @@ impl Emitter {
                             xv2 = aop;
                             xk2 = ak;
                             xh2 = ah;
+                        } else if ak == 5 {
+                            // An f64 payload (Slice 44): store its BITS in the
+                            // i64 slot 1 — bitcast in on construction, back out
+                            // on match. No new slot; Float(f64,..) and
+                            // Integer(i64,..) share slot 1, tag-disjoint.
+                            let fb = self.fresh();
+                            self.body =
+                                self.body + "  " + fb.clone() + " = bitcast double " + aop + " to i64\n";
+                            iv2 = fb;
                         } else {
                             iv2 = aop;
                         }
