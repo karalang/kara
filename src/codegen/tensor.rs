@@ -4152,6 +4152,77 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// The eligibility gate shared by the standalone-map and fused-map-
+    /// reduce vectorizers: float element, no operand bitmap, closure param
+    /// count matches the operand count, and a liftable elementwise float
+    /// body containing a polynomial transcendental (the only case worth
+    /// intercepting). Returns the element float type + param names + the
+    /// block-peeled body, or `None` when ineligible.
+    fn map_vector_gate<'b>(
+        lhs: &ContainerAccess<'ctx>,
+        other_has_bitmap: bool,
+        params: &[crate::ast::ClosureParam],
+        n_operands: usize,
+        body: &'b Expr,
+    ) -> Option<(inkwell::types::FloatType<'ctx>, Vec<String>, &'b Expr)> {
+        let BasicTypeEnum::FloatType(ft) = lhs.elem else {
+            return None;
+        };
+        if lhs.bitmap.is_some() || other_has_bitmap {
+            return None;
+        }
+        let pnames = Self::closure_param_names(params)?;
+        if pnames.len() != n_operands {
+            return None;
+        }
+        let body = Self::peel_map_block(body);
+        let mut has_trans = false;
+        if !Self::map_body_liftable(body, &mut has_trans) || !has_trans {
+            return None;
+        }
+        Some((ft, pnames, body))
+    }
+
+    /// Resolve each loop-invariant capture (free identifier not among the
+    /// params) to a scalar float of the element type, emitting the loads at
+    /// the current insertion point. `None` when any capture isn't a local
+    /// float scalar (a global / captured tensor / non-float) — the caller
+    /// then falls back to the scalar path. Resolves straight from the
+    /// variable table (NOT a synthesized `Expr`, whose fabricated span
+    /// would miss the span-keyed type side-tables); a capture of the other
+    /// float width (a bare `2.5` literal defaults to f64 in an f32 map)
+    /// casts to the element type, matching the scalar path's promotion.
+    fn resolve_map_captures(
+        &self,
+        body: &Expr,
+        pnames: &[String],
+        ft: inkwell::types::FloatType<'ctx>,
+    ) -> Option<Vec<(String, inkwell::values::FloatValue<'ctx>)>> {
+        let mut caps: Vec<String> = Vec::new();
+        Self::collect_map_captures(body, pnames, &mut caps);
+        let mut out: Vec<(String, inkwell::values::FloatValue<'ctx>)> = Vec::new();
+        for c in &caps {
+            let slot = self.variables.get(c).copied()?;
+            let BasicTypeEnum::FloatType(_) = slot.ty else {
+                return None;
+            };
+            let loaded = self
+                .builder
+                .build_load(slot.ty, slot.ptr, "vm.cap")
+                .unwrap()
+                .into_float_value();
+            let fv = if slot.ty == ft.into() {
+                loaded
+            } else {
+                self.builder
+                    .build_float_cast(loaded, ft, "vm.capcast")
+                    .unwrap()
+            };
+            out.push((c.clone(), fv));
+        }
+        Some(out)
+    }
+
     /// Try to emit a transcendental-map as a strip-mined vector loop (the
     /// data-spine last leg — a scalar `expf`/`logf` call in the map body
     /// otherwise blocks vectorization). `Ok(true)` = emitted; `Ok(false)`
@@ -4173,63 +4244,18 @@ impl<'ctx> super::Codegen<'ctx> {
         body: &Expr,
         dest: &MapDest<'ctx>,
     ) -> Result<bool, String> {
-        let BasicTypeEnum::FloatType(ft) = lhs.elem else {
-            return Ok(false);
-        };
-        if lhs.bitmap.is_some()
-            || dest.bitmap.is_some()
-            || other.is_some_and(|o| o.bitmap.is_some())
-        {
+        if dest.bitmap.is_some() {
             return Ok(false);
         }
-        let Some(pnames) = Self::closure_param_names(params) else {
-            return Ok(false);
-        };
-        // param count must match the operand count (1 for map, 2 for zip).
         let want = if other.is_some() { 2 } else { 1 };
-        if pnames.len() != want {
+        let other_bm = other.is_some_and(|o| o.bitmap.is_some());
+        let Some((ft, pnames, body)) = Self::map_vector_gate(lhs, other_bm, params, want, body)
+        else {
             return Ok(false);
-        }
-        let body = Self::peel_map_block(body);
-        let mut has_trans = false;
-        if !Self::map_body_liftable(body, &mut has_trans) || !has_trans {
+        };
+        let Some(cap_scalars) = self.resolve_map_captures(body, &pnames, ft) else {
             return Ok(false);
-        }
-        // Loop-invariant captures: resolve each to a scalar float of the
-        // element type NOW (before the loops). A non-float capture (e.g. a
-        // captured tensor) can't be lane-splatted here — fall back.
-        let mut caps: Vec<String> = Vec::new();
-        Self::collect_map_captures(body, &pnames, &mut caps);
-        let mut cap_scalars: Vec<(String, inkwell::values::FloatValue<'ctx>)> = Vec::new();
-        for c in &caps {
-            // Resolve captures straight from the variable table — NOT via a
-            // synthesized identifier `Expr`, whose fabricated span would
-            // miss the span-keyed type side-tables `compile_expr` consults.
-            // A capture that isn't a local scalar of the element float type
-            // (a global, a captured tensor, a non-float) → fall back.
-            let Some(slot) = self.variables.get(c).copied() else {
-                return Ok(false);
-            };
-            let BasicTypeEnum::FloatType(_) = slot.ty else {
-                return Ok(false);
-            };
-            let loaded = self
-                .builder
-                .build_load(slot.ty, slot.ptr, "vm.cap")
-                .unwrap()
-                .into_float_value();
-            // A capture of the OTHER float width (e.g. a bare `2.5` literal
-            // defaults to f64 in an f32 map) casts to the element type —
-            // matching the scalar path's implicit promotion.
-            let fv = if slot.ty == ft.into() {
-                loaded
-            } else {
-                self.builder
-                    .build_float_cast(loaded, ft, "vm.capcast")
-                    .unwrap()
-            };
-            cap_scalars.push((c.clone(), fv));
-        }
+        };
 
         let fn_val = self
             .current_fn
@@ -4287,6 +4313,274 @@ impl<'ctx> super::Codegen<'ctx> {
             true,
         )?;
         Ok(true)
+    }
+
+    /// Try to emit a FUSED transcendental map-reduce (`t.map(f).sum()` /
+    /// `.zip_with(g).sum()` — the chained form the fusion pass routes to
+    /// `emit_fused_map_reduce`) as a vector-accumulator loop, so the
+    /// transcendental in the map body doesn't scalarize and block
+    /// vectorization. `Ok(Some(total))` = emitted; `Ok(None)` = ineligible,
+    /// caller uses the scalar fused loop (which then relies on `reassoc`
+    /// auto-vec — fine for the pure-arith embeddings kernels, which never
+    /// reach here thanks to the transcendental gate).
+    ///
+    /// Shape: a `<W x T>` accumulator folds the mapped chunks (packed
+    /// `fadd`/`fmul`), then a horizontal lane-fold to a scalar, then a
+    /// scalar-splat tail folding the remaining `< W` elements through the
+    /// SAME width-`W` polynomial (identical accuracy across the tensor).
+    /// Accuracy + reduction reorder are the already-documented `reassoc` /
+    /// SIMD-transcendental divergence class (`karac run` keeps f64 libm +
+    /// ordered fold).
+    pub(super) fn try_emit_vectorized_fused_map_reduce(
+        &mut self,
+        lhs: &ContainerAccess<'ctx>,
+        other: Option<&ContainerAccess<'ctx>>,
+        params: &[crate::ast::ClosureParam],
+        body: &Expr,
+        result_elem: BasicTypeEnum<'ctx>,
+        op: ReduceOp,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Float accumulator + Sum/Prod/Mean only. min/max aren't in the
+        // fused family; a non-float accumulator has no polynomial.
+        let BasicTypeEnum::FloatType(racc) = result_elem else {
+            return Ok(None);
+        };
+        let is_prod = matches!(op, ReduceOp::Prod);
+        if !matches!(op, ReduceOp::Sum | ReduceOp::Prod | ReduceOp::Mean) {
+            return Ok(None);
+        }
+        let want = if other.is_some() { 2 } else { 1 };
+        let other_bm = other.is_some_and(|o| o.bitmap.is_some());
+        let Some((ft, pnames, body)) = Self::map_vector_gate(lhs, other_bm, params, want, body)
+        else {
+            return Ok(None);
+        };
+        // The mapped element must match the accumulator width (the common
+        // case; a widening map-then-reduce is left to the scalar path).
+        if ft != racc {
+            return Ok(None);
+        }
+        let Some(cap_scalars) = self.resolve_map_captures(body, &pnames, ft) else {
+            return Ok(None);
+        };
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "fused vectorized map-reduce outside function".to_string())?;
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+        let f32_t = self.context.f32_type();
+        let (width, elem_align): (u32, u32) = if ft == f32_t { (8, 4) } else { (4, 8) };
+        let vt = ft.vec_type(width);
+        let log2w = width.trailing_zeros();
+
+        let shr = self
+            .builder
+            .build_right_shift(
+                lhs.len,
+                i64_t.const_int(log2w as u64, false),
+                false,
+                "fvm.shr",
+            )
+            .unwrap();
+        let main_count = self
+            .builder
+            .build_left_shift(shr, i64_t.const_int(log2w as u64, false), "fvm.mc")
+            .unwrap();
+        let srcs: Vec<(String, PointerValue<'ctx>)> = match other {
+            Some(o) => vec![(pnames[0].clone(), lhs.data), (pnames[1].clone(), o.data)],
+            None => vec![(pnames[0].clone(), lhs.data)],
+        };
+        let fold = |cg: &Self, a: inkwell::values::VectorValue<'ctx>, b| {
+            if is_prod {
+                cg.builder.build_float_mul(a, b, "fvm.vmul").unwrap()
+            } else {
+                cg.builder.build_float_add(a, b, "fvm.vadd").unwrap()
+            }
+        };
+
+        // Vector accumulator seeded with the folding identity on every lane.
+        let ident = if is_prod {
+            ft.const_float(1.0)
+        } else {
+            ft.const_zero()
+        };
+        let vacc = self.builder.build_alloca(vt, "fvm.vacc").unwrap();
+        let seed_v = self.vsplat_scalar(ident, vt, width);
+        self.builder.build_store(vacc, seed_v).unwrap();
+        let idx = self.builder.build_alloca(i64_t, "fvm.i").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "fvm.head");
+        let bodyb = self.context.append_basic_block(fn_val, "fvm.body");
+        let after = self.context.append_basic_block(fn_val, "fvm.after");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, idx, "fvm.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, main_count, "fvm.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, bodyb, after)
+            .unwrap();
+
+        self.builder.position_at_end(bodyb);
+        let mut lanes: std::collections::HashMap<String, inkwell::values::VectorValue<'ctx>> =
+            std::collections::HashMap::new();
+        for (name, data) in &srcs {
+            let ptr = unsafe { self.builder.build_gep(ft, *data, &[iv], "fvm.sp").unwrap() };
+            let ld = self.builder.build_load(vt, ptr, "fvm.sv").unwrap();
+            let lv = ld.into_vector_value();
+            lv.as_instruction()
+                .unwrap()
+                .set_alignment(elem_align)
+                .unwrap();
+            lanes.insert(name.clone(), lv);
+        }
+        for (name, scalar) in &cap_scalars {
+            lanes.insert(name.clone(), self.vsplat_scalar(*scalar, vt, width));
+        }
+        let mapped = self.compile_vlift(body, width, ft, &lanes)?;
+        let cur = self
+            .builder
+            .build_load(vt, vacc, "fvm.cur")
+            .unwrap()
+            .into_vector_value();
+        let next = fold(self, cur, mapped);
+        self.builder.build_store(vacc, next).unwrap();
+        let i2 = self
+            .builder
+            .build_int_add(iv, i64_t.const_int(width as u64, false), "fvm.i2")
+            .unwrap();
+        self.builder.build_store(idx, i2).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        // Horizontal lane-fold of the vector accumulator to a scalar.
+        self.builder.position_at_end(after);
+        let vacc_v = self
+            .builder
+            .build_load(vt, vacc, "fvm.vout")
+            .unwrap()
+            .into_vector_value();
+        let mut acc_s = self
+            .builder
+            .build_extract_element(vacc_v, i32_t.const_zero(), "fvm.l0")
+            .unwrap()
+            .into_float_value();
+        for lane in 1..width {
+            let l = self
+                .builder
+                .build_extract_element(vacc_v, i32_t.const_int(lane as u64, false), "fvm.ln")
+                .unwrap()
+                .into_float_value();
+            acc_s = if is_prod {
+                self.builder.build_float_mul(acc_s, l, "fvm.hmul").unwrap()
+            } else {
+                self.builder.build_float_add(acc_s, l, "fvm.hadd").unwrap()
+            };
+        }
+
+        // Scalar-splat tail: fold the remaining `< W` elements through the
+        // same width-W polynomial, extracting lane 0.
+        let acc = self.builder.build_alloca(ft, "fvm.acc").unwrap();
+        self.builder.build_store(acc, acc_s).unwrap();
+        let ti = self.builder.build_alloca(i64_t, "fvm.ti").unwrap();
+        self.builder.build_store(ti, main_count).unwrap();
+        let thead = self.context.append_basic_block(fn_val, "fvm.thead");
+        let tbody = self.context.append_basic_block(fn_val, "fvm.tbody");
+        let texit = self.context.append_basic_block(fn_val, "fvm.texit");
+        self.builder.build_unconditional_branch(thead).unwrap();
+
+        self.builder.position_at_end(thead);
+        let tiv = self
+            .builder
+            .build_load(i64_t, ti, "fvm.tiv")
+            .unwrap()
+            .into_int_value();
+        let tmore = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, tiv, lhs.len, "fvm.tmore")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(tmore, tbody, texit)
+            .unwrap();
+
+        self.builder.position_at_end(tbody);
+        let mut tlanes: std::collections::HashMap<String, inkwell::values::VectorValue<'ctx>> =
+            std::collections::HashMap::new();
+        for (name, data) in &srcs {
+            let ptr = unsafe {
+                self.builder
+                    .build_gep(ft, *data, &[tiv], "fvm.tsp")
+                    .unwrap()
+            };
+            let s = self
+                .builder
+                .build_load(ft, ptr, "fvm.tss")
+                .unwrap()
+                .into_float_value();
+            tlanes.insert(name.clone(), self.vsplat_scalar(s, vt, width));
+        }
+        for (name, scalar) in &cap_scalars {
+            tlanes.insert(name.clone(), self.vsplat_scalar(*scalar, vt, width));
+        }
+        let tmapped = self.compile_vlift(body, width, ft, &tlanes)?;
+        let m0 = self
+            .builder
+            .build_extract_element(tmapped, i32_t.const_zero(), "fvm.tm0")
+            .unwrap()
+            .into_float_value();
+        let tcur = self
+            .builder
+            .build_load(ft, acc, "fvm.tcur")
+            .unwrap()
+            .into_float_value();
+        let tnext = if is_prod {
+            self.builder.build_float_mul(tcur, m0, "fvm.tmul").unwrap()
+        } else {
+            self.builder.build_float_add(tcur, m0, "fvm.tadd").unwrap()
+        };
+        self.builder.build_store(acc, tnext).unwrap();
+        let ti2 = self
+            .builder
+            .build_int_add(tiv, i64_t.const_int(1, false), "fvm.ti2")
+            .unwrap();
+        self.builder.build_store(ti, ti2).unwrap();
+        self.builder.build_unconditional_branch(thead).unwrap();
+
+        self.builder.position_at_end(texit);
+        let total = self
+            .builder
+            .build_load(ft, acc, "fvm.total")
+            .unwrap()
+            .into_float_value();
+        if matches!(op, ReduceOp::Mean) {
+            let f64_t = self.context.f64_type();
+            let sum_f = if total.get_type() == f32_t {
+                self.builder
+                    .build_float_ext(total, f64_t, "fvm.sumf64")
+                    .unwrap()
+            } else {
+                total
+            };
+            let nf = self
+                .builder
+                .build_unsigned_int_to_float(lhs.len, f64_t, "fvm.nf")
+                .unwrap();
+            return Ok(Some(
+                self.builder
+                    .build_float_div(sum_f, nf, "fvm.mean")
+                    .unwrap()
+                    .into(),
+            ));
+        }
+        Ok(Some(total.into()))
     }
 
     /// Full reduce → scalar. `sum`/`prod` fold via `compile_binop_typed`

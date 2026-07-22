@@ -70671,6 +70671,69 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_fused_transcendental_map_reduce_vectorizes() {
+        // The CHAINED fused form `t.map(|x| x.exp()).sum()` routes through
+        // emit_fused_map_reduce; a transcendental in the body would
+        // otherwise scalarize the exp call and block the reassoc auto-vec.
+        // try_emit_vectorized_fused_map_reduce emits a <8 x float> vector-
+        // accumulator loop instead (the polynomial + packed fadd).
+        let ir = ir_for(
+            "fn d(t: ref Tensor[f32, [64]]) -> f32 { t.map(|x| x.exp()).sum() }\n\
+             fn main() { let t: Tensor[f32, [64]] = Tensor.ones([64]); println(d(t)); }\n",
+        );
+        assert!(
+            ir.contains("<8 x float>"),
+            "fused transcendental map-reduce must lift to a <8 x float> accumulator loop"
+        );
+
+        // A PURE-ARITHMETIC fused reduce (the embeddings dot shape) must
+        // NOT hit the transcendental vectorizer — it stays on the scalar +
+        // `reassoc` auto-vec path (fadd reassoc, no hand-emitted vector
+        // accumulator from this pass).
+        let ir_dot = ir_for(
+            "fn d(a: ref Tensor[f32, [64]], b: ref Tensor[f32, [64]]) -> f32 \
+             { a.zip_with(b, |x, y| x * y).sum() }\n\
+             fn main() {\n\
+                 let a: Tensor[f32, [64]] = Tensor.ones([64]);\n\
+                 let b: Tensor[f32, [64]] = Tensor.ones([64]);\n\
+                 println(d(a, b));\n\
+             }\n",
+        );
+        assert!(
+            ir_dot.contains("fadd reassoc"),
+            "pure-arith fused dot must stay on the scalar+reassoc path; IR:\n{}",
+            &ir_dot[..ir_dot.len().min(3000)]
+        );
+    }
+
+    #[test]
+    fn test_e2e_fused_transcendental_map_reduce_accuracy() {
+        // The vectorized fused map-reduce (`t.map(|x| x.exp()).sum()`) must
+        // stay within the documented f32-polynomial tolerance of the true
+        // sum. Self-checking so it holds on BOTH backends (interp: f64 libm
+        // + ordered fold; AOT: SIMD polynomial + reassociated vector fold).
+        // Length 20 = two full width-8 chunks + a 4-element tail.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut t: Tensor[f32, [20]] = Tensor.zeros(vec![20]);\n\
+                 for i in 0..20 { t[i] = (i) as f32 * 0.1f32 - 1.0f32; }\n\
+                 let got: f32 = t.map(|x| x.exp()).sum();\n\
+                 let mut want: f32 = 0.0f32;\n\
+                 for i in 0..20 { want = want + ((i) as f32 * 0.1f32 - 1.0f32).exp(); }\n\
+                 let d: f32 = got - want;\n\
+                 let ad: f32 = if d < 0.0f32 { 0.0f32 - d } else { d };\n\
+                 println(ad < 0.01f32);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "true\n",
+                "vectorized fused exp-sum must stay within 1e-2 of the reference on both backends",
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_tensor_transcendental_map_accuracy() {
         // The vectorized transcendental map must stay within the documented
         // f32-polynomial tolerance of the true math value — self-checking so

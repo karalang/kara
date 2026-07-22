@@ -473,6 +473,18 @@ impl<'ctx> super::Codegen<'ctx> {
             ))
             }
         };
+        // Transcendental map-reduce vectorization (data-spine fused leg): a
+        // map body carrying a polynomial exp/ln otherwise scalarizes the
+        // call and blocks the reassoc auto-vec below. When eligible, emit a
+        // hand-vectorized accumulator loop routing the transcendental
+        // through the SIMD polynomial. Non-transcendental fused reductions
+        // (the embeddings dot/cosine kernels) return None and stay on the
+        // scalar+reassoc path unchanged.
+        if let Some(v) =
+            self.try_emit_vectorized_fused_map_reduce(lhs, other, params, body, result_elem, op)?
+        {
+            return Ok(v);
+        }
         let i64_t = self.context.i64_type();
         let fn_val = self
             .current_fn
