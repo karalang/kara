@@ -12974,7 +12974,12 @@ fn main() {
         // f16/bf16 ↔ i16). Covers: compound tuple binding (p.0 + p.1),
         // tuple destructure `Some((a, b))`, runtime-value pack through a fn
         // (non-const path), single payload, bf16, and Result[f16, String].
-        if let Some(out) = run_program(
+        // Captured (not just stdout) so a divergence reports the child's
+        // exit status + stderr: an empty stdout alone can't distinguish a
+        // runtime crash (signal, block-buffered output lost) from a clean
+        // exit that printed nothing — the exact ambiguity that stalled the
+        // macOS-arm64 investigation of B-2026-07-22-1.
+        if let Some(run) = run_program_capturing(
             "fn mk(x: f16, y: f16) -> Option[(f16, f16)] {\n\
                  Some((x, y))\n\
              }\n\
@@ -12994,8 +12999,74 @@ fn main() {
                  match r { Ok(v) => println(v * 3.0f16), Err(e) => println(e) }\n\
              }",
         ) {
-            assert_eq!(out, "4\n1\n3.5\n1.75\n6\n");
+            assert_eq!(
+                run.stdout,
+                "4\n1\n3.5\n1.75\n6\n",
+                "f16/bf16 payload program diverged (status: {}, stderr: {:?})",
+                run.status,
+                run.stderr
+            );
         }
+    }
+
+    #[test]
+    fn test_ir_bf16_widen_to_f64_routes_through_f32() {
+        // B-2026-07-22-1 hardening: LLVM 18's AArch64 backend cannot select
+        // ANY standalone `fpext`/`fptrunc` node touching bfloat (verified
+        // with llc-18 on both `apple-m1` and `generic` v8a: bf16 → f32,
+        // bf16 → f64, and f32 → bf16 all die at ISel with "LLVM ERROR:
+        // Cannot select", even load-fed; bf16 arithmetic legalizes fine).
+        // Any bf16 value the mid-end can't constant-fold away
+        // (KARAC_OPT_LEVEL=0, or a value flowing through an opaque call
+        // boundary) would hit the gap, so codegen must emit bf16
+        // conversions as integer-level sequences (zext+shl widening /
+        // RNE-bias narrowing — `build_float_cast_bf16_safe`). Pins the two
+        // always-reachable emission surfaces at once: the println format
+        // path and the explicit `as f64` cast, on a bf16 that arrives
+        // through a fn boundary so no fold can hide the node.
+        let src = r#"
+fn show(x: bf16) -> f64 {
+    println(x);
+    x as f64
+}
+
+fn main() {
+    println(show(1.25bf16));
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ir = compile_to_ir(&parsed.program, None, None).expect("codegen failed");
+        for line in ir.lines() {
+            assert!(
+                !line.contains("fpext bfloat"),
+                "standalone `fpext bfloat` emitted (unselectable on LLVM 18 \
+                 aarch64): {}",
+                line
+            );
+            assert!(
+                !(line.contains("fptrunc") && line.contains("bfloat")),
+                "standalone `fptrunc … bfloat` emitted (unselectable on \
+                 LLVM 18 aarch64): {}",
+                line
+            );
+        }
+        let widen_seqs = ir.lines().filter(|l| l.contains(".bf2f.shl")).count();
+        assert!(
+            widen_seqs >= 2,
+            "expected the print path AND the `as f64` cast to widen bf16 \
+             via the integer zext+shl sequence (≥2 `.bf2f.shl` legs); \
+             found {} in:\n{}",
+            widen_seqs,
+            ir
+        );
     }
 
     #[test]

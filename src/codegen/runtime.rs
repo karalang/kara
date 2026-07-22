@@ -8362,9 +8362,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_t = self.context.ptr_type(AddressSpace::default());
         let fn_val = self.current_fn.unwrap();
         let v = if fv.get_type() != self.context.f64_type() {
-            self.builder
-                .build_float_ext(fv, self.context.f64_type(), "f2d")
-                .unwrap()
+            // bf16 sources must NOT widen with a direct `fpext bfloat →
+            // double` — LLVM 18's AArch64 backend cannot select that node
+            // (B-2026-07-22-1); the helper routes bf16 through f32 first.
+            self.build_float_cast_bf16_safe(fv, self.context.f64_type(), "f2d")
         } else {
             fv
         };

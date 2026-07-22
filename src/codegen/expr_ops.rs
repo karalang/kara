@@ -3158,11 +3158,184 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(result.into())
             }
             (BasicValueEnum::FloatValue(fv), BasicTypeEnum::FloatType(ft)) => {
-                let result = self.builder.build_float_cast(fv, ft, "cast").unwrap();
+                let result = self.build_float_cast_bf16_safe(fv, ft, "cast");
                 Ok(result.into())
             }
             _ => Ok(val),
         }
+    }
+
+    /// Float→float cast that never emits a standalone `fpext`/`fptrunc`
+    /// node touching `bfloat`: LLVM 18's AArch64 backend cannot select ANY
+    /// of them (verified with llc-18 on both `apple-m1` and `generic` v8a:
+    /// `fpext bfloat → float`, `fpext bfloat → double`, and
+    /// `fptrunc float → bfloat` all die at ISel with "LLVM ERROR: Cannot
+    /// select" — even load-fed; bf16 *arithmetic* (`fadd`/`fcmp`/`fneg`)
+    /// legalizes fine, only the conversion nodes are gapped, fixed upstream
+    /// in LLVM 19). Any bf16 value the mid-end can't constant-fold away
+    /// (`KARAC_OPT_LEVEL=0`, or a value flowing through an opaque call
+    /// boundary) would hit the gap, so bf16 conversions are emitted as
+    /// integer-level sequences instead — the same lowering LLVM 19
+    /// legalization (and compiler-rt's `__truncsfbf2`) uses:
+    ///
+    /// - bf16 → f32: bitcast i16, zext i32, `shl 16`, bitcast f32 (exact —
+    ///   bf16 is a truncated f32).
+    /// - f32 → bf16: round-to-nearest-even bias trick (`bits + 0x7FFF +
+    ///   lsb`) with NaN quieting, then take the high 16 bits.
+    /// - Wider/narrower endpoints route through f32 with legal f32↔f64/f16
+    ///   casts (f64 → bf16 double-rounds through f32; accepted for v1 —
+    ///   it matches the "bf16 computes in f32" semantics everywhere else).
+    ///
+    /// Non-bf16 combinations defer to a plain `build_float_cast`.
+    pub(super) fn build_float_cast_bf16_safe(
+        &self,
+        fv: inkwell::values::FloatValue<'ctx>,
+        ft: inkwell::types::FloatType<'ctx>,
+        name: &str,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        let bf16_t = self.context.bf16_type();
+        let f32_t = self.context.f32_type();
+        let src_t = fv.get_type();
+        if src_t == ft {
+            return fv;
+        }
+        if src_t == bf16_t {
+            let widened = self.emit_bf16_to_f32(fv, &format!("{name}.bf2f"));
+            if ft == f32_t {
+                return widened;
+            }
+            return self.builder.build_float_cast(widened, ft, name).unwrap();
+        }
+        if ft == bf16_t {
+            let at32 = if src_t == f32_t {
+                fv
+            } else {
+                self.builder
+                    .build_float_cast(fv, f32_t, &format!("{name}.to32"))
+                    .unwrap()
+            };
+            return self.emit_f32_to_bf16(at32, name);
+        }
+        self.builder.build_float_cast(fv, ft, name).unwrap()
+    }
+
+    /// bf16 → f32, exactly, without an `fpext bfloat` node (unselectable on
+    /// LLVM 18 aarch64 — see [`Self::build_float_cast_bf16_safe`]): a bf16
+    /// is the high half of an f32, so widen the bit pattern and shift it
+    /// back into place. Pure integer ops — selectable on every target.
+    fn emit_bf16_to_f32(
+        &self,
+        fv: inkwell::values::FloatValue<'ctx>,
+        name: &str,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        let i16_t = self.context.i16_type();
+        let i32_t = self.context.i32_type();
+        let f32_t = self.context.f32_type();
+        let bits16 = self
+            .builder
+            .build_bit_cast(fv, i16_t, &format!("{name}.b16"))
+            .unwrap()
+            .into_int_value();
+        let bits32 = self
+            .builder
+            .build_int_z_extend(bits16, i32_t, &format!("{name}.z"))
+            .unwrap();
+        let shifted = self
+            .builder
+            .build_left_shift(bits32, i32_t.const_int(16, false), &format!("{name}.shl"))
+            .unwrap();
+        self.builder
+            .build_bit_cast(shifted, f32_t, name)
+            .unwrap()
+            .into_float_value()
+    }
+
+    /// f32 → bf16 with round-to-nearest-even, without an `fptrunc … to
+    /// bfloat` node (unselectable on LLVM 18 aarch64 — see
+    /// [`Self::build_float_cast_bf16_safe`]). The standard bias trick:
+    /// adding `0x7FFF + lsb` to the f32 bits rounds the high 16 bits to
+    /// nearest, with the `lsb` term breaking ties to even. NaN inputs skip
+    /// the bias (it could carry into the exponent and turn NaN into Inf)
+    /// and instead force the f32 quiet bit, which lands in the bf16
+    /// mantissa after the shift — sign and high payload bits preserved,
+    /// matching compiler-rt's `__truncsfbf2`.
+    fn emit_f32_to_bf16(
+        &self,
+        fv: inkwell::values::FloatValue<'ctx>,
+        name: &str,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        let i16_t = self.context.i16_type();
+        let i32_t = self.context.i32_type();
+        let bf16_t = self.context.bf16_type();
+        let bits = self
+            .builder
+            .build_bit_cast(fv, i32_t, &format!("{name}.f2bf.bits"))
+            .unwrap()
+            .into_int_value();
+        let hi = self
+            .builder
+            .build_right_shift(
+                bits,
+                i32_t.const_int(16, false),
+                false,
+                &format!("{name}.f2bf.hi"),
+            )
+            .unwrap();
+        let lsb = self
+            .builder
+            .build_and(hi, i32_t.const_int(1, false), &format!("{name}.f2bf.lsb"))
+            .unwrap();
+        let biased = self
+            .builder
+            .build_int_add(
+                bits,
+                i32_t.const_int(0x7FFF, false),
+                &format!("{name}.f2bf.bias"),
+            )
+            .unwrap();
+        let rounded = self
+            .builder
+            .build_int_add(biased, lsb, &format!("{name}.f2bf.rnd"))
+            .unwrap();
+        let is_nan = self
+            .builder
+            .build_float_compare(
+                inkwell::FloatPredicate::UNO,
+                fv,
+                fv,
+                &format!("{name}.f2bf.isnan"),
+            )
+            .unwrap();
+        let nan_bits = self
+            .builder
+            .build_or(
+                bits,
+                i32_t.const_int(0x0040_0000, false),
+                &format!("{name}.f2bf.qnan"),
+            )
+            .unwrap();
+        let sel = self
+            .builder
+            .build_select(is_nan, nan_bits, rounded, &format!("{name}.f2bf.sel"))
+            .unwrap()
+            .into_int_value();
+        let out_hi = self
+            .builder
+            .build_right_shift(
+                sel,
+                i32_t.const_int(16, false),
+                false,
+                &format!("{name}.f2bf.out"),
+            )
+            .unwrap();
+        let out16 = self
+            .builder
+            .build_int_truncate(out_hi, i16_t, &format!("{name}.f2bf.tr"))
+            .unwrap();
+        self.builder
+            .build_bit_cast(out16, bf16_t, name)
+            .unwrap()
+            .into_float_value()
     }
 
     /// Bit width (32 / 64) of an LLVM float type, for intrinsic name mangling.
@@ -5303,10 +5476,7 @@ impl<'ctx> super::Codegen<'ctx> {
             (BasicValueEnum::FloatValue(fv), BasicTypeEnum::FloatType(ft))
                 if fv.get_type() != ft =>
             {
-                self.builder
-                    .build_float_cast(fv, ft, "bnd.fcast")
-                    .unwrap()
-                    .into()
+                self.build_float_cast_bf16_safe(fv, ft, "bnd.fcast").into()
             }
             _ => val,
         }
@@ -5523,17 +5693,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // widening is lossless, and the typechecker typed the op at the
             // wider type, so computing there matches source semantics.
             (
-                self.builder
-                    .build_float_cast(lf, rf.get_type(), "fop.l.ext")
-                    .unwrap(),
+                self.build_float_cast_bf16_safe(lf, rf.get_type(), "fop.l.ext"),
                 rf,
             )
         } else if rw == 16 && lw > 16 {
             (
                 lf,
-                self.builder
-                    .build_float_cast(rf, lf.get_type(), "fop.r.ext")
-                    .unwrap(),
+                self.build_float_cast_bf16_safe(rf, lf.get_type(), "fop.r.ext"),
             )
         } else if lf.get_type() == f64_t && rf.get_type() == f32_t {
             // Real f32 operand × default-f64 float literal: cast the wide
