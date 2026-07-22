@@ -6096,6 +6096,166 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_process_spawn_pipe_env_roundtrip() {
+        // `std.process` codegen (phase-8 P1) — the spawn → take-stream →
+        // read_to_string → wait happy path plus env passthrough, stdin
+        // write/close, and the spawn-error path, matching the interpreter
+        // (`tests/interpreter.rs` § std.process). Chained builder receivers
+        // exercise the `Command`-returning links (arg/env/stdout/stdin);
+        // `read_to_string` exercises the StringPayload Ok protocol;
+        // `wait` the bit-packed ExitStatus protocol.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let cmd = Command.new("echo").arg("kara-spawn").stdout(Stdio.Piped);
+    match cmd.spawn() {
+        Ok(child) => {
+            match child.stdout() {
+                Some(o) => {
+                    match o.read_to_string() {
+                        Ok(text) => println(f"out={text}"),
+                        Err(e) => println("read failed"),
+                    }
+                }
+                None => println("no stdout handle"),
+            }
+            // Stream taken at most once.
+            match child.stdout() {
+                Some(o2) => println("second take?!"),
+                None => println("taken once"),
+            }
+            match child.wait() {
+                Ok(st) => println(f"code={st.code} success={st.success}"),
+                Err(e) => println("wait failed"),
+            }
+        }
+        Err(e) => println("spawn failed"),
+    }
+
+    let ecmd = Command.new("sh").arg("-c").arg("printf %s \"$KARA_E2E\"")
+        .env("KARA_E2E", "env-ok").stdout(Stdio.Piped);
+    match ecmd.spawn() {
+        Ok(child) => {
+            match child.stdout() {
+                Some(o) => {
+                    match o.read_to_string() {
+                        Ok(text) => println(f"env={text}"),
+                        Err(e) => println("env read failed"),
+                    }
+                }
+                None => println("no env stdout"),
+            }
+            match child.wait() {
+                Ok(st) => println(f"env-code={st.code}"),
+                Err(e) => println("env wait failed"),
+            }
+        }
+        Err(e) => println("env spawn failed"),
+    }
+
+    let cat = Command.new("cat").stdin(Stdio.Piped).stdout(Stdio.Piped);
+    match cat.spawn() {
+        Ok(child) => {
+            match child.stdin() {
+                Some(sin) => {
+                    match sin.write("through-the-pipe\n") {
+                        Ok(u) => println("wrote"),
+                        Err(e) => println("write failed"),
+                    }
+                    match sin.close() {
+                        Ok(u) => println("closed"),
+                        Err(e) => println("close failed"),
+                    }
+                }
+                None => println("no stdin handle"),
+            }
+            match child.stdout() {
+                Some(o) => {
+                    match o.read_to_string() {
+                        Ok(text) => println(f"cat={text}"),
+                        Err(e) => println("cat read failed"),
+                    }
+                }
+                None => println("no cat stdout"),
+            }
+            match child.wait() {
+                Ok(st) => println(f"cat-code={st.code}"),
+                Err(e) => println("cat wait failed"),
+            }
+        }
+        Err(e) => println("cat spawn failed"),
+    }
+
+    let bad = Command.new("definitely-not-a-binary-kara");
+    match bad.spawn() {
+        Ok(c) => println("bad spawned?!"),
+        Err(e) => {
+            match e {
+                IoError.NotFound => println("bad=NotFound"),
+                _ => println("bad=other"),
+            }
+        }
+    }
+}
+"#,
+        ) {
+            assert_eq!(
+                out,
+                "out=kara-spawn\n\ntaken once\ncode=0 success=true\nenv=env-ok\nenv-code=0\nwrote\nclosed\ncat=through-the-pipe\n\ncat-code=0\nbad=NotFound\n"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_process_try_wait_kill_reap() {
+        // `Child.try_wait` (bit-packed Option[ExitStatus] Ok payload) on a
+        // long sleeper: Ok(None) while running, then kill + wait reaps with
+        // success=false (signal-killed → code -1). Second wait after the
+        // reap is Err(NotFound) — the pid entry is removed up front,
+        // matching the interpreter.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let sleeper = Command.new("sleep").arg("30");
+    match sleeper.spawn() {
+        Ok(child) => {
+            match child.try_wait() {
+                Ok(maybe) => {
+                    match maybe {
+                        Some(st) => println("exited early?!"),
+                        None => println("running"),
+                    }
+                }
+                Err(e) => println("try_wait failed"),
+            }
+            match child.kill() {
+                Ok(u) => println("killed"),
+                Err(e) => println("kill failed"),
+            }
+            match child.wait() {
+                Ok(st) => println(f"success={st.success} code={st.code}"),
+                Err(e) => println("wait failed"),
+            }
+            match child.wait() {
+                Ok(st) => println("double reap?!"),
+                Err(e) => {
+                    match e {
+                        IoError.NotFound => println("reaped"),
+                        _ => println("unexpected err"),
+                    }
+                }
+            }
+        }
+        Err(e) => println("spawn failed"),
+    }
+}
+"#,
+        ) {
+            assert_eq!(out, "running\nkilled\nsuccess=false code=-1\nreaped\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_oncelock_wide_heap_struct_set_get() {
         // B-2026-07-12-2 gap 3: a WIDE struct-with-heap element (`Rec { id,
         // name: String }`, 4 words). `get`'s boxed borrow reconstructs the

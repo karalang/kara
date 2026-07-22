@@ -2439,6 +2439,102 @@ fn main() {
     }
 
     #[test]
+    fn asan_process_spawn_pipe_roundtrip_no_leak() {
+        // `std.process` codegen (phase-8 P1) — the full chained-builder
+        // spawn → take-stream → read_to_string → wait roundtrip, looped so
+        // LSan catches a per-iteration leak of: the chained `Command` temps
+        // (each builder link constructs a fresh Command whose `cmd_args` /
+        // `cmd_env` Vecs must drop), the `read_to_string` Ok String (owned
+        // buffer adopted from the runtime), or the IoError payloads. The
+        // spawn-error arm exercises the `IoError.Other`-free unit-variant
+        // Err path (`NotFound` carries no heap).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 8i64 {
+        let cmd = Command.new("echo").arg("asan-pipe").env("KARA_ASAN", "1").stdout(Stdio.Piped);
+        match cmd.spawn() {
+            Ok(child) => {
+                match child.stdout() {
+                    Some(o) => {
+                        match o.read_to_string() {
+                            Ok(text) => { total = total + text.len(); }
+                            Err(e) => {}
+                        }
+                    }
+                    None => {}
+                }
+                match child.wait() {
+                    Ok(st) => { total = total + st.code; }
+                    Err(e) => {}
+                }
+            }
+            Err(e) => {}
+        }
+        let bad = Command.new("definitely-not-a-binary-kara");
+        match bad.spawn() {
+            Ok(c) => {}
+            Err(e) => { total = total + 1i64; }
+        }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // ("asan-pipe\n".len() == 10, code 0, +1 bad) * 8 = 88
+            &["88"],
+            "process_spawn_pipe_roundtrip_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_process_stdin_write_close_no_leak() {
+        // `ChildStdin.write` borrows the String argument (runtime reads the
+        // descriptor only); the argument temp and the `cat` output String
+        // must both free exactly once per iteration.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 8i64 {
+        let cat = Command.new("cat").stdin(Stdio.Piped).stdout(Stdio.Piped);
+        match cat.spawn() {
+            Ok(child) => {
+                match child.stdin() {
+                    Some(sin) => {
+                        match sin.write("pipe-payload\n") { Ok(u) => {}, Err(e) => {} }
+                        match sin.close() { Ok(u) => {}, Err(e) => {} }
+                    }
+                    None => {}
+                }
+                match child.stdout() {
+                    Some(o) => {
+                        match o.read_to_string() {
+                            Ok(text) => { total = total + text.len(); }
+                            Err(e) => {}
+                        }
+                    }
+                    None => {}
+                }
+                match child.wait() { Ok(st) => {}, Err(e) => {} }
+            }
+            Err(e) => {}
+        }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // "pipe-payload\n".len() == 13; 13 * 8 = 104
+            &["104"],
+            "process_stdin_write_close_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_result_discard_struct_with_heap_no_leak() {
         // B-2026-07-12-2 gap 3 (general, NOT once-specific) — a discarded
         // fresh-temp `Result[i64, Rec]` whose `Err` payload is a multi-field

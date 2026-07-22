@@ -71,6 +71,7 @@ mod once;
 mod par_blocks;
 mod param_own;
 mod pattern_binding;
+mod process;
 mod provider;
 mod reduce;
 mod refinement;
@@ -469,6 +470,24 @@ static REGEX_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock
     lower_stdlib_source("regex", include_str!("../runtime/stdlib/regex.kara"))
 });
 
+static PROCESS_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
+    lower_stdlib_source("process", include_str!("../runtime/stdlib/process.kara"))
+});
+
+/// The lowered `std.process` program. Contributes the `Command` /
+/// `Child` / `ChildStdout` / `ChildStderr` / `ChildStdin` / `EnvVar` /
+/// `ExitStatus` struct layouts, the `Stdio` enum layout, and the real
+/// Kāra bodies of the pure builder methods (`Command.new` / `.arg` /
+/// `.env` / `.stdin` / `.stdout` / `.stderr`). The OS-touching methods
+/// (`spawn`, the `Child`/stream methods) are `#[compiler_builtin]` —
+/// hand-lowered in `src/codegen/process.rs` to `karac_runtime_process_*`
+/// externs — so they are skipped by the body-compile pass. Always
+/// present (like `ordering`): the builder bodies don't call each other,
+/// so the zero-use fixpoint prune drops them from process-free binaries.
+fn process_stdlib_program() -> &'static Program {
+    &PROCESS_LOWERED_PROGRAM
+}
+
 /// The lowered `std` regex program. Every `Regex` method is
 /// `#[compiler_builtin]` — `compile` / `is_match` are hand-rolled codegen
 /// intercepts (`assoc_call.rs` / `method_call.rs`), and `find` / `find_all` /
@@ -528,6 +547,7 @@ fn compiled_stdlib_programs(user: &Program) -> Vec<&'static Program> {
         ordering_stdlib_program(),
         mem_stdlib_program(),
         regex_stdlib_program(),
+        process_stdlib_program(),
     ];
     if program_uses_protobuf(user) {
         programs.push(protobuf_stdlib_program());
@@ -4608,6 +4628,72 @@ impl<'ctx> Codegen<'ctx> {
         module.add_function(
             "karac_runtime_fs_write",
             fs_write_type,
+            Some(Linkage::External),
+        );
+        // `std.process` runtime externs (`runtime/src/process.rs`,
+        // phase-8 P1 codegen leg). Same KaracIoResult out-param ABI as
+        // the file family. `spawn` takes the program String as a
+        // *descriptor pointer* (SSO-safe) plus the raw `Vec[String]` /
+        // `Vec[EnvVar]` buffer pointers + element counts (the runtime
+        // strides the buffers natively — no codegen-side loops) and the
+        // three `Stdio` enum tags.
+        let process_spawn_type = file_call_void_type.fn_type(
+            &[
+                ptr_type.into(), // out: *mut KaracIoResult
+                ptr_type.into(), // prog: *const RuntimeKaracString
+                ptr_type.into(), // args data: *const RuntimeKaracString
+                i64_type.into(), // args len
+                ptr_type.into(), // env data: *const KaracEnvVarView
+                i64_type.into(), // env len
+                i64_type.into(), // stdin tag
+                i64_type.into(), // stdout tag
+                i64_type.into(), // stderr tag
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_process_spawn",
+            process_spawn_type,
+            Some(Linkage::External),
+        );
+        // wait / try_wait / kill: (out, pid) -> void.
+        let process_pid_type =
+            file_call_void_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+        for sym in [
+            "karac_runtime_process_wait",
+            "karac_runtime_process_try_wait",
+            "karac_runtime_process_kill",
+        ] {
+            module.add_function(sym, process_pid_type, Some(Linkage::External));
+        }
+        // take_stream: (pid, which) -> i64 (pid when taken, 0 → None).
+        let process_take_type = i64_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_process_take_stream",
+            process_take_type,
+            Some(Linkage::External),
+        );
+        // read_to_string: (out, pid, which) -> void (StringPayload Ok).
+        let process_read_type = file_call_void_type
+            .fn_type(&[ptr_type.into(), i64_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_process_read_to_string",
+            process_read_type,
+            Some(Linkage::External),
+        );
+        // stdin_write: (out, pid, data: *const RuntimeKaracString) -> void.
+        let process_write_type = file_call_void_type
+            .fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_process_stdin_write",
+            process_write_type,
+            Some(Linkage::External),
+        );
+        // stdin_close: (pid) -> void.
+        let process_close_type = file_call_void_type.fn_type(&[i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_process_stdin_close",
+            process_close_type,
             Some(Linkage::External),
         );
         // `df.write_csv(path)` — serialize a DataFrame control block to a

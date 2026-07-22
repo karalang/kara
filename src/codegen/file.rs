@@ -59,12 +59,24 @@ use inkwell::IntPredicate;
 ///     the Ok arm rebuilds the `{ptr, len, cap}` aggregate (cap =
 ///     len) into Result payload words 0/1/2. Backs
 ///     `FileSystem.read_to_string`.
+///   - `ExitStatusPacked` — `std.process` `Child.wait`: `value` packs
+///     an `ExitStatus { code, success }` as `(code << 1) | success`
+///     (see `runtime/src/process.rs` module doc). The Ok arm unpacks
+///     into payload words 0 (code, arithmetic-shift-right 1) and 1
+///     (success, low bit).
+///   - `OptionExitStatusPacked` — `Child.try_wait`: `value` packs
+///     `Option[ExitStatus]` as `(code << 2) | (success << 1) |
+///     present`. Word 0 is the Option tag (`present`: Some=1/None=0 —
+///     matching the seeded Option layout), word 1 the code, word 2 the
+///     success bit.
 #[derive(Clone, Copy)]
 pub(super) enum FileOkKind {
     FileHandle,
     ByteCount,
     Unit,
     StringPayload,
+    ExitStatusPacked,
+    OptionExitStatusPacked,
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -208,12 +220,80 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_store(elem_ptr, zero_i64).unwrap();
                 }
             }
+            // Bit-packed `ExitStatus` (`Child.wait`): word0 = code
+            // (`value >> 1`, arithmetic), word1 = success (`value & 1`).
+            FileOkKind::ExitStatusPacked => {
+                let one = i64_ty.const_int(1, false);
+                let code = self
+                    .builder
+                    .build_right_shift(value_i64, one, true, "ok.exit.code")
+                    .unwrap();
+                let success = self
+                    .builder
+                    .build_and(value_i64, one, "ok.exit.success")
+                    .unwrap();
+                for (w, v) in [(1u32, code), (2u32, success)] {
+                    if total_fields > w as u64 {
+                        let p = self
+                            .builder
+                            .build_struct_gep(result_ty, result_slot, w, &format!("ok.exit.w{w}"))
+                            .unwrap();
+                        self.builder.build_store(p, v).unwrap();
+                    }
+                }
+                for w in 3..total_fields {
+                    let elem_ptr = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, w as u32, &format!("ok.w{w}"))
+                        .unwrap();
+                    self.builder.build_store(elem_ptr, zero_i64).unwrap();
+                }
+            }
+            // Bit-packed `Option[ExitStatus]` (`Child.try_wait`): word0 =
+            // Option tag (`value & 1`; Some=1/None=0 per the seeded
+            // layout), word1 = code (`value >> 2`, arithmetic), word2 =
+            // success (`(value >> 1) & 1`).
+            FileOkKind::OptionExitStatusPacked => {
+                let one = i64_ty.const_int(1, false);
+                let two = i64_ty.const_int(2, false);
+                let opt_tag = self.builder.build_and(value_i64, one, "ok.tw.tag").unwrap();
+                let code = self
+                    .builder
+                    .build_right_shift(value_i64, two, true, "ok.tw.code")
+                    .unwrap();
+                let succ_shift = self
+                    .builder
+                    .build_right_shift(value_i64, one, false, "ok.tw.succ.sh")
+                    .unwrap();
+                let success = self
+                    .builder
+                    .build_and(succ_shift, one, "ok.tw.success")
+                    .unwrap();
+                for (w, v) in [(1u32, opt_tag), (2u32, code), (3u32, success)] {
+                    if total_fields > w as u64 {
+                        let p = self
+                            .builder
+                            .build_struct_gep(result_ty, result_slot, w, &format!("ok.tw.w{w}"))
+                            .unwrap();
+                        self.builder.build_store(p, v).unwrap();
+                    }
+                }
+                for w in 4..total_fields {
+                    let elem_ptr = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, w as u32, &format!("ok.w{w}"))
+                        .unwrap();
+                    self.builder.build_store(elem_ptr, zero_i64).unwrap();
+                }
+            }
             // Single-word Ok payload (handle / byte count / unit).
             _ => {
                 let ok_payload_w0 = match ok_kind {
                     FileOkKind::FileHandle | FileOkKind::ByteCount => value_i64,
                     FileOkKind::Unit => zero_i64,
-                    FileOkKind::StringPayload => unreachable!("handled above"),
+                    FileOkKind::StringPayload
+                    | FileOkKind::ExitStatusPacked
+                    | FileOkKind::OptionExitStatusPacked => unreachable!("handled above"),
                 };
                 if total_fields > 1 {
                     let p1 = self

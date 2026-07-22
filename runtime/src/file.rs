@@ -125,7 +125,9 @@ unsafe impl Sync for KaracIoResult {}
 
 /// Build a successful result with the given payload value (handle as
 /// i64 for open-family, byte count for read/write, zero for flush).
-fn ok(value: i64) -> KaracIoResult {
+/// `pub(crate)`: shared with `runtime/src/process.rs`, which speaks the
+/// same `KaracIoResult` ABI.
+pub(crate) fn ok(value: i64) -> KaracIoResult {
     KaracIoResult {
         value,
         error_kind: 0,
@@ -145,7 +147,7 @@ fn ok(value: i64) -> KaracIoResult {
 /// path that frees an `Other` message frees this buffer. The empty
 /// string returns a null pointer + zero length — the `{null, 0, 0}`
 /// String shape with `cap == 0`, which the drop path skips.
-fn ok_string(s: &str) -> KaracIoResult {
+pub(crate) fn ok_string(s: &str) -> KaracIoResult {
     let bytes = s.as_bytes();
     if bytes.is_empty() {
         return KaracIoResult {
@@ -182,7 +184,7 @@ fn ok_string(s: &str) -> KaracIoResult {
 /// the rest of the runtime crate's allocator usage) — the Kāra-side
 /// `String` aggregate's drop path uses the same allocator family, so
 /// the buffer is safe to free through there.
-fn err(e: &std::io::Error) -> KaracIoResult {
+pub(crate) fn err(e: &std::io::Error) -> KaracIoResult {
     use std::io::ErrorKind;
     let kind: i32 = match e.kind() {
         ErrorKind::NotFound => 1,

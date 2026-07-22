@@ -43,6 +43,10 @@ pub mod event_loop;
 mod fatal;
 mod file;
 mod lifecycle;
+// `std.process` Command/Child spawning (phase-8 P1, codegen leg).
+// Target-independent like `file`: on wasm the std::process stubs
+// return `unsupported` at runtime, which surfaces as `IoError.Other`.
+mod process;
 // GPU compute spine — phase-10 GPU codegen spike slice-0a. Opt-in only.
 mod arena;
 #[cfg(feature = "gpu")]
@@ -450,6 +454,20 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         file::karac_runtime_fs_write,
         file::karac_runtime_df_write_csv,
         file::karac_runtime_df_read_csv,
+    );
+    // `std.process` runtime (`runtime/src/process.rs`) — same
+    // JIT-keep-list class as file: without these entries the LLJIT
+    // `dlsym` generator can't resolve them and `karac run` fails at
+    // lookup on any Command/Child program (the B-2026-07-12-22 class).
+    keep!(
+        process::karac_runtime_process_spawn,
+        process::karac_runtime_process_wait,
+        process::karac_runtime_process_try_wait,
+        process::karac_runtime_process_kill,
+        process::karac_runtime_process_take_stream,
+        process::karac_runtime_process_read_to_string,
+        process::karac_runtime_process_stdin_write,
+        process::karac_runtime_process_stdin_close,
     );
     // JSON runtime (this file's `runtime_json_*` block).
     keep!(

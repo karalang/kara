@@ -1463,6 +1463,17 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(self.build_vec_value(ptr, len, cap));
         }
 
+        // `std.process` builtins — `Command.spawn`, the `Child` family,
+        // and the captured-pipe handle methods (`src/codegen/process.rs`,
+        // phase-8 P1). Self-gating on the receiver's static type name
+        // (Command / Child / ChildStdout / ChildStderr / ChildStdin), so
+        // the same-named builder methods (`Command.stdout(cfg)`) and
+        // unrelated `write` / `close` / `read_to_string` methods fall
+        // through to their own dispatchers.
+        if let Some(v) = self.try_compile_process_method(object, method, args)? {
+            return Ok(v);
+        }
+
         // Tensor shape-transform family (`reshape` / `permute` / `slice`
         // / `squeeze`, phase-11 numerical stdlib — `src/codegen/tensor.rs`).
         // Handled here (before the rest of dispatch) so both identifier
@@ -13159,12 +13170,25 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(&object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
             return Ok(None);
         }
-        // Recover the struct type from the `Type.method` callee key.
-        let Some(type_name) = dispatch_key
+        // Recover the struct type from the `Type.method` callee key. When the
+        // key is unavailable — the chained-call span collision leaves only ONE
+        // `method_callee_types` entry per chain, so in a MIXED-NAME chain
+        // (`Command.new("ls").arg("-l").stdout(cfg)`) every link except the
+        // surviving one sees a mismatched key filtered to `None` by the caller
+        // — fall back to the static receiver-type walk (`type_name_of_expr`,
+        // which resolves chains recursively via `fn_return_type_names`). The
+        // `qualified`-function-existence check below remains the real "is this
+        // a user method" gate, so the wider recovery cannot hijack builtin
+        // (never-declared) methods.
+        let type_name = match dispatch_key
             .and_then(|k| k.rsplit_once('.'))
             .map(|(t, _)| t.to_string())
-        else {
-            return Ok(None);
+        {
+            Some(t) => t,
+            None => match self.type_name_of_expr(object) {
+                Some(t) => t,
+                None => return Ok(None),
+            },
         };
         // Accept any user type that carries `impl`-block methods: a non-shared
         // struct, a value enum, or a shared struct/enum (RC). The three differ

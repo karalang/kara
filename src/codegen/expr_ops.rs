@@ -2564,6 +2564,27 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // Associated-call chain root: `Type.new(...)` parses as a
+                // MethodCall whose receiver Identifier names a TYPE, not a
+                // variable (`Command.new("ls").arg(..)`, `B.new().bump(..)`).
+                // The recursive receiver resolution below would look the
+                // identifier up in `var_type_names` and miss, killing type
+                // recovery for the whole chain. Resolve the constructor's
+                // return type through its qualified `Type.method` entry
+                // instead. Gated on the identifier NOT being a live variable,
+                // so a variable that shadows a type name keeps the variable
+                // path.
+                if let ExprKind::Identifier(recv) = &object.kind {
+                    if !self.var_type_names.contains_key(recv.as_str())
+                        && (self.struct_types.contains_key(recv.as_str())
+                            || self.enum_layouts.contains_key(recv.as_str()))
+                    {
+                        return self
+                            .fn_return_type_names
+                            .get(&format!("{recv}.{method}"))
+                            .cloned();
+                    }
+                }
                 let recv_ty = self.type_name_of_expr(object)?;
                 let fn_name = format!("{recv_ty}.{method}");
                 self.fn_return_type_names.get(&fn_name).cloned()
