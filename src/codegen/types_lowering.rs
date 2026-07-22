@@ -2642,6 +2642,27 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(info.heap_type)
     }
 
+    /// True when a Map variable's value type V is an owned-heap `String` or
+    /// `Vec[…]` (i.e. carries a `{ptr,len,cap}` buffer it uniquely owns, as
+    /// opposed to a shared/RC value which `map_val_shared_heap_type_for`
+    /// covers, or a primitive which owns nothing). Used to free the DISPLACED
+    /// old value when `m.insert(k, v)` overwrites an existing key and the
+    /// `Option[V]` result is discarded (B-2026-07-22-12) — the owned sibling of
+    /// the shared-V overwrite dec.
+    pub(super) fn map_val_owned_heap_str_vec_for(&self, var_name: &str) -> bool {
+        let Some(v_te) = self.var_elem_type_exprs.get(var_name) else {
+            return false;
+        };
+        let head = match &v_te.kind {
+            TypeKind::Path(p) => match p.segments.first() {
+                Some(s) => s.as_str(),
+                None => return false,
+            },
+            _ => return false,
+        };
+        (head == "String" || head == "Vec") && !self.shared_types.contains_key(head)
+    }
+
     /// Resolve the heap layout for a Map / Set variable's *key* when
     /// K is a shared struct / shared enum. Mirrors
     /// `map_val_shared_heap_type_for` on the K side. For `Set[shared

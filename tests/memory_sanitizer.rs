@@ -32171,4 +32171,79 @@ fn main() {
             "mut_ref_struct_string_field_reassign_across_calls_no_leak",
         );
     }
+
+    #[test]
+    fn asan_map_string_value_overwrite_discard_no_leak() {
+        // B-2026-07-22-12: `m.insert(k, v)` over an EXISTING key on a
+        // `Map[K, String]` / `Map[K, Vec[…]]` leaked the displaced old value's
+        // heap buffer when the `Option[V]` result was discarded with
+        // `let _ = …`. The insert arm loaded the old value into a `Some(old)`
+        // payload nobody holds, and only the shared/RC-value path dec'd it —
+        // owned `String`/`Vec` values (which need a buffer FREE, not a dec) fell
+        // through, so each overwrite leaked one buffer. Fixed by freeing the
+        // displaced buffer in the discard path for owned-heap V (wildcard-let
+        // form only; a bare `m.insert(…);` already drops its Option temp, so
+        // freeing there too would double-free). Exercises: a looped
+        // `Map[i64,String]` overwrite (heap `push_str` values so the buffer is
+        // real, not rodata), a `Map[i64,Vec[i64]]` overwrite, and — as a
+        // no-double-free guard — a BOUND result (`match m.insert(...)`) whose
+        // old value the caller consumes. Looped so a per-overwrite strand shows
+        // as a large LSan leak.
+        assert_clean_asan_run(
+            r#"
+fn heapstr(seed: String) -> String {
+    let mut s: String = "";
+    s.push_str(seed);
+    s.push_str("-heaptail");
+    return s;
+}
+fn mk(a: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(a);
+    v.push(a + 1);
+    return v;
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        // Map[i64, String] overwrite (discarded result) — old buffer must free.
+        let mut m: Map[i64, String] = Map.new();
+        let _ = m.insert(1, heapstr("first"));
+        let _ = m.insert(1, heapstr("second"));
+        let _ = m.insert(1, heapstr("third"));
+        total = total + m.len();
+
+        // Map[i64, Vec[i64]] overwrite (discarded result).
+        let mut g: Map[i64, Vec[i64]] = Map.new();
+        let _ = g.insert(7, mk(10));
+        let _ = g.insert(7, mk(20));
+        total = total + g.len();
+
+        // Bound result: the caller consumes the displaced old value — must NOT
+        // also be freed by the fix (no double-free).
+        let mut b: Map[i64, String] = Map.new();
+        let _ = b.insert(3, heapstr("old"));
+        match b.insert(3, heapstr("new")) {
+            Some(prev) => { total = total + prev.len(); }
+            None => {}
+        }
+
+        // remove sibling: `let _ = m.remove(k)` moves the heap value out into a
+        // discarded Some(old) — its buffer must free too (same B-2026-07-22-12).
+        let mut r: Map[i64, String] = Map.new();
+        let _ = r.insert(9, heapstr("removeme"));
+        let _ = r.remove(9);
+        total = total + r.len();
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            // Per iter: m.len()=1, g.len()=1, prev.len()=len("old-heaptail")=12,
+            // r.len()=0 → 14; x200 = 2800.
+            &["2800"],
+            "map_string_value_overwrite_discard_no_leak",
+        );
+    }
 }

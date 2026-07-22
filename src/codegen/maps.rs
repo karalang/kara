@@ -1798,6 +1798,16 @@ impl<'ctx> super::Codegen<'ctx> {
                                 old_val.into_pointer_value(),
                             );
                         }
+                    } else if self.map_val_owned_heap_str_vec_for(var_name) {
+                        // B-2026-07-22-12: owned-heap V (`String` / `Vec`). The
+                        // displaced old value was loaded into `old_val` and is
+                        // about to be wrapped in a `Some(old)` payload nobody
+                        // holds (the result is discarded) — free its buffer
+                        // now. `free_str_vec_buffer_if_heap` self-guards on the
+                        // vec-struct shape and a `cap>0` heap check, so a rodata
+                        // literal or a fresh-insert-shaped value no-ops. (The
+                        // none_bb / fresh-insert path never reaches here.)
+                        self.free_str_vec_buffer_if_heap(old_val);
                     }
                 }
                 // Multi-word payload via `coerce_to_payload_words` — see
@@ -2110,6 +2120,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_load(val_ty, old_slot, "map.rm.old")
                     .unwrap();
+                // B-2026-07-22-12 (remove sibling of the insert overwrite leak):
+                // when the `Option[V]` result is discarded (`let _ =
+                // m.remove(k)`), the moved-out value is wrapped in a `Some(old)`
+                // nobody holds. Reclaim it — dec a shared/RC value, free an
+                // owned-heap `String`/`Vec` buffer. Same wildcard-let gating as
+                // insert (a bare `m.remove(k);` already drops its Option temp).
+                if self.pending_map_insert_old_dec {
+                    self.pending_map_insert_old_dec = false;
+                    if let Some(heap_type) = self.map_val_shared_heap_type_for(var_name) {
+                        if old_val.is_pointer_value() {
+                            self.emit_refcount_dec(
+                                var_name,
+                                heap_type,
+                                old_val.into_pointer_value(),
+                            );
+                        }
+                    } else if self.map_val_owned_heap_str_vec_for(var_name) {
+                        self.free_str_vec_buffer_if_heap(old_val);
+                    }
+                }
                 // Multi-word payload via `coerce_to_payload_words` — see
                 // `Vec.first`/`Vec.last` arm for the rationale.
                 let some_payload_words = self.coerce_to_payload_words(old_val, 3)?;

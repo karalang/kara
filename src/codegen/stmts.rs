@@ -2135,8 +2135,34 @@ impl<'ctx> super::Codegen<'ctx> {
         // prior statement's stale flag never bleeds into this one.
         self.pending_map_insert_old_dec = false;
         if let Some((receiver_name, method)) = Self::stmt_discards_method_call(stmt) {
-            if method == "insert" && self.map_val_shared_heap_type_for(receiver_name).is_some() {
-                self.pending_map_insert_old_dec = true;
+            // `insert` displaces an existing value; `remove` moves the value
+            // out. Both wrap it in a `Some(old)` the discard never holds, so
+            // both need the displaced/removed value reclaimed (B-2026-07-22-12).
+            if method == "insert" || method == "remove" {
+                // Shared V → consumed as an rc_dec on the displaced value; set
+                // for BOTH discard forms. Scoped to `insert` only — the
+                // pre-existing behavior; a shared-V `remove`-discard dec is
+                // unverified, so leave that path unchanged rather than risk a
+                // double-dec on the bare form.
+                let shared = method == "insert"
+                    && self.map_val_shared_heap_type_for(receiver_name).is_some();
+                // Owned-heap `String`/`Vec` V → consumed as a buffer free of the
+                // displaced old value (B-2026-07-22-12, the owned sibling of the
+                // shared-V overwrite leak). ONLY the `let _ = m.insert(…)` form
+                // needs it: a BARE `m.insert(…);` expression-statement already
+                // has its `Some(old)` Option temp dropped by the general
+                // statement-result cleanup, so freeing here too would
+                // double-free. Restrict to the wildcard-let shape.
+                let is_let_wildcard = matches!(
+                    &stmt.kind,
+                    StmtKind::Let { pattern, .. }
+                        if matches!(&pattern.kind, PatternKind::Wildcard)
+                );
+                let owned_heap =
+                    is_let_wildcard && self.map_val_owned_heap_str_vec_for(receiver_name);
+                if shared || owned_heap {
+                    self.pending_map_insert_old_dec = true;
+                }
             }
         }
 
