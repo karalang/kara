@@ -1291,6 +1291,14 @@ impl<'a> super::Interpreter<'a> {
                                 | "bool"
                                 | "char"
                                 | "String"
+                                // B-2026-07-22-11: the total-order float
+                                // wrappers. `a > b` on an `F32`/`F64` lowers to
+                                // `F32.gt(a, b)`; route it to the binop
+                                // evaluator (whose TotalFloat arms give the
+                                // total order) instead of the "no evaluation
+                                // rule" path.
+                                | "F32"
+                                | "F64"
                         );
                         if is_primitive {
                             if let Some(result) = self.dispatch_lowered_op(method, args, span) {

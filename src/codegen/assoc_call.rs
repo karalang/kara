@@ -1178,6 +1178,24 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             return Ok(agg);
         }
+        // Total-order float wrapper comparison (B-2026-07-22-11):
+        // `a > b` / `a == b` on an `F32`/`F64` wrapper lowers to
+        // `F32.gt(a, b)` / `F32.eq(a, b)`. These must NOT use the IEEE
+        // partial order (NaN-incomparable, -0.0 == +0.0) — the wrapper's
+        // contract is a TOTAL order (NaN sorts last, -0 < +0, bit-equality).
+        // Intercept before the `is_primitive` reroute (which omits F32/F64
+        // and would fall through to the const-0 unknown-callee tail).
+        if matches!(type_name, "F32" | "F64")
+            && matches!(method, "gt" | "lt" | "ge" | "le" | "eq" | "ne")
+            && _args.len() == 2
+        {
+            return self.compile_total_order_wrapper_cmp(
+                type_name,
+                method,
+                &_args[0].value,
+                &_args[1].value,
+            );
+        }
         // Lowered operator dispatch: `<Primitive>.<op>(args)` — synthesized
         // by the lowering pass. Reroute to the existing BinOp/UnaryOp
         // intrinsic compilation so we don't have to duplicate codegen logic.
@@ -3545,5 +3563,136 @@ impl<'ctx> super::Codegen<'ctx> {
             buf_phi.as_basic_value().into_pointer_value(),
             oom_phi.as_basic_value().into_int_value(),
         )
+    }
+
+    /// Emit a TOTAL-order comparison of two `F32`/`F64` wrapper operands
+    /// (B-2026-07-22-11). The wrapper's contract is a total order — NaN
+    /// sorts last, -0 < +0, equality is BIT-equality (NaN == NaN when the
+    /// bit patterns match) — NOT the IEEE partial order a float compare
+    /// gives. Extract each inner float, bitcast to its integer bit pattern,
+    /// and compare: `eq`/`ne` on the raw bits; ordering on the monotonic
+    /// total-order key (the same transform `f32::total_cmp` uses). Returns
+    /// an `i1` bool.
+    pub(super) fn compile_total_order_wrapper_cmp(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        a: &Expr,
+        b: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let is_f32 = type_name == "F32";
+        let av = self.compile_expr(a)?;
+        let bv = self.compile_expr(b)?;
+        let af = self.extract_total_order_inner_float(av, is_f32)?;
+        let bf = self.extract_total_order_inner_float(bv, is_f32)?;
+        let int_ty = if is_f32 {
+            self.context.i32_type()
+        } else {
+            self.context.i64_type()
+        };
+        let abits = self
+            .builder
+            .build_bit_cast(af, int_ty, "tf.a.bits")
+            .unwrap()
+            .into_int_value();
+        let bbits = self
+            .builder
+            .build_bit_cast(bf, int_ty, "tf.b.bits")
+            .unwrap()
+            .into_int_value();
+        let result = match method {
+            // Bit-equality: consistent with the total order (NaN==NaN when
+            // bits match, -0 != +0). The wrapper distinguishes NaN as a
+            // concrete bit pattern per its Eq contract.
+            "eq" => self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::EQ, abits, bbits, "tf.eq")
+                .unwrap(),
+            "ne" => self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::NE, abits, bbits, "tf.ne")
+                .unwrap(),
+            _ => {
+                let akey = self.total_order_key(abits, is_f32);
+                let bkey = self.total_order_key(bbits, is_f32);
+                let pred = match method {
+                    "gt" => inkwell::IntPredicate::SGT,
+                    "lt" => inkwell::IntPredicate::SLT,
+                    "ge" => inkwell::IntPredicate::SGE,
+                    "le" => inkwell::IntPredicate::SLE,
+                    _ => unreachable!("non-comparison method reached total-order cmp"),
+                };
+                self.builder
+                    .build_int_compare(pred, akey, bkey, "tf.ord")
+                    .unwrap()
+            }
+        };
+        Ok(result.into())
+    }
+
+    /// The monotonic total-order key for a float bit pattern: `key = bits ^
+    /// ((bits >> (w-1) arithmetic) as unsigned >> 1)`. Flips all but the
+    /// sign bit for negatives, so a SIGNED integer compare of two keys is
+    /// the IEEE 754 total order (matches `f32::total_cmp` / `f64::total_cmp`;
+    /// verified: -inf < … < +inf < NaN, -0 < +0). `w` is 32 for f32, 64 for f64.
+    pub(super) fn total_order_key(
+        &self,
+        bits: inkwell::values::IntValue<'ctx>,
+        is_f32: bool,
+    ) -> inkwell::values::IntValue<'ctx> {
+        let wty = bits.get_type();
+        let top = if is_f32 { 31 } else { 63 };
+        // Arithmetic shift → 0 (non-negative) or all-ones (negative).
+        let sign = self
+            .builder
+            .build_right_shift(bits, wty.const_int(top, false), true, "tf.sgn")
+            .unwrap();
+        // Logical shift right 1 → 0 or 0x7FF…F.
+        let mask = self
+            .builder
+            .build_right_shift(sign, wty.const_int(1, false), false, "tf.msk")
+            .unwrap();
+        self.builder.build_xor(bits, mask, "tf.key").unwrap()
+    }
+
+    /// Extract the inner `f32`/`f64` from an `F32`/`F64` wrapper value —
+    /// a single-field `{ f32 }` / `{ f64 }` struct (seeded in
+    /// `seed_builtin_struct_types`). Handles a by-value struct, an
+    /// already-unwrapped float, or a pointer to the struct.
+    fn extract_total_order_inner_float(
+        &mut self,
+        v: BasicValueEnum<'ctx>,
+        is_f32: bool,
+    ) -> Result<inkwell::values::FloatValue<'ctx>, String> {
+        match v {
+            BasicValueEnum::StructValue(sv) => Ok(self
+                .builder
+                .build_extract_value(sv, 0, "tf.inner")
+                .unwrap()
+                .into_float_value()),
+            BasicValueEnum::FloatValue(f) => Ok(f),
+            BasicValueEnum::PointerValue(p) => {
+                let ft = if is_f32 {
+                    self.context.f32_type()
+                } else {
+                    self.context.f64_type()
+                };
+                let st = self.context.struct_type(&[ft.into()], false);
+                let loaded = self
+                    .builder
+                    .build_load(st, p, "tf.load")
+                    .unwrap()
+                    .into_struct_value();
+                Ok(self
+                    .builder
+                    .build_extract_value(loaded, 0, "tf.inner")
+                    .unwrap()
+                    .into_float_value())
+            }
+            other => Err(format!(
+                "total-order wrapper operand is not a struct/float value: {:?}",
+                other.get_type()
+            )),
+        }
     }
 }

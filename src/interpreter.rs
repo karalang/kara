@@ -1887,6 +1887,12 @@ impl<'a> Interpreter<'a> {
     fn read_field(&mut self, obj: Value, field: &str, span: &Span) -> Value {
         let obj_variant = obj.variant_name();
         match obj {
+            // B-2026-07-22-11: the total-order float wrappers construct as
+            // `TotalFloat32/64` (not a `Value::Struct`), so `.value` reads the
+            // inner float out of the dedicated variant. Widen f32 → f64 to the
+            // interpreter's canonical `Value::Float` carrier.
+            Value::TotalFloat32(x) if field == "value" => Value::Float(x as f64),
+            Value::TotalFloat64(x) if field == "value" => Value::Float(x),
             Value::Struct { fields, name } => fields.get(field).cloned().unwrap_or_else(|| {
                 unreachable!(
                     "field '{}' not found on struct '{}' at {}:{}; \
@@ -2006,6 +2012,25 @@ impl<'a> Interpreter<'a> {
         for field in fields {
             let val = self.eval_expr_inner(&field.value);
             field_vals.insert(field.name.clone(), val);
+        }
+        // B-2026-07-22-11: the total-order float wrappers `F32 { value: x }` /
+        // `F64 { value: x }` construct as the dedicated `TotalFloat32/64`
+        // values (like `F32.from(x)`), NOT a plain `Value::Struct`. This makes
+        // comparison / sort / Map keys use the TOTAL order (the `TotalFloat`
+        // arms in eval_ops / value_compare / `total_cmp`), matching codegen. A
+        // plain `Value::Struct` compared its `value` field with the IEEE
+        // partial order, diverging from codegen on -0 / NaN.
+        if matches!(name.as_str(), "F32" | "F64") && field_vals.contains_key("value") {
+            let f = match field_vals.get("value") {
+                Some(Value::Float(x)) => *x,
+                Some(Value::Int(i)) => *i as f64,
+                _ => 0.0,
+            };
+            return if name == "F32" {
+                Value::TotalFloat32(f as f32)
+            } else {
+                Value::TotalFloat64(f)
+            };
         }
         // Enum struct-variant construction `Enum.Variant { field: val, ... }`:
         // when the qualifier names a known enum whose `Variant` is

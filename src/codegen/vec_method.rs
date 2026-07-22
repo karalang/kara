@@ -6557,13 +6557,20 @@ impl<'ctx> super::Codegen<'ctx> {
         if let TypeKind::Path(p) = &te.kind {
             if p.generic_args.is_none() {
                 if let Some(head) = p.segments.first() {
-                    if self.struct_field_type_exprs.contains_key(head)
-                        && !self.shared_types.contains_key(head)
-                    {
-                        return self.emit_cmp_fn_for_struct(head, &mangled);
-                    }
-                    if self.enum_layouts.contains_key(head) {
-                        return self.emit_cmp_fn_for_enum(head, &mangled);
+                    // F32/F64 are seeded into `struct_field_type_exprs` as
+                    // `{ value: f32/f64 }` (B-2026-07-22-11) so construction /
+                    // field-access work, but their comparator must be the
+                    // TOTAL order (below), NOT the derived field comparator
+                    // which would use the IEEE partial order on `value`.
+                    if !matches!(head.as_str(), "F32" | "F64") {
+                        if self.struct_field_type_exprs.contains_key(head)
+                            && !self.shared_types.contains_key(head)
+                        {
+                            return self.emit_cmp_fn_for_struct(head, &mangled);
+                        }
+                        if self.enum_layouts.contains_key(head) {
+                            return self.emit_cmp_fn_for_enum(head, &mangled);
+                        }
                     }
                 }
             }
@@ -6573,6 +6580,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 signed: bool,
             },
             FloatScalar,
+            /// Total-order float wrapper (`F32`/`F64`) — a `{ f32/f64 }`
+            /// struct compared by the IEEE 754 total order (B-2026-07-22-11).
+            TotalFloatScalar {
+                is_f32: bool,
+            },
             Str,
             VecLike {
                 child: FunctionValue<'c>,
@@ -6606,6 +6618,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         Body::IntScalar { signed: false }
                     }
                     "f32" | "f64" => Body::FloatScalar,
+                    "F32" => Body::TotalFloatScalar { is_f32: true },
+                    "F64" => Body::TotalFloatScalar { is_f32: false },
                     // Both String spellings (the 3p discipline).
                     "String" | "str" => Body::Str,
                     "Vec" | "VecDeque" => {
@@ -6689,6 +6703,67 @@ impl<'ctx> super::Codegen<'ctx> {
                 let gt = self
                     .builder
                     .build_float_compare(inkwell::FloatPredicate::OGT, a, b, "gt")
+                    .unwrap();
+                let gt_sel = self
+                    .builder
+                    .build_select(gt, pos_one, zero, "gtsel")
+                    .unwrap();
+                let r = self
+                    .builder
+                    .build_select(lt, neg_one.into(), gt_sel, "cmp")
+                    .unwrap();
+                self.builder.build_return(Some(&r)).unwrap();
+            }
+            Body::TotalFloatScalar { is_f32 } => {
+                // Element is a `{ f32/f64 }` wrapper struct. Load, extract the
+                // inner float, and compare on the TOTAL-order key (the same
+                // transform `compile_total_order_wrapper_cmp` emits): signed
+                // integer compare of `bits ^ ((bits >> top) >>u 1)`.
+                let elem_llvm = self.llvm_type_for_type_expr(te);
+                let a_s = self
+                    .builder
+                    .build_load(elem_llvm, a_ptr, "a.tf")
+                    .unwrap()
+                    .into_struct_value();
+                let b_s = self
+                    .builder
+                    .build_load(elem_llvm, b_ptr, "b.tf")
+                    .unwrap()
+                    .into_struct_value();
+                let a_f = self
+                    .builder
+                    .build_extract_value(a_s, 0, "a.tf.v")
+                    .unwrap()
+                    .into_float_value();
+                let b_f = self
+                    .builder
+                    .build_extract_value(b_s, 0, "b.tf.v")
+                    .unwrap()
+                    .into_float_value();
+                let int_ty = if is_f32 {
+                    self.context.i32_type()
+                } else {
+                    self.context.i64_type()
+                };
+                let a_bits = self
+                    .builder
+                    .build_bit_cast(a_f, int_ty, "a.tf.b")
+                    .unwrap()
+                    .into_int_value();
+                let b_bits = self
+                    .builder
+                    .build_bit_cast(b_f, int_ty, "b.tf.b")
+                    .unwrap()
+                    .into_int_value();
+                let a_key = self.total_order_key(a_bits, is_f32);
+                let b_key = self.total_order_key(b_bits, is_f32);
+                let lt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, a_key, b_key, "lt")
+                    .unwrap();
+                let gt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, a_key, b_key, "gt")
                     .unwrap();
                 let gt_sel = self
                     .builder

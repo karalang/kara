@@ -4566,6 +4566,44 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.context.struct_type(&[i64_t.into()], false),
             );
         }
+
+        // B-2026-07-22-11 — the total-order float wrappers `F32 { value: f32 }`
+        // / `F64 { value: f64 }` (runtime/stdlib/f32.kara, f64.kara). They live
+        // only in the SYNTHETIC `std.prelude` module, which every codegen
+        // super-module assembly path drops (cli.rs), so their `StructDef` never
+        // reaches `register_struct_metadata` / `declare_structs` — construction
+        // stored garbage (`store i64 0`), `.value` errored "type not recorded",
+        // and every comparison fell through to the const-0 assoc-call tail.
+        // Seed them here (the baked-stdlib-struct hook, run before user structs
+        // so a user `struct F32` could still override) as real single-field
+        // structs so construction, `.value` access, and layout flow through the
+        // normal struct machinery. Total-order comparison / hash / eq are
+        // intercepted downstream (they are NOT the IEEE field comparator the
+        // derive would give). A `#[derive(Copy)]` value type — no heap, no drop.
+        let f32_elem: BasicTypeEnum<'ctx> = self.context.f32_type().into();
+        let f64_elem: BasicTypeEnum<'ctx> = self.context.f64_type().into();
+        for (name, elem) in [("F32", f32_elem), ("F64", f64_elem)] {
+            if !self.struct_types.contains_key(name) {
+                self.struct_types
+                    .insert(name.to_string(), self.context.struct_type(&[elem], false));
+                self.struct_field_names
+                    .insert(name.to_string(), vec!["value".to_string()]);
+                let scalar = if name == "F32" { "f32" } else { "f64" };
+                self.struct_field_type_names
+                    .insert(name.to_string(), vec![Some(scalar.to_string())]);
+                self.struct_field_type_exprs.insert(
+                    name.to_string(),
+                    vec![TypeExpr {
+                        kind: TypeKind::Path(PathExpr {
+                            segments: vec![scalar.to_string()],
+                            generic_args: None,
+                            span: crate::token::Span::default(),
+                        }),
+                        span: crate::token::Span::default(),
+                    }],
+                );
+            }
+        }
     }
 
     /// DP slice helper — classify a payload field's TypeExpr into an

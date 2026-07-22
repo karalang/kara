@@ -1005,6 +1005,10 @@ impl<'a> super::Interpreter<'a> {
                     | "bool"
                     | "char"
                     | "String"
+                    // B-2026-07-22-11: total-order float wrappers — method
+                    // syntax `a.gt(b)` sibling of the lowered `F32.gt` path.
+                    | "F32"
+                    | "F64"
             );
             if is_primitive {
                 if method == "from" {

@@ -37,6 +37,12 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => x.cmp(y),
         (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+        // B-2026-07-22-11: total-order float wrappers. Without these arms two
+        // wrappers hit the discriminant catch-all → always Equal, so
+        // `Vec[F32].sort()` was a silent no-op and `SortedSet`/`SortedMap`
+        // keys collapsed. `total_cmp` is the total order codegen also emits.
+        (Value::TotalFloat32(x), Value::TotalFloat32(y)) => x.total_cmp(y),
+        (Value::TotalFloat64(x), Value::TotalFloat64(y)) => x.total_cmp(y),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Char(x), Value::Char(y)) => x.cmp(y),
         (Value::String(x), Value::String(y)) => x.cmp(y),

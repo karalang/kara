@@ -419,6 +419,22 @@ impl<'a> super::Interpreter<'a> {
             (BinOp::NotEq, Value::TotalFloat32(a), Value::TotalFloat32(b)) => {
                 Value::Bool(!a.total_cmp(&b).is_eq())
             }
+            // B-2026-07-22-11: F32 ordering was missing (only Eq/NotEq were
+            // present), so `a < b` / `a > b` on an `F32` fell through to the
+            // generic op error under `--interp`. Total order, mirroring the
+            // `TotalFloat64` arms above.
+            (BinOp::Lt, Value::TotalFloat32(a), Value::TotalFloat32(b)) => {
+                Value::Bool(a.total_cmp(&b).is_lt())
+            }
+            (BinOp::LtEq, Value::TotalFloat32(a), Value::TotalFloat32(b)) => {
+                Value::Bool(!a.total_cmp(&b).is_gt())
+            }
+            (BinOp::Gt, Value::TotalFloat32(a), Value::TotalFloat32(b)) => {
+                Value::Bool(a.total_cmp(&b).is_gt())
+            }
+            (BinOp::GtEq, Value::TotalFloat32(a), Value::TotalFloat32(b)) => {
+                Value::Bool(!a.total_cmp(&b).is_lt())
+            }
 
             // Comparison (String) — lexicographic via Rust's `Ord for String`.
             // Matches the typechecker's builtin Ord registration for `String`

@@ -5080,6 +5080,51 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_total_order_float_wrappers() {
+        // B-2026-07-22-11 — the total-order `F32`/`F64` wrappers
+        // (`struct F32 { value: f32 }`, `#[derive(Eq, Ord, Hash)]`) silently
+        // miscompiled: their baked struct lived only in the synthetic prelude
+        // module, dropped by codegen's super-module assembly, so construction
+        // stored garbage, `.value` errored, and every comparison fell through
+        // to the const-0 assoc-call tail (`a > b` → false, `a == b` → true).
+        // Now the struct is seeded into codegen and comparisons emit a TOTAL
+        // order (NaN last, -0 < +0, bit-equality) — construction, `.value`,
+        // `<`/`>`/`==`, `Map` keys, and `sort` all work. Zero codegen tests
+        // existed for the wrappers before this.
+        let out = run_program(
+            "fn main() {\n\
+                 let a: F32 = F32 { value: 2.5 };\n\
+                 let b: F32 = F32 { value: 1.5 };\n\
+                 println(a > b);\n\
+                 println(a < b);\n\
+                 println(a == a);\n\
+                 println(a == b);\n\
+                 println(a.value + b.value);\n\
+                 let mut m: Map[F32, i64] = Map.new();\n\
+                 let _ = m.insert(F32 { value: 2.0 }, 20);\n\
+                 let _ = m.insert(F32 { value: 3.0 }, 30);\n\
+                 match m.get(F32 { value: 2.0 }) { Some(v) => println(v), None => println(0 - 1) }\n\
+                 let mut v: Vec[F32] = Vec.new();\n\
+                 v.push(F32 { value: 3.0 });\n\
+                 v.push(F32 { value: 1.0 });\n\
+                 v.push(F32 { value: 2.0 });\n\
+                 v.sort();\n\
+                 println(v[0].value);\n\
+                 println(v[2].value);\n\
+                 let neg0: F64 = F64 { value: 0.0 * (0.0 - 1.0) };\n\
+                 let pos0: F64 = F64 { value: 0.0 };\n\
+                 println(neg0 < pos0);\n\
+                 println(neg0 == pos0);\n\
+             }",
+        );
+        if let Some(out) = out {
+            // a>b, a<b, a==a, a==b, .value sum, map get, sort[0], sort[2],
+            // -0<+0 (total order), -0==+0 (bit-eq).
+            assert_eq!(out, "true\nfalse\ntrue\nfalse\n4\n20\n1\n3\ntrue\nfalse\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_f16_widens_to_f32_in_mixed_add() {
         // `f16 + f32` widens the half up to f32 (fpext) before the add — the
         // module-verifier regression this guards (was `fadd half, float`).

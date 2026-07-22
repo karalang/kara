@@ -6230,6 +6230,47 @@ fn test_f32_from_constructor() {
     assert!(output.starts_with("F32(2.5"));
 }
 
+#[test]
+fn test_total_order_wrapper_compare_map_sort_interp_parity() {
+    // B-2026-07-22-11 — the interpreter must match codegen's TOTAL order for
+    // the `F32`/`F64` wrappers. Before the fix, `F32 { value: x }` built a
+    // plain `Value::Struct` compared with the IEEE partial order (diverging
+    // from codegen on -0/NaN), F32 ordering ops were missing from `eval_ops`,
+    // and `value_compare`/the lowered `F32.gt` dispatch had no wrapper arm.
+    // Now the struct literal builds a `TotalFloat32/64` (like `F32.from`), so
+    // comparison, sort, and Map keys all use `total_cmp`. Same program +
+    // expected output as the codegen E2E test
+    // (`test_e2e_total_order_float_wrappers`).
+    let output = run("fn main() {\n\
+             let a: F32 = F32 { value: 2.5 };\n\
+             let b: F32 = F32 { value: 1.5 };\n\
+             println(a > b);\n\
+             println(a < b);\n\
+             println(a == a);\n\
+             println(a == b);\n\
+             println(a.value + b.value);\n\
+             let mut m: Map[F32, i64] = Map.new();\n\
+             let _ = m.insert(F32 { value: 2.0 }, 20);\n\
+             let _ = m.insert(F32 { value: 3.0 }, 30);\n\
+             match m.get(F32 { value: 2.0 }) { Some(v) => println(v), None => println(0 - 1) }\n\
+             let mut v: Vec[F32] = Vec.new();\n\
+             v.push(F32 { value: 3.0 });\n\
+             v.push(F32 { value: 1.0 });\n\
+             v.push(F32 { value: 2.0 });\n\
+             v.sort();\n\
+             println(v[0].value);\n\
+             println(v[2].value);\n\
+             let neg0: F64 = F64 { value: 0.0 * (0.0 - 1.0) };\n\
+             let pos0: F64 = F64 { value: 0.0 };\n\
+             println(neg0 < pos0);\n\
+             println(neg0 == pos0);\n\
+         }");
+    assert_eq!(
+        output,
+        "true\nfalse\ntrue\nfalse\n4\n20\n1\n3\ntrue\nfalse\n"
+    );
+}
+
 // ── Numeric primitive From (Step 4) ────────────────────────────
 
 #[test]
