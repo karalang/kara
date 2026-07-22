@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 160 | 0 |
+| miscompile | 161 | 1 |
 | leak | 92 | 0 |
 | double-free | 77 | 0 |
 | codegen-gap | 71 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 461 | 0 |
+| codegen | 462 | 1 |
 | typecheck | 83 | 0 |
 | interp | 69 | 0 |
 | ownership | 26 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **634 surfaced · 0 open · 629 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **635 surfaced · 1 open · 629 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-22-7 | 2026-07-22 | codegen | high | Index-assigning an UNTYPED float literal to an f32 Tensor element silently stores nothing under AOT: `let mut a: Tensor[f32,[2]] = Tensor.zeros(vec![2]); a[0] = 5.0; println(a[0])` prints 0 under `karac build` (interp: 5). The bare `5.0` literal defaults to f64, and the f64->f32 fptrunc on the tensor index-assign store path is dropped — so the element keeps its zeroed value. WORKAROUNDS that store correctly: an explicit `5.0f32` suffix, a matching f64 element, or a computed `(k) as f32`. i64 elements are unaffected. | — |
 
 ### Fixed (629)
 

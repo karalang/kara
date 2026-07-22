@@ -43,7 +43,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
 
 use crate::ast::{
-    BinOp, CallArg, Expr, ExprKind, GenericArg, PatternKind, ShapeDim, TypeExpr, TypeKind,
+    BinOp, CallArg, Expr, ExprKind, GenericArg, PatternKind, ShapeDim, TypeExpr, TypeKind, UnaryOp,
 };
 use crate::reduce_kernel::ReduceOp;
 use crate::token::Span;
@@ -3698,6 +3698,15 @@ impl<'ctx> super::Codegen<'ctx> {
             elem,
             bitmap: None,
         };
+        // Transcendental-map vectorization (data-spine last leg): a body
+        // like `|x| 1.0 / (1.0 + (0.0 - x).exp())` otherwise lowers to a
+        // per-element scalar `expf` call that blocks vectorization. When
+        // the body is a pure elementwise float expression containing a
+        // polynomial transcendental, emit a strip-mined `<W x T>` loop
+        // routing exp/ln through the shipped SIMD polynomials instead.
+        if self.try_emit_vectorized_map(&lhs, None, params, body, &dest)? {
+            return Ok(res.into());
+        }
         self.emit_elementwise_map(
             &lhs,
             &MapOther::Unary,
@@ -3764,18 +3773,25 @@ impl<'ctx> super::Codegen<'ctx> {
             unsigned,
             bitmap: None,
         };
-        let other = MapOther::Access(ContainerAccess {
+        let r_access = ContainerAccess {
             data: r_data,
             len: count,
             elem,
             unsigned,
             bitmap: None,
-        });
+        };
         let dest = MapDest {
             data: res_data,
             elem,
             bitmap: None,
         };
+        // Transcendental-map vectorization for the two-operand form (same
+        // gate as `map`): only when the body is a pure elementwise float
+        // expression carrying a polynomial transcendental.
+        if self.try_emit_vectorized_map(&lhs, Some(&r_access), params, body, &dest)? {
+            return Ok(res.into());
+        }
+        let other = MapOther::Access(r_access);
         self.emit_elementwise_map(
             &lhs,
             &other,
@@ -3786,6 +3802,471 @@ impl<'ctx> super::Codegen<'ctx> {
             &dest,
         )?;
         Ok(res.into())
+    }
+
+    /// Peel a trivial single-final-expression `{ ... }` wrapper off a
+    /// closure body — `|x| expr` and `|x| { expr }` must lift identically.
+    fn peel_map_block(e: &Expr) -> &Expr {
+        match &e.kind {
+            ExprKind::Block(b) if b.stmts.is_empty() => match &b.final_expr {
+                Some(fe) => Self::peel_map_block(fe),
+                None => e,
+            },
+            _ => e,
+        }
+    }
+
+    /// Simple binding names of a closure's params, or `None` if any param
+    /// isn't a bare binding (the vectorizer needs named lanes).
+    fn closure_param_names(params: &[crate::ast::ClosureParam]) -> Option<Vec<String>> {
+        params
+            .iter()
+            .map(|p| match &p.pattern.kind {
+                PatternKind::Binding(n) => Some(n.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// If `callee` is a desugared float operator path `f32::<op>` /
+    /// `f64::<op>` (arithmetic lowers to these `Call` nodes before
+    /// codegen — `a / b` → `Call(Path(f32::div), [a, b])`), return the op
+    /// name; else `None`. The float-type prefix guards against matching an
+    /// unrelated `T::add`.
+    fn float_path_op(callee: &Expr) -> Option<&str> {
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return None;
+        };
+        if segments.len() < 2 || !matches!(segments[segments.len() - 2].as_str(), "f32" | "f64") {
+            return None;
+        }
+        Some(segments.last().unwrap().as_str())
+    }
+
+    const MAP_ARITH: [&'static str; 5] = ["add", "sub", "mul", "div", "neg"];
+    const MAP_UNARY: [&'static str; 9] = [
+        "exp", "ln", "sqrt", "sigmoid", "tanh", "floor", "ceil", "round", "trunc",
+    ];
+    const MAP_TRANS: [&'static str; 4] = ["exp", "ln", "sigmoid", "tanh"];
+
+    /// Whether a map/zip closure body is a pure elementwise float
+    /// expression this vectorizer can lift to `<W x T>`. Sets `has_trans`
+    /// if the body contains a POLYNOMIAL transcendental (`exp`/`ln`/
+    /// `sigmoid`/`tanh`) — the only case we intercept: pure-arithmetic /
+    /// `sqrt` / rounding bodies already vectorize (LLVM auto-vec /
+    /// hardware intrinsics) and stay bit-exact, so lifting them would only
+    /// widen the divergence surface for no win. Grammar: float/int
+    /// literals, identifiers (param or loop-invariant float capture),
+    /// desugared arithmetic `Call`s (`f32::add/sub/mul/div/neg`), and the
+    /// float-unary transcendental / rounding ops in either the `.exp()`
+    /// method form or the `f32::exp(x)` desugared-call form.
+    fn map_body_liftable(body: &Expr, has_trans: &mut bool) -> bool {
+        match &body.kind {
+            ExprKind::Float(_, _) | ExprKind::Integer(_, _) | ExprKind::Identifier(_) => true,
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => Self::map_body_liftable(operand, has_trans),
+            ExprKind::Binary { op, left, right } => {
+                matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div)
+                    && Self::map_body_liftable(left, has_trans)
+                    && Self::map_body_liftable(right, has_trans)
+            }
+            // Desugared operator / free-fn call: `f32::div(a, b)`,
+            // `f32::exp(x)`, etc.
+            ExprKind::Call { callee, args } => {
+                let Some(op) = Self::float_path_op(callee) else {
+                    return false;
+                };
+                if Self::MAP_ARITH.contains(&op) {
+                    let arity = if op == "neg" { 1 } else { 2 };
+                    return args.len() == arity
+                        && args
+                            .iter()
+                            .all(|a| Self::map_body_liftable(&a.value, has_trans));
+                }
+                if Self::MAP_UNARY.contains(&op) && args.len() == 1 {
+                    if Self::MAP_TRANS.contains(&op) {
+                        *has_trans = true;
+                    }
+                    return Self::map_body_liftable(&args[0].value, has_trans);
+                }
+                false
+            }
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if args.is_empty() && Self::MAP_UNARY.contains(&method.as_str()) => {
+                if Self::MAP_TRANS.contains(&method.as_str()) {
+                    *has_trans = true;
+                }
+                Self::map_body_liftable(object, has_trans)
+            }
+            _ => false,
+        }
+    }
+
+    /// Free identifiers in a liftable body that are NOT closure params —
+    /// the loop-invariant scalar captures the vectorizer splats per lane.
+    fn collect_map_captures(body: &Expr, params: &[String], out: &mut Vec<String>) {
+        match &body.kind {
+            ExprKind::Identifier(n) => {
+                if !params.contains(n) && !out.contains(n) {
+                    out.push(n.clone());
+                }
+            }
+            ExprKind::Unary { operand, .. } => Self::collect_map_captures(operand, params, out),
+            ExprKind::Binary { left, right, .. } => {
+                Self::collect_map_captures(left, params, out);
+                Self::collect_map_captures(right, params, out);
+            }
+            ExprKind::Call { args, .. } => {
+                for a in args {
+                    Self::collect_map_captures(&a.value, params, out);
+                }
+            }
+            ExprKind::MethodCall { object, .. } => Self::collect_map_captures(object, params, out),
+            _ => {}
+        }
+    }
+
+    /// Splat a runtime scalar float across `width` lanes (insert into every
+    /// lane of an undef — LLVM's InstCombine folds the chain to a broadcast
+    /// shuffle).
+    fn vsplat_scalar(
+        &self,
+        s: inkwell::values::FloatValue<'ctx>,
+        vt: inkwell::types::VectorType<'ctx>,
+        width: u32,
+    ) -> inkwell::values::VectorValue<'ctx> {
+        let i32_t = self.context.i32_type();
+        let mut v = vt.get_undef();
+        for i in 0..width {
+            v = self
+                .builder
+                .build_insert_element(v, s, i32_t.const_int(i as u64, false), "vm.splat")
+                .unwrap();
+        }
+        v
+    }
+
+    /// Recursively compile a liftable body at vector `width` — a vector
+    /// twin of scalar body evaluation, routing float-unary calls through
+    /// `apply_vector_float_unary` (so `exp`/`ln` hit the shipped SIMD
+    /// polynomials). `lanes` maps each param / capture name to its
+    /// already-splatted `<width x T>` value.
+    fn compile_vlift(
+        &self,
+        expr: &Expr,
+        width: u32,
+        ft: inkwell::types::FloatType<'ctx>,
+        lanes: &std::collections::HashMap<String, inkwell::values::VectorValue<'ctx>>,
+    ) -> Result<inkwell::values::VectorValue<'ctx>, String> {
+        let vt = ft.vec_type(width);
+        let const_splat = |c: f64| -> inkwell::values::VectorValue<'ctx> {
+            self.vsplat_scalar(ft.const_float(c), vt, width)
+        };
+        match &expr.kind {
+            ExprKind::Float(v, _) => Ok(const_splat(*v)),
+            ExprKind::Integer(v, _) => Ok(const_splat(*v as f64)),
+            ExprKind::Identifier(n) => lanes
+                .get(n)
+                .copied()
+                .ok_or_else(|| format!("vlift: unbound identifier '{n}'")),
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => {
+                let v = self.compile_vlift(operand, width, ft, lanes)?;
+                Ok(self.builder.build_float_neg(v, "vl.neg").unwrap())
+            }
+            ExprKind::Binary { op, left, right } => {
+                let l = self.compile_vlift(left, width, ft, lanes)?;
+                let r = self.compile_vlift(right, width, ft, lanes)?;
+                Ok(match op {
+                    BinOp::Add => self.builder.build_float_add(l, r, "vl.add").unwrap(),
+                    BinOp::Sub => self.builder.build_float_sub(l, r, "vl.sub").unwrap(),
+                    BinOp::Mul => self.builder.build_float_mul(l, r, "vl.mul").unwrap(),
+                    BinOp::Div => self.builder.build_float_div(l, r, "vl.div").unwrap(),
+                    _ => return Err("vlift: unsupported binop".to_string()),
+                })
+            }
+            // Desugared operator / transcendental call (`f32::div(a,b)`,
+            // `f32::exp(x)`).
+            ExprKind::Call { callee, args } => {
+                let op = Self::float_path_op(callee)
+                    .ok_or_else(|| "vlift: non-float call".to_string())?;
+                if Self::MAP_ARITH.contains(&op) {
+                    if op == "neg" {
+                        let v = self.compile_vlift(&args[0].value, width, ft, lanes)?;
+                        return Ok(self.builder.build_float_neg(v, "vl.neg").unwrap());
+                    }
+                    let l = self.compile_vlift(&args[0].value, width, ft, lanes)?;
+                    let r = self.compile_vlift(&args[1].value, width, ft, lanes)?;
+                    return Ok(match op {
+                        "add" => self.builder.build_float_add(l, r, "vl.add").unwrap(),
+                        "sub" => self.builder.build_float_sub(l, r, "vl.sub").unwrap(),
+                        "mul" => self.builder.build_float_mul(l, r, "vl.mul").unwrap(),
+                        _ => self.builder.build_float_div(l, r, "vl.div").unwrap(),
+                    });
+                }
+                let v = self.compile_vlift(&args[0].value, width, ft, lanes)?;
+                self.apply_vector_float_unary(op, v)
+                    .ok_or_else(|| format!("vlift: unsupported call op '{op}'"))
+            }
+            ExprKind::MethodCall { object, method, .. } => {
+                let v = self.compile_vlift(object, width, ft, lanes)?;
+                self.apply_vector_float_unary(method, v)
+                    .ok_or_else(|| format!("vlift: unsupported method '{method}'"))
+            }
+            _ => Err("vlift: non-liftable node".to_string()),
+        }
+    }
+
+    /// Emit one strip-mined loop over `[start, end)` at lane `width`,
+    /// vector-loading each param source, splatting captures, running the
+    /// lifted body, and vector-storing the result. Contiguous C-order
+    /// data; the caller sizes `start`/`end` so the strip stays in bounds.
+    /// The body always COMPUTES at the vector `width`; `scalar_lanes`
+    /// selects how each element is loaded / stored:
+    /// * `false` (main loop): vector-load `width` contiguous lanes, step
+    ///   `width` — the actual vectorization.
+    /// * `true` (remainder): scalar-load ONE element, splat it across the
+    ///   `width` lanes, compute, then extract lane 0 and scalar-store,
+    ///   step 1. This runs the tail through the IDENTICAL width-`W`
+    ///   polynomial (so accuracy matches the main loop exactly) while
+    ///   never touching memory past the element — no width-1 vector types,
+    ///   no out-of-bounds vector load.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_vmap_strip(
+        &self,
+        fn_val: FunctionValue<'ctx>,
+        srcs: &[(String, PointerValue<'ctx>)],
+        dest_data: PointerValue<'ctx>,
+        ft: inkwell::types::FloatType<'ctx>,
+        width: u32,
+        elem_align: u32,
+        start: IntValue<'ctx>,
+        end: IntValue<'ctx>,
+        caps: &[(String, inkwell::values::FloatValue<'ctx>)],
+        body: &Expr,
+        scalar_lanes: bool,
+    ) -> Result<(), String> {
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+        let vt = ft.vec_type(width);
+        let step = if scalar_lanes { 1 } else { width };
+        let idx = self.builder.build_alloca(i64_t, "vm.i").unwrap();
+        self.builder.build_store(idx, start).unwrap();
+        let head = self.context.append_basic_block(fn_val, "vm.head");
+        let body_bb = self.context.append_basic_block(fn_val, "vm.body");
+        let exit = self.context.append_basic_block(fn_val, "vm.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, idx, "vm.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, end, "vm.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body_bb, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let mut lanes: std::collections::HashMap<String, inkwell::values::VectorValue<'ctx>> =
+            std::collections::HashMap::new();
+        for (name, data) in srcs {
+            let ptr = unsafe { self.builder.build_gep(ft, *data, &[iv], "vm.sp").unwrap() };
+            let lv = if scalar_lanes {
+                let s = self
+                    .builder
+                    .build_load(ft, ptr, "vm.ss")
+                    .unwrap()
+                    .into_float_value();
+                self.vsplat_scalar(s, vt, width)
+            } else {
+                let ld = self.builder.build_load(vt, ptr, "vm.sv").unwrap();
+                let lv = ld.into_vector_value();
+                lv.as_instruction()
+                    .unwrap()
+                    .set_alignment(elem_align)
+                    .unwrap();
+                lv
+            };
+            lanes.insert(name.clone(), lv);
+        }
+        for (name, scalar) in caps {
+            lanes.insert(name.clone(), self.vsplat_scalar(*scalar, vt, width));
+        }
+        let result = self.compile_vlift(body, width, ft, &lanes)?;
+        let dp = unsafe {
+            self.builder
+                .build_gep(ft, dest_data, &[iv], "vm.dp")
+                .unwrap()
+        };
+        if scalar_lanes {
+            let lane0 = self
+                .builder
+                .build_extract_element(result, i32_t.const_zero(), "vm.l0")
+                .unwrap();
+            self.builder.build_store(dp, lane0).unwrap();
+        } else {
+            let st = self.builder.build_store(dp, result).unwrap();
+            st.set_alignment(elem_align).unwrap();
+        }
+        let i2 = self
+            .builder
+            .build_int_add(iv, i64_t.const_int(step as u64, false), "vm.i2")
+            .unwrap();
+        self.builder.build_store(idx, i2).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        Ok(())
+    }
+
+    /// Try to emit a transcendental-map as a strip-mined vector loop (the
+    /// data-spine last leg — a scalar `expf`/`logf` call in the map body
+    /// otherwise blocks vectorization). `Ok(true)` = emitted; `Ok(false)`
+    /// = not eligible, caller uses the scalar `emit_elementwise_map`.
+    ///
+    /// ACCURACY: the vector path routes `exp`/`ln` through the shipped
+    /// `compile_vector_exp`/`_ln` polynomials (both the width-`W` main loop
+    /// AND the width-1 tail, so every element uses the SAME approximation —
+    /// no mixed-accuracy within one op). This moves a transcendental
+    /// tensor-`map` from f32 libm to the ~1-ULP polynomial — the exact,
+    /// already-documented `v.exp()` / SIMD-transcendental divergence class
+    /// (`karac run` keeps f64 libm). Non-transcendental bodies never reach
+    /// here (the `has_trans` gate), so bit-exact paths are untouched.
+    fn try_emit_vectorized_map(
+        &mut self,
+        lhs: &ContainerAccess<'ctx>,
+        other: Option<&ContainerAccess<'ctx>>,
+        params: &[crate::ast::ClosureParam],
+        body: &Expr,
+        dest: &MapDest<'ctx>,
+    ) -> Result<bool, String> {
+        let BasicTypeEnum::FloatType(ft) = lhs.elem else {
+            return Ok(false);
+        };
+        if lhs.bitmap.is_some()
+            || dest.bitmap.is_some()
+            || other.is_some_and(|o| o.bitmap.is_some())
+        {
+            return Ok(false);
+        }
+        let Some(pnames) = Self::closure_param_names(params) else {
+            return Ok(false);
+        };
+        // param count must match the operand count (1 for map, 2 for zip).
+        let want = if other.is_some() { 2 } else { 1 };
+        if pnames.len() != want {
+            return Ok(false);
+        }
+        let body = Self::peel_map_block(body);
+        let mut has_trans = false;
+        if !Self::map_body_liftable(body, &mut has_trans) || !has_trans {
+            return Ok(false);
+        }
+        // Loop-invariant captures: resolve each to a scalar float of the
+        // element type NOW (before the loops). A non-float capture (e.g. a
+        // captured tensor) can't be lane-splatted here — fall back.
+        let mut caps: Vec<String> = Vec::new();
+        Self::collect_map_captures(body, &pnames, &mut caps);
+        let mut cap_scalars: Vec<(String, inkwell::values::FloatValue<'ctx>)> = Vec::new();
+        for c in &caps {
+            // Resolve captures straight from the variable table — NOT via a
+            // synthesized identifier `Expr`, whose fabricated span would
+            // miss the span-keyed type side-tables `compile_expr` consults.
+            // A capture that isn't a local scalar of the element float type
+            // (a global, a captured tensor, a non-float) → fall back.
+            let Some(slot) = self.variables.get(c).copied() else {
+                return Ok(false);
+            };
+            let BasicTypeEnum::FloatType(_) = slot.ty else {
+                return Ok(false);
+            };
+            let loaded = self
+                .builder
+                .build_load(slot.ty, slot.ptr, "vm.cap")
+                .unwrap()
+                .into_float_value();
+            // A capture of the OTHER float width (e.g. a bare `2.5` literal
+            // defaults to f64 in an f32 map) casts to the element type —
+            // matching the scalar path's implicit promotion.
+            let fv = if slot.ty == ft.into() {
+                loaded
+            } else {
+                self.builder
+                    .build_float_cast(loaded, ft, "vm.capcast")
+                    .unwrap()
+            };
+            cap_scalars.push((c.clone(), fv));
+        }
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "vectorized map outside function".to_string())?;
+        let i64_t = self.context.i64_type();
+        let f32_t = self.context.f32_type();
+        let (width, elem_align): (u32, u32) = if ft == f32_t { (8, 4) } else { (4, 8) };
+        let log2w = width.trailing_zeros();
+
+        // main_count = (count >> log2w) << log2w  — the largest multiple of
+        // `width` ≤ count. Tail (< width) runs at width 1 through the same
+        // body compiler, so accuracy is identical across the whole tensor.
+        let shr = self
+            .builder
+            .build_right_shift(
+                lhs.len,
+                i64_t.const_int(log2w as u64, false),
+                false,
+                "vm.shr",
+            )
+            .unwrap();
+        let main_count = self
+            .builder
+            .build_left_shift(shr, i64_t.const_int(log2w as u64, false), "vm.mc")
+            .unwrap();
+
+        let srcs: Vec<(String, PointerValue<'ctx>)> = match other {
+            Some(o) => vec![(pnames[0].clone(), lhs.data), (pnames[1].clone(), o.data)],
+            None => vec![(pnames[0].clone(), lhs.data)],
+        };
+        self.emit_vmap_strip(
+            fn_val,
+            &srcs,
+            dest.data,
+            ft,
+            width,
+            elem_align,
+            i64_t.const_zero(),
+            main_count,
+            &cap_scalars,
+            body,
+            false,
+        )?;
+        self.emit_vmap_strip(
+            fn_val,
+            &srcs,
+            dest.data,
+            ft,
+            width,
+            elem_align,
+            main_count,
+            lhs.len,
+            &cap_scalars,
+            body,
+            true,
+        )?;
+        Ok(true)
     }
 
     /// Full reduce → scalar. `sum`/`prod` fold via `compile_binop_typed`

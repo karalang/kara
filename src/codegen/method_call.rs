@@ -16231,6 +16231,75 @@ impl<'ctx> super::Codegen<'ctx> {
     /// back to the overloaded `llvm.exp` intrinsic (the f64 polynomial is a
     /// follow-up). Used by `v.exp()` and, transitively, `v.sigmoid()` /
     /// `v.tanh()` (both derived from `exp`).
+    /// Apply one `std.simd.math` float-unary op to an already-computed
+    /// float vector — the shared core of the `Vector[f32/f64,N]` method
+    /// surface (`compile_vector_method`) and the tensor-map vectorizer
+    /// (`try_emit_vectorized_map`), so a `t.map(|x| x.exp())` inner loop
+    /// routes through the identical polynomial. `exp`/`ln` use the shipped
+    /// guaranteed-SIMD polynomials; `sigmoid`/`tanh` derive from `exp`;
+    /// `sqrt` + the four rounding ops lower to the overloaded LLVM
+    /// float-vector intrinsic. `None` for a non-matching method name.
+    pub(super) fn apply_vector_float_unary(
+        &self,
+        method: &str,
+        recv: inkwell::values::VectorValue<'ctx>,
+    ) -> Option<inkwell::values::VectorValue<'ctx>> {
+        let vt = recv.get_type();
+        let ft = vt.get_element_type().into_float_type();
+        let n = vt.get_size();
+        let i32_t = self.context.i32_type();
+        let splat = |c: f64| -> inkwell::values::VectorValue<'ctx> {
+            let scalar = ft.const_float(c);
+            let mut sv = vt.get_undef();
+            for i in 0..n {
+                sv = self
+                    .builder
+                    .build_insert_element(sv, scalar, i32_t.const_int(i as u64, false), "splat")
+                    .unwrap();
+            }
+            sv
+        };
+        let apply = |name: &str, v: inkwell::values::VectorValue<'ctx>| {
+            let intr = inkwell::intrinsics::Intrinsic::find(name)
+                .expect("float-vector intrinsic must exist");
+            let decl = intr
+                .get_declaration(&self.module, &[v.get_type().into()])
+                .expect("intrinsic declaration for vector float type");
+            self.builder
+                .build_call(decl, &[v.into()], "simdmath")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_vector_value()
+        };
+        Some(match method {
+            "sqrt" => apply("llvm.sqrt", recv),
+            "exp" => self.compile_vector_exp(recv),
+            "ln" => self.compile_vector_ln(recv),
+            "floor" => apply("llvm.floor", recv),
+            "ceil" => apply("llvm.ceil", recv),
+            "round" => apply("llvm.round", recv),
+            "trunc" => apply("llvm.trunc", recv),
+            "sigmoid" => {
+                let neg = self.builder.build_float_neg(recv, "sig.neg").unwrap();
+                let e = self.compile_vector_exp(neg);
+                let one = splat(1.0);
+                let denom = self.builder.build_float_add(one, e, "sig.denom").unwrap();
+                self.builder.build_float_div(one, denom, "sigmoid").unwrap()
+            }
+            "tanh" => {
+                let two = splat(2.0);
+                let x2 = self.builder.build_float_mul(recv, two, "tanh.x2").unwrap();
+                let e = self.compile_vector_exp(x2);
+                let one = splat(1.0);
+                let num = self.builder.build_float_sub(e, one, "tanh.num").unwrap();
+                let den = self.builder.build_float_add(e, one, "tanh.den").unwrap();
+                self.builder.build_float_div(num, den, "tanh").unwrap()
+            }
+            _ => return None,
+        })
+    }
+
     fn compile_vector_exp(
         &self,
         recv: inkwell::values::VectorValue<'ctx>,
@@ -16857,68 +16926,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // half-away-from-zero (`llvm.round`, matching the scalar `.round()`
             // and the interpreter). The typechecker guarantees a float element.
             "sqrt" | "exp" | "ln" | "sigmoid" | "tanh" | "floor" | "ceil" | "round" | "trunc" => {
-                let ft = recv.get_type().get_element_type().into_float_type();
-                // Broadcast a scalar constant across all `n` lanes (LLVM folds
-                // the insert chain to a constant splat).
-                let splat = |cg: &Self, c: f64| -> inkwell::values::VectorValue<'ctx> {
-                    let scalar = ft.const_float(c);
-                    let mut sv = recv.get_type().get_undef();
-                    for i in 0..n {
-                        sv = cg
-                            .builder
-                            .build_insert_element(
-                                sv,
-                                scalar,
-                                i32_t.const_int(i as u64, false),
-                                "splat",
-                            )
-                            .unwrap();
-                    }
-                    sv
-                };
-                let apply = |cg: &Self, name: &str, v: inkwell::values::VectorValue<'ctx>| {
-                    let intr = inkwell::intrinsics::Intrinsic::find(name)
-                        .expect("float-vector intrinsic must exist");
-                    let decl = intr
-                        .get_declaration(&cg.module, &[v.get_type().into()])
-                        .expect("intrinsic declaration for vector float type");
-                    cg.builder
-                        .build_call(decl, &[v.into()], "simdmath")
-                        .unwrap()
-                        .try_as_basic_value()
-                        .unwrap_basic()
-                        .into_vector_value()
-                };
-                let out = match method {
-                    "sqrt" => apply(self, "llvm.sqrt", recv),
-                    // `exp` is the hand-written guaranteed-SIMD polynomial (f32;
-                    // f64 falls back to the intrinsic) — see compile_vector_exp.
-                    "exp" => self.compile_vector_exp(recv),
-                    // `ln` is the hand-written guaranteed-SIMD polynomial (f32;
-                    // f64 falls back to the intrinsic) — see compile_vector_ln.
-                    "ln" => self.compile_vector_ln(recv),
-                    "floor" => apply(self, "llvm.floor", recv),
-                    "ceil" => apply(self, "llvm.ceil", recv),
-                    "round" => apply(self, "llvm.round", recv),
-                    "trunc" => apply(self, "llvm.trunc", recv),
-                    "sigmoid" => {
-                        let neg = self.builder.build_float_neg(recv, "sig.neg").unwrap();
-                        let e = self.compile_vector_exp(neg);
-                        let one = splat(self, 1.0);
-                        let denom = self.builder.build_float_add(one, e, "sig.denom").unwrap();
-                        self.builder.build_float_div(one, denom, "sigmoid").unwrap()
-                    }
-                    _ => {
-                        // tanh(x) = (e^{2x} - 1) / (e^{2x} + 1)
-                        let two = splat(self, 2.0);
-                        let x2 = self.builder.build_float_mul(recv, two, "tanh.x2").unwrap();
-                        let e = self.compile_vector_exp(x2);
-                        let one = splat(self, 1.0);
-                        let num = self.builder.build_float_sub(e, one, "tanh.num").unwrap();
-                        let den = self.builder.build_float_add(e, one, "tanh.den").unwrap();
-                        self.builder.build_float_div(num, den, "tanh").unwrap()
-                    }
-                };
+                // The per-lane transcendental / rounding logic lives in
+                // `apply_vector_float_unary` — shared with the tensor-map
+                // vectorizer (`try_emit_vectorized_map`) so a `t.map(|x|
+                // x.exp())` inner loop routes through the identical
+                // polynomial. The typechecker guarantees a float element.
+                let out = self
+                    .apply_vector_float_unary(method, recv)
+                    .expect("method matched the float-unary set above");
                 Ok(out.into())
             }
             // `std.simd.math` bit-reinterpretation (phase-11): element-wise

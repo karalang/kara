@@ -697,6 +697,43 @@ fn main() {
     }
 
     #[test]
+    fn asan_tensor_transcendental_map_no_leak() {
+        // The data-spine transcendental-map vectorizer allocates a fresh
+        // result tensor per `map`; its FreeTensor cleanup must run (no
+        // leak) and the strip-mined `<8 x float>` main loop + scalar-splat
+        // tail must stay in bounds (no ASan OOB on the vector load/store).
+        // Looped so any per-iteration leak accumulates; the bound map (the
+        // vectorizer's target) carries a captured scalar + a transcendental,
+        // and the length (10) exercises one full width-8 chunk + a 2-element
+        // tail. Self-checking so the expected output is poly-independent.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let t: Tensor[f32, [10]] = Tensor.from([-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5]);
+        let scale: f32 = 1.5f32;
+        let m = t.map(|x| (x * scale).exp());
+        let xs: Tensor[f32, [10]] = Tensor.from([-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5]);
+        let mut ok: bool = true;
+        for i in 0..10 {
+            let want: f32 = (xs[i] * scale).exp();
+            let d: f32 = m[i] - want;
+            let ad: f32 = if d < 0.0f32 { 0.0f32 - d } else { d };
+            let aw: f32 = if want < 0.0f32 { 0.0f32 - want } else { want };
+            if ad > 0.001f32 * aw + 0.001f32 { ok = false; }
+        }
+        println(ok);
+        n = n + 1;
+    }
+}
+"#,
+            &["true", "true", "true"],
+            "asan_tensor_transcendental_map_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_vec_tensor_element_overwrite() {
         // (b) overwrite — `s.grads[0] = old + g` frees the displaced old element
         // block (read into the fresh sum first) and takes over the new one.
