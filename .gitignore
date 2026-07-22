@@ -39,3 +39,11 @@ playground/web/pkg/
 # Self-hosted compiler binary built from the in-tree .kara sources — a local
 # build artifact, not source. Regenerate by compiling the self-host entrypoint.
 nbe_main
+# bench/compile_speed run artifacts (corpus binaries + per-run measurements;
+# baseline.json IS tracked — it's the committed gate reference)
+bench/compile_speed/synthetic
+bench/compile_speed/synthetic_rs
+bench/compile_speed/seed_kata
+bench/compile_speed/seed_kata_rs
+bench/compile_speed/latest.json
+bench/compile_speed/gate.md

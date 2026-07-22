@@ -1,0 +1,110 @@
+name: Compile Speed
+
+# Phase 8.5 Track 5: cold compile-elapsed gate. PRs are gated on the
+# karac/rustc RATIO per corpus workload vs bench/compile_speed/baseline.json
+# (30% initial threshold — catches order-of-magnitude blowups like the
+# 2026-05-12 Maranget O(N²) shape without flaking on routine work; tightens
+# as data accumulates). Pushes to main re-measure and refresh the baseline
+# when a ratio drifted >5%.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    # A baseline refresh commit must not retrigger a run of itself.
+    paths-ignore:
+      - 'bench/compile_speed/baseline.json'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: compile-speed-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: Cold compile-elapsed (gate on PR, baseline on main)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same LLVM 18.1 setup as codegen-e2e (see ci.yml for rationale);
+      # hyperfine rides the same apt transaction.
+      - name: Install LLVM 18 + hyperfine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev hyperfine
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: compile-speed
+
+      # The bench measures the RELEASE karac (the artifact users get), which
+      # links the runtime archive on every `karac build`.
+      - name: Build release karac + runtime archive
+        run: |
+          cargo build --release --features llvm --bin karac
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+
+      - name: Run bench (twin oracle + hyperfine)
+        run: ./bench/compile_speed/bench.sh
+
+      - name: Gate vs baseline
+        if: github.event_name == 'pull_request'
+        run: |
+          cd bench/compile_speed
+          set +e
+          python3 compare.py --latest latest.json --baseline baseline.json --markdown gate.md
+          rc=$?
+          cat gate.md >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      # Sticky PR comment (same-repo PRs only — fork tokens are read-only).
+      - name: PR comment
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'bench/compile_speed/gate.md';
+            if (!fs.existsSync(path)) return;
+            const marker = '<!-- compile-speed-gate -->';
+            const body = fs.readFileSync(path, 'utf8') + '\n' + marker;
+            const {data: comments} = await github.rest.issues.listComments({
+              ...context.repo, issue_number: context.issue.number,
+            });
+            const prev = comments.find(c => c.body.includes(marker));
+            if (prev) {
+              await github.rest.issues.updateComment({
+                ...context.repo, comment_id: prev.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: context.issue.number, body,
+              });
+            }
+
+      - name: Refresh baseline
+        if: github.event_name == 'push'
+        run: |
+          cd bench/compile_speed
+          python3 compare.py --latest latest.json --write-baseline baseline.json
+          if ! git diff --quiet baseline.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add baseline.json
+            git commit -m "bench(compile-speed): refresh baseline from main run"
+            git pull --rebase origin main
+            git push origin main
+          fi
