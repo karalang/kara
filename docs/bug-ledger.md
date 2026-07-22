@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 161 | 0 |
-| leak | 92 | 0 |
+| leak | 93 | 1 |
 | double-free | 77 | 0 |
 | codegen-gap | 71 | 0 |
 | missing-feature | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 462 | 0 |
+| codegen | 463 | 1 |
 | typecheck | 83 | 0 |
 | interp | 69 | 0 |
 | ownership | 26 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **635 surfaced · 0 open · 630 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **636 surfaced · 1 open · 630 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-22-8 | 2026-07-22 | codegen | medium | Reassigning a `mut String` STRUCT FIELD leaks the OLD buffer when the field's current value was set in a PRIOR function call. `s.buf = read4(s)` (buf: String field, via a `mut ref S` param) frees the displaced buffer correctly only when codegen saw the field assigned earlier in the SAME function body; when the field holds a heap String set by an earlier CALL and this function's first touch of it is a reassignment, no old-value free is emitted, so the old buffer leaks (one 8-byte block per such reassignment). Output is correct; codegen-only (interp clean); AOT valgrind/LSan. Sibling of the Vec[String]-reassign leak class (#126). | — |
 
 ### Fixed (630)
 
