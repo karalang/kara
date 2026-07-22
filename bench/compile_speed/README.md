@@ -42,12 +42,14 @@ The gate is on the **ratio**, not absolute karac seconds: both compilers shift t
 
 `baseline.json` bootstraps empty: the first main-leg run writes it. While empty, the PR leg passes vacuously with a note.
 
-## First measurements (2026-07-22, container x86-64 — indicative; the gate baseline is CI-measured)
+## First measurements (2026-07-22)
 
-| workload | karac build | rustc -O | ratio |
-|---|---|---|---|
-| seed_kata (~40 LOC) | 229 ms | 203 ms | **1.13×** |
-| synthetic (~10.9K LOC) | 5.90 s | 2.12 s | **2.79×** |
+| workload | environment | karac build | rustc -O | ratio |
+|---|---|---|---|---|
+| seed_kata (~40 LOC) | CI runner (gate baseline) | 302 ms | 202 ms | **1.50×** |
+| synthetic (~10.9K LOC) | CI runner (gate baseline) | 5.26 s | 1.66 s | **3.17×** |
+| seed_kata | dev container x86-64 | 229 ms | 203 ms | 1.13× |
+| synthetic | dev container x86-64 | 5.90 s | 2.12 s | 2.79× |
 
 Split on the synthetic: `karac check` (parse → desugar → resolve → typecheck → effectcheck → ownership) is **0.56 s** of the 5.90 s — the front end handles 10K LOC in ~half a second, and ~90% of cold build time is LLVM codegen + linking. That's where any future compile-speed engineering should aim; the ratio gate keeps it from silently getting worse meanwhile.
 
