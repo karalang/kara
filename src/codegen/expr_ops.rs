@@ -5720,12 +5720,54 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             (lf, rf)
         };
+        // bf16 arithmetic must never reach ISel as bfloat nodes: LLVM 18's
+        // AArch64 backend fails to select bf16 fadd/fsub/… in common DAG
+        // shapes (B-2026-07-22-1 — the macOS LLJIT lane runs ISel on raw
+        // un-optimized IR, so no mid-end fold can hide a live node; the
+        // child jit-runner dies with SIGABRT "Cannot select: bf16 = fadd").
+        // Compute in f32 and round back once with the RNE sequence —
+        // bit-identical to LLVM's own compute-in-f32 softPromote
+        // legalization of bf16, so x86 results are unchanged.
+        let bf16_op =
+            lf.get_type() == self.context.bf16_type() && rf.get_type() == self.context.bf16_type();
+        let (lf, rf) = if bf16_op {
+            (
+                self.emit_bf16_to_f32(lf, "fop.l.bf2f"),
+                self.emit_bf16_to_f32(rf, "fop.r.bf2f"),
+            )
+        } else {
+            (lf, rf)
+        };
+        // Comparisons stay in f32 (widening is exact, so f32 compare ≡ bf16
+        // compare); only arithmetic results round back down.
+        let round_back = |cg: &Self, v: inkwell::values::FloatValue<'ctx>| {
+            if bf16_op {
+                cg.emit_f32_to_bf16(v, "fop.res")
+            } else {
+                v
+            }
+        };
         match op {
-            BinOp::Add => Ok(self.builder.build_float_add(lf, rf, "fadd").unwrap().into()),
-            BinOp::Sub => Ok(self.builder.build_float_sub(lf, rf, "fsub").unwrap().into()),
-            BinOp::Mul => Ok(self.builder.build_float_mul(lf, rf, "fmul").unwrap().into()),
-            BinOp::Div => Ok(self.builder.build_float_div(lf, rf, "fdiv").unwrap().into()),
-            BinOp::Mod => Ok(self.builder.build_float_rem(lf, rf, "frem").unwrap().into()),
+            BinOp::Add => {
+                let r = self.builder.build_float_add(lf, rf, "fadd").unwrap();
+                Ok(round_back(self, r).into())
+            }
+            BinOp::Sub => {
+                let r = self.builder.build_float_sub(lf, rf, "fsub").unwrap();
+                Ok(round_back(self, r).into())
+            }
+            BinOp::Mul => {
+                let r = self.builder.build_float_mul(lf, rf, "fmul").unwrap();
+                Ok(round_back(self, r).into())
+            }
+            BinOp::Div => {
+                let r = self.builder.build_float_div(lf, rf, "fdiv").unwrap();
+                Ok(round_back(self, r).into())
+            }
+            BinOp::Mod => {
+                let r = self.builder.build_float_rem(lf, rf, "frem").unwrap();
+                Ok(round_back(self, r).into())
+            }
             BinOp::Eq => Ok(self
                 .builder
                 .build_float_compare(FloatPredicate::OEQ, lf, rf, "feq")
@@ -5782,11 +5824,28 @@ impl<'ctx> super::Codegen<'ctx> {
         match op {
             UnaryOp::Neg => {
                 if val.is_float_value() {
-                    Ok(self
-                        .builder
-                        .build_float_neg(val.into_float_value(), "fneg")
-                        .unwrap()
-                        .into())
+                    let f = val.into_float_value();
+                    if f.get_type() == self.context.bf16_type() {
+                        // `fneg bfloat` is ISel-fragile on LLVM 18 aarch64
+                        // (B-2026-07-22-1 class). A float negate is exactly
+                        // a sign-bit flip, so do it in the integer domain —
+                        // exact, and selectable on every target.
+                        let i16_t = self.context.i16_type();
+                        let bits = self
+                            .builder
+                            .build_bit_cast(f, i16_t, "fneg.bf.bits")
+                            .unwrap()
+                            .into_int_value();
+                        let flipped = self
+                            .builder
+                            .build_xor(bits, i16_t.const_int(0x8000, false), "fneg.bf.flip")
+                            .unwrap();
+                        return Ok(self
+                            .builder
+                            .build_bit_cast(flipped, self.context.bf16_type(), "fneg")
+                            .unwrap());
+                    }
+                    Ok(self.builder.build_float_neg(f, "fneg").unwrap().into())
                 } else {
                     // Checked negate: `-iN::MIN` doesn't fit and traps as
                     // `integer overflow`, matching the interpreter's

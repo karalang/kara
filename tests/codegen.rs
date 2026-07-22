@@ -5012,6 +5012,11 @@ fn main() {
     #[test]
     fn test_ir_f16_bf16_arithmetic_lowers_to_half_and_bfloat() {
         // `f16` lowers to LLVM `half`, `bf16` to `bfloat` (phase-11).
+        // f16 arithmetic stays native `half` (softPromoteHalf is mature on
+        // every backend); bf16 arithmetic must NOT emit `fmul bfloat` —
+        // LLVM 18's AArch64 ISel is gapped on bfloat arithmetic/conversion
+        // nodes (B-2026-07-22-1), so it computes in f32 (the widen sequence
+        // + `fmul float`) and rounds back to bf16 with the RNE bit trick.
         let ir = ir_for(
             "fn f(a: f16, b: f16) -> f16 { a + b }\nfn g(a: bf16, b: bf16) -> bf16 { a * b }\nfn main() { let _ = f(1.0f16, 2.0f16); let _ = g(1.0bf16, 2.0bf16); }",
         );
@@ -5020,8 +5025,14 @@ fn main() {
             "expected an `fadd half` for f16 add; IR:\n{ir}"
         );
         assert!(
-            ir.contains("fmul bfloat"),
-            "expected an `fmul bfloat` for bf16 mul; IR:\n{ir}"
+            !ir.contains("fmul bfloat"),
+            "bf16 mul must compute in f32, not `fmul bfloat` \
+             (B-2026-07-22-1); IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("fop.l.bf2f") && ir.contains("fop.res"),
+            "expected the bf16 mul to widen via the integer sequence and \
+             round back (`fop.l.bf2f` / `fop.res`); IR:\n{ir}"
         );
     }
 
@@ -13012,21 +13023,28 @@ fn main() {
     #[test]
     fn test_ir_bf16_widen_to_f64_routes_through_f32() {
         // B-2026-07-22-1 hardening: LLVM 18's AArch64 backend cannot select
-        // ANY standalone `fpext`/`fptrunc` node touching bfloat (verified
-        // with llc-18 on both `apple-m1` and `generic` v8a: bf16 → f32,
+        // standalone `fpext`/`fptrunc` nodes touching bfloat (verified with
+        // llc-18 on both `apple-m1` and `generic` v8a: bf16 → f32,
         // bf16 → f64, and f32 → bf16 all die at ISel with "LLVM ERROR:
-        // Cannot select", even load-fed; bf16 arithmetic legalizes fine).
-        // Any bf16 value the mid-end can't constant-fold away
-        // (KARAC_OPT_LEVEL=0, or a value flowing through an opaque call
-        // boundary) would hit the gap, so codegen must emit bf16
-        // conversions as integer-level sequences (zext+shl widening /
-        // RNE-bias narrowing — `build_float_cast_bf16_safe`). Pins the two
-        // always-reachable emission surfaces at once: the println format
-        // path and the explicit `as f64` cast, on a bf16 that arrives
-        // through a fn boundary so no fold can hide the node.
+        // Cannot select", even load-fed), and Darwin's homebrew LLVM 18
+        // additionally fails to select `fadd bfloat` in common DAG shapes
+        // (the macOS LLJIT parity lane runs ISel on raw un-optimized IR —
+        // its jit-runner child dies with SIGABRT "Cannot select: bf16 =
+        // fadd"). So NO bf16 conversion or arithmetic node may survive
+        // codegen: conversions emit as integer-level sequences (zext+shl
+        // widening / RNE-bias narrowing — `build_float_cast_bf16_safe`),
+        // arithmetic computes in f32 and rounds back once, negation is an
+        // integer sign-bit flip. Pins every emission surface on bf16 values
+        // that arrive through a fn boundary so no fold can hide a node.
         let src = r#"
 fn show(x: bf16) -> f64 {
     println(x);
+    let y = x + 0.5bf16;
+    let n = -y;
+    if n < 0.0bf16 {
+        println(y * 2.0bf16);
+    }
+    println(n);
     x as f64
 }
 
@@ -13057,6 +13075,24 @@ fn main() {
                  LLVM 18 aarch64): {}",
                 line
             );
+            // Match the OPCODE position (`= fadd bfloat …`), not a bare
+            // substring — our own replacement sequences carry names like
+            // `%fneg.bf.bits = bitcast bfloat …` that would false-positive.
+            for node in ["fadd", "fsub", "fmul", "fdiv", "frem", "fneg"] {
+                assert!(
+                    !(line.contains(&format!("= {} bfloat", node))),
+                    "bf16 `{}` emitted (ISel-fragile on LLVM 18 aarch64 — \
+                     must compute in f32): {}",
+                    node,
+                    line
+                );
+            }
+            assert!(
+                !(line.contains("= fcmp") && line.contains(" bfloat ")),
+                "bf16 `fcmp` emitted (ISel-fragile on LLVM 18 aarch64 — \
+                 must compare in f32): {}",
+                line
+            );
         }
         let widen_seqs = ir.lines().filter(|l| l.contains(".bf2f.shl")).count();
         assert!(
@@ -13067,6 +13103,36 @@ fn main() {
             widen_seqs,
             ir
         );
+    }
+
+    #[test]
+    fn test_e2e_bf16_arithmetic_compare_neg_through_fn_boundary() {
+        // Runtime sibling of test_ir_bf16_widen_to_f64_routes_through_f32:
+        // bf16 add/mul/div, compare, and unary negation on values that cross
+        // a fn boundary (so the mid-end can't fold them away). This is the
+        // shape that killed the macOS LLJIT parity lane (B-2026-07-22-1) —
+        // on that lane this test exercises runtime ISel of the promoted
+        // f32-compute emission. All values are exact in bf16.
+        if let Some(run) = run_program_capturing(
+            "fn step(x: bf16) -> bf16 {\n\
+                 x + 0.5bf16\n\
+             }\n\
+             fn main() {\n\
+                 let y = step(1.25bf16);\n\
+                 println(y);\n\
+                 let n = -y;\n\
+                 println(n);\n\
+                 if n < 0.0bf16 { println(\"neg\") }\n\
+                 println(y * 2.0bf16);\n\
+                 println(y / 0.5bf16);\n\
+             }",
+        ) {
+            assert_eq!(
+                run.stdout, "1.75\n-1.75\nneg\n3.5\n3.5\n",
+                "bf16 arithmetic program diverged (status: {}, stderr: {:?})",
+                run.status, run.stderr
+            );
+        }
     }
 
     #[test]
