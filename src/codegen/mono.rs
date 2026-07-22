@@ -1425,7 +1425,14 @@ impl<'ctx> super::Codegen<'ctx> {
         if basic_val.is_instruction() {
             Ok(self.context.i64_type().const_int(0, false).into())
         } else {
-            Ok(basic_val.unwrap_basic())
+            let v = basic_val.unwrap_basic();
+            // LazyFrame codegen twin — rule 3, the generic-call twin of the
+            // `compile_call` hook: a generic fn DECLARED to return LazyExpr/
+            // LazyFrame (`std.lazy`'s `lit[T]`) hands back an escaping +1;
+            // register the matching release in the CALLER's scope (the mono
+            // body's frame stack was already swapped back by this point).
+            self.register_lazy_user_call_result(name, v);
+            Ok(v)
         }
     }
 
@@ -2047,6 +2054,19 @@ impl<'ctx> super::Codegen<'ctx> {
             // self-gates on `owned_vecstr_params` membership + a recorded elem type).
             if let (Some(final_expr), Some(v)) = (func.body.final_expr.as_deref(), result) {
                 result = Some(self.maybe_defensive_copy_param_arg(final_expr, v));
+            }
+            // LazyFrame codegen twin — retain-on-return (rule 2), the mono
+            // twin of the `compile_function` hook: a generic fn DECLARED to
+            // return LazyExpr/LazyFrame (`std.lazy`'s `lit[T]`) hands its
+            // caller an escaping +1 that must survive the release drain
+            // below; `compile_generic_call` registers the matching release.
+            if let (Some(kind), Some(val)) = (
+                func.return_type
+                    .as_ref()
+                    .and_then(Self::lazy_kind_of_type_expr),
+                result,
+            ) {
+                self.emit_lazy_retain_for_return(kind, val);
             }
             // Drain the function-level cleanup frame at the tail return,
             // mirroring `compile_function`. Move-aware suppression first:

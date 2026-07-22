@@ -2164,6 +2164,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.zero_vec_alloca_cap(acc);
                 }
             }
+            // LazyFrame codegen twin — retain-on-return (rule 2 of the
+            // ownership model in `src/codegen/lazyframe.rs`): a fn DECLARED
+            // to return LazyExpr/LazyFrame (the std.lazy col/lit wrappers)
+            // hands its caller an escaping +1 that must survive the scope
+            // release-drain below; the caller registers the matching
+            // release (`register_lazy_user_call_result`). Must run BEFORE
+            // either drain branch.
+            if let (Some(kind), Some(val)) = (
+                func.return_type
+                    .as_ref()
+                    .and_then(Self::lazy_kind_of_type_expr),
+                result,
+            ) {
+                self.emit_lazy_retain_for_return(kind, val);
+            }
             // Slice 2 (Phase 7 § *defer / errdefer codegen*): when the
             // function's tail expression is syntactically `Err(...)` or
             // `None`, route through the error-path cleanup so any

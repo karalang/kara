@@ -5340,6 +5340,8 @@ impl<'ctx> super::Codegen<'ctx> {
             CleanupAction::FreeDataFrame { df_alloca } => Some(name_of(*df_alloca)),
             CleanupAction::FreeSoaGroups { soa_alloca, .. } => Some(name_of(*soa_alloca)),
             CleanupAction::FreeFileHandle { file_alloca } => Some(name_of(*file_alloca)),
+            CleanupAction::ReleaseLazyExpr { alloca }
+            | CleanupAction::ReleaseLazyPlan { alloca } => Some(name_of(*alloca)),
             CleanupAction::FreeGpuBuffer { buf_alloca } => Some(name_of(*buf_alloca)),
             CleanupAction::FreeOnceHandle { once_alloca, .. } => Some(name_of(*once_alloca)),
             CleanupAction::FreeInternerHandle { interner_alloca } => {
@@ -6692,6 +6694,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     .expect("karac_runtime_file_close declared in Codegen::new");
                 self.builder
                     .build_call(close_fn, &[handle.into()], "")
+                    .unwrap();
+            }
+            // LazyFrame codegen twin — release a `LazyExpr` handle produced
+            // in this scope (the release-everywhere ownership model; see
+            // `runtime/src/lazy.rs`). Load the raw `Arc` pointer from its
+            // alloca and drop one strong count.
+            CleanupAction::ReleaseLazyExpr { alloca } => {
+                let handle = self
+                    .builder
+                    .build_load(ptr_ty, *alloca, "cleanup.lazyexpr.handle")
+                    .unwrap()
+                    .into_pointer_value();
+                let rel_fn = self
+                    .module
+                    .get_function("karac_lazy_expr_release")
+                    .expect("karac_lazy_expr_release declared in Codegen::new");
+                self.builder
+                    .build_call(rel_fn, &[handle.into()], "")
+                    .unwrap();
+            }
+            // The plan-handle sibling: release a `LazyFrame` plan handle.
+            CleanupAction::ReleaseLazyPlan { alloca } => {
+                let handle = self
+                    .builder
+                    .build_load(ptr_ty, *alloca, "cleanup.lazyplan.handle")
+                    .unwrap()
+                    .into_pointer_value();
+                let rel_fn = self
+                    .module
+                    .get_function("karac_lazy_release")
+                    .expect("karac_lazy_release declared in Codegen::new");
+                self.builder
+                    .build_call(rel_fn, &[handle.into()], "")
                     .unwrap();
             }
             CleanupAction::FreeGpuBuffer { buf_alloca } => {

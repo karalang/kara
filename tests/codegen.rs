@@ -569,23 +569,39 @@ mod codegen_tests {
 
     #[test]
     fn lazyframe_rejected_by_codegen_with_run_hint() {
-        // Phase-11 LazyDataFrame slice 1 is interpreter-first: `df.lazy()`
-        // (the single entry point to the LazyFrame surface) must be
-        // rejected LOUDLY by codegen with a `karac run` pointer rather
-        // than silently mis-lowering the chain.
+        // Phase-11 LazyDataFrame codegen twin: select/limit/filter/collect/
+        // explain (+ the LazyExpr builders) now LOWER — only the methods
+        // outside the v1 twin (sort / group_by / join / with_columns / the
+        // aggregates) bail, loudly and per method, with a `karac run`
+        // pointer. `sort` is the canary.
         let err = ir_result(
             "fn main() {\n\
                  let mut df: DataFrame = DataFrame.new();\n\
-                 df.insert(\"a\", Column.from_vec([1i64]));\n\
-                 let out = df.lazy().limit(1).collect();\n\
+                 df.insert(\"a\", Column.from_vec([3i64, 1i64, 2i64]));\n\
+                 let plan = df.lazy().sort(vec![LazyExpr.col(\"a\")]);\n\
+                 let out = plan.collect();\n\
                  println(out.height());\n\
              }",
         )
-        .expect_err("df.lazy() must be rejected by codegen in slice 1");
+        .expect_err("LazyFrame.sort must be rejected by the v1 codegen twin");
         assert!(
-            err.contains("interpreter-only") && err.contains("karac run"),
+            err.contains(
+                "LazyFrame.sort is not yet lowered by the v1 codegen twin — run it with \
+                 `karac run` (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
+            ),
             "got: {err}"
         );
+        // And the supported surface must NOT bail: the probe chain compiles.
+        ir_result(
+            "fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"a\", Column.from_vec([1i64]));\n\
+                 let plan = df.lazy().filter(LazyExpr.col(\"a\").gt(0)).limit(1);\n\
+                 let out = plan.collect();\n\
+                 println(out.height());\n\
+             }",
+        )
+        .expect("the v1 twin surface (filter/limit/collect) must compile");
     }
 
     #[test]
@@ -638,6 +654,52 @@ mod codegen_tests {
             assert_eq!(
                 out, "4\n3\n41\n78.25\nbob, jr.\neve \"the\" grey\n1\nnull-ok\nmissing-err\n",
                 "read_csv round-trip must match the interpreter twin",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_lazyframe_select_filter_limit_collect_explain() {
+        // Phase-11 LazyDataFrame codegen twin (`src/codegen/lazyframe.rs` +
+        // `runtime/src/lazy.rs`): the full v1 surface in one AOT binary —
+        // plan building (lazy/filter/select/limit), the LazyExpr predicate
+        // builders (col/gt/ge/and_), `explain` (byte parity with the
+        // interpreter's fold+render — the oracle is
+        // tests/interpreter.rs::test_lazyframe_filter_expression_pipeline),
+        // and `collect` back into an eager DataFrame read through the
+        // ordinary Column indexing path. Output byte-pinned to the
+        // interpreter twin's.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"age\", Column.from_vec([30i64, 15i64, 41i64, 8i64]));\n\
+                 df.insert(\"name\", Column.from_vec([\"ada\", \"bob\", \"eve\", \"kid\"]));\n\
+                 df.insert(\"score\", Column.from_vec([9.5, 3.5, 7.0, 1.0]));\n\
+                 let plan = df.lazy().filter(LazyExpr.col(\"age\").gt(10).and_(LazyExpr.col(\"score\").ge(3.5))).select(vec![\"name\", \"age\"]).limit(2);\n\
+                 println(plan.explain());\n\
+                 let out = plan.collect();\n\
+                 println(out.height());\n\
+                 let names: Column[String] = out.column(\"name\");\n\
+                 match names[0] { Some(v) => println(v), None => println(\"null\") }\n\
+                 match names[1] { Some(v) => println(v), None => println(\"null\") }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "== logical plan ==\n\
+                 LIMIT 2\n\
+                 \x20 SELECT [name, age]\n\
+                 \x20   FILTER ((age > 10) and (score >= 3.5))\n\
+                 \x20     SCAN [age, name, score]\n\
+                 == optimized ==\n\
+                 SELECT [name, age]\n\
+                 \x20 LIMIT 2\n\
+                 \x20   FILTER ((age > 10) and (score >= 3.5))\n\
+                 \x20     SCAN cols=[age, name, score]\n\
+                 2\nada\nbob\n",
+                "the LazyFrame codegen twin must render and evaluate \
+                 identically to the interpreter",
             );
         }
     }

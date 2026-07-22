@@ -55,6 +55,7 @@ mod helpers;
 mod http;
 mod json;
 mod kernel;
+mod lazyframe;
 #[cfg(feature = "llvm")]
 mod lljit;
 #[cfg(feature = "llvm")]
@@ -4768,6 +4769,139 @@ impl<'ctx> Codegen<'ctx> {
                 ],
                 false,
             ),
+            Some(Linkage::External),
+        );
+        // LazyFrame runtime engine (phase-11 LazyDataFrame codegen twin,
+        // `runtime/src/lazy.rs`). Handles are `Arc::into_raw` pointers:
+        // every ARGUMENT position borrows (the runtime clones internally),
+        // every constructor/builder returns a fresh +1 handle that codegen
+        // stores in an alloca and releases once at the producing scope
+        // (`ReleaseLazyExpr` / `ReleaseLazyPlan` cleanup actions), with
+        // `_retain` bumped only on a value escaping through a user-fn
+        // return. Lowered in `src/codegen/lazyframe.rs`.
+        //   `*const ExprNode karac_lazy_expr_col(*const u8 name, i64 len)`
+        module.add_function(
+            "karac_lazy_expr_col",
+            ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const ExprNode karac_lazy_expr_lit_int(i64 v)`
+        module.add_function(
+            "karac_lazy_expr_lit_int",
+            ptr_type.fn_type(&[i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const ExprNode karac_lazy_expr_lit_float(f64 v)`
+        module.add_function(
+            "karac_lazy_expr_lit_float",
+            ptr_type.fn_type(&[context.f64_type().into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const ExprNode karac_lazy_expr_lit_str(*const u8 s, i64 len)`
+        module.add_function(
+            "karac_lazy_expr_lit_str",
+            ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const ExprNode karac_lazy_expr_lit_bool(i8 v)`
+        module.add_function(
+            "karac_lazy_expr_lit_bool",
+            ptr_type.fn_type(&[context.i8_type().into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const ExprNode karac_lazy_expr_cmp(i64 op, *const ExprNode lhs,
+        //    *const ExprNode rhs)` — op: 0=gt 1=ge 2=lt 3=le 4=eq 5=ne.
+        module.add_function(
+            "karac_lazy_expr_cmp",
+            ptr_type.fn_type(&[i64_type.into(), ptr_type.into(), ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const ExprNode karac_lazy_expr_bool(i64 op, *const ExprNode a,
+        //    *const ExprNode b)` — op: 0=and_ 1=or_.
+        module.add_function(
+            "karac_lazy_expr_bool",
+            ptr_type.fn_type(&[i64_type.into(), ptr_type.into(), ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const ExprNode karac_lazy_expr_not(*const ExprNode x)`
+        module.add_function(
+            "karac_lazy_expr_not",
+            ptr_type.fn_type(&[ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const ExprNode karac_lazy_expr_arith(i64 op, *const ExprNode l,
+        //    *const ExprNode r)` — op: 0=add 1=sub 2=mul 3=div.
+        module.add_function(
+            "karac_lazy_expr_arith",
+            ptr_type.fn_type(&[i64_type.into(), ptr_type.into(), ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `void karac_lazy_expr_retain(*const ExprNode x)` /
+        //   `void karac_lazy_expr_release(*const ExprNode x)`
+        module.add_function(
+            "karac_lazy_expr_retain",
+            context.void_type().fn_type(&[ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_lazy_expr_release",
+            context.void_type().fn_type(&[ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const LazyPlan karac_lazy_new(*const u8 df_ctrl)` — BORROWS the
+        //    DataFrame control block; deep-copies the frame.
+        module.add_function(
+            "karac_lazy_new",
+            ptr_type.fn_type(&[ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const LazyPlan karac_lazy_select(*const LazyPlan plan,
+        //    *const u8 elems, i64 count)` — elems is the `Vec[String]` DATA
+        //    pointer (contiguous 24-byte {ptr,len,cap} String aggregates).
+        module.add_function(
+            "karac_lazy_select",
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const LazyPlan karac_lazy_limit(*const LazyPlan plan, i64 n)`
+        module.add_function(
+            "karac_lazy_limit",
+            ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const LazyPlan karac_lazy_filter(*const LazyPlan plan,
+        //    *const ExprNode pred)`
+        module.add_function(
+            "karac_lazy_filter",
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `void karac_lazy_retain(*const LazyPlan plan)` /
+        //   `void karac_lazy_release(*const LazyPlan plan)`
+        module.add_function(
+            "karac_lazy_retain",
+            context.void_type().fn_type(&[ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_lazy_release",
+            context.void_type().fn_type(&[ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*mut u8 karac_lazy_explain(*const LazyPlan plan, *mut i64
+        //    out_len)` — a malloc'd UTF-8 buffer, always max(len, 1) bytes
+        //    (the `karac_regex_replace_all` adoption convention).
+        module.add_function(
+            "karac_lazy_explain",
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*mut u8 karac_lazy_collect(*const LazyPlan plan)` — a fresh
+        //    malloc-compatible DataFrame control block, freeable by the
+        //    ordinary FreeDataFrame path.
+        module.add_function(
+            "karac_lazy_collect",
+            ptr_type.fn_type(&[ptr_type.into()], false),
             Some(Linkage::External),
         );
         // Unicode `char` classification predicates (phase-12 #13): `char`

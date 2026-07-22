@@ -1475,6 +1475,18 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(v);
         }
 
+        // LazyFrame / LazyExpr codegen twin (phase-11 LazyDataFrame,
+        // `src/codegen/lazyframe.rs`): the plan builders (`select` /
+        // `limit` / `filter`), `collect` / `explain`, and the LazyExpr
+        // predicate surface, keyed off the receiver's STATIC Lazy type
+        // (recursive classifier — span-collision-immune for chains).
+        // `None` for non-Lazy receivers; unsupported Lazy methods (sort /
+        // group_by / join / with_columns / the aggregates) bail loudly
+        // inside with a `karac run` pointer.
+        if let Some(v) = self.try_compile_lazy_method(object, method, args, call_span)? {
+            return Ok(v);
+        }
+
         // Column instance methods (`push` / `push_null` / `len` /
         // `null_count` / `valid_count` / `is_null`, phase-11 data-science
         // stdlib — `src/codegen/column.rs`). Identifier receiver only
@@ -6386,22 +6398,26 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // A LazyFrame-typed call that fell through is the documented slice-1
-        // deferral, not a codegen bug — a CHAIN (`df.lazy().limit(1).collect()`)
-        // reaches this fallthrough at the OUTERMOST call before the `lazy`
-        // bail in the DataFrame dispatcher fires, so point at `karac run`
-        // like that bail does (phase-11-stdlib-longtail.md § LazyDataFrame).
+        // A Lazy-typed call reaching this fallthrough should be impossible:
+        // the `try_compile_lazy_method` hook lowers every supported method
+        // and bails loudly (by name) on the unsupported ones, and the
+        // recursive receiver classifier covers chains. A landing here means
+        // a receiver shape the classifier can't name AND a stale/aliased
+        // span-table entry — keep it loud with the twin's `karac run`
+        // pointer rather than the generic fallthrough below.
         let key = (call_span.offset, call_span.length);
-        if self
-            .method_callee_types
-            .get(&key)
-            .is_some_and(|k| k.starts_with("LazyFrame."))
-        {
-            return Err(
-                "LazyFrame (df.lazy()) is interpreter-only in this slice — run it with \
-                 `karac run` (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
-                    .to_string(),
-            );
+        if self.method_callee_types.get(&key).is_some_and(|k| {
+            k.starts_with("LazyFrame.")
+                || k.starts_with("LazyExpr.")
+                || k.starts_with("LazyGroupBy.")
+        }) {
+            return Err(format!(
+                "codegen: Lazy method '{method}' fell through dispatch (the v1 codegen twin \
+                 lowers select/limit/filter/collect/explain and the LazyExpr builders; \
+                 anything else bails by name) — this is a codegen bug in the LazyFrame \
+                 twin; run the program with `karac run` meanwhile \
+                 (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
+            ));
         }
         let receiver_desc = match &object.kind {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
@@ -6457,8 +6473,8 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Extract `(data, len)` (fields 0 and 1) of a `String` / `Vec`
     /// `{ptr, len, cap}` struct value — the subject / replacement arguments of
-    /// the regex method arms.
-    fn str_data_len(
+    /// the regex method arms (and the LazyExpr col/lit-str lowerings).
+    pub(super) fn str_data_len(
         &self,
         sv: inkwell::values::StructValue<'ctx>,
     ) -> (

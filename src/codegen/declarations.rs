@@ -4472,6 +4472,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     vec![Some("i64".to_string()), Some("*mut TlsConfig".to_string())],
                 );
             }
+            // LazyFrame codegen twin (phase-11 LazyDataFrame): `LazyFrame` /
+            // `LazyExpr` / `LazyGroupBy` are baked-stdlib POD one-field
+            // structs (`runtime/stdlib/dataframe.kara` — `{ handle_id: i64 }`)
+            // whose field 0 codegen re-purposes as the ptr-to-int runtime
+            // handle (`src/codegen/lazyframe.rs`). Like the TCP/TLS handles
+            // above, dataframe.kara is never spliced into `program.items`,
+            // so without this seed an annotation-driven slot (`let e:
+            // LazyExpr = ...`) would size at the `i64` fall-through while
+            // the value flows as `{ i64 }`. Guarded so a user-redefined
+            // same-named struct wins.
+            for name in ["LazyFrame", "LazyExpr", "LazyGroupBy"] {
+                if !self.struct_types.contains_key(name) {
+                    let ty = self.context.struct_type(&[i64_t.into()], false);
+                    self.struct_types.insert(name.to_string(), ty);
+                    self.struct_field_names
+                        .insert(name.to_string(), vec!["handle_id".to_string()]);
+                    self.struct_field_type_names
+                        .insert(name.to_string(), vec![Some("i64".to_string())]);
+                }
+            }
         }
         // `AlreadySetError[T] { rejected: T }` — the `OnceLock`/`OnceCell` `set`
         // error type (`runtime/stdlib/once.kara`). Unlike the monomorphic seeds

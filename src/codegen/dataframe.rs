@@ -676,17 +676,27 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(Some(self.compile_dataframe_describe(src)?));
         }
         if method == "lazy" {
-            // Phase-11 LazyDataFrame slice 1 is interpreter-first (the
-            // DataFrame pattern). `lazy()` is the single entry point to the
-            // whole LazyFrame surface, so one loud bail here covers the
-            // chain; the codegen twin (plan as a compile-time value folded
-            // into eager select/limit calls, or a runtime plan object) is a
-            // follow-on slice.
-            return Err(
-                "LazyFrame (df.lazy()) is interpreter-only in this slice — run it with \
-                 `karac run` (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
-                    .to_string(),
-            );
+            // Phase-11 LazyDataFrame codegen twin (`src/codegen/lazyframe.rs`
+            // + `runtime/src/lazy.rs`): `df.lazy()` hands the DataFrame
+            // control block to `karac_lazy_new`, which BORROWS it and
+            // deep-copies the frame into the runtime plan engine (compiled
+            // control blocks are single-ownership, so borrowing would dangle
+            // if the frame dropped before `collect`). The returned +1 plan
+            // handle is released once at this scope's exit.
+            let control = self.dataframe_ptr_for_var(var)?;
+            let new_fn = self
+                .module
+                .get_function("karac_lazy_new")
+                .expect("karac_lazy_new declared in Codegen::new");
+            let handle = self
+                .builder
+                .build_call(new_fn, &[control.into()], "lz.new")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            self.track_lazy_plan_handle(handle);
+            return Ok(Some(self.build_lazy_struct_value("LazyFrame", handle)));
         }
         if method == "write_csv" {
             // Phase-11 CSV leg — the codegen twin. The serialization itself

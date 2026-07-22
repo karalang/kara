@@ -1769,7 +1769,14 @@ impl<'ctx> super::Codegen<'ctx> {
         if basic_val.is_instruction() {
             Ok(self.context.i64_type().const_int(0, false).into())
         } else {
-            Ok(self.unpack_niche_abi_ret(&name, basic_val.unwrap_basic()))
+            let v = self.unpack_niche_abi_ret(&name, basic_val.unwrap_basic());
+            // LazyFrame codegen twin — rule 3 of the ownership model
+            // (`src/codegen/lazyframe.rs`): a user fn DECLARED to return
+            // LazyExpr/LazyFrame hands back an escaping +1 (retained in the
+            // callee's retain-on-return hook); register the matching release
+            // in THIS scope. A no-op for every other callee.
+            self.register_lazy_user_call_result(&name, v);
+            Ok(v)
         }
     }
 

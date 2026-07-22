@@ -21351,6 +21351,88 @@ fn main() {
         );
     }
 
+    /// LazyFrame codegen twin heap lifecycle (phase-11 LazyDataFrame,
+    /// `src/codegen/lazyframe.rs` + `runtime/src/lazy.rs`). Exercises every
+    /// leg of the release-everywhere + retain-on-return ownership model:
+    /// `lazy()`'s deep-copied frame, chained builder temps (each a fresh +1
+    /// `Arc` handle released at scope exit), scalar-lit wraps, a BOUND and
+    /// REUSED `LazyExpr` (one production, two borrows), the `std.lazy`
+    /// col/lit wrappers (retain-on-return in the wrapper + caller-side
+    /// release registration), `explain`'s malloc'd-buffer String adoption,
+    /// and `collect`'s fresh DataFrame control block (ordinary
+    /// `FreeDataFrame`) — String columns and NULL slots included so the
+    /// column deep copies and the null bitmap round-trip is covered. A
+    /// missed release leaks (Linux detect_leaks); an over-release
+    /// double-frees the `Arc` (caught everywhere).
+    #[test]
+    fn asan_lazyframe_no_leak() {
+        let label = "lazyframe_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+import std.lazy.{col, lit};
+fn main() {
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("age", Column.from_vec([30i64, 15i64, 41i64, 8i64]));
+    df.insert("name", Column.from_vec(["ada_padding_aaaaaaaaaaaaaaaaa", "bob", "eve_padding_ccccccccccccccccc", "kid"]));
+    df.insert("score", Column.from_vec([9.5, 3.5, 7.0, 1.0]));
+    let nn: Vec[Option[i64]] = vec![Some(30i64), None, Some(41i64), Some(8i64)];
+    df.insert("opt", Column.from_iter_nullable(nn));
+    // Bound-and-reused expr: one production, two borrowing uses.
+    let c = LazyExpr.col("age");
+    let plan = df.lazy()
+        .filter(c.gt(10).and_(c.lt(40)).or_(col("score").ge(lit(7.0))))
+        .select(vec!["name", "opt"])
+        .limit(3);
+    println(plan.explain());
+    let out = plan.collect();
+    println(out.height());
+    let names: Column[String] = out.column("name");
+    match names[0] { Some(v) => println(v), None => println("null") }
+    let opt: Column[i64] = out.column("opt");
+    match opt[1] { Some(v) => println(v), None => println("null") }
+    // Arithmetic + not_ temps, collected into a second frame.
+    let out2 = df.lazy().filter(col("age").add(1).gt(11).not_()).collect();
+    println(out2.height());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the ReleaseLazyExpr/ReleaseLazyPlan drains, retain-on-return, \
+             and the collect control-block FreeDataFrame path",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec![
+                "== logical plan ==",
+                "LIMIT 3",
+                "  SELECT [name, opt]",
+                "    FILTER (((age > 10) and (age < 40)) or (score >= 7))",
+                "      SCAN [age, name, score, opt]",
+                "== optimized ==",
+                "SELECT [name, opt]",
+                "  LIMIT 3",
+                "    FILTER (((age > 10) and (age < 40)) or (score >= 7))",
+                "      SCAN cols=[age, name, score, opt]",
+                "3",
+                "ada_padding_aaaaaaaaaaaaaaaaa",
+                "null",
+                "1"
+            ],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Column transform heap lifecycle (phase-11 follow-on slice): the
     /// Column-returning transforms `fillna` / `dropna` and the
     /// `from_iter_nullable` constructor each malloc a *fresh* control

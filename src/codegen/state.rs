@@ -673,6 +673,26 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Alloca that holds the opaque `*mut KaracFile` pointer.
         file_alloca: PointerValue<'ctx>,
     },
+    /// LazyFrame codegen twin (phase-11 LazyDataFrame): scope-exit release
+    /// for a `LazyExpr` handle produced by a `karac_lazy_expr_*` builder.
+    /// Every `karac_lazy_*` call that returns a fresh +1 `Arc` handle is
+    /// stored in an entry alloca and released exactly once at the scope
+    /// where it was produced (the release-everywhere model —
+    /// `runtime/src/lazy.rs` module doc). The drain emits
+    /// `karac_lazy_expr_release(load(alloca))`. Mirrors `FreeFileHandle`'s
+    /// shape (opaque handle, no inner element drop).
+    ReleaseLazyExpr {
+        /// Alloca that holds the opaque `*const ExprNode` pointer.
+        alloca: PointerValue<'ctx>,
+    },
+    /// The plan-handle sibling of [`CleanupAction::ReleaseLazyExpr`]: a
+    /// `LazyFrame` handle from `karac_lazy_new` / `_select` / `_limit` /
+    /// `_filter` (or a Lazy-returning user fn call). The drain emits
+    /// `karac_lazy_release(load(alloca))`.
+    ReleaseLazyPlan {
+        /// Alloca that holds the opaque `*const LazyPlan` pointer.
+        alloca: PointerValue<'ctx>,
+    },
     /// GPU-SLIP-4b: scope-exit free for a `GpuBuffer[S]` binding that leaves
     /// scope without being downloaded. The alloca holds the `{ i64 handle, i64 n }`
     /// buffer value; the drain loads field 0 (the resident handle) and emits

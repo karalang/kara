@@ -662,6 +662,29 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(phi.as_basic_value());
         }
 
+        // `LazyExpr.col(name)` / `LazyExpr.lit(v)` — the LazyFrame codegen
+        // twin's expression constructors (phase-11 LazyDataFrame;
+        // `src/codegen/lazyframe.rs`). Both are `#[compiler_builtin]` stubs
+        // in `runtime/stdlib/dataframe.kara`, so this hand-rolled intercept
+        // is their only lowering: `col` passes the name's (data, len) to
+        // `karac_lazy_expr_col`; `lit` classifies its argument (i64 / f64 /
+        // String / bool — anything else is a loud error) into the matching
+        // `karac_lazy_expr_lit_*`. Each returns a fresh +1 handle that the
+        // lowering registers for release at the producing scope's exit.
+        if type_name == "LazyExpr" && matches!(method, "col" | "lit") {
+            if args.len() != 1 {
+                return Err(format!(
+                    "LazyExpr.{method} expects 1 argument, got {}",
+                    args.len()
+                ));
+            }
+            return if method == "col" {
+                self.compile_lazy_expr_col(&args[0].value)
+            } else {
+                self.compile_lazy_expr_lit(&args[0].value)
+            };
+        }
+
         // Phase 6 "Channel AOT codegen lowering": `Channel.new()` — allocate
         // a runtime channel (refcount 2) and return it as the `(Sender[T],
         // Receiver[T])` tuple. Both ends carry the *same* opaque pointer

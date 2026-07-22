@@ -841,6 +841,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // (rule 3), with `self` bound — same exit point as `ensures`.
                     // For a constructor, the returned value is bound as `self`.
                     self.emit_invariant_checks(Some(v))?;
+                    // LazyFrame codegen twin — retain-on-return at an explicit
+                    // `return v;` in a fn DECLARED to return LazyExpr/
+                    // LazyFrame: mirror the tail-position hooks in
+                    // `functions.rs` / `mono.rs` so the escaping handle
+                    // survives the scope drains below (rule 2 of the
+                    // ownership model in `src/codegen/lazyframe.rs`).
+                    if let Some(kind) = self.current_fn_lazy_return_kind() {
+                        self.emit_lazy_retain_for_return(kind, v);
+                    }
                     if is_error_exit {
                         // Slice 4 (Phase 7 § *defer / errdefer codegen*):
                         // stage the Err payload for any in-scope
