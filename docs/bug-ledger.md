@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 78 | 0 |
 | codegen-gap | 71 | 0 |
 | missing-feature | 61 | 0 |
-| false-positive | 40 | 1 |
+| false-positive | 40 | 0 |
 | run-vs-build | 39 | 0 |
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 466 | 1 |
 | typecheck | 84 | 0 |
 | interp | 69 | 0 |
-| ownership | 27 | 1 |
+| ownership | 27 | 0 |
 | other | 18 | 0 |
 | autopar | 15 | 0 |
 | runtime | 14 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **641 surfaced · 2 open · 634 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **641 surfaced · 1 open · 635 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-22-11 | 2026-07-22 | codegen | high | Total-order float wrappers (F32/F64 shipped; F16/Bf16 planned) silently MISCOMPILE in codegen: `a > b`/`a == b` on a wrapper return const-0 (every comparison false; `==` true even for unequal), and `Map`/`Set`/`sort` with a wrapper key COLLAPSE (all keys compare equal -> `get` returns the last-inserted value). Correct ONLY under `karac run --interp` (tree-walk); `karac build` and the default `karac run` (JIT) produce WRONG answers. Pre-existing for the SHIPPED F32/F64; uncaught because there are ZERO codegen tests for the wrappers and the interpreter tests use the `run()` helper that bypasses typecheck (so they only ever exercised `.from` construction + Display, never comparison/map/sort). | phase-11-stdlib-longtail.md line 20 (F16/Bf16 total-order wrappers) is BLOCKED on this. |
-| B-2026-07-22-13 | 2026-07-22 | ownership | low | Spurious `rc-fallback` (perf false-positive) for a `match`/`if let` binding that is CONSUMED EXACTLY ONCE, when the match sits inside a loop: `while … { match m.remove(k) { Some(g) => vec.push(g), None => {} } }` reports `RC fallback inserted for 'g' (direct re-use after consume)` even though `g` is a fresh per-iteration binding used a single time. Outside a loop the identical `match … { Some(g) => vec.push(g) }` is clean. Check still PASSES (rc-fallback is a perf diagnostic, exit 0) and output is correct — the cost is an unnecessary Rc on `g`. | — |
 
-### Fixed (634)
+### Fixed (635)
 
-<details><summary>634 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>635 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -773,6 +772,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **641 surfaced 
 | B-2026-07-22-9 | codegen | high | AOT double-free: a Vec-payload enum variant (Node.Nums(Vec[i64])) COEXISTING with a String-payload variant (Ident(String)), where a String-payload TE… | bc0e99d |
 | B-2026-07-22-10 | typecheck | medium | An unknown associated function on a scalar primitive type — e.g | — |
 | B-2026-07-22-12 | codegen | medium | Overwriting an existing key on a `Map[K, String]` / `Map[K, Vec[…]]` (and the parallel `Map.remove`) leaks the DISPLACED / removed old value's heap b… | abe0236, af564fa |
+| B-2026-07-22-13 | ownership | low | Spurious `rc-fallback` (perf false-positive) for a `match`/`if let` binding that is CONSUMED EXACTLY ONCE, when the match sits inside a loop: `while… | 042f848 |
 
 </details>
 
