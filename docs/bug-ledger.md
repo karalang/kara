@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 162 | 1 |
-| leak | 93 | 0 |
+| leak | 94 | 0 |
 | double-free | 78 | 1 |
 | codegen-gap | 71 | 0 |
 | missing-feature | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 465 | 2 |
+| codegen | 466 | 2 |
 | typecheck | 84 | 0 |
 | interp | 69 | 0 |
 | ownership | 26 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **639 surfaced · 2 open · 632 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **640 surfaced · 2 open · 633 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
@@ -133,9 +133,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **639 surfaced 
 | B-2026-07-22-9 | 2026-07-22 | codegen | high | AOT double-free: a Vec-payload enum variant (Node.Nums(Vec[i64])) COEXISTING with a String-payload variant (Ident(String)), where a String-payload TEMP is passed to a ref-param consuming match AND a Vec-payload value flows through the same describe(ref) fn. 26-line repro (vpmin7): describe(Node.Ident("foo".to_string())) + let a = mk_nums(); describe(a) together abort with 'double free or corruption'; either alone is clean. Interp correct; JIT also aborts. Same mixed-str-enum+aggregate-payload family as B-2026-07-21-5. | — |
 | B-2026-07-22-11 | 2026-07-22 | codegen | high | Total-order float wrappers (F32/F64 shipped; F16/Bf16 planned) silently MISCOMPILE in codegen: `a > b`/`a == b` on a wrapper return const-0 (every comparison false; `==` true even for unequal), and `Map`/`Set`/`sort` with a wrapper key COLLAPSE (all keys compare equal -> `get` returns the last-inserted value). Correct ONLY under `karac run --interp` (tree-walk); `karac build` and the default `karac run` (JIT) produce WRONG answers. Pre-existing for the SHIPPED F32/F64; uncaught because there are ZERO codegen tests for the wrappers and the interpreter tests use the `run()` helper that bypasses typecheck (so they only ever exercised `.from` construction + Display, never comparison/map/sort). | phase-11-stdlib-longtail.md line 20 (F16/Bf16 total-order wrappers) is BLOCKED on this. |
 
-### Fixed (632)
+### Fixed (633)
 
-<details><summary>632 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>633 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -771,6 +771,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **639 surfaced 
 | B-2026-07-22-7 | codegen | high | Index-assigning an UNTYPED float literal to an f32 Tensor element silently stores nothing under AOT: `let mut a: Tensor[f32,[2]] = Tensor.zeros(vec![… | 7495530 |
 | B-2026-07-22-8 | codegen | medium | Reassigning a `mut String` STRUCT FIELD leaks the OLD buffer when the field's current value was set in a PRIOR function call | 1358437 |
 | B-2026-07-22-10 | typecheck | medium | An unknown associated function on a scalar primitive type — e.g | — |
+| B-2026-07-22-12 | codegen | medium | Overwriting an existing key on a `Map[K, String]` / `Map[K, Vec[…]]` (and the parallel `Map.remove`) leaks the DISPLACED / removed old value's heap b… | abe0236 |
 
 </details>
 
