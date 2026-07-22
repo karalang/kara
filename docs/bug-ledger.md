@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 71 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 39 | 0 |
-| run-vs-build | 38 | 0 |
+| run-vs-build | 39 | 0 |
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
 | perf | 22 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 460 | 0 |
+| codegen | 461 | 0 |
 | typecheck | 83 | 0 |
 | interp | 69 | 0 |
 | ownership | 26 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **633 surfaced · 0 open · 628 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **634 surfaced · 0 open · 629 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (628)
+### Fixed (629)
 
-<details><summary>628 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>629 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -764,6 +764,7 @@ _None — the ledger is fully drained._
 | B-2026-07-22-3 | codegen | medium | Mixed-name method chains hanging off an associated constructor failed codegen with 'no handler for method on non-identifier receiver' — `Command.new(… | same commit as the std.process codegen slice |
 | B-2026-07-22-4 | interp | low | interp: `as f16` / `as bf16` casts don't round to storage precision — narrowing float casts are identity in the tree-walk interpreter, diverging from… | 6a734aa |
 | B-2026-07-22-5 | runtime | low | runtime test test_try_wait_kill_reap asserts Unix signal-kill encoding (-2) unconditionally — red on every Windows CI leg (actual 2) | 07bda94 |
+| B-2026-07-22-6 | codegen | medium | `s[a..b].to_string()` / `.clone()` — a `.to_string()`/`.clone()` METHOD CALL directly on a String SLICE fails codegen with "indexed-receiver method '… | 9014477 |
 
 </details>
 
