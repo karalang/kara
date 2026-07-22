@@ -760,8 +760,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **630 surfaced 
 | B-2026-07-21-16 | codegen | high | match/if-let/let-else DIRECTLY over an OWNED struct's `Option[String]` field with a payload binding double-frees under AOT — `match a.opt { Some(s) =… | f9be2c7 |
 | B-2026-07-21-17 | interp | low | A runtime error raised inside a spliced gated-stdlib wrapper body reports the USER file's path with the SPLICE-COMPOSITE line/col — `import std.lazy.… | 5d5361f |
 | B-2026-07-21-18 | codegen | medium | `if let Some(n) = v.pop()` / `while let` / `let…else` over a `Vec[shared T]` (or `VecDeque`) LEAKS the popped node — every element popped through a N… | 587dc94 |
-| B-2026-07-21-20 | ownership | low | Spurious E0500 UseAfterMove on a weak-to-weak field splice `nodes[i].next = nodes[prev].next` where both sides index the SAME `Vec[shared]` and `next… | — |
-| B-2026-07-21-21 | codegen | high | Materializing a `weak`-field read into a strong `Option[shared]` local and then storing it back into another `weak` field DOUBLE-FREES / use-after-fr… | — |
+| B-2026-07-21-20 | ownership | low | Spurious E0500 UseAfterMove on a weak-to-weak field splice `nodes[i].next = nodes[prev].next` where both sides index the SAME `Vec[shared]` and `next… | e1ddb43 |
+| B-2026-07-21-21 | codegen | high | Materializing a `weak`-field read into a strong `Option[shared]` local and then storing it back into another `weak` field DOUBLE-FREES / use-after-fr… | e1ddb43 |
 
 </details>
 
