@@ -220,6 +220,41 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Tag a just-emitted float min/max compare+select with `nnan nsz` so
+    /// LLVM's loop vectorizer recognizes the FP min/max reduction idiom
+    /// (`RecurKind::FMin`/`FMax` requires those flags) and turns the scalar
+    /// `vminss`/`vmaxss` chain into packed `vminps`/`vmaxps` plus a
+    /// horizontal fold — the min/max leg of the data-spine reduction win
+    /// (`docs/spikes/data-spine-autovec-measurement.md`; the sum/mean leg
+    /// landed via [`Self::tag_reduce_reassoc`]). Measured before: 0 packed,
+    /// 18 scalar min/max ops in the probe binary.
+    ///
+    /// NARROWER divergence than `reassoc`: min/max is exact (no rounding
+    /// reorder), so ordinary data stays BIT-IDENTICAL across backends. The
+    /// flags assert no NaNs / no signed zeros flow through the reduction:
+    /// a NaN-bearing tensor's compiled `min`/`max` is unspecified (the
+    /// interpreter keeps its ordered scan — a first-element NaN sticks,
+    /// later NaNs are skipped, see `minmax_value_reduce`), and −0.0 vs
+    /// +0.0 may resolve either way. Documented, deliberate — the same
+    /// divergence class as `reassoc` sums and the `v.exp()`/`v.ln()`
+    /// polynomials.
+    fn tag_minmax_vectorizable(
+        &self,
+        cmp: inkwell::values::IntValue<'ctx>,
+        sel: BasicValueEnum<'ctx>,
+    ) {
+        use inkwell::values::FastMathFlags;
+        let flags = FastMathFlags::NoNaNs | FastMathFlags::NoSignedZeros;
+        if let Some(inst) = cmp.as_instruction() {
+            let _ = inst.set_fast_math_flags(flags);
+        }
+        if let BasicValueEnum::FloatValue(fv) = sel {
+            if let Some(inst) = fv.as_instruction() {
+                let _ = inst.set_fast_math_flags(flags);
+            }
+        }
+    }
+
     pub(super) fn emit_reduce_fold(
         &mut self,
         access: &ContainerAccess<'ctx>,
@@ -626,6 +661,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_select(take, x, cur, "kern.mm.sel")
             .unwrap();
+        if is_float {
+            self.tag_minmax_vectorizable(take, next);
+        }
         self.builder.build_store(acc, next).unwrap();
         let i2 = self
             .builder

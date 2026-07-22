@@ -70040,6 +70040,71 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_float_tensor_minmax_carries_nnan_nsz() {
+        // The float min/max compare+select must be tagged `nnan nsz` so LLVM's
+        // loop vectorizer recognizes the FP min/max reduction idiom
+        // (`tag_minmax_vectorizable`, kernel.rs) — the min/max leg of the
+        // data-spine reduction win (sum/mean landed via `reassoc`). Without
+        // the flags the reduction stays scalar `vminss`/`vmaxss` (measured 0
+        // packed ops before tagging).
+        let ir = ir_for(
+            "fn m(t: ref Tensor[f32, [64]]) -> f32 { t.min() }\n\
+             fn x(t: ref Tensor[f32, [64]]) -> f32 { t.max() }\n\
+             fn main() { let t: Tensor[f32, [64]] = Tensor.ones([64]); \
+             println(m(t)); println(x(t)); }\n",
+        );
+        assert!(
+            ir.contains("fcmp nnan nsz olt") && ir.contains("fcmp nnan nsz ogt"),
+            "float Tensor.min/max compares must carry `nnan nsz` to unlock the FP \
+             min/max reduction idiom; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("select nnan nsz"),
+            "the min/max select must carry `nnan nsz` too (LLVM keys the recurrence \
+             on the select's flags); IR:\n{ir}"
+        );
+
+        // The integer twin must stay flag-free: integer compares/selects are
+        // order-independent already and byte-identical across backends.
+        let int_ir = ir_for(
+            "fn m(t: ref Tensor[i64, [64]]) -> i64 { t.min() }\n\
+             fn main() { let t: Tensor[i64, [64]] = Tensor.ones([64]); println(m(t)); }\n",
+        );
+        assert!(
+            !int_ir.contains("nnan"),
+            "integer Tensor.min must not carry float fast-math flags; IR:\n{int_ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_float_tensor_minmax_bit_identical() {
+        // Unlike the reassoc sum (bit-identical only for exactly-representable
+        // inputs), min/max is EXACT — no rounding reorder — so any NaN-free
+        // data must produce bit-identical results across backends, vectorized
+        // or not. Varied f32/f64/i64 data, both extremes exercised.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut t: Tensor[f32, [1000]] = Tensor.zeros(vec![1000]);\n\
+                 for i in 0..1000 { t[i] = ((i * 37) % 101) as f32 - 50.5; }\n\
+                 println(t.min()); println(t.max());\n\
+                 let mut d: Tensor[f64, [777]] = Tensor.zeros(vec![777]);\n\
+                 for i in 0..777 { d[i] = ((i * 53) % 97) as f64 * 0.25 - 12.0; }\n\
+                 println(d.min()); println(d.max());\n\
+                 let mut it: Tensor[i64, [500]] = Tensor.zeros(vec![500]);\n\
+                 for i in 0..500 { it[i] = ((i * 41) % 89) - 44; }\n\
+                 println(it.min()); println(it.max());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "-50.5\n49.5\n-12\n12\n-44\n44\n",
+                "vectorized float min/max must stay bit-identical to the interpreter \
+                 twin on NaN-free data",
+            );
+        }
+    }
+
+    #[test]
     fn test_ir_chained_zip_reduce_fuses() {
         // `a.zip_with(b, |x,y| x*y).sum()` must FUSE the product + reduction
         // into one accumulating loop (`emit_fused_map_reduce`, `fmr.*` blocks/
