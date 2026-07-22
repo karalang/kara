@@ -5341,7 +5341,8 @@ impl<'ctx> super::Codegen<'ctx> {
             CleanupAction::FreeSoaGroups { soa_alloca, .. } => Some(name_of(*soa_alloca)),
             CleanupAction::FreeFileHandle { file_alloca } => Some(name_of(*file_alloca)),
             CleanupAction::ReleaseLazyExpr { alloca }
-            | CleanupAction::ReleaseLazyPlan { alloca } => Some(name_of(*alloca)),
+            | CleanupAction::ReleaseLazyPlan { alloca }
+            | CleanupAction::ReleaseLazyGroupBy { alloca } => Some(name_of(*alloca)),
             CleanupAction::FreeGpuBuffer { buf_alloca } => Some(name_of(*buf_alloca)),
             CleanupAction::FreeOnceHandle { once_alloca, .. } => Some(name_of(*once_alloca)),
             CleanupAction::FreeInternerHandle { interner_alloca } => {
@@ -6725,6 +6726,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     .module
                     .get_function("karac_lazy_release")
                     .expect("karac_lazy_release declared in Codegen::new");
+                self.builder
+                    .build_call(rel_fn, &[handle.into()], "")
+                    .unwrap();
+            }
+            // The group-by-intermediate sibling: release a `LazyGroupBy`
+            // handle produced by `karac_lazy_group_by`.
+            CleanupAction::ReleaseLazyGroupBy { alloca } => {
+                let handle = self
+                    .builder
+                    .build_load(ptr_ty, *alloca, "cleanup.lazygb.handle")
+                    .unwrap()
+                    .into_pointer_value();
+                let rel_fn = self
+                    .module
+                    .get_function("karac_lazy_gb_release")
+                    .expect("karac_lazy_gb_release declared in Codegen::new");
                 self.builder
                     .build_call(rel_fn, &[handle.into()], "")
                     .unwrap();

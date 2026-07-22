@@ -6412,10 +6412,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 || k.starts_with("LazyGroupBy.")
         }) {
             return Err(format!(
-                "codegen: Lazy method '{method}' fell through dispatch (the v1 codegen twin \
-                 lowers select/limit/filter/collect/explain and the LazyExpr builders; \
-                 anything else bails by name) — this is a codegen bug in the LazyFrame \
-                 twin; run the program with `karac run` meanwhile \
+                "codegen: Lazy method '{method}' fell through dispatch (the codegen twin \
+                 lowers the full LazyFrame/LazyExpr/LazyGroupBy surface; a landing here \
+                 means a receiver shape the classifier can't name) — this is a codegen \
+                 bug in the LazyFrame twin; run the program with `karac run` meanwhile \
                  (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
             ));
         }

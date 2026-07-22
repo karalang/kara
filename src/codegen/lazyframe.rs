@@ -42,27 +42,20 @@
 //!   The table remains a method-segment-checked fallback for receiver
 //!   shapes the classifier can't name.
 //!
-//! v1 twin scope: `select` / `limit` / `filter` / `collect` / `explain` +
-//! the full filter expression surface (col/lit, cmp, and_/or_/not_,
-//! add/sub/mul/div). Everything else (sort / group_by / join /
-//! with_columns / the aggregates / alias_ / desc / LazyGroupBy.agg) bails
-//! loudly per method with a `karac run` pointer.
+//! Twin scope: the FULL LazyFrame op surface — `select` / `limit` /
+//! `filter` / `sort` / `group_by`+`agg` / `join` / `with_columns` /
+//! `collect` / `explain`, plus the full expression surface (col/lit,
+//! cmp, and_/or_/not_, add/sub/mul/div, desc, count/sum/mean/min/max,
+//! alias_). The remaining loud bails are the user-method leaks noted
+//! above (a user impl method declared to return a Lazy value).
 
 use crate::ast::*;
 
-use inkwell::values::{BasicValueEnum, PointerValue};
+use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
 
 /// Tracker pointer shared by every loud Lazy bail.
 const LAZY_TRACKER: &str = "phase-11-stdlib-longtail.md \u{a7} LazyDataFrame";
-
-/// The loud per-method bail for a Lazy method the v1 twin does not lower.
-fn lazy_unsupported(recv: &str, method: &str) -> String {
-    format!(
-        "{recv}.{method} is not yet lowered by the v1 codegen twin — run it with \
-         `karac run` (tracker: {LAZY_TRACKER})"
-    )
-}
 
 impl<'ctx> super::Codegen<'ctx> {
     // ── Type classification ─────────────────────────────────────
@@ -75,6 +68,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return match p.segments.first().map(|s| s.as_str()) {
                 Some("LazyFrame") => Some("LazyFrame"),
                 Some("LazyExpr") => Some("LazyExpr"),
+                Some("LazyGroupBy") => Some("LazyGroupBy"),
                 _ => None,
             };
         }
@@ -90,6 +84,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return match ret.as_str() {
                 "LazyFrame" => Some("LazyFrame"),
                 "LazyExpr" => Some("LazyExpr"),
+                "LazyGroupBy" => Some("LazyGroupBy"),
                 _ => None,
             };
         }
@@ -252,6 +247,20 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// The group-by-intermediate sibling: a `LazyGroupBy` handle from
+    /// `karac_lazy_group_by`, released via `karac_lazy_gb_release`.
+    pub(super) fn track_lazy_gb_handle(&mut self, handle: PointerValue<'ctx>) {
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let alloca = self.create_entry_alloca(fn_val, "lz.gb.slot", ptr_ty.into());
+        self.builder.build_store(alloca, handle).unwrap();
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(super::state::CleanupAction::ReleaseLazyGroupBy { alloca });
+        }
+    }
+
     /// Rule-2 retain-on-return: bump the returned handle's count so it
     /// survives the producing scope's release drain. Emitted immediately
     /// BEFORE the return-path scope cleanup at all three return funnels.
@@ -266,10 +275,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let Ok(handle) = self.lazy_handle_of_value(val, "return value") else {
             return;
         };
-        let fname = if kind == "LazyExpr" {
-            "karac_lazy_expr_retain"
-        } else {
-            "karac_lazy_retain"
+        let fname = match kind {
+            "LazyExpr" => "karac_lazy_expr_retain",
+            "LazyGroupBy" => "karac_lazy_gb_retain",
+            _ => "karac_lazy_retain",
         };
         let f = self
             .module
@@ -294,11 +303,64 @@ impl<'ctx> super::Codegen<'ctx> {
         let Ok(handle) = self.lazy_handle_of_value(val, "call result") else {
             return;
         };
-        if kind == "LazyExpr" {
-            self.track_lazy_expr_handle(handle);
-        } else {
-            self.track_lazy_plan_handle(handle);
+        match kind {
+            "LazyExpr" => self.track_lazy_expr_handle(handle),
+            "LazyGroupBy" => self.track_lazy_gb_handle(handle),
+            _ => self.track_lazy_plan_handle(handle),
         }
+    }
+
+    /// Marshal a `Vec[LazyExpr]` / `Vec[String]` argument to its (data
+    /// pointer, len) pair for the `karac_lazy_*` list-taking builders.
+    /// A fresh owned vec temp (a vec literal / fresh call result) routes
+    /// through the owned-temp chokepoint so buffer + element payloads
+    /// free exactly once at scope exit (the runtime copies everything it
+    /// needs during the call, before that free runs). The scalar
+    /// `struct_gep` loads off a spill alloca are the stats.rs-proven
+    /// pattern — NOT `extractvalue` on the 24-byte aggregate load, which
+    /// mis-lowers the pointer field to null under ASan on arm64-Linux.
+    fn lazy_vec_arg_data_len(
+        &mut self,
+        arg_expr: &Expr,
+        what: &str,
+    ) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), String> {
+        let vec_val = self.compile_expr(arg_expr)?;
+        let is_fresh = self.expr_yields_fresh_owned_temp(arg_expr)
+            || matches!(&arg_expr.kind, ExprKind::PrefixCollectionLiteral { .. });
+        if is_fresh && self.llvm_ty_is_vec_struct(vec_val.get_type()) {
+            self.materialize_owned_temp(vec_val, (arg_expr.span.offset, arg_expr.span.length));
+        }
+        let BasicValueEnum::StructValue(sv) = vec_val else {
+            return Err(format!(
+                "{what} expects a Vec argument (codegen: got a non-vec value of LLVM type \
+                 {:?} — tracker: {LAZY_TRACKER})",
+                vec_val.get_type()
+            ));
+        };
+        let vec_ty = sv.get_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let spill = self.builder.build_alloca(vec_ty, "lz.vec.arg").unwrap();
+        self.builder.build_store(spill, sv).unwrap();
+        let data_field = self
+            .builder
+            .build_struct_gep(vec_ty, spill, 0, "lz.vec.data.p")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_field, "lz.vec.data")
+            .unwrap()
+            .into_pointer_value();
+        let len_field = self
+            .builder
+            .build_struct_gep(vec_ty, spill, 1, "lz.vec.len.p")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_field, "lz.vec.len")
+            .unwrap()
+            .into_int_value();
+        Ok((data, len))
     }
 
     // ── Expression-argument lowering ────────────────────────────
@@ -517,7 +579,36 @@ impl<'ctx> super::Codegen<'ctx> {
             "LazyExpr" => self.compile_lazy_expr_method(object, method, args),
             "LazyGroupBy" => {
                 if method == "agg" {
-                    return Err(lazy_unsupported("LazyGroupBy", "agg"));
+                    let recv_v = self.compile_expr(object)?;
+                    let recv = self.lazy_handle_of_value(recv_v, "LazyGroupBy receiver")?;
+                    let arg = args
+                        .first()
+                        .ok_or("LazyGroupBy.agg expects one Vec[LazyExpr] argument")?;
+                    let (data, len) = self.lazy_vec_arg_data_len(&arg.value, "LazyGroupBy.agg")?;
+                    let f = self
+                        .module
+                        .get_function("karac_lazy_agg")
+                        .expect("karac_lazy_agg declared in Codegen::new");
+                    let out = self
+                        .builder
+                        .build_call(f, &[recv.into(), data.into(), len.into()], "lz.agg")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_pointer_value();
+                    self.track_lazy_plan_handle(out);
+                    return Ok(Some(self.build_lazy_struct_value("LazyFrame", out)));
+                }
+                // A user-extension method on LazyGroupBy: reject a
+                // Lazy-returning one (leak — see module doc); let the rest
+                // dispatch normally.
+                let qualified = format!("LazyGroupBy.{method}");
+                if self.declared_lazy_return_of_fn(&qualified).is_some() {
+                    return Err(format!(
+                        "returning LazyExpr/LazyFrame from user methods (`{qualified}`) is \
+                         not yet lowered by the v1 codegen twin — run it with `karac run` \
+                         (tracker: {LAZY_TRACKER})"
+                    ));
                 }
                 Ok(None)
             }
@@ -533,10 +624,8 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         match method {
-            "select" | "limit" | "filter" | "collect" | "explain" => {}
-            "sort" | "group_by" | "join" | "with_columns" => {
-                return Err(lazy_unsupported("LazyFrame", method));
-            }
+            "select" | "limit" | "filter" | "collect" | "explain" | "sort" | "group_by"
+            | "join" | "with_columns" => {}
             _ => {
                 // A user-extension method on LazyFrame: reject a Lazy-returning
                 // one (leak — see module doc); let the rest dispatch normally.
@@ -557,60 +646,79 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
 
         match method {
-            "select" => {
+            "select" | "sort" | "with_columns" => {
+                // One `Vec[..]` argument marshaled as (data ptr, len):
+                // `select` takes `Vec[String]` (24-byte String aggregates),
+                // `sort` / `with_columns` take `Vec[LazyExpr]` (packed
+                // 8-byte handle words) — the runtime walks each layout.
+                let (fname, what) = match method {
+                    "select" => ("karac_lazy_select", "LazyFrame.select"),
+                    "sort" => ("karac_lazy_sort", "LazyFrame.sort"),
+                    _ => ("karac_lazy_with_columns", "LazyFrame.with_columns"),
+                };
                 let arg = args
                     .first()
-                    .ok_or("LazyFrame.select expects one Vec[String] argument")?;
-                let cols_val = self.compile_expr(&arg.value)?;
-                // A fresh owned `Vec[String]` arg (a vec literal / fresh call
-                // result) has no consuming binding — route it through the
-                // owned-temp chokepoint so buffer + element Strings free
-                // exactly once at scope exit (mirrors
-                // `compile_dataframe_select`; the runtime copies the names
-                // during the call, before that free runs).
-                let cols_is_fresh = self.expr_yields_fresh_owned_temp(&arg.value)
-                    || matches!(&arg.value.kind, ExprKind::PrefixCollectionLiteral { .. });
-                if cols_is_fresh && self.llvm_ty_is_vec_struct(cols_val.get_type()) {
-                    self.materialize_owned_temp(
-                        cols_val,
-                        (arg.value.span.offset, arg.value.span.length),
-                    );
-                }
-                // Read data ptr (field 0) + len (field 1) via scalar
-                // `struct_gep` loads off a spill alloca — NOT `extractvalue`
-                // on the 24-byte aggregate load, which mis-lowers the pointer
-                // field to null under ASan on arm64-Linux (see the proven
-                // pattern + rationale in `stats.rs`).
-                let sv = cols_val.into_struct_value();
-                let vec_ty = sv.get_type();
-                let ptr_ty = self.context.ptr_type(AddressSpace::default());
-                let spill = self.builder.build_alloca(vec_ty, "lz.sel.arg").unwrap();
-                self.builder.build_store(spill, sv).unwrap();
-                let data_field = self
-                    .builder
-                    .build_struct_gep(vec_ty, spill, 0, "lz.sel.data.p")
-                    .unwrap();
-                let data = self
-                    .builder
-                    .build_load(ptr_ty, data_field, "lz.sel.data")
-                    .unwrap()
-                    .into_pointer_value();
-                let len_field = self
-                    .builder
-                    .build_struct_gep(vec_ty, spill, 1, "lz.sel.len.p")
-                    .unwrap();
-                let len = self
-                    .builder
-                    .build_load(i64_t, len_field, "lz.sel.len")
-                    .unwrap()
-                    .into_int_value();
+                    .ok_or_else(|| format!("{what} expects one Vec argument"))?;
+                let (data, len) = self.lazy_vec_arg_data_len(&arg.value, what)?;
                 let f = self
                     .module
-                    .get_function("karac_lazy_select")
-                    .expect("karac_lazy_select declared in Codegen::new");
+                    .get_function(fname)
+                    .unwrap_or_else(|| panic!("{fname} declared in Codegen::new"));
                 let out = self
                     .builder
-                    .build_call(f, &[recv.into(), data.into(), len.into()], "lz.select")
+                    .build_call(f, &[recv.into(), data.into(), len.into()], "lz.plan")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                self.track_lazy_plan_handle(out);
+                Ok(Some(self.build_lazy_struct_value("LazyFrame", out)))
+            }
+            "group_by" => {
+                // Returns the LazyGroupBy INTERMEDIATE — its own handle
+                // type with its own release (`karac_lazy_gb_release`).
+                let arg = args
+                    .first()
+                    .ok_or("LazyFrame.group_by expects one Vec[LazyExpr] argument")?;
+                let (data, len) = self.lazy_vec_arg_data_len(&arg.value, "LazyFrame.group_by")?;
+                let f = self
+                    .module
+                    .get_function("karac_lazy_group_by")
+                    .expect("karac_lazy_group_by declared in Codegen::new");
+                let out = self
+                    .builder
+                    .build_call(f, &[recv.into(), data.into(), len.into()], "lz.group_by")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                self.track_lazy_gb_handle(out);
+                Ok(Some(self.build_lazy_struct_value("LazyGroupBy", out)))
+            }
+            "join" => {
+                // Arg 0: the right-side LazyFrame (a borrowed plan handle —
+                // the runtime stores it as the nested right sub-plan).
+                // Arg 1: the `Vec[String]` join keys.
+                let arg0 = args
+                    .first()
+                    .ok_or("LazyFrame.join expects a LazyFrame as its first argument")?;
+                let other_v = self.compile_expr(&arg0.value)?;
+                let other = self.lazy_handle_of_value(other_v, "LazyFrame.join right side")?;
+                let arg1 = args
+                    .get(1)
+                    .ok_or("LazyFrame.join expects a Vec[String] of key column names")?;
+                let (data, len) = self.lazy_vec_arg_data_len(&arg1.value, "LazyFrame.join")?;
+                let f = self
+                    .module
+                    .get_function("karac_lazy_join")
+                    .expect("karac_lazy_join declared in Codegen::new");
+                let out = self
+                    .builder
+                    .build_call(
+                        f,
+                        &[recv.into(), other.into(), data.into(), len.into()],
+                        "lz.join",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -753,36 +861,86 @@ impl<'ctx> super::Codegen<'ctx> {
             "div" => Some(3),
             _ => None,
         };
-        if cmp_op.is_none() && bool_op.is_none() && arith_op.is_none() && method != "not_" {
-            return match method {
-                "count" | "sum" | "mean" | "min" | "max" | "alias_" | "desc" => {
-                    Err(lazy_unsupported("LazyExpr", method))
-                }
-                _ => {
-                    let qualified = format!("LazyExpr.{method}");
-                    if self.declared_lazy_return_of_fn(&qualified).is_some() {
-                        return Err(format!(
-                            "returning LazyExpr/LazyFrame from user methods (`{qualified}`) \
-                             is not yet lowered by the v1 codegen twin — run it with \
-                             `karac run` (tracker: {LAZY_TRACKER})"
-                        ));
-                    }
-                    Ok(None)
-                }
-            };
+        // The aggregate builders — op codes shared with the runtime:
+        // 0=count 1=sum 2=mean 3=min 4=max.
+        let agg_op: Option<u64> = match method {
+            "count" => Some(0),
+            "sum" => Some(1),
+            "mean" => Some(2),
+            "min" => Some(3),
+            "max" => Some(4),
+            _ => None,
+        };
+        if cmp_op.is_none()
+            && bool_op.is_none()
+            && arith_op.is_none()
+            && agg_op.is_none()
+            && !matches!(method, "not_" | "desc" | "alias_")
+        {
+            let qualified = format!("LazyExpr.{method}");
+            if self.declared_lazy_return_of_fn(&qualified).is_some() {
+                return Err(format!(
+                    "returning LazyExpr/LazyFrame from user methods (`{qualified}`) \
+                     is not yet lowered by the v1 codegen twin — run it with \
+                     `karac run` (tracker: {LAZY_TRACKER})"
+                ));
+            }
+            return Ok(None);
         }
 
         let recv_v = self.compile_expr(object)?;
         let recv = self.lazy_handle_of_value(recv_v, "LazyExpr receiver")?;
         let i64_t = self.context.i64_type();
 
-        let handle = if method == "not_" {
+        let handle = if matches!(method, "not_" | "desc") {
+            // Unary builders on the receiver handle.
+            let fname = if method == "not_" {
+                "karac_lazy_expr_not"
+            } else {
+                "karac_lazy_expr_desc"
+            };
             let f = self
                 .module
-                .get_function("karac_lazy_expr_not")
-                .expect("karac_lazy_expr_not declared in Codegen::new");
+                .get_function(fname)
+                .unwrap_or_else(|| panic!("{fname} declared in Codegen::new"));
             self.builder
-                .build_call(f, &[recv.into()], "lz.not")
+                .build_call(f, &[recv.into()], "lz.unary")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value()
+        } else if let Some(op) = agg_op {
+            let f = self
+                .module
+                .get_function("karac_lazy_expr_agg")
+                .expect("karac_lazy_expr_agg declared in Codegen::new");
+            self.builder
+                .build_call(
+                    f,
+                    &[i64_t.const_int(op, false).into(), recv.into()],
+                    "lz.agg.expr",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value()
+        } else if method == "alias_" {
+            // String argument marshaled as (data, len) — the runtime
+            // copies the bytes (same shape as `LazyExpr.col`).
+            let arg = args
+                .first()
+                .ok_or("LazyExpr.alias_ expects a String name argument")?;
+            let v = self.compile_expr(&arg.value)?;
+            let BasicValueEnum::StructValue(sv) = v else {
+                return Err("LazyExpr.alias_ expects a String name".to_string());
+            };
+            let (data, len) = self.str_data_len(sv);
+            let f = self
+                .module
+                .get_function("karac_lazy_expr_alias")
+                .expect("karac_lazy_expr_alias declared in Codegen::new");
+            self.builder
+                .build_call(f, &[recv.into(), data.into(), len.into()], "lz.alias")
                 .unwrap()
                 .try_as_basic_value()
                 .unwrap_basic()

@@ -687,10 +687,18 @@ pub(crate) enum CleanupAction<'ctx> {
     },
     /// The plan-handle sibling of [`CleanupAction::ReleaseLazyExpr`]: a
     /// `LazyFrame` handle from `karac_lazy_new` / `_select` / `_limit` /
-    /// `_filter` (or a Lazy-returning user fn call). The drain emits
+    /// `_filter` / `_sort` / `_agg` / `_join` / `_with_columns` (or a
+    /// Lazy-returning user fn call). The drain emits
     /// `karac_lazy_release(load(alloca))`.
     ReleaseLazyPlan {
         /// Alloca that holds the opaque `*const LazyPlan` pointer.
+        alloca: PointerValue<'ctx>,
+    },
+    /// The group-by-intermediate sibling: a `LazyGroupBy` handle from
+    /// `karac_lazy_group_by` (or a Lazy-returning user fn call). The
+    /// drain emits `karac_lazy_gb_release(load(alloca))`.
+    ReleaseLazyGroupBy {
+        /// Alloca that holds the opaque `*const LazyGb` pointer.
         alloca: PointerValue<'ctx>,
     },
     /// GPU-SLIP-4b: scope-exit free for a `GpuBuffer[S]` binding that leaves

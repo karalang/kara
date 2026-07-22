@@ -21467,6 +21467,111 @@ fn main() {
         );
     }
 
+    /// Full-surface LazyFrame twin heap lifecycle (sort / group_by+agg /
+    /// join / with_columns — the ops ported after the MVP twin). Exercises
+    /// every new runtime allocation class: `Vec[LazyExpr]` key/agg/entry
+    /// lists (packed handle words — each element a tracked +1 handle),
+    /// the `LazyGroupBy` intermediate (its OWN handle type released via
+    /// `karac_lazy_gb_release`), the nested right sub-plan `Arc` a JOIN
+    /// stores, String group keys + String aggregates (min over Strings),
+    /// NULL agg slots (all-null sum group), join fan-out gathers over
+    /// String join keys, and with_columns computed columns (fold inside
+    /// entries + a same-named replace + a String rename copy). A missed
+    /// release leaks (Linux detect_leaks); an over-release double-frees
+    /// the `Arc` (caught everywhere).
+    #[test]
+    fn asan_lazyframe_full_surface_no_leak() {
+        let label = "lazyframe_full_surface_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+import std.lazy.{col, lit};
+fn main() {
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("city", Column.from_vec(["oslo_padding_aaaaaaaaaaaaaaa", "rome", "oslo_padding_aaaaaaaaaaaaaaa", "rome", "lima"]));
+    let nn: Vec[Option[i64]] = vec![Some(10i64), None, Some(30i64), Some(40i64), None];
+    df.insert("pop", Column.from_iter_nullable(nn));
+    df.insert("score", Column.from_vec([1.5, 2.5, 3.5, 4.5, 5.5]));
+    // Stable multi-key sort: String key asc, nullable i64 key desc (NULLs last).
+    let sp = df.lazy().sort(vec![col("city"), col("pop").desc()]).limit(4);
+    let s = sp.collect();
+    println(s.height());
+    // group_by on String keys; count/sum over a nullable col (one all-null
+    // group), mean, min over Strings, max — alias_ + default output names.
+    let gp = df.lazy()
+        .group_by(vec![col("city")])
+        .agg(vec![col("pop").count().alias_("cnt"), col("pop").sum(), col("score").mean(), col("city").min(), col("score").max()]);
+    println(gp.explain());
+    let g = gp.collect();
+    println(g.width()); println(g.height());
+    let cnts: Column[i64] = g.column("cnt");
+    match cnts[0] { Some(v) => println(v), None => println(-1i64) }
+    let sums: Column[i64] = g.column("pop_sum");
+    match sums[2] { Some(v) => println(v), None => println("null-sum") }
+    let mins: Column[String] = g.column("city_min");
+    match mins[1] { Some(v) => println(v), None => println("null") }
+    // Inner join on String keys with fan-out (duplicate right matches) and
+    // a pushed-down left select; right sub-plan is a nested Arc'd plan.
+    let mut dup: DataFrame = DataFrame.new();
+    dup.insert("city", Column.from_vec(["rome", "rome", "oslo_padding_aaaaaaaaaaaaaaa"]));
+    dup.insert("tag", Column.from_vec(["a_padding_bbbbbbbbbbbbbbbbbbb", "b", "c"]));
+    let jp = df.lazy().select(vec!["city", "score"]).join(dup.lazy(), vec!["city"]);
+    let j = jp.collect();
+    println(j.height());
+    let tags: Column[String] = j.column("tag");
+    match tags[0] { Some(v) => println(v), None => println("null") }
+    // with_columns: computed col (constant folding inside the entry), a
+    // same-named replace, a String rename copy; NULL propagates.
+    let wp = df.lazy()
+        .with_columns(vec![col("pop").mul(lit(2).add(1)).alias_("pop3"), col("score").add(0.5).alias_("score"), col("city").alias_("label")])
+        .filter(col("pop3").gt(29));
+    let w = wp.collect();
+    println(w.width()); println(w.height());
+    let p3: Column[i64] = w.column("pop3");
+    match p3[0] { Some(v) => println(v), None => println("null") }
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the ReleaseLazyExpr/ReleaseLazyPlan/ReleaseLazyGroupBy \
+             drains, the Vec[LazyExpr] owned-temp path, and the collect \
+             control-block FreeDataFrame path",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec![
+                "4",
+                "== logical plan ==",
+                "GROUP BY [city] AGG [count(pop) as cnt, sum(pop), mean(score), min(city), max(score)]",
+                "  SCAN [city, pop, score]",
+                "== optimized ==",
+                "GROUP BY [city] AGG [count(pop) as cnt, sum(pop), mean(score), min(city), max(score)]",
+                "  SCAN cols=[city, pop, score]",
+                "6",
+                "3",
+                "2",
+                "null-sum",
+                "rome",
+                "6",
+                "c",
+                "5",
+                "3",
+                "30"
+            ],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Column transform heap lifecycle (phase-11 follow-on slice): the
     /// Column-returning transforms `fillna` / `dropna` and the
     /// `from_iter_nullable` constructor each malloc a *fresh* control

@@ -4904,6 +4904,87 @@ impl<'ctx> Codegen<'ctx> {
             ptr_type.fn_type(&[ptr_type.into()], false),
             Some(Linkage::External),
         );
+        //   `*const ExprNode karac_lazy_expr_desc(*const ExprNode x)` — the
+        //    descending sort-key marker.
+        module.add_function(
+            "karac_lazy_expr_desc",
+            ptr_type.fn_type(&[ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const ExprNode karac_lazy_expr_agg(i64 op, *const ExprNode arg)`
+        //    — op: 0=count 1=sum 2=mean 3=min 4=max.
+        module.add_function(
+            "karac_lazy_expr_agg",
+            ptr_type.fn_type(&[i64_type.into(), ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const ExprNode karac_lazy_expr_alias(*const ExprNode expr,
+        //    *const u8 name, i64 name_len)` — output-name override.
+        module.add_function(
+            "karac_lazy_expr_alias",
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const LazyPlan karac_lazy_sort(*const LazyPlan plan,
+        //    *const u8 keys, i64 count)` — keys is a `Vec[LazyExpr]` DATA
+        //    pointer: packed 8-byte handle words (`{ handle_id: i64 }` POD).
+        module.add_function(
+            "karac_lazy_sort",
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const LazyGb karac_lazy_group_by(*const LazyPlan plan,
+        //    *const u8 keys, i64 count)` — a NEW handle type (plan + pending
+        //    keys), released via `karac_lazy_gb_release`.
+        module.add_function(
+            "karac_lazy_group_by",
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const LazyPlan karac_lazy_agg(*const LazyGb gb, *const u8 aggs,
+        //    i64 count)` — completes the grouping into a GroupBy plan step.
+        module.add_function(
+            "karac_lazy_agg",
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `void karac_lazy_gb_retain(*const LazyGb gb)` /
+        //   `void karac_lazy_gb_release(*const LazyGb gb)`
+        module.add_function(
+            "karac_lazy_gb_retain",
+            context.void_type().fn_type(&[ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_lazy_gb_release",
+            context.void_type().fn_type(&[ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*const LazyPlan karac_lazy_join(*const LazyPlan plan,
+        //    *const LazyPlan other, *const u8 on, i64 count)` — other is a
+        //    BORROWED plan handle (stored as the nested right sub-plan); on
+        //    is a `Vec[String]` DATA pointer (24-byte String aggregates).
+        module.add_function(
+            "karac_lazy_join",
+            ptr_type.fn_type(
+                &[
+                    ptr_type.into(),
+                    ptr_type.into(),
+                    ptr_type.into(),
+                    i64_type.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+        //   `*const LazyPlan karac_lazy_with_columns(*const LazyPlan plan,
+        //    *const u8 exprs, i64 count)` — exprs is a `Vec[LazyExpr]` DATA
+        //    pointer (packed handle words).
+        module.add_function(
+            "karac_lazy_with_columns",
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
         // Unicode `char` classification predicates (phase-12 #13): `char`
         // lowers to `i32`, so each takes the codepoint as `i32` and returns
         // `i8` (0/1). Backs `char.is_alphabetic()` / `is_numeric()` /

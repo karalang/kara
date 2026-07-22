@@ -569,39 +569,56 @@ mod codegen_tests {
 
     #[test]
     fn lazyframe_rejected_by_codegen_with_run_hint() {
-        // Phase-11 LazyDataFrame codegen twin: select/limit/filter/collect/
-        // explain (+ the LazyExpr builders) now LOWER — only the methods
-        // outside the v1 twin (sort / group_by / join / with_columns / the
-        // aggregates) bail, loudly and per method, with a `karac run`
-        // pointer. `sort` is the canary.
+        // Phase-11 LazyDataFrame codegen twin: the FULL op surface now
+        // LOWERS (select/limit/filter/sort/group_by+agg/join/with_columns +
+        // every LazyExpr builder). The remaining loud bail is the user-
+        // method leak guard — a user impl method declared to return a Lazy
+        // value has no caller-side release registration, so it bails with
+        // the `karac run` pointer. That guard is the canary now.
         let err = ir_result(
-            "fn main() {\n\
+            "struct W { x: i64 }\n\
+             impl W {\n\
+                 fn make(ref self) -> LazyExpr { LazyExpr.col(\"a\") }\n\
+             }\n\
+             fn main() {\n\
+                 let w = W { x: 1i64 };\n\
+                 let e = w.make();\n\
                  let mut df: DataFrame = DataFrame.new();\n\
-                 df.insert(\"a\", Column.from_vec([3i64, 1i64, 2i64]));\n\
-                 let plan = df.lazy().sort(vec![LazyExpr.col(\"a\")]);\n\
+                 df.insert(\"a\", Column.from_vec([1i64]));\n\
+                 let plan = df.lazy().filter(e.gt(0));\n\
                  let out = plan.collect();\n\
                  println(out.height());\n\
              }",
         )
-        .expect_err("LazyFrame.sort must be rejected by the v1 codegen twin");
+        .expect_err("a user method returning LazyExpr must be rejected by the v1 codegen twin");
         assert!(
             err.contains(
-                "LazyFrame.sort is not yet lowered by the v1 codegen twin — run it with \
-                 `karac run` (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
+                "returning LazyExpr/LazyFrame from user methods (`W.make`) is not yet \
+                 lowered by the v1 codegen twin — run it with `karac run` \
+                 (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
             ),
             "got: {err}"
         );
-        // And the supported surface must NOT bail: the probe chain compiles.
+        // And the FULL op surface must NOT bail: sort / group_by+agg (all
+        // five aggregates, desc, alias_) / join / with_columns all compile.
         ir_result(
             "fn main() {\n\
                  let mut df: DataFrame = DataFrame.new();\n\
-                 df.insert(\"a\", Column.from_vec([1i64]));\n\
-                 let plan = df.lazy().filter(LazyExpr.col(\"a\").gt(0)).limit(1);\n\
-                 let out = plan.collect();\n\
+                 df.insert(\"k\", Column.from_vec([\"a\", \"b\"]));\n\
+                 df.insert(\"v\", Column.from_vec([1i64, 2i64]));\n\
+                 let plan = df.lazy()\n\
+                     .with_columns(vec![LazyExpr.col(\"v\").mul(2).alias_(\"v2\")])\n\
+                     .sort(vec![LazyExpr.col(\"v2\").desc()])\n\
+                     .group_by(vec![LazyExpr.col(\"k\")])\n\
+                     .agg(vec![LazyExpr.col(\"v2\").sum(), LazyExpr.col(\"v2\").count(), LazyExpr.col(\"v2\").mean(), LazyExpr.col(\"v2\").min(), LazyExpr.col(\"v2\").max()]);\n\
+                 let mut r: DataFrame = DataFrame.new();\n\
+                 r.insert(\"k\", Column.from_vec([\"a\"]));\n\
+                 let joined = plan.join(r.lazy(), vec![\"k\"]);\n\
+                 let out = joined.collect();\n\
                  println(out.height());\n\
              }",
         )
-        .expect("the v1 twin surface (filter/limit/collect) must compile");
+        .expect("the full LazyFrame op surface must compile under the codegen twin");
     }
 
     #[test]
@@ -700,6 +717,339 @@ mod codegen_tests {
                  2\nada\nbob\n",
                 "the LazyFrame codegen twin must render and evaluate \
                  identically to the interpreter",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_lazyframe_group_by_agg_pipeline() {
+        // Full-surface twin port: filter → group_by(keys) → agg(count/sum/
+        // mean with alias_) → sort on a DERIVED column. First-occurrence
+        // group order; output schema keys-then-aggregates (alias_ wins,
+        // else <col>_<op>). Byte-pinned to the interpreter oracle
+        // (tests/interpreter.rs::test_lazyframe_group_by_agg_pipeline).
+        let out = run_program(
+            "import std.lazy.{col};\n\
+             fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"city\", Column.from_vec([\"oslo\", \"rome\", \"oslo\", \"rome\", \"oslo\"]));\n\
+                 df.insert(\"name\", Column.from_vec([\"a\", \"b\", \"c\", \"d\", \"e\"]));\n\
+                 df.insert(\"pop\", Column.from_vec([10i64, 20i64, 30i64, 40i64, 50i64]));\n\
+                 let plan = df.lazy()\n\
+                     .filter(col(\"pop\").gt(15))\n\
+                     .group_by(vec![col(\"city\")])\n\
+                     .agg(vec![col(\"name\").count().alias_(\"cnt\"), col(\"pop\").sum(), col(\"pop\").mean()])\n\
+                     .sort(vec![col(\"pop_sum\").desc()]);\n\
+                 println(plan.explain());\n\
+                 let out = plan.collect();\n\
+                 println(out.width()); println(out.height());\n\
+                 for n in out.column_names() { println(n); }\n\
+                 let cities: Column[String] = out.column(\"city\");\n\
+                 let sums: Column[i64] = out.column(\"pop_sum\");\n\
+                 let means: Column[f64] = out.column(\"pop_mean\");\n\
+                 match cities[0] { Some(v) => println(v), None => println(\"null\") }\n\
+                 match sums[0] { Some(v) => println(v), None => println(-1i64) }\n\
+                 match means[0] { Some(v) => println(v), None => println(-1.0) }\n\
+                 match cities[1] { Some(v) => println(v), None => println(\"null\") }\n\
+                 match sums[1] { Some(v) => println(v), None => println(-1i64) }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "== logical plan ==\n\
+                 SORT [pop_sum desc]\n\
+                 \x20 GROUP BY [city] AGG [count(name) as cnt, sum(pop), mean(pop)]\n\
+                 \x20   FILTER (pop > 15)\n\
+                 \x20     SCAN [city, name, pop]\n\
+                 == optimized ==\n\
+                 SORT [pop_sum desc]\n\
+                 \x20 GROUP BY [city] AGG [count(name) as cnt, sum(pop), mean(pop)]\n\
+                 \x20   FILTER (pop > 15)\n\
+                 \x20     SCAN cols=[city, name, pop]\n\
+                 4\n2\ncity\ncnt\npop_sum\npop_mean\noslo\n80\n40\nrome\n60\n",
+                "group_by/agg must derive schema and sort on derived columns \
+                 byte-identically to the interpreter",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_lazyframe_join_collision_suffix_and_explain() {
+        // Full-surface twin port: inner join — nested right sub-plan
+        // rendered compactly on the JOIN line; output schema left-then-
+        // right-minus-keys with `_right` on collisions; unmatched rows
+        // drop; left row order preserved. Byte-pinned to the interpreter
+        // oracle (test_lazyframe_join_inner_collision_suffix_and_explain).
+        let out = run_program(
+            "fn main() {\n\
+                 let mut people: DataFrame = DataFrame.new();\n\
+                 people.insert(\"id\", Column.from_vec([1i64, 2i64, 3i64, 4i64]));\n\
+                 people.insert(\"name\", Column.from_vec([\"ada\", \"bob\", \"cyd\", \"dee\"]));\n\
+                 people.insert(\"city\", Column.from_vec([\"rome\", \"oslo\", \"rome\", \"lima\"]));\n\
+                 let mut cities: DataFrame = DataFrame.new();\n\
+                 cities.insert(\"city\", Column.from_vec([\"rome\", \"oslo\", \"kiev\"]));\n\
+                 cities.insert(\"pop\", Column.from_vec([60i64, 80i64, 30i64]));\n\
+                 cities.insert(\"name\", Column.from_vec([\"Roma\", \"Oslo\", \"Kyiv\"]));\n\
+                 let plan = people.lazy().join(cities.lazy(), vec![\"city\"]);\n\
+                 println(plan.explain());\n\
+                 let out = plan.collect();\n\
+                 println(out.width()); println(out.height());\n\
+                 for n in out.column_names() { println(n); }\n\
+                 let names: Column[String] = out.column(\"name\");\n\
+                 let rn: Column[String] = out.column(\"name_right\");\n\
+                 let pops: Column[i64] = out.column(\"pop\");\n\
+                 for i in 0..out.height() {\n\
+                     match names[i] { Some(v) => println(v), None => println(\"null\") }\n\
+                     match rn[i] { Some(v) => println(v), None => println(\"null\") }\n\
+                     match pops[i] { Some(v) => println(v), None => println(-1i64) }\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "== logical plan ==\n\
+                 JOIN on=[city] right=(SCAN [city, pop, name])\n\
+                 \x20 SCAN [id, name, city]\n\
+                 == optimized ==\n\
+                 JOIN on=[city] right=(SCAN cols=[*])\n\
+                 \x20 SCAN cols=[*]\n\
+                 5\n3\nid\nname\ncity\npop\nname_right\n\
+                 ada\nRoma\n60\nbob\nOslo\n80\ncyd\nRoma\n60\n",
+                "inner join must suffix collisions, drop unmatched rows, keep \
+                 left order byte-identically to the interpreter",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_lazyframe_join_pipeline_nulls_and_fanout() {
+        // Full-surface twin port: ops composing around a join — right-side
+        // select narrows the right scan; a left select BEFORE the join
+        // renders as an explicit SELECT step under the JOIN; NULL keys join
+        // nothing; duplicate right matches fan out left-row-then-right-
+        // match. Chain intermediates are let-bound (eager DataFrame method
+        // dispatch on non-identifier receivers is outside the twin), so
+        // this mirrors — not copies — the interpreter oracle
+        // (test_lazyframe_join_pipeline_nulls_and_fanout).
+        let out = run_program(
+            "import std.lazy.{col};\n\
+             fn main() {\n\
+                 let mut people: DataFrame = DataFrame.new();\n\
+                 people.insert(\"id\", Column.from_vec([1i64, 2i64, 3i64, 4i64]));\n\
+                 people.insert(\"name\", Column.from_vec([\"ada\", \"bob\", \"cyd\", \"dee\"]));\n\
+                 people.insert(\"city\", Column.from_vec([\"rome\", \"oslo\", \"rome\", \"lima\"]));\n\
+                 let mut cities: DataFrame = DataFrame.new();\n\
+                 cities.insert(\"city\", Column.from_vec([\"rome\", \"oslo\", \"kiev\"]));\n\
+                 cities.insert(\"pop\", Column.from_vec([60i64, 80i64, 30i64]));\n\
+                 cities.insert(\"name\", Column.from_vec([\"Roma\", \"Oslo\", \"Kyiv\"]));\n\
+                 let plan = people.lazy()\n\
+                     .join(cities.lazy().select(vec![\"city\", \"pop\"]), vec![\"city\"])\n\
+                     .filter(col(\"pop\").gt(50))\n\
+                     .select(vec![\"name\", \"pop\"]);\n\
+                 println(plan.explain());\n\
+                 let planc = plan.collect();\n\
+                 println(planc.height());\n\
+                 let pre = people.lazy().select(vec![\"name\", \"city\"]).join(cities.lazy(), vec![\"city\"]);\n\
+                 println(pre.explain());\n\
+                 let prec = pre.collect();\n\
+                 println(prec.width());\n\
+                 let mut left: DataFrame = DataFrame.new();\n\
+                 let lk: Vec[Option[i64]] = vec![Some(1i64), None, Some(3i64)];\n\
+                 left.insert(\"k\", Column.from_iter_nullable(lk));\n\
+                 let mut right: DataFrame = DataFrame.new();\n\
+                 let rk: Vec[Option[i64]] = vec![Some(1i64), None];\n\
+                 right.insert(\"k\", Column.from_iter_nullable(rk));\n\
+                 right.insert(\"w\", Column.from_vec([100i64, 200i64]));\n\
+                 let njp = left.lazy().join(right.lazy(), vec![\"k\"]);\n\
+                 let nj = njp.collect();\n\
+                 println(nj.height());\n\
+                 let ws: Column[i64] = nj.column(\"w\");\n\
+                 match ws[0] { Some(v) => println(v), None => println(-1i64) }\n\
+                 let mut dup: DataFrame = DataFrame.new();\n\
+                 dup.insert(\"city\", Column.from_vec([\"rome\", \"rome\"]));\n\
+                 dup.insert(\"tag\", Column.from_vec([\"a\", \"b\"]));\n\
+                 let fanp = people.lazy().select(vec![\"name\", \"city\"]).join(dup.lazy(), vec![\"city\"]);\n\
+                 let fan = fanp.collect();\n\
+                 println(fan.height());\n\
+                 let n4: Column[String] = fan.column(\"name\");\n\
+                 let t4: Column[String] = fan.column(\"tag\");\n\
+                 for i in 0..fan.height() {\n\
+                     match n4[i] { Some(v) => println(v), None => println(\"null\") }\n\
+                     match t4[i] { Some(v) => println(v), None => println(\"null\") }\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "== logical plan ==\n\
+                 SELECT [name, pop]\n\
+                 \x20 FILTER (pop > 50)\n\
+                 \x20   JOIN on=[city] right=(SELECT [city, pop] <- SCAN [city, pop, name])\n\
+                 \x20     SCAN [id, name, city]\n\
+                 == optimized ==\n\
+                 SELECT [name, pop]\n\
+                 \x20 FILTER (pop > 50)\n\
+                 \x20   JOIN on=[city] right=(SCAN cols=[city, pop])\n\
+                 \x20     SCAN cols=[*]\n\
+                 3\n\
+                 == logical plan ==\n\
+                 JOIN on=[city] right=(SCAN [city, pop, name])\n\
+                 \x20 SELECT [name, city]\n\
+                 \x20   SCAN [id, name, city]\n\
+                 == optimized ==\n\
+                 JOIN on=[city] right=(SCAN cols=[*])\n\
+                 \x20 SELECT [name, city]\n\
+                 \x20   SCAN cols=[*]\n\
+                 4\n\
+                 1\n100\n\
+                 4\nada\na\nada\nb\ncyd\na\ncyd\nb\n",
+                "join must compose with select/filter, drop NULL keys, fan out \
+                 duplicates byte-identically to the interpreter",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_lazyframe_with_columns_arithmetic_pipeline() {
+        // Full-surface twin port: with_columns computes/replaces/appends,
+        // folds constants inside entries (`2 + 1` → `3`), flushes a prior
+        // select as an honest SELECT step, propagates NULL through
+        // arithmetic, derives bool columns from comparisons, and sorts on
+        // a computed column. Chain intermediates let-bound (see the join
+        // pipeline test note). Mirrors the interpreter oracle
+        // (test_lazyframe_with_columns_arithmetic_pipeline).
+        let out = run_program(
+            "import std.lazy.{col, lit};\n\
+             fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"a\", Column.from_vec([1i64, 2i64, 3i64]));\n\
+                 df.insert(\"b\", Column.from_vec([10.5, 20.5, 30.5]));\n\
+                 df.insert(\"name\", Column.from_vec([\"x\", \"y\", \"z\"]));\n\
+                 let plan = df.lazy().with_columns(vec![col(\"a\").mul(2).alias_(\"a2\"), col(\"b\").add(col(\"a\")).alias_(\"ab\"), col(\"name\").alias_(\"label\")]);\n\
+                 println(plan.explain());\n\
+                 let out = plan.collect();\n\
+                 println(out.width());\n\
+                 for n in out.column_names() { println(n); }\n\
+                 let a2: Column[i64] = out.column(\"a2\");\n\
+                 let ab: Column[f64] = out.column(\"ab\");\n\
+                 match a2[2] { Some(v) => println(v), None => println(-1i64) }\n\
+                 match ab[0] { Some(v) => println(v), None => println(-1.0) }\n\
+                 let repp = df.lazy().with_columns(vec![col(\"a\").add(100).alias_(\"a\")]);\n\
+                 let rep = repp.collect();\n\
+                 for n in rep.column_names() { println(n); }\n\
+                 let ra: Column[i64] = rep.column(\"a\");\n\
+                 match ra[0] { Some(v) => println(v), None => println(-1i64) }\n\
+                 let nn: Vec[Option[i64]] = vec![Some(1i64), None];\n\
+                 let mut nf: DataFrame = DataFrame.new();\n\
+                 nf.insert(\"v\", Column.from_iter_nullable(nn));\n\
+                 let nfp = nf.lazy().with_columns(vec![col(\"v\").mul(10).alias_(\"v10\")]);\n\
+                 let nfc = nfp.collect();\n\
+                 let v10: Column[i64] = nfc.column(\"v10\");\n\
+                 match v10[0] { Some(v) => println(v), None => println(\"null\") }\n\
+                 match v10[1] { Some(v) => println(v), None => println(\"null\") }\n\
+                 let piped = df.lazy()\n\
+                     .select(vec![\"a\", \"b\"])\n\
+                     .with_columns(vec![col(\"a\").mul(lit(2).add(1)).alias_(\"a3\")])\n\
+                     .filter(col(\"a3\").gt(3));\n\
+                 println(piped.explain());\n\
+                 let out4 = piped.collect();\n\
+                 println(out4.height());\n\
+                 let a3: Column[i64] = out4.column(\"a3\");\n\
+                 match a3[0] { Some(v) => println(v), None => println(-1i64) }\n\
+                 let bgp = df.lazy().with_columns(vec![col(\"a\").ge(2).alias_(\"big\")]);\n\
+                 let bgc = bgp.collect();\n\
+                 let bg: Column[bool] = bgc.column(\"big\");\n\
+                 match bg[0] { Some(v) => println(v), None => println(\"null\") }\n\
+                 match bg[1] { Some(v) => println(v), None => println(\"null\") }\n\
+                 let sp = df.lazy().with_columns(vec![col(\"a\").mul(-1).alias_(\"neg\")]).sort(vec![col(\"neg\")]);\n\
+                 let s = sp.collect();\n\
+                 let sa: Column[i64] = s.column(\"a\");\n\
+                 match sa[0] { Some(v) => println(v), None => println(-1i64) }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "== logical plan ==\n\
+                 WITH [(a * 2) as a2, (b + a) as ab, name as label]\n\
+                 \x20 SCAN [a, b, name]\n\
+                 == optimized ==\n\
+                 WITH [(a * 2) as a2, (b + a) as ab, name as label]\n\
+                 \x20 SCAN cols=[a, b, name]\n\
+                 6\na\nb\nname\na2\nab\nlabel\n\
+                 6\n11.5\n\
+                 a\nb\nname\n101\n\
+                 10\nnull\n\
+                 == logical plan ==\n\
+                 FILTER (a3 > 3)\n\
+                 \x20 WITH [(a * (2 + 1)) as a3]\n\
+                 \x20   SELECT [a, b]\n\
+                 \x20     SCAN [a, b, name]\n\
+                 == optimized ==\n\
+                 FILTER (a3 > 3)\n\
+                 \x20 WITH [(a * 3) as a3]\n\
+                 \x20   SELECT [a, b]\n\
+                 \x20     SCAN cols=[a, b]\n\
+                 2\n6\n\
+                 false\ntrue\n\
+                 3\n",
+                "with_columns must compute/replace/append, fold inside entries, \
+                 flush selects honestly — byte-identically to the interpreter",
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_lazyframe_sort_multikey_desc_nulls_last_stable() {
+        // Full-surface twin port: stable multi-key sort with a `.desc()`
+        // marker; NULL keys sort LAST regardless of direction; sort renders
+        // in both explain plans and preserves order vs limit. Byte-pinned
+        // to the interpreter oracle
+        // (test_lazyframe_sort_multikey_desc_nulls_last_stable).
+        let out = run_program(
+            "import std.lazy.{col};\n\
+             fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"dept\", Column.from_vec([\"b\", \"a\", \"b\", \"a\", \"b\"]));\n\
+                 df.insert(\"score\", Column.from_vec([3i64, 9i64, 7i64, 9i64, 3i64]));\n\
+                 df.insert(\"name\", Column.from_vec([\"v\", \"w\", \"x\", \"y\", \"z\"]));\n\
+                 let plan = df.lazy().sort(vec![col(\"dept\"), col(\"score\").desc()]).select(vec![\"name\"]).limit(3);\n\
+                 println(plan.explain());\n\
+                 let out = plan.collect();\n\
+                 let names: Column[String] = out.column(\"name\");\n\
+                 match names[0] { Some(v) => println(v), None => println(\"null\") }\n\
+                 match names[1] { Some(v) => println(v), None => println(\"null\") }\n\
+                 match names[2] { Some(v) => println(v), None => println(\"null\") }\n\
+                 let mut d2: DataFrame = DataFrame.new();\n\
+                 let nn: Vec[Option[i64]] = vec![Some(5i64), None, Some(9i64)];\n\
+                 d2.insert(\"k\", Column.from_iter_nullable(nn));\n\
+                 d2.insert(\"tag\", Column.from_vec([\"five\", \"none\", \"nine\"]));\n\
+                 let s2p = d2.lazy().sort(vec![col(\"k\").desc()]);\n\
+                 let s2 = s2p.collect();\n\
+                 let tags: Column[String] = s2.column(\"tag\");\n\
+                 match tags[0] { Some(v) => println(v), None => println(\"null\") }\n\
+                 match tags[2] { Some(v) => println(v), None => println(\"null\") }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "== logical plan ==\n\
+                 LIMIT 3\n\
+                 \x20 SELECT [name]\n\
+                 \x20   SORT [dept, score desc]\n\
+                 \x20     SCAN [dept, score, name]\n\
+                 == optimized ==\n\
+                 SELECT [name]\n\
+                 \x20 LIMIT 3\n\
+                 \x20   SORT [dept, score desc]\n\
+                 \x20     SCAN cols=[dept, score, name]\n\
+                 w\ny\nx\nnine\nnone\n",
+                "multi-key desc sort must be stable with NULLs last under desc, \
+                 byte-identically to the interpreter",
             );
         }
     }

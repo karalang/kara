@@ -3772,15 +3772,13 @@ fn test_run_gpu_dispatch_routes_to_interpreter() {
 }
 
 #[test]
-fn test_run_lazyframe_routes_to_interpreter() {
-    // Phase-11 LazyDataFrame: the surface is interpreter-only until the
-    // codegen twin lands, and the JIT-default `karac run` previously
-    // dead-ended in the codegen deferral — whose message told the user to
-    // "run it with `karac run`", the very command they had typed. `cmd_run`
-    // now detects the LazyFrame surface from the typed method-callee table
-    // and routes to the tree-walk interpreter (mirroring the gpu/regex
-    // fallbacks). All three run forms must agree; `karac build` keeps the
-    // loud deferral (covered by codegen.rs).
+fn test_run_lazyframe_all_run_forms_agree() {
+    // Phase-11 LazyDataFrame: with the codegen twin covering the full op
+    // surface (slice 9), the JIT-default `karac run` compiles and runs
+    // LazyFrame programs like everything else — the interim
+    // interpreter-routing gate is gone. All three run forms (JIT-default,
+    // --interp, KARAC_RUN_JIT=0) must agree byte-for-byte; a lazy program
+    // must never dead-end in a codegen deferral on the default lane.
     let src = "fn main() {\n\
                \x20   let mut df: DataFrame = DataFrame.new();\n\
                \x20   df.insert(\"a\", Column.from_vec([1i64, 2i64, 3i64]));\n\
