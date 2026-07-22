@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 161 | 1 |
+| miscompile | 161 | 0 |
 | leak | 92 | 0 |
 | double-free | 77 | 0 |
 | codegen-gap | 71 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 462 | 1 |
+| codegen | 462 | 0 |
 | typecheck | 83 | 0 |
 | interp | 69 | 0 |
 | ownership | 26 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **635 surfaced · 1 open · 629 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **635 surfaced · 0 open · 630 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-22-7 | 2026-07-22 | codegen | high | Index-assigning an UNTYPED float literal to an f32 Tensor element silently stores nothing under AOT: `let mut a: Tensor[f32,[2]] = Tensor.zeros(vec![2]); a[0] = 5.0; println(a[0])` prints 0 under `karac build` (interp: 5). The bare `5.0` literal defaults to f64, and the f64->f32 fptrunc on the tensor index-assign store path is dropped — so the element keeps its zeroed value. WORKAROUNDS that store correctly: an explicit `5.0f32` suffix, a matching f64 element, or a computed `(k) as f32`. i64 elements are unaffected. | — |
+_None — the ledger is fully drained._
 
-### Fixed (629)
+### Fixed (630)
 
-<details><summary>629 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>630 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -767,6 +765,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **635 surfaced 
 | B-2026-07-22-4 | interp | low | interp: `as f16` / `as bf16` casts don't round to storage precision — narrowing float casts are identity in the tree-walk interpreter, diverging from… | 6a734aa |
 | B-2026-07-22-5 | runtime | low | runtime test test_try_wait_kill_reap asserts Unix signal-kill encoding (-2) unconditionally — red on every Windows CI leg (actual 2) | 07bda94 |
 | B-2026-07-22-6 | codegen | medium | `s[a..b].to_string()` / `.clone()` — a `.to_string()`/`.clone()` METHOD CALL directly on a String SLICE fails codegen with "indexed-receiver method '… | 9014477 |
+| B-2026-07-22-7 | codegen | high | Index-assigning an UNTYPED float literal to an f32 Tensor element silently stores nothing under AOT: `let mut a: Tensor[f32,[2]] = Tensor.zeros(vec![… | 7495530 |
 
 </details>
 
