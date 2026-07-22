@@ -125,8 +125,18 @@ jobs:
           git add baseline.json
           git commit -m "bench(compile-speed): refresh baseline from main run ${{ github.run_id }}"
           git push -f origin bench/compile-speed-baseline
-          gh pr create \
+          if ! gh pr create \
             --base main --head bench/compile-speed-baseline \
             --title "bench(compile-speed): refresh baseline" \
             --body "Automated baseline refresh from the main-leg run of commit ${{ github.sha }} — a karac/rustc ratio drifted >5% from the stored baseline. Merging keeps the compile-speed gate honest." \
-            || echo "PR already open — branch force-push updated it"
+            2> gh-err.txt; then
+            if grep -qi "already exists" gh-err.txt; then
+              echo "PR already open — the force-push updated it"
+            else
+              cat gh-err.txt
+              echo "::warning::Could not open the baseline PR (repo setting" \
+                "'Allow GitHub Actions to create and approve pull requests'" \
+                "is likely disabled). The refreshed baseline is waiting on" \
+                "branch bench/compile-speed-baseline."
+            fi
+          fi
