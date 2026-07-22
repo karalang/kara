@@ -2755,6 +2755,32 @@ mod codegen_tests {
         }
     }
 
+    /// B-2026-07-22-6: `s[a..b].to_string()` / `.clone()` — a `.to_string()`
+    /// (or `.clone()`) METHOD CALL directly on a String slice. The receiver
+    /// `s[a..b]` is a ranged index that produces a fresh owned String, so the
+    /// method is the slice itself; codegen used to route the whole thing through
+    /// the Vec/Slice/Array indexed-receiver-method path and error ("element
+    /// TypeExpr unknown") even though the interpreter accepted it — a run-vs-build
+    /// divergence surfaced by leetcode #151's `words.push(s[start..i].to_string())`.
+    #[test]
+    fn e2e_string_slice_to_string_method() {
+        if let Some(out) = run_program(
+            "fn f(s: String) -> Vec[String] {\n\
+                 let mut v: Vec[String] = Vec.new();\n\
+                 v.push(s[0..2].to_string());\n\
+                 v.push(s[6..].clone());\n\
+                 return v;\n\
+             }\n\
+             fn main() {\n\
+                 let v = f(\"hello world\");\n\
+                 println(v[0]);\n\
+                 println(v[1]);\n\
+             }",
+        ) {
+            assert_eq!(out, "he\nworld\n");
+        }
+    }
+
     /// `String.strip_{prefix,suffix}(p) -> Option[String]` via
     /// `karac_string_strip_{prefix,suffix}` + an `Option[String]` phi-merge.
     /// Must match the interpreter oracle

@@ -75,6 +75,32 @@ impl<'ctx> super::Codegen<'ctx> {
             ));
         }
 
+        // String-slice receiver: a RANGED index on a String (`s[a..b]`) produces
+        // a FRESH OWNED String (`compile_string_slice`), NOT a container element
+        // — so `s[a..b].to_string()` / `.clone()` IS that owned slice. Return it
+        // directly. Without this the receiver fell through to the
+        // Vec/Slice/Array-element path below and errored ("element TypeExpr
+        // unknown") even though the interpreter accepted it — a run-vs-build
+        // divergence (B-2026-07-22-6). `string_typed_exprs` is the typechecker's
+        // per-span String flag, the same gate `compile_range_index` uses to route
+        // String slicing. (`s[a..b].len()`/`.bytes()` etc. still bind the slice to
+        // a `let` first — those non-owning readers are a separate follow-up.)
+        if (method == "to_string" || method == "clone")
+            && args.is_empty()
+            && self
+                .string_typed_exprs
+                .contains(&(inner.span.offset, inner.span.length))
+        {
+            if let ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } = &index.kind
+            {
+                return self.compile_string_slice(inner, start, end, *inclusive);
+            }
+        }
+
         // B-2026-07-09-1: hoist a FieldAccess container — `self.names[i].m()` —
         // to a synth Vec/Slice identifier so the identifier-keyed lowering
         // below applies unchanged. Surfaced by std.protobuf `#[derive(Message)]`
