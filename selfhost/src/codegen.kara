@@ -439,14 +439,18 @@ impl Emitter {
                         vi = vi + 1;
                     }
                     self.en_cnt.push(cnt);
-                    // Struct payload slot (Slice 39): record the single
-                    // distinct struct payload kind, if any.
+                    // Struct/Vec payload slot (Slices 39/41): record the single
+                    // distinct AGGREGATE payload kind (struct 10+ or vec
+                    // 3/4/2000+/4000+), if any.
                     let eoff2 = self.en_off[self.en_names.len() - 1];
                     let mut ex = 0 - 1;
                     let mut vj = 0;
                     while vj < cnt {
                         let p1 = self.en_var_pl[eoff2 + vj];
                         if p1 >= 10 and p1 < 1000 {
+                            ex = p1;
+                        }
+                        if p1 == 3 or p1 == 4 or p1 >= 2000 {
                             ex = p1;
                         }
                         vj = vj + 1;
@@ -1607,8 +1611,8 @@ impl Emitter {
                                 stride = 32;
                             }
                             if self.en_extra[eei] >= 0 {
-                                // Struct-slot layout (Slice 39).
-                                stride = 32 + self.st_stride(self.en_extra[eei] - 10);
+                                // Aggregate-slot layout (Slices 39/41).
+                                stride = 32 + self.en_extra_stride(self.en_extra[eei]);
                             }
                         } else {
                             let esi0 = vk4 - 2000;
@@ -2552,11 +2556,15 @@ impl Emitter {
                 self.body = self.body + lbody + ":\n";
                 if bind_payload != "" {
                     // The payload binds by KIND (Slice 23): i64 from slot 1,
-                    // String from slot 2, a struct from slot 3 (Slice 39) —
-                    // heap payloads bind as BORROWS (the scrutinee's owner
-                    // keeps and frees the buffers).
+                    // String from slot 2, a struct/vec aggregate from slot 3
+                    // (Slices 39/41) — heap payloads bind as BORROWS (the
+                    // scrutinee's owner keeps and frees the buffers).
                     let plk2 = self.en_var_pl[self.en_off[ei] + tag];
-                    if plk2 >= 10 and plk2 < 1000 {
+                    if (plk2 >= 10 and plk2 < 1000)
+                        or plk2 == 3
+                        or plk2 == 4
+                        or plk2 >= 2000
+                    {
                         let plx = self.fresh();
                         self.body = self.body
                             + "  "
@@ -3011,7 +3019,7 @@ impl Emitter {
                 stride = 32;
             }
             if self.en_extra[eei] >= 0 {
-                stride = 32 + self.st_stride(self.en_extra[eei] - 10);
+                stride = 32 + self.en_extra_stride(self.en_extra[eei]);
             }
             if self.en_has_heap(eei) {
                 elem_heap = true;
@@ -3187,17 +3195,57 @@ impl Emitter {
             vi = vi + 1;
         }
         if self.en_extra[ei] >= 0 {
-            // A heap-bearing STRUCT payload (Slice 39) makes the enum own
-            // heap too.
-            if self.st_has_heap(self.en_extra[ei] - 10) {
+            // A heap-bearing STRUCT/VEC payload (Slices 39/41) makes the enum
+            // own heap too.
+            if self.en_extra_has_heap(self.en_extra[ei]) {
                 return true;
             }
         }
         false
     }
 
-    // i1 register testing whether tag `tg` names the STRUCT-payload variant
-    // set of enum `ei` (Slice 39) — the guard for slot-3 copy/free.
+    // True iff the slot-3 aggregate kind `ex` owns heap (Slice 41): a vec
+    // always owns its buffer; a struct is checked field-wise.
+    fn en_extra_has_heap(ref self, ex: i64) -> bool {
+        if ex == 3 or ex == 4 or ex >= 2000 {
+            return true;
+        }
+        self.st_has_heap(ex - 10)
+    }
+
+    // Byte stride of the slot-3 aggregate kind `ex` (Slice 41): a vec header
+    // is 24 bytes; a struct is its field stride.
+    fn en_extra_stride(ref self, ex: i64) -> i64 {
+        if ex == 3 or ex == 4 or ex >= 2000 {
+            return 24;
+        }
+        self.st_stride(ex - 10)
+    }
+
+    // Deep-copy the slot-3 aggregate `op` of kind `ex` (Slice 41) — vec vs
+    // struct dispatch — returning the owned copy's operand.
+    fn emit_materialize_extra(mut ref self, op: String, ex: i64) -> String {
+        if ex == 3 or ex == 4 or ex >= 2000 {
+            let mv = self.emit_materialize_vec(op, ex);
+            let Val { op: mop, kind: mk, heap: mh } = mv;
+            return mop;
+        }
+        let mv = self.emit_materialize_struct(op, ex - 10);
+        let Val { op: mop, kind: mk, heap: mh } = mv;
+        mop
+    }
+
+    // Free the slot-3 aggregate value `op` of kind `ex` (Slice 41).
+    fn emit_free_extra(mut ref self, op: String, ex: i64) {
+        if ex == 3 or ex == 4 or ex >= 2000 {
+            self.emit_free_vec_val(op, ex);
+        } else {
+            self.emit_free_struct_val(op, ex - 10);
+        }
+    }
+
+    // i1 register testing whether tag `tg` names the STRUCT/VEC-payload
+    // variant set of enum `ei` (Slices 39/41) — the guard for slot-3 copy/free.
     fn emit_enum_extratag_test(mut ref self, tg: String, ei: i64) -> String {
         let off = self.en_off[ei];
         let cnt = self.en_cnt[ei];
@@ -3333,10 +3381,11 @@ impl Emitter {
         self.body = self.body + "  br label %" + ld.clone() + "\n";
         self.body = self.body + ld + ":\n";
         if self.en_extra[ei] >= 0 {
-            // STRUCT-slot deep copy (Slice 39), tag-gated on the struct-
-            // payload variants. Exclusive with the string leg per runtime
-            // tag, so each leg loads/stores the result slot independently.
-            if self.st_has_heap(self.en_extra[ei] - 10) {
+            // AGGREGATE-slot deep copy (Slices 39/41), tag-gated on the
+            // aggregate-payload variants. Exclusive with the string leg per
+            // runtime tag, so each leg loads/stores the result slot
+            // independently.
+            if self.en_extra_has_heap(self.en_extra[ei]) {
                 let c2 = self.emit_enum_extratag_test(tg, ei);
                 let lid2 = self.nlbl;
                 self.nlbl = self.nlbl + 1;
@@ -3360,8 +3409,7 @@ impl Emitter {
                     + " "
                     + op
                     + ", 3\n";
-                let xmv = self.emit_materialize_struct(xs, self.en_extra[ei] - 10);
-                let Val { op: xmop, kind: xmk, heap: xmh } = xmv;
+                let xmop = self.emit_materialize_extra(xs, self.en_extra[ei]);
                 let cur3 = self.fresh();
                 self.body = self.body
                     + "  "
@@ -3456,8 +3504,8 @@ impl Emitter {
         self.body = self.body + "  br label %" + ld.clone() + "\n";
         self.body = self.body + ld + ":\n";
         if self.en_extra[ei] >= 0 {
-            // Free the STRUCT slot's heap (Slice 39), tag-gated.
-            if self.st_has_heap(self.en_extra[ei] - 10) {
+            // Free the AGGREGATE slot's heap (Slices 39/41), tag-gated.
+            if self.en_extra_has_heap(self.en_extra[ei]) {
                 let c2 = self.emit_enum_extratag_test(tg, ei);
                 let lid2 = self.nlbl;
                 self.nlbl = self.nlbl + 1;
@@ -3475,7 +3523,7 @@ impl Emitter {
                 let xs = self.fresh();
                 self.body =
                     self.body + "  " + xs.clone() + " = extractvalue " + ety + " " + op + ", 3\n";
-                self.emit_free_struct_val(xs, self.en_extra[ei] - 10);
+                self.emit_free_extra(xs, self.en_extra[ei]);
                 self.body = self.body + "  br label %" + ld2.clone() + "\n";
                 self.body = self.body + ld2 + ":\n";
             }
@@ -4372,8 +4420,13 @@ impl Emitter {
                         if ak == 2 {
                             sv2 = aop;
                             sh2 = ah;
-                        } else if ak >= 10 and ak < 1000 {
-                            // A STRUCT payload (Slice 39) → slot 3.
+                        } else if (ak >= 10 and ak < 1000)
+                            or ak == 3
+                            or ak == 4
+                            or ak >= 2000
+                        {
+                            // A STRUCT/VEC aggregate payload (Slices 39/41)
+                            // → slot 3.
                             xv2 = aop;
                             xk2 = ak;
                             xh2 = ah;
@@ -4428,16 +4481,14 @@ impl Emitter {
                         cur2 = a2;
                     }
                     if xk2 >= 0 {
-                        // Struct payload → slot 3 (Slice 39): a borrowed
-                        // heap-bearing struct deep-copies in; a temp
-                        // transfers.
+                        // Aggregate payload → slot 3 (Slices 39/41): a borrowed
+                        // heap-bearing struct/vec deep-copies in; a temp
+                        // transfers. (A vec is ALWAYS heap-owning.)
                         let mut xv = xv2;
-                        if not xh2 and self.st_has_heap(xk2 - 10) {
-                            let mv = self.emit_materialize_struct(xv.clone(), xk2 - 10);
-                            let Val { op: mop, kind: mk, heap: mh } = mv;
-                            xv = mop;
+                        if not xh2 and self.en_extra_has_heap(xk2) {
+                            xv = self.emit_materialize_extra(xv.clone(), xk2);
                         }
-                        if self.st_has_heap(xk2 - 10) {
+                        if self.en_extra_has_heap(xk2) {
                             has_str = true;
                         }
                         let a3 = self.fresh();

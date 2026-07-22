@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 161 | 0 |
 | leak | 93 | 1 |
-| double-free | 77 | 0 |
+| double-free | 78 | 1 |
 | codegen-gap | 71 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 39 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 463 | 1 |
+| codegen | 464 | 2 |
 | typecheck | 83 | 0 |
 | interp | 69 | 0 |
 | ownership | 26 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **636 surfaced · 1 open · 630 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **637 surfaced · 2 open · 630 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-22-8 | 2026-07-22 | codegen | medium | Reassigning a `mut String` STRUCT FIELD leaks the OLD buffer when the field's current value was set in a PRIOR function call. `s.buf = read4(s)` (buf: String field, via a `mut ref S` param) frees the displaced buffer correctly only when codegen saw the field assigned earlier in the SAME function body; when the field holds a heap String set by an earlier CALL and this function's first touch of it is a reassignment, no old-value free is emitted, so the old buffer leaks (one 8-byte block per such reassignment). Output is correct; codegen-only (interp clean); AOT valgrind/LSan. Sibling of the Vec[String]-reassign leak class (#126). | — |
+| B-2026-07-22-9 | 2026-07-22 | codegen | high | AOT double-free: a Vec-payload enum variant (Node.Nums(Vec[i64])) COEXISTING with a String-payload variant (Ident(String)), where a String-payload TEMP is passed to a ref-param consuming match AND a Vec-payload value flows through the same describe(ref) fn. 26-line repro (vpmin7): describe(Node.Ident("foo".to_string())) + let a = mk_nums(); describe(a) together abort with 'double free or corruption'; either alone is clean. Interp correct; JIT also aborts. Same mixed-str-enum+aggregate-payload family as B-2026-07-21-5. | — |
 
 ### Fixed (630)
 
