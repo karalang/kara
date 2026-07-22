@@ -106,15 +106,20 @@ jobs:
           if-no-files-found: ignore
 
       # main is a protected branch (required status checks), so the refresh
-      # rides a PR from a well-known branch instead of a direct push. Drift
-      # >5% is rare, so this is an occasional one-click merge, not churn.
+      # rides a PR from a well-known branch instead of a direct push. The
+      # refresh trigger is scoped to `synthetic` (--refresh-on): the tiny
+      # seed_kata's between-run variance exceeds 5%, so it would otherwise
+      # churn the baseline every run — it stays in the gate (30% threshold,
+      # far above its noise) but doesn't drive refreshes. Every refresh still
+      # writes ALL workloads' fresh numbers.
       - name: Refresh baseline (PR on drift)
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd bench/compile_speed
-          python3 compare.py --latest latest.json --write-baseline baseline.json
+          python3 compare.py --latest latest.json --write-baseline baseline.json \
+            --refresh-on synthetic
           if git diff --quiet baseline.json; then
             echo "baseline current — no PR needed"
             exit 0

@@ -60,6 +60,13 @@ def main():
                     help="gate: max allowed ratio regression vs baseline")
     ap.add_argument("--drift", type=float, default=0.05,
                     help="write-baseline: min ratio movement that rewrites")
+    ap.add_argument("--refresh-on", default="",
+                    help="write-baseline: comma-separated workloads whose drift "
+                         "may trigger a refresh (default: all). Noisy short "
+                         "workloads (e.g. seed_kata, whose between-run variance "
+                         "exceeds --drift) are left out so they don't churn the "
+                         "baseline — a brand-new workload still always refreshes, "
+                         "and every refresh writes ALL workloads' fresh numbers.")
     args = ap.parse_args()
 
     latest = ratios(load(args.latest))
@@ -72,14 +79,23 @@ def main():
     if args.write_baseline:
         path = Path(args.write_baseline)
         base = ratios(load(path)) if path.exists() else {}
-        stale = [w for w in latest
-                 if w not in base
-                 or abs(latest[w][2] - base[w][2]) / base[w][2] > args.drift]
+        trigger = {w.strip() for w in args.refresh_on.split(",") if w.strip()}
+        # A brand-new corpus member always seeds the baseline, regardless of the
+        # trigger filter. Among existing workloads, only those in `trigger`
+        # (all, if unset) count toward the drift decision — so a noisy short
+        # workload can't churn the baseline on its own.
+        new = [w for w in latest if w not in base]
+        drifted = [w for w in latest
+                   if w in base
+                   and (not trigger or w in trigger)
+                   and abs(latest[w][2] - base[w][2]) / base[w][2] > args.drift]
+        stale = new + drifted
         if stale:
             path.write_text(Path(args.latest).read_text())
             print(f"baseline rewritten (moved: {', '.join(stale)})")
         else:
-            print(f"baseline unchanged (all ratios within {args.drift:.0%})")
+            scope = f" among {', '.join(sorted(trigger))}" if trigger else ""
+            print(f"baseline unchanged (all ratios within {args.drift:.0%}{scope})")
         return 0
 
     # Gate mode.
