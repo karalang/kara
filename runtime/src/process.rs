@@ -515,8 +515,21 @@ mod tests {
         let mut w = fresh();
         unsafe { karac_runtime_process_wait(&mut w, pid) };
         assert_eq!(w.error_kind, 0);
-        // Signal-killed: code -1, success false → (-1 << 1) | 0 == -2.
-        assert_eq!(w.value, -2);
+        // The kill outcome is platform-dependent because `pack_exit_status`
+        // faithfully reports what the OS gives `Child::wait()` after a kill:
+        //   - Unix: `kill(SIGKILL)` leaves no exit code → `status.code()` is
+        //     `None` → code -1, success false → (-1 << 1) | 0 == -2.
+        //   - Windows: `Child::kill()` is `TerminateProcess(h, 1)`, so the
+        //     child exits with CODE 1 → code 1, success false → 1<<1 | 0 == 2.
+        // Both encode the same fact (killed → not a success exit); the value
+        // differs only because the platforms surface the cause differently.
+        #[cfg(not(windows))]
+        assert_eq!(w.value, -2, "unix signal-kill: code -1, success false");
+        #[cfg(windows)]
+        assert_eq!(
+            w.value, 2,
+            "windows TerminateProcess exit code 1, success false"
+        );
     }
 
     #[test]
