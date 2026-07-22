@@ -1440,6 +1440,52 @@ mod tests {
     }
 
     #[test]
+    fn loop_of_consume_suppressed_for_match_arm_binding_in_loop() {
+        // B-2026-07-22-13: a match-arm payload binding consumed once inside a
+        // loop is freshly re-bound by the pattern each iteration, so it must
+        // NOT fire loop-of-consume. The CFG builder now records a `Define`
+        // for the arm binding (like `let`), which the rule's rebind check
+        // reads. The arm binding is alpha-renamed (`g@armN`), so locate it
+        // dynamically and mark its consume.
+        let src = "fn maybe(i: i64) -> Option[String] {\n\
+                       if i > 0 { Some(\"x\".to_string()) } else { None }\n\
+                   }\n\
+                   fn take(s: String) -> i64 { s.len() as i64 }\n\
+                   fn main() {\n\
+                       let mut i = 0;\n\
+                       while i < 3 {\n\
+                           match maybe(i) { Some(g) => { take(g); } None => {} }\n\
+                           i = i + 1;\n\
+                       }\n\
+                   }";
+        let mut cfg = cfg_of(src);
+        // Find the renamed arm binding (starts with `g`) and mark its
+        // non-Define use (the `take(g)` consume) as Consume.
+        let renamed: String = cfg
+            .blocks
+            .iter()
+            .flat_map(|b| b.uses.iter())
+            .find(|u| u.binding.starts_with('g') && u.kind != UseKind::Define)
+            .map(|u| u.binding.clone())
+            .expect("arm binding `g` use not found — test setup bug");
+        for block in &mut cfg.blocks {
+            for u in &mut block.uses {
+                if u.binding == renamed && u.kind != UseKind::Define {
+                    u.kind = UseKind::Consume;
+                }
+            }
+        }
+        let dom = compute_dominators(&cfg);
+        let cands = loop_of_consume_candidates(&cfg, &dom);
+        assert!(
+            !cands.contains_key(&renamed),
+            "a match-arm binding freshly bound each iteration must not fire \
+             loop-of-consume; got {:?}",
+            cands.get(&renamed)
+        );
+    }
+
+    #[test]
     fn loop_of_consume_suppressed_by_in_loop_reassign() {
         // `while c { consume(x); x = next(); }` — the rebind closes
         // the loop-of-consume gap. v1 coarse rule suppresses on any

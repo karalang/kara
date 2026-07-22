@@ -1013,7 +1013,7 @@ impl<'a> CfgBuilder<'a> {
                 merge
             }
             ExprKind::IfLet {
-                pattern: _,
+                pattern,
                 value,
                 then_block,
                 else_branch,
@@ -1021,6 +1021,25 @@ impl<'a> CfgBuilder<'a> {
                 let after_scrutinee = self.lower_expr(value, cur, exit, loops);
                 let then_entry = self.new_block();
                 self.add_edge(after_scrutinee, then_entry);
+                // Record a `Define` for each `if let` pattern binding at the
+                // then-branch entry (mirrors `Let` / the match-arm fix,
+                // B-2026-07-22-13). Freshly bound each time the `if let`
+                // succeeds, so a loop-body `if let Some(g) = … { … g … }`
+                // consumed once is not a next-iteration use-after-move; the
+                // `Define` lets `loop_of_consume_candidates` see the rebind.
+                for name in pattern_bindings(pattern) {
+                    self.note_local_introduced(&name);
+                    self.record_use(
+                        then_entry,
+                        UseSite {
+                            binding: name.clone(),
+                            kind: UseKind::Define,
+                            span: pattern.span.clone(),
+                            consume_origin: ConsumeOrigin::Direct,
+                            place: PlacePath::new(),
+                        },
+                    );
+                }
                 let then_exit = self.lower_block(then_block, then_entry, exit, loops);
 
                 let merge = self.new_block();
@@ -1054,6 +1073,28 @@ impl<'a> CfgBuilder<'a> {
                         self.push_arm_rename_frame();
                         for name in pattern_bindings(&arm.pattern) {
                             self.note_local_introduced(&name);
+                            // Record a `Define` for each arm pattern binding
+                            // (mirrors `Let`, B-2026-07-22-13). A match-arm
+                            // binding is freshly re-bound by the pattern match
+                            // on every iteration, so a loop-body arm binding
+                            // consumed once is NOT a next-iteration
+                            // use-after-move — but without a `Define`
+                            // use-site, `loop_of_consume_candidates`'s rebind
+                            // check (which keys on `Reassign`/`Define`) never
+                            // sees the fresh bind and spuriously RC-boxes it.
+                            // `record_use` mangles the name through the active
+                            // `@armN` frame, so the Define shares the arm
+                            // body's Consume identity.
+                            self.record_use(
+                                arm_entry,
+                                UseSite {
+                                    binding: name.clone(),
+                                    kind: UseKind::Define,
+                                    span: arm.pattern.span.clone(),
+                                    consume_origin: ConsumeOrigin::Direct,
+                                    place: PlacePath::new(),
+                                },
+                            );
                         }
                         if let Some(guard) = &arm.guard {
                             arm_cur = self.lower_expr(guard, arm_cur, exit, loops);
@@ -1508,6 +1549,41 @@ mod tests {
             .filter(|n| matches!(*n, "x" | "y"))
             .collect();
         assert_eq!(user_names, vec!["x", "x", "y"]);
+    }
+
+    #[test]
+    fn match_arm_and_if_let_bindings_record_define_use_sites() {
+        // B-2026-07-22-13: a match-arm / `if let` pattern binding must record
+        // a `Define` use-site (like `let`), so `loop_of_consume_candidates`
+        // recognizes it as freshly re-bound each iteration and does NOT
+        // spuriously RC-box a loop-body binding consumed exactly once. Before
+        // the fix only `note_local_introduced` ran, leaving no `Define`.
+        let cfg = cfg_of(
+            "enum E { N, Some(String) }\n\
+             fn take(s: String) -> i64 { s.len() as i64 }\n\
+             fn main() {\n\
+                 let e = Some(\"x\");\n\
+                 match e { Some(g) => { take(g); } N => {} }\n\
+                 let f = Some(\"y\");\n\
+                 if let Some(h) = f { take(h); }\n\
+             }",
+        );
+        let has_define = |prefix: &str| {
+            (0..cfg.num_blocks()).any(|i| {
+                cfg.block(i)
+                    .uses
+                    .iter()
+                    .any(|u| u.kind == UseKind::Define && u.binding.starts_with(prefix))
+            })
+        };
+        assert!(
+            has_define("g"),
+            "match-arm binding `g` must record a `Define` use-site"
+        );
+        assert!(
+            has_define("h"),
+            "`if let` binding `h` must record a `Define` use-site"
+        );
     }
 
     #[test]
