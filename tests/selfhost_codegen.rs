@@ -365,6 +365,15 @@ const CORPUS: &[&str] = &[
     // StructLit materializes a borrowed vec field in. Field reads
     // (c.bytes[i]) and Vec[CStr] elements compose.
     "struct CStr { bytes: Vec[i64], source_len: i64 }\nfn sum_bytes(c: ref CStr) -> i64 {\n    let mut t = 0;\n    let mut i = 0;\n    while i < c.bytes.len() {\n        t = t + c.bytes[i];\n        i = i + 1;\n    }\n    return t;\n}\nfn mk(a: i64, b: i64) -> CStr {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(a);\n    v.push(b);\n    v.push(a + b);\n    return CStr { bytes: v, source_len: 3 };\n}\nfn main() {\n    let c = mk(10, 20);\n    println(sum_bytes(c).to_string());\n    println(c.source_len.to_string());\n    let d = c;\n    println(sum_bytes(d).to_string());\n    let mut cs: Vec[CStr] = Vec.new();\n    cs.push(mk(1, 2));\n    cs.push(mk(5, 6));\n    let mut i = 0;\n    while i < cs.len() {\n        let e = cs[i];\n        println(sum_bytes(e).to_string());\n        i = i + 1;\n    }\n}",
+    // Slice 43: TWO DISTINCT AGGREGATE-SLOT ENUMS — the token.kara shape
+    // (a struct payload Cstr(Blob) AND a vec payload Interp(Vec[i64]) in
+    // one enum). en_extra2 adds slot 4; en_agg_slot routes each aggregate
+    // to slot 3/4; per-slot tag-gated copy/free helpers. This entry has
+    // NO String variant (mixed str-enum+aggregate hits open seed bug
+    // B-2026-07-22-9 — the Kara emitter compiles that correctly too,
+    // verified vs interp+valgrind, but the seed leg crashes so it can't
+    // be a differential corpus entry).
+    "struct Blob { bytes: Vec[i64], n: i64 }\nenum Tok { Eof, Cstr(Blob), Interp(Vec[i64]) }\nfn show(t: ref Tok) -> i64 {\n    match t {\n        Cstr(b) => {\n            let mut s = 0;\n            let mut i = 0;\n            while i < b.bytes.len() {\n                s = s + b.bytes[i];\n                i = i + 1;\n            }\n            return s + b.n;\n        }\n        Interp(v) => {\n            let mut s = 0;\n            let mut i = 0;\n            while i < v.len() {\n                s = s + v[i];\n                i = i + 1;\n            }\n            return s;\n        }\n        Eof => {}\n    }\n    return 0 - 1;\n}\nfn mk_cstr(a: i64, b: i64) -> Tok {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(a);\n    v.push(b);\n    return Tok.Cstr(Blob { bytes: v, n: 2 });\n}\nfn mk_interp(a: i64, b: i64, c: i64) -> Tok {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(a);\n    v.push(b);\n    v.push(c);\n    return Tok.Interp(v);\n}\nfn main() {\n    let x = mk_cstr(10, 20);\n    println(show(x).to_string());\n    let y = mk_interp(1, 2, 3);\n    println(show(y).to_string());\n    let z = x;\n    println(show(z).to_string());\n    println(show(Tok.Eof).to_string());\n    let mut ts: Vec[Tok] = Vec.new();\n    ts.push(mk_cstr(5, 6));\n    ts.push(mk_interp(7, 8, 9));\n    let mut i = 0;\n    while i < ts.len() {\n        let e = ts[i];\n        println(show(e).to_string());\n        i = i + 1;\n    }\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

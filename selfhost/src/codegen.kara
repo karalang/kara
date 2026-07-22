@@ -174,6 +174,10 @@ struct Emitter {
     // the always-widened base plus one struct slot (slot 3). One distinct
     // struct payload type per enum (corpus discipline).
     en_extra: Vec[i64],
+    // Per-ENUM (parallel to en_names, Slice 43): a SECOND distinct aggregate
+    // payload kind (slot 4), -1 if the enum has 0 or 1 aggregate types. Two
+    // slots cover the real token.kara (CStr struct + Vec[InterpPart]).
+    en_extra2: Vec[i64],
     en_off: Vec[i64],
     en_cnt: Vec[i64],
 }
@@ -215,6 +219,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         en_var_pl: Vec.new(),
         en_var_pl2: Vec.new(),
         en_extra: Vec.new(),
+        en_extra2: Vec.new(),
         en_off: Vec.new(),
         en_cnt: Vec.new(),
     };
@@ -290,7 +295,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_var_pl2, en_extra, en_off, en_cnt } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_var_pl2, en_extra, en_extra2, en_off, en_cnt } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -389,6 +394,9 @@ impl Emitter {
         while self.en_extra.len() < self.en_names.len() {
             self.en_extra.push(0 - 1);
         }
+        while self.en_extra2.len() < self.en_names.len() {
+            self.en_extra2.push(0 - 1);
+        }
         // Pass A — struct defs (Slice 12), BEFORE fn signatures so a param /
         // return type can name any struct regardless of order. Indexed reads
         // through the ref (`sd.fields[i].ty` — the proven idiom; whole-Vec
@@ -439,23 +447,27 @@ impl Emitter {
                         vi = vi + 1;
                     }
                     self.en_cnt.push(cnt);
-                    // Struct/Vec payload slot (Slices 39/41): record the single
-                    // distinct AGGREGATE payload kind (struct 10+ or vec
-                    // 3/4/2000+/4000+), if any.
+                    // Aggregate payload slots (Slices 39/41/43): record up to
+                    // TWO distinct AGGREGATE payload kinds (struct 10+ or vec
+                    // 3/4/2000+/4000+) → slot 3 and slot 4.
                     let eoff2 = self.en_off[self.en_names.len() - 1];
                     let mut ex = 0 - 1;
+                    let mut ex2 = 0 - 1;
                     let mut vj = 0;
                     while vj < cnt {
                         let p1 = self.en_var_pl[eoff2 + vj];
-                        if p1 >= 10 and p1 < 1000 {
-                            ex = p1;
-                        }
-                        if p1 == 3 or p1 == 4 or p1 >= 2000 {
-                            ex = p1;
+                        let is_agg = (p1 >= 10 and p1 < 1000) or p1 == 3 or p1 == 4 or p1 >= 2000;
+                        if is_agg {
+                            if ex < 0 {
+                                ex = p1;
+                            } else if p1 != ex and ex2 < 0 {
+                                ex2 = p1;
+                            }
                         }
                         vj = vj + 1;
                     }
                     self.en_extra.push(ex);
+                    self.en_extra2.push(ex2);
                 }
                 _ => {}
             }
@@ -674,12 +686,15 @@ impl Emitter {
             // keep the two-slot layout. The four synthetic Result kinds
             // (Slice 30) are ALWAYS widened — even Result$ii — so every
             // instantiation shares one layout and Ok/Err construction is
-            // context-free. A STRUCT-payload enum (Slice 39) appends the
-            // struct as slot 3 to the widened base.
+            // context-free. An aggregate-payload enum (Slices 39/41) appends
+            // its aggregate(s) as slot 3 (and slot 4, Slice 43) to the base.
             if self.en_extra[kind - 1000] >= 0 {
-                return "{ i64, i64, { ptr, i64 }, ".to_string()
-                    + self.ty_text(self.en_extra[kind - 1000])
-                    + " }";
+                let mut ty = "{ i64, i64, { ptr, i64 }, ".to_string()
+                    + self.ty_text(self.en_extra[kind - 1000]);
+                if self.en_extra2[kind - 1000] >= 0 {
+                    ty = ty + ", " + self.ty_text(self.en_extra2[kind - 1000]);
+                }
+                return ty + " }";
             }
             if kind >= 1002 and kind <= 1005 {
                 return "{ i64, i64, { ptr, i64 } }".to_string();
@@ -1611,8 +1626,11 @@ impl Emitter {
                                 stride = 32;
                             }
                             if self.en_extra[eei] >= 0 {
-                                // Aggregate-slot layout (Slices 39/41).
+                                // Aggregate-slot layout (Slices 39/41/43).
                                 stride = 32 + self.en_extra_stride(self.en_extra[eei]);
+                                if self.en_extra2[eei] >= 0 {
+                                    stride = stride + self.en_extra_stride(self.en_extra2[eei]);
+                                }
                             }
                         } else {
                             let esi0 = vk4 - 2000;
@@ -2557,14 +2575,15 @@ impl Emitter {
                 if bind_payload != "" {
                     // The payload binds by KIND (Slice 23): i64 from slot 1,
                     // String from slot 2, a struct/vec aggregate from slot 3
-                    // (Slices 39/41) — heap payloads bind as BORROWS (the
-                    // scrutinee's owner keeps and frees the buffers).
+                    // or 4 (Slices 39/41/43) — heap payloads bind as BORROWS
+                    // (the scrutinee's owner keeps and frees the buffers).
                     let plk2 = self.en_var_pl[self.en_off[ei] + tag];
                     if (plk2 >= 10 and plk2 < 1000)
                         or plk2 == 3
                         or plk2 == 4
                         or plk2 >= 2000
                     {
+                        let aslot2 = self.en_agg_slot(ei, plk2);
                         let plx = self.fresh();
                         self.body = self.body
                             + "  "
@@ -2573,7 +2592,9 @@ impl Emitter {
                             + ety.clone()
                             + " "
                             + sop.clone()
-                            + ", 3\n";
+                            + ", "
+                            + aslot2.to_string()
+                            + "\n";
                         let idxx = self.locals.len();
                         self.locals.push(bind_payload.clone());
                         self.locals_kind.push(plk2);
@@ -3020,6 +3041,9 @@ impl Emitter {
             }
             if self.en_extra[eei] >= 0 {
                 stride = 32 + self.en_extra_stride(self.en_extra[eei]);
+                if self.en_extra2[eei] >= 0 {
+                    stride = stride + self.en_extra_stride(self.en_extra2[eei]);
+                }
             }
             if self.en_has_heap(eei) {
                 elem_heap = true;
@@ -3201,7 +3225,25 @@ impl Emitter {
                 return true;
             }
         }
+        if self.en_extra2[ei] >= 0 {
+            // A SECOND aggregate slot (Slice 43).
+            if self.en_extra_has_heap(self.en_extra2[ei]) {
+                return true;
+            }
+        }
         false
+    }
+
+    // Slot index (3 or 4) for aggregate payload kind `aggkind` in enum `ei`
+    // (Slice 43), -1 if it is neither aggregate slot.
+    fn en_agg_slot(ref self, ei: i64, aggkind: i64) -> i64 {
+        if self.en_extra[ei] == aggkind {
+            return 3;
+        }
+        if self.en_extra2[ei] == aggkind {
+            return 4;
+        }
+        0 - 1
     }
 
     // True iff the slot-3 aggregate kind `ex` owns heap (Slice 41): a vec
@@ -3246,6 +3288,42 @@ impl Emitter {
 
     // i1 register testing whether tag `tg` names the STRUCT/VEC-payload
     // variant set of enum `ei` (Slices 39/41) — the guard for slot-3 copy/free.
+    // i1 register testing whether tag `tg` names a variant whose payload kind
+    // is exactly `aggkind` (Slices 39/41/43) — the guard for a specific
+    // aggregate slot's copy/free. Parametrized so an enum with TWO distinct
+    // aggregate slots (slot 3 + slot 4) guards each independently.
+    fn emit_enum_aggtag_test(mut ref self, tg: String, ei: i64, aggkind: i64) -> String {
+        let off = self.en_off[ei];
+        let cnt = self.en_cnt[ei];
+        let mut acc = "".to_string();
+        let mut vi = 0;
+        while vi < cnt {
+            if self.en_var_pl[off + vi] == aggkind {
+                let c = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + c.clone()
+                    + " = icmp eq i64 "
+                    + tg.clone()
+                    + ", "
+                    + vi.to_string()
+                    + "\n";
+                if acc == "" {
+                    acc = c;
+                } else {
+                    let o = self.fresh();
+                    self.body = self.body + "  " + o.clone() + " = or i1 " + acc + ", " + c + "\n";
+                    acc = o;
+                }
+            }
+            vi = vi + 1;
+        }
+        if acc == "" {
+            acc = "false".to_string();
+        }
+        acc
+    }
+
     fn emit_enum_extratag_test(mut ref self, tg: String, ei: i64) -> String {
         let off = self.en_off[ei];
         let cnt = self.en_cnt[ei];
@@ -3381,72 +3459,102 @@ impl Emitter {
         self.body = self.body + "  br label %" + ld.clone() + "\n";
         self.body = self.body + ld + ":\n";
         if self.en_extra[ei] >= 0 {
-            // AGGREGATE-slot deep copy (Slices 39/41), tag-gated on the
-            // aggregate-payload variants. Exclusive with the string leg per
-            // runtime tag, so each leg loads/stores the result slot
+            // AGGREGATE-slot deep copies (Slices 39/41/43), one tag-gated leg
+            // per aggregate slot. Exclusive with the string leg AND each other
+            // per runtime tag, so each leg loads/stores the result slot
             // independently.
             if self.en_extra_has_heap(self.en_extra[ei]) {
-                let c2 = self.emit_enum_extratag_test(tg, ei);
-                let lid2 = self.nlbl;
-                self.nlbl = self.nlbl + 1;
-                let lc2 = "emxc" + lid2.to_string();
-                let ld2 = "emxd" + lid2.to_string();
-                self.body = self.body
-                    + "  br i1 "
-                    + c2
-                    + ", label %"
-                    + lc2.clone()
-                    + ", label %"
-                    + ld2.clone()
-                    + "\n";
-                self.body = self.body + lc2 + ":\n";
-                let xs = self.fresh();
-                self.body = self.body
-                    + "  "
-                    + xs.clone()
-                    + " = extractvalue "
-                    + ety.clone()
-                    + " "
-                    + op
-                    + ", 3\n";
-                let xmop = self.emit_materialize_extra(xs, self.en_extra[ei]);
-                let cur3 = self.fresh();
-                self.body = self.body
-                    + "  "
-                    + cur3.clone()
-                    + " = load "
-                    + ety.clone()
-                    + ", ptr "
-                    + slot.clone()
-                    + ", align 8\n";
-                let ag2 = self.fresh();
-                self.body = self.body
-                    + "  "
-                    + ag2.clone()
-                    + " = insertvalue "
-                    + ety.clone()
-                    + " "
-                    + cur3
-                    + ", "
-                    + self.ty_text(self.en_extra[ei])
-                    + " "
-                    + xmop
-                    + ", 3\n";
-                self.body = self.body
-                    + "  store "
-                    + ety.clone()
-                    + " "
-                    + ag2
-                    + ", ptr "
-                    + slot.clone()
-                    + ", align 8\n";
-                self.body = self.body + "  br label %" + ld2.clone() + "\n";
-                self.body = self.body + ld2 + ":\n";
+                self.emit_enum_aggslot_copy(op.clone(), slot.clone(), ety.clone(), ei, 3);
+            }
+        }
+        if self.en_extra2[ei] >= 0 {
+            if self.en_extra_has_heap(self.en_extra2[ei]) {
+                self.emit_enum_aggslot_copy(op.clone(), slot.clone(), ety.clone(), ei, 4);
             }
         }
         let r = self.fresh();
         self.body = self.body + "  " + r.clone() + " = load " + ety + ", ptr " + slot + ", align 8\n";
         Val { op: r, kind: 1000 + ei, heap: true }
+    }
+
+    // Tag-gated deep copy of ONE aggregate slot (`slotnum` 3 or 4, Slice 43):
+    // if the runtime tag is one of that slot's aggregate variants, extract the
+    // slot, materialize an owned copy, and re-insert into the result slot.
+    fn emit_enum_aggslot_copy(
+        mut ref self,
+        op: String,
+        slot: String,
+        ety: String,
+        ei: i64,
+        slotnum: i64,
+    ) {
+        let mut aggkind = self.en_extra[ei];
+        if slotnum == 4 {
+            aggkind = self.en_extra2[ei];
+        }
+        let tg = self.fresh();
+        self.body =
+            self.body + "  " + tg.clone() + " = extractvalue " + ety.clone() + " " + op.clone() + ", 0\n";
+        let c2 = self.emit_enum_aggtag_test(tg, ei, aggkind);
+        let lid2 = self.nlbl;
+        self.nlbl = self.nlbl + 1;
+        let lc2 = "emxc" + lid2.to_string();
+        let ld2 = "emxd" + lid2.to_string();
+        self.body = self.body
+            + "  br i1 "
+            + c2
+            + ", label %"
+            + lc2.clone()
+            + ", label %"
+            + ld2.clone()
+            + "\n";
+        self.body = self.body + lc2 + ":\n";
+        let xs = self.fresh();
+        self.body = self.body
+            + "  "
+            + xs.clone()
+            + " = extractvalue "
+            + ety.clone()
+            + " "
+            + op
+            + ", "
+            + slotnum.to_string()
+            + "\n";
+        let xmop = self.emit_materialize_extra(xs, aggkind);
+        let cur3 = self.fresh();
+        self.body = self.body
+            + "  "
+            + cur3.clone()
+            + " = load "
+            + ety.clone()
+            + ", ptr "
+            + slot.clone()
+            + ", align 8\n";
+        let ag2 = self.fresh();
+        self.body = self.body
+            + "  "
+            + ag2.clone()
+            + " = insertvalue "
+            + ety.clone()
+            + " "
+            + cur3
+            + ", "
+            + self.ty_text(aggkind)
+            + " "
+            + xmop
+            + ", "
+            + slotnum.to_string()
+            + "\n";
+        self.body = self.body
+            + "  store "
+            + ety
+            + " "
+            + ag2
+            + ", ptr "
+            + slot
+            + ", align 8\n";
+        self.body = self.body + "  br label %" + ld2.clone() + "\n";
+        self.body = self.body + ld2 + ":\n";
     }
 
     // Free the payload buffer a STR-ENUM VALUE owns, tag-conditionally
@@ -3504,30 +3612,55 @@ impl Emitter {
         self.body = self.body + "  br label %" + ld.clone() + "\n";
         self.body = self.body + ld + ":\n";
         if self.en_extra[ei] >= 0 {
-            // Free the AGGREGATE slot's heap (Slices 39/41), tag-gated.
+            // Free each AGGREGATE slot's heap (Slices 39/41/43), tag-gated.
             if self.en_extra_has_heap(self.en_extra[ei]) {
-                let c2 = self.emit_enum_extratag_test(tg, ei);
-                let lid2 = self.nlbl;
-                self.nlbl = self.nlbl + 1;
-                let lf2 = "enxf" + lid2.to_string();
-                let ld2 = "enxd" + lid2.to_string();
-                self.body = self.body
-                    + "  br i1 "
-                    + c2
-                    + ", label %"
-                    + lf2.clone()
-                    + ", label %"
-                    + ld2.clone()
-                    + "\n";
-                self.body = self.body + lf2 + ":\n";
-                let xs = self.fresh();
-                self.body =
-                    self.body + "  " + xs.clone() + " = extractvalue " + ety + " " + op + ", 3\n";
-                self.emit_free_extra(xs, self.en_extra[ei]);
-                self.body = self.body + "  br label %" + ld2.clone() + "\n";
-                self.body = self.body + ld2 + ":\n";
+                self.emit_enum_aggslot_free(op.clone(), ety.clone(), ei, 3);
             }
         }
+        if self.en_extra2[ei] >= 0 {
+            if self.en_extra_has_heap(self.en_extra2[ei]) {
+                self.emit_enum_aggslot_free(op.clone(), ety.clone(), ei, 4);
+            }
+        }
+    }
+
+    // Tag-gated free of ONE aggregate slot (`slotnum` 3 or 4, Slice 43).
+    fn emit_enum_aggslot_free(mut ref self, op: String, ety: String, ei: i64, slotnum: i64) {
+        let mut aggkind = self.en_extra[ei];
+        if slotnum == 4 {
+            aggkind = self.en_extra2[ei];
+        }
+        let tg = self.fresh();
+        self.body =
+            self.body + "  " + tg.clone() + " = extractvalue " + ety.clone() + " " + op.clone() + ", 0\n";
+        let c2 = self.emit_enum_aggtag_test(tg, ei, aggkind);
+        let lid2 = self.nlbl;
+        self.nlbl = self.nlbl + 1;
+        let lf2 = "enxf" + lid2.to_string();
+        let ld2 = "enxd" + lid2.to_string();
+        self.body = self.body
+            + "  br i1 "
+            + c2
+            + ", label %"
+            + lf2.clone()
+            + ", label %"
+            + ld2.clone()
+            + "\n";
+        self.body = self.body + lf2 + ":\n";
+        let xs = self.fresh();
+        self.body = self.body
+            + "  "
+            + xs.clone()
+            + " = extractvalue "
+            + ety
+            + " "
+            + op
+            + ", "
+            + slotnum.to_string()
+            + "\n";
+        self.emit_free_extra(xs, aggkind);
+        self.body = self.body + "  br label %" + ld2.clone() + "\n";
+        self.body = self.body + ld2 + ":\n";
     }
 
     fn st_has_heap(ref self, si: i64) -> bool {
@@ -4504,9 +4637,10 @@ impl Emitter {
                         cur2 = a2;
                     }
                     if xk2 >= 0 {
-                        // Aggregate payload → slot 3 (Slices 39/41): a borrowed
-                        // heap-bearing struct/vec deep-copies in; a temp
-                        // transfers. (A vec is ALWAYS heap-owning.)
+                        // Aggregate payload → slot 3 or 4 (Slices 39/41/43):
+                        // a borrowed heap-bearing struct/vec deep-copies in; a
+                        // temp transfers. (A vec is ALWAYS heap-owning.)
+                        let xslot = self.en_agg_slot(enum_ei, xk2);
                         let mut xv = xv2;
                         if not xh2 and self.en_extra_has_heap(xk2) {
                             xv = self.emit_materialize_extra(xv.clone(), xk2);
@@ -4526,7 +4660,9 @@ impl Emitter {
                             + self.ty_text(xk2)
                             + " "
                             + xv
-                            + ", 3\n";
+                            + ", "
+                            + xslot.to_string()
+                            + "\n";
                         cur2 = a3;
                     }
                     return Val { op: cur2, kind: 1000 + enum_ei, heap: has_str };
