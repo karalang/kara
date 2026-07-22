@@ -1051,6 +1051,29 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
     }
 
+    /// True when `e` READS a `weak` field (`node.link` / `nodes[i].link` where
+    /// `link: weak T`). A weak read is a BORROW — it hands the standard
+    /// `Option[shared T]` machinery a nullable box pointer WITHOUT a strong
+    /// retain (`compile_field_access`'s niche read; the strong retain would
+    /// double-count). So an `Option[shared T]` binding initialized from a weak
+    /// read owns NO +1, and its scope-exit `RcDecOption` (queued by
+    /// `track_rc_option_var`) needs a matching balancing inner rc-inc — exactly
+    /// the "case (d)" aliasing acquire a strong `Option[shared]`-field read gets
+    /// via `compile_field_access`. Without it the dec is unbalanced and the
+    /// popped node is over-released (B-2026-07-21-21). `docs/spikes/weak-refs.md`.
+    pub(super) fn expr_is_weak_field_read(&self, e: &Expr) -> bool {
+        let ExprKind::FieldAccess { object, field } = &e.kind else {
+            return false;
+        };
+        let Some((type_name, _)) = self.weak_receiver_type(object) else {
+            return false;
+        };
+        self.struct_field_names
+            .get(&type_name)
+            .and_then(|ns| ns.iter().position(|n| n == field))
+            .is_some_and(|idx| self.struct_field_is_weak(&type_name, idx))
+    }
+
     /// Cheap (no-codegen) resolution of a shared-struct receiver's
     /// `(type_name, info)` for the `weak`-field interceptors — a bare/`self`
     /// receiver (`node.weak`) via `shared_type_for_expr`, or a Vec/Slice-indexed

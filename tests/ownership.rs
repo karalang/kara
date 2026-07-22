@@ -77,6 +77,28 @@ fn test_empty_program() {
 }
 
 #[test]
+fn test_weak_field_read_index_assign_no_spurious_move() {
+    // B-2026-07-21-20: `nodes[i].next = nodes[j].next` — both sides index the
+    // SAME `Vec[shared]`, and the RHS reads a field of an indexed element. You
+    // cannot MOVE out through an index projection, so the RHS `nodes[j].next` is
+    // a READ of `nodes`, not a consume — it must NOT collide with the LHS
+    // index-assign into `nodes` and fire a spurious UseAfterMove. (The insertion-
+    // sort splice of leetcode kata #147.) A bare-element RHS `nodes[i] = nodes[j]`
+    // was already clean; this pins the field-of-indexed-element sibling.
+    ownership_ok(
+        r#"
+shared struct Node { val: i64, id: i64, mut next: weak Node }
+fn main() {
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: 1i64, id: 0i64, next: None });
+    nodes.push(Node { val: 2i64, id: 1i64, next: None });
+    nodes[0].next = nodes[1].next;
+}
+"#,
+    );
+}
+
+#[test]
 fn test_primitives_dont_move() {
     // Primitives are Copy — using them multiple times is fine
     ownership_ok(

@@ -521,6 +521,40 @@ fn main() {
     }
 
     #[test]
+    fn asan_weak_read_into_option_binding_then_weak_store_no_leak() {
+        // B-2026-07-21-21: `let after: Option[N] = nodes[i].link;` (a WEAK-field
+        // read) binds an `Option[shared]` that owns NO +1 — the weak read is a
+        // borrow. But the binding queued a scope-exit `RcDecOption`; without a
+        // matching balancing inner rc-inc (the "case (d)" aliasing acquire), that
+        // dec was UNBALANCED, so storing `after` back into another `weak` field
+        // (`nodes[j].link = after`, the insertion-sort splice from kata #147)
+        // over-released the popped node — a leak for one splice, use-after-free /
+        // double-free across several. The fix acquires the inner ref when a
+        // weak-field read initializes a tracked `Option[shared]` binding. This is
+        // the exact leetcode-#147 shape (build-a-chain, save-successor, re-link).
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64, id: i64, mut next: weak Node }
+fn main() {
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: 1i64, id: 0i64, next: None });
+    nodes.push(Node { val: 2i64, id: 1i64, next: None });
+    nodes.push(Node { val: 3i64, id: 2i64, next: None });
+    nodes[0].next = nodes[1];
+    nodes[1].next = nodes[2];
+    let a: Option[Node] = nodes[0].next;
+    nodes[2].next = a;
+    let b: Option[Node] = nodes[1].next;
+    nodes[2].next = b;
+    println("ok");
+}
+"#,
+            &["ok"],
+            "asan_weak_read_into_option_binding_then_weak_store_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_weak_field_indexed_deep_copy_no_leak() {
         // B-2026-07-19-8 + the indexed-read drift it surfaced (same class as
         // B-2026-07-19-6, read side): a `Vec[Node]` deep-copy where `Node` has a

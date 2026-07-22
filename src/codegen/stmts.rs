@@ -3463,6 +3463,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // alone (not surfaced via var_type_names
                                 // to avoid masking the Option-ness).
                                 let _ = inner_name;
+                                // B-2026-07-21-21: a `weak`-field read RHS
+                                // (`let x: Option[T] = node.link;`) is a BORROW —
+                                // it delivers NO +1 (unlike a Call move-out or a
+                                // strong `Option[shared]`-field read, whose
+                                // `compile_field_access` already balances). So the
+                                // just-set `shared_option_info` will queue an
+                                // `RcDecOption` with nothing to balance it; flag
+                                // the case-(d) aliasing acquire so the inner
+                                // rc-inc below matches the scope-exit dec.
+                                if self.expr_is_weak_field_read(value) {
+                                    option_alias_needs_inner_inc = true;
+                                }
                             }
                         }
                         // (b) Untyped let with a call-shaped RHS whose

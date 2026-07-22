@@ -842,7 +842,20 @@ impl<'a> UseClassifier<'a> {
             ExprKind::Index { object, index } => {
                 self.walk_expr(index, Mode::Reading);
                 path.push(PlaceSeg::Index);
-                self.walk_place(object, leaf_mode, path);
+                // You cannot MOVE out through an index projection: `container[i]`
+                // — and any deeper field of it, `container[i].field` — is a
+                // borrow/read of the container, never a move of it (a partial
+                // move of an element the container still owns is disallowed,
+                // exactly like the bare-index arm in `walk_expr`, which walks its
+                // object `Mode::Reading`). So the root BELOW an index is always
+                // Read, never Consume — even when the outer leaf sits in consuming
+                // position. Passing `leaf_mode` through here made `x[i].wf =
+                // y[j].wf` classify the RHS field-read `y[j].wf` as CONSUMING the
+                // container `y`, colliding with the LHS index-assign into the same
+                // container and firing a spurious UseAfterMove (B-2026-07-21-20).
+                // The place path still records the `[i].field` projection for
+                // disjointness.
+                self.walk_place(object, Mode::Reading, path);
             }
             _ => self.walk_expr(expr, Mode::Reading),
         }
