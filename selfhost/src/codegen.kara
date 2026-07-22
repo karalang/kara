@@ -5395,6 +5395,16 @@ impl Emitter {
             }
             return Val { op: "false".to_string(), kind: 1, heap: false };
         }
+        if method == "to_f64" {
+            // `n.to_f64()` (Slice 45): signed int → double (sitofp). Surfaced
+            // by the rich-token lexer capstone (fractional digit accumulation).
+            let ov = self.emit_value(object);
+            let Val { op: oop, kind: ok, heap: oh } = ov;
+            let r = self.fresh();
+            self.body =
+                self.body + "  " + r.clone() + " = sitofp i64 " + oop + " to double\n";
+            return Val { op: r, kind: 5, heap: false };
+        }
         if method == "unwrap" {
             // `o.unwrap()` (Slice 34): extract the Some/Ok payload by its
             // recorded kind — a String payload is a BORROW (the receiver's
