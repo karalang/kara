@@ -32,7 +32,7 @@ can read like a sentence.
 
 Available everywhere as builtins:
 
-```kara
+```kara,ignore
 assert(condition);              // panics if false
 assert_eq(left, right);        // panics if not equal, shows both values
 ```

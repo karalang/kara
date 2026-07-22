@@ -126,7 +126,7 @@ let (first, second) = get_pair();
 
 For when you only care about one variant:
 
-```kara
+```kara,ignore
 if let Some(user) = find_user(42) {
     println(f"Found: {user.name}");
 }

@@ -169,7 +169,7 @@ println(grid[1][2]);       // 6 — row 1, column 2
 
 `grid[i][j]` reads a cell; the same place assigns to one:
 
-```kara
+```kara,ignore
 grid[0][1] = 20;           // mutate one cell in place
 ```
 

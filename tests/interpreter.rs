@@ -24704,3 +24704,21 @@ fn test_lazyframe_with_columns_errors() {
         "{errors:?}",
     );
 }
+
+// ── Script mode (design.md § Script mode, phase-8 Q7) ─────────────────────
+
+#[test]
+fn test_script_mode_top_level_statements_execute() {
+    // A main-less file of top-level statements runs via the synthesized
+    // `fn main()` — previously the statements were silently dropped and
+    // the file was a no-op under the interpreter.
+    assert_eq!(run("let x = 41;\nprintln(x + 1);\n"), "42\n");
+}
+
+#[test]
+fn test_script_mode_items_hoist_and_statements_run_in_order() {
+    assert_eq!(
+        run("fn double(x: i64) -> i64 { x * 2 }\nlet y = double(21);\nprintln(y);\nprintln(y + 1);\n"),
+        "42\n43\n"
+    );
+}

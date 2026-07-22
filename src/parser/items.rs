@@ -152,6 +152,35 @@ impl super::Parser {
             )),
             Token::Impl => Some(Item::ImplBlock(self.parse_impl_block(attributes)?)),
             Token::Effect => self.parse_effect_decl(is_pub, false, false),
+            // Bare `resource Db;` — shorthand for `effect resource Db;`
+            // (the form the effect-system tests and docs use). Previously
+            // this had NO arm and was SILENTLY DROPPED by item recovery
+            // (tolerated because the effect checker accepts resource names
+            // it hasn't seen declared); script mode's statement fallback
+            // would now mis-route it into the synthesized main, so parse
+            // it as the item it always denoted. Same body as the
+            // `effect resource` arm in `parse_effect_decl`.
+            Token::Resource => {
+                let start = self.current_span();
+                self.advance();
+                let name = self.expect_identifier()?;
+                let name_span = self.span_from(&start);
+                self.check_ident_class(&name, IdentClass::Type, "effect resource", name_span);
+                let generic_params = self.parse_optional_generic_params();
+                let provider_trait = if self.eat(&Token::Colon) {
+                    Some(self.expect_identifier()?)
+                } else {
+                    None
+                };
+                self.expect(&Token::Semicolon)?;
+                Some(Item::EffectResource(EffectResourceDecl {
+                    span: self.span_from(&start),
+                    name,
+                    generic_params,
+                    provider_trait,
+                    canonical_host_name: None,
+                }))
+            }
             Token::Stable => {
                 self.advance();
                 // stable effect group ...
@@ -281,6 +310,38 @@ impl super::Parser {
                 Some(Item::TypeAlias(def))
             }
             Token::Let => {
+                // Script mode (design.md § Script mode, phase-8 Q7): a
+                // top-level `let` whose binding name is Value-class
+                // (lowercase — `let x = ...`), or whose pattern is not a
+                // plain name (`let (a, b) = ...`), is a SCRIPT STATEMENT,
+                // not a module-level const binding. Return `None` without
+                // an error so `parse_program`'s statement fallback collects
+                // it into the synthesized `fn main`. Const-class
+                // (SCREAMING_SNAKE) names keep the existing ModuleBinding
+                // path; Type-class names also stay on it so the resolver's
+                // E_MODULE_BINDING_NAMING fix-it continues to fire for the
+                // module-const-with-wrong-case mistake. Guarded on a bare
+                // `let` (no attributes / visibility — those unambiguously
+                // mean a module binding was intended).
+                if attributes.is_empty() && !is_pub && !is_private {
+                    let name_tok = if matches!(self.peek_token_at(1), Token::Mut) {
+                        self.peek_token_at(2)
+                    } else {
+                        self.peek_token_at(1)
+                    };
+                    let is_script_let = match &name_tok {
+                        Token::Identifier { name, .. } => matches!(
+                            crate::lexer::classify_ident(name),
+                            crate::lexer::IdentClass::Value
+                        ),
+                        // Non-identifier pattern head (tuple destructure,
+                        // etc.) — never a module binding shape.
+                        _ => true,
+                    };
+                    if is_script_let {
+                        return None;
+                    }
+                }
                 let decl = self.parse_module_binding(attributes, is_pub, is_private)?;
                 Some(Item::ModuleBinding(decl))
             }

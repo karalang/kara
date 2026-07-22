@@ -132,6 +132,60 @@ impl super::Parser {
         })
     }
 
+    /// One top-level SCRIPT statement (script mode, design.md § Script mode):
+    /// mirrors `parse_block`'s statement dispatch — `let`/`defer`/... via
+    /// `parse_statement`, otherwise an expression statement with the same
+    /// semicolon / assignment / compound-assignment / block-like handling —
+    /// but terminated by EOF/next-item instead of `}` and with no
+    /// final-expression semantics (the synthesized `fn main()` is unit; a
+    /// trailing value expression is just a statement).
+    pub(crate) fn parse_top_level_script_stmt(&mut self) -> Option<Stmt> {
+        if self.is_statement_start() {
+            return self.parse_statement();
+        }
+        let expr = self.parse_expression_stmt()?;
+        if self.eat(&Token::Semicolon) {
+            return Some(Stmt {
+                span: expr.span.clone(),
+                kind: StmtKind::Expr(expr),
+            });
+        }
+        if self.check(&Token::Comma) {
+            return self.finish_multi_assign(expr);
+        }
+        if self.eat(&Token::Equal) {
+            let value = self.parse_expression()?;
+            self.expect(&Token::Semicolon)?;
+            let span = expr.span.clone();
+            return Some(Stmt {
+                span,
+                kind: StmtKind::Assign {
+                    target: expr,
+                    value,
+                },
+            });
+        }
+        if let Some(cop) = self.try_compound_op() {
+            let value = self.parse_expression()?;
+            self.expect(&Token::Semicolon)?;
+            let span = expr.span.clone();
+            return Some(Stmt {
+                span,
+                kind: StmtKind::CompoundAssign {
+                    target: expr,
+                    op: cop,
+                    value,
+                },
+            });
+        }
+        // Block-like expression (`if`/`while`/`match`/...) or a trailing
+        // expression without a semicolon — both are statements here.
+        Some(Stmt {
+            span: expr.span.clone(),
+            kind: StmtKind::Expr(expr),
+        })
+    }
+
     /// Parse a `providers { R => e, ... } in { body }` expression.
     /// Caller positions at the `providers` keyword. Resource keys are
     /// bare identifiers (Type-class; the case-class check is a later
@@ -354,7 +408,7 @@ impl super::Parser {
 
     // ── Statements ───────────────────────────────────────────────
 
-    fn parse_statement(&mut self) -> Option<Stmt> {
+    pub(crate) fn parse_statement(&mut self) -> Option<Stmt> {
         match self.peek_token() {
             Token::Let => self.parse_let_statement(),
             Token::Defer => {

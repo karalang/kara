@@ -45,7 +45,7 @@ v.sort();                       // natural ascending order
 For any other order, `sort_by` takes a comparator closure `|a, b| ...` that
 returns an ordering. Produce one by comparing two elements with `.cmp()`:
 
-```kara
+```kara,ignore
 v.sort_by(|a, b| a.cmp(b));     // ascending — same as v.sort()
 v.sort_by(|a, b| b.cmp(a));     // descending — flip the operands
 ```
@@ -54,7 +54,7 @@ v.sort_by(|a, b| b.cmp(a));     // descending — flip the operands
 reverses the direction. The same shape sorts by a derived key — compare the keys
 instead of the whole elements:
 
-```kara
+```kara,ignore
 // pairs: Vec[(i64, i64)] — order by the second component, descending
 pairs.sort_by(|a, b| b.1.cmp(a.1));
 ```
@@ -79,7 +79,7 @@ Because closures carry the effects of their bodies (see above), iterator chains 
 
 ### Common iterator methods
 
-```kara
+```kara,ignore
 items.map(|x| transform(x))       // transform each element
 items.filter(|x| predicate(x))    // keep elements that match
 items.fold(init, |acc, x| ...)    // reduce to a single value

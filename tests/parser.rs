@@ -12106,3 +12106,88 @@ fn multiple_stray_effect_commas_each_get_an_edit() {
     let result = karac::parse(src);
     assert_eq!(result.fix_edits.len(), 2, "errors: {:?}", result.errors);
 }
+
+// ── Script mode (design.md § Script mode, phase-8 Q7) ─────────────────────
+
+/// A main-less file of top-level statements synthesizes `fn main()` with the
+/// statements as its body in file order. Previously they were SILENTLY
+/// dropped (parse_item → None with no error → synchronize skipped them).
+#[test]
+fn script_mode_synthesizes_main_from_top_level_statements() {
+    let program = parse_ok("let x = 41;\nprintln(x + 1);\n");
+    let mains: Vec<&Function> = program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::Function(f) if f.name == "main" => Some(f),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(mains.len(), 1, "exactly one synthesized main");
+    let main = mains[0];
+    assert!(main.return_type.is_none(), "synthesized main is unit");
+    assert_eq!(
+        main.body.stmts.len(),
+        2,
+        "both statements collected in file order"
+    );
+    assert!(
+        matches!(&main.body.stmts[0].kind, StmtKind::Let { .. }),
+        "first statement is the let"
+    );
+}
+
+/// Items hoist to module scope; interleaved statements form the main body.
+#[test]
+fn script_mode_hoists_items_and_collects_statements() {
+    let program =
+        parse_ok("fn double(x: i64) -> i64 { x * 2 }\nlet y = double(21);\nprintln(y);\n");
+    let fn_names: Vec<&str> = program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::Function(f) => Some(f.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        fn_names.contains(&"double"),
+        "user fn hoisted: {fn_names:?}"
+    );
+    assert!(fn_names.contains(&"main"), "main synthesized: {fn_names:?}");
+}
+
+/// Top-level statements + an explicit `fn main` is the spec'd ambiguity
+/// error, pointing at the statement and naming main's line.
+#[test]
+fn script_mode_rejects_mix_with_explicit_main() {
+    let (_, errors) = parse_with_errors("println(\"top\");\nfn main() { println(\"main\"); }\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("both top-level statements")
+                && e.message.contains("fn main()")),
+        "expected the ambiguity diagnostic; got: {errors:?}"
+    );
+}
+
+/// SCREAMING_SNAKE top-level `let` stays a module-level const binding —
+/// script mode must not capture it (back-compat with module bindings).
+#[test]
+fn script_mode_preserves_module_const_bindings() {
+    let program = parse_ok("let MAX = 5;\nfn main() { println(MAX); }\n");
+    assert!(
+        program
+            .items
+            .iter()
+            .any(|it| matches!(it, Item::ModuleBinding(_))),
+        "SCREAMING let stays a ModuleBinding"
+    );
+    // No synthesized second main; no ambiguity error (parse_ok would panic).
+    let main_count = program
+        .items
+        .iter()
+        .filter(|it| matches!(it, Item::Function(f) if f.name == "main"))
+        .count();
+    assert_eq!(main_count, 1);
+}

@@ -186,7 +186,7 @@ The raw-pointer methods — `.offset(i)`, `.write(v)`, `.read()` (and `_unaligne
 
 When instead you're holding an *owned Kāra value* and want to release it to the caller without running its destructor, the [`forget`](./ch12-ownership.md) primitive is the move-out. It consumes its argument and suppresses the drop Kāra would otherwise run:
 
-```kara
+```kara,ignore
 forget(value);   // Kāra will NOT drop `value`; ownership has left the language
 ```
 

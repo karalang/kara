@@ -10,7 +10,7 @@ let status = if score >= 90 { "excellent" } else { "keep going" };
 
 For side effects, use it as a statement:
 
-```kara
+```kara,ignore
 if temperature > 100 {
     println("Warning: overheating!");
 } else if temperature > 80 {

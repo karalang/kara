@@ -2281,7 +2281,7 @@ fn test_slice_8ac_bound_form_polymorphic_round_trip_with_closure() {
     // Compound polymorphism end-to-end with the bound-form spelling.
     // A closure with concrete effects binds `E` at the call site;
     // the inferred caller effects must include the closure's effects.
-    let source = "        resource Db
+    let source = "        resource Db;
         fn touch_db() with reads(Db) { todo() }
         pub fn pipeline[T, E: Effect](x: T, cb: Fn(T) -> T with E) -> T with E { cb(x) }
         fn caller() with reads(Db) { pipeline(42, |y| { touch_db(); y }); }

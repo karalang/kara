@@ -12839,6 +12839,24 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_script_mode_top_level_statements() {
+        // Script mode (design.md § Script mode, phase-8 Q7): a main-less
+        // file of top-level statements compiles via the parser-synthesized
+        // unit `fn main()` — items hoist, statements form the body in file
+        // order. Build must match the interpreter (which runs the same
+        // synthesized main).
+        if let Some(out) = run_program(
+            "fn double(x: i64) -> i64 { x * 2 }\n\
+             let y = double(21);\n\
+             println(y);\n\
+             let msg: String = \"script\".to_string();\n\
+             println(msg);\n",
+        ) {
+            assert_eq!(out, "42\nscript\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_materialized_iterator_binding() {
         // B-2026-07-11-19 — a `let it = v.iter()` iterator binding used at a
         // terminal / adaptor / for-loop. Codegen has no runtime iterator value,

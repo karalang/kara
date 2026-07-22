@@ -84,6 +84,13 @@ pub struct Parser {
     pub(crate) tokens: Vec<SpannedToken>,
     pub(crate) pos: usize,
     pub(crate) errors: Vec<ParseError>,
+    /// Script mode (design.md § Script mode): when `true` (the default —
+    /// root source files), top-level statements synthesize a unit
+    /// `fn main()`. Item-only contexts — comptime `ast.item` quotes,
+    /// `mod`-loaded module files — set this `false` via
+    /// [`Parser::items_only`], turning top-level statements into a parse
+    /// error instead of a synthesized entry point.
+    pub(crate) allow_script_mode: bool,
     /// Active labels for disambiguating `break label` vs `break value` and
     /// for routing labeled-block label scopes. Each entry carries a
     /// `LabelKind` tag (`Loop` for labeled loops, `Block` for labeled
@@ -186,6 +193,7 @@ impl Parser {
             pos: 0,
             loop_labels: Vec::new(),
             errors: Vec::new(),
+            allow_script_mode: true,
             pending_doc: None,
             fn_context_stack: Vec::new(),
             effect_var_stack: Vec::new(),
@@ -248,6 +256,14 @@ impl Parser {
         }
     }
 
+    /// Disable script-mode synthesis for item-only contexts (comptime
+    /// `ast.item` quotes, module files). Top-level statements then produce
+    /// a parse error rather than a synthesized `fn main()`.
+    pub fn items_only(mut self) -> Self {
+        self.allow_script_mode = false;
+        self
+    }
+
     pub fn parse(mut self) -> ParseResult {
         let program = self.parse_program();
         ParseResult {
@@ -282,13 +298,117 @@ impl Parser {
         let inner_attrs = self.parse_inner_attributes();
 
         let mut items = Vec::new();
+        // Script mode (design.md § Script mode, phase-8 Q7): top-level
+        // STATEMENTS — expression statements, assignments, Value-class
+        // (lowercase) `let`s — collect here in file order and become the
+        // body of a synthesized `fn main()` after the loop. Items hoist to
+        // module scope exactly as before. Previously these statements were
+        // SILENTLY DROPPED (`parse_item` returned `None` with no error and
+        // `synchronize_to_item` skipped them), so a main-less script
+        // "passed" `karac check` and did nothing under `run --interp`.
+        let mut script_stmts: Vec<Stmt> = Vec::new();
         while !self.is_at_end() {
+            let errs_before = self.errors.len();
             match self.parse_item() {
                 Some(item) => items.push(item),
+                None if self.errors.len() == errs_before && !self.is_at_end() => {
+                    // Non-item head with no diagnostic — a top-level
+                    // statement. Parse it as one; a statement parse that
+                    // ALSO fails falls back to the item-level recovery so
+                    // the loop always makes progress.
+                    let pos_before = self.pos;
+                    match self.parse_top_level_script_stmt() {
+                        Some(stmt) => script_stmts.push(stmt),
+                        None => {
+                            if self.pos == pos_before {
+                                self.synchronize_to_item();
+                            }
+                        }
+                    }
+                }
                 None => {
                     // Error recovery: skip to next item-starting token
                     self.synchronize_to_item();
                 }
+            }
+        }
+        if !script_stmts.is_empty() && !self.allow_script_mode {
+            // Item-only context (`ast.item` quote, module file): top-level
+            // statements are an error here, never a synthesized main.
+            self.error_at(
+                "top-level statements are not allowed in this context — only item \
+                 declarations (fn, struct, enum, trait, impl, use); script mode \
+                 applies only to a root source file",
+                script_stmts[0].span.clone(),
+            );
+        } else if !script_stmts.is_empty() {
+            // Ambiguity rule (design.md § Script mode > Rejecting ambiguous
+            // files): top-level statements + an explicit `fn main` is a
+            // compile error with one obvious fix in each direction.
+            let explicit_main = items.iter().find_map(|it| match it {
+                Item::Function(f) if f.name == "main" => Some(f.span.clone()),
+                _ => None,
+            });
+            let first_span = script_stmts[0].span.clone();
+            if let Some(main_span) = explicit_main {
+                self.error_at(
+                    &format!(
+                        "file contains both top-level statements and an explicit `fn main()` \
+                         (defined at line {}); move the statements into `main`, or remove the \
+                         explicit `main` to use script mode",
+                        main_span.line
+                    ),
+                    first_span,
+                );
+            } else {
+                // Synthesize `fn main()` wrapping the statements in file
+                // order. Unit return (the REPL cell-wrapper precedent and
+                // the entry-point contract's `()` arm); the design doc's
+                // `Result[Unit, Error]` signature upgrade is deferred until
+                // a catch-all `Error` type exists in v1 — until then a
+                // top-level `?` reports the ordinary ?-in-unit-fn
+                // diagnostic. Effects are inferred exactly as for a
+                // user-written private `fn main()`.
+                let last_span = script_stmts.last().map(|s| s.span.clone()).unwrap();
+                let body_span = Span {
+                    line: first_span.line,
+                    column: first_span.column,
+                    offset: first_span.offset,
+                    length: (last_span.offset + last_span.length).saturating_sub(first_span.offset),
+                };
+                items.push(Item::Function(Function {
+                    span: first_span.clone(),
+                    attributes: Vec::new(),
+                    doc_comment: None,
+                    is_pub: false,
+                    is_private: false,
+                    is_unsafe: false,
+                    is_comptime: false,
+                    name: "main".to_string(),
+                    generic_params: None,
+                    params: Vec::new(),
+                    self_param: None,
+                    return_type: None,
+                    effects: None,
+                    requires: Vec::new(),
+                    ensures: Vec::new(),
+                    where_clause: None,
+                    body: Block {
+                        stmts: script_stmts,
+                        final_expr: None,
+                        span: body_span,
+                    },
+                    stdlib_origin: false,
+                    deprecation: None,
+                    unstable: None,
+                    is_track_caller: false,
+                    inline_hint: None,
+                    is_cold: false,
+                    is_gpu: false,
+                    lint_overrides: Vec::new(),
+                    profile_compat: Vec::new(),
+                    abi: None,
+                }));
             }
         }
         Program {

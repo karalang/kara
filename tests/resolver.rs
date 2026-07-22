@@ -4690,10 +4690,13 @@ fn test_module_binding_mut_resolves_at_module_scope() {
 
 #[test]
 fn test_module_binding_lowercase_name_rejected() {
-    // Slice 3's Const-class naming check: `let max_retries` at
-    // module scope is rejected with `E_MODULE_BINDING_NAMING`
-    // and a SCREAMING_SNAKE_CASE rename suggestion.
-    let errors = resolve_errors("let max_retries: i32 = 3;");
+    // Slice 3's Const-class naming check. Since script mode (phase-8 Q7),
+    // a BARE lowercase top-level `let` is a script statement (it feeds the
+    // synthesized `fn main()`), so the module-binding naming check is
+    // exercised through a spelling that still routes to `ModuleBinding`:
+    // `pub let` (visibility unambiguously means a module binding was
+    // intended, so the script-let carve-out does not apply).
+    let errors = resolve_errors("pub let max_retries: i32 = 3;");
     assert!(
         errors.iter().any(|e| {
             e.message.contains("E_MODULE_BINDING_NAMING")
@@ -4711,7 +4714,9 @@ fn test_module_binding_naming_carries_machine_replacement() {
     // SCREAMING_SNAKE candidate — wire it as a machine-applicable
     // `.replacement` spanning the name identifier only, so `karac fix` can
     // apply it (previously emitted as prose in `suggestion` only).
-    let src = "let maxRetries: i32 = 3;";
+    // `pub let` keeps the binding on the ModuleBinding path under script
+    // mode (see test_module_binding_lowercase_name_rejected).
+    let src = "pub let maxRetries: i32 = 3;";
     let errors = resolve_errors(src);
     let err = errors
         .iter()
@@ -4729,7 +4734,7 @@ fn test_module_binding_naming_carries_machine_replacement() {
         s.replace_range(edit.offset..edit.offset + edit.length, &edit.replacement);
         s
     };
-    assert_eq!(applied, "let MAX_RETRIES: i32 = 3;");
+    assert_eq!(applied, "pub let MAX_RETRIES: i32 = 3;");
 }
 
 #[test]

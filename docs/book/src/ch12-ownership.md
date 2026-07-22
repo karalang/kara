@@ -72,7 +72,7 @@ fn helper(s: mut ref State) {
 
 Method calls, field assignment, and index assignment never carry the marker:
 
-```kara
+```kara,ignore
 v.push(x);                     // method call — silent
 s.field = 5;                   // field assignment — silent
 v[i] = x;                      // index assignment — silent

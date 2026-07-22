@@ -292,7 +292,7 @@ pub fn build_program_tree_with_deps(
             path: w.file.clone(),
             error: e.to_string(),
         })?;
-        let parsed = crate::parse(&source);
+        let parsed = crate::parse_items_only(&source);
         let imports = extract_imports(&parsed.program);
         if !parsed.errors.is_empty() {
             parse_errors.push(ModuleParseErrors {
@@ -514,7 +514,7 @@ pub fn build_program_tree_with_deps(
                     path: w.file.clone(),
                     error: e.to_string(),
                 })?;
-                let parsed = crate::parse(&source);
+                let parsed = crate::parse_items_only(&source);
                 if !parsed.errors.is_empty() {
                     parse_errors.push(ModuleParseErrors {
                         file: w.file.clone(),

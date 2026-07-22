@@ -180,6 +180,14 @@ pub fn parse(source: &str) -> ParseResult {
     parser.parse()
 }
 
+/// Like [`parse`], but for ITEM-ONLY contexts (module files loaded via
+/// `mod`, comptime `ast.item` quotes): top-level statements are a parse
+/// error instead of synthesizing a script-mode `fn main()`.
+pub fn parse_items_only(source: &str) -> ParseResult {
+    let tokens = tokenize(source);
+    Parser::new(tokens).items_only().parse()
+}
+
 /// Resolve names in a parsed program.
 pub fn resolve(program: &Program) -> ResolveResult {
     let resolver = Resolver::new(program);

@@ -120,7 +120,7 @@ pub(crate) fn parse_comptime_expr(s: &str) -> Result<Expr, String> {
 /// `ast.item(...)` values from the derive fn).
 fn parse_comptime_item(s: &str) -> Result<Item, String> {
     let tokens = crate::tokenize(s);
-    let result = crate::parser::Parser::new(tokens).parse();
+    let result = crate::parser::Parser::new(tokens).items_only().parse();
     if !result.errors.is_empty() {
         let msgs: Vec<String> = result.errors.iter().map(|e| e.message.clone()).collect();
         return Err(msgs.join("; "));
