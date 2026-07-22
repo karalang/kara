@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 161 | 0 |
+| miscompile | 162 | 1 |
 | leak | 93 | 0 |
 | double-free | 78 | 1 |
 | codegen-gap | 71 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 464 | 1 |
+| codegen | 465 | 2 |
 | typecheck | 84 | 0 |
 | interp | 69 | 0 |
 | ownership | 26 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **638 surfaced · 1 open · 632 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **639 surfaced · 2 open · 632 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-22-9 | 2026-07-22 | codegen | high | AOT double-free: a Vec-payload enum variant (Node.Nums(Vec[i64])) COEXISTING with a String-payload variant (Ident(String)), where a String-payload TEMP is passed to a ref-param consuming match AND a Vec-payload value flows through the same describe(ref) fn. 26-line repro (vpmin7): describe(Node.Ident("foo".to_string())) + let a = mk_nums(); describe(a) together abort with 'double free or corruption'; either alone is clean. Interp correct; JIT also aborts. Same mixed-str-enum+aggregate-payload family as B-2026-07-21-5. | — |
+| B-2026-07-22-11 | 2026-07-22 | codegen | high | Total-order float wrappers (F32/F64 shipped; F16/Bf16 planned) silently MISCOMPILE in codegen: `a > b`/`a == b` on a wrapper return const-0 (every comparison false; `==` true even for unequal), and `Map`/`Set`/`sort` with a wrapper key COLLAPSE (all keys compare equal -> `get` returns the last-inserted value). Correct ONLY under `karac run --interp` (tree-walk); `karac build` and the default `karac run` (JIT) produce WRONG answers. Pre-existing for the SHIPPED F32/F64; uncaught because there are ZERO codegen tests for the wrappers and the interpreter tests use the `run()` helper that bypasses typecheck (so they only ever exercised `.from` construction + Display, never comparison/map/sort). | phase-11-stdlib-longtail.md line 20 (F16/Bf16 total-order wrappers) is BLOCKED on this. |
 
 ### Fixed (632)
 
