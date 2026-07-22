@@ -6199,6 +6199,45 @@ fn test_distinct_bogus_method_is_no_method_found() {
     );
 }
 
+#[test]
+fn test_unknown_assoc_fn_on_scalar_primitive_is_no_method_found() {
+    // B-2026-07-22-10: an unresolved associated call on a scalar primitive
+    // (`i64.max_value()` — a Rust-ism; Kāra spells it `i64.MAX`) used to pass
+    // `karac check` clean and then panic the interpreter / fail codegen with a
+    // raw "no handler" error. Now it is a clean typecheck error.
+    for src in [
+        "fn f() -> i64 { i64.max_value() }",
+        "fn f() { let _ = i64.bogus_method(); }",
+        "fn f() { let _ = f64.nope(); }",
+        "fn f() { let _ = bool.frobnicate(); }",
+        "fn f() { let _ = char.wat(); }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+            "expected NoMethodFound for {src:?}, got: {}",
+            errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+    }
+}
+
+#[test]
+fn test_primitive_max_min_and_valid_assoc_fns_still_typecheck() {
+    // The rejection above must NOT catch the valid primitive associated
+    // surface: `.MAX` / `.MIN` field accesses and the `parse` family.
+    // (`typecheck_ok` asserts a clean parse/resolve/typecheck.)
+    typecheck_ok("fn f() -> i64 { i64.MAX }");
+    typecheck_ok("fn f() -> i64 { i64.MIN }");
+    typecheck_ok("fn f() -> i32 { i32.MAX }");
+    typecheck_ok("fn f() -> Option[i64] { i64.parse(\"42\") }");
+}
+
 // B-2026-07-17-12 (partial): `String.bytes()` returns a structural
 // `Type::Slice[u8]`; before the arm-3700 fix that source shape fell through
 // the `extend_from_slice` arm to the silent prelude Error-typing.
@@ -23145,6 +23184,8 @@ fn drop_method_keys_empty_when_no_drop_impl() {
         "PooledConnection",
         "BoundedChannel",
         "CriticalSectionGuard",
+        "Semaphore",
+        "RateLimiter",
     ];
     let user_keys: Vec<&String> = result
         .drop_method_keys

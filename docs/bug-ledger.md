@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
 | perf | 22 | 0 |
-| diagnostics | 13 | 0 |
+| diagnostics | 14 | 0 |
 | use-after-free | 5 | 0 |
 | other | 3 | 0 |
 
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 464 | 1 |
-| typecheck | 83 | 0 |
+| typecheck | 84 | 0 |
 | interp | 69 | 0 |
 | ownership | 26 | 0 |
 | other | 18 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **637 surfaced · 1 open · 631 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **638 surfaced · 1 open · 632 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **637 surfaced 
 |---|---|---|---|---|---|
 | B-2026-07-22-9 | 2026-07-22 | codegen | high | AOT double-free: a Vec-payload enum variant (Node.Nums(Vec[i64])) COEXISTING with a String-payload variant (Ident(String)), where a String-payload TEMP is passed to a ref-param consuming match AND a Vec-payload value flows through the same describe(ref) fn. 26-line repro (vpmin7): describe(Node.Ident("foo".to_string())) + let a = mk_nums(); describe(a) together abort with 'double free or corruption'; either alone is clean. Interp correct; JIT also aborts. Same mixed-str-enum+aggregate-payload family as B-2026-07-21-5. | — |
 
-### Fixed (631)
+### Fixed (632)
 
-<details><summary>631 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>632 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -769,6 +769,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **637 surfaced 
 | B-2026-07-22-6 | codegen | medium | `s[a..b].to_string()` / `.clone()` — a `.to_string()`/`.clone()` METHOD CALL directly on a String SLICE fails codegen with "indexed-receiver method '… | 9014477 |
 | B-2026-07-22-7 | codegen | high | Index-assigning an UNTYPED float literal to an f32 Tensor element silently stores nothing under AOT: `let mut a: Tensor[f32,[2]] = Tensor.zeros(vec![… | 7495530 |
 | B-2026-07-22-8 | codegen | medium | Reassigning a `mut String` STRUCT FIELD leaks the OLD buffer when the field's current value was set in a PRIOR function call | 1358437 |
+| B-2026-07-22-10 | typecheck | medium | An unknown associated function on a scalar primitive type — e.g | — |
 
 </details>
 

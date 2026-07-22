@@ -1340,6 +1340,45 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     return sig.return_type;
                 }
+                // Unresolved associated call on a SCALAR PRIMITIVE — reject
+                // here rather than fall through. A primitive type has no
+                // user-extensible `impl` surface, and every valid primitive
+                // associated fn (`parse` / `from_str_radix` / `from` /
+                // `try_from`, plus the `.MAX` / `.MIN` field accesses handled
+                // elsewhere) has an explicit arm above, so an unresolved one is
+                // genuinely undefined. Without this, `i64.max_value()` (a
+                // Rust-ism — Kāra spells it `i64.MAX`) passed `karac check`
+                // clean and then panicked the tree-walk interpreter
+                // (`eval_expr` treated the `i64` receiver as an undefined
+                // variable → `unreachable!`) or failed codegen with a raw
+                // "no handler for method" — a green-check-then-crash
+                // (B-2026-07-22-10). Struct / enum / `String` receivers keep
+                // the fall-through (they may still resolve downstream).
+                if matches!(
+                    type_name.as_str(),
+                    "i8" | "i16"
+                        | "i32"
+                        | "i64"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "usize"
+                        | "f32"
+                        | "f64"
+                        | "bool"
+                        | "char"
+                ) {
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    self.type_error(
+                        format!("no associated function '{method}' on type '{type_name}'"),
+                        span.clone(),
+                        TypeErrorKind::NoMethodFound,
+                    );
+                    return Type::Error;
+                }
                 // Known type but no matching method — fall through so the
                 // existing "method not found" diagnostic fires below.
             }
