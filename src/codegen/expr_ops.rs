@@ -1647,6 +1647,21 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(&BasicTypeEnum::StructType(struct_ty)) = self.ref_params.get(var_name) {
                 if let Some(idx) = self.field_index_for(object, field) {
                     if let Some(ptr) = self.get_data_ptr(var_name) {
+                        // B-2026-07-22-8: drop the OLD heap-owning field value
+                        // before overwriting it — the same release the owned-
+                        // struct fall-through below does. This `mut ref` struct-
+                        // param path (`s.buf = read4(s)` where `s: mut ref S`)
+                        // previously stored straight over the field, clobbering a
+                        // Vec/String/Map/Set/enum field's old buffer/handle. The
+                        // leak only surfaced when the field held a heap value set
+                        // by a PRIOR call (within-call reassigns route through the
+                        // owned path); the drop here is unconditional (cap-guarded
+                        // inside the drop fn), so it frees the live old value
+                        // regardless. Trivially-copyable (scalar) fields are a
+                        // no-op. Surfaced by leetcode #158's Reader buffer refill.
+                        self.drop_old_plain_struct_field(
+                            object, var_name, field, idx, struct_ty, ptr,
+                        );
                         let field_ptr = self
                             .builder
                             .build_struct_gep(struct_ty, ptr, idx, &format!("ref_{}_ptr", field))
@@ -1683,7 +1698,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         // struct-drop uses; trivially-copyable (scalar) fields are
                         // a no-op. The generic-field subst resolves a bare-param
                         // field (`Box[T]{v:T}`) to its concrete type first.
-                        self.drop_old_plain_struct_field(object, var_name, field, idx, slot);
+                        self.drop_old_plain_struct_field(
+                            object,
+                            var_name,
+                            field,
+                            idx,
+                            sv.get_type(),
+                            slot.ptr,
+                        );
                         // Field-store width coercion — see
                         // `coerce_to_struct_field_ty`.
                         let new_val = self.coerce_to_struct_field_ty(sv.get_type(), idx, new_val);
@@ -1717,7 +1739,8 @@ impl<'ctx> super::Codegen<'ctx> {
         var_name: &str,
         field: &str,
         idx: u32,
-        slot: super::state::VarSlot<'ctx>,
+        struct_ty: StructType<'ctx>,
+        base_ptr: PointerValue<'ctx>,
     ) {
         let Some(type_name) = self
             .type_name_of_expr(object)
@@ -1737,16 +1760,17 @@ impl<'ctx> super::Codegen<'ctx> {
         if super::vec_method::is_trivially_copyable_te(&field_te) {
             return;
         }
-        // A `struct`-typed alloca: GEP the field slot and drop it in place. The
-        // load in the caller already happened, but the drop reads the field's
+        // GEP the field slot and drop it in place. The drop reads the field's
         // live {ptr,len,cap} / handle straight from the slot (the new value is
         // stored only AFTER this returns), so it frees exactly the old value.
-        let BasicTypeEnum::StructType(struct_ty) = slot.ty else {
-            return;
-        };
+        // `base_ptr` is the struct alloca for an owned binding, or the
+        // dereferenced caller storage for a `mut ref` struct param — in both
+        // cases GEP'ing the field and dropping frees the OLD value regardless of
+        // whether this function was the one that last assigned it (the free is
+        // an unconditional cap-guarded release inside the drop fn).
         let field_ptr = self
             .builder
-            .build_struct_gep(struct_ty, slot.ptr, idx, &format!("old_{field}_ptr"))
+            .build_struct_gep(struct_ty, base_ptr, idx, &format!("old_{field}_ptr"))
             .unwrap();
         let drop_fn = self.emit_drop_fn_for_type_expr(&field_te);
         self.builder

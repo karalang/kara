@@ -32107,4 +32107,68 @@ fn main() {
             "descending_loop_bce_skip_in_bounds",
         );
     }
+
+    #[test]
+    fn asan_mut_ref_struct_string_field_reassign_across_calls_no_leak() {
+        // B-2026-07-22-8: reassigning a heap-owning `String` STRUCT FIELD through a
+        // `mut ref S` param leaked the OLD buffer when the field's current value was
+        // set by a PRIOR function call. `compile_field_store`'s mut-ref-param path
+        // stored over the field WITHOUT dropping the displaced value; the old-value
+        // free was gated on an intra-function "field is currently heap-owned" fact
+        // that resets at function entry, so a reassignment whose first touch of the
+        // field is the store (the value having been set in an earlier call) leaked.
+        // Fixed by always loading + cap-guard-freeing the displaced field value before
+        // the store in the mut-ref-param path, mirroring the owned-struct path.
+        // Minimal shape is the Read4-II state machine (leetcode #158): a Reader struct
+        // with a `buf: String` chunk refilled via `s.buf = read4(s)` when it drains,
+        // where across calls the field already holds the previous chunk. Looped so a
+        // per-call strand shows as a large LSan leak.
+        assert_clean_asan_run(
+            r#"
+struct S { src: String, mut pos: i64, mut buf: String, mut bp: i64 }
+fn read4(s: mut ref S) -> String {
+    let n = s.src.len();
+    let mut chunk: String = "";
+    let mut c = 0i64;
+    while c < 4i64 and s.pos < n {
+        chunk.push_str(s.src[s.pos..s.pos + 1i64]);
+        s.pos = s.pos + 1i64;
+        c = c + 1i64;
+    }
+    return chunk;
+}
+fn consume(s: mut ref S, n: i64) -> String {
+    let mut r: String = "";
+    let mut t = 0i64;
+    while t < n {
+        if s.bp >= s.buf.len() {
+            s.buf = read4(s);
+            s.bp = 0i64;
+            if s.buf.len() == 0i64 { return r; }
+        }
+        r.push_str(s.buf[s.bp..s.bp + 1i64]);
+        s.bp = s.bp + 1i64;
+        t = t + 1i64;
+    }
+    return r;
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut iter = 0i64;
+    while iter < 100 {
+        let mut s = S { src: "HelloWorldFromKara", pos: 0i64, buf: "", bp: 0i64 };
+        let a = consume(mut s, 4i64);
+        let b = consume(mut s, 4i64);
+        let c = consume(mut s, 4i64);
+        total = total + a.len() + b.len() + c.len();
+        iter = iter + 1i64;
+    }
+    println(total);
+}
+"#,
+            // 100 iterations x (4 + 4 + 4) consumed chars = 1200.
+            &["1200"],
+            "mut_ref_struct_string_field_reassign_across_calls_no_leak",
+        );
+    }
 }
