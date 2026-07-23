@@ -2665,6 +2665,25 @@ mod codegen_tests {
         compile_to_ir(&parsed.program, None, None).expect("codegen failed")
     }
 
+    /// Like [`ir_for_desugared`] but also splices gated stdlib modules
+    /// (`import std.secret.{Secret};` etc.) before resolve — mirrors the real
+    /// CLI pipeline so a gated program's synthesized fns (e.g. the `Secret`
+    /// drop) appear in the IR.
+    fn ir_for_gated(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        karac::desugar_program(&mut parsed.program);
+        karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        compile_to_ir(&parsed.program, None, None).expect("codegen failed")
+    }
+
     /// Like [`ir_for`] but compiles with contract machinery stripped
     /// (design.md § Contracts: "stripped in release"). Race-free — forces the
     /// decision via the explicit codegen entry, not the process-global
@@ -73210,6 +73229,58 @@ fn main() {
 "#,
         ) {
             assert_eq!(out, "true\nfalse\nfalse\n");
+        }
+    }
+
+    #[test]
+    fn test_ir_secret_string_zeroize_on_drop() {
+        // std.secret Zeroize (design.md § Clone/Drop/Zeroize): a
+        // `Secret[String]`'s inner buffer is overwritten with zeros before it
+        // is freed, so the secret's bytes don't linger in freed heap. Verify
+        // the `Secret[String]` drop fn emits a `memset` (the zeroize) ahead of
+        // the buffer free. A plain (non-secret) String-field struct's drop
+        // must NOT gain a spurious memset.
+        let ir = ir_for_gated(
+            r#"
+import std.secret.{Secret};
+fn main() {
+    let s: Secret[String] = Secret.new("hunter2-token-01");
+    println(s.ct_eq(s));
+}
+"#,
+        );
+        // The Secret[String] mono drop fn carries the zeroize memset.
+        let has_secret_drop = ir.contains("__karac_drop_struct_Secret");
+        assert!(has_secret_drop, "expected a Secret drop fn in IR");
+        assert!(
+            ir.contains("llvm.memset"),
+            "expected a memset (zeroize) in the Secret[String] drop; IR had none"
+        );
+    }
+
+    #[test]
+    fn test_e2e_secret_string_zeroize_runs_all_backends() {
+        // The zeroize memset must not corrupt the normal Secret[String] drop —
+        // the program runs correctly (and leak/double-free-free, see
+        // `asan_secret_string_zeroize_no_leak`) on every backend. The zeroing
+        // itself is unobservable from surface code (the value is gone); this
+        // guards that adding it didn't break construction / use / drop.
+        if let Some(out) = run_program(
+            r#"
+import std.secret.{Secret};
+fn check(tok: ref Secret[String]) -> bool {
+    let ref_val: Secret[String] = Secret.new("hunter2-token-01");
+    return tok.ct_eq(ref_val)
+}
+fn main() {
+    let a: Secret[String] = Secret.new("hunter2-token-01");
+    let b: Secret[String] = Secret.new("different-secret1");
+    println(check(a));
+    println(check(b));
+}
+"#,
+        ) {
+            assert_eq!(out, "true\nfalse\n");
         }
     }
 

@@ -1523,6 +1523,78 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(entry_bb);
         let p_arg = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
 
+        // std.secret Zeroize (design.md § Clone / Drop / Zeroize): before the
+        // inner value's heap buffer is freed by the field-drop loop below,
+        // overwrite it with zeros so the secret's bytes don't linger in freed
+        // heap. This is the `impl Drop for Secret[T] where T: Zeroize` contract
+        // — `T::zeroize(&mut self.inner)` runs before the field destructor.
+        // v1 covers `Secret[String]` (the token / key / HMAC case, matching the
+        // shipped `.ct_eq` surface); `Vec[u8]` / `[u8; N]` inners and user
+        // `Zeroize` impls are follow-on slices. Scoped to the stdlib `Secret`
+        // via `secret_type_is_stdlib`, so a user's own `struct Secret` is
+        // untouched. The memset only writes into the buffer (no free), so it
+        // cannot double-free with the field-drop loop that frees it next.
+        if struct_name == "Secret" && self.secret_type_is_stdlib {
+            let inner_is_string = self
+                .struct_field_type_exprs
+                .get("Secret")
+                .and_then(|v| v.first())
+                .map(|fte| match subst {
+                    Some(s) => crate::codegen::helpers::subst_type_params_in_type_expr(fte, s),
+                    None => fte.clone(),
+                })
+                .map(|fte| self.is_string_type_expr(&fte))
+                .unwrap_or(false);
+            if inner_is_string {
+                if let Ok(field_ptr) = self.builder.build_struct_gep(st, p_arg, 0, "sec.z.inner.p")
+                {
+                    let cap_p = self
+                        .builder
+                        .build_struct_gep(vec_ty, field_ptr, 2, "sec.z.cap.p")
+                        .unwrap();
+                    let cap = self
+                        .builder
+                        .build_load(i64_t, cap_p, "sec.z.cap")
+                        .unwrap()
+                        .into_int_value();
+                    let is_heap = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::UGT,
+                            cap,
+                            i64_t.const_zero(),
+                            "sec.z.is_heap",
+                        )
+                        .unwrap();
+                    let z_bb = self.context.append_basic_block(drop_fn, "sec.z.do");
+                    let z_done = self.context.append_basic_block(drop_fn, "sec.z.done");
+                    self.builder
+                        .build_conditional_branch(is_heap, z_bb, z_done)
+                        .unwrap();
+                    self.builder.position_at_end(z_bb);
+                    let data_pp = self
+                        .builder
+                        .build_struct_gep(vec_ty, field_ptr, 0, "sec.z.data.pp")
+                        .unwrap();
+                    let data = self
+                        .builder
+                        .build_load(ptr_ty, data_pp, "sec.z.data")
+                        .unwrap()
+                        .into_pointer_value();
+                    // `cap` IS the String's byte capacity (the whole allocation),
+                    // so zeroing `cap` bytes clears the entire backing buffer.
+                    let _ = self.builder.build_memset(
+                        data,
+                        1,
+                        self.context.i8_type().const_zero(),
+                        cap,
+                    );
+                    self.builder.build_unconditional_branch(z_done).unwrap();
+                    self.builder.position_at_end(z_done);
+                }
+            }
+        }
+
         for (field_idx, kind) in kinds.iter().enumerate() {
             match kind {
                 FieldDrop::None => {}

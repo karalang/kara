@@ -21492,6 +21492,49 @@ fn main() with writes(FileSystem) reads(FileSystem) {{
         );
     }
 
+    /// std.secret Zeroize-on-drop (design.md § Clone/Drop/Zeroize): a
+    /// `Secret[String]` overwrites its inner buffer with zeros before freeing
+    /// it. The added `memset` runs inside the Secret drop, right before the
+    /// buffer free — this guards that it neither leaks nor double-frees (a
+    /// stray free / mis-sized memset would trip ASAN). Multiple secrets built,
+    /// used, and dropped across a fn boundary.
+    #[test]
+    fn asan_secret_string_zeroize_no_leak() {
+        let label = "secret_string_zeroize";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let src = r#"
+import std.secret.{Secret};
+fn check(tok: ref Secret[String]) -> bool {
+    let ref_val: Secret[String] = Secret.new("hunter2-token-01");
+    return tok.ct_eq(ref_val)
+}
+fn main() {
+    let a: Secret[String] = Secret.new("hunter2-token-01");
+    let b: Secret[String] = Secret.new("different-secret1");
+    println(check(a));
+    println(check(b));
+}
+"#;
+        let Some((stdout, status)) = run_under_asan(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the Secret[String] zeroize memset vs the buffer free",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim(),
+            "true\nfalse",
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// `DataFrame.read_csv` heap lifecycle (phase-11 CSV leg): the runtime
     /// builds the WHOLE frame graph (control + entries + names + column
     /// controls + data + bitmaps + String cell heaps) with malloc-compatible

@@ -23742,6 +23742,30 @@ fn main() {
     assert_eq!(out, "true\nfalse\nfalse\n");
 }
 
+#[test]
+fn test_secret_string_zeroize_on_drop_runs() {
+    // std.secret Zeroize-on-drop (design.md § Clone/Drop/Zeroize): the compiled
+    // path overwrites a `Secret[String]`'s buffer with zeros before freeing it;
+    // the tree-walk interpreter has no observable heap after drop, so zeroize is
+    // a no-op there (same posture as `ct_eq`'s constant-time). This asserts the
+    // interpreter runs construction / use / drop of `Secret[String]` identically
+    // to codegen (`test_e2e_secret_string_zeroize_runs_all_backends`).
+    let out = run(r#"
+import std.secret.{Secret};
+fn check(tok: ref Secret[String]) -> bool {
+    let ref_val: Secret[String] = Secret.new("hunter2-token-01");
+    return tok.ct_eq(ref_val)
+}
+fn main() {
+    let a: Secret[String] = Secret.new("hunter2-token-01");
+    let b: Secret[String] = Secret.new("different-secret1");
+    println(check(a));
+    println(check(b));
+}
+"#);
+    assert_eq!(out, "true\nfalse\n");
+}
+
 // ── VolatileCell (MMIO wrapper) ─────────────────────────────────
 
 #[test]
