@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 163 | 1 |
+| miscompile | 167 | 1 |
 | leak | 95 | 0 |
 | double-free | 79 | 1 |
-| codegen-gap | 73 | 2 |
+| codegen-gap | 74 | 2 |
 | missing-feature | 61 | 0 |
 | false-positive | 41 | 0 |
 | run-vs-build | 39 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 471 | 4 |
+| codegen | 476 | 4 |
 | typecheck | 84 | 0 |
 | interp | 69 | 0 |
 | ownership | 27 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **647 surfaced · 4 open · 638 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **652 surfaced · 4 open · 643 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -135,9 +135,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **647 surfaced 
 | B-2026-07-23-4 | 2026-07-23 | codegen | high | Matching a fresh-temp `Result[_, _]` (a direct function-call return) whose extracted payload is a STRUCT with a heap field (String/Vec), and reading that field (`match f() { Ok(w) => println(w.s) }`), double-frees the field's buffer under `karac build` — a memory-safety bug in an extremely common pattern. interp is clean. | — |
 | B-2026-07-23-5 | 2026-07-23 | codegen | medium | A generic fn whose return type PERMUTES the struct's type params — `fn swap[A,B](p: Pair[A,B]) -> Pair[B,A] { Pair { first: p.second, second: p.first } }` — miscompiles: the mono builds the returned struct literal with the INPUT layout `Pair[A,B]` instead of `Pair[B,A]`, failing LLVM module verification when A and B have different sizes. | — |
 
-### Fixed (638)
+### Fixed (643)
 
-<details><summary>638 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>643 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -779,6 +779,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **647 surfaced 
 | B-2026-07-22-13 | ownership | low | Spurious `rc-fallback` (perf false-positive) for a `match`/`if let` binding that is CONSUMED EXACTLY ONCE, when the match sits inside a loop: `while… | 042f848 |
 | B-2026-07-22-14 | autopar | medium | Auto-par false-negative REGRESSION from B-2026-07-22-9: the new producer-side move-hazard guard de-parallelizes a heap-owning producer whose binding… | 7a73b9d |
 | B-2026-07-23-1 | codegen | medium | An early `return` out of a `for (k, v) in map` / `for x in set` loop leaks the `karac_map_iter_new` iterator handle | 1dea868 |
+| B-2026-07-23-6 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (selfhost/src/codegen.kara emitter, NOT the seed): OR-PATTERNS `A \| B \| C =>` matched only the FIRST a… | 990ba16 |
+| B-2026-07-23-7 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (codegen.kara emitter): MATCH GUARDS `Pat if <cond> =>` were IGNORED entirely — the emitter always too… | 73b3e69 |
+| B-2026-07-23-8 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (codegen.kara emitter): `loop {}`, `break`, and `continue` were UNHANDLED — a `loop { … break }` emitt… | fa25a34 |
+| B-2026-07-23-9 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (codegen.kara emitter): `for x in <vec>` element iteration was UNHANDLED — the loop emitted nothing/0… | 57ea46e |
+| B-2026-07-23-10 | codegen | medium | CODEGEN-GAP in the selfhost codegen PORT (codegen.kara emitter): `i64.to_f64()` was unimplemented — the method returned the i64 receiver unchanged (k… | e2aaaa9 |
 
 </details>
 
