@@ -468,6 +468,20 @@ const CORPUS: &[&str] = &[
     // -1;` shape (where the bug first surfaced, masquerading as an `and`/`if`
     // fault), and a `not` regression guard.
     "fn hexval(c: i64) -> i64 {\n    if c >= 48 and c <= 57 {\n        return c - 48;\n    }\n    return -1;\n}\nfn neg(x: i64) -> i64 {\n    return -x;\n}\nfn main() {\n    let a = -1;\n    println(a.to_string());\n    println((-5).to_string());\n    println(neg(7).to_string());\n    println((-2 * 3).to_string());\n    println(hexval(55).to_string());\n    println(hexval(200).to_string());\n    let b = true;\n    if not b {\n        println(\"t\");\n    } else {\n        println(\"f\");\n    }\n}",
+    // Slice 55: BITWISE / SHIFT operators `& | ^ << >>` — an EMITTER slice.
+    // `bin_ir`'s `_ =>` catch-all mapped ALL of them to `add`, so `12 & 10`
+    // computed 22, `12 | 10` computed 22, `1 << 4` computed 5, `256 >> 2`
+    // computed 258 — every bitwise/shift op was silent ADDITION. In-surface:
+    // codegen.kara's own `hex_u64` uses `(bits >> ((15 - i) * 4)) & 15`, so
+    // the port would miscompile ITSELF. B-2026-07-23-21. Fix: five kind-0
+    // (i64 arithmetic-path) arms — BitAnd→and, BitOr→or, BitXor→xor, Shl→shl,
+    // Shr→ashr (arithmetic right shift, matching the seed's signed-i64
+    // `build_right_shift`). kind 0 keeps them off the kind-2 SHORT-CIRCUIT
+    // path the LOGICAL `and`/`or` take, so the shared mnemonics don't collide.
+    // Covers each op, a nibble-extract `(bits >> 4) & 15`, and a negative-bits
+    // mask loop that exercises `ashr` sign-extension (seed-parity), plus a
+    // logical-`and`/`or` short-circuit regression guard.
+    "fn nib(bits: i64, i: i64) -> i64 {\n    return (bits >> (i * 4)) & 15;\n}\nfn main() {\n    println((12 & 10).to_string());\n    println((12 | 10).to_string());\n    println((12 ^ 10).to_string());\n    println((1 << 4).to_string());\n    println((256 >> 2).to_string());\n    println(nib(250, 0).to_string());\n    println(nib(250, 1).to_string());\n    let mut acc = 0;\n    let bits = 0 - 1;\n    let mut i = 0;\n    while i < 4 {\n        acc = acc + nib(bits, i);\n        i = i + 1;\n    }\n    println(acc.to_string());\n    let x = 5;\n    if x > 0 and x < 10 {\n        println(\"y\");\n    } else {\n        println(\"n\");\n    }\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

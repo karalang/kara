@@ -6146,6 +6146,21 @@ fn bin_ir(op: BinOp) -> BinIr {
         GtEq => BinIr { kind: 1, text: "sge".to_string() },
         And => BinIr { kind: 2, text: "and".to_string() },
         Or => BinIr { kind: 2, text: "or".to_string() },
+        // Bitwise / shift (Slice 55) — kind 0 (i64 arithmetic path), NOT the
+        // kind-2 short-circuit path the LOGICAL And/Or take, so `&`/`|` reuse
+        // the `and`/`or` mnemonics without colliding (different kind → different
+        // branch). Mirrors the seed (src/codegen/expr_ops.rs): BitAnd→and,
+        // BitOr→or, BitXor→xor, Shl→shl, Shr→ashr (ARITHMETIC right shift —
+        // the seed's `build_right_shift(sign_extend = !is_unsigned)` is `ashr`
+        // for signed i64, which is every scalar in the port's model). WITHOUT
+        // these arms the `_ =>` default emitted `add` for ALL of them: `12 & 10`
+        // computed 22, `1 << 4` computed 5. codegen.kara itself uses them
+        // (`(bits >> ((15 - i) * 4)) & 15` in hex_u64). B-2026-07-23-21.
+        BitAnd => BinIr { kind: 0, text: "and".to_string() },
+        BitOr => BinIr { kind: 0, text: "or".to_string() },
+        BitXor => BinIr { kind: 0, text: "xor".to_string() },
+        Shl => BinIr { kind: 0, text: "shl".to_string() },
+        Shr => BinIr { kind: 0, text: "ashr".to_string() },
         _ => BinIr { kind: 0, text: "add".to_string() },
     }
 }
