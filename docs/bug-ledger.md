@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 167 | 1 |
+| miscompile | 168 | 1 |
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
 | codegen-gap | 75 | 0 |
@@ -119,12 +119,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 14 | 0 |
 | cli | 12 | 0 |
 | resolver | 10 | 0 |
+| parser | 4 | 0 |
 | lexer | 3 | 0 |
-| parser | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **656 surfaced · 1 open · 650 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **657 surfaced · 1 open · 651 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **656 surfaced 
 |---|---|---|---|---|---|
 | B-2026-07-23-5 | 2026-07-23 | codegen | medium | A generic fn whose return type PERMUTES the struct's type params — `fn swap[A,B](p: Pair[A,B]) -> Pair[B,A] { Pair { first: p.second, second: p.first } }` — miscompiles: the mono builds the returned struct literal with the INPUT layout `Pair[A,B]` instead of `Pair[B,A]`, failing LLVM module verification when A and B have different sizes. | — |
 
-### Fixed (650)
+### Fixed (651)
 
-<details><summary>650 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>651 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -788,6 +788,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **656 surfaced 
 | B-2026-07-23-12 | interp | low | `mut ref` enum-payload `Map` mutation does not write through in the interpreter (interp keeps the pre-mutation size) while codegen writes through cor… | 54b76cb |
 | B-2026-07-23-13 | codegen | high | SEED codegen double-free: `if let Variant(t) = e` over an OWNED-VARIABLE user-enum scrutinee with a heap (String/Vec) payload re-freed the payload | 5e9bdd0 |
 | B-2026-07-23-14 | codegen | medium | Returning a `Map`/`Set`(-family) value moved OUT of an enum payload fails codegen module verification: `fn unwrap(v: V) -> Map[K,V] { match v { Table… | 178a193 |
+| B-2026-07-23-15 | parser | high | SELFHOST PARSER (parser.kara, Phase-12 port): the `expr as TYPE` cast operator was UNHANDLED in `parse_expr_bp` (only import-alias `as` existed) | 3afd613 |
 
 </details>
 
