@@ -1009,6 +1009,8 @@ impl<'a> super::Interpreter<'a> {
                     // syntax `a.gt(b)` sibling of the lowered `F32.gt` path.
                     | "F32"
                     | "F64"
+                    | "F16"
+                    | "Bf16"
             );
             if is_primitive {
                 if method == "from" {
@@ -1692,6 +1694,8 @@ impl<'a> super::Interpreter<'a> {
                 | Value::String(_)
                 | Value::TotalFloat32(_)
                 | Value::TotalFloat64(_)
+                | Value::TotalFloat16(_)
+                | Value::TotalBFloat16(_)
         ) {
             if method == "cmp" && args.len() == 1 {
                 let other = self.eval_expr_inner(&args[0].value);

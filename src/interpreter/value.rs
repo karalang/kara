@@ -417,6 +417,14 @@ pub enum Value {
     TotalFloat32(f32),
     /// F64 total-order wrapper: NaN sorts last, implements Eq/Ord/Hash
     TotalFloat64(f64),
+    /// F16 total-order wrapper (16-bit IEEE half). Stored promoted to `f64`
+    /// (the tree-walk interpreter has no native `f16` — same f64-promotion
+    /// posture as the `f16` primitive; the compiled path is exact half
+    /// precision). NaN sorts last, implements Eq/Ord/Hash.
+    TotalFloat16(f64),
+    /// Bf16 total-order wrapper (bfloat16). Stored promoted to `f64` (same
+    /// posture as `TotalFloat16`). NaN sorts last, implements Eq/Ord/Hash.
+    TotalBFloat16(f64),
     /// Atomic[T] runtime value. `Arc<Mutex<...>>` (not `Box`) so a par
     /// struct's `Atomic` field is genuinely *shared* across `par {}`
     /// branches — `eval_par_block` clones each branch's env values, and an
@@ -798,6 +806,8 @@ impl PartialEq for Value {
             // TotalFloat uses total ordering: NaN == NaN, -0.0 < +0.0
             (Value::TotalFloat32(a), Value::TotalFloat32(b)) => a.total_cmp(b).is_eq(),
             (Value::TotalFloat64(a), Value::TotalFloat64(b)) => a.total_cmp(b).is_eq(),
+            (Value::TotalFloat16(a), Value::TotalFloat16(b)) => a.total_cmp(b).is_eq(),
+            (Value::TotalBFloat16(a), Value::TotalBFloat16(b)) => a.total_cmp(b).is_eq(),
             (Value::Atomic(a), Value::Atomic(b)) => {
                 // Snapshot each under its own lock (released before the next)
                 // so comparing an atomic to itself can't self-deadlock.
@@ -1222,6 +1232,8 @@ impl std::fmt::Display for Value {
             Value::Function { name, .. } => write!(f, "<fn {}>", name),
             Value::TotalFloat32(v) => write!(f, "F32({})", v),
             Value::TotalFloat64(v) => write!(f, "F64({})", v),
+            Value::TotalFloat16(v) => write!(f, "F16({})", v),
+            Value::TotalBFloat16(v) => write!(f, "Bf16({})", v),
             Value::Atomic(v) => write!(f, "Atomic({})", v.lock().unwrap()),
             Value::Mutex(v) => write!(f, "Mutex({})", v.lock().unwrap()),
             Value::TaskGroup => write!(f, "TaskGroup"),
@@ -1448,6 +1460,8 @@ impl Value {
             Value::Function { .. } => "Function",
             Value::TotalFloat32(_) => "TotalFloat32",
             Value::TotalFloat64(_) => "TotalFloat64",
+            Value::TotalFloat16(_) => "TotalFloat16",
+            Value::TotalBFloat16(_) => "TotalBFloat16",
             Value::Atomic(_) => "Atomic",
             Value::Mutex(_) => "Mutex",
             Value::TaskGroup => "TaskGroup",

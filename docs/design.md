@@ -2288,7 +2288,9 @@ error: f64 does not implement Hash
 - **`f16`** — IEEE 754-2008 half-precision (1 sign, 5 exponent, 10 mantissa bits). Range: ±65504. Native on ARM (FP16 extension), x86 (AVX-512FP16), and all modern ML accelerators.
 - **`bf16`** — bfloat16 (1 sign, 8 exponent, 7 mantissa bits). Same exponent range as `f32` — tolerant of gradient underflow, easy conversion. Native on Google TPU, NVIDIA A100+, Intel AMX, Apple Silicon (ANE).
 
-Same trait surface as `f32`/`f64`: `PartialEq`, `PartialOrd`, `Add`, `Sub`, `Mul`, `Div`, `Neg` — but NOT `Eq`, `Ord`, or `Hash` (NaN semantics apply). Total-order wrappers `F16` and `BF16` follow the same pattern as `F32`/`F64`.
+Same trait surface as `f32`/`f64`: `PartialEq`, `PartialOrd`, `Add`, `Sub`, `Mul`, `Div`, `Neg` — but NOT `Eq`, `Ord`, or `Hash` (NaN semantics apply). Total-order wrappers `F16` and `Bf16` follow the same pattern as `F32`/`F64`.
+
+> **Naming erratum (2026-07-22):** the bfloat16 total-order wrapper is spelled **`Bf16`**, not `BF16`. The all-caps `BF16` classifies as *Const-class* under the CN identifier rules above (a name whose alphabetic characters are all uppercase is a constant), so it is illegal as a type name — the same reason `MAX` cannot name a struct. `F16` is unaffected: its single leading alphabetic character takes the CN-7 single-letter Type escape hatch (exactly like `F32`/`F64`). `bf16`'s two leading letters do not, so its PascalCase wrapper is `Bf16` (what `suggest_type_name("bf16")` produces, and what every other multi-letter type in the language — `StringSlice`, `VolatileCell`, `SortedMap` — looks like). Earlier revisions wrote `BF16`; that spelling is superseded. Shipped 2026-07-22 (`F16` / `Bf16`, all three backends).
 
 Mixed-precision is the standard ML training pattern — store weights in `f16`/`bf16`, compute in `f32`, store results back. The `as` cast is the explicit mechanism; no implicit narrowing:
 
@@ -13399,7 +13401,7 @@ Type system (Phase 7):
 - Both types are numeric primitives, not stdlib types — they follow the same rules as `f32`/`f64`
 - Implement `PartialEq`, `PartialOrd`, `Add`, `Sub`, `Mul`, `Div`, `Neg`, `Copy` — same surface as `f32`/`f64`
 - Do NOT implement `Eq`, `Ord`, `Hash` — NaN semantics apply
-- Total-order wrappers `F16` / `BF16` in the stdlib, following the `F32`/`F64` pattern
+- Total-order wrappers `F16` / `Bf16` in the stdlib, following the `F32`/`F64` pattern (spelled `Bf16`, not `BF16` — see the naming erratum at § f16 / bf16; shipped 2026-07-22)
 - Implicit widening: `f16` → `f32`, `bf16` → `f32`, both lossless (same widening rules as `f32` → `f64`)
 - Literal suffixes: `1.0f16`, `1.0bf16`
 

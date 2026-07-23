@@ -6271,6 +6271,49 @@ fn test_total_order_wrapper_compare_map_sort_interp_parity() {
     );
 }
 
+#[test]
+fn test_f16_bf16_from_constructor() {
+    assert!(run("fn main() { let x = F16.from(2.5); println(x); }").starts_with("F16(2.5"));
+    assert!(run("fn main() { let x = Bf16.from(3.25); println(x); }").starts_with("Bf16(3.25"));
+}
+
+#[test]
+fn test_f16_bf16_total_order_compare_map_sort_interp_parity() {
+    // The 16-bit siblings — same total-order contract as F32/F64, run==build.
+    // Mirrors `test_e2e_total_order_f16_bf16_wrappers`.
+    let output = run("fn main() {\n\
+             let a: F16 = F16 { value: 2.5 };\n\
+             let b: F16 = F16 { value: 1.5 };\n\
+             println(a > b);\n\
+             println(a < b);\n\
+             println(a == a);\n\
+             println(a == b);\n\
+             let mut m: Map[F16, i64] = Map.new();\n\
+             let _ = m.insert(F16 { value: 2.0 }, 20);\n\
+             let _ = m.insert(F16 { value: 3.0 }, 30);\n\
+             match m.get(F16 { value: 2.0 }) { Some(v) => println(v), None => println(0 - 1) }\n\
+             let mut v: Vec[F16] = Vec.new();\n\
+             v.push(F16 { value: 3.0 });\n\
+             v.push(F16 { value: 1.0 });\n\
+             v.push(F16 { value: 2.0 });\n\
+             v.sort();\n\
+             println(v[0].value);\n\
+             println(v[2].value);\n\
+             let c: Bf16 = Bf16 { value: 3.25 };\n\
+             let d: Bf16 = Bf16 { value: 1.25 };\n\
+             println(c > d);\n\
+             println(c == c);\n\
+             let neg0: Bf16 = Bf16 { value: 0.0 * (0.0 - 1.0) };\n\
+             let pos0: Bf16 = Bf16 { value: 0.0 };\n\
+             println(neg0 < pos0);\n\
+             println(neg0 == pos0);\n\
+         }");
+    assert_eq!(
+        output,
+        "true\nfalse\ntrue\nfalse\n20\n1\n3\ntrue\ntrue\ntrue\nfalse\n"
+    );
+}
+
 // ── Numeric primitive From (Step 4) ────────────────────────────
 
 #[test]

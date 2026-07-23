@@ -5125,6 +5125,54 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_total_order_f16_bf16_wrappers() {
+        // The 16-bit siblings of the F32/F64 total-order wrappers
+        // (`struct F16 { value: f16 }` / `struct Bf16 { value: bf16 }`,
+        // `#[derive(Eq, Ord, Hash)]`). Same codegen path as F32/F64: the
+        // struct is seeded (`{ half }` / `{ bfloat }`), and `<`/`>`/`==`
+        // emit a TOTAL order on the 16-bit bit pattern (NaN last, -0 < +0,
+        // bit-equality) — construction, `.value`, comparison, `Map` keys, and
+        // `sort` all agree with `karac run`.
+        let out = run_program(
+            "fn main() {\n\
+                 let a: F16 = F16 { value: 2.5 };\n\
+                 let b: F16 = F16 { value: 1.5 };\n\
+                 println(a > b);\n\
+                 println(a < b);\n\
+                 println(a == a);\n\
+                 println(a == b);\n\
+                 let mut m: Map[F16, i64] = Map.new();\n\
+                 let _ = m.insert(F16 { value: 2.0 }, 20);\n\
+                 let _ = m.insert(F16 { value: 3.0 }, 30);\n\
+                 match m.get(F16 { value: 2.0 }) { Some(v) => println(v), None => println(0 - 1) }\n\
+                 let mut v: Vec[F16] = Vec.new();\n\
+                 v.push(F16 { value: 3.0 });\n\
+                 v.push(F16 { value: 1.0 });\n\
+                 v.push(F16 { value: 2.0 });\n\
+                 v.sort();\n\
+                 println(v[0].value);\n\
+                 println(v[2].value);\n\
+                 let c: Bf16 = Bf16 { value: 3.25 };\n\
+                 let d: Bf16 = Bf16 { value: 1.25 };\n\
+                 println(c > d);\n\
+                 println(c == c);\n\
+                 let neg0: Bf16 = Bf16 { value: 0.0 * (0.0 - 1.0) };\n\
+                 let pos0: Bf16 = Bf16 { value: 0.0 };\n\
+                 println(neg0 < pos0);\n\
+                 println(neg0 == pos0);\n\
+             }",
+        );
+        if let Some(out) = out {
+            // a>b, a<b, a==a, a==b, map get, sort[0], sort[2],
+            // c>d, c==c, -0<+0 (total order), -0==+0 (bit-eq).
+            assert_eq!(
+                out,
+                "true\nfalse\ntrue\nfalse\n20\n1\n3\ntrue\ntrue\ntrue\nfalse\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_f16_widens_to_f32_in_mixed_add() {
         // `f16 + f32` widens the half up to f32 (fpext) before the add — the
         // module-verifier regression this guards (was `fadd half, float`).

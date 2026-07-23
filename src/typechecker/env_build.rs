@@ -1410,6 +1410,20 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![],
                 },
             ),
+            (
+                "F16",
+                Type::Named {
+                    name: "F16".into(),
+                    args: vec![],
+                },
+            ),
+            (
+                "Bf16",
+                Type::Named {
+                    name: "Bf16".into(),
+                    args: vec![],
+                },
+            ),
         ];
 
         let all_ints: Vec<(&str, Type)> = signed_ints

@@ -793,6 +793,33 @@ impl<'a> super::Interpreter<'a> {
                     };
                     return Value::TotalFloat64(val);
                 }
+                "F16.from" => {
+                    // Stored promoted to f64 (the tree-walk interpreter has no
+                    // native 16-bit float — same f64-promotion posture as the
+                    // f16 primitive; the compiled path is exact half precision).
+                    let val = if let Some(arg) = args.first() {
+                        match self.eval_expr_inner(&arg.value) {
+                            Value::Float(v) => v,
+                            Value::Int(v) => v as f64,
+                            _ => 0.0,
+                        }
+                    } else {
+                        0.0
+                    };
+                    return Value::TotalFloat16(val);
+                }
+                "Bf16.from" => {
+                    let val = if let Some(arg) = args.first() {
+                        match self.eval_expr_inner(&arg.value) {
+                            Value::Float(v) => v,
+                            Value::Int(v) => v as f64,
+                            _ => 0.0,
+                        }
+                    } else {
+                        0.0
+                    };
+                    return Value::TotalBFloat16(val);
+                }
                 "Regex.compile" => {
                     let pattern = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {
@@ -1299,6 +1326,8 @@ impl<'a> super::Interpreter<'a> {
                                 // rule" path.
                                 | "F32"
                                 | "F64"
+                                | "F16"
+                                | "Bf16"
                         );
                         if is_primitive {
                             if let Some(result) = self.dispatch_lowered_op(method, args, span) {

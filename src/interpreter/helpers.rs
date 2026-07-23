@@ -43,6 +43,8 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
         // keys collapsed. `total_cmp` is the total order codegen also emits.
         (Value::TotalFloat32(x), Value::TotalFloat32(y)) => x.total_cmp(y),
         (Value::TotalFloat64(x), Value::TotalFloat64(y)) => x.total_cmp(y),
+        (Value::TotalFloat16(x), Value::TotalFloat16(y)) => x.total_cmp(y),
+        (Value::TotalBFloat16(x), Value::TotalBFloat16(y)) => x.total_cmp(y),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Char(x), Value::Char(y)) => x.cmp(y),
         (Value::String(x), Value::String(y)) => x.cmp(y),
@@ -1064,6 +1066,11 @@ pub(super) fn kara_json_to_serde_json(v: &Value) -> serde_json::Value {
             Some(Value::TotalFloat32(f)) => serde_json::Number::from_f64(*f as f64)
                 .map(serde_json::Value::Number)
                 .unwrap_or(serde_json::Value::Null),
+            Some(Value::TotalFloat16(f)) | Some(Value::TotalBFloat16(f)) => {
+                serde_json::Number::from_f64(*f)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null)
+            }
             _ => serde_json::Value::Null,
         },
         "String" => match payload.first() {

@@ -82,6 +82,8 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "StringSlice",
     "F32",
     "F64",
+    "F16",
+    "Bf16",
     "Atomic",
     "Mutex",
     // `VolatileCell[T: Copy]` — the ergonomic typed wrapper over a single MMIO
@@ -702,6 +704,8 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ),
     ("f32.kara", include_str!("../runtime/stdlib/f32.kara")),
     ("f64.kara", include_str!("../runtime/stdlib/f64.kara")),
+    ("f16.kara", include_str!("../runtime/stdlib/f16.kara")),
+    ("bf16.kara", include_str!("../runtime/stdlib/bf16.kara")),
     ("stats.kara", include_str!("../runtime/stdlib/stats.kara")),
     ("regex.kara", include_str!("../runtime/stdlib/regex.kara")),
     ("http.kara", include_str!("../runtime/stdlib/http.kara")),

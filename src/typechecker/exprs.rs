@@ -1720,7 +1720,12 @@ impl<'a> super::TypeChecker<'a> {
         // `Column[f64]` was mis-read as a container/monomorphization bug).
         if matches!(concrete_ty, Type::Float(_)) && matches!(trait_name, "Ord" | "Eq" | "Hash") {
             let disp = type_display(concrete_ty);
-            let wrapper = if disp == "f32" { "F32" } else { "F64" };
+            let wrapper = match disp.as_str() {
+                "f32" => "F32",
+                "f16" => "F16",
+                "bf16" => "Bf16",
+                _ => "F64",
+            };
             out.push_str(&format!(
                 "; note: `{disp}` is not totally ordered (IEEE-754 NaN), so it does not \
                  implement `{trait_name}` — use the total-order wrapper `{wrapper}` \

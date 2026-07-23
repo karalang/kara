@@ -1,0 +1,21 @@
+// runtime/stdlib/bf16.kara
+//
+// `Bf16` is the total-order `bf16` wrapper — adds `Eq` / `Ord` / `Hash`
+// to a 16-bit bfloat16 float by treating NaN as a concrete
+// distinguishable bit pattern (total ordering: NaN sorts last,
+// -0.0 < +0.0). Mirrors the `F32` / `F64` / `F16` wrappers; the bare
+// `bf16` primitive deliberately does NOT implement these traits
+// (IEEE-754 NaN breaks reflexivity/antisymmetry). Method dispatch
+// (`Bf16.from`, total-order compare/hash) stays in the hardcoded path.
+//
+// NAME: spelled `Bf16` (PascalCase), NOT `BF16`. The all-caps `BF16`
+// classifies as Const-class under the CN naming rules (design.md §
+// Identifiers and Naming — a name whose alphabetic chars are ALL
+// uppercase is a constant), so it is illegal as a type name. `F16`
+// survives because its single leading alpha char takes the CN-7
+// single-letter Type escape hatch; `bf16`'s two leading letters do not.
+
+#[derive(Eq, Ord, Hash, PartialEq, PartialOrd, Copy)]
+struct Bf16 {
+    value: bf16,
+}

@@ -1778,6 +1778,8 @@ impl<'a> Interpreter<'a> {
             Value::Char(_) => "char".to_string(),
             Value::TotalFloat32(_) => "F32".to_string(),
             Value::TotalFloat64(_) => "F64".to_string(),
+            Value::TotalFloat16(_) => "F16".to_string(),
+            Value::TotalBFloat16(_) => "Bf16".to_string(),
             Value::Atomic(_) => "Atomic".to_string(),
             Value::Set(_) => "Set".to_string(),
             // S6c-12: name the handle-backed containers so a user-defined
@@ -1893,6 +1895,7 @@ impl<'a> Interpreter<'a> {
             // interpreter's canonical `Value::Float` carrier.
             Value::TotalFloat32(x) if field == "value" => Value::Float(x as f64),
             Value::TotalFloat64(x) if field == "value" => Value::Float(x),
+            Value::TotalFloat16(x) | Value::TotalBFloat16(x) if field == "value" => Value::Float(x),
             Value::Struct { fields, name } => fields.get(field).cloned().unwrap_or_else(|| {
                 unreachable!(
                     "field '{}' not found on struct '{}' at {}:{}; \
@@ -2020,16 +2023,19 @@ impl<'a> Interpreter<'a> {
         // arms in eval_ops / value_compare / `total_cmp`), matching codegen. A
         // plain `Value::Struct` compared its `value` field with the IEEE
         // partial order, diverging from codegen on -0 / NaN.
-        if matches!(name.as_str(), "F32" | "F64") && field_vals.contains_key("value") {
+        if matches!(name.as_str(), "F32" | "F64" | "F16" | "Bf16")
+            && field_vals.contains_key("value")
+        {
             let f = match field_vals.get("value") {
                 Some(Value::Float(x)) => *x,
                 Some(Value::Int(i)) => *i as f64,
                 _ => 0.0,
             };
-            return if name == "F32" {
-                Value::TotalFloat32(f as f32)
-            } else {
-                Value::TotalFloat64(f)
+            return match name.as_str() {
+                "F32" => Value::TotalFloat32(f as f32),
+                "F64" => Value::TotalFloat64(f),
+                "F16" => Value::TotalFloat16(f),
+                _ => Value::TotalBFloat16(f),
             };
         }
         // Enum struct-variant construction `Enum.Variant { field: val, ... }`:

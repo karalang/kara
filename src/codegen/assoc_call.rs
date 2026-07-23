@@ -1185,7 +1185,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // contract is a TOTAL order (NaN sorts last, -0 < +0, bit-equality).
         // Intercept before the `is_primitive` reroute (which omits F32/F64
         // and would fall through to the const-0 unknown-callee tail).
-        if matches!(type_name, "F32" | "F64")
+        if matches!(type_name, "F32" | "F64" | "F16" | "Bf16")
             && matches!(method, "gt" | "lt" | "ge" | "le" | "eq" | "ne")
             && _args.len() == 2
         {
@@ -3565,8 +3565,30 @@ impl<'ctx> super::Codegen<'ctx> {
         )
     }
 
-    /// Emit a TOTAL-order comparison of two `F32`/`F64` wrapper operands
-    /// (B-2026-07-22-11). The wrapper's contract is a total order — NaN
+    /// The inner float type, its same-width integer bit-pattern type, and the
+    /// sign-bit index for a total-order float wrapper (`F32`/`F64`/`F16`/
+    /// `Bf16`). `f16` and `bf16` are both 16-bit → `i16`, sign bit 15.
+    /// `None` for a non-wrapper name.
+    pub(super) fn total_float_wrapper_widths(
+        &self,
+        type_name: &str,
+    ) -> Option<(
+        inkwell::types::FloatType<'ctx>,
+        inkwell::types::IntType<'ctx>,
+        u64,
+    )> {
+        let ctx = self.context;
+        Some(match type_name {
+            "F32" => (ctx.f32_type(), ctx.i32_type(), 31),
+            "F64" => (ctx.f64_type(), ctx.i64_type(), 63),
+            "F16" => (ctx.f16_type(), ctx.i16_type(), 15),
+            "Bf16" => (ctx.bf16_type(), ctx.i16_type(), 15),
+            _ => return None,
+        })
+    }
+
+    /// Emit a TOTAL-order comparison of two `F32`/`F64`/`F16`/`Bf16` wrapper
+    /// operands (B-2026-07-22-11). The wrapper's contract is a total order — NaN
     /// sorts last, -0 < +0, equality is BIT-equality (NaN == NaN when the
     /// bit patterns match) — NOT the IEEE partial order a float compare
     /// gives. Extract each inner float, bitcast to its integer bit pattern,
@@ -3580,16 +3602,13 @@ impl<'ctx> super::Codegen<'ctx> {
         a: &Expr,
         b: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let is_f32 = type_name == "F32";
+        let (float_ty, int_ty, top) = self
+            .total_float_wrapper_widths(type_name)
+            .ok_or_else(|| format!("not a total-order float wrapper: {type_name}"))?;
         let av = self.compile_expr(a)?;
         let bv = self.compile_expr(b)?;
-        let af = self.extract_total_order_inner_float(av, is_f32)?;
-        let bf = self.extract_total_order_inner_float(bv, is_f32)?;
-        let int_ty = if is_f32 {
-            self.context.i32_type()
-        } else {
-            self.context.i64_type()
-        };
+        let af = self.extract_total_order_inner_float(av, float_ty)?;
+        let bf = self.extract_total_order_inner_float(bv, float_ty)?;
         let abits = self
             .builder
             .build_bit_cast(af, int_ty, "tf.a.bits")
@@ -3613,8 +3632,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_int_compare(inkwell::IntPredicate::NE, abits, bbits, "tf.ne")
                 .unwrap(),
             _ => {
-                let akey = self.total_order_key(abits, is_f32);
-                let bkey = self.total_order_key(bbits, is_f32);
+                let akey = self.total_order_key(abits, top);
+                let bkey = self.total_order_key(bbits, top);
                 let pred = match method {
                     "gt" => inkwell::IntPredicate::SGT,
                     "lt" => inkwell::IntPredicate::SLT,
@@ -3638,10 +3657,9 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn total_order_key(
         &self,
         bits: inkwell::values::IntValue<'ctx>,
-        is_f32: bool,
+        top: u64,
     ) -> inkwell::values::IntValue<'ctx> {
         let wty = bits.get_type();
-        let top = if is_f32 { 31 } else { 63 };
         // Arithmetic shift → 0 (non-negative) or all-ones (negative).
         let sign = self
             .builder
@@ -3662,7 +3680,7 @@ impl<'ctx> super::Codegen<'ctx> {
     fn extract_total_order_inner_float(
         &mut self,
         v: BasicValueEnum<'ctx>,
-        is_f32: bool,
+        float_ty: inkwell::types::FloatType<'ctx>,
     ) -> Result<inkwell::values::FloatValue<'ctx>, String> {
         match v {
             BasicValueEnum::StructValue(sv) => Ok(self
@@ -3672,12 +3690,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_float_value()),
             BasicValueEnum::FloatValue(f) => Ok(f),
             BasicValueEnum::PointerValue(p) => {
-                let ft = if is_f32 {
-                    self.context.f32_type()
-                } else {
-                    self.context.f64_type()
-                };
-                let st = self.context.struct_type(&[ft.into()], false);
+                let st = self.context.struct_type(&[float_ty.into()], false);
                 let loaded = self
                     .builder
                     .build_load(st, p, "tf.load")

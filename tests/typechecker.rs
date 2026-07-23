@@ -7063,6 +7063,24 @@ fn test_f32_type_resolves() {
     typecheck_ok("fn main() { let x: F32 = F32 { value: 1.0 }; }");
 }
 
+#[test]
+fn test_f16_bf16_wrapper_types_resolve() {
+    // The 16-bit total-order wrappers are recognized types and comparable.
+    typecheck_ok("fn main() { let x: F16 = F16 { value: 1.0 }; }");
+    typecheck_ok("fn main() { let x: Bf16 = Bf16 { value: 1.0 }; }");
+    typecheck_ok(
+        "fn main() { let a: F16 = F16 { value: 2.0 }; let b: F16 = F16 { value: 1.0 }; let _: bool = a > b; }",
+    );
+    // Distinct types — F16 and Bf16 do not inter-compare (parallels f16 vs bf16).
+    let errors = typecheck_errors(
+        "fn main() { let a: F16 = F16 { value: 1.0 }; let b: Bf16 = Bf16 { value: 1.0 }; let _ = a == b; }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected a type error comparing F16 with Bf16"
+    );
+}
+
 // ── @no_rc Struct Annotation ───────────────────────────────────
 
 #[test]

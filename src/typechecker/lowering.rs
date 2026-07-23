@@ -914,13 +914,21 @@ impl<'a> super::TypeChecker<'a> {
             "bool" => Some(Type::Bool),
             "char" => Some(Type::Char),
             "String" => Some(Type::Str),
-            // F32/F64 are stdlib total-order wrappers (NaN sorts last, implements Eq/Ord/Hash)
+            // F32/F64/F16/Bf16 are stdlib total-order wrappers (NaN sorts last, implements Eq/Ord/Hash)
             "F32" => Some(Type::Named {
                 name: "F32".to_string(),
                 args: vec![],
             }),
             "F64" => Some(Type::Named {
                 name: "F64".to_string(),
+                args: vec![],
+            }),
+            "F16" => Some(Type::Named {
+                name: "F16".to_string(),
+                args: vec![],
+            }),
+            "Bf16" => Some(Type::Named {
+                name: "Bf16".to_string(),
                 args: vec![],
             }),
             _ => None,

@@ -6557,12 +6557,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if let TypeKind::Path(p) = &te.kind {
             if p.generic_args.is_none() {
                 if let Some(head) = p.segments.first() {
-                    // F32/F64 are seeded into `struct_field_type_exprs` as
-                    // `{ value: f32/f64 }` (B-2026-07-22-11) so construction /
-                    // field-access work, but their comparator must be the
-                    // TOTAL order (below), NOT the derived field comparator
-                    // which would use the IEEE partial order on `value`.
-                    if !matches!(head.as_str(), "F32" | "F64") {
+                    // F32/F64/F16/Bf16 are seeded into `struct_field_type_exprs`
+                    // as `{ value: f32/f64/f16/bf16 }` (B-2026-07-22-11) so
+                    // construction / field-access work, but their comparator
+                    // must be the TOTAL order (below), NOT the derived field
+                    // comparator which would use the IEEE partial order on
+                    // `value`.
+                    if !matches!(head.as_str(), "F32" | "F64" | "F16" | "Bf16") {
                         if self.struct_field_type_exprs.contains_key(head)
                             && !self.shared_types.contains_key(head)
                         {
@@ -6580,10 +6581,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 signed: bool,
             },
             FloatScalar,
-            /// Total-order float wrapper (`F32`/`F64`) — a `{ f32/f64 }`
-            /// struct compared by the IEEE 754 total order (B-2026-07-22-11).
+            /// Total-order float wrapper (`F32`/`F64`/`F16`/`Bf16`) — a
+            /// `{ f32/f64/f16/bf16 }` struct compared by the IEEE 754 total
+            /// order (B-2026-07-22-11). `int_ty` is the inner float's bit-
+            /// pattern integer type; `top` is its sign-bit index.
             TotalFloatScalar {
-                is_f32: bool,
+                int_ty: inkwell::types::IntType<'c>,
+                top: u64,
             },
             Str,
             VecLike {
@@ -6618,8 +6622,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         Body::IntScalar { signed: false }
                     }
                     "f32" | "f64" => Body::FloatScalar,
-                    "F32" => Body::TotalFloatScalar { is_f32: true },
-                    "F64" => Body::TotalFloatScalar { is_f32: false },
+                    "F32" | "F64" | "F16" | "Bf16" => {
+                        let (_ft, int_ty, top) = self
+                            .total_float_wrapper_widths(head)
+                            .expect("F32/F64/F16/Bf16 have wrapper widths");
+                        Body::TotalFloatScalar { int_ty, top }
+                    }
                     // Both String spellings (the 3p discipline).
                     "String" | "str" => Body::Str,
                     "Vec" | "VecDeque" => {
@@ -6714,11 +6722,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.builder.build_return(Some(&r)).unwrap();
             }
-            Body::TotalFloatScalar { is_f32 } => {
-                // Element is a `{ f32/f64 }` wrapper struct. Load, extract the
-                // inner float, and compare on the TOTAL-order key (the same
-                // transform `compile_total_order_wrapper_cmp` emits): signed
-                // integer compare of `bits ^ ((bits >> top) >>u 1)`.
+            Body::TotalFloatScalar { int_ty, top } => {
+                // Element is a `{ f32/f64/f16/bf16 }` wrapper struct. Load,
+                // extract the inner float, and compare on the TOTAL-order key
+                // (the same transform `compile_total_order_wrapper_cmp` emits):
+                // signed integer compare of `bits ^ ((bits >> top) >>u 1)`.
                 let elem_llvm = self.llvm_type_for_type_expr(te);
                 let a_s = self
                     .builder
@@ -6740,11 +6748,6 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_extract_value(b_s, 0, "b.tf.v")
                     .unwrap()
                     .into_float_value();
-                let int_ty = if is_f32 {
-                    self.context.i32_type()
-                } else {
-                    self.context.i64_type()
-                };
                 let a_bits = self
                     .builder
                     .build_bit_cast(a_f, int_ty, "a.tf.b")
@@ -6755,8 +6758,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_bit_cast(b_f, int_ty, "b.tf.b")
                     .unwrap()
                     .into_int_value();
-                let a_key = self.total_order_key(a_bits, is_f32);
-                let b_key = self.total_order_key(b_bits, is_f32);
+                let a_key = self.total_order_key(a_bits, top);
+                let b_key = self.total_order_key(b_bits, top);
                 let lt = self
                     .builder
                     .build_int_compare(inkwell::IntPredicate::SLT, a_key, b_key, "lt")

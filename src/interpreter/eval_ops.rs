@@ -435,6 +435,43 @@ impl<'a> super::Interpreter<'a> {
             (BinOp::GtEq, Value::TotalFloat32(a), Value::TotalFloat32(b)) => {
                 Value::Bool(!a.total_cmp(&b).is_lt())
             }
+            // F16 / Bf16 total-order wrappers — same total ordering as F32/F64.
+            (BinOp::Eq, Value::TotalFloat16(a), Value::TotalFloat16(b)) => {
+                Value::Bool(a.total_cmp(&b).is_eq())
+            }
+            (BinOp::NotEq, Value::TotalFloat16(a), Value::TotalFloat16(b)) => {
+                Value::Bool(!a.total_cmp(&b).is_eq())
+            }
+            (BinOp::Lt, Value::TotalFloat16(a), Value::TotalFloat16(b)) => {
+                Value::Bool(a.total_cmp(&b).is_lt())
+            }
+            (BinOp::LtEq, Value::TotalFloat16(a), Value::TotalFloat16(b)) => {
+                Value::Bool(!a.total_cmp(&b).is_gt())
+            }
+            (BinOp::Gt, Value::TotalFloat16(a), Value::TotalFloat16(b)) => {
+                Value::Bool(a.total_cmp(&b).is_gt())
+            }
+            (BinOp::GtEq, Value::TotalFloat16(a), Value::TotalFloat16(b)) => {
+                Value::Bool(!a.total_cmp(&b).is_lt())
+            }
+            (BinOp::Eq, Value::TotalBFloat16(a), Value::TotalBFloat16(b)) => {
+                Value::Bool(a.total_cmp(&b).is_eq())
+            }
+            (BinOp::NotEq, Value::TotalBFloat16(a), Value::TotalBFloat16(b)) => {
+                Value::Bool(!a.total_cmp(&b).is_eq())
+            }
+            (BinOp::Lt, Value::TotalBFloat16(a), Value::TotalBFloat16(b)) => {
+                Value::Bool(a.total_cmp(&b).is_lt())
+            }
+            (BinOp::LtEq, Value::TotalBFloat16(a), Value::TotalBFloat16(b)) => {
+                Value::Bool(!a.total_cmp(&b).is_gt())
+            }
+            (BinOp::Gt, Value::TotalBFloat16(a), Value::TotalBFloat16(b)) => {
+                Value::Bool(a.total_cmp(&b).is_gt())
+            }
+            (BinOp::GtEq, Value::TotalBFloat16(a), Value::TotalBFloat16(b)) => {
+                Value::Bool(!a.total_cmp(&b).is_lt())
+            }
 
             // Comparison (String) — lexicographic via Rust's `Ord for String`.
             // Matches the typechecker's builtin Ord registration for `String`

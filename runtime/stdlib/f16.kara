@@ -1,0 +1,14 @@
+// runtime/stdlib/f16.kara
+//
+// `F16` is the total-order `f16` wrapper — adds `Eq` / `Ord` / `Hash`
+// to a 16-bit IEEE-754 half-precision float by treating NaN as a
+// concrete distinguishable bit pattern (total ordering: NaN sorts
+// last, -0.0 < +0.0). Mirrors the `F32` / `F64` wrappers; the bare
+// `f16` primitive deliberately does NOT implement these traits
+// (IEEE-754 NaN breaks reflexivity/antisymmetry). Method dispatch
+// (`F16.from`, total-order compare/hash) stays in the hardcoded path.
+
+#[derive(Eq, Ord, Hash, PartialEq, PartialOrd, Copy)]
+struct F16 {
+    value: f16,
+}

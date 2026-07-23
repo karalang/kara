@@ -4580,15 +4580,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // normal struct machinery. Total-order comparison / hash / eq are
         // intercepted downstream (they are NOT the IEEE field comparator the
         // derive would give). A `#[derive(Copy)]` value type — no heap, no drop.
+        // F16/Bf16 are the 16-bit siblings (runtime/stdlib/f16.kara, bf16.kara),
+        // lowering to LLVM `half` / `bfloat`. Same seeding + downstream
+        // total-order interception as F32/F64.
         let f32_elem: BasicTypeEnum<'ctx> = self.context.f32_type().into();
         let f64_elem: BasicTypeEnum<'ctx> = self.context.f64_type().into();
-        for (name, elem) in [("F32", f32_elem), ("F64", f64_elem)] {
+        let f16_elem: BasicTypeEnum<'ctx> = self.context.f16_type().into();
+        let bf16_elem: BasicTypeEnum<'ctx> = self.context.bf16_type().into();
+        for (name, elem) in [
+            ("F32", f32_elem),
+            ("F64", f64_elem),
+            ("F16", f16_elem),
+            ("Bf16", bf16_elem),
+        ] {
             if !self.struct_types.contains_key(name) {
                 self.struct_types
                     .insert(name.to_string(), self.context.struct_type(&[elem], false));
                 self.struct_field_names
                     .insert(name.to_string(), vec!["value".to_string()]);
-                let scalar = if name == "F32" { "f32" } else { "f64" };
+                let scalar = match name {
+                    "F32" => "f32",
+                    "F64" => "f64",
+                    "F16" => "f16",
+                    _ => "bf16",
+                };
                 self.struct_field_type_names
                     .insert(name.to_string(), vec![Some(scalar.to_string())]);
                 self.struct_field_type_exprs.insert(
