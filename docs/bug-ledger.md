@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
 | codegen-gap | 75 | 0 |
-| missing-feature | 61 | 0 |
+| missing-feature | 62 | 1 |
 | false-positive | 41 | 0 |
 | run-vs-build | 40 | 0 |
 | crash | 28 | 0 |
@@ -119,18 +119,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 14 | 0 |
 | cli | 12 | 0 |
 | resolver | 11 | 0 |
-| parser | 5 | 0 |
+| parser | 6 | 1 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **663 surfaced · 1 open · 657 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **664 surfaced · 2 open · 657 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-23-20 | 2026-07-23 | autopar | high | Auto-par miscompiles a reduction loop whose body passes a LOOP-INVARIANT shared `mut ref` scratch buffer to a helper. `while w < n { sink = sink + f(..., mut scratch, ...); w += 1 }` is parallelized as a `sink` reduction, but `scratch` (a binding declared OUTSIDE the loop, written every iteration inside `f`) makes the iterations dependent, so parallel workers race on it -> nondeterministic WRONG output from the DEFAULT `karac build` (and `karac run` JIT), while `KARAC_AUTO_PAR=0` is stable and correct. A/B run==build violation; auto-par safety analysis is unsound for this shape. | — |
+| B-2026-07-23-22 | 2026-07-23 | parser | medium | SELFHOST PARSER (parser.kara, Phase-12 port): COMPOUND ASSIGNMENT `x += v` / `-=` / `*=` / `/=` / `%=` is SILENTLY DROPPED — a no-op with no diagnostic. The block statement handler parses the LHS then only checks for a plain `Equal`; a `PlusEqual`(-family) token is neither an assignment nor a recognized infix operator, so the LHS becomes a bare expression-statement and the `OP= value` tail is discarded. `let mut x = 5; x += 3;` leaves x = 5. | — |
 
 ### Fixed (657)
 
