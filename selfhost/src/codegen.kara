@@ -1070,6 +1070,89 @@ impl Emitter {
     }
 
     // Expression statements (Slice 1), `let` bindings and assignments (Slice 3).
+    // `for <var> in <vec>` element iteration (Slice 46): loop [0, len),
+    // load each element as a BORROW into the var slot, run the body. Element
+    // kind by vec kind: Vec[i64]→i64, Vec[String]→String, Vec[struct]→struct,
+    // Vec[enum]→enum. The binding is non-owning (the vec keeps ownership; a
+    // body-level `let y = x` deep-copies via the element path).
+    fn emit_for_vec(mut ref self, var: String, sop: String, sk: i64, fbody: Block) {
+        let mut ek = 0;
+        if sk == 4 {
+            ek = 2;
+        } else if sk >= 4000 {
+            ek = 1000 + (sk - 4000);
+        } else if sk >= 2000 {
+            ek = 10 + (sk - 2000);
+        }
+        let ety = self.ty_text(ek);
+        let pr = self.fresh();
+        self.body = self.body
+            + "  "
+            + pr.clone()
+            + " = extractvalue { ptr, i64, i64 } "
+            + sop.clone()
+            + ", 0\n";
+        let ln = self.fresh();
+        self.body =
+            self.body + "  " + ln.clone() + " = extractvalue { ptr, i64, i64 } " + sop + ", 1\n";
+        let vidx = self.locals.len();
+        self.locals.push(var);
+        self.locals_kind.push(ek);
+        self.locals_heap.push(false);
+        self.body = self.body + "  %v" + vidx.to_string() + " = alloca " + ety.clone() + ", align 8\n";
+        let islot = self.fresh();
+        self.body = self.body + "  " + islot.clone() + " = alloca i64, align 8\n";
+        self.body = self.body + "  store i64 0, ptr " + islot.clone() + ", align 8\n";
+        let lid = self.nlbl;
+        self.nlbl = self.nlbl + 1;
+        let lh = "vfor" + lid.to_string();
+        let lb = "vforb" + lid.to_string();
+        let le = "vfore" + lid.to_string();
+        self.body = self.body + "  br label %" + lh.clone() + "\n";
+        self.body = self.body + lh.clone() + ":\n";
+        let iv = self.fresh();
+        self.body =
+            self.body + "  " + iv.clone() + " = load i64, ptr " + islot.clone() + ", align 8\n";
+        let c = self.fresh();
+        self.body = self.body + "  " + c.clone() + " = icmp slt i64 " + iv.clone() + ", " + ln + "\n";
+        self.body = self.body
+            + "  br i1 "
+            + c
+            + ", label %"
+            + lb.clone()
+            + ", label %"
+            + le.clone()
+            + "\n";
+        self.body = self.body + lb + ":\n";
+        let ep = self.fresh();
+        self.body = self.body
+            + "  "
+            + ep.clone()
+            + " = getelementptr "
+            + ety.clone()
+            + ", ptr "
+            + pr.clone()
+            + ", i64 "
+            + iv.clone()
+            + "\n";
+        let el = self.fresh();
+        self.body = self.body + "  " + el.clone() + " = load " + ety.clone() + ", ptr " + ep + ", align 8\n";
+        self.body = self.body
+            + "  store "
+            + ety
+            + " "
+            + el
+            + ", ptr %v"
+            + vidx.to_string()
+            + ", align 8\n";
+        self.emit_block(fbody);
+        let nx = self.fresh();
+        self.body = self.body + "  " + nx.clone() + " = add i64 " + iv + ", 1\n";
+        self.body = self.body + "  store i64 " + nx + ", ptr " + islot + ", align 8\n";
+        self.body = self.body + "  br label %" + lh + "\n";
+        self.body = self.body + le + ":\n";
+    }
+
     fn emit_stmt(mut ref self, st: Stmt) {
         match st {
             Exp(es) => {
@@ -2075,17 +2158,103 @@ impl Emitter {
                 let ForExpr { label, var, iter, body: fbody, span } = fe;
                 let mut sval = Val { op: "0".to_string(), kind: 0, heap: false };
                 let mut is_bytes = false;
+                let mut is_range = false;
+                let mut rlo = "0".to_string();
+                let mut rhi = "0".to_string();
                 match iter {
                     MethodCall(bmc) => {
                         let MethodCallExpr { object, method, args: bargs, span: bsp } = bmc;
                         if method == "bytes" {
                             sval = self.emit_value(object);
                             is_bytes = true;
+                        } else {
+                            sval = self.emit_method_value(object, method, bargs);
                         }
                     }
-                    _ => {}
+                    Binary(rb) => {
+                        // `for i in lo..hi` (Slice 46): a Range BinOp — iterate
+                        // [lo, hi). NOTE: currently UNREACHABLE via the selfhost
+                        // parser (parser.kara's infix loop lowers only
+                        // `+ - * / %`, not `..`); this leg is correct-by-
+                        // construction and activates when the parser gains range
+                        // expressions. The seed's own parser DOES make ranges,
+                        // so the shape is real — just parser-blocked in the port.
+                        let BinaryExpr { op: rop, left: rl, right: rr, span: rbsp } = rb;
+                        let is_rng = match rop {
+                            Range => true,
+                            _ => false,
+                        };
+                        if is_rng {
+                            let lv = self.emit_value(rl);
+                            let Val { op: lo, kind: lk, heap: lh } = lv;
+                            let hv = self.emit_value(rr);
+                            let Val { op: hi, kind: hk, heap: hh } = hv;
+                            rlo = lo;
+                            rhi = hi;
+                            is_range = true;
+                        }
+                    }
+                    other => {
+                        // A named binding captures the whole Expr (a `_`
+                        // wildcard can't — the match already moved `iter`).
+                        sval = self.emit_value(other);
+                    }
+                }
+                if is_range {
+                    // Loop var slot seeded with lo; header tests < hi.
+                    let vidx = self.locals.len();
+                    self.locals.push(var);
+                    self.locals_kind.push(0);
+                    self.locals_heap.push(false);
+                    self.body = self.body + "  %v" + vidx.to_string() + " = alloca i64, align 8\n";
+                    self.body =
+                        self.body + "  store i64 " + rlo + ", ptr %v" + vidx.to_string() + ", align 8\n";
+                    let lid = self.nlbl;
+                    self.nlbl = self.nlbl + 1;
+                    let lh = "rfor" + lid.to_string();
+                    let lb = "rforb" + lid.to_string();
+                    let le = "rfore" + lid.to_string();
+                    self.body = self.body + "  br label %" + lh.clone() + "\n";
+                    self.body = self.body + lh.clone() + ":\n";
+                    let iv = self.fresh();
+                    self.body =
+                        self.body + "  " + iv.clone() + " = load i64, ptr %v" + vidx.to_string() + ", align 8\n";
+                    let c = self.fresh();
+                    self.body =
+                        self.body + "  " + c.clone() + " = icmp slt i64 " + iv.clone() + ", " + rhi + "\n";
+                    self.body = self.body
+                        + "  br i1 "
+                        + c
+                        + ", label %"
+                        + lb.clone()
+                        + ", label %"
+                        + le.clone()
+                        + "\n";
+                    self.body = self.body + lb + ":\n";
+                    self.emit_block(fbody);
+                    let iv2 = self.fresh();
+                    self.body =
+                        self.body + "  " + iv2.clone() + " = load i64, ptr %v" + vidx.to_string() + ", align 8\n";
+                    let nx = self.fresh();
+                    self.body = self.body + "  " + nx.clone() + " = add i64 " + iv2 + ", 1\n";
+                    self.body =
+                        self.body + "  store i64 " + nx + ", ptr %v" + vidx.to_string() + ", align 8\n";
+                    self.body = self.body + "  br label %" + lh + "\n";
+                    self.body = self.body + le + ":\n";
+                    return;
                 }
                 let Val { op: sop, kind: sk2, heap: sh2 } = sval;
+                if not is_bytes and (sk2 == 3 or sk2 == 4 or sk2 >= 2000) {
+                    // `for x in <vec>` (Slice 46): iterate [0, len), load each
+                    // element as a BORROW (the vec keeps ownership; a binding
+                    // deep-copies via the element path), bind, run body. A
+                    // heap-temp vec (fn result) is freed after the loop.
+                    self.emit_for_vec(var, sop.clone(), sk2, fbody);
+                    if sh2 {
+                        self.emit_free_vec_val(sop, sk2);
+                    }
+                    return;
+                }
                 if is_bytes and sk2 == 2 {
                     let sp2 = self.fresh();
                     self.body = self.body
