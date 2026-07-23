@@ -1243,6 +1243,15 @@ impl<'ctx> super::Codegen<'ctx> {
         self.signature_ref_params.clear();
         self.entry_slot_ref_vars.clear();
         self.owned_vecstr_params.clear();
+        // Record every (simple-binding) parameter name for the auto-par
+        // reduction cost gate's param-bounded-helper check (B-2026-07-23-25).
+        // Destructured tuple/struct params are rare and not the target shape.
+        self.current_fn_param_names.clear();
+        for p in &func.params {
+            if let crate::ast::PatternKind::Binding(n) = &p.pattern.kind {
+                self.current_fn_param_names.insert(n.clone());
+            }
+        }
         self.for_loop_borrow_vars.clear();
         self.borrow_accessor_let_payload.clear();
         self.for_loop_owned_agg_vars.clear();

@@ -3474,25 +3474,168 @@ fn main() {
     }
 
     #[test]
-    fn test_ir_cost_gate_allows_variable_k_slice3b5() {
-        // Variable-K loops bypass the compile-time gate (K isn't a
-        // literal at codegen time). Even with a trivial body, the
-        // lowering fires because the runtime can't see through to
-        // const-eval k_iters cheaply. In practice variable-K loops are
-        // typically large (kata-7 = 50M). A dynamic runtime-side gate
-        // is a follow-up; the v1 cost-model is compile-time-only.
-        let src = r#"
-fn main() {
+    fn test_ir_cost_gate_variable_k_per_iter_work_floor_slice3b5() {
+        // B-2026-07-23-25: a VARIABLE-trip-count reduction whose per-iter body is
+        // only a few scalar ops AND whose trip-count bound references a FUNCTION
+        // PARAMETER must NOT lower to par_reduce — that is the reusable hot-path
+        // helper shape (`fn pow10(n) { while i < n { r = r * 10 } }`) whose
+        // per-call dispatch overhead is unrecoverable when invoked millions of
+        // times inside an O(n²) comparator (~1000x slowdown, output correct).
+        // The floor (`VARIABLE_K_PER_ITER_FLOOR_UNITS = RUNTIME_NESTED_LOOP_
+        // MULTIPLIER`) declines a scalar param-bounded body but keeps a body
+        // doing at least one nested-loop's worth of work per iteration. A
+        // local/literal-bounded loop (a one-shot compute loop) stays eligible —
+        // exercised by the sibling `test_ir_reduction_*` op tests.
+
+        // Param-bounded (`while i < n`) trivial scalar body → declined.
+        let trivial = r#"
+fn helper(n: i64) -> i64 {
     let mut sum: i64 = 0i64;
-    let mut k_iters: i64 = 100i64;
-    let mut k: i64 = 0i64;
-    while k < k_iters {
-        sum = sum + k;
-        k = k + 1i64;
+    let mut i: i64 = 0i64;
+    while i < n {
+        sum = sum + i;
+        i = i + 1i64;
     }
-    println(sum);
+    return sum;
+}
+fn main() {
+    println(helper(100i64));
 }
 "#;
+        // Param-bounded but coarse (a nested runtime loop per iteration) → still
+        // parallelized (its per-iter work clears the floor).
+        let coarse = r#"
+fn inner(m: i64) -> i64 {
+    let mut acc: i64 = 0i64;
+    let mut j: i64 = 0i64;
+    while j < m {
+        acc = acc + (j * j) % 7i64;
+        j = j + 1i64;
+    }
+    return acc;
+}
+fn helper(n: i64) -> i64 {
+    let mut sum: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < n {
+        sum = sum + inner(i);
+        i = i + 1i64;
+    }
+    return sum;
+}
+fn main() {
+    println(helper(100i64));
+}
+"#;
+        let build_ir = |src: &str| -> String {
+            let mut parsed = karac::parse(src);
+            assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+            let resolved = karac::resolve(&parsed.program);
+            let typed = karac::typecheck(&parsed.program, &resolved);
+            karac::lower(&mut parsed.program, &typed);
+            let effects = karac::effectcheck(&parsed.program);
+            let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+            karac::codegen::compile_to_ir_with_options(
+                &parsed.program,
+                None,
+                Some(&analysis),
+                None,
+                None,
+            )
+            .expect("codegen failed")
+        };
+        assert!(
+            !build_ir(trivial).contains("call void @karac_par_reduce"),
+            "a variable-K trivial-scalar-body reduction must NOT lower to par_reduce"
+        );
+        assert!(
+            build_ir(coarse).contains("call void @karac_par_reduce"),
+            "a variable-K reduction with a nested-loop body per iteration must still lower"
+        );
+    }
+
+    #[test]
+    fn test_e2e_fine_grained_helper_reduction_not_parallelized_slice_b2325() {
+        // B-2026-07-23-25 end-to-end: a `pow10`-style fine-grained variable-K
+        // `*` reduction called deep inside an O(n²) sort comparator must NOT be
+        // parallelized (its per-iter body — `r = r * 10` — scores below the
+        // per-iter-work floor). Before the fix the default `karac build` spent
+        // ~15s dispatching a par_reduce on every one of the ~millions of
+        // `pow10` calls while producing the CORRECT answer; now the helper's
+        // reduction is declined (no `mul` reduce-combine helper) and the coarse
+        // outer `sink` reduction — real per-pass work — still lowers. The output
+        // must match the sequential build exactly.
+        let src = r#"
+fn pow10(n: i64) -> i64 {
+    let mut r = 1i64;
+    let mut i = 0i64;
+    while i < n {
+        r = r * 10i64;
+        i = i + 1i64;
+    }
+    return r;
+}
+fn num_digits(x: i64) -> i64 {
+    if x == 0i64 { return 1i64; }
+    let mut n = 0i64;
+    let mut t = x;
+    while t > 0i64 {
+        n = n + 1i64;
+        t = t / 10i64;
+    }
+    return n;
+}
+fn concat_val(a: i64, b: i64) -> i64 {
+    return a * pow10(num_digits(b)) + b;
+}
+fn ordered(a: i64, b: i64) -> bool {
+    return concat_val(a, b) >= concat_val(b, a);
+}
+fn sort_desc(arr: mut ref Vec[i64]) {
+    let n = arr.len();
+    let mut i = 1i64;
+    while i < n {
+        let key = arr[i];
+        let mut j = i - 1i64;
+        while j >= 0i64 {
+            if ordered(key, arr[j]) { arr[j + 1i64] = arr[j]; j = j - 1i64; }
+            else { j = 0i64 - 1i64; }
+        }
+        i = i + 1i64;
+    }
+}
+fn checksum(arr: ref Vec[i64]) -> i64 {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    let n = arr.len();
+    while i < n {
+        acc = (acc * 131i64 + arr[i]) % 1000000007i64;
+        i = i + 1i64;
+    }
+    return acc;
+}
+fn main() {
+    let width = 80i64;
+    let passes = 4i64;
+    let mut sink = 0i64;
+    let mut p = 0i64;
+    while p < passes {
+        let mut arr: Vec[i64] = Vec.new();
+        let mut k = 0i64;
+        while k < width {
+            arr.push(((k * 37i64 + p * 13i64) % 997i64) + 1i64);
+            k = k + 1i64;
+        }
+        sort_desc(mut arr);
+        sink = sink + checksum(arr);
+        p = p + 1i64;
+    }
+    println(sink);
+}
+"#;
+        // Structural: the fine-grained `pow10` `*` reduction must be declined —
+        // no Mul reduce-combine helper is synthesized. (The coarse `sink` `+`
+        // reduction may still lower; this assertion targets the `*` helper.)
         let mut parsed = karac::parse(src);
         assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
         let resolved = karac::resolve(&parsed.program);
@@ -3509,9 +3652,15 @@ fn main() {
         )
         .expect("codegen failed");
         assert!(
-            ir.contains("call void @karac_par_reduce"),
-            "variable-K loop should bypass the compile-time gate and lower; got:\n{ir}"
+            !ir.contains("@__karac_reduce_combine_mul_i64"),
+            "the fine-grained pow10 `*` reduction must be declined (no Mul reduce \
+             helper); got:\n{ir}"
         );
+
+        // End-to-end: the auto-par build must print the exact sequential answer.
+        if let Some(out) = run_program(src) {
+            assert_eq!(out.trim(), "1916928778");
+        }
     }
 
     #[test]

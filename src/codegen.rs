@@ -2041,6 +2041,14 @@ pub(super) struct Codegen<'ctx> {
     /// recursion base case; `fn id(s: String) -> String { s }`).
     /// Cleared per-function alongside `ref_params`.
     pub(crate) owned_vecstr_params: HashSet<String>,
+    /// Names of the CURRENT function's parameters (all modes). Used by the
+    /// auto-par reduction cost gate (B-2026-07-23-25): a fine-grained
+    /// variable-K reduction whose trip-count bound references a function
+    /// parameter is a probable hot-path helper (the `pow10(n)` /
+    /// `while i < n { r = r * 10 }` shape) and must not be parallelized —
+    /// the per-call dispatch overhead is unrecoverable when it's invoked
+    /// millions of times. Cleared + repopulated per function.
+    pub(crate) current_fn_param_names: HashSet<String>,
     /// `for w in vec` loop-element bindings whose element is a heap
     /// `{ptr,len,cap}` type (`String` / `Vec`). `for` over a Vec is
     /// BORROW-iteration — the loop binds `w` to an ALIAS of `data[i]` and the
@@ -7253,6 +7261,7 @@ impl<'ctx> Codegen<'ctx> {
             signature_ref_params: std::collections::HashSet::new(),
             entry_slot_ref_vars: HashMap::new(),
             owned_vecstr_params: HashSet::new(),
+            current_fn_param_names: HashSet::new(),
             for_loop_borrow_vars: HashSet::new(),
             borrow_accessor_let_payload: std::collections::HashMap::new(),
             for_loop_owned_agg_vars: HashSet::new(),

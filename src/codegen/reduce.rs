@@ -71,6 +71,61 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `parent_body` is needed by the `while`-shape path (slice 3b.4)
     /// to peek `parent_body.stmts[stmt_index - 1]` for the loop
     /// variable's `let mut k: T = 0;` init.
+    /// B-2026-07-23-25: whether a reduction loop's trip-count bounds (the upper
+    /// `end` and, if present, the lower `lo`) reference a parameter of the
+    /// current function. A fine-grained variable-K reduction whose bound is a
+    /// parameter is the signature of a reusable hot-path helper
+    /// (`fn pow10(n) { while i < n { … } }`) that may be invoked with tiny
+    /// counts a huge number of times; a local/literal bound is a one-shot
+    /// compute loop and stays eligible.
+    fn reduction_bound_references_param(&self, shape: &LoopShape) -> bool {
+        self.expr_references_current_param(&shape.end_expr)
+            || shape
+                .lo_expr
+                .as_ref()
+                .is_some_and(|e| self.expr_references_current_param(e))
+    }
+
+    /// Recursive walk over the common bound-expression shapes (identifiers,
+    /// arithmetic, casts, field/index/method access, calls) checking for any
+    /// identifier that names a current-function parameter.
+    fn expr_references_current_param(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Identifier(n) => self.current_fn_param_names.contains(n),
+            ExprKind::Path { segments, .. } => segments
+                .first()
+                .is_some_and(|s| self.current_fn_param_names.contains(s)),
+            ExprKind::Binary { left, right, .. } | ExprKind::Pipe { left, right } => {
+                self.expr_references_current_param(left)
+                    || self.expr_references_current_param(right)
+            }
+            ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => {
+                self.expr_references_current_param(operand)
+            }
+            ExprKind::Cast { expr: inner, .. } => self.expr_references_current_param(inner),
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.expr_references_current_param(object)
+            }
+            ExprKind::Index { object, index } => {
+                self.expr_references_current_param(object)
+                    || self.expr_references_current_param(index)
+            }
+            ExprKind::Call { callee, args } => {
+                self.expr_references_current_param(callee)
+                    || args
+                        .iter()
+                        .any(|a| self.expr_references_current_param(&a.value))
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                self.expr_references_current_param(object)
+                    || args
+                        .iter()
+                        .any(|a| self.expr_references_current_param(&a.value))
+            }
+            _ => false,
+        }
+    }
+
     #[allow(clippy::result_large_err)]
     pub(super) fn try_emit_reduction_lowering(
         &mut self,
@@ -215,6 +270,22 @@ impl<'ctx> super::Codegen<'ctx> {
             if total < REDUCE_DISPATCH_THRESHOLD_UNITS {
                 return Ok(None);
             }
+        } else if per_iter_cost < VARIABLE_K_PER_ITER_FLOOR_UNITS
+            && self.reduction_bound_references_param(&shape)
+        {
+            // B-2026-07-23-25: a VARIABLE-K reduction whose per-iter body is only
+            // a few scalar ops (< one nested-loop's worth of work) AND whose
+            // trip-count bound references a FUNCTION PARAMETER must NOT lower to
+            // par_reduce. The const-K gate above can't fire (the bound isn't a
+            // literal), and the runtime gate still pays the per-call dispatch
+            // cost — unrecoverable when this is a tiny param-bounded hot-path
+            // helper (`fn pow10(n) { while i < n { r = r * 10 } }`) invoked
+            // millions of times inside an O(n²) sort comparator (~1000x
+            // slowdown, output correct). The param-bound signal targets exactly
+            // that reusable-helper shape; a local/literal-bounded loop (a
+            // one-shot compute loop in `main`) is left eligible. See
+            // `VARIABLE_K_PER_ITER_FLOOR_UNITS`.
+            return Ok(None);
         }
 
         // Compile the end bound (and `lo`, if present) in the parent
@@ -3593,6 +3664,30 @@ const ASSUMED_WORKER_COUNT: u64 = 8;
 /// runtime, leaving most of the work for parallel speedup.
 const REDUCE_DISPATCH_THRESHOLD_UNITS: u64 =
     DISPATCH_OVERHEAD_PER_CALL_UNITS * ASSUMED_WORKER_COUNT;
+
+/// Minimum per-iteration body cost for a VARIABLE-trip-count reduction to be
+/// lowered to `par_reduce` (B-2026-07-23-25). The compile-time `K × per_iter`
+/// gate above only applies when the trip count is a compile-time constant;
+/// variable-K loops previously bypassed it entirely, relying on a runtime-side
+/// gate. But that runtime gate still pays the descriptor-setup + dispatch cost
+/// on EVERY call, which is catastrophic when the loop is a tiny fine-grained
+/// hot-path HELPER invoked millions of times (the `pow10` / `num_digits` shape
+/// — `while i < n { r = r * 10 }`, per-iter cost ≈ 4 — inside an O(n²) sort
+/// comparator: ~1000x slowdown on the default build, output still correct). For
+/// a body doing less than one function-call's worth of work per iteration
+/// (`CALL_COST_UNITS`), the spawn+join overhead is unrecoverable regardless of
+/// the unknowable trip count, so keep it sequential. Substantial-body
+/// variable-K loops (a real per-iter nested loop) clear this floor and stay
+/// eligible; the runtime gate handles their rare small-actual-K case.
+///
+/// Set to `RUNTIME_NESTED_LOOP_MULTIPLIER` (64): the estimator scores any body
+/// containing a runtime-bounded nested loop at ≥ 64 × its inner cost, while a
+/// body of pure scalar ops / O(1) calls stays well below (the `pow10` body
+/// `r = r * 10; i = i + 1` scores 11; `num_digits` similar). So the floor
+/// cleanly means "the per-iteration work must be at least one nested loop's
+/// worth" — coarse enough that dispatch overhead can amortize even when the
+/// trip count is unknown.
+const VARIABLE_K_PER_ITER_FLOOR_UNITS: u64 = RUNTIME_NESTED_LOOP_MULTIPLIER;
 
 /// Threshold for the `karac_par_run` (parallel-group dispatch) gate.
 /// Sum of per-branch costs must exceed this for dispatch to win;
