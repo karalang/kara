@@ -673,6 +673,22 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Alloca that holds the opaque `*mut KaracFile` pointer.
         file_alloca: PointerValue<'ctx>,
     },
+    /// Scope-exit free for a `for (k, v) in map` / `for x in set` iterator
+    /// handle (`karac_map_iter_new`). The loop's own exit block already frees
+    /// the iterator on normal exhaustion and `break` (and nulls the slot), so
+    /// this cleanup only fires on an EARLY `return` out of the loop body, where
+    /// control bypasses the exit block. It is registered in the frame ENCLOSING
+    /// the loop (below `LoopFrame::cleanup_depth`), so `break` / `continue` —
+    /// which drain only frames *inside* the loop — never reach it; only a full
+    /// function-exit / early-`return` drain (`emit_scope_cleanup`, start 0)
+    /// does. `karac_map_iter_free(null)` is a no-op, so the exit block's
+    /// null-store makes the normal-path drain harmless: exactly-once free on
+    /// every path. Fixes the map/set-iteration early-return leak
+    /// (B-2026-07-23-1).
+    FreeMapIter {
+        /// Alloca that holds the opaque `*mut KaracMapIter` handle.
+        iter_alloca: PointerValue<'ctx>,
+    },
     /// LazyFrame codegen twin (phase-11 LazyDataFrame): scope-exit release
     /// for a `LazyExpr` handle produced by a `karac_lazy_expr_*` builder.
     /// Every `karac_lazy_*` call that returns a fresh +1 `Arc` handle is

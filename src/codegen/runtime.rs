@@ -5371,6 +5371,7 @@ impl<'ctx> super::Codegen<'ctx> {
             CleanupAction::FreeDataFrame { df_alloca } => Some(name_of(*df_alloca)),
             CleanupAction::FreeSoaGroups { soa_alloca, .. } => Some(name_of(*soa_alloca)),
             CleanupAction::FreeFileHandle { file_alloca } => Some(name_of(*file_alloca)),
+            CleanupAction::FreeMapIter { iter_alloca } => Some(name_of(*iter_alloca)),
             CleanupAction::ReleaseLazyExpr { alloca }
             | CleanupAction::ReleaseLazyPlan { alloca }
             | CleanupAction::ReleaseLazyGroupBy { alloca } => Some(name_of(*alloca)),
@@ -6726,6 +6727,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     .expect("karac_runtime_file_close declared in Codegen::new");
                 self.builder
                     .build_call(close_fn, &[handle.into()], "")
+                    .unwrap();
+            }
+            // Free a `for (k, v) in map` / `for x in set` iterator handle on an
+            // early `return` out of the loop body (the loop's exit block frees +
+            // nulls the slot on normal exit / `break`). `karac_map_iter_free`
+            // no-ops on the null the exit block leaves, so this is exactly-once.
+            CleanupAction::FreeMapIter { iter_alloca } => {
+                let handle = self
+                    .builder
+                    .build_load(ptr_ty, *iter_alloca, "cleanup.mapiter.handle")
+                    .unwrap()
+                    .into_pointer_value();
+                self.builder
+                    .build_call(self.karac_map_iter_free_fn, &[handle.into()], "")
                     .unwrap();
             }
             // LazyFrame codegen twin — release a `LazyExpr` handle produced

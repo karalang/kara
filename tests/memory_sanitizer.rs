@@ -32334,4 +32334,57 @@ fn main() {
             "map_string_value_overwrite_discard_no_leak",
         );
     }
+
+    // B-2026-07-23-1 — an early `return` out of a `for (k, v) in map` /
+    // `for x in set` loop bypassed the loop's exit block, where the sole
+    // `karac_map_iter_free` lived, leaking the `karac_map_iter_new` handle on
+    // every early exit. The fix registers the free as a `FreeMapIter` cleanup
+    // in the ENCLOSING frame (drained on `return`) while the exit block nulls
+    // the iterator slot so normal exhaustion / `break` stay exactly-once.
+    // Looped 300× so any per-call iterator leak accumulates into a definite
+    // LeakSanitizer report; the map surfaced it (kata #211, trie wildcard DFS).
+    #[test]
+    fn asan_map_set_iter_early_return_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn first_ge(m: Map[i64, i64], thresh: i64) -> i64 {
+    for (k, v) in m {
+        if v >= thresh { return v; }   // early return mid-iteration
+    }
+    return -1i64;
+}
+
+fn has_elem(s: Set[i64], target: i64) -> bool {
+    for x in s {
+        if x == target { return true; }   // early return out of set iteration
+    }
+    return false;
+}
+
+fn main() {
+    let mut hits = 0i64;
+    let mut i = 0i64;
+    while i < 300i64 {
+        let mut m: Map[i64, i64] = Map.new();
+        let _ = m.insert(1i64, 10i64);
+        let _ = m.insert(2i64, 20i64);
+        let _ = m.insert(3i64, 30i64);
+        if first_ge(m, 15i64) >= 0i64 { hits = hits + 1i64; }
+
+        let mut s: Set[i64] = Set.new();
+        s.insert(4i64);
+        s.insert(5i64);
+        s.insert(6i64);
+        if has_elem(s, 5i64) { hits = hits + 1i64; }
+        i = i + 1i64;
+    }
+    println(hits);
+}
+"#,
+            // Each iter: first_ge finds a value >= 15 (hit) and has_elem finds 5
+            // (hit) → +2; ×300 = 600.
+            &["600"],
+            "map_set_iter_early_return_no_leak",
+        );
+    }
 }

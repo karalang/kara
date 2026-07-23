@@ -3229,6 +3229,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let out_key = self.create_entry_alloca(fn_val, "map.iter.key", key_ty);
         let out_val = self.create_entry_alloca(fn_val, "map.iter.val", val_ty);
 
+        // Hold the iterator handle in a slot and register a scope-exit free in
+        // the ENCLOSING frame so an early `return` out of the loop body frees it
+        // (control then bypasses `exit_bb`). Normal exit / `break` still free at
+        // `exit_bb` below, which nulls the slot so this cleanup no-ops on those
+        // paths — exactly-once free everywhere. Without this, `return` inside a
+        // `for (k, v) in map` body leaks the `karac_map_iter_new` allocation
+        // (B-2026-07-23-1).
+        let iter_slot = self.create_entry_alloca(fn_val, "map.iter.slot", ptr_ty.into());
+        self.builder.build_store(iter_slot, iter_ptr).unwrap();
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(super::state::CleanupAction::FreeMapIter {
+                iter_alloca: iter_slot,
+            });
+        }
+
         let loop_bb = self.context.append_basic_block(fn_val, "map.for.loop");
         let body_bb = self.context.append_basic_block(fn_val, "map.for.body");
         let exit_bb = self.context.append_basic_block(fn_val, "map.for.exit");
@@ -3283,9 +3298,20 @@ impl<'ctx> super::Codegen<'ctx> {
         self.loop_stack.pop();
 
         // exit_bb: free iterator — runs on both normal exhaustion and break.
+        // Null the slot afterwards so the enclosing frame's `FreeMapIter`
+        // cleanup (which also fires on the fall-through drain) no-ops here and
+        // only does real work on the early-`return` path that skips this block.
         self.builder.position_at_end(exit_bb);
+        let iter_final = self
+            .builder
+            .build_load(ptr_ty, iter_slot, "map.iter.final")
+            .unwrap()
+            .into_pointer_value();
         self.builder
-            .build_call(self.karac_map_iter_free_fn, &[iter_ptr.into()], "")
+            .build_call(self.karac_map_iter_free_fn, &[iter_final.into()], "")
+            .unwrap();
+        self.builder
+            .build_store(iter_slot, ptr_ty.const_null())
             .unwrap();
 
         Ok(i64_t.const_int(0, false).into())
@@ -3432,6 +3458,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // with zero bytes per iteration so a single `i8` is sufficient.
         let dummy_val = self.create_entry_alloca(fn_val, "set.iter.dummy", i8_t.into());
 
+        // Early-`return`-safe iterator free — see `compile_for_map_var`
+        // (B-2026-07-23-1). Register the free in the enclosing frame; the
+        // exit block below nulls the slot so the normal-path drain no-ops.
+        let iter_slot = self.create_entry_alloca(fn_val, "set.iter.slot", ptr_ty.into());
+        self.builder.build_store(iter_slot, iter_ptr).unwrap();
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(super::state::CleanupAction::FreeMapIter {
+                iter_alloca: iter_slot,
+            });
+        }
+
         let loop_bb = self.context.append_basic_block(fn_val, "set.for.loop");
         let body_bb = self.context.append_basic_block(fn_val, "set.for.body");
         let exit_bb = self.context.append_basic_block(fn_val, "set.for.exit");
@@ -3482,8 +3519,16 @@ impl<'ctx> super::Codegen<'ctx> {
         self.loop_stack.pop();
 
         self.builder.position_at_end(exit_bb);
+        let iter_final = self
+            .builder
+            .build_load(ptr_ty, iter_slot, "set.iter.final")
+            .unwrap()
+            .into_pointer_value();
         self.builder
-            .build_call(self.karac_map_iter_free_fn, &[iter_ptr.into()], "")
+            .build_call(self.karac_map_iter_free_fn, &[iter_final.into()], "")
+            .unwrap();
+        self.builder
+            .build_store(iter_slot, ptr_ty.const_null())
             .unwrap();
 
         Ok(i64_t.const_int(0, false).into())
