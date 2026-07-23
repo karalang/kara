@@ -3124,10 +3124,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             let Some(st) = struct_ty else {
                                 continue;
                             };
-                            let Ok(field_ptr) =
-                                self.builder
-                                    .build_struct_gep(st, ptr, idx as u32, "struct.cond.fp")
-                            else {
+                            let Ok(field_ptr) = self.builder.build_struct_gep(
+                                st,
+                                ptr,
+                                idx as u32,
+                                "struct.cond.fp",
+                            ) else {
                                 continue;
                             };
                             let Some(field_ty) = st.get_field_type_at_index(idx as u32) else {
@@ -3139,8 +3141,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         _ => continue,
                     };
-                    let sub_cond = self.compile_pattern_condition(sub, field_val)?.into_int_value();
-                    cond = self.builder.build_and(cond, sub_cond, "struct.and").unwrap();
+                    let sub_cond = self
+                        .compile_pattern_condition(sub, field_val)?
+                        .into_int_value();
+                    cond = self
+                        .builder
+                        .build_and(cond, sub_cond, "struct.and")
+                        .unwrap();
                 }
                 Ok(cond.into())
             }

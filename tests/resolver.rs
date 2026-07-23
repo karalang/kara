@@ -280,15 +280,17 @@ fn test_undefined_name_in_ensures_is_a_resolve_error() {
     // passed `karac check` and ICE'd at runtime. It must now resolve like any
     // other expression and report the undefined name.
     let errors = resolve_errors("fn f(a: i64) -> i64 ensures result == a { a }");
-    assert!(errors.iter().any(|e| e.kind == ResolveErrorKind::UndefinedName
-        && e.message.contains("result")));
+    assert!(errors
+        .iter()
+        .any(|e| e.kind == ResolveErrorKind::UndefinedName && e.message.contains("result")));
 }
 
 #[test]
 fn test_undefined_name_in_requires_is_a_resolve_error() {
     let errors = resolve_errors("fn f(a: i64) -> i64 requires bogus > 0 { a }");
-    assert!(errors.iter().any(|e| e.kind == ResolveErrorKind::UndefinedName
-        && e.message.contains("bogus")));
+    assert!(errors
+        .iter()
+        .any(|e| e.kind == ResolveErrorKind::UndefinedName && e.message.contains("bogus")));
 }
 
 #[test]
