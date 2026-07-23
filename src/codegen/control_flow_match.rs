@@ -508,7 +508,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         );
                         let wrapper =
                             self.inline_result_payload_binding_is_struct_wrapper(&arm.pattern);
-                        if !(borrow_only && wrapper) {
+                        // B-2026-07-23-4: a heap FIELD of the wrapper binding
+                        // passed BY VALUE to a free fn (`println(w.s)`) is
+                        // MOVED — the callee frees it. `consume_class` scores a
+                        // free-fn arg as non-consuming, so `borrow_only` is
+                        // spuriously true for these; without suppressing here the
+                        // still-armed source payload drop double-frees that same
+                        // buffer. Force suppression whenever the arm moves a heap
+                        // field into a free-fn arg, overriding the borrow-only
+                        // wrapper skip (which exists only for TRUE reads like
+                        // `Err(e) => e.rejected.len()`).
+                        let heap_field_moved_to_free_fn = self
+                            .wrapper_arm_moves_heap_field_to_free_fn(
+                                &arm.pattern,
+                                &arm.body,
+                                arm.guard.as_ref(),
+                            );
+                        if !(borrow_only && wrapper) || heap_field_moved_to_free_fn {
                             self.suppress_inline_result_payload_cleanup_at(slot, &arm.pattern);
                         }
                     }
@@ -6360,6 +6376,95 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             false
         })
+    }
+
+    /// Does a fresh-temp inline `Result` arm MOVE a HEAP field of its
+    /// `Ok(_)`/`Err(_)` struct-wrapper binding into a FREE-FUNCTION call
+    /// argument (`println(w.s)` / `g(w.s)`)? `arm_only_borrows_inline_result_
+    /// payload` delegates to `consume_class`, which scores a free-fn arg as
+    /// entry-copied / non-consuming — so a `println(w.s)` arm reads as
+    /// borrow-only and the wrapper gate KEEPS the source payload drop armed.
+    /// But a heap field passed BY VALUE to a free fn is MOVED, and the callee
+    /// frees its buffer, so the still-armed `FreeInlineResultPayload` frees it
+    /// a second time (B-2026-07-23-4). This detects exactly that shape so the
+    /// gate suppresses the source drop, leaving the callee sole owner. The
+    /// aggregate / return / let-move / method-arg move-out shapes already score
+    /// as consuming (`borrow_only == false`), so this covers only the free-fn
+    /// arg gap. Inline `Result`/`Option` struct payloads hold at most one
+    /// `String`/`Vec` (two would be 6 words, over the 5-word inline area), so
+    /// the whole-payload-area suppression this drives frees nothing it should
+    /// not.
+    pub(super) fn wrapper_arm_moves_heap_field_to_free_fn(
+        &self,
+        pattern: &Pattern,
+        body: &Expr,
+        guard: Option<&Expr>,
+    ) -> bool {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return false;
+        };
+        // Struct-wrapper payload bindings, paired with their struct type name.
+        let mut names: Vec<String> = Vec::new();
+        let mut binding_types: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for p in patterns {
+            if let PatternKind::Binding(name) = &p.kind {
+                let key = (p.span.offset, p.span.length);
+                if let Some(tn) = self.pattern_binding_types.get(&key) {
+                    if self.struct_types.contains_key(tn.as_str()) {
+                        names.push(name.clone());
+                        binding_types.insert(name.clone(), tn.clone());
+                    }
+                }
+            }
+        }
+        if names.is_empty() {
+            return false;
+        }
+        let mut pairs = super::consume_class::binding_fields_passed_to_free_fn_arg(&names, body);
+        if let Some(g) = guard {
+            pairs.extend(super::consume_class::binding_fields_passed_to_free_fn_arg(
+                &names, g,
+            ));
+        }
+        pairs.iter().any(|(root, field)| {
+            binding_types
+                .get(root)
+                .is_some_and(|tn| self.struct_field_is_heap(tn, field))
+        })
+    }
+
+    /// Is field `field` of struct `struct_name` a heap-owning `String`/`Vec`/
+    /// `VecDeque` (i.e. a `{ptr,len,cap}` buffer whose drop frees the pointer)?
+    /// Resolved by field type NAME first, then by concrete LLVM shape (through
+    /// the active monomorph subst) so a generic field whose spelled name is
+    /// `str` — or any type that lowers to the vec struct — is still recognised.
+    pub(super) fn struct_field_is_heap(&self, struct_name: &str, field: &str) -> bool {
+        let Some(field_names) = self.struct_field_names.get(struct_name) else {
+            return false;
+        };
+        let Some(idx) = field_names.iter().position(|n| n == field) else {
+            return false;
+        };
+        if let Some(tn) = self
+            .struct_field_type_names
+            .get(struct_name)
+            .and_then(|v| v.get(idx))
+            .and_then(|o| o.as_deref())
+        {
+            if matches!(tn, "String" | "str" | "Vec" | "VecDeque") {
+                return true;
+            }
+        }
+        if let Some(te) = self
+            .struct_field_type_exprs
+            .get(struct_name)
+            .and_then(|v| v.get(idx))
+        {
+            let te = self.subst_monomorph_type_params(te);
+            return self.llvm_type_for_type_expr(&te) == self.vec_struct_type().into();
+        }
+        false
     }
 
     /// Alloca-keyed sibling of `suppress_inline_result_payload_cleanup` for a

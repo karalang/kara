@@ -9418,6 +9418,25 @@ fn test_match_ok_unit_payload_selects_correct_arm() {
 }
 
 #[test]
+fn test_match_freshtemp_result_struct_field_moved_to_free_fn() {
+    // B-2026-07-23-4 interpreter parity: matching a fresh-temp `Result[W, _]`
+    // whose `Ok(w)` struct payload has a heap `String` field and passing that
+    // field by value to a free fn (`println(w.s)` / `use_s(w.s)`) is clean in
+    // the tree-walk interpreter (the bug was codegen-only — a double-free under
+    // `karac build`). This pins the reference behavior the codegen fix matches.
+    let output = run_no_errors(
+        "struct W { s: String }\n\
+         fn use_s(x: String) -> i64 { x.len() }\n\
+         fn f() -> Result[W, i64] { Ok(W { s: \"boom\".to_string() }) }\n\
+         fn main() {\n\
+             match f() { Ok(w) => println(w.s), Err(e) => println(e.to_string()) }\n\
+             match f() { Ok(w) => println(use_s(w.s).to_string()), Err(e) => println(e.to_string()) }\n\
+         }",
+    );
+    assert_eq!(output, "boom\n4\n");
+}
+
+#[test]
 fn test_distinct_derived_comparison_runs() {
     // With `#[derive(Eq, Ord)]` the comparison operators are admitted and
     // run on the base layout — `UserId(3) < UserId(5)` is `true`,

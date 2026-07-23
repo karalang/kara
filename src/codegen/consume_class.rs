@@ -410,6 +410,42 @@ fn walk_block(b: &crate::ast::Block, f: &mut impl FnMut(&Expr)) {
     }
 }
 
+/// Collect the single-level field projections `binding.field` (for any `binding`
+/// in `names`) that appear as an ARGUMENT to a FREE-FUNCTION call anywhere in
+/// `e`, returned as `(binding, field)` pairs. This module models a free-fn call
+/// argument as entry-copied / NON-consuming (see [`has_consuming_sink`]'s
+/// `is_free_fn` arm), which is right for its RC-analysis callers — but a HEAP
+/// field passed BY VALUE to a free fn (`println(w.s)`) is MOVED, and the callee
+/// frees its buffer. The fresh-temp inline-`Result` struct-wrapper gate uses
+/// this (filtering the pairs by heap-ness) to suppress a source payload drop
+/// that would otherwise double-free that same buffer (B-2026-07-23-4). Only the
+/// bare `binding.field` arg shape is reported; aggregate / return / let-move /
+/// method-arg sinks are already caught as consuming by `has_consuming_sink`.
+pub(crate) fn binding_fields_passed_to_free_fn_arg(
+    names: &[String],
+    e: &Expr,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    walk_exprs(e, &mut |x| {
+        let ExprKind::Call { callee, args } = &x.kind else {
+            return;
+        };
+        if !matches!(&callee.kind, ExprKind::Identifier(_)) {
+            return;
+        }
+        for a in args {
+            if let ExprKind::FieldAccess { object, field } = &a.value.kind {
+                if let ExprKind::Identifier(root) = &object.kind {
+                    if names.iter().any(|n| n == root) {
+                        out.push((root.clone(), field.clone()));
+                    }
+                }
+            }
+        }
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

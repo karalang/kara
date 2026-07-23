@@ -1650,6 +1650,94 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_result_struct_field_println_no_double_free() {
+        // B-2026-07-23-4: matching a FRESH-TEMP `Result[W, _]` (a direct `f()`
+        // return, not a bound local) whose `Ok(w)` struct payload has a heap
+        // field, and passing that field BY VALUE to a free fn (`println(w.s)`),
+        // MOVES the field's buffer into the callee — which frees it. The
+        // consuming-arm suppressor scored a free-fn arg as non-consuming, so the
+        // source `FreeInlineResultPayload` stayed armed and freed the same buffer
+        // a second time. Now the wrapper gate detects the heap-field-to-free-fn
+        // move and suppresses. Single-shot: the tcache double-free detector
+        // fires on the first `println(w.s)` (len("boom") == 4, well past the
+        // len-2 reliability floor), and LSan flags any single unfreed block.
+        assert_clean_asan_run(
+            r#"
+struct W { s: String }
+fn f() -> Result[W, i64] { Ok(W { s: "boom".to_string() }) }
+fn main() {
+    match f() {
+        Ok(w) => println(w.s),
+        Err(e) => println(e.to_string()),
+    }
+}
+"#,
+            &["boom"],
+            "freshtemp_result_struct_field_println_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_result_err_struct_field_freefn_no_double_free() {
+        // B-2026-07-23-4 Err-side + USER free-fn sibling: `Err(e) => use_s(e.msg)`
+        // where `fn use_s(x: String)` consumes (frees) its owned param. Same
+        // heap-field-to-free-fn move-out on the `Err` variant, verifying the fix
+        // is not `println`- or Ok-specific.
+        assert_clean_asan_run(
+            r#"
+struct E { msg: String }
+fn use_s(x: String) -> i64 { x.len() }
+fn f() -> Result[i64, E] { Err(E { msg: "rejected".to_string() }) }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {
+        match f() {
+            Ok(v) => { n = n + v; }
+            Err(e) => { n = n + use_s(e.msg); }
+        }
+        i = i + 1i64;
+    }
+    println(n.to_string());
+}
+"#,
+            // len("rejected") == 8; 40 * 8 = 320
+            &["320"],
+            "freshtemp_result_err_struct_field_freefn_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_result_struct_field_borrow_read_no_leak() {
+        // B-2026-07-23-4 negative control: a BORROW-only read of the struct-
+        // wrapper heap field (`Ok(w) => w.s.len()`, no by-value move to a free
+        // fn) must KEEP the source payload drop armed — the buffer is freed by
+        // nobody else, so suppressing it would LEAK. Confirms the fix's gate is
+        // move-specific and did not over-suppress the borrow-only path.
+        assert_clean_asan_run(
+            r#"
+struct W { s: String }
+fn f() -> Result[W, i64] { Ok(W { s: "boom".to_string() }) }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {
+        match f() {
+            Ok(w) => { n = n + w.s.len(); }
+            Err(e) => { n = n + e; }
+        }
+        i = i + 1i64;
+    }
+    println(n.to_string());
+}
+"#,
+            // len("boom") == 4; 40 * 4 = 160
+            &["160"],
+            "freshtemp_result_struct_field_borrow_read_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_closure_nested_consume_frees_fresh_arg_no_leak() {
         // B-2026-07-15-9: an indirect closure call passing a FRESH owned heap
         // temp (`String.from(..)`) whose owned param is consumed inside the

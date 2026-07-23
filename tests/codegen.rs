@@ -3613,6 +3613,34 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_freshtemp_result_struct_field_moved_to_free_fn() {
+        // B-2026-07-23-4: matching a FRESH-TEMP `Result[W, _]` (a direct `f()`
+        // call, not a bound local) whose `Ok(w)` struct payload has a heap field,
+        // then passing that field BY VALUE to a free fn (`println(w.s)`), MOVES
+        // the field's buffer into the callee — under `karac build` the source
+        // `FreeInlineResultPayload` then double-freed it (interp was clean). The
+        // wrapper gate now suppresses the source drop on a heap-field-to-free-fn
+        // move. Verifies interp == JIT == AOT byte-identical output.
+        if let Some(out) = run_program(
+            "struct W { s: String }\n\
+             fn use_s(x: String) -> i64 { x.len() }\n\
+             fn f() -> Result[W, i64] { Ok(W { s: \"boom\".to_string() }) }\n\
+             fn main() {\n\
+                 match f() {\n\
+                     Ok(w) => println(w.s),\n\
+                     Err(e) => println(e.to_string()),\n\
+                 }\n\
+                 match f() {\n\
+                     Ok(w) => println(use_s(w.s).to_string()),\n\
+                     Err(e) => println(e.to_string()),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "boom\n4\n");
+        }
+    }
+
+    #[test]
     fn e2e_map_field_constructed_in_associated_fn() {
         // B-2026-07-08-12: a `Map`/`Set`-typed struct field initialized with
         // `Map.new()` inside an associated constructor (`Cache.new()`) emitted
