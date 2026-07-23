@@ -471,6 +471,24 @@ static REGEX_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock
     lower_stdlib_source("regex", include_str!("../runtime/stdlib/regex.kara"))
 });
 
+static POOL_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
+    lower_stdlib_source("pool", include_str!("../runtime/stdlib/pool.kara"))
+});
+
+/// The lowered `std` `Pool` program. Every `Pool` / `PooledConnection` method
+/// is `#[compiler_builtin]` — `Pool.new` is an `assoc_call.rs` intercept,
+/// `acquire`/`release` and the two Drops are hand-lowered in
+/// `src/codegen/pool.rs` to `karac_runtime_pool_*` externs — so, like `regex`,
+/// NO method body is compiled from here. Its sole contribution is the `Pool` /
+/// `PooledConnection[T]` STRUCT LAYOUTS and the `PoolError` ENUM LAYOUT: without
+/// them `acquire`'s `Result[PooledConnection[T], PoolError]` return can't build
+/// the generic `PooledConnection { pool_handle_id, conn_id, val: T }` aggregate.
+/// Always present (like `regex`) — the layouts cost nothing when unused and a
+/// `Pool`-redefining user program skips the module via `user_redefines_stdlib_type`.
+fn pool_stdlib_program() -> &'static Program {
+    &POOL_LOWERED_PROGRAM
+}
+
 static PROCESS_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
     lower_stdlib_source("process", include_str!("../runtime/stdlib/process.kara"))
 });
@@ -549,6 +567,7 @@ fn compiled_stdlib_programs(user: &Program) -> Vec<&'static Program> {
         mem_stdlib_program(),
         regex_stdlib_program(),
         process_stdlib_program(),
+        pool_stdlib_program(),
     ];
     if program_uses_protobuf(user) {
         programs.push(protobuf_stdlib_program());
@@ -6455,6 +6474,58 @@ impl<'ctx> Codegen<'ctx> {
         );
         module.add_function(
             "karac_runtime_rate_limiter_drop",
+            sem_void_ptr_ty,
+            Some(Linkage::External),
+        );
+
+        // Connection pool (`runtime/src/pool.rs`). The `*mut KaracPool`
+        // round-trips through the `Pool { handle_id: i64 }` field.
+        // `_new(fn_ptr: i64, env_ptr: i64, elem_size: i64, max_conn: i64,
+        // max_waiters: i64) -> ptr` stores the create-fn fat pointer + bounds;
+        // `_begin_acquire(pool, out_val: ptr, out_conn_id: ptr, out_fn_ptr: ptr,
+        // out_env_ptr: ptr) -> i32` decides idle/mint/at-cap/closed (codegen does
+        // the mint's closure call); `_release(pool, conn_id: i64, val: ptr)`
+        // returns a slot (idempotent on conn_id); `_drop(pool)` frees it.
+        let pool_new_ty = ptr_type.fn_type(
+            &[
+                i64_type.into(),
+                i64_type.into(),
+                i64_type.into(),
+                i64_type.into(),
+                i64_type.into(),
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_pool_new",
+            pool_new_ty,
+            Some(Linkage::External),
+        );
+        let pool_begin_ty = context.i32_type().fn_type(
+            &[
+                ptr_type.into(),
+                ptr_type.into(),
+                ptr_type.into(),
+                ptr_type.into(),
+                ptr_type.into(),
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_pool_begin_acquire",
+            pool_begin_ty,
+            Some(Linkage::External),
+        );
+        let pool_release_ty = context
+            .void_type()
+            .fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_pool_release",
+            pool_release_ty,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_pool_drop",
             sem_void_ptr_ty,
             Some(Linkage::External),
         );

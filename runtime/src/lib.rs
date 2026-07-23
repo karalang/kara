@@ -45,6 +45,7 @@ mod emutls;
 pub mod event_loop;
 mod fatal;
 mod file;
+mod pool;
 mod rate_limiter;
 mod semaphore;
 // f-string format-spec runtime formatter (`karac_runtime_fmt_*`) — the
@@ -375,6 +376,15 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         rate_limiter::karac_runtime_rate_limiter_new,
         rate_limiter::karac_runtime_rate_limiter_try_acquire,
         rate_limiter::karac_runtime_rate_limiter_drop,
+    );
+    // Connection pool (`runtime/src/pool.rs`). Backs `Pool.new`/`.acquire`/
+    // `.release` + the `Pool` and `PooledConnection` Drops. Same JIT-keep-list
+    // class as bounded_channel / semaphore.
+    keep!(
+        pool::karac_runtime_pool_new,
+        pool::karac_runtime_pool_begin_acquire,
+        pool::karac_runtime_pool_release,
+        pool::karac_runtime_pool_drop,
     );
     // Blocking-mutex slow path (`runtime/src/mutex.rs`). Backs the contended
     // branch of a `lock` block's futex acquire + the wake on its release;
